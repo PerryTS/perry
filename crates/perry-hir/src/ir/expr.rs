@@ -493,8 +493,8 @@ pub enum Expr {
     ProcessExit(Option<Box<Expr>>), // process.exit(code?) -> never; None means code 0
     ProcessAbort,                   // process.abort() -> never; raises SIGABRT
     ProcessUmask(Option<Box<Expr>>), // process.umask(mask?) -> number; no-arg reads, arg sets and returns previous
-    ProcessThreadCpuUsage,           // process.threadCpuUsage() -> { user, system } microseconds
-    ProcessAvailableMemory,          // process.availableMemory() -> number (free memory bytes)
+    ProcessThreadCpuUsage(Option<Box<Expr>>), // process.threadCpuUsage(prior?) -> { user, system } µs
+    ProcessAvailableMemory, // process.availableMemory() -> number (free memory bytes)
     ProcessConstrainedMemory, // process.constrainedMemory() -> number (OS limit, 0 if unconstrained)
     ProcessPosixCredential(super::PosixCredentialKind), // process.{getuid,geteuid,getgid,getegid}() (#1408)
     ProcessEmitWarning(Vec<Expr>), // process.emitWarning(warning[, type, code, ctor]) -> undefined (#1375)
@@ -562,7 +562,7 @@ pub enum Expr {
     PathFormat(Box<Expr>),                 // path.format({ dir, base }) -> string
     PathSep,                               // path.sep constant
     PathDelimiter,                         // path.delimiter constant
-    PathToNamespacedPath(Box<Expr>),       // path.toNamespacedPath(path) -> string (POSIX: no-op)
+    PathToNamespacedPath(Box<Expr>), // path.toNamespacedPath(path) -> string, or original non-string
     PathMatchesGlob(Box<Expr>, Box<Expr>), // path.matchesGlob(path, pattern) -> boolean
     PathResolveJoin(Box<Expr>, Box<Expr>), // internal: join with reset-on-absolute (multi-arg resolve)
     PathWin32Join(Box<Expr>, Box<Expr>),   // path.win32.join(a, b) -> string (issue #810)
@@ -596,7 +596,7 @@ pub enum Expr {
     ObjectGetOwnPropertyDescriptor(Box<Expr>, Box<Expr>), // Object.getOwnPropertyDescriptor(obj, key)
     ObjectGetOwnPropertyDescriptors(Box<Expr>), // Object.getOwnPropertyDescriptors(obj) -> { [k]: descriptor }
     ObjectGetOwnPropertyNames(Box<Expr>),       // Object.getOwnPropertyNames(obj) -> string[]
-    ObjectCreate(Box<Expr>),                    // Object.create(proto)
+    ObjectCreate(Box<Expr>, Option<Box<Expr>>), // Object.create(proto[, propertiesObject])
     ObjectFreeze(Box<Expr>),                    // Object.freeze(obj)
     ObjectSeal(Box<Expr>),                      // Object.seal(obj)
     ObjectPreventExtensions(Box<Expr>),         // Object.preventExtensions(obj)
@@ -613,7 +613,9 @@ pub enum Expr {
     SymbolFor(Box<Expr>),         // Symbol.for(key) -> registered symbol
     SymbolKeyFor(Box<Expr>),      // Symbol.keyFor(sym) -> key | undefined
     SymbolDescription(Box<Expr>), // sym.description
-    SymbolToString(Box<Expr>),    // sym.toString()
+    /// RegExp.escape(str) -> escaped string (TC39 proposal, Node 24+)
+    RegExpEscape(Box<Expr>),
+    SymbolToString(Box<Expr>), // sym.toString()
 
     // URL operations
     FileURLToPath(Box<Expr>), // url.fileURLToPath(url) -> string
@@ -672,6 +674,10 @@ pub enum Expr {
         space: Box<Expr>,
     },
     JsonStringifyFull(Box<Expr>, Box<Expr>, Box<Expr>),
+    /// `JSON.rawJSON(text)` (#2900) -> raw-JSON wrapper object.
+    JsonRawJson(Box<Expr>),
+    /// `JSON.isRawJSON(value)` (#2900) -> boolean.
+    JsonIsRawJson(Box<Expr>),
 
     // Math operations
     MathFloor(Box<Expr>),            // Math.floor(x) -> number
@@ -699,6 +705,7 @@ pub enum Expr {
     MathCbrt(Box<Expr>),             // Math.cbrt(x) -> number
     MathHypot(Vec<Expr>),            // Math.hypot(...values) -> number
     MathFround(Box<Expr>),           // Math.fround(x) -> number
+    MathF16round(Box<Expr>),         // Math.f16round(x) -> number
     MathClz32(Box<Expr>),            // Math.clz32(x) -> number
     MathExpm1(Box<Expr>),            // Math.expm1(x) -> number
     MathLog1p(Box<Expr>),            // Math.log1p(x) -> number
@@ -742,10 +749,24 @@ pub enum Expr {
         source: Box<Expr>,
         dest: Box<Expr>,
     },
-    /// new TextDecoder() or new TextDecoder("utf-8") -> opaque handle
-    TextDecoderNew,
-    /// decoder.decode(buffer) -> string (UTF-8 decode)
-    TextDecoderDecode(Box<Expr>),
+    /// new TextDecoder(label?, { fatal?, ignoreBOM? }) -> opaque handle.
+    /// `label` is undefined for the no-arg form; `fatal`/`ignore_bom`
+    /// default to `false`.
+    TextDecoderNew {
+        label: Box<Expr>,
+        fatal: Box<Expr>,
+        ignore_bom: Box<Expr>,
+    },
+    /// decoder.decode(buffer) -> string. `decoder` carries the encoding
+    /// state (the lowered receiver handle); `input` is the bytes.
+    TextDecoderDecode {
+        decoder: Box<Expr>,
+        input: Box<Expr>,
+    },
+    /// decoder.encoding / .fatal / .ignoreBOM property reads.
+    TextDecoderEncoding(Box<Expr>),
+    TextDecoderFatal(Box<Expr>),
+    TextDecoderIgnoreBom(Box<Expr>),
 
     // URI encoding / decoding
     /// encodeURI(string) -> string
@@ -828,6 +849,7 @@ pub enum Expr {
     // Crypto operations
     CryptoRandomBytes(Box<Expr>), // crypto.randomBytes(size) -> string (hex)
     CryptoRandomUUID,             // crypto.randomUUID() -> string
+    CryptoRandomUUIDv7,           // crypto.randomUUIDv7() -> string (RFC 9562 v7)
     CryptoSha256(Box<Expr>),      // crypto.sha256(data) -> string (hex)
     CryptoMd5(Box<Expr>),         // crypto.md5(data) -> string (hex)
 
@@ -1227,7 +1249,8 @@ pub enum Expr {
     ArrayIndexOf {
         array: Box<Expr>,
         value: Box<Expr>,
-    }, // arr.indexOf(value) -> index
+        from_index: Option<Box<Expr>>,
+    }, // arr.indexOf(value, fromIndex?) -> index
     ArrayLastIndexOf {
         array: Box<Expr>,
         value: Box<Expr>,
@@ -1236,7 +1259,8 @@ pub enum Expr {
     ArrayIncludes {
         array: Box<Expr>,
         value: Box<Expr>,
-    }, // arr.includes(value) -> boolean
+        from_index: Option<Box<Expr>>,
+    }, // arr.includes(value, fromIndex?) -> boolean
     ArraySlice {
         array: Box<Expr>,
         start: Box<Expr>,
@@ -1347,6 +1371,13 @@ pub enum Expr {
     StringSplit(Box<Expr>, Box<Expr>), // string.split(delimiter) -> string[]
     StringFromCharCode(Box<Expr>),     // String.fromCharCode(code) -> single-char string
     StringFromCodePoint(Box<Expr>),    // String.fromCodePoint(code) -> string
+    StringRaw {
+        // Callable String.raw(callSite, ...substitutions) — the non-tagged
+        // form. `call_site` is the `{ raw: [...] }` (array-like) object;
+        // `substitutions` are the interpolated values. (#2789)
+        call_site: Box<Expr>,
+        substitutions: Vec<Expr>,
+    },
     StringAt {
         string: Box<Expr>,
         index: Box<Expr>,
@@ -1462,68 +1493,70 @@ pub enum Expr {
     DateGetUtcSeconds(Box<Expr>),      // date.getUTCSeconds() -> number (0-59)
     DateGetUtcMilliseconds(Box<Expr>), // date.getUTCMilliseconds() -> number (0-999)
 
-    // Date setters (UTC variants) — return the new timestamp
+    // Date setters (UTC variants) — return the new timestamp. `args` carries
+    // all call arguments (Node setters accept optional trailing components,
+    // e.g. `setUTCHours(h, min?, sec?, ms?)`) — #2851.
     DateSetUtcFullYear {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetUtcMonth {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetUtcDate {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetUtcHours {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetUtcMinutes {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetUtcSeconds {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetUtcMilliseconds {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
 
     // Date setters (local-time variants) — return the new timestamp (#1187)
     DateSetFullYear {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetMonth {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetDate {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetHours {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetMinutes {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetSeconds {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetMilliseconds {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetTime {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
 
     // Date misc
@@ -1545,6 +1578,17 @@ pub enum Expr {
         message: Box<Expr>,
         cause: Box<Expr>,
     },
+    /// #2836: `new <Error-kind>(message, options)` where `options` is an
+    /// arbitrary runtime value (variable, dynamic object, or literal) whose
+    /// `cause` property is applied at runtime. `kind` is an `ERROR_KIND_*`
+    /// discriminant so native subclasses (TypeError/RangeError/…) keep their
+    /// `error_kind`. Covers base `Error` plus the four native subclasses with
+    /// a non-literal-recognizable options argument.
+    ErrorNewWithOptions {
+        kind: u32,
+        message: Box<Expr>,
+        options: Box<Expr>,
+    },
     /// new TypeError(message)
     TypeErrorNew(Box<Expr>),
     /// new RangeError(message)
@@ -1553,10 +1597,16 @@ pub enum Expr {
     ReferenceErrorNew(Box<Expr>),
     /// new SyntaxError(message)
     SyntaxErrorNew(Box<Expr>),
-    /// new AggregateError(errors, message)
+    /// new AggregateError(errors, message?, options?)
+    ///
+    /// #2838: `errors` is passed through as a raw runtime value (NOT
+    /// pre-coerced to an array) so the runtime can consume Sets / strings /
+    /// generators / any iterable and throw `TypeError` on non-iterables.
+    /// #2836: `options` carries the optional `{ cause }` argument.
     AggregateErrorNew {
         errors: Box<Expr>,
         message: Box<Expr>,
+        options: Option<Box<Expr>>,
     },
 
     // URL operations
@@ -1663,6 +1713,12 @@ pub enum Expr {
     // URLSearchParams operations
     /// new URLSearchParams(init?)
     UrlSearchParamsNew(Option<Box<Expr>>),
+    /// URLSearchParams method call missing required arguments.
+    UrlSearchParamsMissingArgs {
+        params: Box<Expr>,
+        args: Vec<Expr>,
+        name_and_value: bool,
+    },
     /// params.get(name) -> string | null
     UrlSearchParamsGet {
         params: Box<Expr>,
@@ -1821,6 +1877,13 @@ pub enum Expr {
         items: Box<Expr>,
         key_fn: Box<Expr>,
     },
+    /// Map.groupBy(items, keyFn) -> Map<key, items[]>
+    /// Like ObjectGroupBy but the result is a `Map` and callback keys are
+    /// used directly (no string coercion). Lowered through `js_map_group_by`.
+    MapGroupBy {
+        items: Box<Expr>,
+        key_fn: Box<Expr>,
+    },
     /// Object rest destructuring: copies all properties except the excluded keys
     /// Used for `const { a, b, ...rest } = obj` → rest = ObjectRest(obj, ["a", "b"])
     ObjectRest {
@@ -1835,6 +1898,13 @@ pub enum Expr {
     /// Array.from(iterable) -> Array
     /// Creates a new array from an iterable (e.g., Map.entries(), Map.keys(), another array)
     ArrayFrom(Box<Expr>),
+
+    /// `Iterator.from(iterable)` (#2874) — wrap any iterable/iterator in a lazy
+    /// iterator-helper object exposing `.map`/`.filter`/`.take`/`.drop`/
+    /// `.flatMap`/`.toArray`/`.forEach`/`.reduce`/`.some`/`.every`/`.find`.
+    /// The helper methods themselves dispatch at runtime through
+    /// `js_native_call_method` (no dedicated HIR variant).
+    IteratorFrom(Box<Expr>),
 
     /// Tagged-template strings literal — codegen builds the cooked-strings
     /// array AND a parallel raw-strings array, registers the (cooked, raw)
@@ -1868,11 +1938,13 @@ pub enum Expr {
     /// else drives its `[Symbol.iterator]`. Without it the index loop read
     /// `.length` off a raw Map/Set handle (→ 0) and iterated zero times.
     ForOfToArray(Box<Expr>),
-    /// Array.from(iterable, mapFn) -> Array
+    /// Array.from(iterable, mapFn, thisArg?) -> Array
     /// Creates a new array by applying mapFn to each element of the iterable.
+    /// `this_arg` (#2773) binds `this` inside a non-arrow mapFn.
     ArrayFromMapped {
         iterable: Box<Expr>,
         map_fn: Box<Expr>,
+        this_arg: Option<Box<Expr>>,
     },
 
     // Global built-in functions
@@ -1894,6 +1966,9 @@ pub enum Expr {
     /// String(value) -> string
     /// Type coercion to string
     StringCoerce(Box<Expr>),
+    /// `Object(value)` plain-call coercion (#3149). Nullish/primitive → a fresh
+    /// `{}`; an existing object/array passes through unchanged.
+    ObjectCoerce(Box<Expr>),
     /// Boolean(value) -> boolean
     /// Type coercion to boolean via JS truthiness rules
     BooleanCoerce(Box<Expr>),
@@ -2052,6 +2127,9 @@ pub enum Expr {
     ReflectGet {
         target: Box<Expr>,
         key: Box<Expr>,
+        /// #2766: optional `receiver` argument (the `this` binding for accessor
+        /// getters). Lowering supplies `target` when the call omits it.
+        receiver: Box<Expr>,
     },
     ReflectSet {
         target: Box<Expr>,
@@ -2082,6 +2160,18 @@ pub enum Expr {
         descriptor: Box<Expr>,
     },
     ReflectGetPrototypeOf(Box<Expr>),
+    /// #2761: `Reflect.setPrototypeOf(target, proto)` — returns a boolean
+    /// (false when rejected), unlike `Object.setPrototypeOf` which returns the
+    /// object. Lowered separately so it can report failure / throw on bad args.
+    ReflectSetPrototypeOf {
+        target: Box<Expr>,
+        proto: Box<Expr>,
+    },
+    // #2762: Reflect.isExtensible / Reflect.preventExtensions have
+    // Reflect-specific semantics (boolean result, TypeError on non-object)
+    // distinct from the Object.* helpers, so they use dedicated variants.
+    ReflectIsExtensible(Box<Expr>),
+    ReflectPreventExtensions(Box<Expr>),
     ReflectDefineMetadata {
         key: Box<Expr>,
         value: Box<Expr>,

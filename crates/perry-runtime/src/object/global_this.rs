@@ -115,6 +115,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "ReferenceError",
     "EvalError",
     "URIError",
+    "AggregateError",
     "Symbol",
     "Promise",
     "Map",
@@ -130,6 +131,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "Int16Array",
     "Uint32Array",
     "Int32Array",
+    "Float16Array",
     "Float32Array",
     "Float64Array",
     "Uint8ClampedArray",
@@ -153,6 +155,13 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "Request",
     "Response",
     "FinalizationRegistry",
+    // #2875: TC39 explicit-resource-management globals. Backed by the
+    // no-op constructor thunk so `typeof DisposableStack === "function"`;
+    // real `new DisposableStack()` / `new SuppressedError(...)` flow through
+    // codegen's `lower_builtin_new` to the dedicated runtime ctors.
+    "DisposableStack",
+    "AsyncDisposableStack",
+    "SuppressedError",
     "Buffer",
 ];
 
@@ -161,6 +170,10 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
 /// reads degrade gracefully — but typeof reports "object".
 pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] =
     &["console", "process", "Math", "JSON", "Reflect"];
+
+// Note: `navigator` (#2923) is installed on the singleton directly (see
+// `populate_global_this_builtins`) rather than via this generic namespace
+// loop because it needs its own field-populated object, not an empty stub.
 
 /// JS global built-in functions exposed as function-valued properties on
 /// `globalThis`. Unlike constructor sentinels, these call through to Perry's
@@ -177,6 +190,17 @@ pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &[
     "setImmediate",
     "clearImmediate",
     "queueMicrotask",
+    // #2905: standard global helper functions. These route through Perry's
+    // real direct-call runtime helpers, so `const p = parseInt; p("42px")`
+    // and `globalThis.encodeURIComponent("a b")` match Node.
+    "parseInt",
+    "parseFloat",
+    "isNaN",
+    "isFinite",
+    "encodeURI",
+    "decodeURI",
+    "encodeURIComponent",
+    "decodeURIComponent",
 ];
 
 /// No-op thunk used as the function body for most singleton globalThis
@@ -204,6 +228,20 @@ extern "C" fn global_this_string_thunk(
     crate::value::js_nanbox_string(string_ptr as i64)
 }
 
+extern "C" fn global_this_object_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let js_value = crate::value::JSValue::from_bits(value.to_bits());
+    if js_value.is_undefined() || js_value.is_null() {
+        return crate::value::js_nanbox_pointer(js_object_alloc(0, 0) as i64);
+    }
+    if crate::value::js_nanbox_get_pointer(value) != 0 {
+        return value;
+    }
+    crate::value::js_nanbox_pointer(js_object_alloc(0, 0) as i64)
+}
+
 extern "C" fn global_this_structured_clone_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
@@ -226,6 +264,142 @@ extern "C" fn global_this_btoa_thunk(
 ) -> f64 {
     let encoded = crate::string::js_btoa(value);
     crate::value::js_nanbox_string(encoded as i64)
+}
+
+extern "C" fn math_f16round_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::math::js_math_f16round(value)
+}
+
+// #2905: thunks for the standard global helper functions. Each coerces its
+// arguments the same way the bare-call HIR lowering does and forwards to the
+// shared runtime helper so a rebound / property-read reference matches Node.
+
+extern "C" fn global_this_parse_int_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+    radix: f64,
+) -> f64 {
+    let s = crate::builtins::js_string_coerce(value);
+    crate::builtins::js_parse_int(s, radix)
+}
+
+extern "C" fn global_this_parse_float_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let s = crate::builtins::js_string_coerce(value);
+    crate::builtins::js_parse_float(s)
+}
+
+extern "C" fn global_this_is_nan_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::builtins::js_is_nan(value)
+}
+
+extern "C" fn global_this_is_finite_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::builtins::js_is_finite(value)
+}
+
+extern "C" fn global_this_encode_uri_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::value::js_nanbox_string(crate::builtins::js_encode_uri(value))
+}
+
+extern "C" fn global_this_decode_uri_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::value::js_nanbox_string(crate::builtins::js_decode_uri(value))
+}
+
+extern "C" fn global_this_encode_uri_component_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::value::js_nanbox_string(crate::builtins::js_encode_uri_component(value))
+}
+
+extern "C" fn global_this_decode_uri_component_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::value::js_nanbox_string(crate::builtins::js_decode_uri_component(value))
+}
+
+// #2889: call-form thunks for `Number`/`Boolean` global constructor values.
+// `Object`/`String` already have dedicated thunks above; these mirror the
+// bare-call HIR lowering (`Expr::NumberCoerce` / `Expr::BooleanCoerce`) so
+// `const N = Number; N("42")` and `const B = Boolean; B(0)` match Node.
+extern "C" fn global_this_number_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let jsv = crate::value::JSValue::from_bits(value.to_bits());
+    if jsv.is_undefined() {
+        // `Number()` with no args returns 0; an explicit `undefined` arg → NaN.
+        // The closure-call path zero-fills missing args with TAG_UNDEFINED, so
+        // we can't distinguish — match the common `Number()` → 0 case.
+        return f64::from_bits(crate::value::JSValue::number(0.0).bits());
+    }
+    crate::builtins::js_number_coerce(value)
+}
+
+extern "C" fn global_this_boolean_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let b = crate::value::js_is_truthy(value) != 0;
+    f64::from_bits(crate::value::JSValue::bool(b).bits())
+}
+
+extern "C" fn global_this_error_capture_stack_trace_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    target: f64,
+    constructor_opt: f64,
+) -> f64 {
+    crate::error::js_error_capture_stack_trace(target, constructor_opt)
+}
+
+/// #2904: `Error.isError(value)` thunk — delegates to the runtime duck-check.
+extern "C" fn global_this_error_is_error_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::error::js_error_is_error(value)
+}
+
+/// #2904: `Error.prepareStackTrace` default — Node leaves a hook here that
+/// formats the stack from structured frames. Perry's stack strings are
+/// coarse; the installed default returns the existing `error.stack` string
+/// (or empty) so `typeof Error.prepareStackTrace === "function"` holds and
+/// callers that invoke it get a usable string rather than a crash.
+extern "C" fn global_this_error_prepare_stack_trace_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    error: f64,
+    _structured_stack: f64,
+) -> f64 {
+    let jsval = crate::value::JSValue::from_bits(error.to_bits());
+    if jsval.is_pointer() {
+        let ptr = crate::value::js_nanbox_get_pointer(error) as *mut crate::error::ErrorHeader;
+        if !ptr.is_null() {
+            let stack = crate::error::js_error_get_stack(ptr);
+            if !stack.is_null() {
+                return crate::value::js_nanbox_string(stack as i64);
+            }
+        }
+    }
+    let empty = crate::string::js_string_from_bytes(b"".as_ptr(), 0);
+    crate::value::js_nanbox_string(empty as i64)
 }
 
 fn global_this_rest_array_values(rest: f64) -> Vec<f64> {
@@ -404,13 +578,37 @@ extern "C" fn object_prototype_to_string_thunk(
     f64::from_bits(crate::js_nanbox_string(s as i64).to_bits())
 }
 
+extern "C" fn object_prototype_is_prototype_of_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    f64::from_bits(
+        JSValue::bool(unsafe { super::js_object_is_prototype_of_value(this_value, value) }).bits(),
+    )
+}
+
+extern "C" fn object_prototype_value_of_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    unsafe { super::js_object_default_value_of(this_value) }
+}
+
+extern "C" fn object_prototype_to_locale_string_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    unsafe { super::js_object_default_to_locale_string(this_value) }
+}
+
 /// Thunk for `Array.prototype.slice` exposed as a real callable closure
 /// value. Reads the array receiver from `IMPLICIT_THIS` (set by
 /// `Function.prototype.call`/`.apply`'s runtime arm in
-/// `js_native_call_method`) and forwards to `js_array_slice`.
+/// `js_native_call_method`) and forwards to the shared slice-value helper.
 ///
-/// Coerces start/end through `JSValue::to_number`, with `undefined`
-/// mapping to `0` for start and `i32::MAX` for end — matching
+/// Coerces start/end through the shared array slice helper, with
+/// `undefined` mapping to `0` for start and end-of-array for end — matching
 /// `Array.prototype.slice`'s ECMA-262 defaults.
 ///
 /// Unblocks the `Array.prototype.slice.call(list, …)` pattern that
@@ -445,29 +643,7 @@ extern "C" fn array_prototype_slice_thunk(
     if arr_ptr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let start_jsv = JSValue::from_bits(start_val.to_bits());
-    let end_jsv = JSValue::from_bits(end_val.to_bits());
-    let start_i32 = if start_jsv.is_undefined() {
-        0
-    } else {
-        let n = start_jsv.to_number();
-        if n.is_nan() {
-            0
-        } else {
-            n as i32
-        }
-    };
-    let end_i32 = if end_jsv.is_undefined() {
-        i32::MAX
-    } else {
-        let n = end_jsv.to_number();
-        if n.is_nan() {
-            0
-        } else {
-            n as i32
-        }
-    };
-    let result = crate::array::js_array_slice(arr_ptr, start_i32, end_i32);
+    let result = crate::array::js_array_slice_values(arr_ptr, start_val, end_val);
     f64::from_bits(crate::value::js_nanbox_pointer(result as i64).to_bits())
 }
 
@@ -682,20 +858,34 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             );
             continue;
         }
-        let func_ptr = if name == "String" {
-            global_this_string_thunk as *const u8
-        } else {
-            global_this_builtin_noop_thunk as *const u8
+        let func_ptr = match name {
+            "Object" => global_this_object_thunk as *const u8,
+            "String" => global_this_string_thunk as *const u8,
+            // #2889: call-form `Number(x)` / `Boolean(x)` through a rebound
+            // global value coerce like the bare-call lowering does.
+            "Number" => global_this_number_thunk as *const u8,
+            "Boolean" => global_this_boolean_thunk as *const u8,
+            _ => global_this_builtin_noop_thunk as *const u8,
         };
         let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
         if closure_ptr.is_null() {
             continue;
         }
-        if name == "String" {
+        if matches!(name, "Object" | "String" | "Number" | "Boolean") {
             crate::closure::js_register_closure_arity(func_ptr, 1);
         }
-        if name == "File" {
+        // #2889: install static methods (`Object.keys`, `Array.isArray`, ...)
+        // on the constructor closure so rebound usage like
+        // `const O = Object; O.keys(x)` dispatches through the real helpers.
+        install_builtin_constructor_statics(name, closure_ptr);
+        if matches!(
+            name,
+            "Blob" | "File" | "EvalError" | "URIError" | "Uint8Array"
+        ) {
             super::native_module::set_bound_native_closure_name(closure_ptr, name);
+        }
+        if name == "Error" {
+            install_error_static_methods(closure_ptr);
         }
         // Stash `prototype` on the closure's dynamic-prop side table.
         // `js_object_set_field_by_name` detects the CLOSURE_MAGIC tag
@@ -729,6 +919,7 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                         | "Uint16Array"
                         | "Int32Array"
                         | "Uint32Array"
+                        | "Float16Array"
                         | "Float32Array"
                         | "Float64Array"
                         | "BigInt64Array"
@@ -765,6 +956,23 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             "setImmediate" => (global_this_set_immediate_thunk as *const u8, 1, true),
             "clearImmediate" => (global_this_clear_immediate_thunk as *const u8, 1, false),
             "queueMicrotask" => (global_this_queue_microtask_thunk as *const u8, 1, false),
+            // #2905: standard global helper functions.
+            "parseInt" => (global_this_parse_int_thunk as *const u8, 2, false),
+            "parseFloat" => (global_this_parse_float_thunk as *const u8, 1, false),
+            "isNaN" => (global_this_is_nan_thunk as *const u8, 1, false),
+            "isFinite" => (global_this_is_finite_thunk as *const u8, 1, false),
+            "encodeURI" => (global_this_encode_uri_thunk as *const u8, 1, false),
+            "decodeURI" => (global_this_decode_uri_thunk as *const u8, 1, false),
+            "encodeURIComponent" => (
+                global_this_encode_uri_component_thunk as *const u8,
+                1,
+                false,
+            ),
+            "decodeURIComponent" => (
+                global_this_decode_uri_component_thunk as *const u8,
+                1,
+                false,
+            ),
             _ => continue,
         };
         let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
@@ -797,6 +1005,9 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             if ns_obj.is_null() {
                 continue;
             }
+            if name == "Math" {
+                install_proto_method(ns_obj, "f16round", math_f16round_thunk as *const u8, 1);
+            }
             crate::value::js_nanbox_pointer(ns_obj as i64)
         };
         js_object_set_field_by_name(singleton, name_key, ns_value);
@@ -809,6 +1020,286 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let pkey = crate::string::js_string_from_bytes(pname.as_ptr(), pname.len() as u32);
         let pval = crate::perf_hooks::performance_namespace();
         js_object_set_field_by_name(singleton, pkey, pval);
+    }
+    // #2923: `globalThis.navigator` — Node's browser-compatible runtime
+    // metadata object. typeof is "object". Built once per process.
+    {
+        let nname = b"navigator";
+        let nkey = crate::string::js_string_from_bytes(nname.as_ptr(), nname.len() as u32);
+        let nval = crate::navigator::js_navigator_object();
+        js_object_set_field_by_name(singleton, nkey, nval);
+    }
+}
+
+fn install_error_static_methods(ctor: *mut crate::closure::ClosureHeader) {
+    if ctor.is_null() {
+        return;
+    }
+    let func_ptr = global_this_error_capture_stack_trace_thunk as *const u8;
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return;
+    }
+    crate::closure::js_register_closure_arity(func_ptr, 2);
+    super::native_module::set_bound_native_closure_name(closure, "captureStackTrace");
+
+    let key = crate::string::js_string_from_bytes(b"captureStackTrace".as_ptr(), 17);
+    let value = crate::value::js_nanbox_pointer(closure as i64);
+    js_object_set_field_by_name(ctor as *mut ObjectHeader, key, value);
+    super::set_builtin_property_attrs(
+        ctor as usize,
+        "captureStackTrace".to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+
+    // #2904: `Error.isError` — V8/Node Error duck-check.
+    install_error_static_fn(
+        ctor,
+        "isError",
+        global_this_error_is_error_thunk as *const u8,
+        1,
+    );
+
+    // #2904: `Error.prepareStackTrace` — default stack-formatting hook.
+    install_error_static_fn(
+        ctor,
+        "prepareStackTrace",
+        global_this_error_prepare_stack_trace_thunk as *const u8,
+        2,
+    );
+
+    // #2904: `Error.stackTraceLimit` — writable number controlling captured
+    // frame count. Node's default is 10; Perry's stacks are coarse but the
+    // property must read as a number and be writable.
+    let limit_key = crate::string::js_string_from_bytes(b"stackTraceLimit".as_ptr(), 15);
+    js_object_set_field_by_name(ctor as *mut ObjectHeader, limit_key, 10.0);
+    super::set_builtin_property_attrs(
+        ctor as usize,
+        "stackTraceLimit".to_string(),
+        super::PropertyAttrs::new(true, true, true),
+    );
+}
+
+/// #2904: install a callable static method on the `Error` constructor closure
+/// as a non-enumerable, writable, configurable data property (matching Node's
+/// property descriptors for the V8 static helpers).
+fn install_error_static_fn(
+    ctor: *mut crate::closure::ClosureHeader,
+    name: &str,
+    func_ptr: *const u8,
+    arity: u32,
+) {
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return;
+    }
+    crate::closure::js_register_closure_arity(func_ptr, arity);
+    super::native_module::set_bound_native_closure_name(closure, name);
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = crate::value::js_nanbox_pointer(closure as i64);
+    js_object_set_field_by_name(ctor as *mut ObjectHeader, key, value);
+    super::set_builtin_property_attrs(
+        ctor as usize,
+        name.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+}
+
+// =====================================================================
+// #2889: static methods on rebound global built-in constructor values.
+//
+// `const O = Object; O.keys(x)` reads `keys` off the `Object` constructor
+// closure's dynamic-prop side table, then calls it. Pre-fix nothing was
+// installed there, so the read returned `undefined`. These thunks delegate
+// to the same runtime helpers the direct `Object.keys(x)` lowering uses.
+// =====================================================================
+
+fn nanbox_array_or_undef(arr: *mut crate::array::ArrayHeader) -> f64 {
+    if arr.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        crate::value::js_nanbox_pointer(arr as i64)
+    }
+}
+
+extern "C" fn object_keys_thunk(_closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+    nanbox_array_or_undef(super::js_object_keys_value(value))
+}
+
+extern "C" fn object_values_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    nanbox_array_or_undef(super::js_object_values_value(value))
+}
+
+extern "C" fn object_entries_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    nanbox_array_or_undef(super::js_object_entries_value(value))
+}
+
+extern "C" fn object_freeze_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    super::js_object_freeze(value)
+}
+
+extern "C" fn object_create_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    super::js_object_create(value)
+}
+
+extern "C" fn object_get_prototype_of_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    super::js_object_get_prototype_of(value)
+}
+
+extern "C" fn object_get_own_property_names_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    super::js_object_get_own_property_names(value)
+}
+
+extern "C" fn object_from_entries_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    super::js_object_from_entries(value)
+}
+
+extern "C" fn object_assign_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    target: f64,
+    rest: f64,
+) -> f64 {
+    let validated = unsafe { super::js_object_assign_validate_target(target) };
+    for source in global_this_rest_array_values(rest) {
+        unsafe { super::js_object_assign_one(validated, source) };
+    }
+    validated
+}
+
+extern "C" fn array_is_array_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::array::js_array_is_array(value)
+}
+
+extern "C" fn array_from_thunk(_closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+    nanbox_array_or_undef(crate::array::js_array_from_value(value))
+}
+
+extern "C" fn array_of_thunk(_closure: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
+    let vals = global_this_rest_array_values(rest);
+    let len = vals.len() as u32;
+    let arr = crate::array::js_array_alloc(len);
+    unsafe {
+        (*arr).length = len;
+        for (i, &v) in vals.iter().enumerate() {
+            crate::array::js_array_set_f64(arr, i as u32, v);
+        }
+    }
+    crate::value::js_nanbox_pointer(arr as i64)
+}
+
+/// Install a single callable static method on a constructor closure as a
+/// `{ writable: true, enumerable: false, configurable: true }` data property
+/// (matching Node's descriptors for built-in statics). `has_rest` registers
+/// the func pointer as a rest-arg closure so trailing args arrive as an array.
+fn install_constructor_static(
+    ctor: *mut crate::closure::ClosureHeader,
+    name: &str,
+    func_ptr: *const u8,
+    arity: u32,
+    has_rest: bool,
+) {
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return;
+    }
+    if has_rest {
+        crate::closure::js_register_closure_rest(func_ptr, arity);
+    } else {
+        crate::closure::js_register_closure_arity(func_ptr, arity);
+    }
+    super::native_module::set_bound_native_closure_name(closure, name);
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = crate::value::js_nanbox_pointer(closure as i64);
+    js_object_set_field_by_name(ctor as *mut ObjectHeader, key, value);
+    super::set_builtin_property_attrs(
+        ctor as usize,
+        name.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+}
+
+/// #2889: install the common static methods on the `Object` / `Array`
+/// constructor closures so rebound usage (`const O = Object; O.keys(x)`)
+/// dispatches through the real runtime helpers. Only the high-traffic
+/// statics with simple f64-in / f64-out shapes are reified here; the long
+/// tail (`Object.defineProperty`, `Object.getOwnPropertyDescriptor`, …)
+/// stays unreified on the rebound value and is a known scope gap.
+fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::ClosureHeader) {
+    if ctor.is_null() {
+        return;
+    }
+    match name {
+        "Object" => {
+            install_constructor_static(ctor, "keys", object_keys_thunk as *const u8, 1, false);
+            install_constructor_static(ctor, "values", object_values_thunk as *const u8, 1, false);
+            install_constructor_static(
+                ctor,
+                "entries",
+                object_entries_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(ctor, "freeze", object_freeze_thunk as *const u8, 1, false);
+            install_constructor_static(ctor, "create", object_create_thunk as *const u8, 1, false);
+            install_constructor_static(
+                ctor,
+                "getPrototypeOf",
+                object_get_prototype_of_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "getOwnPropertyNames",
+                object_get_own_property_names_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "fromEntries",
+                object_from_entries_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(ctor, "assign", object_assign_thunk as *const u8, 1, true);
+        }
+        "Array" => {
+            install_constructor_static(
+                ctor,
+                "isArray",
+                array_is_array_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(ctor, "from", array_from_thunk as *const u8, 1, false);
+            install_constructor_static(ctor, "of", array_of_thunk as *const u8, 0, true);
+        }
+        _ => {}
     }
 }
 
@@ -838,6 +1329,11 @@ fn install_proto_method(
     }
     crate::closure::js_register_closure_arity(func_ptr, arity);
     super::native_module::set_bound_native_closure_name(closure, method_name);
+    // #3143: record this method's spec `.length` per closure instance — all
+    // noop-backed methods share one func_ptr, so the func-ptr arity registry
+    // can't distinguish `map` (1) from `slice` (2). Read back by the `.length`
+    // value-accessor and `getOwnPropertyDescriptor`.
+    super::native_module::set_builtin_closure_length(closure as usize, arity);
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
     js_object_set_field_by_name(proto_obj, key, value);
@@ -850,6 +1346,22 @@ fn install_proto_method(
         proto_obj as usize,
         method_name.to_string(),
         super::PropertyAttrs::new(true, false, true),
+    );
+    // #3143: the method's own `.name` / `.length` data properties are
+    // `{ writable: false, enumerable: false, configurable: true }` per spec.
+    // Register those on the closure itself so `getOwnPropertyDescriptor(
+    // Array.prototype.map, "name")` reports `writable: false` (it previously
+    // read the dynamic-prop slot and defaulted to writable). Reflection-only —
+    // no hot-path gate flip.
+    super::set_builtin_property_attrs(
+        closure as usize,
+        "name".to_string(),
+        super::PropertyAttrs::new(false, false, true),
+    );
+    super::set_builtin_property_attrs(
+        closure as usize,
+        "length".to_string(),
+        super::PropertyAttrs::new(false, false, true),
     );
 }
 
@@ -967,7 +1479,28 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                 object_prototype_to_string_thunk as *const u8,
                 0,
             );
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_proto_method(
+                proto_obj,
+                "isPrototypeOf",
+                object_prototype_is_prototype_of_thunk as *const u8,
+                1,
+            );
+            install_proto_method(
+                proto_obj,
+                "toLocaleString",
+                object_prototype_to_locale_string_thunk as *const u8,
+                0,
+            );
+            install_proto_method(
+                proto_obj,
+                "valueOf",
+                object_prototype_value_of_thunk as *const u8,
+                0,
+            );
+            install_noop_proto_methods(
+                proto_obj,
+                &[("hasOwnProperty", 1), ("propertyIsEnumerable", 1)],
+            );
         }
         "Function" => {
             install_noop_proto_methods(
@@ -1003,6 +1536,7 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                     ("slice", 2),
                     ("split", 2),
                     ("startsWith", 1),
+                    ("substr", 2),
                     ("substring", 2),
                     ("toLocaleLowerCase", 0),
                     ("toLocaleUpperCase", 0),
@@ -1172,8 +1706,8 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
         // `getOwnPropertyDescriptor(Int8Array.prototype, "length")` =
         // `undefined`).
         "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
-        | "Int32Array" | "Uint32Array" | "Float32Array" | "Float64Array" | "BigInt64Array"
-        | "BigUint64Array" => {
+        | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
+        | "BigInt64Array" | "BigUint64Array" => {
             install_noop_proto_methods(
                 proto_obj,
                 &[

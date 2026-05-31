@@ -99,8 +99,10 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // of one byte (issue #584).
         Expr::TextEncoderEncode(_) => Some(HirType::Named("Uint8Array".into())),
         Expr::TextEncoderEncodeInto { .. } => Some(HirType::Object(Default::default())),
-        // TextDecoder.decode(buf) always produces a string.
-        Expr::TextDecoderDecode(_) => Some(HirType::String),
+        // TextDecoder.decode(buf) / .encoding always produce a string.
+        Expr::TextDecoderDecode { .. } => Some(HirType::String),
+        Expr::TextDecoderEncoding(_) => Some(HirType::String),
+        Expr::TextDecoderFatal(_) | Expr::TextDecoderIgnoreBom(_) => Some(HirType::Boolean),
         // string.split(sep) → Array<string>
         Expr::StringSplit { .. } => Some(HirType::Array(Box::new(HirType::String))),
         // Set.values() / Set.keys() → iterable, but Array.from wraps it
@@ -127,6 +129,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         | Expr::StringCoerce(_)
         | Expr::StringFromCodePoint(_)
         | Expr::StringFromCharCode(_)
+        | Expr::StringRaw { .. }
         | Expr::StringAt { .. }
         | Expr::RegExpSource(_)
         | Expr::RegExpFlags(_)
@@ -618,6 +621,7 @@ fn is_numeric_typed_array_class(name: &str) -> bool {
             | "Uint16Array"
             | "Int32Array"
             | "Uint32Array"
+            | "Float16Array"
             | "Float32Array"
             | "Float64Array"
     )
@@ -943,6 +947,13 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::LocalGet(id) => {
             matches!(ctx.local_types.get(id), Some(HirType::String))
         }
+        Expr::PathToNamespacedPath(path) => is_definitely_string_expr(ctx, path),
+        Expr::PathWin32 {
+            method: perry_hir::PathWin32Method::ToNamespacedPath,
+            args,
+        } => args
+            .first()
+            .map_or(false, |arg| is_definitely_string_expr(ctx, arg)),
         Expr::StringCoerce(_)
         | Expr::TypeOf(_)
         | Expr::ArrayJoin { .. }
@@ -951,6 +962,7 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::JsonStringifyFull(..)
         | Expr::StringFromCodePoint(_)
         | Expr::StringFromCharCode(_)
+        | Expr::StringRaw { .. }
         | Expr::FsReadFileSync(_)
         | Expr::FsReadFileBinary(_)
         | Expr::PathSep
@@ -961,7 +973,6 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::PathExtname(_)
         | Expr::PathResolve(_)
         | Expr::PathNormalize(_)
-        | Expr::PathToNamespacedPath(_)
         | Expr::PathResolveJoin(..)
         | Expr::PathWin32Join(..)
         | Expr::PathWin32 {
@@ -974,8 +985,7 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 | perry_hir::PathWin32Method::Format
                 | perry_hir::PathWin32Method::Relative
                 | perry_hir::PathWin32Method::Resolve
-                | perry_hir::PathWin32Method::ResolveJoin
-                | perry_hir::PathWin32Method::ToNamespacedPath,
+                | perry_hir::PathWin32Method::ResolveJoin,
             ..
         }
         | Expr::ProcessVersion
@@ -1121,6 +1131,13 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Binary { op: BinaryOp::Add, left, right } => {
             is_string_expr(ctx, left) || is_string_expr(ctx, right)
         }
+        Expr::PathToNamespacedPath(path) => is_definitely_string_expr(ctx, path),
+        Expr::PathWin32 {
+            method: perry_hir::PathWin32Method::ToNamespacedPath,
+            args,
+        } => args
+            .first()
+            .map_or(false, |arg| is_definitely_string_expr(ctx, arg)),
         // String coerce, JSON.stringify, ArrayJoin, etc. all return
         // strings.
         Expr::StringCoerce(_)
@@ -1135,7 +1152,6 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::PathExtname(_)
         | Expr::PathResolve(_)
         | Expr::PathNormalize(_)
-        | Expr::PathToNamespacedPath(_)
         | Expr::PathResolveJoin(..)
         | Expr::PathWin32Join(..)
         | Expr::PathWin32 {
@@ -1148,14 +1164,14 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 | perry_hir::PathWin32Method::Format
                 | perry_hir::PathWin32Method::Relative
                 | perry_hir::PathWin32Method::Resolve
-                | perry_hir::PathWin32Method::ResolveJoin
-                | perry_hir::PathWin32Method::ToNamespacedPath,
+                | perry_hir::PathWin32Method::ResolveJoin,
             ..
         } => true,
         // String.fromCodePoint(...) / String.fromCharCode(...) / str.at(i)
         // / RegExp.source|flags — all produce string handles.
         Expr::StringFromCodePoint(_)
         | Expr::StringFromCharCode(_)
+        | Expr::StringRaw { .. }
         | Expr::StringAt { .. }
         | Expr::RegExpSource(_)
         | Expr::RegExpFlags(_)
@@ -1680,6 +1696,29 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
 pub(crate) fn is_array_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match static_type_of(ctx, e) {
         Some(HirType::Array(_)) | Some(HirType::Tuple(_)) => true,
+        // #3148: %TypedArray% receivers route their not-already-folded methods
+        // (fill / reverse / keys / values / entries / set / subarray) through
+        // `lower_array_method`; the generic `js_array_*` helpers delegate to the
+        // element-typed `js_typed_array_*` impls via `lookup_typed_array_kind`.
+        // Uint8Array / Uint8ClampedArray are intentionally excluded — they are
+        // buffer-backed and dispatched by `dispatch_buffer_method`.
+        Some(HirType::Named(ref n))
+            if matches!(
+                n.as_str(),
+                "Int8Array"
+                    | "Int16Array"
+                    | "Int32Array"
+                    | "Uint16Array"
+                    | "Uint32Array"
+                    | "Float16Array"
+                    | "Float32Array"
+                    | "Float64Array"
+                    | "BigInt64Array"
+                    | "BigUint64Array"
+            ) =>
+        {
+            true
+        }
         // `T | null`, `T | undefined`, `T[] | null` — when an `if (x)`
         // guard narrows away the null/undefined, the truthy branch
         // still has the same union type in the HIR, so recognize

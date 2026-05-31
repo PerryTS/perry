@@ -110,6 +110,7 @@ pub(super) fn try_url_date_weakref_instance(
                 | Some("Buffer")
                 | Some("Uint8Array")
                 | Some("Uint8ClampedArray")
+                | Some("Array")
         );
         // Methods we treat as Date-only when the receiver is unambiguously
         // Date or unknown (current behavior). `toString` / `toJSON` etc.
@@ -158,7 +159,14 @@ pub(super) fn try_url_date_weakref_instance(
                     | "toISOString"
                     | "valueOf"
             );
-            if ambiguous && !allow_ambiguous_date {
+            if method_name == "setTime"
+                && is_node_test_mock_timers_receiver(ctx, member.obj.as_ref())
+            {
+                // `node:test` exposes `mock.timers.setTime(ms)`. The broad
+                // Date setter fallback below also matches `.setTime(...)` on
+                // unknown receivers, so keep this known non-Date receiver on
+                // the generic method-call path.
+            } else if ambiguous && !allow_ambiguous_date {
                 // Receiver is statically a non-Date class (e.g. URL).
                 // Skip the Date arms below — fall through to generic.
             } else {
@@ -293,82 +301,86 @@ pub(super) fn try_url_date_weakref_instance(
                     | "setUTCMinutes" | "setUTCSeconds" | "setUTCMilliseconds" | "setFullYear"
                     | "setMonth" | "setDate" | "setHours" | "setMinutes" | "setSeconds"
                     | "setMilliseconds" | "setTime" => {
-                        if !args.is_empty() {
-                            let value_expr = args.into_iter().next().unwrap();
-                            let date_expr = lower_expr(ctx, &member.obj)?;
-                            let setter_call = match method_name {
-                                "setUTCFullYear" => Expr::DateSetUtcFullYear {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setUTCMonth" => Expr::DateSetUtcMonth {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setUTCDate" => Expr::DateSetUtcDate {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setUTCHours" => Expr::DateSetUtcHours {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setUTCMinutes" => Expr::DateSetUtcMinutes {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setUTCSeconds" => Expr::DateSetUtcSeconds {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setUTCMilliseconds" => Expr::DateSetUtcMilliseconds {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setFullYear" => Expr::DateSetFullYear {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setMonth" => Expr::DateSetMonth {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setDate" => Expr::DateSetDate {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setHours" => Expr::DateSetHours {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setMinutes" => Expr::DateSetMinutes {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setSeconds" => Expr::DateSetSeconds {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setMilliseconds" => Expr::DateSetMilliseconds {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setTime" => Expr::DateSetTime {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                _ => unreachable!(),
-                            };
-                            // #2089: Date is now a reference type — a setter
-                            // mutates the shared `DateCell` in place, so its
-                            // effect is already visible through every alias /
-                            // param / closure that holds this Date. The setter
-                            // call evaluates to the numeric ms (the JS setter
-                            // return value). The old `LocalSet(id, setter_call)`
-                            // writeback is dropped: it would now overwrite the
-                            // receiver local's Date POINTER with that number.
-                            return Ok(Ok(setter_call));
-                        }
+                        // #2851: Node Date setters accept optional trailing
+                        // components (e.g. `setUTCHours(h, min?, sec?, ms?)`)
+                        // and apply every supplied field in one call; an
+                        // omitted *leading* argument (`setHours()`) coerces to
+                        // NaN and makes the Date Invalid. We forward the entire
+                        // argument list to the runtime, which handles defaults,
+                        // NaN propagation, and the zero-argument case. So the
+                        // dispatch no longer requires `!args.is_empty()`.
+                        let setter_args = args;
+                        let date_expr = lower_expr(ctx, &member.obj)?;
+                        let date = Box::new(date_expr);
+                        let setter_call = match method_name {
+                            "setUTCFullYear" => Expr::DateSetUtcFullYear {
+                                date,
+                                args: setter_args,
+                            },
+                            "setUTCMonth" => Expr::DateSetUtcMonth {
+                                date,
+                                args: setter_args,
+                            },
+                            "setUTCDate" => Expr::DateSetUtcDate {
+                                date,
+                                args: setter_args,
+                            },
+                            "setUTCHours" => Expr::DateSetUtcHours {
+                                date,
+                                args: setter_args,
+                            },
+                            "setUTCMinutes" => Expr::DateSetUtcMinutes {
+                                date,
+                                args: setter_args,
+                            },
+                            "setUTCSeconds" => Expr::DateSetUtcSeconds {
+                                date,
+                                args: setter_args,
+                            },
+                            "setUTCMilliseconds" => Expr::DateSetUtcMilliseconds {
+                                date,
+                                args: setter_args,
+                            },
+                            "setFullYear" => Expr::DateSetFullYear {
+                                date,
+                                args: setter_args,
+                            },
+                            "setMonth" => Expr::DateSetMonth {
+                                date,
+                                args: setter_args,
+                            },
+                            "setDate" => Expr::DateSetDate {
+                                date,
+                                args: setter_args,
+                            },
+                            "setHours" => Expr::DateSetHours {
+                                date,
+                                args: setter_args,
+                            },
+                            "setMinutes" => Expr::DateSetMinutes {
+                                date,
+                                args: setter_args,
+                            },
+                            "setSeconds" => Expr::DateSetSeconds {
+                                date,
+                                args: setter_args,
+                            },
+                            "setMilliseconds" => Expr::DateSetMilliseconds {
+                                date,
+                                args: setter_args,
+                            },
+                            "setTime" => Expr::DateSetTime {
+                                date,
+                                args: setter_args,
+                            },
+                            _ => unreachable!(),
+                        };
+                        // #2089: Date is a reference type — a setter mutates the
+                        // shared `DateCell` in place, so its effect is already
+                        // visible through every alias / param / closure that
+                        // holds this Date. The setter call evaluates to the
+                        // numeric ms (the JS setter return value).
+                        return Ok(Ok(setter_call));
                     }
                     _ => {} // Fall through to other handling
                 }
@@ -391,35 +403,36 @@ pub(super) fn try_url_date_weakref_instance(
                     let registry_id = ctx.lookup_local(&recv_name).unwrap_or(0);
                     match method_name {
                         "register" => {
-                            if args.len() >= 2 {
-                                let mut iter = args.into_iter();
-                                let target = iter.next().unwrap();
-                                let held = iter.next().unwrap();
-                                let token = iter.next().map(Box::new);
-                                return Ok(Ok(Expr::FinalizationRegistryRegister {
-                                    registry: Box::new(Expr::LocalGet(registry_id)),
-                                    target: Box::new(target),
-                                    held: Box::new(held),
-                                    token,
-                                }));
-                            }
+                            let mut iter = args.into_iter();
+                            let target = iter.next().unwrap_or(Expr::Undefined);
+                            let held = iter.next().unwrap_or(Expr::Undefined);
+                            let token = iter.next().map(Box::new);
+                            return Ok(Ok(Expr::FinalizationRegistryRegister {
+                                registry: Box::new(Expr::LocalGet(registry_id)),
+                                target: Box::new(target),
+                                held: Box::new(held),
+                                token,
+                            }));
                         }
                         "unregister" => {
-                            if !args.is_empty() {
-                                let token = args.into_iter().next().unwrap();
-                                return Ok(Ok(Expr::FinalizationRegistryUnregister {
-                                    registry: Box::new(Expr::LocalGet(registry_id)),
-                                    token: Box::new(token),
-                                }));
-                            }
+                            let token = args.into_iter().next().unwrap_or(Expr::Undefined);
+                            return Ok(Ok(Expr::FinalizationRegistryUnregister {
+                                registry: Box::new(Expr::LocalGet(registry_id)),
+                                token: Box::new(token),
+                            }));
                         }
                         _ => {}
                     }
                 }
                 // WeakMap/WeakSet — route to dedicated runtime functions
                 // (NOT the regular Map/Set HIR variants) so reference-equality
-                // works for object keys. Primitive keys/values throw via
-                // js_weak_throw_primitive when the AST shows a bare literal.
+                // works for object keys. Primitive keys/values are rejected by
+                // the runtime helpers themselves (#2772): `js_weakmap_set` /
+                // `js_weakset_add` validate the key/value at runtime and throw
+                // Node's exact `Invalid value used as weak map key` /
+                // `Invalid value used in weak set`. This covers both literal
+                // and dynamic primitives uniformly, so no AST-literal fast path
+                // is needed here.
                 let make_extern_call = |name: &str, args: Vec<Expr>| -> Expr {
                     Expr::Call {
                         callee: Box::new(Expr::ExternFuncRef {
@@ -431,29 +444,11 @@ pub(super) fn try_url_date_weakref_instance(
                         type_args: Vec::new(),
                     }
                 };
-                let throw_primitive_expr = || -> Expr {
-                    Expr::Call {
-                        callee: Box::new(Expr::ExternFuncRef {
-                            name: "js_weak_throw_primitive".to_string(),
-                            param_types: Vec::new(),
-                            return_type: Type::Any,
-                        }),
-                        args: Vec::new(),
-                        type_args: Vec::new(),
-                    }
-                };
                 if ctx.weakmap_locals.contains(&recv_name) {
                     let map_id = ctx.lookup_local(&recv_name).unwrap_or(0);
                     let recv = Expr::LocalGet(map_id);
                     match method_name {
                         "set" if args.len() >= 2 => {
-                            let key_is_primitive_lit = matches!(
-                                call.args.first().map(|a| a.expr.as_ref()),
-                                Some(ast::Expr::Lit(_))
-                            );
-                            if key_is_primitive_lit {
-                                return Ok(Ok(throw_primitive_expr()));
-                            }
                             let mut iter = args.into_iter();
                             let key = iter.next().unwrap();
                             let value = iter.next().unwrap();
@@ -488,13 +483,6 @@ pub(super) fn try_url_date_weakref_instance(
                     let recv = Expr::LocalGet(set_id);
                     match method_name {
                         "add" if !args.is_empty() => {
-                            let value_is_primitive_lit = matches!(
-                                call.args.first().map(|a| a.expr.as_ref()),
-                                Some(ast::Expr::Lit(_))
-                            );
-                            if value_is_primitive_lit {
-                                return Ok(Ok(throw_primitive_expr()));
-                            }
                             return Ok(Ok(make_extern_call(
                                 "js_weakset_add",
                                 vec![recv, args.into_iter().next().unwrap()],
@@ -519,4 +507,17 @@ pub(super) fn try_url_date_weakref_instance(
         }
     }
     Ok(Err(args))
+}
+
+fn is_node_test_mock_timers_receiver(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    let ast::Expr::Member(inner) = expr else {
+        return false;
+    };
+    if !matches!(&inner.prop, ast::MemberProp::Ident(prop) if prop.sym.as_ref() == "timers") {
+        return false;
+    }
+    let ast::Expr::Ident(root) = inner.obj.as_ref() else {
+        return false;
+    };
+    ctx.lookup_imported_func(root.sym.as_ref()) == Some("mock")
 }

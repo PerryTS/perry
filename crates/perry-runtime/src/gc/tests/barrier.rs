@@ -1,3 +1,4 @@
+use super::super::barrier::RememberedSetClearState;
 use super::super::*;
 use super::support::*;
 
@@ -54,8 +55,17 @@ unsafe fn field_indices_on_distinct_pages(fields: *mut u64, field_count: u32) ->
     panic!("test object did not span two field pages");
 }
 
+fn remembered_maintenance_entry_count() -> usize {
+    let dirty_old = DIRTY_OLD_PAGES.with(|s| s.borrow().len());
+    let external_dirty =
+        EXTERNAL_DIRTY_SLOT_PAGES.with(|s| s.borrow().values().map(Vec::len).sum::<usize>());
+    let fallback = REMEMBERED_SET.with(|s| s.borrow().len());
+    dirty_old + external_dirty + fallback
+}
+
 #[test]
 fn test_write_barrier_old_to_young_records() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
     let old = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
@@ -86,6 +96,7 @@ fn test_write_barrier_old_to_young_records() {
 
 #[test]
 fn test_write_barrier_slot_marks_dirty_page_and_dedups() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
     let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
@@ -119,6 +130,7 @@ fn test_write_barrier_slot_marks_dirty_page_and_dedups() {
 
 #[test]
 fn test_barriered_slot_store_api_trace_counters() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     let tracing = gc_trace_enabled();
     let _ = take_write_barrier_trace_counters();
@@ -154,7 +166,75 @@ fn test_barriered_slot_store_api_trace_counters() {
 }
 
 #[test]
+fn test_remembered_set_clear_state_slices_maintenance_entries() {
+    let _guard = GcTestIsolationGuard::new();
+    reset_remembered_set();
+
+    let old = crate::arena::arena_alloc_gc_old(24 * 1024, 8, GC_TYPE_STRING) as usize;
+    let old_header = unsafe { header_from_user_ptr(old as *const u8) };
+    let old_total = unsafe { (*old_header).size as usize };
+    let dirty_pages: Vec<usize> =
+        crate::arena::old_object_page_overlaps(old_header as usize, old_total)
+            .into_iter()
+            .map(|(page, _)| page)
+            .take(3)
+            .collect();
+    assert!(
+        dirty_pages.len() >= 3,
+        "test old object should span at least three old pages"
+    );
+    for &page in &dirty_pages {
+        mark_dirty_old_page(page);
+        assert!(old_page_dirty_for(page));
+    }
+
+    EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
+        let mut pages = s.borrow_mut();
+        pages.insert(0x1000, vec![0x10, 0x20]);
+        pages.insert(0x2000, vec![0x30]);
+    });
+    REMEMBERED_SET.with(|s| {
+        let mut headers = s.borrow_mut();
+        headers.insert(0x40);
+        headers.insert(0x50);
+    });
+
+    let initial = remembered_maintenance_entry_count();
+    assert_eq!(initial, dirty_pages.len() + 5);
+
+    let mut state = RememberedSetClearState::new();
+    assert!(
+        !state.step(1),
+        "one cleanup unit must not drain all maintenance structures"
+    );
+    assert_eq!(remembered_maintenance_entry_count(), initial - 1);
+    assert!(
+        DIRTY_OLD_PAGES.with(|s| !s.borrow().is_empty()),
+        "one cleanup unit should remove one dirty old page, not bulk-clear the set"
+    );
+
+    let mut calls = 1usize;
+    while !state.step(1) {
+        calls += 1;
+        assert!(
+            calls <= initial,
+            "remembered cleanup should finish after one call per maintenance entry"
+        );
+    }
+
+    assert!(calls > 1);
+    assert_eq!(remembered_maintenance_entry_count(), 0);
+    for page in dirty_pages {
+        assert!(
+            !old_page_dirty_for(page),
+            "dirty old-page metadata should be clear after cleanup completes"
+        );
+    }
+}
+
+#[test]
 fn test_write_barrier_young_to_young_skipped() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     let parent = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
     let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -168,6 +248,7 @@ fn test_write_barrier_young_to_young_skipped() {
 
 #[test]
 fn test_write_barrier_old_to_old_skipped() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     let parent = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
     let child = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
@@ -181,6 +262,7 @@ fn test_write_barrier_old_to_old_skipped() {
 
 #[test]
 fn test_write_barrier_old_to_young_string_tag() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     let young_str = crate::arena::arena_alloc_gc(32, 8, GC_TYPE_STRING) as usize;
     let old = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
@@ -191,6 +273,7 @@ fn test_write_barrier_old_to_young_string_tag() {
 
 #[test]
 fn test_write_barrier_non_pointer_child_skipped() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     let old = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
     // INT32_TAG in child position.
@@ -220,6 +303,7 @@ fn test_write_barrier_non_pointer_child_skipped() {
 
 #[test]
 fn test_write_barrier_non_pointer_parent_skipped() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
     js_write_barrier_slot(0x7FFE_0000_0000_002A_u64, 0, POINTER_TAG | young as u64);
@@ -232,6 +316,7 @@ fn test_write_barrier_non_pointer_parent_skipped() {
 
 #[test]
 fn test_write_barrier_remembered_set_clear() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
     let old = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
@@ -249,6 +334,7 @@ fn test_write_barrier_remembered_set_clear() {
 
 #[test]
 fn test_write_barrier_slot_clear() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
     let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
@@ -271,6 +357,7 @@ fn test_write_barrier_slot_clear() {
 
 #[test]
 fn test_gc_collect_minor_restores_live_old_young_rs() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
     let (old, fields) = unsafe { alloc_old_test_object(1) };
@@ -294,6 +381,7 @@ fn test_gc_collect_minor_restores_live_old_young_rs() {
 
 #[test]
 fn test_dirty_page_scan_marks_young_child() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -326,6 +414,7 @@ fn test_dirty_page_scan_marks_young_child() {
 
 #[test]
 fn test_old_young_edge_verifier_rejects_unbarriered_old_object_field() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -351,6 +440,7 @@ fn test_old_young_edge_verifier_rejects_unbarriered_old_object_field() {
 
 #[test]
 fn test_old_young_edge_verifier_accepts_barriered_old_object_field() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -375,6 +465,7 @@ fn test_old_young_edge_verifier_accepts_barriered_old_object_field() {
 
 #[test]
 fn test_old_young_edge_verifier_accepts_dirty_old_page_metadata() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -399,6 +490,7 @@ fn test_old_young_edge_verifier_accepts_dirty_old_page_metadata() {
 
 #[test]
 fn test_old_young_edge_verifier_rejects_object_fallback_only() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -427,6 +519,7 @@ fn test_old_young_edge_verifier_rejects_object_fallback_only() {
 
 #[test]
 fn test_old_young_edge_verifier_accepts_barriered_array_element() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -451,6 +544,7 @@ fn test_old_young_edge_verifier_accepts_barriered_array_element() {
 
 #[test]
 fn test_old_young_edge_verifier_accepts_map_external_slot() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -482,6 +576,7 @@ fn test_old_young_edge_verifier_accepts_map_external_slot() {
 
 #[test]
 fn test_old_young_edge_verifier_accepts_set_external_slot() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -508,6 +603,7 @@ fn test_old_young_edge_verifier_accepts_set_external_slot() {
 
 #[test]
 fn test_old_young_edge_verifier_accepts_promise_slot() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -532,6 +628,7 @@ fn test_old_young_edge_verifier_accepts_promise_slot() {
 
 #[test]
 fn test_old_young_edge_verifier_trace_json_shape() {
+    let _guard = GcTestIsolationGuard::new();
     let mut trace = GcCycleTrace::new(
         GcCollectionKind::Minor,
         GcTriggerSnapshot {
@@ -574,6 +671,7 @@ fn test_old_young_edge_verifier_trace_json_shape() {
 
 #[test]
 fn test_dirty_page_scan_skips_pointer_free_old_object_payload_slots() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let (old_obj, fields) = unsafe { alloc_old_test_object(2048) };
@@ -608,6 +706,7 @@ fn test_dirty_page_scan_skips_pointer_free_old_object_payload_slots() {
 
 #[test]
 fn test_dirty_page_array_scan_is_slot_range_bounded() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let dirty_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -646,6 +745,7 @@ fn test_dirty_page_array_scan_is_slot_range_bounded() {
 
 #[test]
 fn test_dirty_page_scan_ignores_clean_old_pages() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let dirty_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -697,6 +797,7 @@ fn test_dirty_page_scan_ignores_clean_old_pages() {
 
 #[test]
 fn test_dirty_page_scan_dedupes_object_spanning_dirty_pages() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let young_a = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -748,6 +849,7 @@ fn test_dirty_page_scan_dedupes_object_spanning_dirty_pages() {
 
 #[test]
 fn test_dirty_page_map_entry_scan_is_external_range_bounded() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let dirty_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -792,6 +894,7 @@ fn test_dirty_page_map_entry_scan_is_external_range_bounded() {
 
 #[test]
 fn test_dirty_lazy_array_external_cache_scan_marks_bitmap_selected_child() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
 
@@ -861,6 +964,7 @@ fn test_dirty_lazy_array_external_cache_scan_marks_bitmap_selected_child() {
 
 #[test]
 fn test_dirty_page_map_external_dedupes_and_clears() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
     let (map, entries, layout) = unsafe { alloc_old_test_map(16) };
@@ -891,6 +995,7 @@ fn test_dirty_page_map_external_dedupes_and_clears() {
 
 #[test]
 fn test_dirty_page_map_realloc_span_marks_new_entries_pages() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -926,6 +1031,7 @@ fn test_dirty_page_map_realloc_span_marks_new_entries_pages() {
 
 #[test]
 fn test_dirty_page_set_external_slot_marks_child() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
 
@@ -959,6 +1065,7 @@ fn test_dirty_page_set_external_slot_marks_child() {
 
 #[test]
 fn test_rewrite_remembered_dirty_range_updates_set_external_entry_span() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
 
@@ -1011,6 +1118,7 @@ fn test_rewrite_remembered_dirty_range_updates_set_external_entry_span() {
 
 #[test]
 fn test_dirty_page_promise_value_slot_marks_child() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
 
@@ -1075,6 +1183,7 @@ fn clear_mark_user_ptr(ptr: usize) {
 
 #[test]
 fn test_incremental_barrier_marks_object_field_store() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -1096,6 +1205,7 @@ fn test_incremental_barrier_marks_object_field_store() {
 
 #[test]
 fn test_incremental_barrier_marks_array_element_store() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -1117,6 +1227,7 @@ fn test_incremental_barrier_marks_array_element_store() {
 
 #[test]
 fn test_incremental_barrier_marks_closure_capture_store() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -1138,6 +1249,7 @@ fn test_incremental_barrier_marks_closure_capture_store() {
 
 #[test]
 fn test_incremental_barrier_marks_closure_static_prototype_store() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let proto = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -1161,6 +1273,7 @@ fn test_incremental_barrier_marks_closure_static_prototype_store() {
 
 #[test]
 fn test_incremental_barrier_marks_external_map_and_set_slots() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let map_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -1194,6 +1307,7 @@ fn test_incremental_barrier_marks_external_map_and_set_slots() {
 
 #[test]
 fn test_mark_invariant_verifier_rejects_incremental_barrier_bypass() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -1216,6 +1330,7 @@ fn test_mark_invariant_verifier_rejects_incremental_barrier_bypass() {
 
 #[test]
 fn test_store_outside_incremental_mark_keeps_generational_behavior_only() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     assert!(!incremental_mark_barrier_active());
@@ -1312,6 +1427,7 @@ fn test_promise_pointer_field_stores_dirty_old_page() {
 
 #[test]
 fn test_dirty_page_error_cause_slot_marks_child() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
 
@@ -1341,6 +1457,7 @@ fn test_dirty_page_error_cause_slot_marks_child() {
 
 #[test]
 fn test_rewrite_remembered_dirty_range_updates_unmarked_old_parent_slot() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -1382,6 +1499,7 @@ fn test_rewrite_remembered_dirty_range_updates_unmarked_old_parent_slot() {
 
 #[test]
 fn test_rewrite_remembered_dirty_range_updates_map_external_entry_span() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let dirty_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -1432,6 +1550,7 @@ fn test_rewrite_remembered_dirty_range_updates_map_external_entry_span() {
 
 #[test]
 fn test_rewrite_remembered_fallback_header_updates_fields() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -1461,6 +1580,7 @@ fn test_rewrite_remembered_fallback_header_updates_fields() {
 
 #[test]
 fn test_object_hashset_fallback_still_scans() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
     let (old_obj, _fields) = unsafe { alloc_old_test_object(1) };
@@ -1483,6 +1603,7 @@ fn test_object_hashset_fallback_still_scans() {
 
 #[test]
 fn test_gc_collect_minor_keeps_dirty_page_child_alive() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
     let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
@@ -1508,6 +1629,7 @@ fn test_gc_collect_minor_keeps_dirty_page_child_alive() {
 
 #[test]
 fn test_minor_gc_promotes_after_two_survivals() {
+    let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     // Allocate an arena object and pin it so it survives every GC.
     let user_ptr = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);

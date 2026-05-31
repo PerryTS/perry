@@ -615,6 +615,34 @@ fn test_numeric_array_layout_bulk_rebuild_preserves_and_downgrades() {
 }
 
 #[test]
+fn test_array_slice_value_index_coercion() {
+    let values = [1.0, 2.0, 3.0, 4.0];
+    let src = js_array_from_f64(values.as_ptr(), values.len() as u32);
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+
+    assert_numeric_raw_values(js_array_slice_values(src, f64::NAN, undefined), &values);
+    assert_numeric_raw_values(js_array_slice_values(src, f64::INFINITY, undefined), &[]);
+    assert_numeric_raw_values(
+        js_array_slice_values(src, f64::NEG_INFINITY, undefined),
+        &values,
+    );
+    assert_numeric_raw_values(
+        js_array_slice_values(src, 1.0, f64::INFINITY),
+        &[2.0, 3.0, 4.0],
+    );
+    assert_numeric_raw_values(js_array_slice_values(src, 1.0, f64::NAN), &[]);
+    assert_numeric_raw_values(js_array_slice_values(src, 1.9, 3.8), &[2.0, 3.0]);
+    assert_numeric_raw_values(js_array_slice_values(src, 1.0, undefined), &[2.0, 3.0, 4.0]);
+
+    let str_ptr = crate::string::js_string_from_bytes(b"2".as_ptr(), 1);
+    let string_two = crate::value::js_nanbox_string(str_ptr as i64);
+    assert_numeric_raw_values(
+        js_array_slice_values(src, string_two, undefined),
+        &[3.0, 4.0],
+    );
+}
+
+#[test]
 fn test_numeric_array_layout_length_and_delete_transitions() {
     let mut arr = js_array_alloc(4);
     arr = js_array_push_f64(arr, 1.0);
@@ -913,6 +941,26 @@ fn test_array_splice_delete_to_end() {
 }
 
 #[test]
+fn test_array_splice_delete_count_coerces_js_values() {
+    assert_eq!(
+        js_array_splice_delete_count(f64::from_bits(crate::value::TAG_UNDEFINED)),
+        0
+    );
+    assert_eq!(
+        js_array_splice_delete_count(f64::from_bits(crate::value::TAG_NULL)),
+        0
+    );
+    assert_eq!(
+        js_array_splice_delete_count(crate::value::js_nanbox_string(
+            crate::string::js_string_from_bytes(b"2.8".as_ptr(), 3) as i64,
+        )),
+        2
+    );
+    assert_eq!(js_array_splice_delete_count(f64::INFINITY), i32::MAX);
+    assert_eq!(js_array_splice_delete_count(f64::NAN), 0);
+}
+
+#[test]
 fn test_array_splice_negative_start() {
     // [1,2,3,4].splice(-2, 1) -> deleted=[3], arr=[1,2,4]
     let arr = js_array_alloc(8);
@@ -977,5 +1025,28 @@ fn join_routes_objects_and_nested_arrays_through_tostring() {
         let data = (out as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
         let s = std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap();
         assert_eq!(s, "1,2;[object Object]");
+    }
+}
+
+#[test]
+fn join_accepts_heap_string_tagged_elements() {
+    unsafe {
+        let left = crate::string::js_string_from_bytes(b"alpha".as_ptr(), 5);
+        let right = crate::string::js_string_from_bytes(b"beta".as_ptr(), 4);
+        let left_v =
+            f64::from_bits(crate::value::STRING_TAG | (left as u64 & crate::value::POINTER_MASK));
+        let right_v =
+            f64::from_bits(crate::value::STRING_TAG | (right as u64 & crate::value::POINTER_MASK));
+
+        let mut arr = js_array_alloc(2);
+        arr = js_array_push_f64(arr, left_v);
+        arr = js_array_push_f64(arr, right_v);
+
+        let sep = crate::string::js_string_from_bytes(b"|".as_ptr(), 1);
+        let out = js_array_join(arr, sep);
+        let len = (*out).byte_len as usize;
+        let data = (out as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let s = std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap();
+        assert_eq!(s, "alpha|beta");
     }
 }

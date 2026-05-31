@@ -269,6 +269,22 @@ mod tests {
     }
 
     #[test]
+    fn assert_strict_self_alias_has_manifest_entries() {
+        let method = module_has_symbol("node:assert/strict", "strict")
+            .expect("assert/strict.strict should be callable in the manifest");
+        assert!(matches!(method.kind, ApiKind::Method { .. }));
+
+        assert!(
+            API_MANIFEST.iter().any(|entry| {
+                entry.module == "assert/strict"
+                    && entry.name == "strict"
+                    && matches!(entry.kind, ApiKind::Property)
+            }),
+            "assert/strict.strict should also be a manifest property"
+        );
+    }
+
+    #[test]
     fn util_is_array_is_manifest_method() {
         let entry = module_has_symbol("node:util", "isArray")
             .expect("util.isArray should be in the manifest");
@@ -284,6 +300,53 @@ mod tests {
     }
 
     #[test]
+    fn path_make_long_is_manifest_method() {
+        let entry = module_has_symbol("node:path", "_makeLong")
+            .expect("node:path._makeLong should be in the manifest");
+        assert!(matches!(
+            entry.kind,
+            ApiKind::Method {
+                has_receiver: false,
+                class_filter: None
+            }
+        ));
+    }
+
+    #[test]
+    fn crypto_random_fill_is_manifest_method() {
+        let entry = module_has_symbol("node:crypto", "randomFill")
+            .expect("crypto.randomFill should be in the manifest");
+        assert!(matches!(
+            entry.kind,
+            ApiKind::Method {
+                has_receiver: false,
+                class_filter: None
+            }
+        ));
+    }
+
+    #[test]
+    fn deprecated_constants_alias_has_manifest_entries() {
+        for name in [
+            "F_OK",
+            "SIGTERM",
+            "SIGINT",
+            "EACCES",
+            "PRIORITY_NORMAL",
+            "RTLD_DEEPBIND",
+            "RSA_PKCS1_PADDING",
+            "SSL_OP_NO_SSLv2",
+            "SSL_OP_NO_TLSv1",
+            "POINT_CONVERSION_COMPRESSED",
+            "POINT_CONVERSION_UNCOMPRESSED",
+        ] {
+            let entry = module_has_symbol("node:constants", name)
+                .expect("node:constants representative property should be in the manifest");
+            assert!(matches!(entry.kind, ApiKind::Property));
+        }
+    }
+
+    #[test]
     fn known_modules_consistent_with_manifest() {
         // Every entry's module must appear in NATIVE_MODULES.
         // Catches typos and entries on un-registered modules.
@@ -294,6 +357,144 @@ mod tests {
                 entry.module,
                 entry.name
             );
+        }
+    }
+
+    #[test]
+    fn sys_alias_mirrors_util_manifest() {
+        assert!(is_known_module("sys"));
+        assert!(is_known_module("node:sys"));
+        assert!(module_has_any_entries("sys"));
+
+        for name in [
+            "format",
+            "inspect",
+            "types",
+            "TextEncoder",
+            "parseArgs",
+            "stripVTControlCharacters",
+        ] {
+            assert!(
+                module_has_symbol("node:sys", name).is_some(),
+                "node:sys missing representative util alias export: {name}"
+            );
+        }
+
+        let util_entries: Vec<&ApiEntry> =
+            API_MANIFEST.iter().filter(|e| e.module == "util").collect();
+        let sys_entries: Vec<&ApiEntry> =
+            API_MANIFEST.iter().filter(|e| e.module == "sys").collect();
+        assert_eq!(
+            sys_entries.len(),
+            util_entries.len(),
+            "sys should mirror the public util module manifest surface"
+        );
+
+        for util_entry in util_entries {
+            let sys_entry = sys_entries
+                .iter()
+                .copied()
+                .find(|e| e.name == util_entry.name && e.kind == util_entry.kind)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "sys missing util alias entry {}::{:?}",
+                        util_entry.name, util_entry.kind
+                    )
+                });
+            assert_eq!(sys_entry.source, util_entry.source, "{}", util_entry.name);
+            assert_eq!(sys_entry.stub, util_entry.stub, "{}", util_entry.name);
+            assert_eq!(
+                sys_entry.abi_version, util_entry.abi_version,
+                "{}",
+                util_entry.name
+            );
+            assert_eq!(
+                sys_entry.params.len(),
+                util_entry.params.len(),
+                "{}",
+                util_entry.name
+            );
+            assert_eq!(sys_entry.returns, util_entry.returns, "{}", util_entry.name);
+        }
+    }
+
+    #[test]
+    fn path_submodule_manifests_mirror_path() {
+        let path_entries: Vec<&ApiEntry> =
+            API_MANIFEST.iter().filter(|e| e.module == "path").collect();
+
+        for module in ["path/posix", "path/win32"] {
+            assert!(is_known_module(module));
+            assert!(is_known_module(&format!("node:{module}")));
+            assert!(module_has_any_entries(module));
+
+            for name in ["join", "basename", "sep", "delimiter", "posix", "win32"] {
+                assert!(
+                    module_has_symbol(module, name).is_some(),
+                    "{module} missing representative path export: {name}"
+                );
+            }
+
+            let submodule_entries: Vec<&ApiEntry> =
+                API_MANIFEST.iter().filter(|e| e.module == module).collect();
+            assert_eq!(
+                submodule_entries.len(),
+                path_entries.len(),
+                "{module} should mirror the public path module manifest surface"
+            );
+
+            for path_entry in &path_entries {
+                let submodule_entry = submodule_entries
+                    .iter()
+                    .copied()
+                    .find(|e| e.name == path_entry.name && e.kind == path_entry.kind)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{module} missing path alias entry {}::{:?}",
+                            path_entry.name, path_entry.kind
+                        )
+                    });
+                assert_eq!(
+                    submodule_entry.source, path_entry.source,
+                    "{module}::{}",
+                    path_entry.name
+                );
+                assert_eq!(
+                    submodule_entry.stub, path_entry.stub,
+                    "{module}::{}",
+                    path_entry.name
+                );
+                assert_eq!(
+                    submodule_entry.params.len(),
+                    path_entry.params.len(),
+                    "{module}::{}",
+                    path_entry.name
+                );
+                assert_eq!(
+                    submodule_entry.returns, path_entry.returns,
+                    "{module}::{}",
+                    path_entry.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stream_consumers_manifest_surface_is_registered() {
+        assert!(is_known_module("stream/consumers"));
+        assert!(is_known_module("node:stream/consumers"));
+        assert!(module_has_any_entries("stream/consumers"));
+
+        for name in ["arrayBuffer", "blob", "buffer", "bytes", "json", "text"] {
+            let entry = module_has_symbol("node:stream/consumers", name)
+                .unwrap_or_else(|| panic!("stream/consumers missing {name}"));
+            assert!(matches!(
+                entry.kind,
+                ApiKind::Method {
+                    has_receiver: false,
+                    class_filter: None,
+                }
+            ));
         }
     }
 }

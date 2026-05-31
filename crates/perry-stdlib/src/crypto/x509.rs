@@ -98,31 +98,89 @@ pub(super) fn x509_colon_hex(bytes: &[u8]) -> String {
         .join(":")
 }
 
+fn throw_x509_parse_error(message: &str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = perry_runtime::error::js_error_new_with_message(msg);
+    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn decode_x509_pem(bytes: &[u8]) -> Option<Vec<u8>> {
+    const BEGIN: &[u8] = b"-----BEGIN CERTIFICATE-----";
+    const END: &[u8] = b"-----END CERTIFICATE-----";
+
+    let start = bytes.strip_prefix(BEGIN)?;
+    let end = find_bytes(start, END)?;
+    let mut body = Vec::with_capacity(end);
+    for &byte in &start[..end] {
+        if !matches!(byte, b'\r' | b'\n' | b'\t' | b' ') {
+            body.push(byte);
+        }
+    }
+    if body.is_empty() {
+        return None;
+    }
+    base64::engine::general_purpose::STANDARD.decode(body).ok()
+}
+
+fn complete_der_sequence_len(bytes: &[u8]) -> Option<usize> {
+    if bytes.len() < 2 || bytes[0] != 0x30 {
+        return None;
+    }
+    let first_len = bytes[1];
+    if first_len & 0x80 == 0 {
+        return Some(2 + first_len as usize);
+    }
+
+    let len_bytes = (first_len & 0x7f) as usize;
+    if len_bytes == 0 || len_bytes > std::mem::size_of::<usize>() || bytes.len() < 2 + len_bytes {
+        return None;
+    }
+    let mut payload_len = 0usize;
+    for &byte in &bytes[2..2 + len_bytes] {
+        payload_len = payload_len.checked_shl(8)?.checked_add(byte as usize)?;
+    }
+    (2 + len_bytes).checked_add(payload_len)
+}
+
+fn is_complete_der_sequence(bytes: &[u8]) -> bool {
+    matches!(complete_der_sequence_len(bytes), Some(len) if len == bytes.len())
+}
+
 /// `new crypto.X509Certificate(pem | der)` — parse and register a handle.
-/// Accepts a PEM string or a DER Buffer/Uint8Array. Returns `undefined`
-/// on a parse failure (Node throws; the stub degrades to undefined).
+/// Accepts a PEM string or a DER Buffer/Uint8Array. Invalid input throws
+/// a catchable Error instead of returning an undefined sentinel.
 ///
 /// # Safety
 /// `input_ptr` must be a valid string/buffer pointer (the codegen-unboxed
 /// constructor argument).
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_x509_new(input_ptr: i64) -> f64 {
-    use x509_cert::der::{Decode, DecodePem, Encode};
+    use x509_cert::der::{Decode, Encode};
     let bytes = bytes_from_ptr(input_ptr);
-    let cert = if bytes.starts_with(b"-----BEGIN") {
-        match x509_cert::Certificate::from_pem(&bytes) {
-            Ok(c) => c,
-            Err(_) => return nanbox_undefined(),
+    let der = if bytes.starts_with(b"-----BEGIN") {
+        match decode_x509_pem(&bytes) {
+            Some(der) if is_complete_der_sequence(&der) => der,
+            _ => throw_x509_parse_error("error:0480006C:PEM routines::no start line"),
         }
     } else {
-        match x509_cert::Certificate::from_der(&bytes) {
-            Ok(c) => c,
-            Err(_) => return nanbox_undefined(),
+        if !is_complete_der_sequence(&bytes) {
+            throw_x509_parse_error("error:0680007B:asn1 encoding routines::header too long");
         }
+        bytes
+    };
+    let cert = match x509_cert::Certificate::from_der(&der) {
+        Ok(c) => c,
+        Err(_) => throw_x509_parse_error("error:0680007B:asn1 encoding routines::header too long"),
     };
     let der = match cert.to_der() {
         Ok(d) => d,
-        Err(_) => return nanbox_undefined(),
+        Err(_) => throw_x509_parse_error("error:0680007B:asn1 encoding routines::header too long"),
     };
     let handle: Handle = register_handle(X509Handle { der, cert });
     f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))

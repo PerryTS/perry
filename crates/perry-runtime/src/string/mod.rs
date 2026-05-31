@@ -27,7 +27,9 @@ mod concat;
 mod format;
 mod intern;
 mod io;
+mod locale;
 mod pad;
+mod raw;
 mod slice_ops;
 mod split;
 
@@ -49,8 +51,9 @@ pub use char_ops::{
 };
 pub use compare::{
     js_string_compare, js_string_ends_with, js_string_ends_with_at, js_string_equals,
-    js_string_is_well_formed, js_string_locale_compare, js_string_normalize, js_string_starts_with,
-    js_string_starts_with_at, js_string_to_well_formed,
+    js_string_is_well_formed, js_string_locale_compare, js_string_normalize,
+    js_string_search_value_to_string, js_string_starts_with, js_string_starts_with_at,
+    js_string_to_well_formed,
 };
 // #1781: SSO-aware key lookup helpers, used to retire the
 // `is_string() && js_string_equals(key, key_val.as_string_ptr())` shape
@@ -67,11 +70,16 @@ pub use format::{
 };
 pub use intern::{js_string_intern, scan_intern_table_roots, scan_intern_table_roots_mut};
 pub use io::{js_string_error, js_string_print, js_string_warn};
+pub use locale::{
+    js_string_to_locale_lower_case, js_string_to_locale_upper_case, js_string_validate_locales,
+};
 pub use pad::{js_string_alloc_space, js_string_pad_end, js_string_pad_start, js_string_repeat};
+pub use raw::js_string_raw;
 pub use slice_ops::{
     js_string_index_of, js_string_index_of_from, js_string_last_index_of,
-    js_string_last_index_of_from, js_string_slice, js_string_substring, js_string_to_lower_case,
-    js_string_to_upper_case, js_string_trim, js_string_trim_end, js_string_trim_start,
+    js_string_last_index_of_from, js_string_slice, js_string_substr, js_string_substring,
+    js_string_to_lower_case, js_string_to_upper_case, js_string_trim, js_string_trim_end,
+    js_string_trim_start,
 };
 pub use split::{js_string_split, js_string_split_n};
 

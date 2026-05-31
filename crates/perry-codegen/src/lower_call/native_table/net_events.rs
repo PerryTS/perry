@@ -457,6 +457,147 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_OBJ_FROM_JSON_STR,
     },
+    // #2549 — `net.Socket` state / counter / metadata property getters.
+    // A bare member read on a `("net","Socket")` instance lowers to a
+    // zero-arg `NativeMethodCall` with `class_name: None` (see
+    // `perry-hir/.../expr_member.rs`), so these rows use `class_filter:
+    // None`; the `module: "net"` qualifier still disambiguates them from
+    // other modules' getters in the generic dispatch pass.
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "pending",
+        class_filter: None,
+        runtime: "js_net_socket_get_pending",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "connecting",
+        class_filter: None,
+        runtime: "js_net_socket_get_connecting",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "destroyed",
+        class_filter: None,
+        runtime: "js_net_socket_get_destroyed",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "readyState",
+        class_filter: None,
+        runtime: "js_net_socket_get_ready_state",
+        args: &[],
+        ret: NR_STR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "bytesRead",
+        class_filter: None,
+        runtime: "js_net_socket_get_bytes_read",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "bytesWritten",
+        class_filter: None,
+        runtime: "js_net_socket_get_bytes_written",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "timeout",
+        class_filter: None,
+        runtime: "js_net_socket_get_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "localAddress",
+        class_filter: None,
+        runtime: "js_net_socket_get_local_address",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "localPort",
+        class_filter: None,
+        runtime: "js_net_socket_get_local_port",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "localFamily",
+        class_filter: None,
+        runtime: "js_net_socket_get_local_family",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "remoteAddress",
+        class_filter: None,
+        runtime: "js_net_socket_get_remote_address",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "remotePort",
+        class_filter: None,
+        runtime: "js_net_socket_get_remote_port",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "remoteFamily",
+        class_filter: None,
+        runtime: "js_net_socket_get_remote_family",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "bufferSize",
+        class_filter: None,
+        runtime: "js_net_socket_get_buffer_size",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "autoSelectFamilyAttemptedAddresses",
+        class_filter: None,
+        runtime: "js_net_socket_get_auto_select_family_attempted_addresses",
+        args: &[],
+        ret: NR_F64,
+    },
     // Issue #2131 — EventEmitter surface beyond `on`/`addListener`.
     // `once` flags the listener in a side-table so the pump removes it
     // after the next event fires. `off`/`removeListener` delete a
@@ -764,12 +905,21 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_STR],
         ret: NR_PTR,
     },
-    // ========== node:stream — Readable.from(iterable) (#631) ==========
+    // ========== node:stream — Readable.from / Duplex.from (#631/#1532) ==========
     // The other stream constructors (`new Readable(opts)` etc.) are wired
     // via `lower_builtin_new` so the codegen can carry the closure-fields
     // ObjectHeader with NaN-boxed POINTER_TAG; they never reach this
-    // table. `Readable.from` is a static factory call surfaced as
-    // `Readable.from(...)` → `stream.from(...)`, so it lives here.
+    // table. Static factory calls surface as `stream.from(...)` with a
+    // class filter for constructor imports like `Duplex.from(...)`.
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "from",
+        class_filter: Some("Duplex"),
+        runtime: "js_node_stream_duplex_from_options",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
     NativeModSig {
         module: "stream",
         has_receiver: false,
@@ -1428,7 +1578,9 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "on",
         class_filter: None,
         runtime: "js_event_emitter_on",
-        args: &[NA_STR, NA_PTR],
+        // NA_JSV (#3072): pass the full NaN-boxed listener so the runtime can
+        // validate it is callable and throw ERR_INVALID_ARG_TYPE otherwise.
+        args: &[NA_STR, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1446,7 +1598,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "removeListener",
         class_filter: None,
         runtime: "js_event_emitter_remove_listener",
-        args: &[NA_STR, NA_PTR],
+        // NA_JSV (#3072): validate the listener is callable before removal.
+        args: &[NA_STR, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1469,7 +1622,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "once",
         class_filter: None,
         runtime: "js_event_emitter_once",
-        args: &[NA_STR, NA_PTR],
+        // NA_JSV (#3072): validate the listener is callable.
+        args: &[NA_STR, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1478,7 +1632,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "addListener",
         class_filter: None,
         runtime: "js_event_emitter_on",
-        args: &[NA_STR, NA_PTR],
+        // NA_JSV (#3072): validate the listener is callable.
+        args: &[NA_STR, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1487,7 +1642,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "prependListener",
         class_filter: None,
         runtime: "js_event_emitter_prepend_listener",
-        args: &[NA_STR, NA_PTR],
+        // NA_JSV (#3072): validate the listener is callable.
+        args: &[NA_STR, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1496,7 +1652,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "prependOnceListener",
         class_filter: None,
         runtime: "js_event_emitter_prepend_once_listener",
-        args: &[NA_STR, NA_PTR],
+        // NA_JSV (#3072): validate the listener is callable.
+        args: &[NA_STR, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1505,7 +1662,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "off",
         class_filter: None,
         runtime: "js_event_emitter_remove_listener",
-        args: &[NA_STR, NA_PTR],
+        // NA_JSV (#3072): validate the listener is callable.
+        args: &[NA_STR, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1572,7 +1730,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "once",
         class_filter: None,
         runtime: "js_events_once",
-        args: &[NA_PTR, NA_STR, NA_F64],
+        args: &[NA_F64, NA_STR, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1581,7 +1739,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "on",
         class_filter: None,
         runtime: "js_events_on",
-        args: &[NA_PTR, NA_STR, NA_F64],
+        args: &[NA_F64, NA_STR, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1590,7 +1748,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "addAbortListener",
         class_filter: None,
         runtime: "js_events_add_abort_listener",
-        args: &[NA_PTR, NA_PTR],
+        args: &[NA_F64, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1599,7 +1757,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "getEventListeners",
         class_filter: None,
         runtime: "js_events_get_event_listeners",
-        args: &[NA_PTR, NA_STR],
+        args: &[NA_F64, NA_STR],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1608,7 +1766,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "listenerCount",
         class_filter: None,
         runtime: "js_events_listener_count",
-        args: &[NA_PTR, NA_STR],
+        args: &[NA_F64, NA_STR],
         ret: NR_F64,
     },
     NativeModSig {
@@ -1617,7 +1775,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "getMaxListeners",
         class_filter: None,
         runtime: "js_events_get_max_listeners",
-        args: &[NA_PTR],
+        args: &[NA_F64],
         ret: NR_F64,
     },
     NativeModSig {

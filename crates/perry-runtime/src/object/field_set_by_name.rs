@@ -185,12 +185,7 @@ pub extern "C" fn js_object_set_field_by_name(
                     .unwrap_or("")
                     .to_string();
                 if !name.is_empty() {
-                    CLASS_DYNAMIC_PROPS.with(|m| {
-                        m.borrow_mut()
-                            .entry(class_id)
-                            .or_insert_with(std::collections::HashMap::new)
-                            .insert(name, value);
-                    });
+                    class_dynamic_prop_root_store(class_id, name, value);
                 }
             }
             return;
@@ -321,6 +316,19 @@ pub extern "C" fn js_object_set_field_by_name(
                 let name_len = (*key).byte_len as usize;
                 let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
                 if let Ok(name_str) = std::str::from_utf8(name_bytes) {
+                    // #3143: honor a non-writable registered descriptor — a
+                    // built-in method's `.name`/`.length` are spec'd
+                    // `writable: false`, so a sloppy-mode write must be a silent
+                    // no-op (this is what Test262's `verifyProperty` checks).
+                    // Only fires when a descriptor was actually recorded for
+                    // this closure+key (built-in proto methods, or a user
+                    // `Object.defineProperty`); plain `fn.x = 1` finds none and
+                    // proceeds. Closure writes are not the object hot path.
+                    if let Some(attrs) = super::get_property_attrs(obj as usize, name_str) {
+                        if !attrs.writable() {
+                            return;
+                        }
+                    }
                     crate::closure::closure_set_dynamic_prop(obj as usize, name_str, value);
                 }
             }
@@ -395,17 +403,49 @@ pub extern "C" fn js_object_set_field_by_name(
             }
         }
 
-        if !key.is_null()
-            && (key as usize) > 0x10000
-            && key_to_str_for_diag(key) == "href"
-            && crate::url::is_url_object_shape(obj)
-        {
-            let value_string = crate::value::js_jsvalue_to_string(value);
-            let value_string_handle = scope.root_string_ptr(value_string);
+        if !key.is_null() && (key as usize) > 0x10000 && crate::url::is_url_object_shape(obj) {
+            let key_str = key_to_str_for_diag(key);
             let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-            let value_string = value_string_handle.get_raw_mut_ptr::<crate::StringHeader>();
-            crate::url::js_url_set_href(obj, value_string);
-            return;
+            let value = value_handle.get_nanbox_f64();
+            match key_str.as_str() {
+                "pathname" => {
+                    crate::url::js_url_set_pathname(obj, value);
+                    return;
+                }
+                "search" => {
+                    crate::url::js_url_set_search(obj, value);
+                    return;
+                }
+                "hash" => {
+                    crate::url::js_url_set_hash(obj, value);
+                    return;
+                }
+                "protocol" => {
+                    crate::url::js_url_set_protocol(obj, value);
+                    return;
+                }
+                "hostname" => {
+                    crate::url::js_url_set_hostname(obj, value);
+                    return;
+                }
+                "port" => {
+                    crate::url::js_url_set_port(obj, value);
+                    return;
+                }
+                "username" => {
+                    crate::url::js_url_set_username(obj, value);
+                    return;
+                }
+                "password" => {
+                    crate::url::js_url_set_password(obj, value);
+                    return;
+                }
+                "href" => {
+                    crate::url::js_url_set_href(obj, value);
+                    return;
+                }
+                _ => {}
+            }
         }
 
         // Check Object.freeze/seal/preventExtensions flags

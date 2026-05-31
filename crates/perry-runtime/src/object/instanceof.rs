@@ -7,6 +7,7 @@ use super::*;
 
 // Keep in sync with perry-codegen/src/expr/instance_misc1.rs.
 const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
+const CLASS_ID_PROMISE: u32 = 0xFFFF0027;
 
 /// v0.5.749: dynamic instanceof — `value instanceof type` where the
 /// type is a runtime value (function arg holding a class ref). Extracts
@@ -50,6 +51,15 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
+        if module == "tty"
+            && matches!(method.as_str(), "ReadStream" | "WriteStream")
+            && crate::tty::is_tty_stream_instance(value, method.as_str())
+        {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
+        if module == "wasi" && method == "WASI" && crate::wasi::is_wasi_instance(value) {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
         if module == "console"
             && method == "Console"
             && crate::builtins::is_console_instance_value(value)
@@ -71,6 +81,23 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     if is_buffer_constructor_value(type_ref) {
         return js_instanceof(value, crate::buffer::BUFFER_TYPE_ID);
     }
+    if let Some(name) = identify_global_builtin_constructor(type_ref) {
+        let class_id = match name {
+            "Error" => crate::error::CLASS_ID_ERROR,
+            "TypeError" => crate::error::CLASS_ID_TYPE_ERROR,
+            "RangeError" => crate::error::CLASS_ID_RANGE_ERROR,
+            "ReferenceError" => crate::error::CLASS_ID_REFERENCE_ERROR,
+            "SyntaxError" => crate::error::CLASS_ID_SYNTAX_ERROR,
+            "EvalError" => crate::error::CLASS_ID_EVAL_ERROR,
+            "URIError" => crate::error::CLASS_ID_URI_ERROR,
+            "AggregateError" => crate::error::CLASS_ID_AGGREGATE_ERROR,
+            "Promise" => CLASS_ID_PROMISE,
+            _ => 0,
+        };
+        if class_id != 0 {
+            return js_instanceof(value, class_id);
+        }
+    }
     if crate::node_submodules::is_diagnostics_channel_constructor_value(type_ref) {
         return if crate::node_submodules::diagnostics_channel_is_channel_instance_value(value) {
             f64::from_bits(crate::value::TAG_TRUE)
@@ -89,7 +116,74 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     if synthetic_cid != 0 {
         return js_instanceof(value, synthetic_cid);
     }
-    f64::from_bits(TAG_FALSE)
+    // #2909: nothing recognized the RHS as a constructor/class. Per the
+    // ECMAScript `InstanceofOperator`, the right operand must be an object
+    // (and ultimately callable / have a `Symbol.hasInstance`); a primitive
+    // or non-callable RHS is a `TypeError`, not a silent `false`. Match
+    // Node's two distinct messages:
+    //   - primitive RHS (number/string/bool/null/undefined/bigint/symbol):
+    //       "Right-hand side of 'instanceof' is not an object"
+    //   - object-but-non-callable RHS ({}, [], Map, …):
+    //       "Right-hand side of 'instanceof' is not callable"
+    // (Callable RHS values never reach here — they resolve to a synthetic
+    // class id above — so we don't need to model the arrow-`.prototype`
+    // case at this site.)
+    throw_invalid_instanceof_rhs(type_ref)
+}
+
+#[cold]
+fn throw_invalid_instanceof_rhs(type_ref: f64) -> ! {
+    if rhs_is_object_value(type_ref) {
+        throw_type_error(b"Right-hand side of 'instanceof' is not callable");
+    }
+    throw_type_error(b"Right-hand side of 'instanceof' is not an object");
+}
+
+/// Whether `value` is a (non-callable) object for the purposes of the
+/// `instanceof` RHS check: any heap pointer (plain object, array, Map, Set,
+/// Date, RegExp, Buffer/typed-array, etc.). Primitives — including `null`,
+/// `undefined`, numbers, strings, booleans, bigints — are not objects.
+fn rhs_is_object_value(value: f64) -> bool {
+    let bits = value.to_bits();
+    let jsval = crate::JSValue::from_bits(bits);
+    if jsval.is_null()
+        || jsval.is_undefined()
+        || jsval.is_bool()
+        || jsval.is_any_string()
+        || jsval.is_int32()
+        || jsval.is_bigint()
+    {
+        return false;
+    }
+    if jsval.is_pointer() {
+        let ptr = (bits & crate::value::POINTER_MASK) as usize;
+        // Symbols are primitives; small registry handles aren't real objects
+        // here either, but they're still object-typed in JS (`typeof` is
+        // "object"), so a "not callable" message is the right one for them.
+        if ptr >= 0x100000 && crate::symbol::is_registered_symbol(ptr) {
+            return false;
+        }
+        return true;
+    }
+    // Raw bitcast pointers (typed arrays / buffers / arrays) — these are
+    // objects too.
+    let top16 = bits >> 48;
+    if top16 == 0 && bits >= 0x1000 {
+        let addr = bits as usize;
+        return crate::buffer::is_registered_buffer(addr)
+            || crate::set::is_registered_set(addr)
+            || crate::map::is_registered_map(addr)
+            || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+            || addr >= crate::gc::GC_HEADER_SIZE;
+    }
+    false
+}
+
+#[cold]
+fn throw_type_error(message: &[u8]) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
 fn is_event_emitter_instance_value(value: f64) -> bool {
@@ -301,6 +395,13 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         }
         return false_val;
     }
+    if class_id == CLASS_ID_PROMISE {
+        return if crate::promise::js_value_is_promise(value) != 0 {
+            true_val
+        } else {
+            false_val
+        };
+    }
 
     // `Object` — ECMAScript spec: `x instanceof Object` is true for any
     // non-primitive (every object/array/function/Map/Set/Buffer/RegExp/
@@ -359,10 +460,10 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         return false_val;
     }
 
-    // Typed arrays — Int8Array..Float64Array reserved IDs (0xFFFF0030..37).
+    // Typed arrays — Int8Array..Float16Array reserved IDs (0xFFFF0030..3B).
     // The pointer can arrive as either a NaN-boxed POINTER_TAG value or a
     // raw bitcast f64, so handle both forms.
-    if (0xFFFF0030..=0xFFFF0037).contains(&class_id) {
+    if (0xFFFF0030..=0xFFFF003B).contains(&class_id) {
         let addr = if jsval.is_pointer() {
             (bits & 0x0000_FFFF_FFFF_FFFF) as usize
         } else {
@@ -438,6 +539,20 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
                 }
                 crate::error::CLASS_ID_SYNTAX_ERROR => {
                     if kind == crate::error::ERROR_KIND_SYNTAX_ERROR {
+                        true_val
+                    } else {
+                        false_val
+                    }
+                }
+                crate::error::CLASS_ID_EVAL_ERROR => {
+                    if kind == crate::error::ERROR_KIND_EVAL_ERROR {
+                        true_val
+                    } else {
+                        false_val
+                    }
+                }
+                crate::error::CLASS_ID_URI_ERROR => {
+                    if kind == crate::error::ERROR_KIND_URI_ERROR {
                         true_val
                     } else {
                         false_val

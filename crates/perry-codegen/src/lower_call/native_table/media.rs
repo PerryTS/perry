@@ -274,7 +274,10 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "gzipSync",
         class_filter: None,
         runtime: "js_zlib_gzip_sync",
-        args: &[NA_STR],
+        // #2935: data as raw NaN-box bits (i64) + options object (f64). The
+        // codec extracts the buffer/string pointer itself; the options object
+        // carries `{ level }`.
+        args: &[NA_JSV, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -283,7 +286,9 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "gunzipSync",
         class_filter: None,
         runtime: "js_zlib_gunzip_sync",
-        args: &[NA_STR],
+        // #2935: data as raw NaN-box bits so the codec unboxes the buffer
+        // pointer itself (a Buffer/string both decompress correctly).
+        args: &[NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -292,7 +297,8 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "deflateSync",
         class_filter: None,
         runtime: "js_zlib_deflate_sync",
-        args: &[NA_STR],
+        // #2935: see gzipSync above.
+        args: &[NA_JSV, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -301,7 +307,8 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "inflateSync",
         class_filter: None,
         runtime: "js_zlib_inflate_sync",
-        args: &[NA_STR],
+        // #2935: see gunzipSync above.
+        args: &[NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -310,8 +317,8 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "gzip",
         class_filter: None,
         runtime: "js_zlib_gzip",
-        args: &[NA_STR],
-        ret: NR_PTR,
+        args: &[NA_F64, NA_F64],
+        ret: NR_VOID,
     },
     NativeModSig {
         module: "zlib",
@@ -319,8 +326,53 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "gunzip",
         class_filter: None,
         runtime: "js_zlib_gunzip",
-        args: &[NA_STR],
-        ret: NR_PTR,
+        args: &[NA_F64, NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "zlib",
+        has_receiver: false,
+        method: "deflate",
+        class_filter: None,
+        runtime: "js_zlib_deflate",
+        args: &[NA_F64, NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "zlib",
+        has_receiver: false,
+        method: "inflate",
+        class_filter: None,
+        runtime: "js_zlib_inflate",
+        args: &[NA_F64, NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "zlib",
+        has_receiver: false,
+        method: "deflateRaw",
+        class_filter: None,
+        runtime: "js_zlib_deflate_raw",
+        args: &[NA_F64, NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "zlib",
+        has_receiver: false,
+        method: "inflateRaw",
+        class_filter: None,
+        runtime: "js_zlib_inflate_raw",
+        args: &[NA_F64, NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "zlib",
+        has_receiver: false,
+        method: "unzip",
+        class_filter: None,
+        runtime: "js_zlib_unzip",
+        args: &[NA_F64, NA_F64],
+        ret: NR_VOID,
     },
     // Raw deflate / inflate + auto-detect unzip + CRC32 one-shots. Round
     // out the sync codec coverage on top of #1843's Transform-stream layer.
@@ -330,7 +382,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "deflateRawSync",
         class_filter: None,
         runtime: "js_zlib_deflate_raw_sync",
-        args: &[NA_STR],
+        args: &[NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -339,7 +391,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "inflateRawSync",
         class_filter: None,
         runtime: "js_zlib_inflate_raw_sync",
-        args: &[NA_STR],
+        args: &[NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -348,7 +400,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "unzipSync",
         class_filter: None,
         runtime: "js_zlib_unzip_sync",
-        args: &[NA_STR],
+        args: &[NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -357,7 +409,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "crc32",
         class_filter: None,
         runtime: "js_zlib_crc32",
-        args: &[NA_STR, NA_F64],
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     // `zlib.brotli{Compress,Decompress}Sync(data)` — one-shot Brotli via the
@@ -368,7 +420,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "brotliCompressSync",
         class_filter: None,
         runtime: "js_zlib_brotli_compress_sync",
-        args: &[NA_STR],
+        args: &[NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -377,7 +429,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "brotliDecompressSync",
         class_filter: None,
         runtime: "js_zlib_brotli_decompress_sync",
-        args: &[NA_STR],
+        args: &[NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -386,8 +438,8 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "brotliCompress",
         class_filter: None,
         runtime: "js_zlib_brotli_compress",
-        args: &[NA_STR],
-        ret: NR_PTR,
+        args: &[NA_F64, NA_F64],
+        ret: NR_VOID,
     },
     NativeModSig {
         module: "zlib",
@@ -395,8 +447,8 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "brotliDecompress",
         class_filter: None,
         runtime: "js_zlib_brotli_decompress",
-        args: &[NA_STR],
-        ret: NR_PTR,
+        args: &[NA_F64, NA_F64],
+        ret: NR_VOID,
     },
     // zlib Transform-stream factories (#1843 cluster 1). Each returns an i64
     // stream handle (0x60000+ range) NaN-boxed with POINTER_TAG; subsequent

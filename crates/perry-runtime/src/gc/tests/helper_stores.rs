@@ -48,8 +48,8 @@ unsafe fn assert_slot_rewritten_to_nursery(slot: *const u64, before: usize) -> u
 
 #[test]
 fn shared_array_and_object_slot_helpers_preserve_young_children() {
-    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
     let _guard = CopyingNurseryTestGuard::new(0);
+    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     let array_child = young_leaf();
@@ -84,8 +84,8 @@ fn map_and_set_external_helper_stores_preserve_young_children() {
         }
     }
 
-    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
     let _guard = CopyingNurseryTestGuard::new(0);
+    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
     let _set_guard = SetRootGuard;
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     crate::set::test_clear_set_roots();
@@ -126,8 +126,8 @@ fn map_and_set_external_helper_stores_preserve_young_children() {
 
 #[test]
 fn json_large_object_materialization_preserves_young_string_fields() {
-    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
     let _guard = CopyingNurseryTestGuard::new(1);
+    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     let mut json = String::from("{");
@@ -165,8 +165,8 @@ fn json_large_object_materialization_preserves_young_string_fields() {
 
 #[test]
 fn regex_global_result_array_preserves_young_match_strings() {
-    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
     let _guard = CopyingNurseryTestGuard::new(1);
+    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     let source_bytes = "x".repeat(4096);
@@ -210,8 +210,8 @@ fn regex_global_result_array_preserves_young_match_strings() {
 
 #[test]
 fn plugin_and_promise_field_population_helpers_preserve_young_children() {
-    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
     let _guard = CopyingNurseryTestGuard::new(0);
+    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     let plugin_name = young_leaf();
@@ -259,8 +259,8 @@ fn plugin_and_promise_field_population_helpers_preserve_young_children() {
 
 #[test]
 fn thread_materialized_array_and_object_helpers_preserve_young_children() {
-    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
     let _guard = CopyingNurseryTestGuard::new(0);
+    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     let array_child = young_leaf();

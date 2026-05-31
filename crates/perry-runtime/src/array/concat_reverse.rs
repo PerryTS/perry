@@ -71,6 +71,7 @@ pub extern "C" fn js_array_concat(
             };
             let dst_elements =
                 (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            // GC_STORE_AUDIT(BARRIERED): concat bulk copy is followed by exact layout/barrier rebuild.
             ptr::copy_nonoverlapping(
                 src_elements,
                 dst_elements.add(dest_len as usize),
@@ -132,6 +133,12 @@ pub extern "C" fn js_array_reverse(arr: *mut ArrayHeader) -> *mut ArrayHeader {
     if arr.is_null() {
         return arr;
     }
+    // #3148: TypedArray receiver — reverse over element-typed storage.
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        return crate::typedarray::js_typed_array_reverse(
+            arr as *mut crate::typedarray::TypedArrayHeader,
+        ) as *mut ArrayHeader;
+    }
     unsafe {
         let len = (*arr).length as usize;
         if len <= 1 {
@@ -142,6 +149,7 @@ pub extern "C" fn js_array_reverse(arr: *mut ArrayHeader) -> *mut ArrayHeader {
         let mut j = len - 1;
         while i < j {
             let tmp = *elements.add(i);
+            // GC_STORE_AUDIT(BARRIERED): reverse slot swap is followed by layout/barrier rebuild.
             *elements.add(i) = *elements.add(j);
             *elements.add(j) = tmp;
             i += 1;
@@ -160,6 +168,17 @@ pub extern "C" fn js_array_fill(arr: *mut ArrayHeader, value: f64) -> *mut Array
     if arr.is_null() {
         return arr;
     }
+    // #3148: TypedArray receiver — fill the whole array, element-typed.
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        return crate::typedarray::js_typed_array_fill(
+            arr as *mut crate::typedarray::TypedArrayHeader,
+            value,
+            0,
+            0.0,
+            0,
+            0.0,
+        ) as *mut ArrayHeader;
+    }
     unsafe {
         let len = (*arr).length as usize;
         if len == 0 {
@@ -167,6 +186,7 @@ pub extern "C" fn js_array_fill(arr: *mut ArrayHeader, value: f64) -> *mut Array
         }
         let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         for i in 0..len {
+            // GC_STORE_AUDIT(BARRIERED): fill slot writes are followed by layout/barrier rebuild.
             *elements.add(i) = value;
         }
         rebuild_array_layout(arr);
@@ -188,6 +208,17 @@ pub extern "C" fn js_array_fill_range(
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return arr;
+    }
+    // #3148: TypedArray receiver — fill [start, end) over element-typed storage.
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        return crate::typedarray::js_typed_array_fill(
+            arr as *mut crate::typedarray::TypedArrayHeader,
+            value,
+            1,
+            start,
+            1,
+            end,
+        ) as *mut ArrayHeader;
     }
     unsafe {
         let len = (*arr).length as i64;
@@ -226,6 +257,7 @@ pub extern "C" fn js_array_fill_range(
         }
         let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         for i in s..e {
+            // GC_STORE_AUDIT(BARRIERED): fill range writes are followed by layout/barrier rebuild.
             *elements.add(i as usize) = value;
         }
         rebuild_array_layout(arr);

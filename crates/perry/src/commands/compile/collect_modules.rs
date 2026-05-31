@@ -148,6 +148,8 @@ pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
         // run if the class is called *without* `new`.
         "stream/web" => Some("stream_web"),
         "sys" => Some("sys"),
+        "test" => Some("test"),
+        "test/reporters" => Some("test_reporters"),
         // Pino downstream (#906 follow-up): `require('node:diagnostics_channel')`
         // returns the module exports object. The CJS-wrap rewrites this as
         // `import diagChan from 'node:diagnostics_channel'`. Pre-fix the
@@ -160,6 +162,7 @@ pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
         // `asJsonChan.hasSubscribers === false` and take the fast path
         // without ever entering the tracing-instrumentation branch.
         "diagnostics_channel" => Some("diagnostics_channel"),
+        "trace_events" => Some("trace_events"),
         // #1671: hono JSX runtime/streaming helpers. Perry renders JSX with the
         // built-in `js_jsx` runtime, so these submodules have no compiled-source
         // backing — they expose function singletons (jsx/jsxs/Fragment/JSXNode,
@@ -735,6 +738,21 @@ pub(super) fn collect_modules(
         if let Some(alias) = ctx.package_aliases.get(import.source.as_str()).cloned() {
             import.source = alias;
             import.is_native = perry_hir::is_native_module(&import.source);
+        }
+
+        // `node:stream/web` is routed as a runtime submodule so its named
+        // imports keep their singleton shape, but the implementations live in
+        // perry-stdlib's `bundled-streams` module. Mark the import explicitly
+        // instead of relying only on codegen-side FFI provenance, which object
+        // cache hits can skip.
+        if import
+            .source
+            .strip_prefix("node:")
+            .unwrap_or(&import.source)
+            == "stream/web"
+        {
+            ctx.needs_stdlib = true;
+            ctx.native_module_imports.insert("stream/web".to_string());
         }
 
         // Refs #665: an opt-in via `perry.compilePackages` overrides the

@@ -109,16 +109,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // -------- new AggregateError(errors, message) --------
         // Calls real runtime `js_aggregateerror_new(errors_handle, msg_handle)`
         // which stores both the errors array and message in ErrorHeader.
-        Expr::AggregateErrorNew { errors, message } => {
+        Expr::AggregateErrorNew {
+            errors,
+            message,
+            options,
+        } => {
+            // #2838: `errors` must reach the runtime as a raw NaN-boxed value
+            // (NOT an array pointer) so Sets / strings / generators / any
+            // iterable can be consumed and non-iterables rejected with a
+            // TypeError. #2836: apply the optional `{ cause }`.
             let errors_box = lower_expr(ctx, errors)?;
             let m = lower_expr(ctx, message)?;
+            let options_box = match options {
+                Some(o) => lower_expr(ctx, o)?,
+                None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+            };
             let blk = ctx.block();
-            let errors_handle = unbox_to_i64(blk, &errors_box);
             let msg_handle = unbox_to_i64(blk, &m);
             let err_handle = blk.call(
                 I64,
-                "js_aggregateerror_new",
-                &[(I64, &errors_handle), (I64, &msg_handle)],
+                "js_aggregateerror_new_full",
+                &[
+                    (DOUBLE, &errors_box),
+                    (I64, &msg_handle),
+                    (DOUBLE, &options_box),
+                ],
             );
             Ok(nanbox_pointer_inline(blk, &err_handle))
         }
@@ -236,11 +251,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let result = blk.call(I64, "js_path_resolve", &[(I64, &p_handle)]);
             Ok(nanbox_string_inline(blk, &result))
         }
-        Expr::ObjectCreate(p) => {
+        Expr::ObjectCreate(p, props) => {
+            // #2816: route through `js_object_create_with_props` so prototype
+            // validation + the optional descriptor bag are handled uniformly.
+            // Pass `undefined` for the props arg when only one argument was
+            // supplied.
             let v = lower_expr(ctx, p)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_object_create", &[(DOUBLE, &v)]))
+            let props_val = match props {
+                Some(props_expr) => lower_expr(ctx, props_expr)?,
+                None => crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+            };
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_object_create_with_props",
+                &[(DOUBLE, &v), (DOUBLE, &props_val)],
+            ))
         }
         Expr::MathClz32(o) => {
             let v = lower_expr(ctx, o)?;
@@ -308,6 +333,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 I64,
                 "js_error_new_with_cause",
                 &[(I64, &msg_handle), (DOUBLE, &c)],
+            );
+            Ok(nanbox_pointer_inline(blk, &err_handle))
+        }
+        Expr::ErrorNewWithOptions {
+            kind,
+            message,
+            options,
+        } => {
+            // #2836: new <Error-kind>(msg, options) where `options` is a
+            // runtime value (variable or dynamic object). The runtime reads
+            // the `cause` property off `options` and stamps the right
+            // ERROR_KIND_* so `instanceof TypeError`/etc. still hold.
+            let msg = lower_expr(ctx, message)?;
+            let opts = lower_expr(ctx, options)?;
+            let blk = ctx.block();
+            let msg_handle = unbox_to_i64(blk, &msg);
+            let kind_lit = (*kind as i64).to_string();
+            let err_handle = blk.call(
+                I64,
+                "js_error_new_kind_with_options",
+                &[(I32, &kind_lit), (I64, &msg_handle), (DOUBLE, &opts)],
             );
             Ok(nanbox_pointer_inline(blk, &err_handle))
         }

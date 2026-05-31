@@ -48,7 +48,6 @@ where
         | Expr::ProcessStdout
         | Expr::ProcessStderr
         | Expr::ProcessAbort
-        | Expr::ProcessThreadCpuUsage
         | Expr::ProcessAvailableMemory
         | Expr::ProcessConstrainedMemory
         | Expr::ProcessPosixCredential(_)
@@ -66,8 +65,8 @@ where
         | Expr::IterResultGetValue
         | Expr::IterResultGetDone
         | Expr::TextEncoderNew
-        | Expr::TextDecoderNew
         | Expr::CryptoRandomUUID
+        | Expr::CryptoRandomUUIDv7
         | Expr::OsPlatform
         | Expr::OsArch
         | Expr::OsHostname
@@ -137,7 +136,6 @@ where
         | Expr::FinalizationRegistryNew(v)
         | Expr::ObjectGetOwnPropertyNames(v)
         | Expr::ObjectGetOwnPropertyDescriptors(v)
-        | Expr::ObjectCreate(v)
         | Expr::ObjectFreeze(v)
         | Expr::ObjectSeal(v)
         | Expr::ObjectPreventExtensions(v)
@@ -153,12 +151,15 @@ where
         | Expr::SymbolFor(v)
         | Expr::SymbolKeyFor(v)
         | Expr::SymbolDescription(v)
+        | Expr::RegExpEscape(v)
         | Expr::SymbolToString(v)
         | Expr::RegExpSource(v)
         | Expr::RegExpFlags(v)
         | Expr::RegExpLastIndex(v)
         | Expr::JsonParse(v)
         | Expr::JsonStringify(v)
+        | Expr::JsonRawJson(v)
+        | Expr::JsonIsRawJson(v)
         | Expr::JsonParseTyped { text: v, .. }
         | Expr::MathFloor(v)
         | Expr::MathCeil(v)
@@ -178,6 +179,7 @@ where
         | Expr::MathAtan(v)
         | Expr::MathCbrt(v)
         | Expr::MathFround(v)
+        | Expr::MathF16round(v)
         | Expr::MathExpm1(v)
         | Expr::MathSinh(v)
         | Expr::MathCosh(v)
@@ -193,7 +195,9 @@ where
         | Expr::Atob(v)
         | Expr::Btoa(v)
         | Expr::TextEncoderEncode(v)
-        | Expr::TextDecoderDecode(v)
+        | Expr::TextDecoderEncoding(v)
+        | Expr::TextDecoderFatal(v)
+        | Expr::TextDecoderIgnoreBom(v)
         | Expr::EncodeURI(v)
         | Expr::DecodeURI(v)
         | Expr::EncodeURIComponent(v)
@@ -219,6 +223,7 @@ where
         | Expr::NumberCoerce(v)
         | Expr::BigIntCoerce(v)
         | Expr::StringCoerce(v)
+        | Expr::ObjectCoerce(v)
         | Expr::BooleanCoerce(v)
         | Expr::IsNaN(v)
         | Expr::IsUndefinedOrBareNan(v)
@@ -230,6 +235,7 @@ where
         | Expr::StaticPluginResolve(v)
         | Expr::ArrayIsArray(v)
         | Expr::ArrayFrom(v)
+        | Expr::IteratorFrom(v)
         | Expr::IteratorToArray(v)
         | Expr::GetIterator(v)
         | Expr::ForOfToArray(v)
@@ -237,6 +243,8 @@ where
         | Expr::ProxyRevoke(v)
         | Expr::ReflectOwnKeys(v)
         | Expr::ReflectGetPrototypeOf(v)
+        | Expr::ReflectIsExtensible(v)
+        | Expr::ReflectPreventExtensions(v)
         | Expr::DateGetTime(v)
         | Expr::DateToISOString(v)
         | Expr::DateGetFullYear(v)
@@ -311,6 +319,18 @@ where
         | Expr::ArrayToReversed { array: v }
         | Expr::TemplateRaw(v) => {
             f(v);
+        }
+        Expr::ObjectCreate(proto, props) => {
+            f(proto);
+            if let Some(props) = props {
+                f(props);
+            }
+        }
+        Expr::UrlSearchParamsMissingArgs { params, args, .. } => {
+            f(params);
+            for arg in args {
+                f(arg);
+            }
         }
         Expr::BufferConcatWithLength { list, total_length } => {
             f(list);
@@ -521,6 +541,19 @@ where
             f(left);
             f(right);
         }
+        Expr::TextDecoderNew {
+            label,
+            fatal,
+            ignore_bom,
+        } => {
+            f(label);
+            f(fatal);
+            f(ignore_bom);
+        }
+        Expr::TextDecoderDecode { decoder, input } => {
+            f(decoder);
+            f(input);
+        }
         Expr::TextEncoderEncodeInto { source, dest } => {
             f(source);
             f(dest);
@@ -624,6 +657,15 @@ where
         Expr::StringFromCharCode(v) | Expr::StringFromCodePoint(v) => {
             f(v);
         }
+        Expr::StringRaw {
+            call_site,
+            substitutions,
+        } => {
+            f(call_site);
+            for s in substitutions {
+                f(s);
+            }
+        }
         Expr::StringAt { string, index } | Expr::StringCodePointAt { string, index } => {
             f(string);
             f(index);
@@ -659,13 +701,20 @@ where
             f(b);
             f(c);
         }
-        Expr::ObjectGroupBy { items, key_fn } => {
+        Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn } => {
             f(items);
             f(key_fn);
         }
-        Expr::ArrayFromMapped { iterable, map_fn } => {
+        Expr::ArrayFromMapped {
+            iterable,
+            map_fn,
+            this_arg,
+        } => {
             f(iterable);
             f(map_fn);
+            if let Some(t) = this_arg {
+                f(t);
+            }
         }
         Expr::IndexSet {
             object,
@@ -832,23 +881,25 @@ where
             }
         }
         Expr::BoxedPrimitiveNew { arg, .. } => f(arg),
-        Expr::DateSetUtcFullYear { date, value }
-        | Expr::DateSetUtcMonth { date, value }
-        | Expr::DateSetUtcDate { date, value }
-        | Expr::DateSetUtcHours { date, value }
-        | Expr::DateSetUtcMinutes { date, value }
-        | Expr::DateSetUtcSeconds { date, value }
-        | Expr::DateSetUtcMilliseconds { date, value }
-        | Expr::DateSetFullYear { date, value }
-        | Expr::DateSetMonth { date, value }
-        | Expr::DateSetDate { date, value }
-        | Expr::DateSetHours { date, value }
-        | Expr::DateSetMinutes { date, value }
-        | Expr::DateSetSeconds { date, value }
-        | Expr::DateSetMilliseconds { date, value }
-        | Expr::DateSetTime { date, value } => {
+        Expr::DateSetUtcFullYear { date, args }
+        | Expr::DateSetUtcMonth { date, args }
+        | Expr::DateSetUtcDate { date, args }
+        | Expr::DateSetUtcHours { date, args }
+        | Expr::DateSetUtcMinutes { date, args }
+        | Expr::DateSetUtcSeconds { date, args }
+        | Expr::DateSetUtcMilliseconds { date, args }
+        | Expr::DateSetFullYear { date, args }
+        | Expr::DateSetMonth { date, args }
+        | Expr::DateSetDate { date, args }
+        | Expr::DateSetHours { date, args }
+        | Expr::DateSetMinutes { date, args }
+        | Expr::DateSetSeconds { date, args }
+        | Expr::DateSetMilliseconds { date, args }
+        | Expr::DateSetTime { date, args } => {
             f(date);
-            f(value);
+            for a in args {
+                f(a);
+            }
         }
         Expr::ErrorNew(opt) => {
             if let Some(v) = opt {
@@ -859,9 +910,22 @@ where
             f(message);
             f(cause);
         }
-        Expr::AggregateErrorNew { errors, message } => {
+        Expr::ErrorNewWithOptions {
+            message, options, ..
+        } => {
+            f(message);
+            f(options);
+        }
+        Expr::AggregateErrorNew {
+            errors,
+            message,
+            options,
+        } => {
             f(errors);
             f(message);
+            if let Some(o) = options {
+                f(o);
+            }
         }
         Expr::UrlNew { url, base } => {
             f(url);
@@ -1141,6 +1205,11 @@ where
                 f(v);
             }
         }
+        Expr::ProcessThreadCpuUsage(opt) => {
+            if let Some(v) = opt {
+                f(v);
+            }
+        }
         Expr::ProcessEmitWarning(args) => {
             for a in args {
                 f(a);
@@ -1313,11 +1382,17 @@ where
         | Expr::SetAdd { value, .. } => {
             f(value);
         }
-        Expr::ArrayIndexOf { array, value } | Expr::ArrayIncludes { array, value } => {
-            f(array);
-            f(value);
+        Expr::ArrayIndexOf {
+            array,
+            value,
+            from_index,
         }
-        Expr::ArrayLastIndexOf {
+        | Expr::ArrayIncludes {
+            array,
+            value,
+            from_index,
+        }
+        | Expr::ArrayLastIndexOf {
             array,
             value,
             from_index,
@@ -1466,9 +1541,16 @@ where
                 f(a);
             }
         }
-        Expr::ReflectGet { target, key }
-        | Expr::ReflectHas { target, key }
-        | Expr::ReflectDelete { target, key } => {
+        Expr::ReflectGet {
+            target,
+            key,
+            receiver,
+        } => {
+            f(target);
+            f(key);
+            f(receiver);
+        }
+        Expr::ReflectHas { target, key } | Expr::ReflectDelete { target, key } => {
             f(target);
             f(key);
         }
@@ -1476,6 +1558,10 @@ where
             f(target);
             f(key);
             f(value);
+        }
+        Expr::ReflectSetPrototypeOf { target, proto } => {
+            f(target);
+            f(proto);
         }
         Expr::ReflectApply {
             func,

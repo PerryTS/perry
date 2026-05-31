@@ -333,6 +333,7 @@ pub fn check_escapes_in_expr(
         | Expr::Await(operand)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
+        | Expr::ObjectCoerce(operand)
         | Expr::BooleanCoerce(operand)
         | Expr::NumberCoerce(operand)
         | Expr::IsFinite(operand)
@@ -351,12 +352,16 @@ pub fn check_escapes_in_expr(
         | Expr::MathCeil(operand)
         | Expr::MathRound(operand)
         | Expr::MathAbs(operand)
+        | Expr::MathF16round(operand)
         | Expr::MathMinSpread(operand)
         | Expr::MathMaxSpread(operand)
         | Expr::ArrayFrom(operand)
+        | Expr::IteratorFrom(operand)
         | Expr::Uint8ArrayFrom(operand)
         | Expr::JsonParse(operand)
         | Expr::JsonStringify(operand)
+        | Expr::JsonRawJson(operand)
+        | Expr::JsonIsRawJson(operand)
         | Expr::IteratorToArray(operand)
         | Expr::GetIterator(operand)
         | Expr::ForOfToArray(operand)
@@ -593,11 +598,17 @@ pub fn check_escapes_in_expr(
                 check_escapes_in_expr(e, candidates, classes, escaped);
             }
         }
-        Expr::ArrayIncludes { array, value } | Expr::ArrayIndexOf { array, value } => {
-            check_escapes_in_expr(array, candidates, classes, escaped);
-            check_escapes_in_expr(value, candidates, classes, escaped);
+        Expr::ArrayIncludes {
+            array,
+            value,
+            from_index,
         }
-        Expr::ArrayLastIndexOf {
+        | Expr::ArrayIndexOf {
+            array,
+            value,
+            from_index,
+        }
+        | Expr::ArrayLastIndexOf {
             array,
             value,
             from_index,
@@ -705,8 +716,22 @@ pub fn check_escapes_in_expr(
             check_escapes_in_expr(registry, candidates, classes, escaped);
             check_escapes_in_expr(token, candidates, classes, escaped);
         }
-        Expr::ArrayFromMapped { iterable, map_fn }
-        | Expr::ObjectGroupBy {
+        Expr::ArrayFromMapped {
+            iterable,
+            map_fn,
+            this_arg,
+        } => {
+            check_escapes_in_expr(iterable, candidates, classes, escaped);
+            check_escapes_in_expr(map_fn, candidates, classes, escaped);
+            if let Some(t) = this_arg {
+                check_escapes_in_expr(t, candidates, classes, escaped);
+            }
+        }
+        Expr::ObjectGroupBy {
+            items: iterable,
+            key_fn: map_fn,
+        }
+        | Expr::MapGroupBy {
             items: iterable,
             key_fn: map_fn,
         } => {

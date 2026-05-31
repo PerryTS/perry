@@ -31,9 +31,12 @@ mod class_gc_roots;
 mod class_handles;
 mod class_registry;
 mod delete_rest;
+mod descriptors;
 mod field_get_set;
 mod field_set_by_name;
 mod global_this;
+mod groupby;
+pub(crate) mod has_own_helpers;
 mod instanceof;
 mod native_call_method;
 mod native_module;
@@ -41,6 +44,8 @@ mod native_module_dispatch;
 mod native_module_stream;
 mod object_ops;
 mod polymorphic_index;
+pub(crate) mod prototype_chain;
+mod reflect_support;
 mod util_types;
 pub use alloc::*;
 pub use assert::*;
@@ -56,9 +61,11 @@ pub(crate) use class_gc_roots::{
 };
 pub use class_registry::*;
 pub use delete_rest::*;
+pub use descriptors::*;
 pub use field_get_set::*;
 pub use field_set_by_name::*;
 pub use global_this::*;
+pub use groupby::*;
 pub use instanceof::*;
 pub use native_call_method::*;
 pub use native_module::*;
@@ -66,6 +73,7 @@ pub(crate) use native_module_dispatch::*;
 pub(crate) use native_module_stream::*;
 pub use object_ops::*;
 pub use polymorphic_index::*;
+pub(crate) use reflect_support::*;
 pub use util_types::*;
 
 static HTTP_METHODS_CACHE: AtomicU64 = AtomicU64::new(0);
@@ -499,6 +507,43 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
 /// Look up the accessor descriptor (get/set) for (obj, key).
 pub(crate) fn get_accessor_descriptor(obj: usize, key: &str) -> Option<AccessorDescriptor> {
     ACCESSOR_DESCRIPTORS.with(|m| m.borrow().get(&(obj, key.to_string())).copied())
+}
+
+/// #2766: resolve an accessor *getter* closure for `(value, key)` if one is
+/// installed (e.g. an object-literal `get x() {…}` or
+/// `Object.defineProperty(obj, k, { get })`). Returns the NaN-boxed getter
+/// closure bits, or `0` when no getter exists. Used by `Reflect.get(target,
+/// key, receiver)` so it can rebind the getter's `this` to the receiver before
+/// invoking it. Returns `None` (rather than reading the field) when there is no
+/// accessor at all, so the caller falls back to an ordinary field read.
+pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
+    if !ACCESSORS_IN_USE.with(|c| c.get()) {
+        return None;
+    }
+    let obj = unsafe { extract_obj_ptr(value) };
+    if obj.is_null() {
+        return None;
+    }
+    let key_str = crate::builtins::js_string_coerce(key);
+    if key_str.is_null() {
+        return None;
+    }
+    let name = unsafe {
+        let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let name_len = (*key_str).byte_len as usize;
+        match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
+            Ok(s) => s.to_string(),
+            Err(_) => return None,
+        }
+    };
+    let acc = get_accessor_descriptor(obj as usize, &name)?;
+    if acc.get != 0 {
+        Some(acc.get)
+    } else {
+        // Accessor exists but has no getter → reading yields undefined; signal
+        // that via 0 so the caller returns undefined rather than a field read.
+        Some(0)
+    }
 }
 
 /// Store an accessor descriptor for (obj, key).
@@ -1883,113 +1928,4 @@ pub(super) unsafe fn rebuild_array_layout_from_slots(arr: *mut ArrayHeader) {
     }
 }
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_object_alloc_and_fields() {
-        let obj = js_object_alloc(1, 3);
-
-        // Check header
-        assert_eq!(js_object_get_class_id(obj), 1);
-
-        // Fields should be undefined initially
-        let f0 = js_object_get_field(obj, 0);
-        assert!(f0.is_undefined());
-
-        // Set and get a field
-        js_object_set_field(obj, 0, JSValue::number(42.0));
-        let f0 = js_object_get_field(obj, 0);
-        assert!(f0.is_number());
-        assert_eq!(f0.as_number(), 42.0);
-
-        // Set another field
-        js_object_set_field(obj, 2, JSValue::bool(true));
-        let f2 = js_object_get_field(obj, 2);
-        assert!(f2.is_bool());
-        assert!(f2.as_bool());
-
-        // Clean up
-        js_object_free(obj);
-    }
-
-    #[test]
-    fn test_object_to_value_roundtrip() {
-        let obj = js_object_alloc(5, 2);
-        js_object_set_field(obj, 0, JSValue::number(123.0));
-
-        let value = js_object_to_value(obj);
-        assert!(value.is_pointer());
-
-        let obj2 = js_value_to_object(value);
-        assert_eq!(js_object_get_class_id(obj2), 5);
-
-        let f0 = js_object_get_field(obj2, 0);
-        assert_eq!(f0.as_number(), 123.0);
-
-        js_object_free(obj);
-    }
-
-    #[test]
-    fn text_encoding_stream_globals_construct_readable_writable_shape() {
-        unsafe {
-            let global = js_get_global_this();
-            let global_ptr = crate::value::js_nanbox_get_pointer(global) as *const ObjectHeader;
-            assert!(!global_ptr.is_null());
-
-            for ctor_name in ["TextEncoderStream", "TextDecoderStream"] {
-                let ctor_key =
-                    crate::string::js_string_from_bytes(ctor_name.as_ptr(), ctor_name.len() as u32);
-                let ctor = js_object_get_field_by_name(global_ptr, ctor_key);
-                assert!(
-                    ctor.is_pointer(),
-                    "{ctor_name} should be a closure-backed global"
-                );
-
-                let ctor_ptr = ctor.as_pointer::<crate::closure::ClosureHeader>();
-                assert_eq!((*ctor_ptr).type_tag, crate::closure::CLOSURE_MAGIC);
-
-                let instance =
-                    js_new_function_construct(f64::from_bits(ctor.bits()), std::ptr::null(), 0);
-                for field in ["readable", "writable"] {
-                    let key =
-                        crate::string::js_string_from_bytes(field.as_ptr(), field.len() as u32);
-                    let key_box = f64::from_bits(JSValue::string_ptr(key).bits());
-                    let present = js_object_has_property(instance, key_box);
-                    assert_ne!(
-                        crate::value::js_is_truthy(present),
-                        0,
-                        "{ctor_name} instance should expose {field}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn transition_cache_lookup_rejects_mutated_edge_target() {
-        let key = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
-        let keys = crate::array::js_array_alloc(4);
-        let keys = crate::array::js_array_push(keys, JSValue::string_ptr(key));
-        let keys = crate::array::js_array_push(keys, JSValue::string_ptr(key));
-
-        transition_cache_insert(0, key, keys as usize, 0);
-
-        assert!(
-            transition_cache_lookup(0, key).is_none(),
-            "slot 0 cache edge must not hit after its keys array grows past length 1"
-        );
-
-        let slot = transition_cache_slot(0, key as usize);
-        with_transition_cache(|t| unsafe {
-            // GC_STORE_AUDIT(ROOT): test cleanup writes non-pointer sentinels into scanned TRANSITION_CACHE_GLOBAL roots.
-            (*t)[slot] = TransitionEntry {
-                prev_keys: 0,
-                key_ptr: 0,
-                next_keys: 0,
-                slot_idx: 0,
-                target_len: 0,
-            };
-        });
-    }
-}
+mod tests;

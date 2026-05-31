@@ -643,34 +643,26 @@ pub extern "C" fn js_set_delete(set: *mut SetHeader, value: f64) -> i32 {
         let size = (*set).size;
         let elements = elements_ptr_mut(set);
 
-        // Update the hash index: remove the deleted value,
-        // and if we swap-remove, update the swapped element's index.
-        SET_INDEX.with(|sidx| {
-            let mut sidx = sidx.borrow_mut();
-            if let Some(map) = sidx.get_mut(&(set as usize)) {
-                map.remove(&JSValueKey(value));
-                if (idx as u32) < size - 1 {
-                    let last_value = ptr::read(elements.add((size - 1) as usize));
-                    // Update the last element's index to the position of the deleted element
-                    if let Some(entry) = map.get_mut(&JSValueKey(last_value)) {
-                        *entry = idx as u32;
-                    }
-                }
-            }
-        });
-
-        // If not the last element, swap with the last element
-        if (idx as u32) < size - 1 {
-            let last_value = ptr::read(elements.add((size - 1) as usize));
-            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): Set swap-remove stores through the shared external-slot helper.
+        // #2831: preserve insertion order. The previous swap-remove moved
+        // the last element into the hole, reordering iteration. Shift every
+        // element after `idx` down by one slot instead so survivors keep
+        // their relative order (and a delete-then-re-add appends at the end).
+        for i in (idx as usize)..(size as usize - 1) {
+            let next_value = ptr::read(elements.add(i + 1));
+            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): Set compaction stores through the shared external-slot helper.
             crate::gc::runtime_store_external_jsvalue_slot(
                 set as usize,
-                elements.add(idx as usize) as usize,
-                last_value.to_bits(),
+                elements.add(i) as usize,
+                next_value.to_bits(),
             );
         }
 
         (*set).size = size - 1;
+
+        // The shift changes the stored index of every surviving element at
+        // or after `idx`, so rebuild the O(1) lookup index from the
+        // compacted buffer.
+        rebuild_set_index(set);
         1
     }
 }
@@ -792,85 +784,62 @@ pub extern "C" fn js_set_from_array(arr: *const crate::array::ArrayHeader) -> *m
 ///   adding each as a single-char string to the set (matches the JS
 ///   spec: `new Set("abc")` → `{"a", "b", "c"}`)
 /// - undefined / null → empty set (matches `new Set()` and `new Set(null)`)
-/// - anything else → empty set with no error (lenient — JS would throw
-///   `TypeError`, but blocking compilation for non-iterable inputs is
-///   worse than silently producing an empty set; followup as needed)
+/// - any other iterable (Map/Set/custom `[Symbol.iterator]`) → consume its
+///   yielded values
+/// - non-iterable number / boolean / bigint / symbol / function / plain
+///   object → throw `TypeError: <type> ... is not iterable (...)` (#2771)
 ///
 /// Used by codegen for `Expr::SetNewFromArray` so a single call site
 /// handles any iterable input shape — closes #421-related bug where
 /// `new Set("abc")` (hono's `regExpMetaChars` pattern) crashed because
-/// `js_set_from_array` blindly cast the StringHeader to ArrayHeader.
+/// `js_set_from_array` blindly cast the StringHeader to ArrayHeader, and
+/// #2771 (arbitrary iterables + TypeError on non-iterables).
 #[no_mangle]
 pub extern "C" fn js_set_from_iterable(value: f64) -> *mut SetHeader {
+    use crate::collection_iter::{classify_init, InitIter};
+
     let scope = crate::gc::RuntimeHandleScope::new();
-    let value_handle = scope.root_nanbox_f64(value);
-    let bits = value_handle.get_nanbox_u64();
-    let top16 = (bits >> 48) as u16;
-    // String literals (heap or SSO).
-    if top16 == 0x7FFF || top16 == 0x7FF9 {
-        let set = js_set_alloc(4);
-        let set_handle = scope.root_raw_mut_ptr(set);
-        maybe_force_helper_gc_for_test();
-        // Materialize SSO to a real heap StringHeader; cheap for heap strings.
-        let str_ptr = {
-            crate::value::js_get_string_pointer_unified(value_handle.get_nanbox_f64())
-                as *const crate::string::StringHeader
-        };
-        if str_ptr.is_null() {
-            return set_handle.get_raw_mut_ptr::<SetHeader>();
-        }
-        let bytes = unsafe {
-            let byte_len = (*str_ptr).byte_len as usize;
-            let data =
-                (str_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-            std::slice::from_raw_parts(data, byte_len).to_vec()
-        };
-        // UTF-8 codepoint iteration. Each codepoint becomes a single-
-        // codepoint string allocated via `js_string_from_bytes`, then
-        // added to the set as the NaN-boxed string handle.
-        let mut i = 0;
-        while i < bytes.len() {
-            let lead = bytes[i];
-            let codepoint_len = if lead < 0x80 {
-                1
-            } else if lead < 0xC0 {
-                // Continuation byte mid-sequence — shouldn't happen for
-                // well-formed UTF-8; skip one byte to avoid infinite loop.
-                1
-            } else if lead < 0xE0 {
-                2
-            } else if lead < 0xF0 {
-                3
-            } else {
-                4
-            };
-            let end = (i + codepoint_len).min(bytes.len());
-            let cp_bytes = &bytes[i..end];
-            let cp_str =
-                crate::string::js_string_from_bytes(cp_bytes.as_ptr(), cp_bytes.len() as u32);
-            let cp_value =
-                f64::from_bits(0x7FFF_0000_0000_0000 | (cp_str as u64 & 0x0000_FFFF_FFFF_FFFF));
-            let set = set_handle.get_raw_mut_ptr::<SetHeader>();
-            js_set_add(set, cp_value);
-            i = end;
-        }
+    // `classify_init` returns the materialized array of yielded values for any
+    // iterable (Array/String/Map/Set/custom iterator), an Empty marker for
+    // null/undefined, or throws the Node "not iterable" TypeError otherwise.
+    // For a Map it yields `[k, v]` pair arrays; for a String it yields
+    // single-codepoint strings — both match `[...new Set(x)]` in Node.
+    let arr_ptr = match classify_init(value) {
+        InitIter::Empty => return js_set_alloc(4),
+        InitIter::Values(p) => p,
+    };
+    let arr_handle = if arr_ptr.is_null() {
+        None
+    } else {
+        Some(scope.root_raw_mut_ptr(arr_ptr))
+    };
+    let set = js_set_alloc(4);
+    let set_handle = scope.root_raw_mut_ptr(set);
+    let Some(arr_handle) = arr_handle.as_ref() else {
         return set_handle.get_raw_mut_ptr::<SetHeader>();
+    };
+    maybe_force_helper_gc_for_test();
+    let len = {
+        let arr = arr_handle.get_raw_const_ptr::<crate::array::ArrayHeader>();
+        crate::array::js_array_length(arr)
+    };
+    for i in 0..len {
+        let element = {
+            let arr = arr_handle.get_raw_const_ptr::<crate::array::ArrayHeader>();
+            crate::array::js_array_get_f64(arr, i)
+        };
+        let set = set_handle.get_raw_mut_ptr::<SetHeader>();
+        js_set_add(set, element);
     }
-    // Pointer tag covers arrays + objects; we treat it as array (existing
-    // path). Non-array objects produce an empty-ish set since
-    // `js_array_length` reads bytes that happen to be at offset 0.
-    if top16 == 0x7FFD || (bits & 0xFFFF_0000_0000_0000) == 0 {
-        let arr_ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::array::ArrayHeader;
-        return js_set_from_array(arr_ptr);
-    }
-    // undefined / null / number / etc. → empty set.
-    js_set_alloc(4)
+    set_handle.get_raw_mut_ptr::<SetHeader>()
 }
 
-/// Iterate over set elements, calling a callback with (value, value, set) for each
-/// Matches JS Set.forEach signature where key===value (so we pass value twice).
+/// `Set.prototype.forEach(callback, thisArg)` — calls `callback` with
+/// `(value, value, set)` (key === value for Sets, #2830) and binds
+/// `thisArg` as the callback's `this`. `this_arg` is `undefined` when
+/// omitted at the call site.
 #[no_mangle]
-pub extern "C" fn js_set_foreach(set: *const SetHeader, callback: f64) {
+pub extern "C" fn js_set_foreach(set: *const SetHeader, callback: f64, this_arg: f64) {
     let set = clean_set_ptr(set);
     if set.is_null() {
         return;
@@ -878,15 +847,15 @@ pub extern "C" fn js_set_foreach(set: *const SetHeader, callback: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let set_handle = scope.root_raw_const_ptr(set);
     let callback_handle = scope.root_nanbox_f64(callback);
+    let this_handle = scope.root_nanbox_f64(this_arg);
     unsafe {
         let set = set_handle.get_raw_const_ptr::<SetHeader>();
         let size = (*set).size as usize;
         if size == 0 {
             return;
         }
-
-        // Extract the closure pointer from the NaN-boxed callback.
-        // Mask off the upper 16 bits (NaN-box tag) to get the real pointer.
+        // The Set itself is the third callback argument / `self === s`.
+        let set_value = crate::value::js_nanbox_pointer(set as i64);
 
         for i in 0..size {
             let set = set_handle.get_raw_const_ptr::<SetHeader>();
@@ -895,13 +864,320 @@ pub extern "C" fn js_set_foreach(set: *const SetHeader, callback: f64) {
             }
             let elements = elements_ptr(set);
             let value = ptr::read(elements.add(i));
-            let closure_ptr = (callback_handle.get_nanbox_u64() & 0x0000_FFFF_FFFF_FFFF)
-                as *const crate::closure::ClosureHeader;
-            // Call closure with (value, value) - Set.forEach callback gets (value, value) in JS
-            crate::closure::js_closure_call2(closure_ptr, value, value);
+            let args = [value, value, set_value];
+            let cb = callback_handle.get_nanbox_f64();
+            let this_v = this_handle.get_nanbox_f64();
+            let prev_this = crate::object::js_implicit_this_set(this_v);
+            let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
+            crate::object::js_implicit_this_set(prev_this);
         }
     }
 }
+
+// =====================================================================
+// ES2024 Set composition methods (TC39 Set-methods proposal, Node 22+).
+// #2872: union / intersection / difference / symmetricDifference return a
+// NEW Set; isSubsetOf / isSupersetOf / isDisjointFrom return a boolean.
+//
+// All four set-returning methods preserve insertion order per spec:
+// `union` is `this` elements followed by `other`'s new elements;
+// `intersection` / `difference` keep `this`'s order; `symmetricDifference`
+// is `this`'s leftover elements followed by `other`'s leftover elements.
+//
+// The `other` argument is received as a NaN-boxed value (f64). For the
+// scoped basic behavior (#2872) it is expected to be a real Set; we
+// recover its pointer via `clean_set_ptr` (which masks the NaN-box tag).
+// =====================================================================
+
+/// Recover a `*const SetHeader` from a NaN-boxed `other` argument. Returns
+/// null if the value isn't a registered Set (callers treat null as empty).
+unsafe fn other_set_ptr(other: f64) -> *const SetHeader {
+    let raw = other.to_bits() as *const SetHeader;
+    let cleaned = clean_set_ptr(raw);
+    if cleaned.is_null() {
+        return ptr::null();
+    }
+    if is_registered_set(cleaned as usize) {
+        cleaned
+    } else {
+        ptr::null()
+    }
+}
+
+/// `Set.prototype.union(other)` — new Set with elements of both sets,
+/// `this`'s elements first (insertion order) then `other`'s new elements.
+#[no_mangle]
+pub extern "C" fn js_set_union(set: *const SetHeader, other: f64) -> *mut SetHeader {
+    let set = clean_set_ptr(set);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result = js_set_alloc(4);
+    let result_handle = scope.root_raw_mut_ptr(result);
+    let set_handle = if set.is_null() {
+        None
+    } else {
+        Some(scope.root_raw_const_ptr(set))
+    };
+    let other_handle = unsafe {
+        let o = other_set_ptr(other);
+        if o.is_null() {
+            None
+        } else {
+            Some(scope.root_raw_const_ptr(o))
+        }
+    };
+    unsafe {
+        if let Some(ref h) = set_handle {
+            let s = h.get_raw_const_ptr::<SetHeader>();
+            for i in 0..(*s).size as usize {
+                let s = h.get_raw_const_ptr::<SetHeader>();
+                let v = ptr::read(elements_ptr(s).add(i));
+                js_set_add(result_handle.get_raw_mut_ptr::<SetHeader>(), v);
+            }
+        }
+        if let Some(ref h) = other_handle {
+            let o = h.get_raw_const_ptr::<SetHeader>();
+            for i in 0..(*o).size as usize {
+                let o = h.get_raw_const_ptr::<SetHeader>();
+                let v = ptr::read(elements_ptr(o).add(i));
+                js_set_add(result_handle.get_raw_mut_ptr::<SetHeader>(), v);
+            }
+        }
+    }
+    result_handle.get_raw_mut_ptr::<SetHeader>()
+}
+
+/// `Set.prototype.intersection(other)` — new Set with elements present in
+/// both sets, keeping `this`'s insertion order.
+#[no_mangle]
+pub extern "C" fn js_set_intersection(set: *const SetHeader, other: f64) -> *mut SetHeader {
+    let set = clean_set_ptr(set);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result = js_set_alloc(4);
+    let result_handle = scope.root_raw_mut_ptr(result);
+    if set.is_null() {
+        return result_handle.get_raw_mut_ptr::<SetHeader>();
+    }
+    let set_handle = scope.root_raw_const_ptr(set);
+    let other = unsafe { other_set_ptr(other) };
+    let other_handle = if other.is_null() {
+        None
+    } else {
+        Some(scope.root_raw_const_ptr(other))
+    };
+    unsafe {
+        let s = set_handle.get_raw_const_ptr::<SetHeader>();
+        for i in 0..(*s).size as usize {
+            let s = set_handle.get_raw_const_ptr::<SetHeader>();
+            let v = ptr::read(elements_ptr(s).add(i));
+            let in_other = match other_handle {
+                Some(ref h) => {
+                    let o = h.get_raw_const_ptr::<SetHeader>();
+                    js_set_has(o, v) != 0
+                }
+                None => false,
+            };
+            if in_other {
+                js_set_add(result_handle.get_raw_mut_ptr::<SetHeader>(), v);
+            }
+        }
+    }
+    result_handle.get_raw_mut_ptr::<SetHeader>()
+}
+
+/// `Set.prototype.difference(other)` — new Set with elements of `this` that
+/// are NOT in `other`, keeping `this`'s insertion order.
+#[no_mangle]
+pub extern "C" fn js_set_difference(set: *const SetHeader, other: f64) -> *mut SetHeader {
+    let set = clean_set_ptr(set);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result = js_set_alloc(4);
+    let result_handle = scope.root_raw_mut_ptr(result);
+    if set.is_null() {
+        return result_handle.get_raw_mut_ptr::<SetHeader>();
+    }
+    let set_handle = scope.root_raw_const_ptr(set);
+    let other = unsafe { other_set_ptr(other) };
+    let other_handle = if other.is_null() {
+        None
+    } else {
+        Some(scope.root_raw_const_ptr(other))
+    };
+    unsafe {
+        let s = set_handle.get_raw_const_ptr::<SetHeader>();
+        for i in 0..(*s).size as usize {
+            let s = set_handle.get_raw_const_ptr::<SetHeader>();
+            let v = ptr::read(elements_ptr(s).add(i));
+            let in_other = match other_handle {
+                Some(ref h) => {
+                    let o = h.get_raw_const_ptr::<SetHeader>();
+                    js_set_has(o, v) != 0
+                }
+                None => false,
+            };
+            if !in_other {
+                js_set_add(result_handle.get_raw_mut_ptr::<SetHeader>(), v);
+            }
+        }
+    }
+    result_handle.get_raw_mut_ptr::<SetHeader>()
+}
+
+/// `Set.prototype.symmetricDifference(other)` — new Set with elements in
+/// exactly one of the sets. `this`'s leftover elements (not in `other`)
+/// first, then `other`'s leftover elements (not in `this`).
+#[no_mangle]
+pub extern "C" fn js_set_symmetric_difference(set: *const SetHeader, other: f64) -> *mut SetHeader {
+    let set = clean_set_ptr(set);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result = js_set_alloc(4);
+    let result_handle = scope.root_raw_mut_ptr(result);
+    let set_handle = if set.is_null() {
+        None
+    } else {
+        Some(scope.root_raw_const_ptr(set))
+    };
+    let other = unsafe { other_set_ptr(other) };
+    let other_handle = if other.is_null() {
+        None
+    } else {
+        Some(scope.root_raw_const_ptr(other))
+    };
+    unsafe {
+        // `this` elements not in `other`.
+        if let Some(ref sh) = set_handle {
+            let s = sh.get_raw_const_ptr::<SetHeader>();
+            for i in 0..(*s).size as usize {
+                let s = sh.get_raw_const_ptr::<SetHeader>();
+                let v = ptr::read(elements_ptr(s).add(i));
+                let in_other = match other_handle {
+                    Some(ref h) => {
+                        let o = h.get_raw_const_ptr::<SetHeader>();
+                        js_set_has(o, v) != 0
+                    }
+                    None => false,
+                };
+                if !in_other {
+                    js_set_add(result_handle.get_raw_mut_ptr::<SetHeader>(), v);
+                }
+            }
+        }
+        // `other` elements not in `this`.
+        if let Some(ref oh) = other_handle {
+            let o = oh.get_raw_const_ptr::<SetHeader>();
+            for i in 0..(*o).size as usize {
+                let o = oh.get_raw_const_ptr::<SetHeader>();
+                let v = ptr::read(elements_ptr(o).add(i));
+                let in_set = match set_handle {
+                    Some(ref h) => {
+                        let s = h.get_raw_const_ptr::<SetHeader>();
+                        js_set_has(s, v) != 0
+                    }
+                    None => false,
+                };
+                if !in_set {
+                    js_set_add(result_handle.get_raw_mut_ptr::<SetHeader>(), v);
+                }
+            }
+        }
+    }
+    result_handle.get_raw_mut_ptr::<SetHeader>()
+}
+
+/// `Set.prototype.isSubsetOf(other)` — true if every element of `this` is
+/// also in `other`. Returns 1/0.
+#[no_mangle]
+pub extern "C" fn js_set_is_subset_of(set: *const SetHeader, other: f64) -> i32 {
+    let set = clean_set_ptr(set);
+    if set.is_null() {
+        return 1; // empty set is a subset of anything
+    }
+    unsafe {
+        let other = other_set_ptr(other);
+        let size = (*set).size as usize;
+        if other.is_null() {
+            return (size == 0) as i32;
+        }
+        let elements = elements_ptr(set);
+        for i in 0..size {
+            let v = ptr::read(elements.add(i));
+            if js_set_has(other, v) == 0 {
+                return 0;
+            }
+        }
+        1
+    }
+}
+
+/// `Set.prototype.isSupersetOf(other)` — true if every element of `other`
+/// is also in `this`. Returns 1/0.
+#[no_mangle]
+pub extern "C" fn js_set_is_superset_of(set: *const SetHeader, other: f64) -> i32 {
+    let set = clean_set_ptr(set);
+    unsafe {
+        let other = other_set_ptr(other);
+        if other.is_null() {
+            return 1; // every set is a superset of an empty other
+        }
+        let osize = (*other).size as usize;
+        if set.is_null() {
+            return (osize == 0) as i32;
+        }
+        let oelements = elements_ptr(other);
+        for i in 0..osize {
+            let v = ptr::read(oelements.add(i));
+            if js_set_has(set, v) == 0 {
+                return 0;
+            }
+        }
+        1
+    }
+}
+
+/// `Set.prototype.isDisjointFrom(other)` — true if the sets share no
+/// elements. Returns 1/0.
+#[no_mangle]
+pub extern "C" fn js_set_is_disjoint_from(set: *const SetHeader, other: f64) -> i32 {
+    let set = clean_set_ptr(set);
+    if set.is_null() {
+        return 1;
+    }
+    unsafe {
+        let other = other_set_ptr(other);
+        if other.is_null() {
+            return 1;
+        }
+        let size = (*set).size as usize;
+        let elements = elements_ptr(set);
+        for i in 0..size {
+            let v = ptr::read(elements.add(i));
+            if js_set_has(other, v) != 0 {
+                return 0;
+            }
+        }
+        1
+    }
+}
+
+// #2872: keepalive anchors so the auto-optimize whole-program-LLVM-bitcode
+// rebuild doesn't dead-strip these codegen-only `#[no_mangle]` entry points
+// (see project_auto_optimize_keepalive_3320 / PR #3320).
+#[used]
+static KEEP_SET_UNION: extern "C" fn(*const SetHeader, f64) -> *mut SetHeader = js_set_union;
+#[used]
+static KEEP_SET_INTERSECTION: extern "C" fn(*const SetHeader, f64) -> *mut SetHeader =
+    js_set_intersection;
+#[used]
+static KEEP_SET_DIFFERENCE: extern "C" fn(*const SetHeader, f64) -> *mut SetHeader =
+    js_set_difference;
+#[used]
+static KEEP_SET_SYMDIFF: extern "C" fn(*const SetHeader, f64) -> *mut SetHeader =
+    js_set_symmetric_difference;
+#[used]
+static KEEP_SET_IS_SUBSET: extern "C" fn(*const SetHeader, f64) -> i32 = js_set_is_subset_of;
+#[used]
+static KEEP_SET_IS_SUPERSET: extern "C" fn(*const SetHeader, f64) -> i32 = js_set_is_superset_of;
+#[used]
+static KEEP_SET_IS_DISJOINT: extern "C" fn(*const SetHeader, f64) -> i32 = js_set_is_disjoint_from;
 
 #[cfg(test)]
 mod tests {
@@ -920,6 +1196,93 @@ mod tests {
         assert_eq!(js_set_has(set, 3.0), 1);
         assert_eq!(js_set_has(set, 4.0), 0);
         assert_eq!(js_set_has(set, 0.0), 0);
+    }
+
+    // #2872: helper to pass a Set pointer as the NaN-boxed `other` argument.
+    // A raw heap pointer (top16 == 0) is returned unchanged by `clean_set_ptr`,
+    // so reinterpreting the pointer bits as f64 round-trips through
+    // `other_set_ptr`.
+    fn as_other(set: *mut SetHeader) -> f64 {
+        f64::from_bits(set as u64)
+    }
+
+    fn collect(set: *const SetHeader) -> Vec<f64> {
+        unsafe {
+            let size = (*set).size as usize;
+            (0..size).map(|i| *(elements_ptr(set).add(i))).collect()
+        }
+    }
+
+    #[test]
+    fn test_set_union() {
+        let a = js_set_alloc(4);
+        js_set_add(a, 1.0);
+        js_set_add(a, 2.0);
+        let b = js_set_alloc(4);
+        js_set_add(b, 2.0);
+        js_set_add(b, 3.0);
+        let u = js_set_union(a, as_other(b));
+        assert_eq!(collect(u), vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_set_intersection() {
+        let a = js_set_alloc(4);
+        js_set_add(a, 1.0);
+        js_set_add(a, 2.0);
+        let b = js_set_alloc(4);
+        js_set_add(b, 2.0);
+        js_set_add(b, 3.0);
+        let r = js_set_intersection(a, as_other(b));
+        assert_eq!(collect(r), vec![2.0]);
+    }
+
+    #[test]
+    fn test_set_difference() {
+        let a = js_set_alloc(4);
+        js_set_add(a, 1.0);
+        js_set_add(a, 2.0);
+        let b = js_set_alloc(4);
+        js_set_add(b, 2.0);
+        js_set_add(b, 3.0);
+        let r = js_set_difference(a, as_other(b));
+        assert_eq!(collect(r), vec![1.0]);
+    }
+
+    #[test]
+    fn test_set_symmetric_difference() {
+        let a = js_set_alloc(4);
+        js_set_add(a, 1.0);
+        js_set_add(a, 2.0);
+        let b = js_set_alloc(4);
+        js_set_add(b, 2.0);
+        js_set_add(b, 3.0);
+        let r = js_set_symmetric_difference(a, as_other(b));
+        // `a` leftovers (1) then `b` leftovers (3) — insertion order.
+        assert_eq!(collect(r), vec![1.0, 3.0]);
+    }
+
+    #[test]
+    fn test_set_predicates() {
+        let a = js_set_alloc(4);
+        js_set_add(a, 1.0);
+        js_set_add(a, 2.0);
+
+        let superset = js_set_alloc(4);
+        js_set_add(superset, 1.0);
+        js_set_add(superset, 2.0);
+        js_set_add(superset, 3.0);
+        assert_eq!(js_set_is_subset_of(a, as_other(superset)), 1);
+        assert_eq!(js_set_is_superset_of(a, as_other(superset)), 0);
+
+        let one = js_set_alloc(4);
+        js_set_add(one, 1.0);
+        assert_eq!(js_set_is_superset_of(a, as_other(one)), 1);
+
+        let disjoint = js_set_alloc(4);
+        js_set_add(disjoint, 4.0);
+        assert_eq!(js_set_is_disjoint_from(a, as_other(disjoint)), 1);
+        assert_eq!(js_set_is_disjoint_from(a, as_other(superset)), 0);
     }
 
     #[test]

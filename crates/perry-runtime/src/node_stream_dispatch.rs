@@ -115,6 +115,11 @@ pub(super) fn register_stub_arities() {
     };
     register(ns_chain0 as *const u8, 0);
     register(ns_chain1 as *const u8, 1);
+    register(ns_wrap1 as *const u8, 1);
+    register(ns_wrap_data as *const u8, 1);
+    register(ns_wrap_end as *const u8, 0);
+    register(ns_wrap_error as *const u8, 1);
+    register(ns_wrap_close as *const u8, 0);
     register(ns_destroy_error_microtask as *const u8, 0);
     register(ns_stream_abort_listener as *const u8, 0);
     register(ns_destroy1 as *const u8, 1);
@@ -148,11 +153,19 @@ pub(super) fn register_stub_arities() {
     register(pipe_drain_callback as *const u8, 0);
     register(pipe_finish_destination_callback as *const u8, 0);
     register(writable_write_callback_noop as *const u8, 0);
+    register(duplex_pair_write_callback as *const u8, 3);
+    register(duplex_pair_final_callback as *const u8, 1);
     register(transform_write_callback as *const u8, 2);
     register(transform_flush_callback as *const u8, 2);
     register(pipeline_success_callback as *const u8, 0);
     register(pipeline_error_callback as *const u8, 1);
     register(pipeline_close_callback as *const u8, 0);
+    register(compose_stage_error_callback as *const u8, 1);
+    register(compose_source_data_callback as *const u8, 1);
+    register(compose_source_end_callback as *const u8, 0);
+    register(compose_source_error_callback as *const u8, 1);
+    register(compose_duplex_write_callback as *const u8, 3);
+    register(compose_duplex_final_callback as *const u8, 1);
     register(ns_write3 as *const u8, 3);
     register(ns_end3 as *const u8, 3);
     register(ns_cork0 as *const u8, 0);
@@ -171,6 +184,14 @@ pub(super) fn register_stub_arities() {
     register(ns_is_paused0 as *const u8, 0);
     register(ns_unpipe1 as *const u8, 1);
     register(ns_readable_resume_microtask as *const u8, 0);
+    register(
+        super::readable_from_promises::ns_readable_from_promise_fulfilled as *const u8,
+        1,
+    );
+    register(
+        super::readable_from_promises::ns_readable_from_promise_rejected as *const u8,
+        1,
+    );
     register(ns_finished_error_false_close as *const u8, 0);
     register(ns_finished_signal_abort as *const u8, 0);
     register(ns_iter_to_array as *const u8, 1);
@@ -199,6 +220,11 @@ pub(super) fn install_stream_async_dispose_symbol(stream: f64) {
     }
     let closure = js_closure_alloc(ns_async_dispose as *const u8, 1);
     crate::closure::js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
+    set_hidden_value(
+        stream,
+        hidden_key(b"__perry_async_dispose__"),
+        box_pointer(closure as *const u8),
+    );
     unsafe {
         crate::symbol::js_object_set_symbol_property(
             stream,

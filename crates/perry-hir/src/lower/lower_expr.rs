@@ -259,6 +259,11 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     && name != "Error"
                     && name != "TypeError"
                     && name != "RangeError"
+                    && name != "SyntaxError"
+                    && name != "ReferenceError"
+                    && name != "EvalError"
+                    && name != "URIError"
+                    && name != "AggregateError"
                     && name != "Promise"
                     && name != "Map"
                     && name != "Set"
@@ -268,6 +273,9 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     && name != "WeakSet"
                     && name != "WeakRef"
                     && name != "FinalizationRegistry"
+                    && name != "DisposableStack"
+                    && name != "AsyncDisposableStack"
+                    && name != "SuppressedError"
                     && name != "Proxy"
                     && name != "Reflect"
                     && name != "Uint8Array"
@@ -276,6 +284,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     && name != "Uint16Array"
                     && name != "Int32Array"
                     && name != "Uint32Array"
+                    && name != "Float16Array"
                     && name != "Float32Array"
                     && name != "Float64Array"
                     && name != "TextEncoder"
@@ -295,6 +304,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     && name != "btoa"
                     && name != "BigInt"
                     && name != "WebAssembly"
+                    && !is_builtin_global_value_name(&name)
                 {
                     eprintln!(
                         "  Warning: unknown identifier '{}' — assuming global; member access will dispatch by name at runtime, bare reads lower to 0",
@@ -583,6 +593,14 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     if id.sym.as_ref() == "Function" && ctx.lookup_local("Function").is_none() {
                         return Ok(Expr::String("function".to_string()));
                     }
+                    // #2874: global `Iterator` (TC39 iterator-helpers) is a
+                    // constructor function in Node 22+.
+                    if id.sym.as_ref() == "Iterator"
+                        && ctx.lookup_local("Iterator").is_none()
+                        && ctx.lookup_func("Iterator").is_none()
+                    {
+                        return Ok(Expr::String("function".to_string()));
+                    }
                     // #1454: global timer builtins (+ fetch) are functions, but
                     // a bare read lowers to an ExternFuncRef whose typeof reads
                     // "boolean". Fold to "function" (gc is excluded — it's
@@ -746,6 +764,37 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             {
                                 return Ok(Expr::String("function".to_string()));
                             }
+                            // `readline.Interface` is a native handle whose
+                            // value-read members lower as zero-arg native
+                            // calls. For shape probes, fold `typeof` at the
+                            // AST layer so we report Node's public surface
+                            // without invoking those methods.
+                            if matches!(
+                                ctx.lookup_native_instance(obj_name),
+                                Some(("readline", "Interface"))
+                            ) {
+                                if matches!(
+                                    prop_name,
+                                    "close"
+                                        | "pause"
+                                        | "resume"
+                                        | "prompt"
+                                        | "setPrompt"
+                                        | "getPrompt"
+                                        | "question"
+                                        | "write"
+                                        | "getCursorPos"
+                                        | "on"
+                                ) {
+                                    return Ok(Expr::String("function".to_string()));
+                                }
+                                if prop_name == "line" {
+                                    return Ok(Expr::String("string".to_string()));
+                                }
+                                if prop_name == "terminal" {
+                                    return Ok(Expr::String("boolean".to_string()));
+                                }
+                            }
                             // #1698: `typeof req.json` on a Web Fetch Request /
                             // Response instance. The body methods are real
                             // functions in Node, but a bare LITERAL member read
@@ -761,7 +810,13 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                 Some(("Request", "Request")) | Some(("fetch", "Response"))
                             ) && matches!(
                                 prop_name,
-                                "json" | "text" | "arrayBuffer" | "blob" | "formData" | "clone"
+                                "json"
+                                    | "text"
+                                    | "arrayBuffer"
+                                    | "blob"
+                                    | "bytes"
+                                    | "formData"
+                                    | "clone"
                             ) {
                                 return Ok(Expr::String("function".to_string()));
                             }

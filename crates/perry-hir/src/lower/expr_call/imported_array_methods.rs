@@ -127,18 +127,27 @@ pub(super) fn try_imported_array_methods(
                                     }
                                 }
                                 "indexOf" => {
+                                    // #2804: carry the optional fromIndex (2nd arg).
                                     if !args.is_empty() {
+                                        let mut it = args.into_iter();
+                                        let value = it.next().unwrap();
+                                        let from_index = it.next().map(Box::new);
                                         return Ok(Ok(Expr::ArrayIndexOf {
                                             array: Box::new(extern_ref),
-                                            value: Box::new(args.into_iter().next().unwrap()),
+                                            value: Box::new(value),
+                                            from_index,
                                         }));
                                     }
                                 }
                                 "includes" => {
                                     if !args.is_empty() {
+                                        let mut it = args.into_iter();
+                                        let value = it.next().unwrap();
+                                        let from_index = it.next().map(Box::new);
                                         return Ok(Ok(Expr::ArrayIncludes {
                                             array: Box::new(extern_ref),
-                                            value: Box::new(args.into_iter().next().unwrap()),
+                                            value: Box::new(value),
+                                            from_index,
                                         }));
                                     }
                                 }
@@ -199,18 +208,22 @@ pub(super) fn try_imported_array_methods(
                                     }));
                                 }
                                 "toSpliced" => {
-                                    if args.len() >= 2 {
-                                        let mut args_iter = args.into_iter();
-                                        let start = args_iter.next().unwrap();
-                                        let delete_count = args_iter.next().unwrap();
-                                        let items: Vec<Expr> = args_iter.collect();
-                                        return Ok(Ok(Expr::ArrayToSpliced {
-                                            array: Box::new(extern_ref),
-                                            start: Box::new(start),
-                                            delete_count: Box::new(delete_count),
-                                            items,
-                                        }));
-                                    }
+                                    // #2794: handle omitted args.
+                                    let arg_count = args.len();
+                                    let mut args_iter = args.into_iter();
+                                    let start = args_iter.next().unwrap_or(Expr::Number(0.0));
+                                    let delete_count = match args_iter.next() {
+                                        Some(dc) => dc,
+                                        None if arg_count >= 1 => Expr::Number(f64::INFINITY),
+                                        None => Expr::Number(0.0),
+                                    };
+                                    let items: Vec<Expr> = args_iter.collect();
+                                    return Ok(Ok(Expr::ArrayToSpliced {
+                                        array: Box::new(extern_ref),
+                                        start: Box::new(start),
+                                        delete_count: Box::new(delete_count),
+                                        items,
+                                    }));
                                 }
                                 "with" => {
                                     if args.len() >= 2 {

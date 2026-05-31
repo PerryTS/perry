@@ -2106,6 +2106,7 @@ const __memDispatch = {
 
   // Crypto — args are plain JS values
   crypto_random_uuid: () => crypto.randomUUID(),
+  crypto_random_uuidv7: () => crypto.randomUUIDv7(),
   crypto_random_bytes: (n) => crypto.getRandomValues(new Uint8Array(n)),
   crypto_sha256: (data) => {
     const str = String(data);

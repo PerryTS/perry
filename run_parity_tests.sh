@@ -241,6 +241,7 @@ for raw in sys.stdin:
         sed -E '/^\(node:[0-9]+\)( \[[^]]+\])? DeprecationWarning:/d' | \
         sed -E '/^\(node:[0-9]+\) ExperimentalWarning: Type Stripping is an experimental feature/d' | \
         sed -E '/^\(node:[0-9]+\) ExperimentalWarning: glob is an experimental feature/d' | \
+        sed -E '/^\(node:[0-9]+\) ExperimentalWarning: WASI is an experimental feature/d' | \
         sed -E 's/^\(node:[0-9]+\) (Timeout(Overflow|Negative|NaN)Warning:)/(node:<pid>) \1/' | \
         sed -E '/^Timeout duration was set to [0-9]+\.$/d' | \
         sed -E '/^\(Use `node --trace-deprecation/d' | \
@@ -265,10 +266,16 @@ for raw in sys.stdin:
         # Node prints extra payload after the duration.
         sed -E 's/^([^:]*): [0-9]+(\.[0-9]+)?[[:space:]]*(μs|ms|s)( .*)$/\1: <timer>\4/g' | \
         sed -E 's/^([^:]*): [0-9]+(\.[0-9]+)?[[:space:]]*(μs|ms|s)$/\1: <timer>/g' | \
+        # Normalize node:test's measured durations in the default reporter.
+        sed -E 's/^([✔✖] .*) \([0-9]+(\.[0-9]+)?ms\)$/\1 (<duration>)/g' | \
+        sed -E 's/^ℹ duration_ms [0-9]+(\.[0-9]+)?$/ℹ duration_ms <duration>/g' | \
         # Normalize console warning delivery: Node emits process warnings on
         # stderr after the script body, while Perry writes the equivalent
         # warning eagerly at the call site.
         sed -E '/^(\(node:[0-9]+\) )?Warning: (Count for .* does not exist|No such label .* for console\.(timeLog|timeEnd)\(\)|Label .* already exists for console\.time\(\))/d' | \
+        # Normalize Node-style process warning prefixes. The warning text is
+        # semantically relevant, but the pid is not stable across runs.
+        sed -E 's/^\(node:[0-9]+\) /\(node:<pid>\) /g' | \
         # Normalize console.trace output: strip stack frame lines so only
         # the "Trace: <message>" header survives for comparison.
         # Node.js emits "    at <symbol> (<location>)" JS stack frames;
@@ -429,6 +436,11 @@ for test_file in "${TEST_FILES[@]}"; do
     node_output_file="$OUTPUT_DIR/node/${safe_test_id}.txt"
     perry_output_file="$OUTPUT_DIR/perry/${safe_test_id}.txt"
     perry_binary="/tmp/perry_parity_$safe_test_id"
+    parity_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-argv:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
+    test_argv=()
+    if [[ -n "$parity_argv_line" ]]; then
+        read -r -a test_argv <<< "$parity_argv_line"
+    fi
 
     # Check if test should be skipped
     if should_skip "$test_name"; then
@@ -453,7 +465,7 @@ for test_file in "${TEST_FILES[@]}"; do
     # rather than a `cmd | cap_output` pipeline.
     node_tmp=$(mktemp)
     run_with_timeout 10 env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
-        node --experimental-strip-types "$test_file" > "$node_tmp" 2>&1
+        node --experimental-strip-types "$test_file" "${test_argv[@]}" > "$node_tmp" 2>&1
     node_exit=$?
     node_output=$(cap_output < "$node_tmp")
     rm -f "$node_tmp"
@@ -517,7 +529,7 @@ for test_file in "${TEST_FILES[@]}"; do
 
     # Run Perry binary — same cap-via-tempfile protocol as Node above (#796).
     perry_tmp=$(mktemp)
-    run_with_timeout 10 "$perry_binary" > "$perry_tmp" 2>&1
+    run_with_timeout 10 "$perry_binary" "${test_argv[@]}" > "$perry_tmp" 2>&1
     perry_exit=$?
     perry_output=$(cap_output < "$perry_tmp")
     rm -f "$perry_tmp"

@@ -368,6 +368,7 @@ pub extern "C" fn js_closure_unbind_this(val: f64) -> f64 {
         let src_captures = closure_capture_slots_mut(source_ptr as *mut ClosureHeader);
         let dst_captures = closure_capture_slots_mut(new_closure);
         // Set slot 0 to undefined
+        // GC_STORE_AUDIT(BARRIERED): cloned closure capture stores are followed by layout/barrier rebuild.
         *dst_captures = crate::value::TAG_UNDEFINED;
         // Copy remaining captures (slots 1..count)
         for i in 1..count {
@@ -483,10 +484,12 @@ pub(crate) fn clone_closure_rebind_this(closure_bits: u64, recv_box: f64) -> u64
         let src_captures = closure_capture_slots_mut(source_ptr as *mut ClosureHeader);
         let dst_captures = closure_capture_slots_mut(new_closure);
         // Copy every capture verbatim, then overwrite the `this` slot (last) with recv_box.
+        // GC_STORE_AUDIT(BARRIERED): rebound closure captures are followed by layout/barrier rebuild.
         for i in 0..count {
             *dst_captures.add(i) = *src_captures.add(i);
         }
         let this_slot = count - 1;
+        // GC_STORE_AUDIT(BARRIERED): rebound this capture is included in the layout/barrier rebuild.
         *dst_captures.add(this_slot) = recv_handle.get_nanbox_f64().to_bits();
         rebuild_closure_layout_and_barriers(new_closure, count);
         let new_ptr = new_closure as u64;

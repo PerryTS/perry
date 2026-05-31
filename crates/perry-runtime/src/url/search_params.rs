@@ -27,6 +27,64 @@ fn throw_invalid_query_pair_tuple() -> ! {
     ))
 }
 
+fn throw_missing_args(name_and_value: bool) -> ! {
+    let message: &[u8] = if name_and_value {
+        b"The \"name\" and \"value\" arguments must be specified"
+    } else {
+        b"The \"name\" argument must be specified"
+    };
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, "ERR_MISSING_ARGS");
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_search_params_throw_missing_args(kind: i32) -> f64 {
+    throw_missing_args(kind == 2)
+}
+
+fn gc_object_type(raw_ptr: *const u8) -> Option<u8> {
+    if raw_ptr.is_null() || (raw_ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    unsafe { Some(*raw_ptr.sub(crate::gc::GC_HEADER_SIZE)) }
+}
+
+fn known_iterable_to_array(raw_ptr: i64) -> Option<*mut ArrayHeader> {
+    if raw_ptr == 0 {
+        return None;
+    }
+    let addr = raw_ptr as usize;
+    if crate::map::is_registered_map(addr) {
+        return Some(crate::map::js_map_entries(
+            raw_ptr as *const crate::map::MapHeader,
+        ));
+    }
+    if crate::set::is_registered_set(addr) {
+        return Some(crate::set::js_set_to_array(
+            raw_ptr as *const crate::set::SetHeader,
+        ));
+    }
+    let raw = raw_ptr as *const u8;
+    match gc_object_type(raw) {
+        Some(t) if t == crate::gc::GC_TYPE_ARRAY => Some(raw as *mut ArrayHeader),
+        _ => None,
+    }
+}
+
+fn query_pair_iterable_to_array(pair_f64: f64) -> *mut ArrayHeader {
+    let pair_jsval = crate::value::JSValue::from_bits(pair_f64.to_bits());
+    if !pair_jsval.is_pointer() {
+        throw_invalid_query_pair_tuple();
+    }
+    let pair_ptr_i64 = crate::value::js_nanbox_get_pointer(pair_f64);
+    if let Some(pair) = known_iterable_to_array(pair_ptr_i64) {
+        return pair;
+    }
+    throw_invalid_query_pair_tuple();
+}
+
 // URL field constant alias — we only need URL_SEARCH from `super::parse` for
 // the params→owner-URL sync path.
 use super::parse::URL_SEARCH;
@@ -125,6 +183,10 @@ pub(crate) fn url_encode(s: &str) -> String {
         }
     }
     result
+}
+
+fn coerce_search_param_arg(value: f64) -> String {
+    string_from_header(js_url_coerce_string(value))
 }
 
 /// Create a URLSearchParams object from entries
@@ -254,25 +316,11 @@ pub extern "C" fn js_url_search_params_new_any(init: f64) -> *mut ObjectHeader {
         if ptr_i64 == 0 {
             return create_url_search_params_object(Vec::new());
         }
-        let raw_ptr = ptr_i64 as *const u8;
 
-        // Issue #650 sub-issue: iterable form `new URLSearchParams([['a','1'], ['b','2']])`.
-        // The init is an Array (GC_TYPE_ARRAY), each element a 2-element
-        // pair array. Pre-fix this fell through to `read_record_entries`
-        // which read the array's numeric "keys" (`"0"`, `"1"`) as if they
-        // were string keys and stringified the inner pair-array values
-        // via `[object Object]` — and on some shapes silently exited
-        // mid-construction. Detect via the GC header's obj_type tag and
-        // walk pair-by-pair.
-        unsafe {
-            if !raw_ptr.is_null() && (raw_ptr as usize) >= 0x1000 {
-                let gc_obj_type = *raw_ptr.sub(crate::gc::GC_HEADER_SIZE);
-                if gc_obj_type == crate::gc::GC_TYPE_ARRAY {
-                    return create_url_search_params_object(read_iterable_pair_entries(
-                        raw_ptr as *const ArrayHeader,
-                    ));
-                }
-            }
+        // Iterable form: arrays, Maps, and Sets are consumed as sequences of
+        // query-pair iterables before falling back to record enumeration.
+        if let Some(iterable_entries) = known_iterable_to_array(ptr_i64) {
+            return create_url_search_params_object(read_iterable_pair_entries(iterable_entries));
         }
 
         let obj_ptr = ptr_i64 as *mut ObjectHeader;
@@ -292,54 +340,34 @@ pub extern "C" fn js_url_search_params_new_any(init: f64) -> *mut ObjectHeader {
         return create_url_search_params_object(entries);
     }
 
-    // Numbers / booleans / etc. — coerce to string via the unified string-ptr
-    // helper, then parse. Matches Node which `String(init)`-coerces unknown
-    // init values before parsing.
-    let s = get_string_content(init);
+    // Numbers / booleans / etc. — coerce with `String(init)`, then parse.
+    let s = stringify_field_value(init);
     create_url_search_params_object(parse_query_string(&s))
 }
 
-/// Issue #650: iterable URLSearchParams init — each element is itself
-/// a 2-element array `[key, value]`. Strings (key + value) are
-/// extracted via `get_string_content`, which handles SSO + heap
-/// strings + INT32 / number coercion so `new URLSearchParams([["n", 1]])`
-/// silently stringifies the value to `"1"` to match Node. Array entries must
-/// be exactly two items; Node throws `ERR_INVALID_TUPLE` for shorter or longer
-/// query pairs before appending them.
+/// Iterable URLSearchParams init — each element must itself be an iterable
+/// two-item `[key, value]` tuple. Node throws `ERR_INVALID_TUPLE` when an
+/// entry is not iterable or does not produce exactly two items.
 pub(crate) fn read_iterable_pair_entries(arr: *const ArrayHeader) -> Vec<(String, String)> {
     if arr.is_null() {
         return Vec::new();
     }
-    let len = unsafe { (*arr).length } as usize;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_const_ptr(arr);
+    let len = crate::array::js_array_length(arr_handle.get_raw_const_ptr::<ArrayHeader>()) as usize;
     let mut out = Vec::with_capacity(len);
     for i in 0..len {
+        let arr = arr_handle.get_raw_const_ptr::<ArrayHeader>();
         let pair_f64 = crate::array::js_array_get_f64(arr, i as u32);
-        let pair_bits = pair_f64.to_bits();
-        let pair_jsval = crate::value::JSValue::from_bits(pair_bits);
-        if !pair_jsval.is_pointer() {
-            continue;
-        }
-        let pair_ptr_i64 = crate::value::js_nanbox_get_pointer(pair_f64);
-        if pair_ptr_i64 == 0 {
-            continue;
-        }
-        let pair_raw = pair_ptr_i64 as *const u8;
-        unsafe {
-            if (pair_raw as usize) < 0x1000 {
-                continue;
-            }
-            let gc_type = *pair_raw.sub(crate::gc::GC_HEADER_SIZE);
-            if gc_type != crate::gc::GC_TYPE_ARRAY {
-                continue;
-            }
-        }
-        let pair = pair_ptr_i64 as *const ArrayHeader;
-        let pair_len = unsafe { (*pair).length };
+        let pair = query_pair_iterable_to_array(pair_f64);
+        let pair_len = crate::array::js_array_length(pair);
         if pair_len != 2 {
             throw_invalid_query_pair_tuple();
         }
-        let k = get_string_content(crate::array::js_array_get_f64(pair, 0));
-        let v = get_string_content(crate::array::js_array_get_f64(pair, 1));
+        let key_f64 = crate::array::js_array_get_f64(pair, 0);
+        let value_f64 = crate::array::js_array_get_f64(pair, 1);
+        let k = stringify_field_value(key_f64);
+        let v = stringify_field_value(value_f64);
         out.push((k, v));
     }
     out
@@ -407,57 +435,20 @@ pub(crate) fn read_record_entries(obj: *mut ObjectHeader) -> Vec<(String, String
     }
 }
 
-/// Coerce a NaN-boxed field value to a String the way Node's
-/// `URLSearchParams` does — values are passed through `String(...)`. Strings
-/// pass through; numbers / booleans use their textual form; null/undefined
-/// stringify literally.
+/// Coerce a NaN-boxed field value through the same `String(value)` path used
+/// by URLSearchParams constructors and methods. Symbols throw.
 pub(crate) fn stringify_field_value(v: f64) -> String {
-    let bits = v.to_bits();
-    let jsval = crate::value::JSValue::from_bits(bits);
-    if jsval.is_string() || jsval.is_short_string() {
-        return get_string_content(v);
-    }
-    if jsval.is_undefined() {
-        return "undefined".to_string();
-    }
-    if jsval.is_null() {
-        return "null".to_string();
-    }
-    if !v.is_nan() {
-        // Plain double — format without trailing ".0" for integers.
-        if v == v.trunc() && v.is_finite() && v.abs() < 1e21 {
-            return format!("{}", v as i64);
-        }
-        return format!("{}", v);
-    }
-    // Booleans land in the NaN-tag space.
-    if bits == 0x7FFC_0000_0000_0004 {
-        return "true".to_string();
-    }
-    if bits == 0x7FFC_0000_0000_0003 {
-        return "false".to_string();
-    }
-    // Pointer / unknown: stringify via the unified helper.
-    get_string_content(v)
+    coerce_search_param_arg(v)
 }
 
 /// Get a value by name
-/// js_url_search_params_get(params: *mut ObjectHeader, name: *mut StringHeader) -> *mut StringHeader (string or null)
+/// js_url_search_params_get(params, name) -> *mut StringHeader (string or null)
 #[no_mangle]
 pub extern "C" fn js_url_search_params_get(
     params: *mut ObjectHeader,
-    name_str: *mut crate::StringHeader,
+    name_value: f64,
 ) -> *mut crate::StringHeader {
-    let name = if name_str.is_null() {
-        String::new()
-    } else {
-        unsafe {
-            let len = (*name_str).byte_len as usize;
-            let data_ptr = (name_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let slice = std::slice::from_raw_parts(data_ptr, len);
-            String::from_utf8_lossy(slice).into_owned()
-        }
-    };
+    let name = coerce_search_param_arg(name_value);
 
     let entries = get_url_search_params_entries(params);
     for (key, value) in entries {
@@ -472,22 +463,10 @@ pub extern "C" fn js_url_search_params_get(
 }
 
 /// Check if a name exists
-/// js_url_search_params_has(params: *mut ObjectHeader, name: *mut StringHeader) -> f64 (boolean)
+/// js_url_search_params_has(params, name) -> f64 (boolean)
 #[no_mangle]
-pub extern "C" fn js_url_search_params_has(
-    params: *mut ObjectHeader,
-    name_str: *mut crate::StringHeader,
-) -> f64 {
-    let name = if name_str.is_null() {
-        String::new()
-    } else {
-        unsafe {
-            let len = (*name_str).byte_len as usize;
-            let data_ptr = (name_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let slice = std::slice::from_raw_parts(data_ptr, len);
-            String::from_utf8_lossy(slice).into_owned()
-        }
-    };
+pub extern "C" fn js_url_search_params_has(params: *mut ObjectHeader, name_value: f64) -> f64 {
+    let name = coerce_search_param_arg(name_value);
 
     let entries = get_url_search_params_entries(params);
     let found = entries.iter().any(|(key, _)| key == &name);
@@ -499,34 +478,15 @@ pub extern "C" fn js_url_search_params_has(
 }
 
 /// Set a value (replaces existing or adds new)
-/// js_url_search_params_set(params: *mut ObjectHeader, name: *mut StringHeader, value: *mut StringHeader) -> void
+/// js_url_search_params_set(params, name, value) -> void
 #[no_mangle]
 pub extern "C" fn js_url_search_params_set(
     params: *mut ObjectHeader,
-    name_str: *mut crate::StringHeader,
-    value_str: *mut crate::StringHeader,
+    name_value: f64,
+    value_value: f64,
 ) {
-    let name = if name_str.is_null() {
-        String::new()
-    } else {
-        unsafe {
-            let len = (*name_str).byte_len as usize;
-            let data_ptr = (name_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let slice = std::slice::from_raw_parts(data_ptr, len);
-            String::from_utf8_lossy(slice).into_owned()
-        }
-    };
-
-    let value = if value_str.is_null() {
-        String::new()
-    } else {
-        unsafe {
-            let len = (*value_str).byte_len as usize;
-            let data_ptr = (value_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let slice = std::slice::from_raw_parts(data_ptr, len);
-            String::from_utf8_lossy(slice).into_owned()
-        }
-    };
+    let name = coerce_search_param_arg(name_value);
+    let value = coerce_search_param_arg(value_value);
 
     let entries = get_url_search_params_entries(params);
 
@@ -564,34 +524,15 @@ pub extern "C" fn js_url_search_params_set(
 }
 
 /// Append a value (adds even if name already exists)
-/// js_url_search_params_append(params: *mut ObjectHeader, name: *mut StringHeader, value: *mut StringHeader) -> void
+/// js_url_search_params_append(params, name, value) -> void
 #[no_mangle]
 pub extern "C" fn js_url_search_params_append(
     params: *mut ObjectHeader,
-    name_str: *mut crate::StringHeader,
-    value_str: *mut crate::StringHeader,
+    name_value: f64,
+    value_value: f64,
 ) {
-    let name = if name_str.is_null() {
-        String::new()
-    } else {
-        unsafe {
-            let len = (*name_str).byte_len as usize;
-            let data_ptr = (name_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let slice = std::slice::from_raw_parts(data_ptr, len);
-            String::from_utf8_lossy(slice).into_owned()
-        }
-    };
-
-    let value = if value_str.is_null() {
-        String::new()
-    } else {
-        unsafe {
-            let len = (*value_str).byte_len as usize;
-            let data_ptr = (value_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let slice = std::slice::from_raw_parts(data_ptr, len);
-            String::from_utf8_lossy(slice).into_owned()
-        }
-    };
+    let name = coerce_search_param_arg(name_value);
+    let value = coerce_search_param_arg(value_value);
 
     let mut entries = get_url_search_params_entries(params);
     entries.push((name, value));
@@ -611,22 +552,10 @@ pub extern "C" fn js_url_search_params_append(
 }
 
 /// Delete all entries with a name
-/// js_url_search_params_delete(params: *mut ObjectHeader, name: *mut StringHeader) -> void
+/// js_url_search_params_delete(params, name) -> void
 #[no_mangle]
-pub extern "C" fn js_url_search_params_delete(
-    params: *mut ObjectHeader,
-    name_str: *mut crate::StringHeader,
-) {
-    let name = if name_str.is_null() {
-        String::new()
-    } else {
-        unsafe {
-            let len = (*name_str).byte_len as usize;
-            let data_ptr = (name_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let slice = std::slice::from_raw_parts(data_ptr, len);
-            String::from_utf8_lossy(slice).into_owned()
-        }
-    };
+pub extern "C" fn js_url_search_params_delete(params: *mut ObjectHeader, name_value: f64) {
+    let name = coerce_search_param_arg(name_value);
 
     let mut entries = get_url_search_params_entries(params);
     entries.retain(|(key, _)| key != &name);
@@ -646,22 +575,18 @@ pub extern "C" fn js_url_search_params_delete(
 }
 
 /// Node 19+: `URLSearchParams.has(name, value)` returns true only when both
-/// the name and value match (exact string equality). Falls back to the
-/// 1-arg behavior when `value_str` is null.
+/// the name and value match (exact string equality). The lowering only calls
+/// this helper when the second argument was actually present.
 #[no_mangle]
 pub extern "C" fn js_url_search_params_has2(
     params: *mut ObjectHeader,
-    name_str: *mut crate::StringHeader,
-    value_str: *mut crate::StringHeader,
+    name_value: f64,
+    value_value: f64,
 ) -> f64 {
-    let name = string_header_to_string(name_str);
+    let name = coerce_search_param_arg(name_value);
+    let value = coerce_search_param_arg(value_value);
     let entries = get_url_search_params_entries(params);
-    let found = if value_str.is_null() {
-        entries.iter().any(|(k, _)| k == &name)
-    } else {
-        let value = string_header_to_string(value_str);
-        entries.iter().any(|(k, v)| k == &name && v == &value)
-    };
+    let found = entries.iter().any(|(k, v)| k == &name && v == &value);
     if found {
         1.0
     } else {
@@ -670,29 +595,22 @@ pub extern "C" fn js_url_search_params_has2(
 }
 
 /// Node 19+: `URLSearchParams.delete(name, value)` — drops only entries
-/// matching BOTH the name and value (exact string equality). Falls back to
-/// the 1-arg behavior when `value_str` is null.
+/// matching BOTH the name and value (exact string equality). The lowering only
+/// calls this helper when the second argument was actually present.
 #[no_mangle]
 pub extern "C" fn js_url_search_params_delete2(
     params: *mut ObjectHeader,
-    name_str: *mut crate::StringHeader,
-    value_str: *mut crate::StringHeader,
+    name_value: f64,
+    value_value: f64,
 ) {
-    let name = string_header_to_string(name_str);
-    let value_filter: Option<String> = if value_str.is_null() {
-        None
-    } else {
-        Some(string_header_to_string(value_str))
-    };
+    let name = coerce_search_param_arg(name_value);
+    let value_filter = coerce_search_param_arg(value_value);
     let mut entries = get_url_search_params_entries(params);
     entries.retain(|(k, v)| {
         if k != &name {
             return true;
         }
-        match &value_filter {
-            Some(want) => v != want,
-            None => false,
-        }
+        v != &value_filter
     });
     let mut entries_array = js_array_alloc(entries.len() as u32);
     for (key, val) in entries {
@@ -810,6 +728,9 @@ pub extern "C" fn js_url_search_params_for_each(
     callback: f64,
     this_arg: f64,
 ) {
+    // #3058: Node validates the callback before iterating — a missing or
+    // non-function argument throws `TypeError [ERR_INVALID_ARG_TYPE]`.
+    crate::fs::validate::validate_function("callback", callback);
     let entries = get_url_search_params_entries(params);
     let this_value = crate::value::js_nanbox_pointer(params as i64);
     for (key, value) in entries {
@@ -827,22 +748,10 @@ pub extern "C" fn js_url_search_params_for_each(
 }
 
 /// Get all values for a name
-/// js_url_search_params_get_all(params: *mut ObjectHeader, name: *mut StringHeader) -> f64 (array)
+/// js_url_search_params_get_all(params, name) -> f64 (array)
 #[no_mangle]
-pub extern "C" fn js_url_search_params_get_all(
-    params: *mut ObjectHeader,
-    name_str: *mut crate::StringHeader,
-) -> f64 {
-    let name = if name_str.is_null() {
-        String::new()
-    } else {
-        unsafe {
-            let len = (*name_str).byte_len as usize;
-            let data_ptr = (name_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let slice = std::slice::from_raw_parts(data_ptr, len);
-            String::from_utf8_lossy(slice).into_owned()
-        }
-    };
+pub extern "C" fn js_url_search_params_get_all(params: *mut ObjectHeader, name_value: f64) -> f64 {
+    let name = coerce_search_param_arg(name_value);
 
     let entries = get_url_search_params_entries(params);
     let values: Vec<String> = entries

@@ -29,6 +29,7 @@ fn typed_array_name_for_name(name: &str) -> Option<&'static str> {
         "Uint16Array" => Some("Uint16Array"),
         "Int32Array" => Some("Int32Array"),
         "Uint32Array" => Some("Uint32Array"),
+        "Float16Array" => Some("Float16Array"),
         "Float32Array" => Some("Float32Array"),
         "Float64Array" => Some("Float64Array"),
         _ => None,
@@ -807,7 +808,9 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                             "floor" | "ceil" | "round" | "abs" | "sqrt" | "pow" | "min" | "max"
                             | "random" | "log" | "log2" | "log10" | "sin" | "cos" | "tan"
                             | "asin" | "acos" | "atan" | "atan2" | "exp" | "sign" | "trunc"
-                            | "cbrt" | "hypot" | "fround" | "clz32" | "imul" => Type::Number,
+                            | "cbrt" | "hypot" | "fround" | "f16round" | "clz32" | "imul" => {
+                                Type::Number
+                            }
                             _ => Type::Any,
                         };
                     }
@@ -860,6 +863,18 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                             "compare" => Type::Number,
                             _ => Type::Any,
                         };
+                    }
+                    // #2902: `<TypedArray>.from(...)` / `<TypedArray>.of(...)`
+                    // produce a typed array of the receiver's kind. Typing the
+                    // local refines `arr[i]` / `arr.length` onto the typed-array
+                    // fast path (like the `new TypedArray(...)` form), instead of
+                    // the generic `Any` index path which reads raw f64 garbage.
+                    // Uint8Array stays a Buffer (handled above).
+                    if obj_name != "Uint8Array"
+                        && crate::ir::typed_array_kind_for_name(obj_name).is_some()
+                        && matches!(method_name, "from" | "of")
+                    {
+                        return Type::Named(obj_name.to_string());
                     }
                     // `Readable.from(...)` produces a classic node:stream
                     // Readable. Typing it lets `for await (... of r)` lower

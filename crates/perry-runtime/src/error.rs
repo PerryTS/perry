@@ -24,6 +24,8 @@ pub const ERROR_KIND_RANGE_ERROR: u32 = 2;
 pub const ERROR_KIND_REFERENCE_ERROR: u32 = 3;
 pub const ERROR_KIND_SYNTAX_ERROR: u32 = 4;
 pub const ERROR_KIND_AGGREGATE_ERROR: u32 = 5;
+pub const ERROR_KIND_EVAL_ERROR: u32 = 6;
+pub const ERROR_KIND_URI_ERROR: u32 = 7;
 
 /// Special class IDs for `instanceof` checks (must match perry-codegen/src/expr.rs)
 pub const CLASS_ID_ERROR: u32 = 0xFFFF0001;
@@ -32,6 +34,8 @@ pub const CLASS_ID_RANGE_ERROR: u32 = 0xFFFF0011;
 pub const CLASS_ID_REFERENCE_ERROR: u32 = 0xFFFF0012;
 pub const CLASS_ID_SYNTAX_ERROR: u32 = 0xFFFF0013;
 pub const CLASS_ID_AGGREGATE_ERROR: u32 = 0xFFFF0014;
+pub const CLASS_ID_EVAL_ERROR: u32 = 0xFFFF0015;
+pub const CLASS_ID_URI_ERROR: u32 = 0xFFFF0016;
 /// AssertionError is a plain ObjectHeader (so it can carry the extra
 /// `actual` / `expected` / `operator` / `code` / `generatedMessage`
 /// fields Node attaches), but it is registered via
@@ -202,10 +206,93 @@ pub extern "C" fn js_referenceerror_new(message: *mut StringHeader) -> *mut Erro
     unsafe { alloc_error(ERROR_KIND_REFERENCE_ERROR, b"ReferenceError", message) }
 }
 
+thread_local! {
+    /// Interned `&'static str` for each distinct Node `ERR_*` code passed
+    /// across the FFI boundary, so it can be stored in the
+    /// message→code side table read by the `.code` getter. Bounded: each
+    /// distinct code string leaks at most once per thread.
+    static INTERNED_ERROR_CODES: std::cell::RefCell<std::collections::HashMap<String, &'static str>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+fn intern_error_code(code: &str) -> &'static str {
+    INTERNED_ERROR_CODES.with(|m| {
+        if let Some(v) = m.borrow().get(code) {
+            return *v;
+        }
+        let leaked: &'static str = Box::leak(code.to_string().into_boxed_str());
+        m.borrow_mut().insert(code.to_string(), leaked);
+        leaked
+    })
+}
+
+/// Generic "throw a JS Error subclass carrying a Node `.code`" FFI entry
+/// point for out-of-crate callers (e.g. `perry-ext-http-server`'s http2
+/// settings helpers) that have no direct access to `perry-runtime`'s Rust
+/// API. Building + registering + throwing in this single extern symbol
+/// guarantees the message→code registration and the later `.code` read
+/// resolve through the same runtime copy, avoiding the staticlib
+/// thread-local divergence that split registration/read paths hit.
+///
+/// `kind`: 0 = Error, 1 = TypeError, 2 = RangeError. The message and code
+/// are UTF-8 byte slices. Diverges via `js_throw`.
+///
+/// # Safety
+/// `msg_ptr` must point to `msg_len` valid bytes; `code_ptr` must point to
+/// `code_len` valid bytes or be null with `code_len == 0`.
+#[no_mangle]
+pub unsafe extern "C" fn js_throw_error_with_code(
+    msg_ptr: *const u8,
+    msg_len: usize,
+    code_ptr: *const u8,
+    code_len: usize,
+    kind: i32,
+) -> ! {
+    let msg = js_string_from_bytes(msg_ptr, msg_len as u32);
+    if !code_ptr.is_null() && code_len > 0 {
+        let code_bytes = std::slice::from_raw_parts(code_ptr, code_len);
+        if let Ok(code_str) = std::str::from_utf8(code_bytes) {
+            let interned = intern_error_code(code_str);
+            crate::node_submodules::register_error_code_pub(msg, interned);
+        }
+    }
+    let err = match kind {
+        1 => js_typeerror_new(msg),
+        2 => js_rangeerror_new(msg),
+        _ => js_error_new_with_message(msg),
+    };
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+// `js_throw_error_with_code` is referenced only from the prebuilt
+// `perry-ext-http-server` archive (linked after the runtime's bitcode is
+// optimized), so the auto-optimize LTO pass would otherwise dead-strip it
+// (see project_auto_optimize_keepalive_3320). The `#[used]` anchor pins it.
+#[used]
+static KEEP_JS_THROW_ERROR_WITH_CODE: unsafe extern "C" fn(
+    *const u8,
+    usize,
+    *const u8,
+    usize,
+    i32,
+) -> ! = js_throw_error_with_code;
+
 /// Create a new SyntaxError with a message
 #[no_mangle]
 pub extern "C" fn js_syntaxerror_new(message: *mut StringHeader) -> *mut ErrorHeader {
     unsafe { alloc_error(ERROR_KIND_SYNTAX_ERROR, b"SyntaxError", message) }
+}
+
+/// Create a new EvalError with a message
+#[no_mangle]
+pub extern "C" fn js_evalerror_new(message: *mut StringHeader) -> *mut ErrorHeader {
+    unsafe { alloc_error(ERROR_KIND_EVAL_ERROR, b"EvalError", message) }
+}
+
+/// Create a new URIError with a message
+#[no_mangle]
+pub extern "C" fn js_urierror_new(message: *mut StringHeader) -> *mut ErrorHeader {
+    unsafe { alloc_error(ERROR_KIND_URI_ERROR, b"URIError", message) }
 }
 
 /// Create a new AggregateError with an errors array and a message
@@ -219,6 +306,126 @@ pub extern "C" fn js_aggregateerror_new(
         error_set_errors(ptr, errors);
         ptr
     }
+}
+
+const TAG_UNDEFINED_BITS: u64 = 0x7FFC_0000_0000_0001;
+
+/// #2836: extract the ES2022 `cause` option from a runtime options *value*
+/// and apply it to an already-allocated error. Node sets `.cause` whenever
+/// the options argument is an object that has a `cause` property (own or
+/// inherited); the value can be anything, including `undefined`. Perry reads
+/// the property via the generic dynamic index getter so it works for plain
+/// object literals AND options held in a variable / produced dynamically.
+///
+/// Non-object option values (`undefined`, a number, a string, …) leave the
+/// cause untouched — matching Node, which simply ignores them.
+unsafe fn apply_cause_from_options(error: *mut ErrorHeader, options: f64) {
+    let opts = crate::value::JSValue::from_bits(options.to_bits());
+    if !opts.is_pointer() {
+        return;
+    }
+    // Only honor a real `cause` slot. `js_dyn_index_get` returns
+    // TAG_UNDEFINED both for "no such key" and for `{ cause: undefined }`;
+    // either way Node would store `undefined`, but storing undefined is the
+    // already-initialized default, so a missing key is a harmless no-op.
+    let key = js_string_from_bytes(b"cause".as_ptr(), 5);
+    let key_f64 = crate::value::js_nanbox_string(key as i64);
+    let cause = crate::value::js_dyn_index_get(options, key_f64);
+    if cause.to_bits() != TAG_UNDEFINED_BITS {
+        error_set_cause(error, cause);
+    }
+}
+
+/// #2836: allocate an Error (or native subclass) carrying a `{ cause }`
+/// option read from an arbitrary runtime options value. `kind` selects the
+/// ERROR_KIND_* discriminant so `instanceof TypeError`/etc. keep working.
+#[no_mangle]
+pub extern "C" fn js_error_new_kind_with_options(
+    kind: u32,
+    message: *mut StringHeader,
+    options: f64,
+) -> *mut ErrorHeader {
+    let name: &[u8] = match kind {
+        ERROR_KIND_TYPE_ERROR => b"TypeError",
+        ERROR_KIND_RANGE_ERROR => b"RangeError",
+        ERROR_KIND_REFERENCE_ERROR => b"ReferenceError",
+        ERROR_KIND_SYNTAX_ERROR => b"SyntaxError",
+        ERROR_KIND_EVAL_ERROR => b"EvalError",
+        ERROR_KIND_URI_ERROR => b"URIError",
+        _ => b"Error",
+    };
+    unsafe {
+        let resolved_kind = if name == b"Error" {
+            ERROR_KIND_ERROR
+        } else {
+            kind
+        };
+        let ptr = alloc_error(resolved_kind, name, message);
+        apply_cause_from_options(ptr, options);
+        ptr
+    }
+}
+
+fn throw_not_iterable_type_error() -> ! {
+    let message = b"is not iterable";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// #2838/#2836: full `new AggregateError(errors, message?, options?)`
+/// constructor. Consumes the `errors` iterable synchronously (throwing
+/// `TypeError` when it is omitted or non-iterable), stores `.message`, and
+/// applies the `{ cause }` option from `options` if present.
+///
+/// `errors` and `options` arrive as raw NaN-boxed values (the iterable must
+/// not be pre-coerced to an array pointer — Sets / strings / generators must
+/// reach `materialize_iterable` intact).
+#[no_mangle]
+pub extern "C" fn js_aggregateerror_new_full(
+    errors: f64,
+    message: *mut StringHeader,
+    options: f64,
+) -> *mut ErrorHeader {
+    // #2838: reuse the spec-shaped iterable→array converter that backs the
+    // Promise combinators (`Promise.any`/`all`/…). It accepts arrays, strings,
+    // Set/Map, buffers, generators, and any object exposing `[Symbol.iterator]`
+    // or a bare `.next` field, and returns `Err(())` for non-iterables
+    // (`undefined`, numbers, plain objects) — exactly the AggregateError
+    // contract.
+    let arr = match crate::promise::combinators::combinator_iterable_to_array(errors) {
+        Ok(arr) => arr,
+        Err(()) => throw_not_iterable_type_error(),
+    };
+    unsafe {
+        let ptr = alloc_error(ERROR_KIND_AGGREGATE_ERROR, b"AggregateError", message);
+        error_set_errors(ptr, arr);
+        apply_cause_from_options(ptr, options);
+        ptr
+    }
+}
+
+/// #2904: `Error.isError(value)` — V8/Node duck-check that returns `true`
+/// only for genuine Error instances (any kind: base Error, TypeError, …,
+/// AggregateError, and AssertionError-style objects registered as extending
+/// Error). Plain objects, primitives, and null/undefined return `false`.
+#[no_mangle]
+pub extern "C" fn js_error_is_error(value: f64) -> f64 {
+    let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return f64::from_bits(crate::value::TAG_FALSE);
+    }
+    unsafe {
+        let ptr = crate::value::js_nanbox_get_pointer(value) as *const u8;
+        if ptr.is_null() || !crate::object::is_valid_obj_ptr(ptr) {
+            return f64::from_bits(crate::value::TAG_FALSE);
+        }
+        let object_type = std::ptr::read(ptr as *const u32);
+        if object_type == OBJECT_TYPE_ERROR {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
+    }
+    f64::from_bits(crate::value::TAG_FALSE)
 }
 
 /// Get the message property of an Error
@@ -252,6 +459,63 @@ pub extern "C" fn js_error_get_stack(error: *mut ErrorHeader) -> *mut StringHead
         }
         (*error).stack
     }
+}
+
+fn throw_builtin_not_constructor(name: &'static str) -> ! {
+    let message = format!("{name} is not a constructor");
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+#[no_mangle]
+pub extern "C" fn js_throw_symbol_constructor_type_error() -> f64 {
+    throw_builtin_not_constructor("Symbol")
+}
+
+#[no_mangle]
+pub extern "C" fn js_throw_bigint_constructor_type_error() -> f64 {
+    throw_builtin_not_constructor("BigInt")
+}
+
+fn throw_capture_stack_trace_target_type_error() -> ! {
+    let message = b"The \"targetObject\" argument must be an object";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// `Error.captureStackTrace(target[, constructorOpt])`.
+///
+/// Perry's stack strings are intentionally coarse today; this helper installs
+/// the same non-enumerable `stack` data property shape Node exposes and
+/// preserves the invalid-target TypeError contract.
+#[no_mangle]
+pub extern "C" fn js_error_capture_stack_trace(target: f64, _constructor_opt: f64) -> f64 {
+    let target_value = crate::value::JSValue::from_bits(target.to_bits());
+    if !target_value.is_pointer() {
+        throw_capture_stack_trace_target_type_error();
+    }
+
+    unsafe {
+        let target_ptr = target_value.as_pointer::<crate::object::ObjectHeader>()
+            as *mut crate::object::ObjectHeader;
+        if target_ptr.is_null() || !crate::object::is_valid_obj_ptr(target_ptr as *const u8) {
+            throw_capture_stack_trace_target_type_error();
+        }
+
+        let stack = make_stack("Error", "");
+        let key = js_string_from_bytes(b"stack".as_ptr(), 5);
+        let value = crate::value::js_nanbox_string(stack as i64);
+        crate::object::js_object_set_field_by_name(target_ptr, key, value);
+        crate::object::set_property_attrs(
+            target_ptr as usize,
+            "stack".to_string(),
+            crate::object::PropertyAttrs::new(true, false, true),
+        );
+    }
+
+    f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 /// Read a `StringHeader`'s UTF-8 bytes into an owned `String` (lossy on
@@ -475,6 +739,26 @@ pub(crate) fn throw_immutable_write(kind: u32, key: &str) -> ! {
     js_throw_type_error_immutable_write(kind, key.as_ptr(), key.len())
 }
 
+// #2836/#2838/#2904: keep the codegen-emitted error FFIs alive through the
+// auto-optimize whole-program-bitcode link. These `#[no_mangle]` fns are
+// reachable only from generated `.o`; without `#[used]` anchors the
+// internalize+dead-strip pass drops them and the default `perry file.ts -o`
+// link fails (see project_auto_optimize_keepalive_3320).
+#[used]
+static KEEP_ERROR_NEW_KIND_WITH_OPTIONS: extern "C" fn(
+    u32,
+    *mut StringHeader,
+    f64,
+) -> *mut ErrorHeader = js_error_new_kind_with_options;
+#[used]
+static KEEP_AGGREGATEERROR_NEW_FULL: extern "C" fn(
+    f64,
+    *mut StringHeader,
+    f64,
+) -> *mut ErrorHeader = js_aggregateerror_new_full;
+#[used]
+static KEEP_ERROR_IS_ERROR: extern "C" fn(f64) -> f64 = js_error_is_error;
+
 #[cfg(test)]
 mod tostring_tests {
     use super::*;
@@ -502,5 +786,22 @@ mod tostring_tests {
         let e = js_error_new_with_name_message(b"TypeError", s(b"bad"));
         let out = unsafe { read_string_header_owned(js_error_to_string(e)) };
         assert_eq!(out, "TypeError: bad");
+    }
+
+    #[test]
+    fn eval_and_uri_errors_have_distinct_kinds_and_names() {
+        let eval = js_evalerror_new(s(b"eval"));
+        assert_eq!(js_error_get_kind(eval), ERROR_KIND_EVAL_ERROR);
+        assert_eq!(
+            unsafe { read_string_header_owned(js_error_get_name(eval)) },
+            "EvalError"
+        );
+
+        let uri = js_urierror_new(s(b"uri"));
+        assert_eq!(js_error_get_kind(uri), ERROR_KIND_URI_ERROR);
+        assert_eq!(
+            unsafe { read_string_header_owned(js_error_get_name(uri)) },
+            "URIError"
+        );
     }
 }

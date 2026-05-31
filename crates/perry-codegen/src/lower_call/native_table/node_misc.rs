@@ -1,6 +1,46 @@
 use super::*;
 
 pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
+    // ========== node:cluster ==========
+    // Primary lifecycle methods mutate runtime state, so ordinary
+    // `cluster.setupPrimary(...)` / `.fork(...)` call syntax must route to
+    // the same helpers as captured callable exports.
+    NativeModSig {
+        module: "cluster",
+        has_receiver: false,
+        method: "setupPrimary",
+        class_filter: None,
+        runtime: "js_cluster_setup_primary",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "cluster",
+        has_receiver: false,
+        method: "setupMaster",
+        class_filter: None,
+        runtime: "js_cluster_setup_primary",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "cluster",
+        has_receiver: false,
+        method: "fork",
+        class_filter: None,
+        runtime: "js_cluster_fork",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "cluster",
+        has_receiver: false,
+        method: "disconnect",
+        class_filter: None,
+        runtime: "js_cluster_disconnect",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ========== node:querystring ==========
     // Module-level functions. `decode` / `encode` route to the same
     // runtime symbols as `parse` / `stringify` so the test's

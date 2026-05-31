@@ -18,12 +18,29 @@ use crate::common::async_bridge::{queue_promise_resolution, spawn};
 mod headers;
 pub use headers::*;
 
+// Cached bound-method values for Fetch `Headers` handles — split out to keep
+// this file under the 2,000-line lint gate. Same child-module/`use super::*`
+// contract as `headers`.
+mod headers_method_value;
+pub(crate) use headers_method_value::headers_bound_method_value;
+
 // Untyped handle dispatch helpers (`dispatch_request_method`,
 // `dispatch_response_property`, …) — split out to keep this file under the
 // 2,000-line lint gate (#1698). Same child-module/`use super::*` contract as
 // `headers`.
 mod dispatch;
 pub use dispatch::*;
+
+mod body_metadata;
+pub use body_metadata::*;
+
+// Web Fetch constructor validation helpers (#2640 / #2643) — split out to
+// keep this file under the 2,000-line lint gate.
+mod validation;
+use validation::{
+    canonical_reason, is_forbidden_method, is_null_body_status, is_valid_status_text,
+    normalize_method,
+};
 
 // Response handle storage
 lazy_static::lazy_static! {
@@ -76,6 +93,9 @@ struct FetchResponse {
     body: Vec<u8>,
     body_present: bool,
     body_used: bool,
+    type_name: String,
+    url: String,
+    redirected: bool,
     /// Cached Headers handle id, allocated on first `response.headers`
     /// access. None until a property/method dispatcher needs to expose
     /// the headers as a Headers instance. Subsequent reads of `.headers`
@@ -179,6 +199,12 @@ unsafe fn throw_fetch_type_error(msg: &str) -> ! {
     perry_runtime::exception::js_throw(f64::from_bits(fetch_type_error_bits(msg)))
 }
 
+unsafe fn throw_fetch_range_error(msg: &str) -> ! {
+    let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = perry_runtime::error::js_rangeerror_new(msg_str);
+    perry_runtime::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
+}
+
 fn tagged_bool(value: bool) -> f64 {
     f64::from_bits(if value { TAG_TRUE } else { TAG_FALSE })
 }
@@ -229,6 +255,9 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perr
                         body,
                         body_present: true,
                         body_used: false,
+                        type_name: "basic".to_string(),
+                        url: url.clone(),
+                        redirected: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                     },
@@ -304,6 +333,9 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
                         body,
                         body_present: true,
                         body_used: false,
+                        type_name: "basic".to_string(),
+                        url: url.clone(),
+                        redirected: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                     },
@@ -381,6 +413,9 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
                         body,
                         body_present: true,
                         body_used: false,
+                        type_name: "basic".to_string(),
+                        url: url.clone(),
+                        redirected: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                     },
@@ -461,6 +496,9 @@ pub unsafe extern "C" fn js_fetch_post(
                         body,
                         body_present: true,
                         body_used: false,
+                        type_name: "basic".to_string(),
+                        url: url.clone(),
+                        redirected: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                     },
@@ -560,6 +598,9 @@ pub unsafe extern "C" fn js_fetch_with_options(
                         body,
                         body_present: true,
                         body_used: false,
+                        type_name: "basic".to_string(),
+                        url: url.clone(),
+                        redirected: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                     },
@@ -1051,6 +1092,17 @@ struct RequestRecord {
     body: Option<String>,
     body_used: bool,
     headers: HeadersStore,
+    destination: String,
+    referrer: String,
+    referrer_policy: String,
+    mode: String,
+    credentials: String,
+    cache: String,
+    redirect: String,
+    integrity: String,
+    keepalive: bool,
+    duplex: String,
+    signal: f64,
     /// Cached Headers handle id, allocated on first `request.headers` read so
     /// repeat reads return the same handle (preserves `req.headers ===
     /// req.headers`). Mirrors `FetchResponse::cached_headers_id` (#1649).
@@ -1122,6 +1174,9 @@ fn alloc_response(
             body,
             body_present,
             body_used: false,
+            type_name: "default".to_string(),
+            url: String::new(),
+            redirected: false,
             cached_headers_id: None,
             cached_body_stream_id: None,
         },
@@ -1151,13 +1206,37 @@ pub unsafe extern "C" fn js_response_new(
     let body_present = body_opt.is_some();
     let body_str = body_opt.unwrap_or_default();
     let body = body_str.into_bytes();
+    // NaN / 0.0 are the codegen "no status field" sentinels. Node defaults
+    // missing status to 200; any explicit value is truncated toward zero
+    // then range-checked against 200..=599 (199.9 → RangeError, 599.9 →
+    // 599). Refs #2640.
     let status_u16 = if status.is_nan() || status == 0.0 {
         200
     } else {
-        status as u16
+        let truncated = status.trunc();
+        if !(200.0..=599.0).contains(&truncated) {
+            throw_fetch_range_error(
+                "init[\"status\"] must be in the range of 200 to 599, inclusive.",
+            );
+        }
+        truncated as u16
     };
-    let status_text = string_from_header(status_text_ptr)
-        .unwrap_or_else(|| canonical_reason(status_u16).to_string());
+    // Node defaults statusText to the empty string (NOT the canonical
+    // reason phrase) and validates the reason-phrase token. Refs #2640.
+    let status_text = match string_from_header(status_text_ptr) {
+        Some(s) => {
+            if !is_valid_status_text(&s) {
+                throw_fetch_type_error("Invalid statusText");
+            }
+            s
+        }
+        None => String::new(),
+    };
+    if body_present && is_null_body_status(status_u16) {
+        throw_fetch_type_error(&format!(
+            "Response constructor: Invalid response status code {status_u16}"
+        ));
+    }
     let headers_id = handle_id(headers_handle);
     let headers = if headers_id != 0 {
         HEADERS_REGISTRY
@@ -1176,23 +1255,6 @@ pub unsafe extern "C" fn js_response_new(
         body,
         body_present,
     ))
-}
-
-fn canonical_reason(status: u16) -> &'static str {
-    match status {
-        200 => "OK",
-        201 => "Created",
-        204 => "No Content",
-        301 => "Moved Permanently",
-        302 => "Found",
-        304 => "Not Modified",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        403 => "Forbidden",
-        404 => "Not Found",
-        500 => "Internal Server Error",
-        _ => "",
-    }
 }
 
 /// response.headers — returns a Headers handle (f64). Lazily allocates a Headers entry
@@ -1229,6 +1291,9 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
                 body: resp.body.clone(),
                 body_present: resp.body_present,
                 body_used: false,
+                type_name: resp.type_name.clone(),
+                url: resp.url.clone(),
+                redirected: resp.redirected,
                 cached_headers_id: None,
                 cached_body_stream_id: None,
             }
@@ -1541,10 +1606,20 @@ pub unsafe extern "C" fn js_response_body(handle: f64) -> f64 {
     response_body_stream(handle_id(handle))
 }
 
-/// Response.json(value) — static method. Allocates a Response with JSON-stringified body
-/// and Content-Type: application/json. The value is passed as NaN-boxed JSValue bits (f64).
+/// Response.json(value, init?) — static method. Allocates a Response with the
+/// JSON-stringified body and `Content-Type: application/json`, honoring the
+/// optional `init` (#2638): `init.status` (default 200), `init.statusText`
+/// (default "" — Node does NOT derive it from the status code for this
+/// factory) and `init.headers` (a Headers handle; user headers are applied
+/// first, then `content-type` defaults to `application/json` only if the init
+/// didn't already set it). The value is passed as NaN-boxed JSValue bits (f64).
 #[no_mangle]
-pub unsafe extern "C" fn js_response_static_json(value: f64) -> f64 {
+pub unsafe extern "C" fn js_response_static_json(
+    value: f64,
+    init_status: f64,
+    init_status_text_ptr: *const StringHeader,
+    headers_handle: f64,
+) -> f64 {
     // Stringify via runtime (type_hint 1 = object)
     extern "C" {
         fn js_json_stringify(value: f64, type_hint: u32) -> *mut StringHeader;
@@ -1555,11 +1630,33 @@ pub unsafe extern "C" fn js_response_static_json(value: f64) -> f64 {
     } else {
         string_from_header(str_ptr).unwrap_or_else(|| "null".to_string())
     };
-    let mut headers = HeadersStore::default();
-    headers.set("content-type", "application/json");
+    let status_u16 = if init_status.is_nan() || init_status == 0.0 {
+        200
+    } else {
+        init_status as u16
+    };
+    // Node's `Response.json` leaves statusText "" when not provided — it does
+    // not fall back to the status reason phrase.
+    let status_text = string_from_header(init_status_text_ptr).unwrap_or_default();
+    // Start from any user-provided headers, then add the default content-type
+    // only if the init headers didn't already set one.
+    let headers_id = handle_id(headers_handle);
+    let mut headers = if headers_id != 0 {
+        HEADERS_REGISTRY
+            .lock()
+            .unwrap()
+            .get(&headers_id)
+            .cloned()
+            .unwrap_or_default()
+    } else {
+        HeadersStore::default()
+    };
+    if !headers.has("content-type") {
+        headers.set("content-type", "application/json");
+    }
     handle_to_f64(alloc_response(
-        200,
-        "OK".to_string(),
+        status_u16,
+        status_text,
         headers,
         body_str.into_bytes(),
         true,
@@ -1598,10 +1695,30 @@ pub unsafe extern "C" fn js_request_new(
     method_ptr: *const StringHeader,
     body_ptr: *const StringHeader,
     headers_handle: f64,
+    referrer_ptr: *const StringHeader,
+    referrer_policy_ptr: *const StringHeader,
+    mode_ptr: *const StringHeader,
+    credentials_ptr: *const StringHeader,
+    cache_ptr: *const StringHeader,
+    redirect_ptr: *const StringHeader,
+    integrity_ptr: *const StringHeader,
+    keepalive: f64,
+    duplex_ptr: *const StringHeader,
+    signal: f64,
 ) -> f64 {
     let url = string_from_header(url_ptr).unwrap_or_default();
-    let method = string_from_header(method_ptr).unwrap_or_else(|| "GET".to_string());
+    let raw_method = string_from_header(method_ptr).unwrap_or_else(|| "GET".to_string());
+    // Forbidden methods are rejected case-insensitively; the error message
+    // preserves the caller's original casing (Node parity). Refs #2643.
+    if is_forbidden_method(&raw_method.to_ascii_uppercase()) {
+        throw_fetch_type_error(&format!("'{raw_method}' HTTP method is unsupported."));
+    }
+    let method = normalize_method(&raw_method);
     let body = string_from_header(body_ptr);
+    // GET/HEAD requests may not carry a body (WHATWG fetch). Refs #2643.
+    if body.is_some() && (method == "GET" || method == "HEAD") {
+        throw_fetch_type_error("Request with GET/HEAD method cannot have body.");
+    }
     let headers_id_in = handle_id(headers_handle);
     let headers = if headers_id_in != 0 {
         HEADERS_REGISTRY
@@ -1625,6 +1742,19 @@ pub unsafe extern "C" fn js_request_new(
             body,
             body_used: false,
             headers,
+            destination: String::new(),
+            referrer: string_from_header(referrer_ptr)
+                .unwrap_or_else(|| "about:client".to_string()),
+            referrer_policy: string_from_header(referrer_policy_ptr).unwrap_or_default(),
+            mode: string_from_header(mode_ptr).unwrap_or_else(|| "cors".to_string()),
+            credentials: string_from_header(credentials_ptr)
+                .unwrap_or_else(|| "same-origin".to_string()),
+            cache: string_from_header(cache_ptr).unwrap_or_else(|| "default".to_string()),
+            redirect: string_from_header(redirect_ptr).unwrap_or_else(|| "follow".to_string()),
+            integrity: string_from_header(integrity_ptr).unwrap_or_default(),
+            keepalive: body_metadata::bool_from_js(keepalive),
+            duplex: string_from_header(duplex_ptr).unwrap_or_else(|| "half".to_string()),
+            signal: body_metadata::signal_or_default(signal),
             cached_headers_id: None,
         },
     );
@@ -1730,6 +1860,17 @@ pub extern "C" fn js_request_clone(handle: f64) -> f64 {
                 body: req.body.clone(),
                 body_used: false,
                 headers: req.headers.clone(),
+                destination: req.destination.clone(),
+                referrer: req.referrer.clone(),
+                referrer_policy: req.referrer_policy.clone(),
+                mode: req.mode.clone(),
+                credentials: req.credentials.clone(),
+                cache: req.cache.clone(),
+                redirect: req.redirect.clone(),
+                integrity: req.integrity.clone(),
+                keepalive: req.keepalive,
+                duplex: req.duplex.clone(),
+                signal: req.signal,
                 cached_headers_id: None,
             }
         })

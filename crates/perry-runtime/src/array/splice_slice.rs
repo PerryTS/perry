@@ -53,6 +53,7 @@ pub extern "C" fn js_array_splice(
 
         // Copy deleted elements to return array
         for i in 0..actual_delete as usize {
+            // GC_STORE_AUDIT(BARRIERED): deleted-array initialization is followed by layout/barrier rebuild.
             ptr::write(
                 deleted_elements.add(i),
                 *elements_ptr.add(start_idx as usize + i),
@@ -79,12 +80,14 @@ pub extern "C" fn js_array_splice(
             // Need to shift the tail
             let src = elements_ptr.add(tail_start as usize);
             let dst = elements_ptr.add((start_idx + items_count) as usize);
+            // GC_STORE_AUDIT(BARRIERED): splice tail memmove is followed by layout/barrier rebuild.
             ptr::copy(src, dst, tail_len as usize);
         }
 
         // Insert new items
         if items_count > 0 && !items.is_null() {
             for i in 0..items_count as usize {
+                // GC_STORE_AUDIT(BARRIERED): splice inserted item writes are followed by layout/barrier rebuild.
                 ptr::write(elements_ptr.add(start_idx as usize + i), *items.add(i));
             }
         }
@@ -99,9 +102,50 @@ pub extern "C" fn js_array_splice(
     }
 }
 
-/// Slice an array, returning a new array with elements from start to end (exclusive)
-/// Handles negative indices (from end of array)
-/// If end is i32::MAX, slices to end of array
+fn array_slice_value_to_index(value: f64) -> i32 {
+    let number = crate::builtins::js_number_coerce(value);
+    if number.is_nan() {
+        0
+    } else if number >= i32::MAX as f64 {
+        i32::MAX
+    } else if number <= i32::MIN as f64 {
+        i32::MIN
+    } else {
+        number.trunc() as i32
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_splice_delete_count(value: f64) -> i32 {
+    array_slice_value_to_index(value)
+}
+
+fn array_slice_start_index(value: f64) -> i32 {
+    array_slice_value_to_index(value)
+}
+
+fn array_slice_end_index(value: f64) -> i32 {
+    if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
+        i32::MAX
+    } else {
+        array_slice_value_to_index(value)
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_slice_values(
+    arr: *const ArrayHeader,
+    start_value: f64,
+    end_value: f64,
+) -> *mut ArrayHeader {
+    let start = array_slice_start_index(start_value);
+    let end = array_slice_end_index(end_value);
+    js_array_slice(arr, start, end)
+}
+
+/// Slice an array, returning a new array with elements from start to end (exclusive).
+/// Handles negative indices (from end of array).
+/// If end is i32::MAX, slices to end of array.
 #[no_mangle]
 pub extern "C" fn js_array_slice(
     arr: *const ArrayHeader,
@@ -111,6 +155,14 @@ pub extern "C" fn js_array_slice(
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
         return js_array_alloc(0);
+    }
+    // #3148: TypedArray slice — return a same-kind TypedArray.
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        return crate::typedarray::js_typed_array_slice(
+            arr as *const crate::typedarray::TypedArrayHeader,
+            start,
+            end,
+        ) as *mut ArrayHeader;
     }
     unsafe {
         let len = (*arr).length as i32;
@@ -143,6 +195,7 @@ pub extern "C" fn js_array_slice(
         let dst_elements = (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
 
         for i in 0..slice_len as usize {
+            // GC_STORE_AUDIT(BARRIERED): slice result initialization is followed by layout/barrier rebuild.
             ptr::write(
                 dst_elements.add(i),
                 ptr::read(src_elements.add(start_idx as usize + i)),

@@ -20,6 +20,13 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_http_client_request_path", I64, &[I64]);
     module.declare_function("js_http_client_request_listener_count", DOUBLE, &[I64, I64]);
     module.declare_function("js_http_get", I64, &[DOUBLE, I64]);
+    // #3226/#3227/#3228 — overload-normalizing client factories take a
+    // single `NA_VARARGS` array (i64 ArrayHeader ptr) and return a
+    // ClientRequest handle.
+    module.declare_function("js_http_get_overload", I64, &[I64]);
+    module.declare_function("js_http_request_overload", I64, &[I64]);
+    module.declare_function("js_https_get_overload", I64, &[I64]);
+    module.declare_function("js_https_request_overload", I64, &[I64]);
     module.declare_function("js_http_on", I64, &[I64, I64, I64]);
     module.declare_function("js_http_request", I64, &[DOUBLE, I64]);
     module.declare_function("js_http_request_body", I64, &[I64]);
@@ -88,9 +95,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
 
     // ========== HTTPS ==========
     module.declare_function("js_https_get", I64, &[DOUBLE, I64]);
-    module.declare_function("js_https_get_variadic", I64, &[I64]);
     module.declare_function("js_https_request", I64, &[DOUBLE, I64]);
-    module.declare_function("js_https_request_variadic", I64, &[I64]);
 
     // ========== node:http / node:https / node:http2 SERVER (issue #577) ==========
     // perry-ext-http-server — handler-push HTTP/1.1 + HTTP/2 + TLS via rustls.
@@ -208,6 +213,12 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http2_server_close", VOID, &[I64, I64]);
     module.declare_function("js_node_http2_server_address_json", I64, &[I64]);
     module.declare_function("js_node_http2_server_on", DOUBLE, &[I64, I64, I64]);
+    // node:http2 settings helpers (#3168) — getDefaultSettings()/
+    // getUnpackedSettings() return a JSON StringHeader (reparsed via
+    // NR_OBJ_FROM_JSON_STR); getPackedSettings() returns a Buffer pointer.
+    module.declare_function("js_node_http2_get_default_settings", I64, &[]);
+    module.declare_function("js_node_http2_get_packed_settings", I64, &[I64]);
+    module.declare_function("js_node_http2_get_unpacked_settings", I64, &[I64]);
 
     // ========== PostgreSQL (pg) ==========
     module.declare_function("js_pg_client_connect", I64, &[I64]);
@@ -417,33 +428,55 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function(
         "js_async_resource_run_in_async_scope",
         DOUBLE,
-        &[I64, I64, DOUBLE, I64],
+        &[I64, DOUBLE, DOUBLE, I64],
     );
-    module.declare_function("js_async_resource_bind", I64, &[I64, I64]);
+    module.declare_function("js_async_resource_bind", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_async_resource_static_bind", I64, &[I64, DOUBLE]);
     module.declare_function("js_async_local_storage_disable", VOID, &[I64]);
     module.declare_function("js_async_local_storage_enter_with", VOID, &[I64, DOUBLE]);
-    module.declare_function("js_async_local_storage_exit", DOUBLE, &[I64, I64]);
+    // #3092 — callback is passed as a full NaN-boxed value (DOUBLE), not a raw
+    // pointer, so the runtime can reject non-callable callbacks.
+    module.declare_function("js_async_local_storage_exit", DOUBLE, &[I64, DOUBLE, I64]);
     module.declare_function("js_async_local_storage_get_store", DOUBLE, &[I64]);
     module.declare_function("js_async_local_storage_new", I64, &[]);
-    module.declare_function("js_async_local_storage_run", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function(
+        "js_async_local_storage_run",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE, I64],
+    );
+
+    // ========== #2875 DisposableStack / AsyncDisposableStack / SuppressedError ==========
+    // `new` ctors (dispatched by lower_builtin_new). Instance methods are
+    // declared through the native_table dispatch path, but the constructors
+    // are called directly so they need an explicit declaration here.
+    module.declare_function("js_disposable_stack_new", I64, &[]);
+    module.declare_function("js_async_disposable_stack_new", I64, &[]);
+    module.declare_function("js_suppressed_error_new", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
 
     // ========== zlib ==========
-    module.declare_function("js_zlib_deflate_sync", I64, &[I64]);
-    module.declare_function("js_zlib_gunzip", I64, &[I64]);
+    // #2935: gzipSync/deflateSync take the data as raw NaN-box bits (I64) plus
+    // an options object (DOUBLE) so the `{ level }` option can select the
+    // compression level / throw RangeError. The codec unboxes the data itself.
+    module.declare_function("js_zlib_deflate_sync", I64, &[I64, DOUBLE]);
+    module.declare_function("js_zlib_deflate", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_gunzip_sync", I64, &[I64]);
-    module.declare_function("js_zlib_gzip", I64, &[I64]);
-    module.declare_function("js_zlib_gzip_sync", I64, &[I64]);
+    module.declare_function("js_zlib_gunzip", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_gzip_sync", I64, &[I64, DOUBLE]);
+    module.declare_function("js_zlib_gzip", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_inflate_sync", I64, &[I64]);
-    module.declare_function("js_zlib_deflate_raw_sync", I64, &[I64]);
-    module.declare_function("js_zlib_inflate_raw_sync", I64, &[I64]);
-    module.declare_function("js_zlib_unzip_sync", I64, &[I64]);
-    module.declare_function("js_zlib_crc32", DOUBLE, &[I64, DOUBLE]);
-    // #1843 — Brotli one-shots (StringHeader ptr in/out; async returns a Promise ptr).
-    module.declare_function("js_zlib_brotli_compress_sync", I64, &[I64]);
-    module.declare_function("js_zlib_brotli_decompress_sync", I64, &[I64]);
-    module.declare_function("js_zlib_brotli_compress", I64, &[I64]);
-    module.declare_function("js_zlib_brotli_decompress", I64, &[I64]);
+    module.declare_function("js_zlib_inflate", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_deflate_raw_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_deflate_raw", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_inflate_raw_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_inflate_raw", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_unzip_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_unzip", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_crc32", DOUBLE, &[DOUBLE, DOUBLE]);
+    // #1843 — Brotli one-shots (sync validates JS values; async queues callbacks).
+    module.declare_function("js_zlib_brotli_compress_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_brotli_decompress_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_brotli_compress", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_brotli_decompress", VOID, &[DOUBLE, DOUBLE]);
     // #1843 — Transform-stream factories: `_opts` (DOUBLE) in, i64 handle out.
     // (`js_zlib_create_brotli_decompress` is declared alongside the other
     // crypto/zlib helpers in runtime_decls/strings.rs.)
@@ -548,17 +581,17 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     //     (*mut ObjectHeader)                                  -> f64 (NaN-boxed string)
     //   js_url_search_params_new(*mut StringHeader)            -> *mut ObjectHeader
     //   js_url_search_params_new_empty()                       -> *mut ObjectHeader
-    //   js_url_search_params_get(*mut ObjectHeader, *mut StringHeader)
+    //   js_url_search_params_get(*mut ObjectHeader, NaN-boxed name)
     //                                                          -> *mut StringHeader (null if missing)
-    //   js_url_search_params_has(*mut ObjectHeader, *mut StringHeader)
+    //   js_url_search_params_has(*mut ObjectHeader, NaN-boxed name)
     //                                                          -> f64 (0.0 or 1.0)
-    //   js_url_search_params_set/append(*mut ObjectHeader, *mut ..., *mut ...) -> void
-    //   js_url_search_params_delete(*mut ObjectHeader, *mut StringHeader)      -> void
+    //   js_url_search_params_set/append(*mut ObjectHeader, name, value) -> void
+    //   js_url_search_params_delete(*mut ObjectHeader, name)            -> void
     //   js_url_search_params_to_string(*mut ObjectHeader)     -> *mut StringHeader
-    //   js_url_search_params_get_all(*mut ObjectHeader, *mut StringHeader)
+    //   js_url_search_params_get_all(*mut ObjectHeader, NaN-boxed name)
     //                                                          -> f64 (NaN-boxed array)
-    module.declare_function("js_url_file_url_to_path", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_url_file_url_to_path_buffer", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_url_file_url_to_path", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_url_file_url_to_path_buffer", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_url_get_hash", DOUBLE, &[I64]);
     module.declare_function("js_url_get_host", DOUBLE, &[I64]);
     module.declare_function("js_url_get_hostname", DOUBLE, &[I64]);
@@ -577,28 +610,29 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_parse", I64, &[I64]);
     module.declare_function("js_url_parse_with_base", I64, &[I64, I64]);
     // Issue #650: URL setters — mutate field + re-derive href.
-    module.declare_function("js_url_set_pathname", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_search", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_hash", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_protocol", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_hostname", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_port", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_username", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_password", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_href", VOID, &[I64, I64]);
-    module.declare_function("js_url_search_params_has2", DOUBLE, &[I64, I64, I64]);
-    module.declare_function("js_url_search_params_delete2", VOID, &[I64, I64, I64]);
-    module.declare_function("js_url_search_params_append", VOID, &[I64, I64, I64]);
-    module.declare_function("js_url_search_params_delete", VOID, &[I64, I64]);
-    module.declare_function("js_url_search_params_get", I64, &[I64, I64]);
-    module.declare_function("js_url_search_params_get_all", DOUBLE, &[I64, I64]);
-    module.declare_function("js_url_search_params_has", DOUBLE, &[I64, I64]);
+    module.declare_function("js_url_set_pathname", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_search", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_hash", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_protocol", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_hostname", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_port", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_username", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_password", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_href", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_search_params_has2", DOUBLE, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_url_search_params_delete2", VOID, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_url_search_params_throw_missing_args", DOUBLE, &[I32]);
+    module.declare_function("js_url_search_params_append", VOID, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_url_search_params_delete", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_search_params_get", I64, &[I64, DOUBLE]);
+    module.declare_function("js_url_search_params_get_all", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_url_search_params_has", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_url_search_params_new", I64, &[I64]);
     // Generic init that handles string / record / URLSearchParams / null /
     // undefined — see `js_url_search_params_new_any` rustdoc. Refs #575.
     module.declare_function("js_url_search_params_new_any", I64, &[DOUBLE]);
     module.declare_function("js_url_search_params_new_empty", I64, &[]);
-    module.declare_function("js_url_search_params_set", VOID, &[I64, I64, I64]);
+    module.declare_function("js_url_search_params_set", VOID, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_url_search_params_to_string", I64, &[I64]);
     // Issue #650: URLSearchParams.size getter — returns entries count.
     module.declare_function("js_url_search_params_size", I32, &[I64]);
@@ -613,7 +647,10 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         VOID,
         &[I64, DOUBLE, DOUBLE],
     );
-    module.declare_function("js_url_path_to_file_url", DOUBLE, &[DOUBLE]);
+    // `String(value)` coercion (throws TypeError for Symbols) for WHATWG URL
+    // arguments — #3054/#3055. Returns a `*mut StringHeader` (I64).
+    module.declare_function("js_url_coerce_string", I64, &[DOUBLE]);
+    module.declare_function("js_url_path_to_file_url", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_url_domain_to_ascii", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_domain_to_unicode", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_to_http_options", DOUBLE, &[DOUBLE]);
@@ -957,11 +994,26 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         &[DOUBLE, DOUBLE],
     );
     module.declare_function("js_node_stream_duplex_new", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_node_stream_duplex_subclass_init",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_node_stream_transform_new", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_node_stream_transform_subclass_init",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_node_stream_passthrough_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_readable_from", DOUBLE, &[DOUBLE]);
     module.declare_function(
         "js_node_stream_readable_from_options",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_stream_duplex_from_options",
         DOUBLE,
         &[DOUBLE, DOUBLE],
     );
@@ -1035,12 +1087,12 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_event_emitter_listeners", I64, &[I64, I64]);
     module.declare_function("js_event_emitter_raw_listeners", I64, &[I64, I64]);
     // Module-level helpers
-    module.declare_function("js_events_once", I64, &[I64, I64, DOUBLE]);
-    module.declare_function("js_events_on", I64, &[I64, I64, DOUBLE]);
-    module.declare_function("js_events_add_abort_listener", I64, &[I64, I64]);
-    module.declare_function("js_events_get_event_listeners", I64, &[I64, I64]);
-    module.declare_function("js_events_listener_count", DOUBLE, &[I64, I64]);
-    module.declare_function("js_events_get_max_listeners", DOUBLE, &[I64]);
+    module.declare_function("js_events_once", I64, &[DOUBLE, I64, DOUBLE]);
+    module.declare_function("js_events_on", I64, &[DOUBLE, I64, DOUBLE]);
+    module.declare_function("js_events_add_abort_listener", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_events_get_event_listeners", I64, &[DOUBLE, I64]);
+    module.declare_function("js_events_listener_count", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function("js_events_get_max_listeners", DOUBLE, &[DOUBLE]);
     module.declare_function("js_events_set_max_listeners", DOUBLE, &[DOUBLE, I64]);
 
     // ========== StringDecoder (issue #848) ==========
@@ -1225,7 +1277,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_call_function", DOUBLE, &[I64, I64, I64, I64, I64]);
     module.declare_function("js_call_method", DOUBLE, &[DOUBLE, I64, I64, I64, I64]);
     module.declare_function("js_call_value", DOUBLE, &[DOUBLE, I64, I64]);
-    module.declare_function("js_closure_call_array", DOUBLE, &[I64, I64, I64]);
+    // (closure_env i64, args_ptr, args_len i64). The args pointer is a real
+    // pointer to a `[N x double]` stack buffer; declare it PTR (ABI-identical
+    // to I64 in the integer register class) so call sites can pass an alloca
+    // directly. See `try_lower_closure_call_fallthrough` (#3527).
+    module.declare_function("js_closure_call_array", DOUBLE, &[I64, PTR, I64]);
     module.declare_function(
         "js_closure_call_apply_with_spread",
         DOUBLE,
@@ -1322,10 +1378,18 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_perf_get_entries_by_name", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_clear_marks", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_clear_measures", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_perf_event_loop_utilization", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_perf_event_loop_utilization", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_to_json", DOUBLE, &[]);
     module.declare_function("js_perf_clear_resource_timings", DOUBLE, &[]);
     module.declare_function("js_perf_set_resource_timing_buffer_size", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_perf_mark_resource_timing",
+        DOUBLE,
+        &[
+            DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
+        ],
+    );
+    module.declare_function("js_perf_timerify", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_observer_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_observer_observe", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_observer_disconnect", DOUBLE, &[DOUBLE]);
@@ -1480,7 +1544,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // NaN-boxed Promise pointer; for arrays it forwards to
     // `js_promise_all`, for async iterators it chains `.next()` calls
     // through `array_from_async_step`.
-    module.declare_function("js_object_group_by", DOUBLE, &[DOUBLE, I64]);
+    // Both args NaN-boxed f64; runtime validates iterability + callback and
+    // throws TypeError per Node. Object.groupBy → null-proto object (symbol
+    // keys preserved); Map.groupBy → Map with un-coerced keys.
+    module.declare_function("js_object_group_by", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_map_group_by", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_array_from_async", DOUBLE, &[DOUBLE]);
 
     // ========== JSX runtime stubs (issue #277) ==========

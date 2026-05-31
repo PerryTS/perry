@@ -29,6 +29,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // declaration was missing — the call site at
     // `lower_call/builtin.rs:217` referenced an undeclared symbol.
     module.declare_function("js_array_create", I64, &[]);
+    module.declare_function("js_array_constructor_single", I64, &[DOUBLE]);
     // Exact-sized literal allocator — one call + N direct stores replaces
     // alloc + N×push_f64. See `js_array_alloc_literal` in perry-runtime/src/array.rs.
     module.declare_function("js_array_alloc_literal", I64, &[I32]);
@@ -104,8 +105,10 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // Array methods (Phase B.12).
     // - js_array_pop_f64(arr) -> f64    (last element, NaN if empty)
     // - js_array_join(arr, sep) -> *mut StringHeader (i64)
+    // - js_array_join_value(arr, sep_value) -> *mut StringHeader (i64)
     module.declare_function("js_array_pop_f64", DOUBLE, &[I64]);
     module.declare_function("js_array_join", I64, &[I64, I64]);
+    module.declare_function("js_array_join_value", I64, &[I64, DOUBLE]);
     module.declare_function("js_array_forEach", VOID, &[I64, I64]);
     module.declare_function("js_array_fill", I64, &[I64, DOUBLE]);
     module.declare_function("js_array_fill_range", I64, &[I64, DOUBLE, DOUBLE, DOUBLE]);
@@ -114,6 +117,19 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_set_length", VOID, &[I64, DOUBLE]);
     // Array.from() — js_array_clone handles arrays, Sets, and Maps.
     module.declare_function("js_array_clone", I64, &[I64]);
+    // #2773: Array.from(source) — throws TypeError for nullish sources, keeps
+    // number/boolean/symbol -> [], otherwise materializes via js_array_clone.
+    // Takes the raw NaN-boxed value so the tag bits survive.
+    module.declare_function("js_array_from_value", I64, &[DOUBLE]);
+    // #2874: Iterator.from(x) — wrap any iterable in a lazy iterator-helper
+    // object. Returns an already NaN-boxed pointer (DOUBLE).
+    module.declare_function("js_iterator_from", DOUBLE, &[DOUBLE]);
+    // #2773: Array.from(source, mapFn, thisArg?) — nullish-throw + mapFn
+    // callability validation + (value,index) mapped call with thisArg binding.
+    module.declare_function("js_array_from_mapped", I64, &[DOUBLE, DOUBLE, DOUBLE]);
+    // #2805: Array.prototype.concat(...args) — non-mutating, variadic, with
+    // Symbol.isConcatSpreadable handling. (recv_handle, args_ptr, count).
+    module.declare_function("js_array_concat_variadic", I64, &[I64, PTR, I32]);
     // Spread `[...x]` — wraps js_array_clone with a null/undefined
     // TypeError check so plain spread matches ECMA semantics.
     module.declare_function("js_array_clone_for_spread", I64, &[DOUBLE]);

@@ -30,6 +30,7 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // Allocate new from arena and copy old data.
         let new_ptr = arena_alloc_gc(new_size, 8, crate::gc::GC_TYPE_ARRAY) as *mut ArrayHeader;
         let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+        // GC_STORE_AUDIT(BARRIERED): array growth copy transfers layout and replays write barriers below.
         ptr::copy_nonoverlapping(arr as *const u8, new_ptr as *mut u8, old_size);
 
         (*new_ptr).capacity = new_capacity;
@@ -112,6 +113,7 @@ pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut A
         let value = canonicalize_array_numeric_store_value(arr, value);
         let value_bits = value.to_bits();
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        // GC_STORE_AUDIT(BARRIERED): push slot is immediately recorded via note_array_slot.
         ptr::write(elements_ptr.add(length as usize), value);
         note_array_slot(arr, length as usize, value_bits);
         (*arr).length = length + 1;
@@ -151,6 +153,7 @@ unsafe fn js_array_push_f64_grow(
     let value_bits = value.to_bits();
 
     let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    // GC_STORE_AUDIT(BARRIERED): grown push slot is immediately recorded via note_array_slot.
     ptr::write(elements_ptr.add(length as usize), value);
     note_array_slot(arr, length as usize, value_bits);
     (*arr).length = length + 1;
@@ -238,9 +241,9 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
 /// the original value, and the elements were never cleared.
 ///
 /// `new_length` arrives as f64 from the codegen (assignment value is a
-/// JSValue). Truncates to u32 with NaN/negative/non-integer clamped to 0
-/// (the spec throws RangeError; we clamp for now since Perry's exception
-/// surface is incomplete in places — issue worth a follow-up).
+/// JSValue). The JS ArraySetLength path coerces it with `Number(...)`, then
+/// rejects NaN, negative, fractional, infinite, and >uint32 lengths with
+/// `RangeError: Invalid array length`.
 #[no_mangle]
 pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
     let arr = clean_arr_ptr_mut(arr);
@@ -249,11 +252,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let _arr_handle = scope.root_raw_mut_ptr(arr);
-    let n: u32 = if new_length.is_nan() || new_length < 0.0 || new_length > u32::MAX as f64 {
-        0
-    } else {
-        new_length as u32
-    };
+    let n = array_length_from_property_value_or_throw(new_length);
     unsafe {
         let cur = (*arr).length;
         if n < cur {
@@ -265,6 +264,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
             let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             for i in n..cur {
+                // GC_STORE_AUDIT(BARRIERED): length truncation sentinel is immediately recorded via note_array_slot.
                 std::ptr::write(elements_ptr.add(i as usize), TAG_UNDEFINED_F64);
                 note_array_slot(arr, i as usize, TAG_UNDEFINED_F64.to_bits());
             }
@@ -286,6 +286,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                 let elements_ptr =
                     (target as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
                 for i in cur..n {
+                    // GC_STORE_AUDIT(BARRIERED): length extension sentinel is immediately recorded via note_array_slot.
                     std::ptr::write(elements_ptr.add(i as usize), TAG_UNDEFINED_F64);
                     note_array_slot(target, i as usize, TAG_UNDEFINED_F64.to_bits());
                 }
@@ -313,6 +314,7 @@ pub extern "C" fn js_array_delete(arr: *mut ArrayHeader, index: u32) -> i32 {
         }
         const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        // GC_STORE_AUDIT(BARRIERED): delete sentinel is immediately recorded via note_array_slot.
         std::ptr::write(elements_ptr.add(index as usize), TAG_UNDEFINED_F64);
         note_array_slot(arr, index as usize, TAG_UNDEFINED_F64.to_bits());
         1
@@ -342,6 +344,7 @@ pub extern "C" fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64 {
         let value = *elements_ptr;
 
         // Shift all elements down
+        // GC_STORE_AUDIT(BARRIERED): shift memmove is followed by layout/barrier rebuild.
         ptr::copy(elements_ptr.add(1), elements_ptr, (length - 1) as usize);
         (*arr).length = length - 1;
         rebuild_array_layout(arr);
@@ -374,6 +377,7 @@ pub extern "C" fn js_array_unshift_f64(arr: *mut ArrayHeader, value: f64) -> *mu
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
 
         // Shift all elements up
+        // GC_STORE_AUDIT(BARRIERED): unshift memmove and new slot are followed by layout/barrier rebuild.
         ptr::copy(elements_ptr, elements_ptr.add(1), length as usize);
         // Write new element at beginning
         ptr::write(elements_ptr, value);
@@ -390,3 +394,59 @@ pub extern "C" fn js_array_unshift_jsvalue(arr: *mut ArrayHeader, value: u64) ->
     let bits_as_f64 = f64::from_bits(value);
     js_array_unshift_f64(arr, bits_as_f64)
 }
+
+/// `arr.unshift(...items)` (#2814) — insert zero or more elements at the front
+/// in source order, growing the array if needed. Returns the (possibly
+/// reallocated) array header so the caller can read the new length / write the
+/// new pointer back. With `count == 0` the array is returned unchanged.
+#[no_mangle]
+pub extern "C" fn js_array_unshift_variadic(
+    arr: *mut ArrayHeader,
+    items: *const f64,
+    count: u32,
+) -> *mut ArrayHeader {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() {
+        return js_array_alloc(0);
+    }
+    if count == 0 {
+        return arr;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _arr_handle = scope.root_raw_mut_ptr(arr);
+    // Copy the items out before any grow can move arena memory; `items`
+    // points at a caller-owned alloca, so it is stable, but we read it
+    // before mutating to keep the logic simple.
+    let item_vec: Vec<f64> = unsafe {
+        if items.is_null() {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(items, count as usize).to_vec()
+        }
+    };
+    let n = item_vec.len();
+    unsafe {
+        let length = (*arr).length;
+        let capacity = (*arr).capacity;
+        let arr = if length + n as u32 > capacity {
+            js_array_grow(arr, length + n as u32)
+        } else {
+            arr
+        };
+        let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        // Shift existing elements up by `n`.
+        // GC_STORE_AUDIT(BARRIERED): memmove + new slots followed by layout/barrier rebuild.
+        ptr::copy(elements_ptr, elements_ptr.add(n), length as usize);
+        // Write items in source order at the front.
+        for (i, v) in item_vec.into_iter().enumerate() {
+            ptr::write(elements_ptr.add(i), v);
+        }
+        (*arr).length = length + n as u32;
+        rebuild_array_layout(arr);
+        arr
+    }
+}
+
+#[used]
+static KEEP_UNSHIFT_VARIADIC: extern "C" fn(*mut ArrayHeader, *const f64, u32) -> *mut ArrayHeader =
+    js_array_unshift_variadic;

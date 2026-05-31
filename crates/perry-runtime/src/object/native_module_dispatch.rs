@@ -7,6 +7,115 @@
 
 use super::*;
 
+fn crypto_dispatch_value_addr(value: f64) -> usize {
+    let bits = value.to_bits();
+    if (bits >> 48) >= 0x7FF8 {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else {
+        bits as usize
+    }
+}
+
+fn crypto_random_fill_number_arg(value: f64, name: &str) -> Option<f64> {
+    let js = JSValue::from_bits(value.to_bits());
+    if js.is_undefined() {
+        return None;
+    }
+    if !js.is_number() && !js.is_int32() {
+        let message = format!(
+            "The \"{}\" argument must be of type number. Received {}",
+            name,
+            crate::fs::validate::describe_received(value)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    Some(if js.is_int32() {
+        js.as_int32() as f64
+    } else {
+        value
+    })
+}
+
+fn crypto_random_fill_range(total: usize, offset_bits: f64, size_bits: f64) -> (usize, usize) {
+    let offset = match crypto_random_fill_number_arg(offset_bits, "offset") {
+        Some(n) if n.is_finite() && n >= 0.0 && n <= total as f64 => n as usize,
+        Some(n) => {
+            let message = format!(
+                "The value of \"offset\" is out of range. It must be >= 0 && <= {}. Received {}",
+                total, n
+            );
+            crate::fs::validate::throw_range_error_with_code(&message);
+        }
+        None => 0,
+    };
+    let size = match crypto_random_fill_number_arg(size_bits, "size") {
+        Some(n) if n.is_finite() && n >= 0.0 && n <= i32::MAX as f64 => n as usize,
+        Some(n) => {
+            let message = format!(
+                "The value of \"size\" is out of range. It must be >= 0 && <= 2147483647. Received {}",
+                n
+            );
+            crate::fs::validate::throw_range_error_with_code(&message);
+        }
+        None => total.saturating_sub(offset),
+    };
+    let end = offset.saturating_add(size);
+    if end > total {
+        let message = format!(
+            "The value of \"size + offset\" is out of range. It must be <= {}. Received {}",
+            total, end
+        );
+        crate::fs::validate::throw_range_error_with_code(&message);
+    }
+    (offset, size)
+}
+
+fn crypto_random_fill_invalid_buf(value: f64) -> ! {
+    let message = format!(
+        "The \"buf\" argument must be an instance of Buffer, TypedArray, DataView, or ArrayBuffer. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+unsafe fn crypto_random_fill_sync_dispatch(target: f64, offset_bits: f64, size_bits: f64) -> f64 {
+    use rand::RngCore;
+
+    let addr = crypto_dispatch_value_addr(target);
+    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+        let ta = addr as *mut crate::typedarray::TypedArrayHeader;
+        if let Some(data) = crate::typedarray::typed_array_bytes_mut(ta) {
+            let elem_size = (*ta).elem_size as usize;
+            let len = if elem_size == 0 {
+                0
+            } else {
+                data.len() / elem_size
+            };
+            let (start_elem, count_elem) = crypto_random_fill_range(len, offset_bits, size_bits);
+            let start = start_elem.saturating_mul(elem_size);
+            let end = start
+                .saturating_add(count_elem.saturating_mul(elem_size))
+                .min(data.len());
+            if end > start {
+                rand::thread_rng().fill_bytes(&mut data[start..end]);
+            }
+            return target;
+        }
+        crypto_random_fill_invalid_buf(target);
+    }
+    if crate::buffer::is_registered_buffer(addr) {
+        let buf = addr as *mut crate::buffer::BufferHeader;
+        let total = (*buf).length as usize;
+        let (start, count) = crypto_random_fill_range(total, offset_bits, size_bits);
+        if count > 0 {
+            let data = crate::buffer::buffer_data_mut(buf);
+            rand::thread_rng().fill_bytes(std::slice::from_raw_parts_mut(data.add(start), count));
+        }
+        return target;
+    }
+    crypto_random_fill_invalid_buf(target);
+}
+
 /// Dispatch a method call on a native module namespace object.
 /// Extracts the module name from the object and dispatches to the appropriate
 /// runtime function based on (module_name, method_name).
@@ -25,6 +134,11 @@ pub(crate) unsafe fn dispatch_native_module_method(
         std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap_or("")
     } else {
         ""
+    };
+    let module_name = match module_name {
+        "path/posix" => "path.posix",
+        "path/win32" => "path.win32",
+        _ => module_name,
     };
     // Helper: get arg N as f64
     let arg = |n: usize| -> f64 {
@@ -47,16 +161,6 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
     };
 
-    // Helper: extract raw string pointer from a NaN-boxed f64 value
-    let arg_str_ptr = |n: usize| -> *const crate::StringHeader {
-        let v = arg(n);
-        let jsv = JSValue::from_bits(v.to_bits());
-        if jsv.is_string() {
-            jsv.as_string_ptr()
-        } else {
-            std::ptr::null()
-        }
-    };
     let require_path_str_ptr = |n: usize| -> *const crate::StringHeader {
         if n < args_len {
             let v = arg(n);
@@ -189,10 +293,22 @@ pub(crate) unsafe fn dispatch_native_module_method(
             bits as usize
         }
     };
-    let arg_event_ptr = |n: usize| -> *const crate::StringHeader {
+    let optional_ptr_addr = |v: f64| -> usize {
+        let value = JSValue::from_bits(v.to_bits());
+        if value.is_undefined() || value.is_null() {
+            0
+        } else {
+            ptr_addr(v)
+        }
+    };
+    let _arg_event_ptr = |n: usize| -> *const crate::StringHeader {
         crate::value::js_get_string_pointer_unified(arg(n)) as *const crate::StringHeader
     };
-    let arg_closure_ptr = |n: usize| -> *const crate::closure::ClosureHeader {
+    // Raw NaN-box bits of arg `n` (undefined when missing). Used by the
+    // process EventEmitter arms so the runtime can coerce event names and
+    // validate listeners against the full JS value (#3047/#3046).
+    let arg_bits = |n: usize| -> i64 { arg(n).to_bits() as i64 };
+    let _arg_closure_ptr = |n: usize| -> *const crate::closure::ClosureHeader {
         if n >= args_len {
             return std::ptr::null();
         }
@@ -213,26 +329,6 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::typedarray::lookup_typed_array_kind(addr)
         }
     };
-    let usize_arg = |v: f64| -> Option<usize> {
-        let raw = v.to_bits();
-        let top16 = (raw >> 48) as u16;
-        if JSValue::from_bits(raw).is_undefined() || JSValue::from_bits(raw).is_null() {
-            return None;
-        }
-        if top16 == 0x7FFE {
-            let i = (raw & 0xFFFF_FFFF) as u32 as i32;
-            return (i >= 0).then_some(i as usize);
-        }
-        // `is_sign_negative` is true for -0.0 too (a normal result of
-        // `0 - 0` in JS land). Accept -0.0 as 0 and only reject genuinely
-        // negative numbers.
-        if v.is_nan() || v.is_infinite() || (v.is_sign_negative() && v != 0.0) {
-            None
-        } else {
-            Some(v as usize)
-        }
-    };
-
     match (module_name, method_name) {
         // ── Buffer constructor static API ──
         // `class MyBuffer extends Buffer {}; MyBuffer.from(...)` reaches this
@@ -321,51 +417,58 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
 
         // ── process EventEmitter API ──
-        ("process", "on") => crate::os::js_process_on(arg_event_ptr(0), arg_closure_ptr(1)),
-        ("process", "addListener") => {
-            crate::os::js_process_add_listener(arg_event_ptr(0), arg_closure_ptr(1))
-        }
-        ("process", "once") => crate::os::js_process_once(arg_event_ptr(0), arg_closure_ptr(1)),
+        ("process", "on") => crate::os::js_process_on(arg_bits(0), arg_bits(1)),
+        ("process", "addListener") => crate::os::js_process_add_listener(arg_bits(0), arg_bits(1)),
+        ("process", "once") => crate::os::js_process_once(arg_bits(0), arg_bits(1)),
         ("process", "prependListener") => {
-            crate::os::js_process_prepend_listener(arg_event_ptr(0), arg_closure_ptr(1))
+            crate::os::js_process_prepend_listener(arg_bits(0), arg_bits(1))
         }
         ("process", "prependOnceListener") => {
-            crate::os::js_process_prepend_once_listener(arg_event_ptr(0), arg_closure_ptr(1))
+            crate::os::js_process_prepend_once_listener(arg_bits(0), arg_bits(1))
         }
-        ("process", "emit") => crate::os::js_process_emit(arg_event_ptr(0), pack_args_from(1)),
+        ("process", "emit") => crate::os::js_process_emit(arg_bits(0), pack_args_from(1)),
         ("process", "removeListener") => {
-            crate::os::js_process_remove_listener(arg_event_ptr(0), arg_closure_ptr(1))
+            crate::os::js_process_remove_listener(arg_bits(0), arg_bits(1))
         }
-        ("process", "off") => crate::os::js_process_off(arg_event_ptr(0), arg_closure_ptr(1)),
+        ("process", "off") => crate::os::js_process_off(arg_bits(0), arg_bits(1)),
         ("process", "removeAllListeners") => {
-            crate::os::js_process_remove_all_listeners(arg_event_ptr(0))
+            crate::os::js_process_remove_all_listeners(arg_bits(0))
         }
         ("process", "listenerCount") => {
-            crate::os::js_process_listener_count(arg_event_ptr(0), arg_closure_ptr(1))
+            crate::os::js_process_listener_count(arg_bits(0), arg_bits(1))
         }
         ("process", "listeners") => {
-            ptr_to_f64(crate::os::js_process_listeners(arg_event_ptr(0)) as *const u8)
+            ptr_to_f64(crate::os::js_process_listeners(arg_bits(0)) as *const u8)
         }
         ("process", "rawListeners") => {
-            ptr_to_f64(crate::os::js_process_raw_listeners(arg_event_ptr(0)) as *const u8)
+            ptr_to_f64(crate::os::js_process_raw_listeners(arg_bits(0)) as *const u8)
         }
         ("process", "eventNames") => ptr_to_f64(crate::os::js_process_event_names() as *const u8),
         ("process", "setMaxListeners") => crate::os::js_process_set_max_listeners(arg(0)),
         ("process", "getMaxListeners") => crate::os::js_process_get_max_listeners(),
         ("process", "getBuiltinModule") => crate::process::js_process_get_builtin_module(arg(0)),
+        ("module", "isBuiltin") => crate::process::js_module_is_builtin(arg(0)),
         ("process", "cwd") => str_to_f64(crate::os::js_process_cwd()),
         ("process", "uptime") => crate::os::js_process_uptime(),
         ("process", "memoryUsage") => crate::process::js_process_memory_usage(),
+        ("process", "threadCpuUsage") => crate::process::js_process_thread_cpu_usage(arg(0)),
         ("process", "nextTick") => {
-            crate::os::js_process_next_tick(arg_closure_ptr(0));
+            // Validate the callback and forward trailing args (#3046).
+            unsafe { crate::os::js_process_next_tick(arg_bits(0), pack_args_from(1)) };
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "chdir") => {
-            crate::os::js_process_chdir(arg_event_ptr(0));
+            // #3043 — route dynamic/method-value chdir calls through the
+            // full-value validator (matching the static codegen path) so a
+            // non-string argument throws TypeError [ERR_INVALID_ARG_TYPE]
+            // instead of silently no-oping on a null string pointer.
+            unsafe {
+                crate::process::js_process_chdir_jsv(arg(0));
+            }
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "loadEnvFile") => {
-            crate::process::js_process_load_env_file(optional_path_str_ptr(0));
+            crate::process::js_process_load_env_file(arg(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "getgroups") => crate::process::js_process_getgroups(),
@@ -393,10 +496,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::process::js_process_initgroups(arg(0), arg(1));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
-        ("process", "kill") => {
-            crate::os::js_process_kill(arg(0), arg(1));
-            f64::from_bits(crate::value::TAG_UNDEFINED)
-        }
+        ("process", "kill") => crate::os::js_process_kill(arg(0), arg(1)),
         ("process", "exit") => {
             crate::process::js_process_exit(arg(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -405,52 +505,16 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "cpuUsage") => crate::process::js_process_cpu_usage(arg(0)),
         // ── crypto module ──
         ("crypto", "randomFillSync") if args_len >= 1 => {
-            use rand::RngCore;
-            let target = arg(0);
-            let addr = ptr_addr(target);
-            let offset = usize_arg(arg(1));
-            let size = usize_arg(arg(2));
-            let range = |total: usize| -> (usize, usize) {
-                let start = offset.unwrap_or(0).min(total);
-                let end = size
-                    .map(|s| start.saturating_add(s).min(total))
-                    .unwrap_or(total);
-                (start, end)
-            };
-            if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-                let ta = addr as *mut crate::typedarray::TypedArrayHeader;
-                if let Some(data) = crate::typedarray::typed_array_bytes_mut(ta) {
-                    let elem_size = (*ta).elem_size as usize;
-                    let len = if elem_size == 0 {
-                        0
-                    } else {
-                        data.len() / elem_size
-                    };
-                    let (start_elem, end_elem) = range(len);
-                    let start = start_elem.saturating_mul(elem_size);
-                    let end = end_elem.saturating_mul(elem_size).min(data.len());
-                    if end > start {
-                        rand::thread_rng().fill_bytes(&mut data[start..end]);
-                    }
-                }
-                target
-            } else if crate::buffer::is_registered_buffer(addr) {
-                let buf = addr as *mut crate::buffer::BufferHeader;
-                let total = (*buf).length as usize;
-                let (start, end) = range(total);
-                if end > start {
-                    let data = crate::buffer::buffer_data_mut(buf);
-                    rand::thread_rng()
-                        .fill_bytes(std::slice::from_raw_parts_mut(data.add(start), end - start));
-                }
-                target
-            } else {
-                target
-            }
+            crypto_random_fill_sync_dispatch(arg(0), arg(1), arg(2))
         }
 
         // ── tty module ──
         ("tty", "isatty") => crate::tty::js_tty_isatty(arg(0)),
+        ("tty", "ReadStream") => crate::tty::js_tty_read_stream_new(arg(0)),
+        ("tty", "WriteStream") => crate::tty::js_tty_write_stream_new(arg(0)),
+
+        // ── wasi module ──
+        ("wasi", "WASI") => crate::wasi::js_wasi_constructor_call(arg(0)),
 
         // ── net module legacy/internal helpers ──
         ("net", "_normalizeArgs") => crate::net_validate::js_net_normalize_args(arg(0)),
@@ -478,7 +542,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("perf_hooks", "clearMarks") => crate::perf_hooks::js_perf_clear_marks(arg(0)),
         ("perf_hooks", "clearMeasures") => crate::perf_hooks::js_perf_clear_measures(arg(0)),
         ("perf_hooks", "eventLoopUtilization") => {
-            crate::perf_hooks::js_perf_event_loop_utilization(arg(0))
+            crate::perf_hooks::js_perf_event_loop_utilization(arg(0), arg(1))
         }
         ("perf_hooks", "toJSON") => crate::perf_hooks::js_perf_to_json(),
         ("perf_hooks", "clearResourceTimings") => {
@@ -487,6 +551,17 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("perf_hooks", "setResourceTimingBufferSize") => {
             crate::perf_hooks::js_perf_set_resource_timing_buffer_size(arg(0))
         }
+        ("perf_hooks", "markResourceTiming") => crate::perf_hooks::js_perf_mark_resource_timing(
+            arg(0),
+            arg(1),
+            arg(2),
+            arg(3),
+            arg(4),
+            arg(5),
+            arg(6),
+            arg(7),
+        ),
+        ("perf_hooks", "timerify") => crate::perf_hooks::js_perf_timerify(arg(0), arg(1)),
 
         // ── PerformanceObserver instance (perf_observer) ──
         // The registry index lives in field[1] of the namespace object; the
@@ -622,7 +697,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // Root-callable `assert(x, msg)` / `assert.strict(x, msg)` —
         // HIR lowers these to method "default".
         ("assert", "default") | ("assert/strict", "default") => js_assert_ok(arg(0), arg(1)),
-        ("assert", "strict") => js_assert_ok(arg(0), arg(1)),
+        ("assert", "strict") | ("assert/strict", "strict") => js_assert_ok(arg(0), arg(1)),
         ("assert", "ok") | ("assert/strict", "ok") => js_assert_ok(arg(0), arg(1)),
         ("assert", "fail") | ("assert/strict", "fail") => js_assert_fail(arg(0)),
         ("assert", "equal") => js_assert_equal(arg(0), arg(1), arg(2)),
@@ -839,6 +914,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("path", "isAbsolute") => {
             bool_to_f64(crate::path::js_path_is_absolute(require_path_str_ptr(0)))
         }
+        ("path", "toNamespacedPath") => crate::path::js_path_to_namespaced_path_value(arg(0)),
+        ("path", "_makeLong") => crate::path::js_path_to_namespaced_path_value(arg(0)),
 
         // #1740: dynamic sub-namespace method dispatch — `path[k].method(...)`
         // where `k` resolves to "win32"/"posix" at runtime. `path[k].sep`
@@ -864,9 +941,10 @@ pub(crate) unsafe fn dispatch_native_module_method(
             require_path_str_ptr(0),
             require_path_str_ptr(1),
         )),
-        ("path.win32", "toNamespacedPath") => str_to_f64(
-            crate::path::js_path_win32_to_namespaced_path(arg_str_ptr(0)),
-        ),
+        ("path.win32", "toNamespacedPath") => {
+            crate::path::js_path_win32_to_namespaced_path_value(arg(0))
+        }
+        ("path.win32", "_makeLong") => crate::path::js_path_win32_to_namespaced_path_value(arg(0)),
         ("path.win32", "isAbsolute") => bool_to_f64(crate::path::js_path_win32_is_absolute(
             require_path_str_ptr(0),
         )),
@@ -895,9 +973,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
             require_path_str_ptr(0),
             require_path_str_ptr(1),
         )),
-        ("path.posix", "toNamespacedPath") => {
-            str_to_f64(crate::path::js_path_to_namespaced_path(arg_str_ptr(0)))
-        }
+        ("path.posix", "toNamespacedPath") => crate::path::js_path_to_namespaced_path_value(arg(0)),
+        ("path.posix", "_makeLong") => crate::path::js_path_to_namespaced_path_value(arg(0)),
         ("path.posix", "isAbsolute") => {
             bool_to_f64(crate::path::js_path_is_absolute(require_path_str_ptr(0)))
         }
@@ -921,15 +998,29 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::builtins::js_util_format_with_options(arg(0), arr)
         }
         ("util", "inspect") => crate::builtins::js_util_inspect(arg(0), arg(1)),
+        ("util", "convertProcessSignalToExitCode") => {
+            crate::os::js_util_convert_process_signal_to_exit_code(arg(0))
+        }
         // #2514: libuv-style errno → name/message/map helpers.
         ("util", "getSystemErrorName") => crate::util_syserr::js_util_get_system_error_name(arg(0)),
         ("util", "getSystemErrorMessage") => {
             crate::util_syserr::js_util_get_system_error_message(arg(0))
         }
         ("util", "getSystemErrorMap") => crate::util_syserr::js_util_get_system_error_map(),
+        ("util", "aborted") => crate::util_abort::js_util_aborted(arg(0), arg(1)),
+        ("util", "transferableAbortController") => {
+            crate::util_abort::js_util_transferable_abort_controller()
+        }
+        ("util", "transferableAbortSignal") => {
+            crate::util_abort::js_util_transferable_abort_signal(arg(0))
+        }
+        ("util", "getCallSites") => crate::util_call_sites::js_util_get_call_sites(arg(0), arg(1)),
         // #2514: util.parseEnv(content) → object.
         ("util", "parseEnv") => crate::util_parse_env::js_util_parse_env(arg(0)),
-        ("util", "debuglog") => super::native_module::util_debuglog_logger_value(),
+        ("util", "debuglog") | ("util", "debug") => {
+            crate::util_debuglog::js_util_debuglog(arg(0), arg(1))
+        }
+        ("util", "diff") => crate::util_diff::js_util_diff(arg(0), arg(1)),
         ("util", "isArray") => crate::array::js_array_is_array(arg(0)),
         ("util", "isDeepStrictEqual") => {
             crate::builtins::js_util_is_deep_strict_equal(arg(0), arg(1))
@@ -937,6 +1028,10 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util", "stripVTControlCharacters") => {
             crate::builtins::js_util_strip_vt_control_characters(arg(0))
         }
+        ("util", "styleText") => crate::util_style_text::js_util_style_text(arg(0), arg(1), arg(2)),
+        // #2514: util.toUSVString(value) → string with lone surrogates → U+FFFD.
+        ("util", "toUSVString") => crate::util_usv::js_util_to_usv_string(arg(0)),
+        ("util", "setTraceSigInt") => crate::util_settracesigint::js_util_set_trace_sig_int(arg(0)),
         ("util", "promisify") => crate::util_promisify::js_util_promisify(arg(0)),
         ("util", "callbackify") => crate::util_promisify::js_util_callbackify(arg(0)),
         ("util", "deprecate") => crate::util_promisify::js_util_deprecate(arg(0), arg(1), arg(2)),
@@ -1169,9 +1264,11 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::object::js_util_types_is_boxed_primitive(arg(0))
         }
         // ── url module (module-level functions return NaN-boxed JS values) ──
-        ("url", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0)),
-        ("url", "fileURLToPathBuffer") => crate::url::js_url_file_url_to_path_buffer(arg(0)),
-        ("url", "pathToFileURL") => crate::url::js_url_path_to_file_url(arg(0)),
+        ("url", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0), arg(1)),
+        ("url", "fileURLToPathBuffer") => {
+            crate::url::js_url_file_url_to_path_buffer(arg(0), arg(1))
+        }
+        ("url", "pathToFileURL") => crate::url::js_url_path_to_file_url(arg(0), arg(1)),
         ("url", "domainToASCII") => crate::url::js_url_domain_to_ascii(arg(0)),
         ("url", "domainToUnicode") => crate::url::js_url_domain_to_unicode(arg(0)),
         ("url", "urlToHttpOptions") => crate::url::js_url_to_http_options(arg(0)),
@@ -1189,7 +1286,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("punycode.ucs2", "encode") => crate::punycode::js_punycode_ucs2_encode(arg(0)),
 
         // ── console module namespace (`node:console` / `console`) ──
-        ("console", "Console") => crate::builtins::js_console_new(arg(0)),
+        ("console", "Console") => crate::builtins::js_console_new2(arg(0), arg(1)),
         ("console", "log") | ("console", "info") | ("console", "debug") | ("console", "dirxml") => {
             crate::builtins::js_console_log_spread(pack_args());
             f64::from_bits(JSValue::undefined().bits())
@@ -1265,6 +1362,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             f64::from_bits(JSValue::undefined().bits())
         }
         ("stream", "compose") => crate::node_stream::js_node_stream_compose_args(pack_args()),
+        ("stream", "duplexPair") => crate::node_stream::js_node_stream_duplex_pair(arg(0)),
         ("stream", "pipeline") => crate::node_stream::js_node_stream_pipeline(pack_args()),
         // Classic stream constructors are legacy-callable in Node:
         // `PassThrough()` behaves like `new PassThrough()`.
@@ -1287,20 +1385,20 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // undefined inside the impls).
         ("child_process", "spawn") => {
             let cmd = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
-            let args_p = ptr_addr(arg(1)) as i64;
-            let opts_p = ptr_addr(arg(2)) as i64;
+            let args_p = optional_ptr_addr(arg(1)) as i64;
+            let opts_p = optional_ptr_addr(arg(2)) as i64;
             crate::child_process::reactor::js_child_process_spawn_streams(cmd, args_p, opts_p)
         }
         ("child_process", "spawnSync") => {
             let cmd = crate::string::js_string_materialize_to_heap(arg(0));
-            let args_p = ptr_addr(arg(1)) as *const crate::array::ArrayHeader;
-            let opts_p = ptr_addr(arg(2)) as *const ObjectHeader;
+            let args_p = optional_ptr_addr(arg(1)) as *const crate::array::ArrayHeader;
+            let opts_p = optional_ptr_addr(arg(2)) as *const ObjectHeader;
             let result = crate::child_process::js_child_process_spawn_sync(cmd, args_p, opts_p);
             ptr_to_f64(result as *const u8)
         }
         ("child_process", "execSync") => {
             let cmd = crate::string::js_string_materialize_to_heap(arg(0));
-            let opts_p = ptr_addr(arg(1)) as *const ObjectHeader;
+            let opts_p = optional_ptr_addr(arg(1)) as *const ObjectHeader;
             crate::child_process::js_child_process_exec_sync(cmd, opts_p)
         }
         ("child_process", "exec") => {
@@ -1317,10 +1415,16 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         ("child_process", "fork") => {
             let module = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
-            let args_p = ptr_addr(arg(1)) as i64;
-            let opts_p = ptr_addr(arg(2)) as i64;
+            let args_p = optional_ptr_addr(arg(1)) as i64;
+            let opts_p = optional_ptr_addr(arg(2)) as i64;
             crate::child_process::fork::js_child_process_fork(module, args_p, opts_p)
         }
+        ("cluster", "setupPrimary") | ("cluster", "setupMaster") => {
+            crate::cluster::js_cluster_setup_primary(arg(0))
+        }
+        ("cluster", "fork") => crate::cluster::js_cluster_fork(arg(0)),
+        ("cluster", "disconnect") => crate::cluster::js_cluster_disconnect(arg(0)),
+        ("cluster", "Worker") => f64::from_bits(JSValue::undefined().bits()),
 
         // #1577: captured-then-called crypto methods (`const f =
         // crypto.createHash; f(...)`). The impls live in perry-stdlib (which
@@ -1383,6 +1487,11 @@ pub(crate) unsafe fn dispatch_native_module_method(
                 dispatch(qualified.as_ptr(), qualified.len(), args_ptr, args_len)
             }
         }
+
+        // #3142: `new v8.GCProfiler()` is the "v8.GCProfiler" namespace.
+        // `start()` returns undefined; `stop()` returns the report object.
+        ("v8.GCProfiler", "start") => f64::from_bits(JSValue::undefined().bits()),
+        ("v8.GCProfiler", "stop") => crate::node_v8::js_v8_gc_profiler_report(),
 
         // #2533: captured / aliased server factories
         // (`const createServer = options.createServer || createServerHTTP;

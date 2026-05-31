@@ -15,6 +15,7 @@ mod collection_equality;
 pub use boxed_primitives::scan_boxed_primitive_payload_roots_mut;
 mod collections;
 mod identity_equality;
+mod prototype_equality;
 mod strip_vt;
 mod typed_array_equality;
 
@@ -844,10 +845,13 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                         }
                         format!("[\n{}\n]", lines.join("\n"))
                     } else {
-                        // Non-numeric multi-line: 4 per line, no padding
+                        // Non-numeric multi-line: short arrays of wide string
+                        // entries print one item per row in Node's compact
+                        // inspect layout.
                         let indent = "  ";
+                        let chunk_size = if length <= 6 { 1 } else { 4 };
                         let mut row_strs: Vec<String> = parts
-                            .chunks(4)
+                            .chunks(chunk_size)
                             .map(|chunk| format!("{}{}", indent, chunk.join(", ")))
                             .collect();
                         let n = row_strs.len();
@@ -1955,22 +1959,20 @@ pub extern "C" fn js_util_format_with_options(
 
 #[no_mangle]
 pub extern "C" fn js_util_inspect(value: f64, options: f64) -> f64 {
-    let max_depth = unsafe { super::console::decode_dir_depth_option(options) }.unwrap_or(2);
-    let show_hidden =
-        unsafe { super::console::decode_dir_bool_option(options, "showHidden") }.unwrap_or(false);
-    let show_proxy =
-        unsafe { super::console::decode_dir_bool_option(options, "showProxy") }.unwrap_or(false);
+    let default_options = crate::object::util_inspect_default_options_value();
+    let max_depth = unsafe { super::console::decode_dir_depth_option(options) }
+        .or_else(|| unsafe { super::console::decode_dir_depth_option(default_options) })
+        .unwrap_or(2);
+    let show_hidden = inspect_bool_option(options, default_options, "showHidden").unwrap_or(false);
+    let show_proxy = inspect_bool_option(options, default_options, "showProxy").unwrap_or(false);
     // `util.inspect` defaults to `customInspect: true`; an explicit
     // `{ customInspect: false }` opts out and surfaces the hook as a
     // symbol property. Refs #1201.
     let custom_inspect =
-        unsafe { super::console::decode_dir_bool_option(options, "customInspect") }.unwrap_or(true);
-    let getters =
-        unsafe { super::console::decode_dir_bool_option(options, "getters") }.unwrap_or(false);
-    let sorted =
-        unsafe { super::console::decode_dir_bool_option(options, "sorted") }.unwrap_or(false);
-    let compact =
-        unsafe { super::console::decode_dir_bool_option(options, "compact") }.unwrap_or(true);
+        inspect_bool_option(options, default_options, "customInspect").unwrap_or(true);
+    let getters = inspect_bool_option(options, default_options, "getters").unwrap_or(false);
+    let sorted = inspect_bool_option(options, default_options, "sorted").unwrap_or(false);
+    let compact = inspect_bool_option(options, default_options, "compact").unwrap_or(true);
     let _depth_guard = InspectDepthLimitGuard::new(max_depth);
     let _hidden_guard = InspectShowHiddenGuard::new(show_hidden);
     let _proxy_guard = InspectShowProxyGuard::new(show_proxy);
@@ -1987,6 +1989,11 @@ pub extern "C" fn js_util_inspect(value: f64, options: f64) -> f64 {
     };
     let ptr = crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32);
     f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
+}
+
+fn inspect_bool_option(options: f64, default_options: f64, name: &str) -> Option<bool> {
+    unsafe { super::console::decode_dir_bool_option(options, name) }
+        .or_else(|| unsafe { super::console::decode_dir_bool_option(default_options, name) })
 }
 
 #[inline]
@@ -2034,6 +2041,12 @@ fn js_util_deep_strict_equal_bool(left: f64, right: f64, depth: usize) -> bool {
     if has_raw_heap_operand {
         false
     } else if has_tagged_heap_operand {
+        // #2934: Node's default deepStrictEqual is prototype-sensitive — two
+        // objects with the same own properties but different `[[Prototype]]`
+        // are not equal. Gate before comparing the formatted body.
+        if prototype_equality::prototypes_differ(left, right) {
+            return false;
+        }
         format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0)
     } else {
         crate::value::js_jsvalue_equals(left, right) != 0

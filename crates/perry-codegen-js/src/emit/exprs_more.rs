@@ -2,6 +2,20 @@ use super::*;
 use std::fmt::Write as FmtWrite;
 
 impl JsEmitter {
+    /// Emit `<date><method><a0>, <a1>, …)` for a Date setter, preserving all
+    /// supplied arguments (#2851).
+    fn emit_date_setter(&mut self, date: &Expr, method: &str, args: &[Expr]) {
+        self.emit_expr(date);
+        self.output.push_str(method);
+        for (i, a) in args.iter().enumerate() {
+            if i > 0 {
+                self.output.push_str(", ");
+            }
+            self.emit_expr(a);
+        }
+        self.output.push(')');
+    }
+
     pub fn emit_expr_continued(&mut self, expr: &Expr) {
         match expr {
             // --- Child process (throw stubs) ---
@@ -101,16 +115,32 @@ impl JsEmitter {
                 self.emit_expr(value);
                 self.output.push(')');
             }
-            Expr::ArrayIndexOf { array, value } => {
+            Expr::ArrayIndexOf {
+                array,
+                value,
+                from_index,
+            } => {
                 self.emit_expr(array);
                 self.output.push_str(".indexOf(");
                 self.emit_expr(value);
+                if let Some(fi) = from_index {
+                    self.output.push_str(", ");
+                    self.emit_expr(fi);
+                }
                 self.output.push(')');
             }
-            Expr::ArrayIncludes { array, value } => {
+            Expr::ArrayIncludes {
+                array,
+                value,
+                from_index,
+            } => {
                 self.emit_expr(array);
                 self.output.push_str(".includes(");
                 self.emit_expr(value);
+                if let Some(fi) = from_index {
+                    self.output.push_str(", ");
+                    self.emit_expr(fi);
+                }
                 self.output.push(')');
             }
             Expr::ArraySlice { array, start, end } => {
@@ -571,96 +601,45 @@ impl JsEmitter {
                 self.emit_expr(d);
                 self.output.push_str(".getUTCMilliseconds()");
             }
-            Expr::DateSetUtcFullYear { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setUTCFullYear(");
-                self.emit_expr(value);
-                self.output.push(')');
+            // Date setters (#2851): emit every supplied argument so Node's
+            // optional-trailing-component semantics survive round-tripping.
+            Expr::DateSetUtcFullYear { date, args } => {
+                self.emit_date_setter(date, ".setUTCFullYear(", args)
             }
-            Expr::DateSetUtcMonth { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setUTCMonth(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetUtcMonth { date, args } => {
+                self.emit_date_setter(date, ".setUTCMonth(", args)
             }
-            Expr::DateSetUtcDate { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setUTCDate(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetUtcDate { date, args } => {
+                self.emit_date_setter(date, ".setUTCDate(", args)
             }
-            Expr::DateSetUtcHours { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setUTCHours(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetUtcHours { date, args } => {
+                self.emit_date_setter(date, ".setUTCHours(", args)
             }
-            Expr::DateSetUtcMinutes { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setUTCMinutes(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetUtcMinutes { date, args } => {
+                self.emit_date_setter(date, ".setUTCMinutes(", args)
             }
-            Expr::DateSetUtcSeconds { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setUTCSeconds(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetUtcSeconds { date, args } => {
+                self.emit_date_setter(date, ".setUTCSeconds(", args)
             }
-            Expr::DateSetUtcMilliseconds { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setUTCMilliseconds(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetUtcMilliseconds { date, args } => {
+                self.emit_date_setter(date, ".setUTCMilliseconds(", args)
             }
-            Expr::DateSetFullYear { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setFullYear(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetFullYear { date, args } => {
+                self.emit_date_setter(date, ".setFullYear(", args)
             }
-            Expr::DateSetMonth { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setMonth(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetMonth { date, args } => self.emit_date_setter(date, ".setMonth(", args),
+            Expr::DateSetDate { date, args } => self.emit_date_setter(date, ".setDate(", args),
+            Expr::DateSetHours { date, args } => self.emit_date_setter(date, ".setHours(", args),
+            Expr::DateSetMinutes { date, args } => {
+                self.emit_date_setter(date, ".setMinutes(", args)
             }
-            Expr::DateSetDate { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setDate(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetSeconds { date, args } => {
+                self.emit_date_setter(date, ".setSeconds(", args)
             }
-            Expr::DateSetHours { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setHours(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetMilliseconds { date, args } => {
+                self.emit_date_setter(date, ".setMilliseconds(", args)
             }
-            Expr::DateSetMinutes { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setMinutes(");
-                self.emit_expr(value);
-                self.output.push(')');
-            }
-            Expr::DateSetSeconds { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setSeconds(");
-                self.emit_expr(value);
-                self.output.push(')');
-            }
-            Expr::DateSetMilliseconds { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setMilliseconds(");
-                self.emit_expr(value);
-                self.output.push(')');
-            }
-            Expr::DateSetTime { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setTime(");
-                self.emit_expr(value);
-                self.output.push(')');
-            }
+            Expr::DateSetTime { date, args } => self.emit_date_setter(date, ".setTime(", args),
             Expr::DateValueOf(d) => {
                 self.emit_expr(d);
                 self.output.push_str(".valueOf()");
@@ -715,6 +694,26 @@ impl JsEmitter {
                 self.emit_expr(cause);
                 self.output.push_str(" })");
             }
+            Expr::ErrorNewWithOptions {
+                kind,
+                message,
+                options,
+            } => {
+                let ctor = match kind {
+                    1 => "TypeError",
+                    2 => "RangeError",
+                    3 => "ReferenceError",
+                    4 => "SyntaxError",
+                    _ => "Error",
+                };
+                self.output.push_str("new ");
+                self.output.push_str(ctor);
+                self.output.push('(');
+                self.emit_expr(message);
+                self.output.push_str(", ");
+                self.emit_expr(options);
+                self.output.push(')');
+            }
             Expr::TypeErrorNew(msg) => {
                 self.output.push_str("new TypeError(");
                 self.emit_expr(msg);
@@ -735,11 +734,19 @@ impl JsEmitter {
                 self.emit_expr(msg);
                 self.output.push(')');
             }
-            Expr::AggregateErrorNew { errors, message } => {
+            Expr::AggregateErrorNew {
+                errors,
+                message,
+                options,
+            } => {
                 self.output.push_str("new AggregateError(");
                 self.emit_expr(errors);
                 self.output.push_str(", ");
                 self.emit_expr(message);
+                if let Some(o) = options {
+                    self.output.push_str(", ");
+                    self.emit_expr(o);
+                }
                 self.output.push(')');
             }
 
@@ -1028,11 +1035,19 @@ impl JsEmitter {
                 self.emit_expr(val);
                 self.output.push(')');
             }
-            Expr::ArrayFromMapped { iterable, map_fn } => {
+            Expr::ArrayFromMapped {
+                iterable,
+                map_fn,
+                this_arg,
+            } => {
                 self.output.push_str("Array.from(");
                 self.emit_expr(iterable);
                 self.output.push_str(", ");
                 self.emit_expr(map_fn);
+                if let Some(t) = this_arg {
+                    self.output.push_str(", ");
+                    self.emit_expr(t);
+                }
                 self.output.push(')');
             }
 
@@ -1063,6 +1078,11 @@ impl JsEmitter {
             }
             Expr::StringCoerce(val) => {
                 self.output.push_str("String(");
+                self.emit_expr(val);
+                self.output.push(')');
+            }
+            Expr::ObjectCoerce(val) => {
+                self.output.push_str("Object(");
                 self.emit_expr(val);
                 self.output.push(')');
             }
@@ -1120,18 +1140,45 @@ impl JsEmitter {
             Expr::TextEncoderNew => {
                 self.output.push_str("new TextEncoder()");
             }
-            Expr::TextDecoderNew => {
-                self.output.push_str("new TextDecoder()");
+            Expr::TextDecoderNew {
+                label,
+                fatal,
+                ignore_bom,
+            } => {
+                self.output.push_str("new TextDecoder(");
+                self.emit_expr(label);
+                self.output.push_str(", { fatal: ");
+                self.emit_expr(fatal);
+                self.output.push_str(", ignoreBOM: ");
+                self.emit_expr(ignore_bom);
+                self.output.push_str(" })");
             }
             Expr::TextEncoderEncode(inner) => {
                 self.output.push_str("new TextEncoder().encode(");
                 self.emit_expr(inner);
                 self.output.push(')');
             }
-            Expr::TextDecoderDecode(inner) => {
-                self.output.push_str("new TextDecoder().decode(");
-                self.emit_expr(inner);
+            Expr::TextDecoderDecode { decoder, input } => {
+                self.output.push('(');
+                self.emit_expr(decoder);
+                self.output.push_str(").decode(");
+                self.emit_expr(input);
                 self.output.push(')');
+            }
+            Expr::TextDecoderEncoding(decoder) => {
+                self.output.push('(');
+                self.emit_expr(decoder);
+                self.output.push_str(").encoding");
+            }
+            Expr::TextDecoderFatal(decoder) => {
+                self.output.push('(');
+                self.emit_expr(decoder);
+                self.output.push_str(").fatal");
+            }
+            Expr::TextDecoderIgnoreBom(decoder) => {
+                self.output.push('(');
+                self.emit_expr(decoder);
+                self.output.push_str(").ignoreBOM");
             }
             Expr::EncodeURI(inner) => {
                 self.output.push_str("encodeURI(");
@@ -1308,9 +1355,13 @@ impl JsEmitter {
                 self.emit_expr(obj);
                 self.output.push(')');
             }
-            Expr::ObjectCreate(proto) => {
+            Expr::ObjectCreate(proto, props) => {
                 self.output.push_str("Object.create(");
                 self.emit_expr(proto);
+                if let Some(props) = props {
+                    self.output.push_str(", ");
+                    self.emit_expr(props);
+                }
                 self.output.push(')');
             }
             Expr::ObjectFreeze(obj) => {
@@ -1505,11 +1556,17 @@ impl JsEmitter {
             Expr::ProxyRevoke(_) => {
                 self.output.push_str("undefined");
             }
-            Expr::ReflectGet { target, key } => {
+            Expr::ReflectGet {
+                target,
+                key,
+                receiver,
+            } => {
                 self.output.push_str("Reflect.get(");
                 self.emit_expr(target);
                 self.output.push_str(", ");
                 self.emit_expr(key);
+                self.output.push_str(", ");
+                self.emit_expr(receiver);
                 self.output.push(')');
             }
             Expr::ReflectSet { target, key, value } => {
@@ -1575,6 +1632,23 @@ impl JsEmitter {
             }
             Expr::ReflectGetPrototypeOf(target) => {
                 self.output.push_str("Reflect.getPrototypeOf(");
+                self.emit_expr(target);
+                self.output.push(')');
+            }
+            Expr::ReflectSetPrototypeOf { target, proto } => {
+                self.output.push_str("Reflect.setPrototypeOf(");
+                self.emit_expr(target);
+                self.output.push_str(", ");
+                self.emit_expr(proto);
+                self.output.push(')');
+            }
+            Expr::ReflectIsExtensible(target) => {
+                self.output.push_str("Reflect.isExtensible(");
+                self.emit_expr(target);
+                self.output.push(')');
+            }
+            Expr::ReflectPreventExtensions(target) => {
+                self.output.push_str("Reflect.preventExtensions(");
                 self.emit_expr(target);
                 self.output.push(')');
             }

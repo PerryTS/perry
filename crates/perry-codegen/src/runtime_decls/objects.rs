@@ -24,6 +24,9 @@ use super::*;
 /// `js_object_alloc(0, N)` is the fallback for dynamic cases.
 pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_object_alloc", I64, &[I32, I32]);
+    // #3149: `Object(value)` plain-call coercion. Takes & returns a NaN-boxed
+    // JSValue (DOUBLE): nullish/primitive -> fresh {}, object passes through.
+    module.declare_function("js_object_coerce", DOUBLE, &[DOUBLE]);
     // #1789: stamp a class-expression's heap object as a class object
     // (object_type = OBJECT_TYPE_CLASS) so typeof → "function" and
     // new/instanceof read class_id from it.
@@ -232,6 +235,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
 
     // --- Proxy / Reflect ---
     module.declare_function("js_proxy_new", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_proxy_revocable", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_proxy_revoke", VOID, &[DOUBLE]);
     module.declare_function("js_proxy_is_revoked", I32, &[DOUBLE]);
     module.declare_function("js_proxy_is_proxy", I32, &[DOUBLE]);
@@ -242,7 +246,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_proxy_delete", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_proxy_apply", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_proxy_construct", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_reflect_get", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_reflect_get", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_reflect_set", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_reflect_has", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_reflect_delete", DOUBLE, &[DOUBLE, DOUBLE]);
@@ -253,6 +257,10 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function("js_reflect_get_prototype_of", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_reflect_set_prototype_of", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_reflect_is_extensible", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_reflect_prevent_extensions", DOUBLE, &[DOUBLE]);
     module.declare_function(
         "js_reflect_define_metadata",
         DOUBLE,

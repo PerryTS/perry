@@ -117,10 +117,27 @@ console.log("config typeof:", typeof process.config);
 console.log("allowedNodeEnvironmentFlags typeof:", typeof process.allowedNodeEnvironmentFlags);
 // PERRY-SKIP: process.allowedNodeEnvironmentFlags.size — chained on undefined crashes.
 // PERRY-SKIP: process.debugPort — Host-dependent default debug port; can vary between runtime versions.
-// process.features — typeof only on the top-level binding. Chained accesses
-// like process.features.tls crash when features itself is undefined under Perry.
+// process.features is a real, non-null object of capability flags, so chained
+// reads work. We assert the JS type of each flag (deterministic) rather than the
+// concrete boolean values, which legitimately differ between a Perry build and a
+// Node build (e.g. require_module / uv).
 console.log("features typeof:", typeof process.features);
-// PERRY-SKIP: process.features.{cached_builtins,debug,inspector,ipv6,tls,tls_alpn,tls_ocsp,tls_sni,uv,require_module,typescript} — chained on undefined features crashes.
+console.log("features non-null:", process.features !== null);
+for (const k of [
+  "cached_builtins",
+  "debug",
+  "inspector",
+  "ipv6",
+  "tls",
+  "tls_alpn",
+  "tls_ocsp",
+  "tls_sni",
+  "uv",
+  "require_module",
+]) {
+  console.log("features." + k + " is boolean:", typeof process.features[k] === "boolean");
+}
+console.log("features.typescript is string:", typeof process.features.typescript === "string");
 console.log("process.noDeprecation:", process.noDeprecation);
 console.log("process.throwDeprecation:", process.throwDeprecation);
 console.log("process.traceDeprecation:", process.traceDeprecation);

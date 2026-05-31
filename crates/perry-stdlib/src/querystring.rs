@@ -171,23 +171,31 @@ fn hex_nibble(b: u8) -> Option<u8> {
     }
 }
 
+fn throw_symbol_to_string_type_error() -> ! {
+    let message = b"Cannot convert a Symbol value to a string";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = perry_runtime::error::js_typeerror_new(msg);
+    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+}
+
+unsafe fn querystring_public_arg_to_string(value: f64) -> String {
+    if perry_runtime::symbol::js_is_symbol(value) != 0 {
+        throw_symbol_to_string_type_error();
+    }
+    jsvalue_to_owned_string(value)
+}
+
 /// `querystring.escape(str)` → string.
 #[no_mangle]
 pub unsafe extern "C" fn js_querystring_escape(str_arg: f64) -> f64 {
-    let s = match nanboxed_to_string(str_arg) {
-        Some(s) => s,
-        None => return f64::from_bits(JSValue::undefined().bits()),
-    };
+    let s = querystring_public_arg_to_string(str_arg);
     nanbox_string(intern_string(&percent_encode(&s)))
 }
 
 /// `querystring.unescape(str)` → string.
 #[no_mangle]
 pub unsafe extern "C" fn js_querystring_unescape(str_arg: f64) -> f64 {
-    let s = match nanboxed_to_string(str_arg) {
-        Some(s) => s,
-        None => return f64::from_bits(JSValue::undefined().bits()),
-    };
+    let s = querystring_public_arg_to_string(str_arg);
     nanbox_string(intern_string(&percent_decode(&s, false)))
 }
 
@@ -262,8 +270,8 @@ pub unsafe extern "C" fn js_querystring_parse(
     options_arg: f64,
 ) -> *mut ObjectHeader {
     let input = nanboxed_to_string(str_arg).unwrap_or_default();
-    let sep = resolve_separator_str(sep_arg, "&");
-    let eq = resolve_separator_str(eq_arg, "=");
+    let sep = resolve_parse_separator_str(sep_arg, "&");
+    let eq = resolve_parse_separator_str(eq_arg, "=");
     let max_keys = resolve_max_keys(options_arg);
     let decode = resolve_codec_option(options_arg, "decodeURIComponent");
 
@@ -300,9 +308,10 @@ pub unsafe extern "C" fn js_querystring_parse(
                 None => (pair, ""),
             }
         };
-        let key = decode_parse_component(key_raw, decode);
+        let key_value = decode_parse_component(key_raw, decode);
         let value = decode_parse_component(val_raw, decode);
-        push_parsed_pair(obj, &key, &value);
+        let key = jsvalue_to_owned_string(key_value);
+        push_parsed_pair(obj, &key, value);
         parsed += 1;
     }
     obj
@@ -343,19 +352,20 @@ fn normalize_decode_component_input(input: &str) -> Cow<'_, str> {
     }
 }
 
-unsafe fn decode_parse_component(raw: &str, decode: Option<*const ClosureHeader>) -> String {
+unsafe fn decode_parse_component(raw: &str, decode: Option<*const ClosureHeader>) -> f64 {
     let Some(callback) = decode else {
-        return percent_decode(raw, true);
+        return nanbox_string(intern_string(&percent_decode(raw, true)));
     };
     let normalized = normalize_decode_component_input(raw);
-    apply_decode_codec(callback, normalized.as_ref()).unwrap_or_else(|| percent_decode(raw, true))
+    apply_decode_codec(callback, normalized.as_ref())
+        .unwrap_or_else(|| nanbox_string(intern_string(&percent_decode(raw, true))))
 }
 
-unsafe fn apply_decode_codec(callback: *const ClosureHeader, raw: &str) -> Option<String> {
+unsafe fn apply_decode_codec(callback: *const ClosureHeader, raw: &str) -> Option<f64> {
     let trap_buf = perry_runtime::exception::js_try_push();
     let jumped = unsafe { perry_runtime::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
     let result = if jumped == 0 {
-        Some(apply_codec(callback, raw))
+        Some(call_codec(callback, raw))
     } else {
         perry_runtime::exception::js_clear_exception();
         None
@@ -364,14 +374,25 @@ unsafe fn apply_decode_codec(callback: *const ClosureHeader, raw: &str) -> Optio
     result
 }
 
-/// Call a user-supplied codec closure with `raw` and decode the return.
-/// Returns the empty string if the callback yielded a non-string — Node
-/// would coerce via `String(ret)`, but the only realistic failure mode here
-/// is a buggy callback, and an empty string is observably distinct.
-unsafe fn apply_codec(callback: *const ClosureHeader, raw: &str) -> String {
+/// Call a user-supplied codec closure with `raw` and return its JS value.
+unsafe fn call_codec(callback: *const ClosureHeader, raw: &str) -> f64 {
     let arg = nanbox_string(intern_string(raw));
-    let ret = js_closure_call1(callback, arg);
-    nanboxed_to_string(ret).unwrap_or_default()
+    js_closure_call1(callback, arg)
+}
+
+unsafe fn apply_encode_codec(callback: *const ClosureHeader, raw: &str) -> String {
+    jsvalue_to_owned_string(call_codec(callback, raw))
+}
+
+unsafe fn jsvalue_to_owned_string(value: f64) -> String {
+    let ptr = perry_runtime::value::js_jsvalue_to_string(value);
+    if ptr.is_null() || (ptr as usize) < 0x1000 {
+        return String::new();
+    }
+    let len = (*ptr).byte_len as usize;
+    let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let bytes = std::slice::from_raw_parts(data, len);
+    String::from_utf8_lossy(bytes).into_owned()
 }
 
 fn resolve_max_keys(options: f64) -> Option<usize> {
@@ -395,23 +416,20 @@ fn resolve_max_keys(options: f64) -> Option<usize> {
     } else {
         return Some(1000);
     };
-    if n <= 0.0 || !n.is_finite() {
+    if n <= 0.0 || !n.is_finite() || n.fract() != 0.0 {
         None
     } else {
-        Some(n.floor() as usize)
+        Some(n as usize)
     }
 }
 
 /// Insert `(key, value)` into the parse result, promoting to an array
 /// on repeated keys. Mirrors Node's behaviour:
-///   - first occurrence stores the value as a plain string
+///   - first occurrence stores the decoded value
 ///   - second occurrence promotes to a 2-element array
 ///   - subsequent occurrences push onto the existing array
-unsafe fn push_parsed_pair(obj: *mut ObjectHeader, key: &str, value: &str) {
+unsafe fn push_parsed_pair(obj: *mut ObjectHeader, key: &str, value_f64: f64) {
     let key_hdr = intern_string(key);
-
-    let value_str = intern_string(value);
-    let value_f64 = nanbox_string(value_str);
 
     // #1175: read the OWN-property value rather than going through
     // `js_object_get_field_by_name` (which walks the prototype chain) for
@@ -465,7 +483,7 @@ unsafe fn push_parsed_pair(obj: *mut ObjectHeader, key: &str, value: &str) {
         }
     }
 
-    // Promote: existing string + new string → 2-element array.
+    // Promote: existing decoded value + new decoded value -> 2-element array.
     let arr = js_array_alloc(0);
     js_array_push_f64(arr, f64::from_bits(existing_bits));
     js_array_push_f64(arr, value_f64);
@@ -483,8 +501,8 @@ pub unsafe extern "C" fn js_querystring_stringify(
 ) -> f64 {
     // Default separators are the bytes Node uses; we read into UTF-8
     // strings instead of bytes since the chars are always ASCII.
-    let sep = resolve_separator_str(sep_arg, "&");
-    let eq = resolve_separator_str(eq_arg, "=");
+    let sep = resolve_stringify_separator_str(sep_arg, "&");
+    let eq = resolve_stringify_separator_str(eq_arg, "=");
     let encode = resolve_codec_option(options_arg, "encodeURIComponent");
 
     let bits = obj_arg.to_bits();
@@ -520,15 +538,21 @@ pub unsafe extern "C" fn js_querystring_stringify(
     nanbox_string(intern_string(&out))
 }
 
-fn resolve_separator_str(value: f64, default: &'static str) -> String {
-    let bits = value.to_bits();
-    if bits == JSValue::undefined().bits() || bits == JSValue::null().bits() {
+unsafe fn resolve_parse_separator_str(value: f64, default: &'static str) -> String {
+    if perry_runtime::value::js_is_truthy(value) == 0 {
         return default.to_string();
     }
-    match unsafe { nanboxed_to_string(value) } {
-        Some(s) if !s.is_empty() => s,
-        _ => default.to_string(),
+    jsvalue_to_owned_string(value)
+}
+
+unsafe fn resolve_stringify_separator_str(value: f64, default: &'static str) -> String {
+    if perry_runtime::value::js_is_truthy(value) == 0 {
+        return default.to_string();
     }
+    if perry_runtime::symbol::js_is_symbol(value) != 0 {
+        throw_symbol_to_string_type_error();
+    }
+    jsvalue_to_owned_string(value)
 }
 
 /// Append `key=value` (or `key=v1&key=v2` for arrays) to `out`.
@@ -542,7 +566,7 @@ unsafe fn append_stringify_value(
 ) {
     let encode_with = |s: &str| -> String {
         match encode {
-            Some(cb) => apply_codec(cb, s),
+            Some(cb) => apply_encode_codec(cb, s),
             None => percent_encode(s),
         }
     };

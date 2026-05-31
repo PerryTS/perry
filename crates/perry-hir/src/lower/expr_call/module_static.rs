@@ -2,7 +2,7 @@
 //!
 //! Extracted from `expr_call/mod.rs` as a mechanical move.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
@@ -223,7 +223,7 @@ pub(super) fn try_module_static_methods(
                                 ))));
                             }
                         }
-                        "toNamespacedPath" => {
+                        "toNamespacedPath" | "_makeLong" => {
                             if !args.is_empty() {
                                 return Ok(Ok(Expr::PathToNamespacedPath(Box::new(
                                     args.into_iter().next().unwrap(),
@@ -345,6 +345,20 @@ pub(super) fn try_module_static_methods(
                                 )));
                             }
                         }
+                        "rawJSON" => {
+                            // #2900: `JSON.rawJSON(text)` -> raw-JSON wrapper.
+                            if !args.is_empty() {
+                                let text = args.into_iter().next().unwrap();
+                                return Ok(Ok(Expr::JsonRawJson(Box::new(text))));
+                            }
+                        }
+                        "isRawJSON" => {
+                            // #2900: `JSON.isRawJSON(value)` -> boolean.
+                            if !args.is_empty() {
+                                let value = args.into_iter().next().unwrap();
+                                return Ok(Ok(Expr::JsonIsRawJson(Box::new(value))));
+                            }
+                        }
                         _ => {} // Fall through to generic handling
                     }
                 }
@@ -390,12 +404,13 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
-            // Check for Response.json(value) / Response.redirect(url, status?) static factories
+            // Check for Response.json(value) / Response.redirect(url, status?) /
+            // Response.error() static factories.
             if obj_ident.sym.as_ref() == "Response" {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
-                        "json" | "redirect" => {
+                        "json" | "redirect" | "error" => {
                             ctx.uses_fetch = true;
                             return Ok(Ok(Expr::NativeMethodCall {
                                 module: "fetch".to_string(),
@@ -662,6 +677,13 @@ pub(super) fn try_module_static_methods(
                                 ))));
                             }
                         }
+                        "f16round" => {
+                            if !args.is_empty() {
+                                return Ok(Ok(Expr::MathF16round(Box::new(
+                                    args.into_iter().next().unwrap(),
+                                ))));
+                            }
+                        }
                         "clz32" => {
                             if !args.is_empty() {
                                 return Ok(Ok(Expr::MathClz32(Box::new(
@@ -737,6 +759,27 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
+            // #2877: `ArrayBuffer.isView(x)` — true for TypedArray / DataView
+            // values, false for ArrayBuffer / anything else. Route through the
+            // existing `util.types.isArrayBufferView` runtime predicate (it
+            // already recognizes typed arrays, Uint8Array-from-ctor and
+            // DataView-marked buffers) by re-emitting a `util/types`
+            // NativeMethodCall — no new HIR variant or runtime helper needed.
+            if obj_ident.sym.as_ref() == "ArrayBuffer" {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    if method_ident.sym.as_ref() == "isView" {
+                        let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "util/types".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: "isArrayBufferView".to_string(),
+                            args: vec![arg],
+                        }));
+                    }
+                }
+            }
+
             // Check for Number.methodName() static calls
             if obj_ident.sym.as_ref() == "Number" {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
@@ -776,6 +819,8 @@ pub(super) fn try_module_static_methods(
                                 return Ok(Ok(Expr::ParseFloat(Box::new(
                                     args.into_iter().next().unwrap(),
                                 ))));
+                            } else {
+                                return Ok(Ok(Expr::ParseFloat(Box::new(Expr::Undefined))));
                             }
                         }
                         "parseInt" => {
@@ -784,9 +829,7 @@ pub(super) fn try_module_static_methods(
                             let string_arg = if let Some(s) = iter.next() {
                                 Box::new(s)
                             } else {
-                                return Err(anyhow!(
-                                    "Number.parseInt requires at least one argument"
-                                ));
+                                Box::new(Expr::Undefined)
                             };
                             let radix_arg = iter.next().map(Box::new);
                             return Ok(Ok(Expr::ParseInt {
@@ -805,6 +848,10 @@ pub(super) fn try_module_static_methods(
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
                         "fromCharCode" => {
+                            if args.is_empty() {
+                                // #2788: String.fromCharCode() -> "".
+                                return Ok(Ok(Expr::String(String::new())));
+                            }
                             if args.len() == 1 {
                                 return Ok(Ok(Expr::StringFromCharCode(Box::new(
                                     args.into_iter().next().unwrap(),
@@ -825,6 +872,10 @@ pub(super) fn try_module_static_methods(
                             }
                         }
                         "fromCodePoint" => {
+                            if args.is_empty() {
+                                // #2788: String.fromCodePoint() -> "".
+                                return Ok(Ok(Expr::String(String::new())));
+                            }
                             if args.len() == 1 {
                                 return Ok(Ok(Expr::StringFromCodePoint(Box::new(
                                     args.into_iter().next().unwrap(),
@@ -842,6 +893,19 @@ pub(super) fn try_module_static_methods(
                                 }
                                 return Ok(Ok(acc));
                             }
+                        }
+                        // Callable String.raw(callSite, ...subs) — the
+                        // non-tagged form. The tagged ``String.raw`...` ``
+                        // form is handled at the TaggedTpl lowering site.
+                        // (#2789)
+                        "raw" => {
+                            let mut iter = args.into_iter();
+                            let call_site = iter.next().unwrap_or(Expr::Undefined);
+                            let substitutions: Vec<Expr> = iter.collect();
+                            return Ok(Ok(Expr::StringRaw {
+                                call_site: Box::new(call_site),
+                                substitutions,
+                            }));
                         }
                         _ => {} // Fall through to generic handling
                     }
@@ -1114,6 +1178,63 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
+            // #2901: TC39 `Uint8Array.fromBase64(str, opts)` / `fromHex(str)`
+            // static factories. Perry aliases Uint8Array → Buffer; route these
+            // through the buffer native-module dispatch table (no new HIR
+            // variant) so the runtime decodes into a fresh BufferHeader.
+            if obj_name == "Uint8Array" {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let method_name = method_ident.sym.as_ref();
+                    if matches!(method_name, "fromBase64" | "fromHex") {
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "buffer".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: method_name.to_string(),
+                            args,
+                        }));
+                    }
+                }
+            }
+
+            // #2902: generic `<TypedArray>.from(src)` / `<TypedArray>.of(...items)`
+            // for the multi-byte numeric kinds (Int16/Uint16/Int32/Uint32/
+            // Float16/Float32/Float64). Uint8Array is handled by the Buffer
+            // path above; with a mapFn we fall through to dynamic dispatch.
+            // `from(src)` and `of(...items)` both reduce to copying a JS array
+            // into a fresh typed array, which `TypedArrayNew` already does
+            // (no mapFn). This intentionally only fires when the receiver name
+            // is a real global typed-array constructor (not shadowed by a
+            // local/import/class binding).
+            if let Some(kind) = crate::ir::typed_array_kind_for_name(&obj_name) {
+                let shadowed = ctx.lookup_local(&obj_name).is_some()
+                    || ctx.lookup_func(&obj_name).is_some()
+                    || ctx.lookup_imported_func(&obj_name).is_some()
+                    || ctx.lookup_class(&obj_name).is_some();
+                if !shadowed && obj_name != "Uint8Array" {
+                    if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                        let method_name = method_ident.sym.as_ref();
+                        match method_name {
+                            // `from(arrayLike)` with no map function: copy.
+                            "from" if args.len() == 1 => {
+                                return Ok(Ok(Expr::TypedArrayNew {
+                                    kind,
+                                    arg: Some(Box::new(args.into_iter().next().unwrap())),
+                                }));
+                            }
+                            // `of(...items)` is `from([...items])`.
+                            "of" => {
+                                return Ok(Ok(Expr::TypedArrayNew {
+                                    kind,
+                                    arg: Some(Box::new(Expr::Array(args))),
+                                }));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
             // Check for child_process named imports (execSync, spawnSync, spawn, exec)
             let is_child_process_module =
                 ctx.lookup_builtin_module_alias(obj_name) == Some("child_process");
@@ -1270,14 +1391,14 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
-            // Check for AbortSignal.timeout(ms) static method call
+            // Check for AbortSignal static helpers: timeout / abort / any (#2582).
             if obj_ident.sym.as_ref() == "AbortSignal" {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
-                    if method_name == "timeout" {
+                    if matches!(method_name, "timeout" | "abort" | "any") {
                         return Ok(Ok(Expr::StaticMethodCall {
                             class_name: "AbortSignal".to_string(),
-                            method_name: "timeout".to_string(),
+                            method_name: method_name.to_string(),
                             args,
                         }));
                     }

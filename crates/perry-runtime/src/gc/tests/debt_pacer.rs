@@ -217,9 +217,26 @@ fn allocation_assists_stop_before_unsliced_finalize_and_sweep() {
         );
     }
 
-    assert_eq!(
-        js_gc_step_work_units(1, &mut status),
-        JS_GC_STEP_STATUS_ACTIVE
+    let mut host_finalize_steps = 0usize;
+    while status.phase == GcCyclePhase::AtomicFinalize.ffi_code() {
+        assert_eq!(
+            js_gc_step_work_units(1, &mut status),
+            JS_GC_STEP_STATUS_ACTIVE
+        );
+        host_finalize_steps += 1;
+        assert!(
+            host_finalize_steps < 100_000,
+            "host-driven atomic finalize did not finish"
+        );
+        assert!(
+            status.phase == GcCyclePhase::AtomicFinalize.ffi_code()
+                || status.phase == GcCyclePhase::Sweep.ffi_code(),
+            "host-driven finalization should stay in atomic finalize or advance to sweep"
+        );
+    }
+    assert!(
+        host_finalize_steps > 0,
+        "host step should advance through atomic finalize"
     );
     assert_eq!(status.phase, GcCyclePhase::Sweep.ffi_code());
 
@@ -243,9 +260,29 @@ fn allocation_assists_stop_before_unsliced_finalize_and_sweep() {
         );
     }
 
-    assert_eq!(
-        js_gc_step_work_units(1, &mut status),
-        JS_GC_STEP_STATUS_ACTIVE
+    let mut saw_partial_sweep = false;
+    for _ in 0..500_000 {
+        assert_eq!(
+            js_gc_step_work_units(1, &mut status),
+            JS_GC_STEP_STATUS_ACTIVE
+        );
+        if status.phase == GcCyclePhase::Reclaim.ffi_code() {
+            break;
+        }
+        assert_eq!(status.phase, GcCyclePhase::Sweep.ffi_code());
+        let remaining = tracked_malloc_headers_matching(&churn_headers);
+        if remaining < churn_headers.len() {
+            saw_partial_sweep = true;
+        }
+        assert_eq!(
+            gc_collection_count(),
+            before,
+            "host-driven incremental sweep must not complete the cycle"
+        );
+    }
+    assert!(
+        saw_partial_sweep,
+        "host-driven sweep should pause after reclaiming part of malloc churn"
     );
     assert_eq!(status.phase, GcCyclePhase::Reclaim.ffi_code());
     assert_eq!(

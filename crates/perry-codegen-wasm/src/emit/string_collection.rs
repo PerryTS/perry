@@ -674,9 +674,21 @@ impl WasmModuleEmitter {
                 }
                 self.intern_string(","); // default separator
             }
-            Expr::ArrayIndexOf { array, value } | Expr::ArrayIncludes { array, value } => {
+            Expr::ArrayIndexOf {
+                array,
+                value,
+                from_index,
+            }
+            | Expr::ArrayIncludes {
+                array,
+                value,
+                from_index,
+            } => {
                 self.collect_strings_in_expr(array);
                 self.collect_strings_in_expr(value);
+                if let Some(fi) = from_index {
+                    self.collect_strings_in_expr(fi);
+                }
             }
             Expr::ArrayMap { array, callback }
             | Expr::ArrayFilter { array, callback }
@@ -752,9 +764,16 @@ impl WasmModuleEmitter {
             Expr::ArrayEntries(array) | Expr::ArrayKeys(array) | Expr::ArrayValues(array) => {
                 self.collect_strings_in_expr(array);
             }
-            Expr::ArrayFromMapped { iterable, map_fn } => {
+            Expr::ArrayFromMapped {
+                iterable,
+                map_fn,
+                this_arg,
+            } => {
                 self.collect_strings_in_expr(iterable);
                 self.collect_strings_in_expr(map_fn);
+                if let Some(t) = this_arg {
+                    self.collect_strings_in_expr(t);
+                }
             }
             Expr::MapSet { map, key, value } => {
                 self.collect_strings_in_expr(map);
@@ -827,23 +846,25 @@ impl WasmModuleEmitter {
                     self.collect_strings_in_expr(a);
                 }
             }
-            Expr::DateSetUtcFullYear { date, value }
-            | Expr::DateSetUtcMonth { date, value }
-            | Expr::DateSetUtcDate { date, value }
-            | Expr::DateSetUtcHours { date, value }
-            | Expr::DateSetUtcMinutes { date, value }
-            | Expr::DateSetUtcSeconds { date, value }
-            | Expr::DateSetUtcMilliseconds { date, value }
-            | Expr::DateSetFullYear { date, value }
-            | Expr::DateSetMonth { date, value }
-            | Expr::DateSetDate { date, value }
-            | Expr::DateSetHours { date, value }
-            | Expr::DateSetMinutes { date, value }
-            | Expr::DateSetSeconds { date, value }
-            | Expr::DateSetMilliseconds { date, value }
-            | Expr::DateSetTime { date, value } => {
+            Expr::DateSetUtcFullYear { date, args }
+            | Expr::DateSetUtcMonth { date, args }
+            | Expr::DateSetUtcDate { date, args }
+            | Expr::DateSetUtcHours { date, args }
+            | Expr::DateSetUtcMinutes { date, args }
+            | Expr::DateSetUtcSeconds { date, args }
+            | Expr::DateSetUtcMilliseconds { date, args }
+            | Expr::DateSetFullYear { date, args }
+            | Expr::DateSetMonth { date, args }
+            | Expr::DateSetDate { date, args }
+            | Expr::DateSetHours { date, args }
+            | Expr::DateSetMinutes { date, args }
+            | Expr::DateSetSeconds { date, args }
+            | Expr::DateSetMilliseconds { date, args }
+            | Expr::DateSetTime { date, args } => {
                 self.collect_strings_in_expr(date);
-                self.collect_strings_in_expr(value);
+                for a in args {
+                    self.collect_strings_in_expr(a);
+                }
             }
             Expr::ErrorNew(msg) => {
                 if let Some(m) = msg {
@@ -857,15 +878,28 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(message);
                 self.collect_strings_in_expr(cause);
             }
+            Expr::ErrorNewWithOptions {
+                message, options, ..
+            } => {
+                self.collect_strings_in_expr(message);
+                self.collect_strings_in_expr(options);
+            }
             Expr::TypeErrorNew(m)
             | Expr::RangeErrorNew(m)
             | Expr::ReferenceErrorNew(m)
             | Expr::SyntaxErrorNew(m) => {
                 self.collect_strings_in_expr(m);
             }
-            Expr::AggregateErrorNew { errors, message } => {
+            Expr::AggregateErrorNew {
+                errors,
+                message,
+                options,
+            } => {
                 self.collect_strings_in_expr(errors);
                 self.collect_strings_in_expr(message);
+                if let Some(o) = options {
+                    self.collect_strings_in_expr(o);
+                }
             }
             Expr::JsonParse(e) | Expr::JsonStringify(e) => {
                 self.collect_strings_in_expr(e);

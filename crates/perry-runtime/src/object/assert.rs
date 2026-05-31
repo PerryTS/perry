@@ -11,6 +11,10 @@ fn undefined_f64() -> f64 {
     f64::from_bits(crate::value::JSValue::undefined().bits())
 }
 
+fn null_f64() -> f64 {
+    f64::from_bits(crate::value::JSValue::null().bits())
+}
+
 fn string_f64(s: &str) -> f64 {
     let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
     f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
@@ -33,22 +37,26 @@ fn is_null_or_undefined(value: f64) -> bool {
     jv.is_null() || jv.is_undefined()
 }
 
-fn is_error_value(value: f64) -> bool {
+fn gc_type_of(value: f64) -> Option<u8> {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
-        return false;
+        return None;
     }
     let ptr = jv.as_pointer::<u8>();
     if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return false;
+        return None;
     }
     unsafe {
         let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*gc_header).obj_type == crate::gc::GC_TYPE_ERROR
+        Some((*gc_header).obj_type)
     }
 }
 
-fn regex_test_value(pattern: f64, input: f64) -> Option<bool> {
+fn is_error_value(value: f64) -> bool {
+    gc_type_of(value) == Some(crate::gc::GC_TYPE_ERROR)
+}
+
+fn regexp_ptr(pattern: f64) -> Option<*const crate::regex::RegExpHeader> {
     let jv = crate::value::JSValue::from_bits(pattern.to_bits());
     if !jv.is_pointer() {
         return None;
@@ -57,10 +65,49 @@ fn regex_test_value(pattern: f64, input: f64) -> Option<bool> {
     if !crate::regex::is_regex_pointer(ptr) {
         return None;
     }
+    Some(ptr as *const crate::regex::RegExpHeader)
+}
+
+fn regex_test_value(pattern: f64, input: f64) -> Option<bool> {
+    let re = regexp_ptr(pattern)?;
     let input_string = value_to_string(input);
     let input_ptr =
         crate::string::js_string_from_bytes(input_string.as_ptr(), input_string.len() as u32);
-    Some(crate::regex::js_regexp_test(ptr as *const crate::regex::RegExpHeader, input_ptr) != 0)
+    Some(crate::regex::js_regexp_test(re, input_ptr) != 0)
+}
+
+fn regex_test_string(re: *const crate::regex::RegExpHeader, input: f64) -> bool {
+    let input_ptr =
+        crate::value::js_get_string_pointer_unified(input) as *const crate::StringHeader;
+    !input_ptr.is_null() && crate::regex::js_regexp_test(re, input_ptr) != 0
+}
+
+fn validate_regexp_argument(regexp: f64) -> *const crate::regex::RegExpHeader {
+    if let Some(re) = regexp_ptr(regexp) {
+        return re;
+    }
+    let message = format!(
+        "The \"regexp\" argument must be an instance of RegExp. Received {}",
+        crate::fs::validate::describe_received(regexp)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn validate_assert_match_string(actual: f64, expected: f64, message: f64, operator: &str) {
+    if crate::value::JSValue::from_bits(actual.to_bits()).is_any_string() {
+        return;
+    }
+    let fallback = format!(
+        "The \"string\" argument must be of type string. Received {}",
+        crate::fs::validate::describe_received(actual)
+    );
+    throw_assertion(
+        assertion_message(message, &fallback),
+        actual,
+        expected,
+        operator,
+        is_null_or_undefined(message),
+    )
 }
 
 fn read_property(value: f64, key: &str) -> f64 {
@@ -142,6 +189,10 @@ fn constructor_name_matches_builtin_error(thrown: f64, expected: f64) -> bool {
         "ReferenceError"
     } else if expected.to_bits() == global_builtin(b"SyntaxError").to_bits() {
         "SyntaxError"
+    } else if expected.to_bits() == global_builtin(b"EvalError").to_bits() {
+        "EvalError"
+    } else if expected.to_bits() == global_builtin(b"URIError").to_bits() {
+        "URIError"
     } else if expected.to_bits() == global_builtin(b"AggregateError").to_bits() {
         "AggregateError"
     } else {
@@ -157,6 +208,8 @@ fn constructor_name_matches_builtin_error(thrown: f64, expected: f64) -> bool {
                 | "RangeError"
                 | "ReferenceError"
                 | "SyntaxError"
+                | "EvalError"
+                | "URIError"
                 | "AggregateError"
         ) {
             return false;
@@ -247,7 +300,17 @@ fn make_assertion_error(
         set("message", string_f64(&message));
         set("actual", actual);
         set("expected", expected);
-        set("operator", string_f64(operator));
+        // An absent operator surfaces as `undefined` (matching Node), not an
+        // empty string. The assert.* helpers always pass a non-empty operator,
+        // so this only affects `new AssertionError({ ... })` with no operator.
+        set(
+            "operator",
+            if operator.is_empty() {
+                undefined_f64()
+            } else {
+                string_f64(operator)
+            },
+        );
         set(
             "generatedMessage",
             f64::from_bits(crate::value::JSValue::bool(generated).bits()),
@@ -266,6 +329,44 @@ fn throw_assertion(
     crate::exception::js_throw(make_assertion_error(
         message, actual, expected, operator, generated,
     ))
+}
+
+fn if_error_value_message(value: f64) -> Option<String> {
+    match gc_type_of(value) {
+        Some(crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_ERROR) => {}
+        _ => return None,
+    }
+
+    let message = read_property(value, "message");
+    if !crate::value::JSValue::from_bits(message.to_bits()).is_any_string() {
+        return None;
+    }
+
+    let message = value_to_string(message);
+    if !message.is_empty() {
+        return Some(message);
+    }
+
+    let name = read_property(value, "name");
+    if crate::value::JSValue::from_bits(name.to_bits()).is_any_string() {
+        let name = value_to_string(name);
+        if !name.is_empty() {
+            return Some(name);
+        }
+    }
+
+    Some(message)
+}
+
+fn inspected_value_to_string(value: f64) -> String {
+    let inspected = crate::builtins::js_util_inspect(value, undefined_f64());
+    value_to_string(inspected)
+}
+
+fn if_error_message(value: f64) -> String {
+    let value_message =
+        if_error_value_message(value).unwrap_or_else(|| inspected_value_to_string(value));
+    format!("ifError got unwanted exception: {value_message}")
 }
 
 fn promise_ptr_from_value(value: f64) -> Option<*mut crate::promise::Promise> {
@@ -361,6 +462,14 @@ extern "C" fn assert_does_not_reject_rejected(
     let result =
         crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
     let message = crate::closure::js_closure_get_capture_f64(closure, 1);
+    let expected = crate::closure::js_closure_get_capture_f64(closure, 2);
+    // With a matcher present, a rejection that does NOT match propagates the
+    // original rejection reason unchanged (Node behavior, #2971). Only a
+    // matching rejection (or no matcher) becomes an AssertionError.
+    if !is_null_or_undefined(expected) && !expected_error_matches(reason, expected) {
+        crate::promise::js_promise_reject(result, reason);
+        return undefined_f64();
+    }
     let err = make_assertion_error(
         assertion_message(message, "Got unwanted rejection"),
         reason,
@@ -731,7 +840,9 @@ pub extern "C" fn js_assert_not_deep_equal(actual: f64, expected: f64, message: 
 
 #[no_mangle]
 pub extern "C" fn js_assert_match(actual: f64, expected: f64, message: f64) -> f64 {
-    if regex_test_value(expected, actual).unwrap_or(false) {
+    let re = validate_regexp_argument(expected);
+    validate_assert_match_string(actual, expected, message, "match");
+    if regex_test_string(re, actual) {
         return undefined_f64();
     }
     throw_assertion(
@@ -745,7 +856,9 @@ pub extern "C" fn js_assert_match(actual: f64, expected: f64, message: f64) -> f
 
 #[no_mangle]
 pub extern "C" fn js_assert_does_not_match(actual: f64, expected: f64, message: f64) -> f64 {
-    if !regex_test_value(expected, actual).unwrap_or(false) {
+    let re = validate_regexp_argument(expected);
+    validate_assert_match_string(actual, expected, message, "doesNotMatch");
+    if !regex_test_string(re, actual) {
         return undefined_f64();
     }
     throw_assertion(
@@ -785,9 +898,17 @@ pub extern "C" fn js_assert_throws(block: f64, expected: f64, message: f64) -> f
 }
 
 #[no_mangle]
-pub extern "C" fn js_assert_does_not_throw(block: f64, _expected: f64, message: f64) -> f64 {
+pub extern "C" fn js_assert_does_not_throw(block: f64, expected: f64, message: f64) -> f64 {
     match call_block_capturing_throw(block) {
         Ok(_) => undefined_f64(),
+        // With a matcher present, a throw that does NOT match the matcher
+        // propagates the original error unchanged (Node behavior, #2971). Only
+        // a matching throw (or no matcher at all) becomes an AssertionError.
+        Err(thrown)
+            if !is_null_or_undefined(expected) && !expected_error_matches(thrown, expected) =>
+        {
+            crate::exception::js_throw(thrown)
+        }
         Err(thrown) => throw_assertion(
             assertion_message(message, "Got unwanted exception"),
             thrown,
@@ -819,16 +940,17 @@ pub extern "C" fn js_assert_rejects(input: f64, expected: f64, message: f64) -> 
 }
 
 #[no_mangle]
-pub extern "C" fn js_assert_does_not_reject(input: f64, _expected: f64, message: f64) -> f64 {
+pub extern "C" fn js_assert_does_not_reject(input: f64, expected: f64, message: f64) -> f64 {
     let source = promise_from_assert_async_input(input);
     let result = crate::promise::js_promise_new();
     let on_fulfilled =
         crate::closure::js_closure_alloc(assert_does_not_reject_fulfilled as *const u8, 1);
     let on_rejected =
-        crate::closure::js_closure_alloc(assert_does_not_reject_rejected as *const u8, 2);
+        crate::closure::js_closure_alloc(assert_does_not_reject_rejected as *const u8, 3);
     crate::closure::js_closure_set_capture_ptr(on_fulfilled, 0, result as i64);
     crate::closure::js_closure_set_capture_ptr(on_rejected, 0, result as i64);
     crate::closure::js_closure_set_capture_f64(on_rejected, 1, message);
+    crate::closure::js_closure_set_capture_f64(on_rejected, 2, expected);
     crate::promise::js_promise_then(source, on_fulfilled, on_rejected);
     promise_value_from_ptr(result)
 }
@@ -838,49 +960,65 @@ pub extern "C" fn js_assert_does_not_reject(input: f64, _expected: f64, message:
 /// carries the `CLASS_ID_ASSERTION_ERROR` class id, satisfies
 /// `instanceof Error`, and has the standard `actual` / `expected` /
 /// `operator` / `code` / `message` / `generatedMessage` fields Node
-/// attaches. Unspecified fields default to `undefined`. When `message`
-/// is missing, the operator-derived "<actual> <op> <expected>" default
-/// is left to the caller (Node's behaviour computes a stringy summary
-/// — we currently default to the operator string itself, which matches
-/// what Perry's failing-assert helpers produce).
+/// attaches.
+///
+/// #3034 — Node requires an options object: a missing/null/primitive
+/// `options` throws `TypeError [ERR_INVALID_ARG_TYPE]`. When `message` is
+/// absent, Node generates a default from `actual`/`operator`/`expected`. We
+/// emit the generic comparison summary `"<actual> <operator> <expected>"`
+/// (the format Node uses for non-diffing operators like `===`, and the one
+/// the issue's surface exercises); the elaborate per-operator diff messages
+/// for `strictEqual`/`deepStrictEqual`/… are produced by the assert.* helpers
+/// themselves, not by this direct-construction path.
 #[no_mangle]
 pub extern "C" fn js_assert_assertion_error_ctor(options: f64) -> f64 {
-    let undef = undefined_f64();
     let opts_is_obj = {
         let jv = crate::value::JSValue::from_bits(options.to_bits());
         jv.is_pointer() && !jv.as_pointer::<u8>().is_null()
     };
-    let (actual, expected, operator_str, message, generated) = if opts_is_obj {
-        unsafe {
-            let read = |key: &str| -> f64 {
-                let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-                let obj_ptr = crate::value::JSValue::from_bits(options.to_bits())
-                    .as_pointer::<ObjectHeader>();
-                let v = crate::object::js_object_get_field_by_name_f64(obj_ptr, key_ptr);
-                f64::from_bits(v.to_bits())
-            };
-            let actual = read("actual");
-            let expected = read("expected");
-            let operator_v = read("operator");
-            let message_v = read("message");
-            let operator_str = if is_null_or_undefined(operator_v) {
-                String::new()
-            } else {
-                value_to_string(operator_v)
-            };
-            let (msg, generated) = if is_null_or_undefined(message_v) {
-                // Default to the operator name so the resulting message is
-                // non-empty; users typically pass an explicit message.
-                (operator_str.clone(), true)
-            } else {
-                (value_to_string(message_v), false)
-            };
-            (actual, expected, operator_str, msg, generated)
-        }
-    } else {
-        (undef, undef, String::new(), String::new(), true)
-    };
-    make_assertion_error(message, actual, expected, &operator_str, generated)
+    if !opts_is_obj {
+        let message = format!(
+            "The \"options\" argument must be of type object. Received {}",
+            crate::fs::validate::describe_received(options)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    unsafe {
+        let read = |key: &str| -> f64 {
+            let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+            let obj_ptr =
+                crate::value::JSValue::from_bits(options.to_bits()).as_pointer::<ObjectHeader>();
+            let v = crate::object::js_object_get_field_by_name_f64(obj_ptr, key_ptr);
+            f64::from_bits(v.to_bits())
+        };
+        let actual = read("actual");
+        let expected = read("expected");
+        let operator_v = read("operator");
+        let message_v = read("message");
+        let operator_str = if is_null_or_undefined(operator_v) {
+            String::new()
+        } else {
+            value_to_string(operator_v)
+        };
+        let (message, generated) = if is_null_or_undefined(message_v) {
+            // Node's generated default for a directly-constructed
+            // AssertionError is the comparison summary
+            // `<actual> <operator> <expected>`, with each absent operand and
+            // the operator itself rendered via String() (`undefined` when
+            // missing). E.g. `{}` -> "undefined undefined undefined",
+            // `{actual:1,expected:2,operator:"==="}` -> "1 === 2".
+            let summary = format!(
+                "{} {} {}",
+                value_to_string(actual),
+                value_to_string(operator_v),
+                value_to_string(expected)
+            );
+            (summary, true)
+        } else {
+            (value_to_string(message_v), false)
+        };
+        make_assertion_error(message, actual, expected, &operator_str, generated)
+    }
 }
 
 #[no_mangle]
@@ -888,11 +1026,5 @@ pub extern "C" fn js_assert_if_error(value: f64) -> f64 {
     if is_null_or_undefined(value) {
         return undefined_f64();
     }
-    throw_assertion(
-        format!("ifError got unwanted exception: {}", value_to_string(value)),
-        value,
-        undefined_f64(),
-        "ifError",
-        true,
-    )
+    throw_assertion(if_error_message(value), value, null_f64(), "ifError", false)
 }

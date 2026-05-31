@@ -268,6 +268,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "ReferenceError"
             | "EvalError"
             | "URIError"
+            | "AggregateError"
             | "Symbol"
             | "Promise"
             | "Map"
@@ -283,6 +284,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "Int16Array"
             | "Uint32Array"
             | "Int32Array"
+            | "Float16Array"
             | "Float32Array"
             | "Float64Array"
             | "Uint8ClampedArray"
@@ -307,6 +309,10 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "Request"
             | "Response"
             | "FinalizationRegistry"
+            // #2875: TC39 explicit-resource-management global constructors.
+            | "DisposableStack"
+            | "AsyncDisposableStack"
+            | "SuppressedError"
             | "Buffer"
             // Global functions (typeof === "function" in spec).
             | "structuredClone"
@@ -319,6 +325,15 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "setImmediate"
             | "clearImmediate"
             | "queueMicrotask"
+            // #2905: standard global helper functions (typeof === "function").
+            | "parseInt"
+            | "parseFloat"
+            | "isNaN"
+            | "isFinite"
+            | "encodeURI"
+            | "decodeURI"
+            | "encodeURIComponent"
+            | "decodeURIComponent"
             // Namespaces (typeof === "object" in spec).
             | "globalThis"
             | "console"
@@ -327,6 +342,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "Reflect"
             | "performance"
             | "process"
+            | "navigator"
     )
 }
 
@@ -339,7 +355,14 @@ pub(crate) fn is_global_this_builtin_function_name(name: &str) -> bool {
     is_global_this_builtin_name(name)
         && !matches!(
             name,
-            "globalThis" | "console" | "Math" | "JSON" | "Reflect" | "performance" | "process"
+            "globalThis"
+                | "console"
+                | "Math"
+                | "JSON"
+                | "Reflect"
+                | "performance"
+                | "process"
+                | "navigator"
         )
 }
 

@@ -40,7 +40,9 @@ use crate::promise::{
     js_value_is_promise, ClosurePtr, Promise,
 };
 use crate::string::js_string_from_bytes;
-use crate::value::{JSValue, POINTER_MASK, POINTER_TAG, TAG_MASK, TAG_NULL, TAG_UNDEFINED};
+use crate::value::{
+    JSValue, POINTER_MASK, POINTER_TAG, TAG_MASK, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
+};
 
 const TAG_UNDEFINED_F64: f64 = f64::from_bits(TAG_UNDEFINED);
 const TAG_NULL_F64: f64 = f64::from_bits(TAG_NULL);
@@ -88,6 +90,34 @@ fn is_callable_closure(value: f64) -> bool {
     crate::closure::is_closure_ptr(ptr)
 }
 
+fn validate_original_function(fn_value: f64) {
+    if is_callable_closure(fn_value) {
+        return;
+    }
+    let message = format!(
+        "The \"original\" argument must be of type function. Received {}",
+        crate::fs::validate::describe_received(fn_value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+fn throw_plain_type_error(message: &str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn validate_deprecate_target(fn_value: f64) {
+    if is_callable_closure(fn_value) {
+        return;
+    }
+    let message = format!(
+        "The \"fn\" argument must be of type function. Received {}",
+        crate::fs::validate::describe_received(fn_value)
+    );
+    throw_plain_type_error(&message);
+}
+
 fn custom_promisified_value(fn_value: f64) -> Option<f64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let fn_handle = scope.root_nanbox_f64(fn_value);
@@ -132,24 +162,19 @@ fn register_thunks_once() {
         js_register_closure_rest(callbackify_outer_thunk as *const u8, 0);
         js_register_closure_arity(callbackify_fulfilled_thunk as *const u8, 1);
         js_register_closure_arity(callbackify_rejected_thunk as *const u8, 1);
+        js_register_closure_rest(deprecate_outer_thunk as *const u8, 0);
+        crate::builtins::register_function_name_if_absent(
+            deprecate_outer_thunk as *const () as usize,
+            "deprecated",
+        );
         flag.set(true);
     });
 }
 
 /// `util.promisify(fn)` — returns a wrapper closure as a NaN-boxed f64.
-///
-/// If `fn` isn't pointer-shaped (not a closure / native callable), we fall
-/// back to returning `fn` unchanged. Node throws `TypeError [ERR_INVALID_ARG_TYPE]`
-/// in that case; we keep behavior conservative for now so callers that
-/// accidentally promisify a non-function still get a clear "value is not a
-/// function" error at the call site rather than crashing here.
 #[no_mangle]
 pub extern "C" fn js_util_promisify(fn_value: f64) -> f64 {
-    let bits = fn_value.to_bits();
-    let tag = bits & TAG_MASK;
-    if tag != POINTER_TAG {
-        return fn_value;
-    }
+    validate_original_function(fn_value);
 
     if let Some(custom) = custom_promisified_value(fn_value) {
         return custom;
@@ -164,30 +189,6 @@ pub extern "C" fn js_util_promisify(fn_value: f64) -> f64 {
     {
         if module == "child_process" && (method == "exec" || method == "execFile") {
             return crate::child_process::make_promisified_child_process(&method);
-        }
-        // node:zlib's callback-form codecs (`gzip`/`gunzip`/`deflate`/`inflate`
-        // /`deflateRaw`/`inflateRaw`/`unzip`/`brotliCompress`/`brotliDecompress`)
-        // are wired in Perry to *return a Promise* directly — there's no
-        // callback parameter that the generic outer_thunk could await. Routing
-        // them through the standard wrapper would inject a callback that never
-        // fires and the awaiter would hang. Since `util.promisify(p)` is meant
-        // to expose a Promise-returning API and `p` already is one, the
-        // identity transform is the correct semantics here.
-        if module == "zlib"
-            && matches!(
-                method.as_str(),
-                "gzip"
-                    | "gunzip"
-                    | "deflate"
-                    | "inflate"
-                    | "deflateRaw"
-                    | "inflateRaw"
-                    | "unzip"
-                    | "brotliCompress"
-                    | "brotliDecompress"
-            )
-        {
-            return fn_value;
         }
     }
 
@@ -208,24 +209,68 @@ pub extern "C" fn js_util_promisify(fn_value: f64) -> f64 {
     nanbox_pointer(closure_handle.get_raw_const_ptr::<ClosureHeader>() as *const u8)
 }
 
-/// Minimal `util.deprecate(fn, msg, code)` shape.
-///
-/// Full warning emission is separate; callers must at least receive a callable
-/// that forwards to the original function, and Node accepts string codes that
-/// contain spaces.
+fn function_length(value: f64) -> u32 {
+    if let Some(arity) = unsafe { crate::object::bound_native_callable_value_arity(value) } {
+        return arity;
+    }
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return 0;
+    }
+    let closure = jv.as_pointer::<ClosureHeader>();
+    if closure.is_null() {
+        return 0;
+    }
+    if let Some(len) = crate::object::builtin_closure_length(closure as usize) {
+        return len;
+    }
+    crate::closure::closure_arity(closure).unwrap_or(0)
+}
+
+/// `util.deprecate(fn, msg, code)` — returns a wrapper named `deprecated` that
+/// emits one `DeprecationWarning` on first invocation, then forwards all calls.
 #[no_mangle]
-pub extern "C" fn js_util_deprecate(fn_value: f64, _msg: f64, _code: f64) -> f64 {
-    fn_value
+pub extern "C" fn js_util_deprecate(fn_value: f64, msg: f64, code: f64) -> f64 {
+    validate_deprecate_target(fn_value);
+
+    register_thunks_once();
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let fn_handle = scope.root_nanbox_f64(fn_value);
+    let msg_handle = scope.root_nanbox_f64(msg);
+    let code_handle = scope.root_nanbox_f64(code);
+    let closure = js_closure_alloc(deprecate_outer_thunk as *const u8, 4);
+    if closure.is_null() {
+        return TAG_UNDEFINED_F64;
+    }
+    let closure_handle = scope.root_raw_mut_ptr(closure);
+    js_closure_set_capture_f64(
+        closure_handle.get_raw_mut_ptr(),
+        0,
+        fn_handle.get_nanbox_f64(),
+    );
+    js_closure_set_capture_f64(
+        closure_handle.get_raw_mut_ptr(),
+        1,
+        msg_handle.get_nanbox_f64(),
+    );
+    js_closure_set_capture_f64(
+        closure_handle.get_raw_mut_ptr(),
+        2,
+        code_handle.get_nanbox_f64(),
+    );
+    js_closure_set_capture_f64(closure_handle.get_raw_mut_ptr(), 3, TAG_UNDEFINED_F64);
+    crate::object::set_builtin_closure_length(
+        closure_handle.get_raw_const_ptr::<ClosureHeader>() as usize,
+        function_length(fn_handle.get_nanbox_f64()),
+    );
+    nanbox_pointer(closure_handle.get_raw_const_ptr::<ClosureHeader>() as *const u8)
 }
 
 /// `util.callbackify(fn)` — returns a wrapper closure as a NaN-boxed f64.
 #[no_mangle]
 pub extern "C" fn js_util_callbackify(fn_value: f64) -> f64 {
-    let bits = fn_value.to_bits();
-    let tag = bits & TAG_MASK;
-    if tag != POINTER_TAG {
-        return fn_value;
-    }
+    validate_original_function(fn_value);
 
     register_thunks_once();
 
@@ -351,6 +396,54 @@ extern "C" fn inner_callback_thunk(closure: *const ClosureHeader, err: f64, valu
     TAG_UNDEFINED_F64
 }
 
+/// `util.deprecate()` wrapper body. Receives all user arguments bundled in
+/// `rest_value`, emits one warning per wrapper, then forwards the call.
+extern "C" fn deprecate_outer_thunk(closure: *const ClosureHeader, rest_value: f64) -> f64 {
+    if closure.is_null() {
+        return TAG_UNDEFINED_F64;
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let fn_value = js_closure_get_capture_f64(closure, 0);
+    let msg = js_closure_get_capture_f64(closure, 1);
+    let code = js_closure_get_capture_f64(closure, 2);
+    let fn_handle = scope.root_nanbox_f64(fn_value);
+    let msg_handle = scope.root_nanbox_f64(msg);
+    let code_handle = scope.root_nanbox_f64(code);
+    let rest_handle = scope.root_nanbox_f64(rest_value);
+
+    if js_closure_get_capture_f64(closure, 3).to_bits() != TAG_TRUE {
+        js_closure_set_capture_f64(closure as *mut ClosureHeader, 3, f64::from_bits(TAG_TRUE));
+        let warning_type = js_string_from_bytes(b"DeprecationWarning".as_ptr(), 18);
+        let warning_type_value = f64::from_bits(JSValue::string_ptr(warning_type).bits());
+        let warning_type_handle = scope.root_nanbox_f64(warning_type_value);
+        crate::process::js_process_emit_warning(
+            msg_handle.get_nanbox_f64(),
+            warning_type_handle.get_nanbox_f64(),
+            code_handle.get_nanbox_f64(),
+        );
+    }
+
+    let rest_bits = rest_handle.get_nanbox_f64().to_bits();
+    let rest_arr_ptr = if (rest_bits & TAG_MASK) == POINTER_TAG {
+        (rest_bits & POINTER_MASK) as *const ArrayHeader
+    } else {
+        std::ptr::null()
+    };
+    let rest_len = if rest_arr_ptr.is_null() {
+        0
+    } else {
+        js_array_length(rest_arr_ptr) as usize
+    };
+    let rest_data = if rest_arr_ptr.is_null() {
+        std::ptr::null()
+    } else {
+        unsafe { (rest_arr_ptr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64 }
+    };
+
+    unsafe { crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), rest_data, rest_len) }
+}
+
 /// Outer callbackify body: `(closure, rest_array_value) -> undefined`.
 ///
 /// The last incoming argument is the Node-style callback. Every preceding
@@ -394,29 +487,19 @@ extern "C" fn callbackify_outer_thunk(closure: *const ClosureHeader, rest_value:
     }
     let original_args_handle = scope.root_raw_mut_ptr(original_args);
 
-    let mut returned = TAG_UNDEFINED_F64;
-    let trap_buf = crate::exception::js_try_push();
-    let jumped = unsafe { setjmp(trap_buf as *mut c_int) };
-    if jumped == 0 {
+    // #2917: Node's callbackified wrapper does NOT catch synchronous throws
+    // from `original` — they propagate to the caller. Likewise, if `original`
+    // returns a non-thenable, Node throws `TypeError` synchronously (it reaches
+    // for `.then` on the result). Only genuine Promise fulfillment/rejection
+    // routes through the callback. We therefore run the call WITHOUT a try
+    // trap so any sync exception unwinds past us.
+    let returned = unsafe {
         let arr = original_args_handle.get_raw_const_ptr::<ArrayHeader>();
-        let data =
-            unsafe { (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64 };
-        returned = unsafe {
-            crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), data, original_arg_len)
-        };
-    } else {
-        let exc = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        call_callback_rejected(callback_handle.get_nanbox_f64(), exc);
-    }
-    crate::exception::js_try_end();
+        let data = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), data, original_arg_len)
+    };
 
-    let promise_ptr = promise_ptr_from_value(returned);
-    if promise_ptr.is_null() {
-        return TAG_UNDEFINED_F64;
-    }
-    let promise_handle = scope.root_raw_mut_ptr(promise_ptr);
-
+    // Build the onFulfilled / onRejected closures (bound to the user callback).
     let fulfilled = js_closure_alloc(callbackify_fulfilled_thunk as *const u8, 1);
     if fulfilled.is_null() {
         return TAG_UNDEFINED_F64;
@@ -439,13 +522,98 @@ extern "C" fn callbackify_outer_thunk(closure: *const ClosureHeader, rest_value:
         callback_handle.get_nanbox_f64(),
     );
 
-    js_promise_attach_handlers(
-        promise_handle.get_raw_mut_ptr(),
-        fulfilled_handle.get_raw_const_ptr::<ClosureHeader>() as ClosurePtr,
-        rejected_handle.get_raw_const_ptr::<ClosureHeader>() as ClosurePtr,
-    );
+    // Native Perry Promise → attach our handlers directly.
+    let promise_ptr = promise_ptr_from_value(returned);
+    if !promise_ptr.is_null() {
+        let promise_handle = scope.root_raw_mut_ptr(promise_ptr);
+        js_promise_attach_handlers(
+            promise_handle.get_raw_mut_ptr(),
+            fulfilled_handle.get_raw_const_ptr::<ClosureHeader>() as ClosurePtr,
+            rejected_handle.get_raw_const_ptr::<ClosureHeader>() as ClosurePtr,
+        );
+        return TAG_UNDEFINED_F64;
+    }
 
-    TAG_UNDEFINED_F64
+    // Class-based thenable (e.g. a custom Promise subclass) → assimilate into a
+    // real Promise wrapper, then attach.
+    let assimilated = crate::promise::js_assimilate_thenable(returned);
+    let assimilated_ptr = promise_ptr_from_value(assimilated);
+    if !assimilated_ptr.is_null() {
+        let promise_handle = scope.root_raw_mut_ptr(assimilated_ptr);
+        js_promise_attach_handlers(
+            promise_handle.get_raw_mut_ptr(),
+            fulfilled_handle.get_raw_const_ptr::<ClosureHeader>() as ClosurePtr,
+            rejected_handle.get_raw_const_ptr::<ClosureHeader>() as ClosurePtr,
+        );
+        return TAG_UNDEFINED_F64;
+    }
+
+    // Object-literal thenable (`{ then(onF, onR) { … } }`) → its `.then` lives
+    // as an own field, not a vtable method, so `js_assimilate_thenable` passes
+    // it through unchanged. Probe for a callable `.then` field and invoke it
+    // with the thenable as `this`, passing our fulfilled/rejected handlers.
+    if let Some(then_fn) = callable_then_field(returned) {
+        let then_handle = scope.root_nanbox_f64(then_fn);
+        let on_fulfilled =
+            nanbox_pointer(fulfilled_handle.get_raw_const_ptr::<ClosureHeader>() as *const u8);
+        let on_rejected =
+            nanbox_pointer(rejected_handle.get_raw_const_ptr::<ClosureHeader>() as *const u8);
+        let args = [on_fulfilled, on_rejected];
+        let prev_this = crate::object::js_implicit_this_set(returned);
+        unsafe {
+            crate::closure::js_native_call_value(
+                then_handle.get_nanbox_f64(),
+                args.as_ptr(),
+                args.len(),
+            );
+        }
+        crate::object::js_implicit_this_set(prev_this);
+        return TAG_UNDEFINED_F64;
+    }
+
+    // Not a Promise or thenable — Node throws `TypeError` synchronously because
+    // it attempts to call `.then` on the result.
+    throw_callbackify_not_thenable(returned);
+}
+
+/// Locate a callable own `then` field on a heap-object value (object-literal
+/// thenable). Returns the closure value to invoke, or `None`.
+fn callable_then_field(value: f64) -> Option<f64> {
+    let bits = value.to_bits();
+    if (bits & TAG_MASK) != POINTER_TAG {
+        return None;
+    }
+    let addr = (bits & POINTER_MASK) as usize;
+    if addr < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    // Only read `.then` off genuine object headers; reading arbitrary heap
+    // types as objects would segfault.
+    unsafe {
+        let gc_header =
+            (addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+            return None;
+        }
+    }
+    let obj = addr as *const crate::object::ObjectHeader;
+    let key = js_string_from_bytes(b"then".as_ptr(), 4);
+    let then_value = unsafe {
+        crate::object::js_object_get_field_by_name_f64(obj, key as *const crate::StringHeader)
+    };
+    if is_callable_closure(then_value) {
+        Some(then_value)
+    } else {
+        None
+    }
+}
+
+/// `TypeError` Node raises when the callbackified original returns a
+/// non-thenable. Node's message reads `<expr>.then is not a function` (the
+/// `<expr>` text varies by version); we use a stable, descriptive form.
+fn throw_callbackify_not_thenable(value: f64) -> ! {
+    let _ = value;
+    throw_plain_type_error("The \"original\" function did not return a Promise");
 }
 
 extern "C" fn callbackify_fulfilled_thunk(closure: *const ClosureHeader, value: f64) -> f64 {

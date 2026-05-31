@@ -13,6 +13,7 @@ mod cmp;
 mod coding;
 mod copy_bytes;
 mod copy_write;
+mod dataview;
 mod encode;
 mod from;
 mod header;
@@ -21,6 +22,7 @@ mod mutate;
 mod numeric;
 mod query;
 mod transcode;
+mod u8_codec;
 pub mod validate;
 mod view;
 
@@ -29,12 +31,12 @@ pub use header::{BufferHeader, BUFFER_TYPE_ID, SMALL_BUF_THRESHOLD};
 
 // ---- Re-exports: allocation / registry helpers ----
 pub use header::{
-    asymmetric_key_meta, buffer_ab_alias, buffer_alloc, buffer_data, buffer_data_mut,
-    crypto_key_meta, is_any_array_buffer, is_array_buffer, is_data_view, is_registered_buffer,
-    is_secret_key, is_shared_array_buffer, is_uint8array_buffer, mark_as_array_buffer,
-    mark_as_asymmetric_key, mark_as_crypto_key, mark_as_data_view, mark_as_secret_key,
-    mark_as_shared_array_buffer, mark_as_uint8array, register_buffer, resolve_buffer_ab_alias,
-    set_buffer_ab_alias,
+    asymmetric_key_meta, buffer_ab_alias, buffer_alloc, buffer_backing_array_buffer,
+    buffer_byte_offset, buffer_data, buffer_data_mut, crypto_key_meta, ensure_buffer_ab_alias,
+    is_any_array_buffer, is_array_buffer, is_data_view, is_registered_buffer, is_secret_key,
+    is_shared_array_buffer, is_uint8array_buffer, mark_as_array_buffer, mark_as_asymmetric_key,
+    mark_as_crypto_key, mark_as_data_view, mark_as_secret_key, mark_as_shared_array_buffer,
+    mark_as_uint8array, register_buffer, resolve_buffer_ab_alias, set_buffer_ab_alias,
 };
 
 // ---- Re-exports: Buffer.from / alloc / concat (FFI) ----
@@ -59,10 +61,19 @@ pub use encode::{
     js_buffer_to_string_range, js_value_to_string_with_encoding,
 };
 
+// ---- Re-exports: TC39 Uint8Array base64/hex codecs (#2901) ----
+pub use u8_codec::{
+    js_u8_from_base64, js_u8_from_hex, js_u8_set_from_base64, js_u8_set_from_hex, js_u8_to_base64,
+    js_u8_to_hex,
+};
+
 // ---- Re-exports: indexed access / slice / Uint8Array.set ----
 pub use access::{
     js_buffer_get, js_buffer_set, js_buffer_set_from, js_buffer_set_from_value, js_buffer_slice,
 };
+
+// ---- Re-exports: DataView numeric accessors (#2878) ----
+pub use dataview::{js_data_view_get, js_data_view_set, DataViewKind};
 
 // ---- Re-exports: copy / write ----
 pub use copy_bytes::js_buffer_copy_bytes_from;

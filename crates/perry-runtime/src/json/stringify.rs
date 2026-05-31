@@ -517,6 +517,15 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
             }
             return;
         }
+        // #2900: a `JSON.rawJSON(text)` wrapper emits its stored text verbatim
+        // (no quoting, no re-escaping) — at the root, as an object field, or as
+        // an array element. Detect via the reserved class id before the
+        // generic object path so the wrapper's `rawJSON` own property is never
+        // serialized as `{"rawJSON":...}`.
+        if let Some(raw) = super::raw_json_text_bytes(ptr) {
+            buf.push_str(std::str::from_utf8(raw).unwrap_or("null"));
+            return;
+        }
         if type_hint == TYPE_OBJECT {
             stringify_object(ptr, buf);
             return;
@@ -718,6 +727,12 @@ pub(crate) unsafe fn stringify_value_depth(
             } else {
                 buf.push_str("null");
             }
+            return;
+        }
+        // #2900: raw-JSON wrapper — emit stored text verbatim. See the matching
+        // branch in `stringify_value`.
+        if let Some(raw) = super::raw_json_text_bytes(ptr) {
+            buf.push_str(std::str::from_utf8(raw).unwrap_or("null"));
             return;
         }
         if type_hint == TYPE_OBJECT {
@@ -1397,10 +1412,18 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
     let template = if len >= 2 {
         let first_bits = (*elements).to_bits();
         let tag = first_bits & 0xFFFF_0000_0000_0000;
+        let first_ptr = if tag == POINTER_TAG {
+            (first_bits & POINTER_MASK) as *const u8
+        } else {
+            first_bits as *const u8
+        };
         if (tag == POINTER_TAG || is_raw_pointer(first_bits))
             // #2089: a Date element is a small `DateCell`, not an object with a
             // `keys_array` — don't build an object-shape template from it.
             && !crate::date::is_date_cell_addr((first_bits & POINTER_MASK) as usize)
+            // #2900: a raw-JSON wrapper must emit its stored text verbatim, not
+            // be templated as a `{"rawJSON":...}` object.
+            && !(first_ptr as usize >= 0x1000 && super::ptr_is_raw_json_wrapper(first_ptr))
         {
             build_shape_prefix_template(first_bits)
         } else {
@@ -1483,6 +1506,11 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
                 } else {
                     buf.push_str("null");
                 }
+                continue;
+            }
+            // #2900: raw-JSON wrapper element — emit stored text verbatim.
+            if let Some(raw) = super::raw_json_text_bytes(elem_ptr) {
+                buf.push_str(std::str::from_utf8(raw).unwrap_or("null"));
                 continue;
             }
             // Issue #639: Buffer/Uint8Array detection BEFORE gc_obj_type — see

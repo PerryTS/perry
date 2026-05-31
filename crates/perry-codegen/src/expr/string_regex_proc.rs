@@ -58,10 +58,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- String.fromCodePoint(cp) — returns single-char string --------
         Expr::StringFromCodePoint(o) => {
+            // #2788: pass the raw NaN-boxed value; the runtime validates the
+            // code point and throws RangeError for negative/non-integer/>0x10FFFF.
+            // A prior fptosi truncated `3.14` to `3` and hid the error.
             let v = lower_expr(ctx, o)?;
             let blk = ctx.block();
-            let i32_v = blk.fptosi(DOUBLE, &v, I32);
-            let handle = blk.call(I64, "js_string_from_code_point", &[(I32, &i32_v)]);
+            let handle = blk.call(I64, "js_string_from_code_point", &[(DOUBLE, &v)]);
+            Ok(nanbox_string_inline(blk, &handle))
+        }
+        // -------- Callable String.raw(callSite, ...substitutions) (#2789) --------
+        Expr::StringRaw {
+            call_site,
+            substitutions,
+        } => {
+            // callSite as a NaN-boxed value; substitutions collected into a
+            // NaN-boxed array. The runtime reads `callSite.raw` (array-like),
+            // interleaves the substitutions, and throws TypeError on nullish
+            // callSite / raw.
+            let cs = lower_expr(ctx, call_site)?;
+            let subs_arr = lower_array_literal(ctx, substitutions)?;
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_string_raw", &[(DOUBLE, &cs), (DOUBLE, &subs_arr)]);
             Ok(nanbox_string_inline(blk, &handle))
         }
         // -------- str.at(i) — returns single-char string or undefined --------
@@ -201,26 +218,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
         Expr::MathExpm1(o) => {
-            // expm1(x) = exp(x) - 1. No llvm.expm1 intrinsic; use llvm.exp.f64
-            // and subtract 1.0.
             let v = lower_expr(ctx, o)?;
-            let blk = ctx.block();
-            let exp_v = blk.call(DOUBLE, "llvm.exp.f64", &[(DOUBLE, &v)]);
-            Ok(blk.fsub(&exp_v, "1.0"))
+            Ok(ctx.block().call(DOUBLE, "js_math_expm1", &[(DOUBLE, &v)]))
         }
         Expr::MathExp(o) => {
             let v = lower_expr(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "llvm.exp.f64", &[(DOUBLE, &v)]))
         }
-        Expr::DateSetUtcFullYear { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_utc_full_year",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
-        }
+        Expr::DateSetUtcFullYear { date, args } => super::os_uri_dates::lower_date_setter(
+            ctx,
+            date,
+            args,
+            true,
+            super::os_uri_dates::DATE_FIELD_FULL_YEAR,
+        ),
         Expr::DateGetDate(d) => {
             let v = lower_expr(ctx, d)?;
             Ok(ctx
@@ -382,10 +393,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- String.fromCharCode(code) --------
         Expr::StringFromCharCode(o) => {
+            // #2788: pass the raw NaN-boxed value; the runtime applies ToUint16
+            // so negative/out-of-range codes wrap modulo 65536. A prior fptosi
+            // is UB on a NaN and dropped the wrap semantics.
             let v = lower_expr(ctx, o)?;
             let blk = ctx.block();
-            let i32_v = blk.fptosi(DOUBLE, &v, I32);
-            let handle = blk.call(I64, "js_string_from_char_code", &[(I32, &i32_v)]);
+            let handle = blk.call(I64, "js_string_from_char_code", &[(DOUBLE, &v)]);
             Ok(nanbox_string_inline(blk, &handle))
         }
         Expr::RegExpSetLastIndex { regex, value } => {
@@ -414,33 +427,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let v = lower_expr(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_atanh", &[(DOUBLE, &v)]))
         }
-        Expr::DateSetUtcDate { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_utc_date",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
-        }
-        Expr::DateSetUtcHours { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_utc_hours",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
-        }
+        Expr::DateSetUtcDate { date, args } => super::os_uri_dates::lower_date_setter(
+            ctx,
+            date,
+            args,
+            true,
+            super::os_uri_dates::DATE_FIELD_DATE,
+        ),
+        Expr::DateSetUtcHours { date, args } => super::os_uri_dates::lower_date_setter(
+            ctx,
+            date,
+            args,
+            true,
+            super::os_uri_dates::DATE_FIELD_HOURS,
+        ),
         Expr::ProcessKill { pid, signal } => {
             let pid_d = lower_expr(ctx, pid)?;
             let sig_d = match signal {
                 Some(s) => lower_expr(ctx, s)?,
-                None => double_literal(0.0),
+                None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
             };
             let blk = ctx.block();
-            blk.call_void("js_process_kill", &[(DOUBLE, &pid_d), (DOUBLE, &sig_d)]);
-            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+            Ok(blk.call(
+                DOUBLE,
+                "js_process_kill",
+                &[(DOUBLE, &pid_d), (DOUBLE, &sig_d)],
+            ))
         }
         // -------- Symbol() / Symbol.for / ObjectGetOwnPropertySymbols --------
         // Runtime functions in perry-runtime/src/symbol.rs take and return
@@ -467,6 +479,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(ctx
                 .block()
                 .call(DOUBLE, "js_symbol_key_for", &[(DOUBLE, &s_box)]))
+        }
+        // RegExp.escape(str) — runtime returns a NaN-boxed string f64.
+        Expr::RegExpEscape(arg) => {
+            let a_box = lower_expr(ctx, arg)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_regexp_escape", &[(DOUBLE, &a_box)]))
         }
         Expr::SymbolDescription(sym) => {
             let s_box = lower_expr(ctx, sym)?;
@@ -503,9 +522,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let h = blk.call(I64, "js_text_encoder_new", &[]);
             Ok(nanbox_pointer_inline(blk, &h))
         }
-        Expr::TextDecoderNew => {
+        Expr::TextDecoderNew {
+            label,
+            fatal,
+            ignore_bom,
+        } => {
+            // new TextDecoder(label?, { fatal?, ignoreBOM? }) — the runtime
+            // validates the label, stores per-instance state, and returns a
+            // small-int handle. NaN-box with POINTER_TAG so the handle reads
+            // back through `decoder_handle_id` for decode/property access.
+            let label = lower_expr(ctx, label)?;
+            let fatal = lower_expr(ctx, fatal)?;
+            let ignore_bom = lower_expr(ctx, ignore_bom)?;
             let blk = ctx.block();
-            let h = blk.call(I64, "js_text_decoder_new", &[]);
+            let h = blk.call(
+                I64,
+                "js_text_decoder_new",
+                &[(DOUBLE, &label), (DOUBLE, &fatal), (DOUBLE, &ignore_bom)],
+            );
             Ok(nanbox_pointer_inline(blk, &h))
         }
         Expr::TextEncoderEncode(o) => {
@@ -531,15 +565,37 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(nanbox_pointer_inline(blk, &obj_ptr))
         }
-        Expr::TextDecoderDecode(o) => {
-            // decoder.decode(bufOrArr) — runtime returns an i64 string
-            // pointer. Handles both ArrayHeader-backed values from
-            // `encoder.encode(...)` and BufferHeader values from
-            // `new Uint8Array([...])`. NaN-box with STRING_TAG.
-            let v = lower_expr(ctx, o)?;
+        Expr::TextDecoderDecode { decoder, input } => {
+            // decoder.decode(bufOrArr) — runtime reads the decoder handle's
+            // encoding/fatal state and decodes `input` (BufferHeader-backed
+            // value from `encoder.encode(...)` or `new Uint8Array([...])`).
+            // NaN-box the result with STRING_TAG.
+            let dec = lower_expr(ctx, decoder)?;
+            let v = lower_expr(ctx, input)?;
             let blk = ctx.block();
-            let str_ptr = blk.call(I64, "js_text_decoder_decode_llvm", &[(DOUBLE, &v)]);
+            let str_ptr = blk.call(
+                I64,
+                "js_text_decoder_decode_llvm",
+                &[(DOUBLE, &dec), (DOUBLE, &v)],
+            );
             Ok(nanbox_string_inline(blk, &str_ptr))
+        }
+        Expr::TextDecoderEncoding(d) => {
+            let dec = lower_expr(ctx, d)?;
+            let blk = ctx.block();
+            let str_ptr = blk.call(I64, "js_text_decoder_encoding", &[(DOUBLE, &dec)]);
+            Ok(nanbox_string_inline(blk, &str_ptr))
+        }
+        Expr::TextDecoderFatal(d) => {
+            let dec = lower_expr(ctx, d)?;
+            let blk = ctx.block();
+            // Runtime returns a NaN-boxed boolean (DOUBLE) directly.
+            Ok(blk.call(DOUBLE, "js_text_decoder_fatal", &[(DOUBLE, &dec)]))
+        }
+        Expr::TextDecoderIgnoreBom(d) => {
+            let dec = lower_expr(ctx, d)?;
+            let blk = ctx.block();
+            Ok(blk.call(DOUBLE, "js_text_decoder_ignore_bom", &[(DOUBLE, &dec)]))
         }
         Expr::OsArch => {
             let blk = ctx.block();

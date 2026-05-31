@@ -222,6 +222,7 @@ fn collect_used_new_fields_in_expr(
         | Expr::Await(operand)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
+        | Expr::ObjectCoerce(operand)
         | Expr::BooleanCoerce(operand)
         | Expr::NumberCoerce(operand)
         | Expr::IsFinite(operand)
@@ -240,12 +241,16 @@ fn collect_used_new_fields_in_expr(
         | Expr::MathCeil(operand)
         | Expr::MathRound(operand)
         | Expr::MathAbs(operand)
+        | Expr::MathF16round(operand)
         | Expr::MathMinSpread(operand)
         | Expr::MathMaxSpread(operand)
         | Expr::ArrayFrom(operand)
+        | Expr::IteratorFrom(operand)
         | Expr::Uint8ArrayFrom(operand)
         | Expr::JsonParse(operand)
         | Expr::JsonStringify(operand)
+        | Expr::JsonRawJson(operand)
+        | Expr::JsonIsRawJson(operand)
         | Expr::IteratorToArray(operand)
         | Expr::GetIterator(operand)
         | Expr::ForOfToArray(operand)
@@ -453,11 +458,17 @@ fn collect_used_new_fields_in_expr(
                 collect_used_new_fields_in_expr(end, non_escaping_news, used);
             }
         }
-        Expr::ArrayIncludes { array, value } | Expr::ArrayIndexOf { array, value } => {
-            collect_used_new_fields_in_expr(array, non_escaping_news, used);
-            collect_used_new_fields_in_expr(value, non_escaping_news, used);
+        Expr::ArrayIncludes {
+            array,
+            value,
+            from_index,
         }
-        Expr::ArrayLastIndexOf {
+        | Expr::ArrayIndexOf {
+            array,
+            value,
+            from_index,
+        }
+        | Expr::ArrayLastIndexOf {
             array,
             value,
             from_index,
@@ -516,8 +527,22 @@ fn collect_used_new_fields_in_expr(
             collect_used_new_fields_in_expr(registry, non_escaping_news, used);
             collect_used_new_fields_in_expr(token, non_escaping_news, used);
         }
-        Expr::ArrayFromMapped { iterable, map_fn }
-        | Expr::ObjectGroupBy {
+        Expr::ArrayFromMapped {
+            iterable,
+            map_fn,
+            this_arg,
+        } => {
+            collect_used_new_fields_in_expr(iterable, non_escaping_news, used);
+            collect_used_new_fields_in_expr(map_fn, non_escaping_news, used);
+            if let Some(t) = this_arg {
+                collect_used_new_fields_in_expr(t, non_escaping_news, used);
+            }
+        }
+        Expr::ObjectGroupBy {
+            items: iterable,
+            key_fn: map_fn,
+        }
+        | Expr::MapGroupBy {
             items: iterable,
             key_fn: map_fn,
         } => {

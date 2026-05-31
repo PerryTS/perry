@@ -100,6 +100,14 @@ pub(super) fn rejected_promise(reason: f64) -> f64 {
     box_pointer(crate::promise::js_promise_rejected(reason) as *const u8)
 }
 
+pub(super) fn reduce_missing_initial_error() -> f64 {
+    let message = b"Reduce of an empty stream requires an initial value";
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, "ERR_MISSING_ARGS");
+    let err = crate::error::js_typeerror_new(msg);
+    box_pointer(err as *const u8)
+}
+
 #[inline]
 pub(super) fn hidden_signal_key() -> *mut crate::string::StringHeader {
     hidden_key(READABLE_SIGNAL_KEY)
@@ -234,66 +242,6 @@ pub(super) fn drain_iter_helper_microtasks() {
 pub(super) fn prepare_readable_for_iteration(stream: f64) {
     invoke_read_once(stream);
     drain_iter_helper_microtasks();
-}
-
-pub(super) fn extend_compose_output_chunks(
-    mut out: *mut crate::array::ArrayHeader,
-    stage: f64,
-    chunks: f64,
-) -> *mut crate::array::ArrayHeader {
-    if !readable_object_mode(stage) {
-        let mut bytes = Vec::new();
-        append_chunk_bytes(chunks, &mut bytes, 0);
-        if !bytes.is_empty() {
-            out = crate::array::js_array_push_f64(out, buffer_value_from_bytes(&bytes));
-        }
-        return out;
-    }
-
-    if is_array_like_value(chunks) {
-        extend_with_array(out, raw_ptr_from_value(chunks) as *const _)
-    } else {
-        crate::array::js_array_push_f64(out, chunks)
-    }
-}
-
-pub(super) fn compose_readable_snapshot(source: f64, stage: f64) -> Option<f64> {
-    prepare_readable_for_iteration(source);
-    let arr = readable_chunks_array(source);
-    if arr.is_null() || !is_transform_stream(stage) {
-        return None;
-    }
-
-    let mut out = crate::array::js_array_alloc(0);
-    if has_truthy_hidden(stage, hidden_transform_passthrough_key()) {
-        out = extend_compose_output_chunks(out, stage, box_pointer(arr as *const u8));
-    } else {
-        transform_hidden_callback(stage)?;
-        clear_readable_buffer(stage);
-        let len = crate::array::js_array_length(arr);
-        for i in 0..len {
-            let chunk = crate::array::js_array_get_f64(arr, i);
-            let _ = write_writable_chunk(
-                stage,
-                chunk,
-                f64::from_bits(TAG_UNDEFINED),
-                f64::from_bits(TAG_UNDEFINED),
-            );
-            if let Some(err) = readable_hidden_error(stage) {
-                let result = readable_from_chunks(out);
-                propagate_stream_state(source, f64::from_bits(TAG_UNDEFINED), result);
-                set_hidden_value(result, hidden_error_key(), err);
-                return Some(result);
-            }
-        }
-        if let Some(chunks) = readable_hidden_chunks(stage) {
-            out = extend_compose_output_chunks(out, stage, chunks);
-        }
-    }
-
-    let result = readable_from_chunks(out);
-    propagate_stream_state(source, f64::from_bits(TAG_UNDEFINED), result);
-    Some(result)
 }
 
 /// Resolve a callback result that may be a Promise (an async mapper /
@@ -481,9 +429,15 @@ pub(super) extern "C" fn ns_iter_reduce(
     } else if len > 0 {
         (crate::array::js_array_get_f64(arr, 0), 1)
     } else {
-        // Node throws "Reduce of empty stream with no initial value";
-        // the stub resolves undefined rather than crash.
-        return settle_consuming(this, opts, f64::from_bits(TAG_UNDEFINED));
+        if readable_hidden_error(this).is_some() {
+            return settle_consuming(this, opts, f64::from_bits(TAG_UNDEFINED));
+        }
+        if let Some(sig) = effective_signal(this, opts) {
+            if signal_is_aborted(sig) {
+                return rejected_promise(abort_error());
+            }
+        }
+        return rejected_promise(reduce_missing_initial_error());
     };
     if readable_hidden_error(this).is_none() && !cb.is_null() {
         for i in start..len {
@@ -670,14 +624,19 @@ pub(super) extern "C" fn ns_iter_flat_map(
 ///
 /// `None` signals "not iterable" so the caller can fall back to the
 /// "append as a single chunk" path that pre-#1572 was the only branch.
-pub(super) fn flatten_async_iterable_value(value: f64) -> Option<*mut crate::array::ArrayHeader> {
+pub(super) fn flatten_async_iterable_with_source(
+    value: f64,
+) -> Option<(*mut crate::array::ArrayHeader, Option<f64>)> {
     use crate::array::{
         async_iterator_to_array_for_flat_map, call_symbol_async_iterator_for_flat_map,
         has_iterator_next,
     };
     use crate::symbol::js_get_iterator;
     if let Some(async_iter) = call_symbol_async_iterator_for_flat_map(value) {
-        return Some(async_iterator_to_array_for_flat_map(async_iter));
+        return Some((
+            async_iterator_to_array_for_flat_map(async_iter),
+            Some(async_iter),
+        ));
     }
     if has_iterator_next(value) {
         // Async generator step values may be already-settled promises that
@@ -685,13 +644,20 @@ pub(super) fn flatten_async_iterable_value(value: f64) -> Option<*mut crate::arr
         // helper for a bare-iterator receiver too — `js_async_iterator_to_array`
         // is a strict superset of `js_iterator_to_array` (it transparently
         // returns non-promise step results unchanged).
-        return Some(async_iterator_to_array_for_flat_map(value));
+        return Some((async_iterator_to_array_for_flat_map(value), Some(value)));
     }
     let sync_iter = js_get_iterator(value);
     if sync_iter.to_bits() != value.to_bits() {
-        return Some(async_iterator_to_array_for_flat_map(sync_iter));
+        return Some((
+            async_iterator_to_array_for_flat_map(sync_iter),
+            Some(sync_iter),
+        ));
     }
     None
+}
+
+pub(super) fn flatten_async_iterable_value(value: f64) -> Option<*mut crate::array::ArrayHeader> {
+    flatten_async_iterable_with_source(value).map(|(chunks, _)| chunks)
 }
 
 pub(super) extern "C" fn ns_iter_take(closure: *const ClosureHeader, count: f64) -> f64 {

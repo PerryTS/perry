@@ -2,11 +2,12 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1528 entries across 84 modules.
+Total: 2155 entries across 99 modules.
 
 ## Modules
 
 - [`@perryts/pdf`](#-perryts-pdf)
+- [`__disposable__`](#--disposable--)
 - [`argon2`](#argon2)
 - [`assert`](#assert)
 - [`assert/strict`](#assert-strict)
@@ -21,11 +22,15 @@ Total: 1528 entries across 84 modules.
 - [`cluster`](#cluster)
 - [`commander`](#commander)
 - [`console`](#console)
+- [`constants`](#constants)
 - [`cron`](#cron)
 - [`crypto`](#crypto)
 - [`date-fns`](#date-fns)
 - [`dayjs`](#dayjs)
 - [`decimal.js`](#decimal-js)
+- [`dgram`](#dgram)
+- [`dns`](#dns)
+- [`dns/promises`](#dns-promises)
 - [`dotenv`](#dotenv)
 - [`ethers`](#ethers)
 - [`events`](#events)
@@ -33,6 +38,7 @@ Total: 1528 entries across 84 modules.
 - [`fastify`](#fastify)
 - [`fetch`](#fetch)
 - [`fs`](#fs)
+- [`fs/promises`](#fs-promises)
 - [`http`](#http)
 - [`http2`](#http2)
 - [`https`](#https)
@@ -41,6 +47,7 @@ Total: 1528 entries across 84 modules.
 - [`jsonwebtoken`](#jsonwebtoken)
 - [`lodash`](#lodash)
 - [`lru-cache`](#lru-cache)
+- [`module`](#module)
 - [`moment`](#moment)
 - [`mongodb`](#mongodb)
 - [`mysql2`](#mysql2)
@@ -52,6 +59,8 @@ Total: 1528 entries across 84 modules.
 - [`nodemailer`](#nodemailer)
 - [`os`](#os)
 - [`path`](#path)
+- [`path/posix`](#path-posix)
+- [`path/win32`](#path-win32)
 - [`perf_hooks`](#perf-hooks)
 - [`perry/ads`](#perry-ads)
 - [`perry/audio`](#perry-audio)
@@ -72,13 +81,17 @@ Total: 1528 entries across 84 modules.
 - [`querystring`](#querystring)
 - [`rate-limiter-flexible`](#rate-limiter-flexible)
 - [`readline`](#readline)
+- [`readline/promises`](#readline-promises)
 - [`redis`](#redis)
 - [`sharp`](#sharp)
 - [`slugify`](#slugify)
 - [`stream`](#stream)
+- [`stream/consumers`](#stream-consumers)
 - [`stream/promises`](#stream-promises)
 - [`streams`](#streams)
 - [`string_decoder`](#string-decoder)
+- [`sys`](#sys)
+- [`test`](#test)
 - [`tls`](#tls)
 - [`tty`](#tty)
 - [`tursodb`](#tursodb)
@@ -86,7 +99,9 @@ Total: 1528 entries across 84 modules.
 - [`util`](#util)
 - [`util/types`](#util-types)
 - [`uuid`](#uuid)
+- [`v8`](#v8)
 - [`validator`](#validator)
+- [`wasi`](#wasi)
 - [`worker_threads`](#worker-threads)
 - [`ws`](#ws)
 - [`zlib`](#zlib)
@@ -102,6 +117,18 @@ Total: 1528 entries across 84 modules.
 - `pdfAddText` — module
 - `pdfNewPage` — module
 - `pdfSave` — module
+
+## `__disposable__`
+
+### Methods
+
+- `adopt` — instance
+- `defer` — instance
+- `dispose` — instance
+- `disposeAsync` — instance
+- `disposed` — instance
+- `move` — instance
+- `use` — instance
 
 ## `argon2`
 
@@ -168,8 +195,13 @@ Total: 1528 entries across 84 modules.
 - `ok` — module
 - `partialDeepStrictEqual` — module
 - `rejects` — module
+- `strict` — module
 - `strictEqual` — module
 - `throws` — module
+
+### Properties
+
+- `strict`
 
 ## `async_hooks`
 
@@ -261,6 +293,8 @@ Total: 1528 entries across 84 modules.
 - `concat` — module
 - `copyBytesFrom` — module
 - `from` — module
+- `fromBase64` — module
+- `fromHex` — module
 - `isAscii` — module
 - `isBuffer` — module
 - `isEncoding` — module
@@ -386,6 +420,209 @@ Total: 1528 entries across 84 modules.
 - `trace` — module
 - `warn` — module
 
+## `constants`
+
+### Properties
+
+- `COPYFILE_EXCL`
+- `COPYFILE_FICLONE`
+- `COPYFILE_FICLONE_FORCE`
+- `DH_CHECK_P_NOT_PRIME`
+- `DH_CHECK_P_NOT_SAFE_PRIME`
+- `DH_NOT_SUITABLE_GENERATOR`
+- `DH_UNABLE_TO_CHECK_GENERATOR`
+- `E2BIG`
+- `EACCES`
+- `EADDRINUSE`
+- `EADDRNOTAVAIL`
+- `EAFNOSUPPORT`
+- `EAGAIN`
+- `EALREADY`
+- `EBADF`
+- `EBADMSG`
+- `EBUSY`
+- `ECANCELED`
+- `ECHILD`
+- `ECONNABORTED`
+- `ECONNREFUSED`
+- `ECONNRESET`
+- `EDEADLK`
+- `EDESTADDRREQ`
+- `EDOM`
+- `EDQUOT`
+- `EEXIST`
+- `EFAULT`
+- `EFBIG`
+- `EHOSTUNREACH`
+- `EIDRM`
+- `EILSEQ`
+- `EINPROGRESS`
+- `EINTR`
+- `EINVAL`
+- `EIO`
+- `EISCONN`
+- `EISDIR`
+- `ELOOP`
+- `EMFILE`
+- `EMLINK`
+- `EMSGSIZE`
+- `EMULTIHOP`
+- `ENAMETOOLONG`
+- `ENETDOWN`
+- `ENETRESET`
+- `ENETUNREACH`
+- `ENFILE`
+- `ENGINE_METHOD_ALL`
+- `ENGINE_METHOD_CIPHERS`
+- `ENGINE_METHOD_DH`
+- `ENGINE_METHOD_DIGESTS`
+- `ENGINE_METHOD_DSA`
+- `ENGINE_METHOD_EC`
+- `ENGINE_METHOD_NONE`
+- `ENGINE_METHOD_PKEY_ASN1_METHS`
+- `ENGINE_METHOD_PKEY_METHS`
+- `ENGINE_METHOD_RAND`
+- `ENGINE_METHOD_RSA`
+- `ENOBUFS`
+- `ENODATA`
+- `ENODEV`
+- `ENOENT`
+- `ENOEXEC`
+- `ENOLCK`
+- `ENOLINK`
+- `ENOMEM`
+- `ENOMSG`
+- `ENOPROTOOPT`
+- `ENOSPC`
+- `ENOSR`
+- `ENOSTR`
+- `ENOSYS`
+- `ENOTCONN`
+- `ENOTDIR`
+- `ENOTEMPTY`
+- `ENOTSOCK`
+- `ENOTSUP`
+- `ENOTTY`
+- `ENXIO`
+- `EOPNOTSUPP`
+- `EOVERFLOW`
+- `EPERM`
+- `EPIPE`
+- `EPROTO`
+- `EPROTONOSUPPORT`
+- `EPROTOTYPE`
+- `ERANGE`
+- `EROFS`
+- `ESPIPE`
+- `ESRCH`
+- `ESTALE`
+- `ETIME`
+- `ETIMEDOUT`
+- `ETXTBSY`
+- `EWOULDBLOCK`
+- `EXDEV`
+- `F_OK`
+- `OPENSSL_VERSION_NUMBER`
+- `O_APPEND`
+- `O_CREAT`
+- `O_EXCL`
+- `O_NOFOLLOW`
+- `O_RDONLY`
+- `O_RDWR`
+- `O_TRUNC`
+- `O_WRONLY`
+- `POINT_CONVERSION_COMPRESSED`
+- `POINT_CONVERSION_HYBRID`
+- `POINT_CONVERSION_UNCOMPRESSED`
+- `PRIORITY_ABOVE_NORMAL`
+- `PRIORITY_BELOW_NORMAL`
+- `PRIORITY_HIGH`
+- `PRIORITY_HIGHEST`
+- `PRIORITY_LOW`
+- `PRIORITY_NORMAL`
+- `RSA_NO_PADDING`
+- `RSA_PKCS1_OAEP_PADDING`
+- `RSA_PKCS1_PADDING`
+- `RSA_PKCS1_PSS_PADDING`
+- `RSA_PSS_SALTLEN_AUTO`
+- `RSA_PSS_SALTLEN_DIGEST`
+- `RSA_PSS_SALTLEN_MAX_SIGN`
+- `RSA_X931_PADDING`
+- `RTLD_DEEPBIND`
+- `RTLD_GLOBAL`
+- `RTLD_LAZY`
+- `RTLD_LOCAL`
+- `RTLD_NOW`
+- `R_OK`
+- `SIGABRT`
+- `SIGALRM`
+- `SIGBUS`
+- `SIGCHLD`
+- `SIGCONT`
+- `SIGFPE`
+- `SIGHUP`
+- `SIGILL`
+- `SIGINT`
+- `SIGIO`
+- `SIGIOT`
+- `SIGKILL`
+- `SIGPIPE`
+- `SIGPROF`
+- `SIGQUIT`
+- `SIGSEGV`
+- `SIGSTOP`
+- `SIGSYS`
+- `SIGTERM`
+- `SIGTRAP`
+- `SIGTSTP`
+- `SIGTTIN`
+- `SIGTTOU`
+- `SIGURG`
+- `SIGUSR1`
+- `SIGUSR2`
+- `SIGVTALRM`
+- `SIGWINCH`
+- `SIGXCPU`
+- `SIGXFSZ`
+- `SSL_OP_ALL`
+- `SSL_OP_ALLOW_NO_DHE_KEX`
+- `SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION`
+- `SSL_OP_CIPHER_SERVER_PREFERENCE`
+- `SSL_OP_CISCO_ANYCONNECT`
+- `SSL_OP_COOKIE_EXCHANGE`
+- `SSL_OP_CRYPTOPRO_TLSEXT_BUG`
+- `SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS`
+- `SSL_OP_LEGACY_SERVER_CONNECT`
+- `SSL_OP_NO_COMPRESSION`
+- `SSL_OP_NO_ENCRYPT_THEN_MAC`
+- `SSL_OP_NO_QUERY_MTU`
+- `SSL_OP_NO_RENEGOTIATION`
+- `SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION`
+- `SSL_OP_NO_SSLv2`
+- `SSL_OP_NO_SSLv3`
+- `SSL_OP_NO_TICKET`
+- `SSL_OP_NO_TLSv1`
+- `SSL_OP_NO_TLSv1_1`
+- `SSL_OP_NO_TLSv1_2`
+- `SSL_OP_NO_TLSv1_3`
+- `SSL_OP_PRIORITIZE_CHACHA`
+- `SSL_OP_TLS_ROLLBACK_BUG`
+- `S_IRGRP`
+- `S_IROTH`
+- `S_IRUSR`
+- `S_IWGRP`
+- `S_IWOTH`
+- `S_IWUSR`
+- `S_IXGRP`
+- `S_IXOTH`
+- `S_IXUSR`
+- `TLS1_1_VERSION`
+- `TLS1_2_VERSION`
+- `TLS1_3_VERSION`
+- `TLS1_VERSION`
+- `W_OK`
+- `X_OK`
+
 ## `cron`
 
 ### Methods
@@ -439,10 +676,12 @@ Total: 1528 entries across 84 modules.
 - `publicDecrypt` — module
 - `publicEncrypt` — module
 - `randomBytes` — module
+- `randomFill` — module
 - `randomFillSync` — module
 - `randomInt` — module
 - `randomInt` — module
 - `randomUUID` — module
+- `randomUUIDv7` — module
 - `scryptSync` — module
 - `sha256` — module
 - `sign` — module
@@ -530,6 +769,189 @@ Total: 1528 entries across 84 modules.
 - `toNumber` — instance
 - `toString` — instance
 - `valueOf` — instance
+
+## `dgram`
+
+### Classes
+
+- `Socket`
+
+### Methods
+
+- `Socket` — module
+- `addMembership` — instance *(class: `Socket`)*
+- `address` — instance *(class: `Socket`)*
+- `bind` — instance *(class: `Socket`)*
+- `close` — instance *(class: `Socket`)*
+- `connect` — instance *(class: `Socket`)*
+- `createSocket` — module
+- `disconnect` — instance *(class: `Socket`)*
+- `dropMembership` — instance *(class: `Socket`)*
+- `getRecvBufferSize` — instance *(class: `Socket`)*
+- `getSendBufferSize` — instance *(class: `Socket`)*
+- `ref` — instance *(class: `Socket`)*
+- `send` — instance *(class: `Socket`)*
+- `setBroadcast` — instance *(class: `Socket`)*
+- `setMulticastInterface` — instance *(class: `Socket`)*
+- `setMulticastLoopback` — instance *(class: `Socket`)*
+- `setMulticastTTL` — instance *(class: `Socket`)*
+- `setRecvBufferSize` — instance *(class: `Socket`)*
+- `setSendBufferSize` — instance *(class: `Socket`)*
+- `setTTL` — instance *(class: `Socket`)*
+- `unref` — instance *(class: `Socket`)*
+
+## `dns`
+
+### Classes
+
+- `Resolver`
+
+### Methods
+
+- `Resolver` — module
+- `cancel` — instance *(class: `Resolver`)*
+- `getDefaultResultOrder` — module
+- `getServers` — module
+- `getServers` — instance *(class: `Resolver`)*
+- `lookup` — module
+- `lookupService` — module
+- `resolve` — module
+- `resolve4` — module
+- `resolve6` — module
+- `resolveAny` — module
+- `resolveCaa` — module
+- `resolveCname` — module
+- `resolveMx` — module
+- `resolveNaptr` — module
+- `resolveNs` — module
+- `resolvePtr` — module
+- `resolveSoa` — module
+- `resolveSrv` — module
+- `resolveTlsa` — module
+- `resolveTxt` — module
+- `reverse` — module
+- `setDefaultResultOrder` — module
+- `setLocalAddress` — instance *(class: `Resolver`)*
+- `setServers` — module
+- `setServers` — instance *(class: `Resolver`)*
+
+### Properties
+
+- `ADDRCONFIG`
+- `ADDRCONFIG`
+- `ADDRGETNETWORKPARAMS`
+- `ADDRGETNETWORKPARAMS`
+- `ALL`
+- `ALL`
+- `BADFAMILY`
+- `BADFAMILY`
+- `BADFLAGS`
+- `BADFLAGS`
+- `BADHINTS`
+- `BADHINTS`
+- `BADNAME`
+- `BADNAME`
+- `BADQUERY`
+- `BADQUERY`
+- `BADRESP`
+- `BADRESP`
+- `BADSTR`
+- `BADSTR`
+- `CANCELLED`
+- `CANCELLED`
+- `CONNREFUSED`
+- `CONNREFUSED`
+- `DESTRUCTION`
+- `DESTRUCTION`
+- `EOF`
+- `EOF`
+- `FILE`
+- `FILE`
+- `FORMERR`
+- `FORMERR`
+- `LOADIPHLPAPI`
+- `LOADIPHLPAPI`
+- `NODATA`
+- `NODATA`
+- `NOMEM`
+- `NOMEM`
+- `NONAME`
+- `NONAME`
+- `NOTFOUND`
+- `NOTFOUND`
+- `NOTIMP`
+- `NOTIMP`
+- `NOTINITIALIZED`
+- `NOTINITIALIZED`
+- `REFUSED`
+- `REFUSED`
+- `SERVFAIL`
+- `SERVFAIL`
+- `TIMEOUT`
+- `TIMEOUT`
+- `V4MAPPED`
+- `V4MAPPED`
+- `promises`
+
+## `dns/promises`
+
+### Classes
+
+- `Resolver`
+
+### Methods
+
+- `Resolver` — module
+- `cancel` — instance *(class: `Resolver`)*
+- `getDefaultResultOrder` — module
+- `getServers` — module
+- `getServers` — instance *(class: `Resolver`)*
+- `lookup` — module
+- `lookupService` — module
+- `resolve` — module
+- `resolve4` — module
+- `resolve6` — module
+- `resolveAny` — module
+- `resolveCaa` — module
+- `resolveCname` — module
+- `resolveMx` — module
+- `resolveNaptr` — module
+- `resolveNs` — module
+- `resolvePtr` — module
+- `resolveSoa` — module
+- `resolveSrv` — module
+- `resolveTlsa` — module
+- `resolveTxt` — module
+- `reverse` — module
+- `setDefaultResultOrder` — module
+- `setServers` — module
+
+### Properties
+
+- `ADDRGETNETWORKPARAMS`
+- `BADFAMILY`
+- `BADFLAGS`
+- `BADHINTS`
+- `BADNAME`
+- `BADQUERY`
+- `BADRESP`
+- `BADSTR`
+- `CANCELLED`
+- `CONNREFUSED`
+- `DESTRUCTION`
+- `EOF`
+- `FILE`
+- `FORMERR`
+- `LOADIPHLPAPI`
+- `NODATA`
+- `NOMEM`
+- `NONAME`
+- `NOTFOUND`
+- `NOTIMP`
+- `NOTINITIALIZED`
+- `REFUSED`
+- `SERVFAIL`
+- `TIMEOUT`
 
 ## `dotenv`
 
@@ -747,6 +1169,42 @@ Total: 1528 entries across 84 modules.
 - `constants`
 - `promises`
 
+## `fs/promises`
+
+### Methods
+
+- `access` — module
+- `appendFile` — module
+- `chmod` — module
+- `chown` — module
+- `copyFile` — module
+- `cp` — module
+- `glob` — module
+- `lchmod` — module
+- `lchown` — module
+- `link` — module
+- `lstat` — module
+- `lutimes` — module
+- `mkdir` — module
+- `mkdtemp` — module
+- `open` — module
+- `opendir` — module
+- `readFile` — module
+- `readdir` — module
+- `readlink` — module
+- `realpath` — module
+- `rename` — module
+- `rm` — module
+- `rmdir` — module
+- `stat` — module
+- `statfs` — module
+- `symlink` — module
+- `truncate` — module
+- `unlink` — module
+- `utimes` — module
+- `watch` — module
+- `writeFile` — module
+
 ## `http`
 
 ### Classes
@@ -768,12 +1226,14 @@ Total: 1528 entries across 84 modules.
 - `__get_complete` — instance *(class: `IncomingMessage`)*
 - `__get_createConnection` — instance *(class: `Agent`)*
 - `__get_createSocket` — instance *(class: `Agent`)*
+- `__get_defaultPort` — instance *(class: `Agent`)*
 - `__get_destroyed` — instance *(class: `Agent`)*
 - `__get_destroyed` — instance *(class: `IncomingMessage`)*
 - `__get_freeSockets` — instance *(class: `Agent`)*
 - `__get_headers` — instance *(class: `IncomingMessage`)*
 - `__get_headersSent` — instance *(class: `ServerResponse`)*
 - `__get_headersTimeout` — instance *(class: `HttpServer`)*
+- `__get_host` — instance *(class: `ClientRequest`)*
 - `__get_httpVersion` — instance *(class: `IncomingMessage`)*
 - `__get_keepAlive` — instance *(class: `Agent`)*
 - `__get_keepAliveMsecs` — instance *(class: `Agent`)*
@@ -783,8 +1243,11 @@ Total: 1528 entries across 84 modules.
 - `__get_maxRequestsPerSocket` — instance *(class: `HttpServer`)*
 - `__get_maxSockets` — instance *(class: `Agent`)*
 - `__get_maxTotalSockets` — instance *(class: `Agent`)*
+- `__get_method` — instance *(class: `ClientRequest`)*
 - `__get_method` — instance *(class: `IncomingMessage`)*
+- `__get_path` — instance *(class: `ClientRequest`)*
 - `__get_protocol` — instance *(class: `Agent`)*
+- `__get_protocol` — instance *(class: `ClientRequest`)*
 - `__get_requestTimeout` — instance *(class: `HttpServer`)*
 - `__get_requests` — instance *(class: `Agent`)*
 - `__get_sockets` — instance *(class: `Agent`)*
@@ -823,6 +1286,7 @@ Total: 1528 entries across 84 modules.
 - `closeIdleConnections` — instance *(class: `HttpServer`)*
 - `createServer` — module
 - `createServer` — module
+- `defaultPort` — instance *(class: `Agent`)*
 - `destroy` — instance *(class: `Agent`)*
 - `destroy` — instance *(class: `IncomingMessage`)*
 - `destroyed` — instance *(class: `Agent`)*
@@ -842,6 +1306,7 @@ Total: 1528 entries across 84 modules.
 - `keepAliveTimeout` — instance *(class: `HttpServer`)*
 - `keepSocketAlive` — instance *(class: `Agent`)*
 - `listen` — instance *(class: `HttpServer`)*
+- `listenerCount` — instance *(class: `ClientRequest`)*
 - `maxFreeSockets` — instance *(class: `Agent`)*
 - `maxHeadersCount` — instance *(class: `HttpServer`)*
 - `maxRequestsPerSocket` — instance *(class: `HttpServer`)*
@@ -893,6 +1358,9 @@ Total: 1528 entries across 84 modules.
 - `address` — instance *(class: `Http2SecureServer`)*
 - `close` — instance *(class: `Http2SecureServer`)*
 - `createSecureServer` — module
+- `getDefaultSettings` — module
+- `getPackedSettings` — module
+- `getUnpackedSettings` — module
 - `listen` — instance *(class: `Http2SecureServer`)*
 - `on` — instance *(class: `Http2SecureServer`)*
 
@@ -915,14 +1383,40 @@ Total: 1528 entries across 84 modules.
 
 - `Agent` — module
 - `Server` — module
+- `__get_headersTimeout` — instance *(class: `HttpsServer`)*
+- `__get_keepAliveTimeout` — instance *(class: `HttpsServer`)*
+- `__get_maxHeadersCount` — instance *(class: `HttpsServer`)*
+- `__get_maxRequestsPerSocket` — instance *(class: `HttpsServer`)*
+- `__get_requestTimeout` — instance *(class: `HttpsServer`)*
+- `__get_timeout` — instance *(class: `HttpsServer`)*
+- `__set_headersTimeout` — instance *(class: `HttpsServer`)*
+- `__set_keepAliveTimeout` — instance *(class: `HttpsServer`)*
+- `__set_maxHeadersCount` — instance *(class: `HttpsServer`)*
+- `__set_maxRequestsPerSocket` — instance *(class: `HttpsServer`)*
+- `__set_requestTimeout` — instance *(class: `HttpsServer`)*
+- `__set_timeout` — instance *(class: `HttpsServer`)*
+- `addListener` — instance *(class: `HttpsServer`)*
 - `address` — instance *(class: `HttpsServer`)*
 - `close` — instance *(class: `HttpsServer`)*
+- `closeAllConnections` — instance *(class: `HttpsServer`)*
+- `closeIdleConnections` — instance *(class: `HttpsServer`)*
 - `createServer` — module
 - `createServer` — module
 - `get` — module
+- `headersTimeout` — instance *(class: `HttpsServer`)*
+- `keepAliveTimeout` — instance *(class: `HttpsServer`)*
 - `listen` — instance *(class: `HttpsServer`)*
+- `maxHeadersCount` — instance *(class: `HttpsServer`)*
+- `maxRequestsPerSocket` — instance *(class: `HttpsServer`)*
 - `on` — instance *(class: `HttpsServer`)*
 - `request` — module
+- `requestTimeout` — instance *(class: `HttpsServer`)*
+- `setTimeout` — instance *(class: `HttpsServer`)*
+- `timeout` — instance *(class: `HttpsServer`)*
+
+### Properties
+
+- `globalAgent`
 
 ## `ioredis`
 
@@ -1013,6 +1507,35 @@ Total: 1528 entries across 84 modules.
 - `has` — instance
 - `set` — instance
 - `size` — instance
+
+## `module`
+
+### Classes
+
+- `SourceMap`
+
+### Methods
+
+- `SourceMap` — module
+- `createRequire` — module
+- `enableCompileCache` — module
+- `findPackageJSON` — module
+- `findSourceMap` — module
+- `flushCompileCache` — module
+- `getCompileCacheDir` — module
+- `getSourceMapsSupport` — module
+- `isBuiltin` — module
+- `register` — module
+- `registerHooks` — module
+- `runMain` — module
+- `setSourceMapsSupport` — module
+- `stripTypeScriptTypes` — module
+- `syncBuiltinESMExports` — module
+
+### Properties
+
+- `builtinModules`
+- `constants`
 
 ## `moment`
 
@@ -1111,13 +1634,19 @@ Total: 1528 entries across 84 modules.
 - `addListener` — instance *(class: `Server`)*
 - `address` — instance *(class: `Socket`)*
 - `address` — instance *(class: `Server`)*
+- `autoSelectFamilyAttemptedAddresses` — instance *(class: `Socket`)*
+- `bufferSize` — instance *(class: `Socket`)*
+- `bytesRead` — instance *(class: `Socket`)*
+- `bytesWritten` — instance *(class: `Socket`)*
 - `close` — instance *(class: `Server`)*
 - `connect` — module
 - `connect` — instance *(class: `Socket`)*
+- `connecting` — instance *(class: `Socket`)*
 - `cork` — instance *(class: `Socket`)*
 - `createConnection` — module
 - `createServer` — module
 - `destroy` — instance *(class: `Socket`)*
+- `destroyed` — instance *(class: `Socket`)*
 - `end` — instance *(class: `Socket`)*
 - `eventNames` — instance *(class: `Socket`)*
 - `eventNames` — instance *(class: `Server`)*
@@ -1131,15 +1660,23 @@ Total: 1528 entries across 84 modules.
 - `listenerCount` — instance *(class: `Server`)*
 - `listeners` — instance *(class: `Socket`)*
 - `listeners` — instance *(class: `Server`)*
+- `localAddress` — instance *(class: `Socket`)*
+- `localFamily` — instance *(class: `Socket`)*
+- `localPort` — instance *(class: `Socket`)*
 - `off` — instance *(class: `Socket`)*
 - `off` — instance *(class: `Server`)*
 - `on` — instance *(class: `Socket`)*
 - `once` — instance *(class: `Socket`)*
 - `once` — instance *(class: `Server`)*
 - `pause` — instance *(class: `Socket`)*
+- `pending` — instance *(class: `Socket`)*
 - `rawListeners` — instance *(class: `Socket`)*
 - `rawListeners` — instance *(class: `Server`)*
+- `readyState` — instance *(class: `Socket`)*
 - `ref` — instance *(class: `Socket`)*
+- `remoteAddress` — instance *(class: `Socket`)*
+- `remoteFamily` — instance *(class: `Socket`)*
+- `remotePort` — instance *(class: `Socket`)*
 - `removeAllListeners` — instance *(class: `Socket`)*
 - `removeAllListeners` — instance *(class: `Server`)*
 - `removeListener` — instance *(class: `Socket`)*
@@ -1153,6 +1690,7 @@ Total: 1528 entries across 84 modules.
 - `setKeepAlive` — instance *(class: `Socket`)*
 - `setNoDelay` — instance *(class: `Socket`)*
 - `setTimeout` — instance *(class: `Socket`)*
+- `timeout` — instance *(class: `Socket`)*
 - `uncork` — instance *(class: `Socket`)*
 - `unref` — instance *(class: `Socket`)*
 - `upgradeToTLS` — instance *(class: `Socket`)*
@@ -1221,6 +1759,57 @@ Total: 1528 entries across 84 modules.
 
 ### Methods
 
+- `_makeLong` — module
+- `basename` — module
+- `dirname` — module
+- `extname` — module
+- `format` — module
+- `isAbsolute` — module
+- `join` — module
+- `matchesGlob` — module
+- `normalize` — module
+- `parse` — module
+- `relative` — module
+- `resolve` — module
+- `toNamespacedPath` — module
+
+### Properties
+
+- `delimiter`
+- `posix`
+- `sep`
+- `win32`
+
+## `path/posix`
+
+### Methods
+
+- `_makeLong` — module
+- `basename` — module
+- `dirname` — module
+- `extname` — module
+- `format` — module
+- `isAbsolute` — module
+- `join` — module
+- `matchesGlob` — module
+- `normalize` — module
+- `parse` — module
+- `relative` — module
+- `resolve` — module
+- `toNamespacedPath` — module
+
+### Properties
+
+- `delimiter`
+- `posix`
+- `sep`
+- `win32`
+
+## `path/win32`
+
+### Methods
+
+- `_makeLong` — module
 - `basename` — module
 - `dirname` — module
 - `extname` — module
@@ -1712,11 +2301,13 @@ Total: 1528 entries across 84 modules.
 - `removeListener` — module
 - `resourceUsage` — module
 - `setMaxListeners` — module
+- `setSourceMapsEnabled` — module
 - `setegid` — module
 - `seteuid` — module
 - `setgid` — module
 - `setgroups` — module
 - `setuid` — module
+- `sourceMapsEnabled` — module
 - `threadCpuUsage` — module
 - `umask` — module
 - `uptime` — module
@@ -1779,9 +2370,34 @@ Total: 1528 entries across 84 modules.
 
 ### Methods
 
+- `clearLine` — module
+- `clearScreenDown` — module
 - `close` — instance
 - `createInterface` — module
+- `cursorTo` — module
+- `emitKeypressEvents` — module
+- `getCursorPos` — instance
+- `getPrompt` — instance
+- `moveCursor` — module
 - `on` — instance
+- `pause` — instance
+- `prompt` — instance
+- `question` — instance
+- `resume` — instance
+- `setPrompt` — instance
+- `write` — instance
+
+## `readline/promises`
+
+### Classes
+
+- `Interface`
+- `Readline`
+
+### Methods
+
+- `close` — instance
+- `createInterface` — module
 - `question` — instance
 
 ## `redis`
@@ -1907,6 +2523,17 @@ Total: 1528 entries across 84 modules.
 - `promises`
 - `prototype`
 
+## `stream/consumers`
+
+### Methods
+
+- `arrayBuffer` — module
+- `blob` — module
+- `buffer` — module
+- `bytes` — module
+- `json` — module
+- `text` — module
+
 ## `stream/promises`
 
 ### Methods
@@ -1947,6 +2574,69 @@ Total: 1528 entries across 84 modules.
 - `lastNeed`
 - `lastTotal`
 
+## `sys`
+
+### Classes
+
+- `TextDecoder`
+- `TextEncoder`
+
+### Methods
+
+- `aborted` — module
+- `callbackify` — module
+- `convertProcessSignalToExitCode` — module
+- `debug` — module
+- `debuglog` — module
+- `deprecate` — module
+- `diff` — module
+- `format` — module
+- `formatWithOptions` — module
+- `getCallSites` — module
+- `getSystemErrorMap` — module
+- `getSystemErrorMessage` — module
+- `getSystemErrorName` — module
+- `inherits` — module
+- `inspect` — module
+- `isArray` — module
+- `isDeepStrictEqual` — module
+- `parseArgs` — module
+- `parseEnv` — module
+- `promisify` — module
+- `setTraceSigInt` — module
+- `stripVTControlCharacters` — module
+- `styleText` — module
+- `toUSVString` — module
+- `transferableAbortController` — module
+- `transferableAbortSignal` — module
+
+### Properties
+
+- `types`
+
+## `test`
+
+### Methods
+
+- `after` — module
+- `afterEach` — module
+- `before` — module
+- `beforeEach` — module
+- `describe` — module
+- `fn` — module *(class: `mock`)*
+- `it` — module
+- `only` — module
+- `property` — module *(class: `mock`)*
+- `run` — module
+- `skip` — module
+- `suite` — module
+- `todo` — module
+
+### Properties
+
+- `mock`
+- `snapshot`
+
 ## `tls`
 
 ### Methods
@@ -1962,7 +2652,24 @@ Total: 1528 entries across 84 modules.
 
 ### Methods
 
+- `ReadStream` — module
+- `WriteStream` — module
+- `_refreshSize` — instance *(class: `WriteStream`)*
+- `addListener` — instance *(class: `WriteStream`)*
+- `clearLine` — instance *(class: `WriteStream`)*
+- `clearScreenDown` — instance *(class: `WriteStream`)*
+- `cursorTo` — instance *(class: `WriteStream`)*
+- `getColorDepth` — instance *(class: `WriteStream`)*
+- `getWindowSize` — instance *(class: `WriteStream`)*
+- `hasColors` — instance *(class: `WriteStream`)*
 - `isatty` — module
+- `moveCursor` — instance *(class: `WriteStream`)*
+- `off` — instance *(class: `WriteStream`)*
+- `on` — instance *(class: `WriteStream`)*
+- `once` — instance *(class: `WriteStream`)*
+- `removeAllListeners` — instance *(class: `WriteStream`)*
+- `removeListener` — instance *(class: `WriteStream`)*
+- `setRawMode` — instance *(class: `ReadStream`)*
 
 ## `tursodb`
 
@@ -2007,10 +2714,16 @@ Total: 1528 entries across 84 modules.
 
 ### Methods
 
+- `aborted` — module
 - `callbackify` — module
+- `convertProcessSignalToExitCode` — module
+- `debug` — module
+- `debuglog` — module
 - `deprecate` — module
+- `diff` — module
 - `format` — module
 - `formatWithOptions` — module
+- `getCallSites` — module
 - `getSystemErrorMap` — module
 - `getSystemErrorMessage` — module
 - `getSystemErrorName` — module
@@ -2021,7 +2734,12 @@ Total: 1528 entries across 84 modules.
 - `parseArgs` — module
 - `parseEnv` — module
 - `promisify` — module
+- `setTraceSigInt` — module
 - `stripVTControlCharacters` — module
+- `styleText` — module
+- `toUSVString` — module
+- `transferableAbortController` — module
+- `transferableAbortSignal` — module
 
 ### Properties
 
@@ -2073,6 +2791,23 @@ Total: 1528 entries across 84 modules.
 - `v7` — module
 - `validate` — module
 
+## `v8`
+
+### Classes
+
+- `GCProfiler`
+
+### Methods
+
+- `cachedDataVersionTag` — module
+- `deserialize` — module
+- `getHeapCodeStatistics` — module
+- `getHeapSpaceStatistics` — module
+- `getHeapStatistics` — module
+- `serialize` — module
+- `start` — instance *(class: `GCProfiler`)*
+- `stop` — instance *(class: `GCProfiler`)*
+
 ## `validator`
 
 ### Methods
@@ -2083,22 +2818,61 @@ Total: 1528 entries across 84 modules.
 - `isURL` — module
 - `isUUID` — module
 
-## `worker_threads`
+## `wasi`
+
+### Classes
+
+- `WASI`
 
 ### Methods
 
+- `WASI` — module
+- `finalizeBindings` — instance *(class: `WASI`)*
+- `getImportObject` — instance *(class: `WASI`)*
+- `initialize` — instance *(class: `WASI`)*
+- `start` — instance *(class: `WASI`)*
+
+### Properties
+
+- `wasiImport`
+
+## `worker_threads`
+
+### Classes
+
+- `BroadcastChannel`
+- `MessageChannel`
+- `MessagePort`
+- `Worker`
+
+### Methods
+
+- `BroadcastChannel` — module
+- `MessageChannel` — module
 - `getEnvironmentData` — module
 - `getWorkerData` — module
+- `isMarkedAsUntransferable` — module
+- `markAsUncloneable` — module
+- `markAsUntransferable` — module
+- `moveMessagePortToContext` — module
 - `parentPort` — module
 - `postMessage` — instance
+- `postMessageToThread` — module
+- `receiveMessageOnPort` — module
 - `setEnvironmentData` — module
 - `workerData` — module
 
 ### Properties
 
+- `SHARE_ENV`
+- `isInternalThread`
 - `isMainThread`
+- `locks`
+- `parentPort`
 - `resourceLimits`
 - `threadId`
+- `threadName`
+- `workerData`
 
 ## `ws`
 

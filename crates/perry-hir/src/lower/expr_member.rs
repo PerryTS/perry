@@ -187,15 +187,22 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // runtime's `node:dgram`/network stack handles it) —
                     // the literal mirrors what we actually link in.
                     "features" => return Ok(process_features_literal()),
-                    // #1400: process.sourceMapsEnabled — boolean indicating
-                    // whether the runtime's source-map support is on. Perry
-                    // compiles AOT and doesn't ship a source-map resolver,
-                    // so the value is always false. Without this arm the
-                    // bare read returned a 0 sentinel — falsy in a boolean
-                    // context but `typeof` was `"number"`, so libraries
-                    // doing `typeof process.sourceMapsEnabled === "boolean"`
-                    // bailed out (e.g. some Vitest stack-trace formatters).
-                    "sourceMapsEnabled" => return Ok(Expr::Bool(false)),
+                    // #1400 / #3108: process.sourceMapsEnabled — live boolean
+                    // reflecting setSourceMapsEnabled(). Perry compiles AOT
+                    // and ships no source-map resolver, so the flag drives
+                    // nothing observable, but it round-trips through the
+                    // setter (starting `false`) so `typeof ... === "boolean"`
+                    // holds and toggles are observable. Lower to a 0-arg
+                    // native getter that reads the runtime flag.
+                    "sourceMapsEnabled" => {
+                        return Ok(Expr::NativeMethodCall {
+                            module: "process".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: "sourceMapsEnabled".to_string(),
+                            args: Vec::new(),
+                        })
+                    }
                     // #1412: `process.moduleLoadList` is Node's list of
                     // built-in modules already loaded into the
                     // interpreter. Perry AOT-compiles every reachable
@@ -236,15 +243,17 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             ("target_defaults".to_string(), Expr::Object(Vec::new())),
                         ]));
                     }
-                    // #1380: process.allowedNodeEnvironmentFlags — the
-                    // set of NODE_OPTIONS / V8 flags Node will accept
-                    // from the environment. Perry binaries are AOT and
-                    // don't honour NODE_OPTIONS-style runtime flags, so
-                    // the empty Set is the spec-compatible shape.
-                    // Without this, the bare read returned a 0 sentinel
-                    // and `.has(...)` / `.size` / `for...of` iteration
-                    // all exploded.
-                    "allowedNodeEnvironmentFlags" => return Ok(Expr::SetNew),
+                    // #1380 / #2589: process.allowedNodeEnvironmentFlags —
+                    // the Set of NODE_OPTIONS / V8 flags Node accepts from
+                    // the environment. Perry binaries are AOT and don't
+                    // honour NODE_OPTIONS-style runtime flags, but consumers
+                    // feature-detect on this being a real, non-empty `Set`
+                    // (`instanceof Set`, `.size > 0`, `.has("--no-warnings")`,
+                    // iteration), so materialise it with a Node-compatible
+                    // flag list rather than the previously-empty Set.
+                    "allowedNodeEnvironmentFlags" => {
+                        return Ok(process_allowed_node_flags_literal())
+                    }
                     "report" => return Ok(process_report_literal()),
                     // #1346: process.argv0 / execPath / title — Node
                     // documents these as strings (program-invocation
@@ -382,7 +391,16 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         ]));
                     }
                     "features" => return Ok(process_features_literal()),
-                    "sourceMapsEnabled" => return Ok(Expr::Bool(false)),
+                    // #3108: live boolean toggle — see the matching arm above.
+                    "sourceMapsEnabled" => {
+                        return Ok(Expr::NativeMethodCall {
+                            module: "process".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: "sourceMapsEnabled".to_string(),
+                            args: Vec::new(),
+                        })
+                    }
                     "moduleLoadList" => return Ok(Expr::Array(vec![])),
                     "finalization" => {
                         return Ok(Expr::Object(vec![
@@ -397,7 +415,9 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             ("target_defaults".to_string(), Expr::Object(Vec::new())),
                         ]));
                     }
-                    "allowedNodeEnvironmentFlags" => return Ok(Expr::SetNew),
+                    "allowedNodeEnvironmentFlags" => {
+                        return Ok(process_allowed_node_flags_literal())
+                    }
                     "report" => return Ok(process_report_literal()),
                     "argv0" | "execPath" => {
                         return Ok(Expr::IndexGet {
@@ -444,8 +464,9 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     }
 
     // Check if this is Symbol.<well-known> — Symbol.toPrimitive,
-    // Symbol.hasInstance, Symbol.toStringTag, Symbol.iterator,
-    // Symbol.asyncIterator, Symbol.dispose, Symbol.asyncDispose.
+    // Symbol.hasInstance, Symbol.toStringTag, Symbol.match, Symbol.iterator,
+    // Symbol.asyncIterator, Symbol.dispose, Symbol.asyncDispose, and the
+    // remaining standard protocol constants.
     // Lowered to `SymbolFor(String("@@__perry_wk_<name>"))` which the
     // runtime's `js_symbol_for` sniffs via prefix and resolves from
     // the well-known cache (not the registry). Gives each well-known
@@ -459,6 +480,14 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "toPrimitive"
                         | "hasInstance"
                         | "toStringTag"
+                        | "species"
+                        | "match"
+                        | "matchAll"
+                        | "replace"
+                        | "search"
+                        | "split"
+                        | "isConcatSpreadable"
+                        | "unscopables"
                         | "iterator"
                         | "asyncIterator"
                         | "dispose"
@@ -649,6 +678,39 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 };
                 if let Some(v) = val {
                     return Ok(Expr::Number(v));
+                }
+            }
+        }
+    }
+
+    // #2902: `<TypedArray>.BYTES_PER_ELEMENT` static property — fold to the
+    // element byte width. Works for all the global typed-array constructors
+    // (Int8Array..Float64Array, including Float16Array=2). Only fires when the
+    // name is a real global typed-array ctor not shadowed by a local binding.
+    if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+        let obj_name = obj_ident.sym.as_ref();
+        if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+            if prop_ident.sym.as_ref() == "BYTES_PER_ELEMENT" {
+                if let Some(kind) = crate::ir::typed_array_kind_for_name(obj_name) {
+                    let shadowed = ctx.lookup_local(obj_name).is_some()
+                        || ctx.lookup_func(obj_name).is_some()
+                        || ctx.lookup_imported_func(obj_name).is_some()
+                        || ctx.lookup_class(obj_name).is_some();
+                    if !shadowed {
+                        let bytes = match kind {
+                            crate::ir::TYPED_ARRAY_KIND_INT8
+                            | crate::ir::TYPED_ARRAY_KIND_UINT8
+                            | crate::ir::TYPED_ARRAY_KIND_UINT8_CLAMPED => 1.0,
+                            crate::ir::TYPED_ARRAY_KIND_INT16
+                            | crate::ir::TYPED_ARRAY_KIND_UINT16
+                            | crate::ir::TYPED_ARRAY_KIND_FLOAT16 => 2.0,
+                            crate::ir::TYPED_ARRAY_KIND_INT32
+                            | crate::ir::TYPED_ARRAY_KIND_UINT32
+                            | crate::ir::TYPED_ARRAY_KIND_FLOAT32 => 4.0,
+                            _ => 8.0, // Float64 / BigInt64 / BigUint64
+                        };
+                        return Ok(Expr::Number(bytes));
+                    }
                 }
             }
         }
@@ -947,6 +1009,56 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             | "setTimeout"
                     )
                 {
+                    // Bare reads of HTTP/HTTPS server method values
+                    // (`typeof server.listen`) return a callable bound method
+                    // rather than invoking the native method with zero args.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if matches!(module_name.as_str(), "dns" | "dns/promises")
+                    && class_name == "Resolver"
+                    && is_dns_resolver_method_name(&property_name)
+                {
+                    // `dns.Resolver`/`dns/promises.Resolver` instances expose
+                    // callable method-valued fields. A bare method read
+                    // (`typeof r.resolve4`) returns that closure rather than
+                    // invoking the receiver stub as a 0-arg getter.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "dgram"
+                    && class_name == "Socket"
+                    && is_dgram_socket_method_name(&property_name)
+                {
+                    // `dgram.createSocket()` returns a socket-shaped stub
+                    // object whose methods are callable fields. A bare method
+                    // read (`typeof s.close`) should observe that closure
+                    // instead of invoking the receiver stub as a getter.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "net"
+                    && ((class_name == "Socket" && is_net_socket_method_name(&property_name))
+                        || (class_name == "Server" && is_net_server_method_name(&property_name)))
+                {
+                    // `net.Socket` / `net.Server` method reads are callable
+                    // values. The call form still lowers through the native
+                    // method table; only bare reads use property dispatch.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "Headers" && is_headers_method_name(&property_name) {
+                    // A bare Fetch Headers method read (`headers.entries`) is a
+                    // function value, not a zero-arg native call. The call form
+                    // (`headers.entries()`) is handled by expr_call lowering.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         object: Box::new(object_expr),
@@ -1066,6 +1178,26 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         }
     }
 
+    // Inline `new TextDecoder(...).encoding | .fatal | .ignoreBOM`.
+    if let ast::Expr::New(new_expr) = member.obj.as_ref() {
+        if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
+            if class_ident.sym.as_ref() == "TextDecoder" {
+                if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+                    let prop_name = prop_ident.sym.as_ref();
+                    if matches!(prop_name, "encoding" | "fatal" | "ignoreBOM") {
+                        let d =
+                            super::expr_new::lower_text_decoder_new(ctx, new_expr.args.as_deref())?;
+                        return Ok(match prop_name {
+                            "encoding" => Expr::TextDecoderEncoding(Box::new(d)),
+                            "fatal" => Expr::TextDecoderFatal(Box::new(d)),
+                            _ => Expr::TextDecoderIgnoreBom(Box::new(d)),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     // TextEncoder / TextDecoder property access
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
         let obj_name = obj_ident.sym.to_string();
@@ -1079,8 +1211,25 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 .lookup_local_type(&obj_name)
                 .map(|ty| matches!(ty, Type::Named(name) if name == "TextDecoder"))
                 .unwrap_or(false);
-            if (is_text_encoder || is_text_decoder) && prop_name == "encoding" {
+            if is_text_encoder && prop_name == "encoding" {
                 return Ok(Expr::String("utf-8".to_string()));
+            }
+            if is_text_decoder {
+                match prop_name {
+                    "encoding" => {
+                        let d = lower_expr(ctx, &member.obj)?;
+                        return Ok(Expr::TextDecoderEncoding(Box::new(d)));
+                    }
+                    "fatal" => {
+                        let d = lower_expr(ctx, &member.obj)?;
+                        return Ok(Expr::TextDecoderFatal(Box::new(d)));
+                    }
+                    "ignoreBOM" => {
+                        let d = lower_expr(ctx, &member.obj)?;
+                        return Ok(Expr::TextDecoderIgnoreBom(Box::new(d)));
+                    }
+                    _ => {}
+                }
             }
         }
     }
@@ -1228,6 +1377,53 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     // `PropertyGet { GlobalGet(0), <method> }` (for `Math.min.name` /
     // `Promise.race.name`). Local shadowing (`const Math = …`) lowers the
     // receiver to a `LocalGet` instead, so the fold is correctly skipped.
+    // #3143: spec `.length` own-property on built-in constructors. Same
+    // gating as the `.name` fold below — bare `GlobalGet(0)` receiver (no
+    // local shadowing) and a recognized standard constructor name. Built-in
+    // constructors share a no-op closure thunk with no per-name arity, so a
+    // value-read would otherwise return 0 instead of the spec count
+    // (`Array.length === 1`, `Date.length === 7`).
+    if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+        if prop_ident.sym.as_ref() == "length" {
+            // Peel transparent TS/paren wrappers so `(Array as any).length` —
+            // the pervasive Test262 / cast idiom — folds the same as the bare
+            // `Array.length`.
+            let mut recv = member.obj.as_ref();
+            loop {
+                recv = match recv {
+                    ast::Expr::TsAs(x) => x.expr.as_ref(),
+                    ast::Expr::TsNonNull(x) => x.expr.as_ref(),
+                    ast::Expr::TsSatisfies(x) => x.expr.as_ref(),
+                    ast::Expr::TsTypeAssertion(x) => x.expr.as_ref(),
+                    ast::Expr::TsConstAssertion(x) => x.expr.as_ref(),
+                    ast::Expr::Paren(x) => x.expr.as_ref(),
+                    _ => break,
+                };
+            }
+            if let ast::Expr::Ident(obj_ident) = recv {
+                let name = obj_ident.sym.as_ref();
+                // The receiver must resolve to the *global* builtin (not a
+                // local shadow). A bare ident lowers to `GlobalGet(0)` (after
+                // the reroute-undo above); wrapped in a cast/paren it keeps the
+                // #973 value-form `PropertyGet { GlobalGet(0), <name> }`. A
+                // shadowing local would lower to `LocalGet`, matching neither —
+                // so the fold is correctly skipped.
+                let is_global_builtin = match &object_expr {
+                    Expr::GlobalGet(0) => true,
+                    Expr::PropertyGet { object, property } => {
+                        matches!(object.as_ref(), Expr::GlobalGet(0)) && property.as_str() == name
+                    }
+                    _ => false,
+                };
+                if is_global_builtin {
+                    if let Some(len) = crate::analysis::builtin_constructor_length(name) {
+                        return Ok(Expr::Number(len as f64));
+                    }
+                }
+            }
+        }
+    }
+
     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
         if prop_ident.sym.as_ref() == "name" {
             match &object_expr {
@@ -1524,6 +1720,7 @@ const STDLIB_NAMESPACE_NAMES: &[&str] = &[
     "fs",
     "crypto",
     "child_process",
+    "dgram",
     "net",
     "os",
     "path",
@@ -1541,6 +1738,7 @@ const STDLIB_NAMESPACE_NAMES: &[&str] = &[
     "async_hooks",
     "readline",
     "string_decoder",
+    "test",
     "tty",
     "worker_threads",
 ];
@@ -1766,6 +1964,13 @@ fn is_classic_stream_method_name(prop: &str) -> bool {
     )
 }
 
+fn is_dns_resolver_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "cancel" | "getServers" | "setServers" | "setLocalAddress"
+    )
+}
+
 fn is_console_instance_method_name(prop: &str) -> bool {
     matches!(
         prop,
@@ -1785,6 +1990,104 @@ fn is_console_instance_method_name(prop: &str) -> bool {
             | "profile"
             | "profileEnd"
             | "timeStamp"
+    )
+}
+
+fn is_dgram_socket_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "send"
+            | "bind"
+            | "close"
+            | "address"
+            | "connect"
+            | "disconnect"
+            | "addMembership"
+            | "dropMembership"
+            | "setBroadcast"
+            | "setMulticastTTL"
+            | "setMulticastLoopback"
+            | "setMulticastInterface"
+            | "setTTL"
+            | "setRecvBufferSize"
+            | "setSendBufferSize"
+            | "getRecvBufferSize"
+            | "getSendBufferSize"
+            | "ref"
+            | "unref"
+    )
+}
+
+fn is_net_socket_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "address"
+            | "connect"
+            | "destroy"
+            | "destroySoon"
+            | "end"
+            | "pause"
+            | "ref"
+            | "resetAndDestroy"
+            | "resume"
+            | "setEncoding"
+            | "setKeepAlive"
+            | "setNoDelay"
+            | "setTimeout"
+            | "unref"
+            | "write"
+            | "on"
+            | "addListener"
+            | "once"
+            | "off"
+            | "removeListener"
+            | "removeAllListeners"
+            | "listenerCount"
+            | "eventNames"
+            | "listeners"
+            | "rawListeners"
+            | "upgradeToTLS"
+            | "setDefaultEncoding"
+            | "cork"
+            | "uncork"
+    )
+}
+
+fn is_net_server_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "address"
+            | "close"
+            | "getConnections"
+            | "listen"
+            | "ref"
+            | "unref"
+            | "on"
+            | "addListener"
+            | "once"
+            | "off"
+            | "removeListener"
+            | "removeAllListeners"
+            | "listenerCount"
+            | "eventNames"
+            | "listeners"
+            | "rawListeners"
+    )
+}
+
+fn is_headers_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "append"
+            | "delete"
+            | "entries"
+            | "forEach"
+            | "get"
+            | "getSetCookie"
+            | "has"
+            | "keys"
+            | "set"
+            | "values"
     )
 }
 
@@ -1808,6 +2111,303 @@ fn is_console_instance_method_name(prop: &str) -> bool {
 /// `process.features` pattern (#1378)).
 ///
 /// See #1396.
+
+/// `process.allowedNodeEnvironmentFlags` (#2589) — the Set of flags Node
+/// accepts from `NODE_OPTIONS` / the V8 environment. Perry binaries are
+/// AOT and don't honour `NODE_OPTIONS`-style runtime flags, but consumers
+/// feature-detect on this being a real, non-empty `Set` (e.g.
+/// `flags instanceof Set`, `flags.size > 0`, `flags.has("--no-warnings")`,
+/// iteration). We materialise it as a `Set` populated with a
+/// Node-compatible flag list (via `Expr::SetNewFromArray`) so the
+/// observable shape matches. The exact membership varies by Node build;
+/// this list mirrors a recent Node and is intentionally not asserted
+/// byte-for-byte by parity tests.
+fn process_allowed_node_flags_literal() -> Expr {
+    const FLAGS: &[&str] = &[
+        "--abort-on-uncaught-exception",
+        "--addons",
+        "--allow-addons",
+        "--allow-child-process",
+        "--allow-fs-read",
+        "--allow-fs-write",
+        "--allow-inspector",
+        "--allow-net",
+        "--allow-wasi",
+        "--allow-worker",
+        "--async-context-frame",
+        "--conditions",
+        "--cpu-prof",
+        "--cpu-prof-dir",
+        "--cpu-prof-interval",
+        "--cpu-prof-name",
+        "--debug-arraybuffer-allocations",
+        "--debug-port",
+        "--deprecation",
+        "--diagnostic-dir",
+        "--disable-proto",
+        "--disable-sigusr1",
+        "--disable-warning",
+        "--disable-wasm-trap-handler",
+        "--disallow-code-generation-from-strings",
+        "--dns-result-order",
+        "--enable-etw-stack-walking",
+        "--enable-fips",
+        "--enable-network-family-autoselection",
+        "--enable-source-maps",
+        "--entry-url",
+        "--es-module-specifier-resolution",
+        "--experimental-abortcontroller",
+        "--experimental-addon-modules",
+        "--experimental-detect-module",
+        "--experimental-eventsource",
+        "--experimental-fetch",
+        "--experimental-global-customevent",
+        "--experimental-global-navigator",
+        "--experimental-global-webcrypto",
+        "--experimental-import-meta-resolve",
+        "--experimental-json-modules",
+        "--experimental-loader",
+        "--experimental-modules",
+        "--experimental-print-required-tla",
+        "--experimental-quic",
+        "--experimental-repl-await",
+        "--experimental-report",
+        "--experimental-require-module",
+        "--experimental-shadow-realm",
+        "--experimental-specifier-resolution",
+        "--experimental-sqlite",
+        "--experimental-strip-types",
+        "--experimental-test-isolation",
+        "--experimental-top-level-await",
+        "--experimental-transform-types",
+        "--experimental-vm-modules",
+        "--experimental-wasi-unstable-preview1",
+        "--experimental-wasm-modules",
+        "--experimental-websocket",
+        "--experimental-webstorage",
+        "--experimental-worker",
+        "--expose-gc",
+        "--extra-info-on-fatal-exception",
+        "--force-async-hooks-checks",
+        "--force-context-aware",
+        "--force-fips",
+        "--force-node-api-uncaught-exceptions-policy",
+        "--frozen-intrinsics",
+        "--global-search-paths",
+        "--heap-prof",
+        "--heap-prof-dir",
+        "--heap-prof-interval",
+        "--heap-prof-name",
+        "--heapsnapshot-near-heap-limit",
+        "--heapsnapshot-signal",
+        "--http-parser",
+        "--icu-data-dir",
+        "--import",
+        "--input-type",
+        "--insecure-http-parser",
+        "--inspect",
+        "--inspect-brk",
+        "--inspect-port",
+        "--inspect-publish-uid",
+        "--inspect-wait",
+        "--interpreted-frames-native-stack",
+        "--jitless",
+        "--loader",
+        "--localstorage-file",
+        "--max-http-header-size",
+        "--max-old-space-size",
+        "--max-old-space-size-percentage",
+        "--max-semi-space-size",
+        "--napi-modules",
+        "--network-family-autoselection",
+        "--network-family-autoselection-attempt-timeout",
+        "--no-addons",
+        "--no-allow-addons",
+        "--no-allow-child-process",
+        "--no-allow-inspector",
+        "--no-allow-net",
+        "--no-allow-wasi",
+        "--no-allow-worker",
+        "--no-async-context-frame",
+        "--no-cpu-prof",
+        "--no-debug-arraybuffer-allocations",
+        "--no-deprecation",
+        "--no-disable-sigusr1",
+        "--no-disable-wasm-trap-handler",
+        "--no-enable-fips",
+        "--no-enable-source-maps",
+        "--no-entry-url",
+        "--no-experimental-addon-modules",
+        "--no-experimental-detect-module",
+        "--no-experimental-eventsource",
+        "--no-experimental-global-navigator",
+        "--no-experimental-import-meta-resolve",
+        "--no-experimental-print-required-tla",
+        "--no-experimental-repl-await",
+        "--no-experimental-require-module",
+        "--no-experimental-shadow-realm",
+        "--no-experimental-sqlite",
+        "--no-experimental-transform-types",
+        "--no-experimental-vm-modules",
+        "--no-experimental-websocket",
+        "--no-experimental-webstorage",
+        "--no-extra-info-on-fatal-exception",
+        "--no-force-async-hooks-checks",
+        "--no-force-context-aware",
+        "--no-force-fips",
+        "--no-force-node-api-uncaught-exceptions-policy",
+        "--no-frozen-intrinsics",
+        "--no-global-search-paths",
+        "--no-heap-prof",
+        "--no-insecure-http-parser",
+        "--no-inspect",
+        "--no-inspect-brk",
+        "--no-inspect-wait",
+        "--no-network-family-autoselection",
+        "--no-node-snapshot",
+        "--no-openssl-legacy-provider",
+        "--no-openssl-shared-config",
+        "--no-pending-deprecation",
+        "--no-permission",
+        "--no-permission-audit",
+        "--no-preserve-symlinks",
+        "--no-preserve-symlinks-main",
+        "--no-report-compact",
+        "--no-report-exclude-env",
+        "--no-report-exclude-network",
+        "--no-report-on-fatalerror",
+        "--no-report-on-signal",
+        "--no-report-uncaught-exception",
+        "--no-require-module",
+        "--no-strip-types",
+        "--no-test-only",
+        "--no-throw-deprecation",
+        "--no-tls-max-v1.2",
+        "--no-tls-max-v1.3",
+        "--no-tls-min-v1.0",
+        "--no-tls-min-v1.1",
+        "--no-tls-min-v1.2",
+        "--no-tls-min-v1.3",
+        "--no-trace-deprecation",
+        "--no-trace-env",
+        "--no-trace-env-js-stack",
+        "--no-trace-env-native-stack",
+        "--no-trace-exit",
+        "--no-trace-promises",
+        "--no-trace-sigint",
+        "--no-trace-sync-io",
+        "--no-trace-tls",
+        "--no-trace-uncaught",
+        "--no-trace-warnings",
+        "--no-track-heap-objects",
+        "--no-use-bundled-ca",
+        "--no-use-env-proxy",
+        "--no-use-openssl-ca",
+        "--no-use-system-ca",
+        "--no-verify-base-objects",
+        "--no-warnings",
+        "--no-watch",
+        "--no-watch-preserve-output",
+        "--no-zero-fill-buffers",
+        "--node-memory-debug",
+        "--node-snapshot",
+        "--openssl-config",
+        "--openssl-legacy-provider",
+        "--openssl-shared-config",
+        "--pending-deprecation",
+        "--perf-basic-prof",
+        "--perf-basic-prof-only-functions",
+        "--perf-prof",
+        "--perf-prof-unwinding-info",
+        "--permission",
+        "--permission-audit",
+        "--preserve-symlinks",
+        "--preserve-symlinks-main",
+        "--prof-process",
+        "--redirect-warnings",
+        "--report-compact",
+        "--report-dir",
+        "--report-directory",
+        "--report-exclude-env",
+        "--report-exclude-network",
+        "--report-filename",
+        "--report-on-fatalerror",
+        "--report-on-signal",
+        "--report-signal",
+        "--report-uncaught-exception",
+        "--require",
+        "--require-module",
+        "--secure-heap",
+        "--secure-heap-min",
+        "--snapshot-blob",
+        "--stack-trace-limit",
+        "--strip-types",
+        "--test-coverage-branches",
+        "--test-coverage-exclude",
+        "--test-coverage-functions",
+        "--test-coverage-include",
+        "--test-coverage-lines",
+        "--test-global-setup",
+        "--test-isolation",
+        "--test-name-pattern",
+        "--test-only",
+        "--test-reporter",
+        "--test-reporter-destination",
+        "--test-rerun-failures",
+        "--test-shard",
+        "--test-skip-pattern",
+        "--throw-deprecation",
+        "--title",
+        "--tls-cipher-list",
+        "--tls-keylog",
+        "--tls-max-v1.2",
+        "--tls-max-v1.3",
+        "--tls-min-v1.0",
+        "--tls-min-v1.1",
+        "--tls-min-v1.2",
+        "--tls-min-v1.3",
+        "--trace-deprecation",
+        "--trace-env",
+        "--trace-env-js-stack",
+        "--trace-env-native-stack",
+        "--trace-event-categories",
+        "--trace-event-file-pattern",
+        "--trace-events-enabled",
+        "--trace-exit",
+        "--trace-promises",
+        "--trace-require-module",
+        "--trace-sigint",
+        "--trace-sync-io",
+        "--trace-tls",
+        "--trace-uncaught",
+        "--trace-warnings",
+        "--track-heap-objects",
+        "--unhandled-rejections",
+        "--use-bundled-ca",
+        "--use-env-proxy",
+        "--use-largepages",
+        "--use-openssl-ca",
+        "--use-system-ca",
+        "--v8-pool-size",
+        "--verify-base-objects",
+        "--warnings",
+        "--watch",
+        "--watch-kill-signal",
+        "--watch-path",
+        "--watch-preserve-output",
+        "--webstorage",
+        "--zero-fill-buffers",
+        "-C",
+        "-r",
+    ];
+    Expr::SetNewFromArray(Box::new(Expr::Array(
+        FLAGS
+            .iter()
+            .map(|f| Expr::String((*f).to_string()))
+            .collect(),
+    )))
+}
+
 fn process_report_literal() -> Expr {
     fn b(k: &str, v: bool) -> (String, Expr) {
         (k.to_string(), Expr::Bool(v))

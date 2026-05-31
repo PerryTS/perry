@@ -54,6 +54,25 @@ pub(super) fn lower_builtin_new(
         return Ok(None);
     }
     match class_name {
+        "EvalError" | "URIError" => {
+            let msg_box = if let Some(message) = args.first() {
+                lower_expr(ctx, message)?
+            } else {
+                lower_expr(ctx, &Expr::String(String::new()))?
+            };
+            for arg in args.iter().skip(1) {
+                let _ = lower_expr(ctx, arg)?;
+            }
+            let blk = ctx.block();
+            let msg_handle = unbox_to_i64(blk, &msg_box);
+            let runtime = if class_name == "EvalError" {
+                "js_evalerror_new"
+            } else {
+                "js_urierror_new"
+            };
+            let err_handle = blk.call(I64, runtime, &[(I64, &msg_handle)]);
+            Ok(Some(nanbox_pointer_inline(blk, &err_handle)))
+        }
         // `new RegExp(pattern)` / `new RegExp(pattern, flags)` — call
         // js_regexp_new directly so the resulting object is a real
         // RegExpHeader (registered in REGEX_POINTERS, .test/.exec/etc
@@ -124,13 +143,22 @@ pub(super) fn lower_builtin_new(
             } else {
                 double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
-            for a in args.iter().skip(1) {
-                let _ = lower_expr(ctx, a)?;
-            }
+            let offset_i32 = if args.len() >= 2 {
+                let offset = lower_expr(ctx, &args[1])?;
+                ctx.block().fptosi(DOUBLE, &offset, I32)
+            } else {
+                "0".to_string()
+            };
+            let length_i32 = if args.len() >= 3 {
+                let length = lower_expr(ctx, &args[2])?;
+                ctx.block().fptosi(DOUBLE, &length, I32)
+            } else {
+                "-1".to_string()
+            };
             Ok(Some(ctx.block().call(
                 DOUBLE,
                 "js_data_view_new",
-                &[(DOUBLE, &view_box)],
+                &[(DOUBLE, &view_box), (I32, &offset_i32), (I32, &length_i32)],
             )))
         }
         "RegExp" => {
@@ -200,8 +228,16 @@ pub(super) fn lower_builtin_new(
             } else {
                 double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
-            for a in args.iter().skip(1) {
-                let _ = lower_expr(ctx, a)?;
+            if let Some(stderr_arg) = args.get(1) {
+                let stderr = lower_expr(ctx, stderr_arg)?;
+                for a in args.iter().skip(2) {
+                    let _ = lower_expr(ctx, a)?;
+                }
+                return Ok(Some(ctx.block().call(
+                    DOUBLE,
+                    "js_console_new2",
+                    &[(DOUBLE, &opts), (DOUBLE, &stderr)],
+                )));
             }
             Ok(Some(ctx.block().call(
                 DOUBLE,
@@ -449,6 +485,56 @@ pub(super) fn lower_builtin_new(
             );
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        // #2875: TC39 explicit-resource-management stacks. `new
+        // DisposableStack()` / `new AsyncDisposableStack()` allocate a
+        // GC-managed stack object (NaN-boxed pointer) so the instance methods
+        // (`use` / `adopt` / `defer` / `dispose` / `move` / `disposed`)
+        // dispatch through the `__disposable__` rows in native_table.
+        "DisposableStack" => {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_disposable_stack_new", &[]);
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "AsyncDisposableStack" => {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_async_disposable_stack_new", &[]);
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        // #2875: `new SuppressedError(error, suppressed, message?)` — an
+        // Error-subclass object carrying `.error` / `.suppressed` /
+        // `.message` / `.name`. The runtime ctor registers the class id as
+        // extending Error (once) so `instanceof Error` holds; the property
+        // reads flow through the ordinary by-name object getter.
+        "SuppressedError" => {
+            let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let error = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                undef.clone()
+            };
+            let suppressed = if let Some(a) = args.get(1) {
+                lower_expr(ctx, a)?
+            } else {
+                undef.clone()
+            };
+            let message = if let Some(a) = args.get(2) {
+                lower_expr(ctx, a)?
+            } else {
+                undef.clone()
+            };
+            let blk = ctx.block();
+            Ok(Some(blk.call(
+                DOUBLE,
+                "js_suppressed_error_new",
+                &[(DOUBLE, &error), (DOUBLE, &suppressed), (DOUBLE, &message)],
+            )))
+        }
         // decimal.js Decimal — `new Decimal(value)` where value is a number,
         // string, or another Decimal. Routes through `js_decimal_coerce_to_handle`
         // which NaN-decodes the JSValue and dispatches to `from_number` /
@@ -467,19 +553,17 @@ pub(super) fn lower_builtin_new(
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         "Array" => {
-            // `new Array()` → empty array, `new Array(n)` → length-n array
-            // (slots NaN-boxed `undefined`, see issue #323), `new Array(a, b, c)` → 3-element array
-            // [a, b, c]. We handle the no-arg and single-numeric-arg cases
-            // here. Multi-arg / non-numeric single arg falls back to the
-            // generic Expr::New path.
+            // `new Array()` → empty array, `new Array(n)` → length-n sparse
+            // array after runtime validation, and `new Array(value)` with a
+            // non-number argument → one-element array. Multi-arg calls fall
+            // back to the generic Expr::New path.
             let blk = ctx.block();
             let handle = if args.is_empty() {
                 blk.call(I64, "js_array_create", &[])
             } else if args.len() == 1 {
-                let cap = lower_expr(ctx, &args[0])?;
+                let value = lower_expr(ctx, &args[0])?;
                 let blk = ctx.block();
-                let cap_i32 = blk.fptosi(DOUBLE, &cap, I32);
-                blk.call(I64, "js_array_alloc_with_length", &[(I32, &cap_i32)])
+                blk.call(I64, "js_array_constructor_single", &[(DOUBLE, &value)])
             } else {
                 return Ok(None);
             };
@@ -675,15 +759,17 @@ pub(super) fn lower_builtin_new(
 
         "Headers" => {
             // new Headers(init?) — init can be an object literal or another
-            // Headers/array iterable. Only inline object literals are
-            // handled so far; anything else falls back to empty.
+            // Headers/array iterable.
             let h = ctx.block().call(DOUBLE, "js_headers_new", &[]);
             if !args.is_empty() {
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
                     for (k, vexpr) in &props {
                         let key_expr = Expr::String(k.clone());
                         let key_ptr = get_raw_string_ptr(ctx, &key_expr)?;
-                        let val_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                        let value = lower_expr(ctx, vexpr)?;
+                        let val_ptr =
+                            ctx.block()
+                                .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &value)]);
                         ctx.block().call(
                             DOUBLE,
                             "js_headers_set",
@@ -691,14 +777,19 @@ pub(super) fn lower_builtin_new(
                         );
                     }
                 } else {
-                    let _ = lower_expr(ctx, &args[0])?;
+                    let init = lower_expr(ctx, &args[0])?;
+                    ctx.block().call(
+                        DOUBLE,
+                        "js_headers_init_from_value",
+                        &[(DOUBLE, &h), (DOUBLE, &init)],
+                    );
                 }
             }
             Ok(Some(h))
         }
 
         "Request" => {
-            // new Request(url, init?) — init = { method?, body?, headers? }
+            // new Request(url, init?) — init = Fetch RequestInit subset.
             let url_ptr = if !args.is_empty() {
                 get_raw_string_ptr(ctx, &args[0])?
             } else {
@@ -708,6 +799,16 @@ pub(super) fn lower_builtin_new(
             let mut method_ptr = "0".to_string();
             let mut body_ptr = "0".to_string();
             let mut headers_handle = "0.0".to_string();
+            let mut referrer_ptr = "0".to_string();
+            let mut referrer_policy_ptr = "0".to_string();
+            let mut mode_ptr = "0".to_string();
+            let mut credentials_ptr = "0".to_string();
+            let mut cache_ptr = "0".to_string();
+            let mut redirect_ptr = "0".to_string();
+            let mut integrity_ptr = "0".to_string();
+            let mut keepalive = double_literal(f64::from_bits(crate::nanbox::TAG_FALSE));
+            let mut duplex_ptr = "0".to_string();
+            let mut signal = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
 
             if args.len() >= 2 {
                 if let Some(props) = extract_options_fields(ctx, &args[1]) {
@@ -725,6 +826,36 @@ pub(super) fn lower_builtin_new(
                                 } else {
                                     headers_handle = lower_expr(ctx, vexpr)?;
                                 }
+                            }
+                            "referrer" => {
+                                referrer_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "referrerPolicy" => {
+                                referrer_policy_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "mode" => {
+                                mode_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "credentials" => {
+                                credentials_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "cache" => {
+                                cache_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "redirect" => {
+                                redirect_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "integrity" => {
+                                integrity_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "keepalive" => {
+                                keepalive = lower_expr(ctx, vexpr)?;
+                            }
+                            "duplex" => {
+                                duplex_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "signal" => {
+                                signal = lower_expr(ctx, vexpr)?;
                             }
                             _ => {
                                 let _ = lower_expr(ctx, vexpr)?;
@@ -744,6 +875,16 @@ pub(super) fn lower_builtin_new(
                     (I64, &method_ptr),
                     (I64, &body_ptr),
                     (DOUBLE, &headers_handle),
+                    (I64, &referrer_ptr),
+                    (I64, &referrer_policy_ptr),
+                    (I64, &mode_ptr),
+                    (I64, &credentials_ptr),
+                    (I64, &cache_ptr),
+                    (I64, &redirect_ptr),
+                    (I64, &integrity_ptr),
+                    (DOUBLE, &keepalive),
+                    (I64, &duplex_ptr),
+                    (DOUBLE, &signal),
                 ],
             );
             Ok(Some(handle))
@@ -852,6 +993,13 @@ pub(super) fn lower_builtin_new(
                             hwm = lower_expr(ctx, vexpr)?;
                         }
                     }
+                } else {
+                    let strategy = lower_expr(ctx, &args[1])?;
+                    hwm = ctx.block().call(
+                        DOUBLE,
+                        "js_streams_strategy_high_water_mark",
+                        &[(DOUBLE, &strategy)],
+                    );
                 }
             }
             let h = ctx.block().call(

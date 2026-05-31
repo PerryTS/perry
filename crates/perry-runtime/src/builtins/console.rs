@@ -577,29 +577,188 @@ fn object_property(value: f64, name: &[u8]) -> f64 {
     f64::from_bits(crate::object::js_object_get_field_by_name(obj, key).bits())
 }
 
+fn value_gc_type(value: f64) -> Option<u8> {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return None;
+    }
+    let ptr = jsval.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < 0x10000 || ((ptr as u64) >> 48) != 0 {
+        return None;
+    }
+    let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
+    Some(gc_header.obj_type)
+}
+
+fn is_plain_object(value: f64) -> bool {
+    value_gc_type(value) == Some(crate::gc::GC_TYPE_OBJECT)
+}
+
 #[cold]
-fn throw_console_writable_stream() -> ! {
-    let msg = b"Console expects a writable stream instance";
-    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+fn throw_console_writable_stream(stream_name: &str) -> ! {
+    // Mirror Node's `ERR_CONSOLE_WRITABLE_STREAM` wording, which names the
+    // offending stream (e.g. "... instance for stdout").
+    let msg = format!("Console expects a writable stream instance for {stream_name}");
+    let bytes = msg.as_bytes();
+    let s = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
     crate::node_submodules::register_error_code_pub(s, "ERR_CONSOLE_WRITABLE_STREAM");
     let err = crate::error::js_typeerror_new(s);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+/// True when `value` is callable, matching Node's `typeof x === "function"`.
+/// Reuses the canonical `typeof` implementation so closures, function
+/// references and class refs are all classified consistently.
+fn is_callable(value: f64) -> bool {
+    let header = crate::builtins::arithmetic::js_value_typeof(value);
+    if header.is_null() {
+        return false;
+    }
+    unsafe {
+        let len = (*header).byte_len as usize;
+        let data = (header as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        std::slice::from_raw_parts(data, len) == b"function"
+    }
+}
+
+/// True when `value` is an object that exposes a callable `write` method, which
+/// is Node's definition of an acceptable Console stream.
+fn has_write_method(value: f64) -> bool {
+    if null_or_undefined(value) {
+        return false;
+    }
+    is_callable(object_property(value, b"write"))
+}
+
+fn color_mode_received(value: f64) -> String {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_null() {
+        return "null".to_string();
+    }
+    if jsval.is_undefined() {
+        return "undefined".to_string();
+    }
+    if jsval.is_bool() {
+        return jsval.as_bool().to_string();
+    }
+    if jsval.is_int32() {
+        return jsval.as_int32().to_string();
+    }
+    if jsval.is_number() {
+        let n = jsval.as_number();
+        if n.fract() == 0.0 && n.is_finite() {
+            return (n as i64).to_string();
+        }
+        return n.to_string();
+    }
+    if jsval.is_any_string() {
+        return format!("'{}'", jsvalue_string_content(value).unwrap_or_default());
+    }
+    format_jsvalue(value, 0)
+}
+
+#[cold]
+fn throw_invalid_color_mode(value: f64) -> ! {
+    let message = format!(
+        "The argument 'colorMode' must be one of: 'auto', true, false. Received {}",
+        color_mode_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
+}
+
+fn validate_console_constructor_options(options: f64) {
+    if !is_plain_object(options) {
+        return;
+    }
+
+    let inspect_options = object_property(options, b"inspectOptions");
+    if !JSValue::from_bits(inspect_options.to_bits()).is_undefined()
+        && !is_plain_object(inspect_options)
+    {
+        let message = format!(
+            "The \"options.inspectOptions\" property must be of type object. Received {}",
+            crate::fs::validate::describe_received(inspect_options)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+
+    let color_mode = object_property(options, b"colorMode");
+    let color_mode_value = JSValue::from_bits(color_mode.to_bits());
+    if !color_mode_value.is_undefined()
+        && !color_mode_value.is_bool()
+        && !(color_mode_value.is_any_string()
+            && jsvalue_string_content(color_mode).as_deref() == Some("auto"))
+    {
+        throw_invalid_color_mode(color_mode);
+    }
+
+    let group_indentation = object_property(options, b"groupIndentation");
+    if !JSValue::from_bits(group_indentation.to_bits()).is_undefined() {
+        crate::fs::validate::validate_int32(group_indentation, "groupIndentation", 0, 1000);
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_console_new(options: f64) -> f64 {
-    let stdout = object_property(options, b"stdout");
-    if null_or_undefined(stdout) {
-        throw_console_writable_stream();
+    // Both `new Console(stdout, stderr?)` and `new Console(options)` are
+    // normalized by codegen into a single value exposing `.stdout` / `.stderr`.
+    // The lone exception is `new Console(stream)` where the single positional
+    // argument is itself a writable stream — there it has no `.stdout` of its
+    // own, so detect that case by checking whether the argument is itself a
+    // writable stream.
+    let stdout_prop = object_property(options, b"stdout");
+    let stdout;
+    let stderr_candidate;
+    let options_value;
+    if !null_or_undefined(stdout_prop) {
+        stdout = stdout_prop;
+        stderr_candidate = object_property(options, b"stderr");
+        options_value = options;
+    } else if has_write_method(options) {
+        // Single positional stream form: the argument is stdout itself.
+        stdout = options;
+        stderr_candidate = undefined_value();
+        options_value = undefined_value();
+    } else {
+        // Options-object form whose stdout is missing/nullish.
+        stdout = stdout_prop;
+        stderr_candidate = object_property(options, b"stderr");
+        options_value = options;
     }
-    let stderr_candidate = object_property(options, b"stderr");
+
+    let ignore_errors = unsafe { decode_dir_bool_option(options, "ignoreErrors") }.unwrap_or(true);
+    js_console_new_resolved(stdout, stderr_candidate, ignore_errors, options_value)
+}
+
+#[no_mangle]
+pub extern "C" fn js_console_new2(stdout: f64, stderr_candidate: f64) -> f64 {
+    let has_options_stdout = !null_or_undefined(object_property(stdout, b"stdout"));
+    if null_or_undefined(stderr_candidate) && has_options_stdout {
+        return js_console_new(stdout);
+    }
+    js_console_new_resolved(stdout, stderr_candidate, true, undefined_value())
+}
+
+fn js_console_new_resolved(
+    stdout: f64,
+    stderr_candidate: f64,
+    ignore_errors: bool,
+    options_value: f64,
+) -> f64 {
+    if !has_write_method(stdout) {
+        throw_console_writable_stream("stdout");
+    }
+    // stderr is validated only when explicitly provided (non-nullish);
+    // otherwise it defaults to stdout, matching Node.
+    if !null_or_undefined(stderr_candidate) && !has_write_method(stderr_candidate) {
+        throw_console_writable_stream("stderr");
+    }
+    validate_console_constructor_options(options_value);
     let stderr = if null_or_undefined(stderr_candidate) {
         stdout
     } else {
         stderr_candidate
     };
-    let ignore_errors = unsafe { decode_dir_bool_option(options, "ignoreErrors") }.unwrap_or(true);
-
     let obj = crate::object::js_object_alloc(CONSOLE_INSTANCE_CLASS_ID, 0);
     let value = crate::value::js_nanbox_pointer(obj as i64);
     CONSOLE_INSTANCES.with(|instances| {

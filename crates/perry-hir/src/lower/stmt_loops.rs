@@ -798,7 +798,7 @@ pub(crate) fn lower_stmt_for_of(
             "Uint8Array" | "Int8Array" | "Uint8ClampedArray"
             | "Uint16Array" | "Int16Array"
             | "Uint32Array" | "Int32Array"
-            | "Float32Array" | "Float64Array"
+            | "Float16Array" | "Float32Array" | "Float64Array"
         )
     );
     // #321: the for-of desugar reads `__arr.length` / `__arr[i]` and so

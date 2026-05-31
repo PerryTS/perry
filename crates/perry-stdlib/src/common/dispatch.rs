@@ -6,6 +6,9 @@
 //! runtime dispatch by checking the handle type in the registry.
 
 use super::handle::*;
+use perry_runtime::StringHeader;
+
+type EventEmitterOn = unsafe extern "C" fn(i64, *const StringHeader, i64) -> i64;
 
 /// Dispatch a method call on a handle-based object.
 /// Called from perry-runtime's js_native_call_method when it detects a handle
@@ -50,21 +53,8 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return v;
     }
 
-    // Each dispatcher below is gated on TWO conditions: (a) its registry
-    // currently holds this handle id, AND (b) the method name is one this
-    // dispatcher actually handles. Both are required because handle id
-    // namespaces are not unified — `net.createConnection` uses its own
-    // `NEXT_NET_ID` counter, separate from the common HANDLES registry that
-    // backs Fastify/ioredis/HashHandle. A net.Socket at id=1 always
-    // collides with the first object created in the common registry. If we
-    // claimed a handle on registry match alone, calling `socket.write(b)` on
-    // a socket whose id collided with a HashHandle would route to
-    // `dispatch_hash` (registry says yes), find no `write` arm, and silently
-    // return undefined — the bytes never reach the wire (#91). Gating on
-    // method-name vocabulary lets the call fall through to the next
-    // dispatcher when a handle id is reused across registries with disjoint
-    // method sets. The proper long-term fix is a single unified id space;
-    // this is the surgical version.
+    // Dispatchers below gate on registry membership plus method vocabulary
+    // because native handle id spaces are not unified (#91).
 
     // Fastify app: routes for HTTP verbs + lifecycle methods.
     // #1113 adds `"on"` here — `app.server.on(event, cb)` dispatches
@@ -131,7 +121,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             | "disconnect"
     ) && with_handle::<crate::ioredis::RedisClient, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return dispatch_ioredis(handle, method_name, &args);
+        return super::dispatch_ioredis::dispatch_ioredis(handle, method_name, &args);
     }
 
     // crypto Hash handle: createHash(...).update(...).digest().
@@ -502,6 +492,13 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         if unsafe { js_ext_net_is_socket_handle(handle) } != 0 {
             return dispatch_external_net_socket(handle, method_name, &args);
         }
+        if let Some(v) = crate::common::net_method_values::dispatch_external_server_method(
+            handle,
+            method_name,
+            &args,
+        ) {
+            return v;
+        }
     }
 
     // Web Fetch method dispatch (refs #421 — Phase 1 of the handle-NaN-boxing
@@ -844,7 +841,7 @@ unsafe fn dispatch_net_socket(handle: i64, method: &str, args: &[f64]) -> f64 {
             crate::net::js_net_socket_end(handle, chunk.to_bits() as i64);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
-        "destroy" => {
+        "destroy" | "destroySoon" => {
             crate::net::js_net_socket_destroy(handle);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
@@ -1035,7 +1032,7 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
             js_net_socket_end(handle, chunk.to_bits() as i64);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
-        "destroy" => {
+        "destroy" | "destroySoon" => {
             js_net_socket_destroy(handle);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
@@ -1218,6 +1215,10 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 )
             };
         }
+    }
+
+    if let Some(v) = crate::common::net_method_values::dispatch_property(handle, property_name) {
+        return v;
     }
 
     // Server-side node:http request/response handles whose static
@@ -1773,89 +1774,6 @@ unsafe fn dispatch_sqlite_db(handle: i64, method: &str, args: &[f64]) -> f64 {
     }
 }
 
-/// Dispatch method calls on ioredis Redis client handles
-#[cfg(feature = "database-redis")]
-unsafe fn dispatch_ioredis(handle: i64, method: &str, args: &[f64]) -> f64 {
-    // Helper: extract raw StringHeader pointer from NaN-boxed f64
-    fn get_string_ptr(val: f64) -> *const perry_runtime::StringHeader {
-        let bits = val.to_bits();
-        // Strip STRING_TAG (0x7FFF) to get raw pointer
-        (bits & 0x0000_FFFF_FFFF_FFFF) as *const perry_runtime::StringHeader
-    }
-
-    // Helper: NaN-box a Promise pointer with POINTER_TAG for return
-    fn nanbox_promise(promise: *mut perry_runtime::Promise) -> f64 {
-        let bits = (promise as u64) | 0x7FFD_0000_0000_0000;
-        f64::from_bits(bits)
-    }
-
-    match method {
-        "connect" => {
-            let promise = crate::ioredis::js_ioredis_connect(handle);
-            nanbox_promise(promise)
-        }
-        "get" if !args.is_empty() => {
-            let key_ptr = get_string_ptr(args[0]);
-            let promise = crate::ioredis::js_ioredis_get(handle, key_ptr);
-            nanbox_promise(promise)
-        }
-        "set" if args.len() >= 2 => {
-            let key_ptr = get_string_ptr(args[0]);
-            let value_ptr = get_string_ptr(args[1]);
-            let promise = crate::ioredis::js_ioredis_set(handle, key_ptr, value_ptr);
-            nanbox_promise(promise)
-        }
-        "setex" if args.len() >= 3 => {
-            let key_ptr = get_string_ptr(args[0]);
-            let seconds = args[1];
-            let value_ptr = get_string_ptr(args[2]);
-            let promise = crate::ioredis::js_ioredis_setex(handle, key_ptr, seconds, value_ptr);
-            nanbox_promise(promise)
-        }
-        "del" if !args.is_empty() => {
-            let key_ptr = get_string_ptr(args[0]);
-            let promise = crate::ioredis::js_ioredis_del(handle, key_ptr);
-            nanbox_promise(promise)
-        }
-        "exists" if !args.is_empty() => {
-            let key_ptr = get_string_ptr(args[0]);
-            let promise = crate::ioredis::js_ioredis_exists(handle, key_ptr);
-            nanbox_promise(promise)
-        }
-        "incr" if !args.is_empty() => {
-            let key_ptr = get_string_ptr(args[0]);
-            let promise = crate::ioredis::js_ioredis_incr(handle, key_ptr);
-            nanbox_promise(promise)
-        }
-        "decr" if !args.is_empty() => {
-            let key_ptr = get_string_ptr(args[0]);
-            let promise = crate::ioredis::js_ioredis_decr(handle, key_ptr);
-            nanbox_promise(promise)
-        }
-        "expire" if args.len() >= 2 => {
-            let key_ptr = get_string_ptr(args[0]);
-            let seconds = args[1];
-            let promise = crate::ioredis::js_ioredis_expire(handle, key_ptr, seconds);
-            nanbox_promise(promise)
-        }
-        "ping" => {
-            let promise = crate::ioredis::js_ioredis_ping(handle);
-            nanbox_promise(promise)
-        }
-        "quit" => {
-            let promise = crate::ioredis::js_ioredis_quit(handle);
-            nanbox_promise(promise)
-        }
-        "disconnect" => {
-            crate::ioredis::js_ioredis_disconnect(handle);
-            f64::from_bits(0x7FFC_0000_0000_0001) // undefined
-        }
-        _ => {
-            f64::from_bits(0x7FFC_0000_0000_0001) // undefined
-        }
-    }
-}
-
 /// Dispatch property set on a handle-based object.
 /// Called from perry-runtime's js_object_set_field_by_name when it detects a handle.
 #[no_mangle]
@@ -1997,24 +1915,19 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
             f: unsafe extern "C" fn(i64, *const u8, usize, f64),
         );
         fn js_register_event_emitter_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
+        fn js_register_event_emitter_on(f: EventEmitterOn);
     }
     js_register_handle_method_dispatch(js_handle_method_dispatch);
     js_register_handle_property_dispatch(js_handle_property_dispatch);
     js_register_handle_property_set_dispatch(js_handle_property_set_dispatch);
+    #[cfg(feature = "bundled-events")]
     unsafe extern "C" fn event_emitter_probe(handle: i64) -> bool {
-        // `crate::events` only exists with the `bundled-events` feature; when
-        // it's compiled out there are no EventEmitter handles to recognize.
-        #[cfg(feature = "bundled-events")]
-        {
-            crate::events::is_event_emitter_handle(handle)
-        }
-        #[cfg(not(feature = "bundled-events"))]
-        {
-            let _ = handle;
-            false
-        }
+        crate::events::is_event_emitter_handle(handle)
     }
+    #[cfg(feature = "bundled-events")]
     js_register_event_emitter_handle_probe(event_emitter_probe);
+    #[cfg(feature = "bundled-events")]
+    js_register_event_emitter_on(crate::events::js_event_emitter_on);
     // #1577: route captured-then-called `crypto.*` methods (which reach the
     // runtime's native-module dispatch) back to the stdlib crypto impls.
     perry_runtime::js_set_native_crypto_dispatch(crate::crypto::js_crypto_native_dispatch);

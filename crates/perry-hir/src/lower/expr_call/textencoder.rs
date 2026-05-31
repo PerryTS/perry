@@ -16,7 +16,7 @@ use super::super::{
 
 fn text_encoder_encode_into(args: Vec<Expr>) -> Expr {
     let mut args = args.into_iter();
-    let source = args.next().unwrap_or_else(|| Expr::String(String::new()));
+    let source = args.next().unwrap_or(Expr::Undefined);
     let dest = args.next().unwrap_or(Expr::Undefined);
     Expr::TextEncoderEncodeInto {
         source: Box::new(source),
@@ -51,13 +51,19 @@ pub(super) fn try_textencoder_decoder(
                             return Ok(Ok(text_encoder_encode_into(args)));
                         }
                         if class_name == "TextDecoder" && method_name == "decode" {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::TextDecoderDecode(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
+                            let decoder = super::super::expr_new::lower_text_decoder_new(
+                                ctx,
+                                new_expr.args.as_deref(),
+                            )?;
+                            let input = if !args.is_empty() {
+                                args.into_iter().next().unwrap()
                             } else {
-                                return Ok(Ok(Expr::String(String::new())));
-                            }
+                                Expr::Undefined
+                            };
+                            return Ok(Ok(Expr::TextDecoderDecode {
+                                decoder: Box::new(decoder),
+                                input: Box::new(input),
+                            }));
                         }
                     }
                 }
@@ -84,13 +90,16 @@ pub(super) fn try_textencoder_decoder(
                         .map(|ty| matches!(ty, Type::Named(name) if name == "TextDecoder"))
                         .unwrap_or(false);
                     if is_text_decoder && method_name == "decode" {
-                        if !args.is_empty() {
-                            return Ok(Ok(Expr::TextDecoderDecode(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
+                        let decoder = lower_expr(ctx, &member.obj)?;
+                        let input = if !args.is_empty() {
+                            args.into_iter().next().unwrap()
                         } else {
-                            return Ok(Ok(Expr::String(String::new())));
-                        }
+                            Expr::Undefined
+                        };
+                        return Ok(Ok(Expr::TextDecoderDecode {
+                            decoder: Box::new(decoder),
+                            input: Box::new(input),
+                        }));
                     }
                 }
             }

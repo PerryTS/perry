@@ -508,12 +508,22 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
     }
     if let Some(write) = write_callback_from_options(opts) {
         js_object_set_field_by_name(obj, hidden_write_key(), rebind_callback_this(write, duplex));
+        set_hidden_value(
+            duplex,
+            hidden_key(b"writableCustomSink"),
+            f64::from_bits(TAG_TRUE),
+        );
     }
     if let Some(writev) = writev_callback_from_options(opts) {
         js_object_set_field_by_name(
             obj,
             hidden_writev_key(),
             rebind_callback_this(writev, duplex),
+        );
+        set_hidden_value(
+            duplex,
+            hidden_key(b"writableCustomSink"),
+            f64::from_bits(TAG_TRUE),
         );
     }
     init_lifecycle_state(duplex, opts);
@@ -528,6 +538,76 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
     install_stream_async_dispose_symbol(duplex);
     invoke_construct_callback(duplex, opts);
     duplex
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_duplex_subclass_init(this: f64, opts: f64) -> f64 {
+    register_iter_helper_arities();
+    let raw = raw_ptr_from_value(this);
+    if raw == 0 {
+        return this;
+    }
+    if unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
+        return this;
+    }
+
+    let obj = raw as *mut ObjectHeader;
+    let subclass_read =
+        js_object_get_field_by_name_f64(obj as *const ObjectHeader, hidden_key(b"_read"));
+    let subclass_write = js_object_get_field_by_name_f64(obj, hidden_key(b"_write"));
+    let subclass_writev = js_object_get_field_by_name_f64(obj, hidden_key(b"_writev"));
+
+    let methods = duplex_methods();
+    install_methods_on_existing_object(obj, this, &methods, &[]);
+
+    if let Some(read) = read_callback_from_options(opts) {
+        js_object_set_field_by_name(obj, hidden_read_key(), rebind_callback_this(read, this));
+    } else if is_callable_value(subclass_read) {
+        js_object_set_field_by_name(obj, hidden_read_key(), subclass_read);
+    }
+    if let Some(write) = write_callback_from_options(opts) {
+        js_object_set_field_by_name(obj, hidden_write_key(), rebind_callback_this(write, this));
+        set_hidden_value(
+            this,
+            hidden_key(b"writableCustomSink"),
+            f64::from_bits(TAG_TRUE),
+        );
+    } else if is_callable_value(subclass_write) {
+        js_object_set_field_by_name(obj, hidden_write_key(), subclass_write);
+        set_hidden_value(
+            this,
+            hidden_key(b"writableCustomSink"),
+            f64::from_bits(TAG_TRUE),
+        );
+    }
+    if let Some(writev) = writev_callback_from_options(opts) {
+        js_object_set_field_by_name(obj, hidden_writev_key(), rebind_callback_this(writev, this));
+        set_hidden_value(
+            this,
+            hidden_key(b"writableCustomSink"),
+            f64::from_bits(TAG_TRUE),
+        );
+    } else if is_callable_value(subclass_writev) {
+        js_object_set_field_by_name(obj, hidden_writev_key(), subclass_writev);
+        set_hidden_value(
+            this,
+            hidden_key(b"writableCustomSink"),
+            f64::from_bits(TAG_TRUE),
+        );
+    }
+
+    init_lifecycle_state(this, opts);
+    init_constructor(this, "Duplex");
+    init_readable_state(this, opts);
+    init_writable_state(this, opts);
+    init_duplex_state(this, opts);
+    install_common_lifecycle_callbacks(this, opts);
+    install_writable_lifecycle_callbacks(this, opts);
+    init_abort_signal_state(this, opts);
+    async_iterator::install_readable_async_iterator_symbol(this);
+    install_stream_async_dispose_symbol(this);
+    invoke_construct_callback(this, opts);
+    this
 }
 
 #[no_mangle]
@@ -546,6 +626,47 @@ pub extern "C" fn js_node_stream_transform_new(opts: f64) -> f64 {
             hidden_transform_flush_key(),
             rebind_callback_this(flush, transform),
         );
+    }
+    init_constructor(transform, "Transform");
+    transform
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_transform_subclass_init(this: f64, opts: f64) -> f64 {
+    let transform = js_node_stream_duplex_subclass_init(this, opts);
+    let raw = raw_ptr_from_value(transform);
+    if raw == 0 {
+        return transform;
+    }
+    if unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
+        return transform;
+    }
+
+    let obj = raw as *mut ObjectHeader;
+    let subclass_transform = js_object_get_field_by_name_f64(obj, hidden_key(b"_transform"));
+    let subclass_flush = js_object_get_field_by_name_f64(obj, hidden_key(b"_flush"));
+
+    if let Some(callback) = transform_callback_from_options(opts) {
+        set_hidden_value(
+            transform,
+            hidden_transform_callback_key(),
+            rebind_callback_this(callback, transform),
+        );
+    } else if is_callable_value(subclass_transform) {
+        set_hidden_value(
+            transform,
+            hidden_transform_callback_key(),
+            subclass_transform,
+        );
+    }
+    if let Some(flush) = transform_flush_from_options(opts) {
+        set_hidden_value(
+            transform,
+            hidden_transform_flush_key(),
+            rebind_callback_this(flush, transform),
+        );
+    } else if is_callable_value(subclass_flush) {
+        set_hidden_value(transform, hidden_transform_flush_key(), subclass_flush);
     }
     init_constructor(transform, "Transform");
     transform
@@ -581,8 +702,29 @@ pub extern "C" fn js_node_stream_readable_from_options(iterable: f64, opts: f64)
     let readable = js_node_stream_readable_new(readable_from_options(opts));
     let raw = raw_ptr_from_value(readable);
     if raw >= 0x10000 {
-        let chunks = normalize_readable_from_input(iterable);
-        js_object_set_field_by_name(raw as *mut ObjectHeader, hidden_chunks_key(), chunks);
+        let trap_buf = crate::exception::js_try_push();
+        let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
+        if jumped == 0 {
+            let normalized = normalize_readable_from_input(iterable);
+            crate::exception::js_try_end();
+            js_object_set_field_by_name(
+                raw as *mut ObjectHeader,
+                hidden_chunks_key(),
+                normalized.chunks,
+            );
+            if let Some(source_iterator) = normalized.source_iterator {
+                js_object_set_field_by_name(
+                    raw as *mut ObjectHeader,
+                    hidden_key(READABLE_SOURCE_ITERATOR_KEY),
+                    source_iterator,
+                );
+            }
+        } else {
+            let err = crate::exception::js_get_exception();
+            crate::exception::js_clear_exception();
+            crate::exception::js_try_end();
+            destroy_stream(readable, err);
+        }
     }
     readable
 }
@@ -706,18 +848,11 @@ pub extern "C" fn js_node_stream_add_abort_signal(signal: f64, stream: f64) -> f
     stream
 }
 
-fn node_stream_duplex_from_source_chunks(source: f64) -> f64 {
+fn attach_duplex_readable_source(duplex: f64, source: f64) -> Result<(), f64> {
     let chunks = if let Some(chunks) = readable_hidden_chunks(source) {
         chunks
     } else {
-        match collect_pipeline_chunks(source) {
-            Ok(chunks) => chunks,
-            Err(err) => {
-                let duplex = js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED));
-                set_hidden_value(duplex, hidden_error_key(), err);
-                return duplex;
-            }
-        }
+        collect_pipeline_chunks(source)?
     };
     let values = pipeline_chunks_vec(chunks);
     let mut arr = crate::array::js_array_alloc(values.len() as u32);
@@ -725,8 +860,6 @@ fn node_stream_duplex_from_source_chunks(source: f64) -> f64 {
         arr = crate::array::js_array_push_f64(arr, chunk);
     }
 
-    let duplex = js_node_stream_duplex_new(readable_from_options(f64::from_bits(TAG_UNDEFINED)));
-    set_visible_writable(duplex, false);
     set_hidden_value(duplex, hidden_chunks_key(), box_pointer(arr as *const u8));
     set_hidden_value(
         duplex,
@@ -738,14 +871,106 @@ fn node_stream_duplex_from_source_chunks(source: f64) -> f64 {
         hidden_key(b"readableLength"),
         crate::array::js_array_length(arr) as f64,
     );
+    Ok(())
+}
+
+fn node_stream_duplex_from_source_chunks(source: f64) -> f64 {
+    let duplex = js_node_stream_duplex_new(readable_from_options(f64::from_bits(TAG_UNDEFINED)));
+    set_visible_writable(duplex, false);
+    if let Err(err) = attach_duplex_readable_source(duplex, source) {
+        set_hidden_value(duplex, hidden_error_key(), err);
+    }
     duplex
 }
 
-/// #1539: `stream.compose(...streams)` chains a sequence of streams
-/// into one composite Duplex (data flows through them in order). Perry
-/// now handles Node's single-source fast path by returning a Duplex
-/// wrapper whose readable side drains the source snapshot; multi-stage
-/// composition remains tracked separately.
+pub(super) extern "C" fn duplex_from_writable_write_callback(
+    closure: *const ClosureHeader,
+    chunk: f64,
+    encoding: f64,
+    cb: f64,
+) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let writable = js_closure_get_capture_f64(closure, 0);
+    js_node_stream_method_write(raw_ptr_from_value(writable) as i64, chunk, encoding, cb)
+}
+
+pub(super) extern "C" fn duplex_from_writable_final_callback(
+    closure: *const ClosureHeader,
+    cb: f64,
+) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let writable = js_closure_get_capture_f64(closure, 0);
+    js_node_stream_method_end(
+        raw_ptr_from_value(writable) as i64,
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    call_listener_args(writable, cb, &[]);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+fn install_duplex_from_writable(duplex: f64, writable: f64) {
+    let raw = raw_ptr_from_value(duplex);
+    if raw < 0x10000 {
+        return;
+    }
+    let obj = raw as *mut ObjectHeader;
+    let write = js_closure_alloc(duplex_from_writable_write_callback as *const u8, 1);
+    js_closure_set_capture_f64(write, 0, writable);
+    js_object_set_field_by_name(
+        obj,
+        hidden_write_key(),
+        f64::from_bits(JSValue::pointer(write as *const u8).bits()),
+    );
+
+    let final_cb = js_closure_alloc(duplex_from_writable_final_callback as *const u8, 1);
+    js_closure_set_capture_f64(final_cb, 0, writable);
+    js_object_set_field_by_name(
+        obj,
+        hidden_writable_final_key(),
+        f64::from_bits(JSValue::pointer(final_cb as *const u8).bits()),
+    );
+
+    set_hidden_value(duplex, hidden_key(b"duplexWrappedWritable"), writable);
+    set_hidden_value(
+        duplex,
+        hidden_key(b"writableCustomSink"),
+        f64::from_bits(TAG_TRUE),
+    );
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_duplex_from_options(body: f64, _opts: f64) -> f64 {
+    if object_ptr_from_value(body).is_some() && !is_classic_stream_instance_value(body) {
+        let readable = get_hidden_value(body, hidden_key(b"readable"));
+        let writable = get_hidden_value(body, hidden_key(b"writable"));
+        if readable.is_some() || writable.is_some() {
+            let duplex =
+                js_node_stream_duplex_new(readable_from_options(f64::from_bits(TAG_UNDEFINED)));
+            if let Some(readable) = readable {
+                if let Err(err) = attach_duplex_readable_source(duplex, readable) {
+                    set_hidden_value(duplex, hidden_error_key(), err);
+                }
+            } else {
+                set_visible_readable(duplex, false);
+            }
+            if let Some(writable) = writable {
+                install_duplex_from_writable(duplex, writable);
+            } else {
+                set_visible_writable(duplex, false);
+            }
+            return duplex;
+        }
+    }
+
+    node_stream_duplex_from_source_chunks(body)
+}
+
+/// #1539: `stream.compose(...streams)` chains a sequence of streams or
+/// callable stages into one composite Duplex.
 #[no_mangle]
 pub extern "C" fn js_node_stream_compose(args: *const crate::array::ArrayHeader) -> f64 {
     js_node_stream_compose_args(args)
@@ -754,14 +979,7 @@ pub extern "C" fn js_node_stream_compose(args: *const crate::array::ArrayHeader)
 /// Variadic `stream.compose(...)` entry used by bound native-module property
 /// reads and by direct named imports through codegen's packed varargs ABI.
 pub extern "C" fn js_node_stream_compose_args(args: *const crate::array::ArrayHeader) -> f64 {
-    let args = pipeline_args(args);
-    if args.is_empty() {
-        throw_pipeline_missing_streams();
-    }
-    if args.len() == 1 {
-        return node_stream_duplex_from_source_chunks(args[0]);
-    }
-    js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
+    build_node_stream_compose(pipeline_args(args))
 }
 
 pub(super) fn add_finished_once_listeners(
@@ -912,16 +1130,77 @@ pub extern "C" fn js_node_stream_pipeline(args: *const crate::array::ArrayHeader
     *stages.last().unwrap_or(&f64::from_bits(TAG_UNDEFINED))
 }
 
+pub(super) extern "C" fn duplex_pair_write_callback(
+    closure: *const ClosureHeader,
+    chunk: f64,
+    _encoding: f64,
+    cb: f64,
+) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let peer = js_closure_get_capture_f64(closure, 0);
+    if get_hidden_value(peer, hidden_readable_flag_key()).is_some() && !stream_destroyed(peer) {
+        mark_disturbed(peer);
+        if readable_is_flowing(peer) {
+            emit_readable_data(peer, chunk);
+        } else {
+            buffer_pending_readable_chunk(peer, chunk);
+        }
+    }
+    call_listener_args(peer, cb, &[]);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+pub(super) extern "C" fn duplex_pair_final_callback(closure: *const ClosureHeader, cb: f64) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let peer = js_closure_get_capture_f64(closure, 0);
+    schedule_readable_end(peer);
+    call_listener_args(peer, cb, &[]);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+fn install_duplex_pair_endpoint(endpoint: f64, peer: f64) {
+    let raw = raw_ptr_from_value(endpoint);
+    if raw < 0x10000 {
+        return;
+    }
+    let obj = raw as *mut ObjectHeader;
+    let write = js_closure_alloc(duplex_pair_write_callback as *const u8, 1);
+    js_closure_set_capture_f64(write, 0, peer);
+    js_object_set_field_by_name(
+        obj,
+        hidden_write_key(),
+        f64::from_bits(JSValue::pointer(write as *const u8).bits()),
+    );
+
+    let final_cb = js_closure_alloc(duplex_pair_final_callback as *const u8, 1);
+    js_closure_set_capture_f64(final_cb, 0, peer);
+    js_object_set_field_by_name(
+        obj,
+        hidden_writable_final_key(),
+        f64::from_bits(JSValue::pointer(final_cb as *const u8).bits()),
+    );
+
+    set_hidden_value(endpoint, hidden_key(b"duplexPairPeer"), peer);
+    set_hidden_value(
+        endpoint,
+        hidden_key(b"writableCustomSink"),
+        f64::from_bits(TAG_TRUE),
+    );
+}
+
 /// #1539: `stream.duplexPair([options])` returns a two-element array
 /// `[Duplex, Duplex]` where writes to one show up as reads on the
-/// other and vice versa. Perry's stubs return a pair of unrelated
-/// Duplex stubs so the shape (`const [a, b] = duplexPair()`,
-/// `a instanceof Duplex`) matches; cross-stream piping is the real
-/// missing piece, tracked separately.
+/// other and vice versa.
 #[no_mangle]
 pub extern "C" fn js_node_stream_duplex_pair(_opts: f64) -> f64 {
     let a = js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED));
     let b = js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED));
+    install_duplex_pair_endpoint(a, b);
+    install_duplex_pair_endpoint(b, a);
     let arr = crate::array::js_array_alloc(2);
     crate::array::js_array_push(arr, JSValue::from_bits(a.to_bits()));
     crate::array::js_array_push(arr, JSValue::from_bits(b.to_bits()));

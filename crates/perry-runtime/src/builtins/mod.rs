@@ -61,7 +61,7 @@ pub use console::{
     js_console_error_number, js_console_error_spread, js_console_group, js_console_group_begin,
     js_console_group_end, js_console_log, js_console_log_as_closure, js_console_log_dynamic,
     js_console_log_i32, js_console_log_i64, js_console_log_number, js_console_log_spread,
-    js_console_new, js_console_noop, js_console_time, js_console_time_end,
+    js_console_new, js_console_new2, js_console_noop, js_console_time, js_console_time_end,
     js_console_time_end_value, js_console_time_log, js_console_time_log_spread,
     js_console_time_log_value, js_console_time_value, js_console_trace, js_console_trace_spread,
     js_console_warn_dynamic, js_console_warn_i32, js_console_warn_number, js_console_warn_spread,
@@ -89,9 +89,10 @@ pub(crate) use formatting::{
 
 pub use globals::{
     js_decode_uri, js_decode_uri_component, js_drain_queued_microtasks, js_encode_uri,
-    js_encode_uri_component, js_queue_microtask, js_queue_next_tick, js_structured_clone,
-    js_text_decoder_decode, js_text_encoder_encode, restore_queued_microtask_contexts,
-    scan_queued_microtask_roots, scan_queued_microtask_roots_mut,
+    js_encode_uri_component, js_queue_microtask, js_queue_next_tick, js_queue_next_tick_args,
+    js_structured_clone, js_text_decoder_decode, js_text_encoder_encode,
+    restore_queued_microtask_contexts, scan_queued_microtask_roots,
+    scan_queued_microtask_roots_mut,
 };
 
 pub use numbers::{

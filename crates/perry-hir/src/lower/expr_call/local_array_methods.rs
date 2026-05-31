@@ -146,39 +146,43 @@ pub(super) fn try_local_array_methods(
                     if let Some(array_id) = ctx.lookup_local(&arr_name) {
                         match method_name {
                             "push" => {
-                                if !args.is_empty() {
-                                    // Check if any argument has spread operator —
-                                    // when present, route through the spread path.
-                                    // Multi-arg push without spread is desugared to a
-                                    // Sequence of ArrayPush statements (one per arg);
-                                    // JS spec returns the final array length, which is
-                                    // exactly what the last ArrayPush returns.
-                                    let any_spread = call.args.iter().any(|a| a.spread.is_some());
-                                    if any_spread {
-                                        if args.len() == 1 {
-                                            return Ok(Ok(Expr::ArrayPushSpread {
-                                                array_id,
-                                                source: Box::new(args.into_iter().next().unwrap()),
-                                            }));
-                                        }
-                                        // Mixed regular + spread: bail to generic
-                                        // dispatch (no current single-IR-shape).
-                                    } else {
-                                        if args.len() == 1 {
-                                            return Ok(Ok(Expr::ArrayPush {
-                                                array_id,
-                                                value: Box::new(args.into_iter().next().unwrap()),
-                                            }));
-                                        }
-                                        let mut stmts: Vec<Expr> = Vec::with_capacity(args.len());
-                                        for a in args.into_iter() {
-                                            stmts.push(Expr::ArrayPush {
-                                                array_id,
-                                                value: Box::new(a),
-                                            });
-                                        }
-                                        return Ok(Ok(Expr::Sequence(stmts)));
+                                if args.is_empty() {
+                                    return Ok(Ok(Expr::PropertyGet {
+                                        object: Box::new(Expr::LocalGet(array_id)),
+                                        property: "length".to_string(),
+                                    }));
+                                }
+                                // Check if any argument has spread operator —
+                                // when present, route through the spread path.
+                                // Multi-arg push without spread is desugared to a
+                                // Sequence of ArrayPush expressions (one per arg);
+                                // JS spec returns the final array length, which is
+                                // exactly what the last ArrayPush returns.
+                                let any_spread = call.args.iter().any(|a| a.spread.is_some());
+                                if any_spread {
+                                    if args.len() == 1 {
+                                        return Ok(Ok(Expr::ArrayPushSpread {
+                                            array_id,
+                                            source: Box::new(args.into_iter().next().unwrap()),
+                                        }));
                                     }
+                                    // Mixed regular + spread: bail to generic
+                                    // dispatch (no current single-IR-shape).
+                                } else {
+                                    if args.len() == 1 {
+                                        return Ok(Ok(Expr::ArrayPush {
+                                            array_id,
+                                            value: Box::new(args.into_iter().next().unwrap()),
+                                        }));
+                                    }
+                                    let mut stmts: Vec<Expr> = Vec::with_capacity(args.len());
+                                    for a in args.into_iter() {
+                                        stmts.push(Expr::ArrayPush {
+                                            array_id,
+                                            value: Box::new(a),
+                                        });
+                                    }
+                                    return Ok(Ok(Expr::Sequence(stmts)));
                                 }
                             }
                             "pop" => {
@@ -188,7 +192,11 @@ pub(super) fn try_local_array_methods(
                                 return Ok(Ok(Expr::ArrayShift(array_id)));
                             }
                             "unshift" => {
-                                if !args.is_empty() {
+                                // #2814: the single-value fast path only handles
+                                // exactly one argument. Zero-arg and multi-arg
+                                // calls fall through to generic dispatch, which
+                                // routes to the variadic runtime helper.
+                                if args.len() == 1 {
                                     return Ok(Ok(Expr::ArrayUnshift {
                                         array_id,
                                         value: Box::new(args.into_iter().next().unwrap()),
@@ -196,18 +204,27 @@ pub(super) fn try_local_array_methods(
                                 }
                             }
                             "indexOf" => {
+                                // #2804: carry the optional fromIndex (2nd arg).
                                 if !args.is_empty() {
+                                    let mut it = args.into_iter();
+                                    let value = it.next().unwrap();
+                                    let from_index = it.next().map(Box::new);
                                     return Ok(Ok(Expr::ArrayIndexOf {
                                         array: Box::new(Expr::LocalGet(array_id)),
-                                        value: Box::new(args.into_iter().next().unwrap()),
+                                        value: Box::new(value),
+                                        from_index,
                                     }));
                                 }
                             }
                             "includes" => {
                                 if !args.is_empty() {
+                                    let mut it = args.into_iter();
+                                    let value = it.next().unwrap();
+                                    let from_index = it.next().map(Box::new);
                                     return Ok(Ok(Expr::ArrayIncludes {
                                         array: Box::new(Expr::LocalGet(array_id)),
-                                        value: Box::new(args.into_iter().next().unwrap()),
+                                        value: Box::new(value),
+                                        from_index,
                                     }));
                                 }
                             }
@@ -231,10 +248,22 @@ pub(super) fn try_local_array_methods(
                             "slice" => {
                                 // arr.slice(start, end?) - returns new array
                                 // Only convert to ArraySlice if we KNOW it's an Array type
-                                // (Type::Any could be a string, which has its own .slice() method)
+                                // (Type::Any could be a string, which has its own .slice() method).
+                                // TypedArray receivers (#3148) also route here so
+                                // `int32arr.slice(1,3)` returns a same-kind TypedArray
+                                // (js_array_slice delegates via lookup_typed_array_kind).
                                 let is_definitely_array = ctx
                                     .lookup_local_type(&arr_name)
-                                    .map(|ty| matches!(ty, Type::Array(_)))
+                                    .map(|ty| {
+                                        matches!(ty, Type::Array(_))
+                                            || matches!(ty, Type::Named(n) if matches!(
+                                                n.as_str(),
+                                                "Int8Array" | "Int16Array" | "Int32Array"
+                                                | "Uint16Array" | "Uint32Array"
+                                                | "Float16Array" | "Float32Array" | "Float64Array"
+                                                | "BigInt64Array" | "BigUint64Array"
+                                            ))
+                                    })
                                     .unwrap_or(false);
                                 if is_definitely_array && !args.is_empty() {
                                     let mut args_iter = args.into_iter();
@@ -250,18 +279,21 @@ pub(super) fn try_local_array_methods(
                             }
                             "splice" => {
                                 // arr.splice(start, deleteCount?, ...items) - returns deleted elements
-                                if !args.is_empty() {
-                                    let mut args_iter = args.into_iter();
-                                    let start = args_iter.next().unwrap();
-                                    let delete_count = args_iter.next();
-                                    let items: Vec<Expr> = args_iter.collect();
-                                    return Ok(Ok(Expr::ArraySplice {
-                                        array_id,
-                                        start: Box::new(start),
-                                        delete_count: delete_count.map(Box::new),
-                                        items,
-                                    }));
-                                }
+                                let has_start = !args.is_empty();
+                                let mut args_iter = args.into_iter();
+                                let start = args_iter.next().unwrap_or(Expr::Number(0.0));
+                                let delete_count = if has_start {
+                                    args_iter.next().map(Box::new)
+                                } else {
+                                    Some(Box::new(Expr::Number(0.0)))
+                                };
+                                let items: Vec<Expr> = args_iter.collect();
+                                return Ok(Ok(Expr::ArraySplice {
+                                    array_id,
+                                    start: Box::new(start),
+                                    delete_count,
+                                    items,
+                                }));
                             }
                             "forEach" => {
                                 // Check if the receiver is a Map or Set - if so, don't use ArrayForEach.
@@ -312,7 +344,7 @@ pub(super) fn try_local_array_methods(
                                             "Int8Array" | "Int16Array" | "Int32Array"
                                             | "Uint8Array" | "Uint8ClampedArray"
                                             | "Uint16Array" | "Uint32Array"
-                                            | "Float32Array" | "Float64Array"
+                                            | "Float16Array" | "Float32Array" | "Float64Array"
                                             | "BigInt64Array" | "BigUint64Array"
                                         ))
                                     })
@@ -447,18 +479,23 @@ pub(super) fn try_local_array_methods(
                                 }));
                             }
                             "toSpliced" => {
-                                if args.len() >= 2 {
-                                    let mut args_iter = args.into_iter();
-                                    let start = args_iter.next().unwrap();
-                                    let delete_count = args_iter.next().unwrap();
-                                    let items: Vec<Expr> = args_iter.collect();
-                                    return Ok(Ok(Expr::ArrayToSpliced {
-                                        array: Box::new(Expr::LocalGet(array_id)),
-                                        start: Box::new(start),
-                                        delete_count: Box::new(delete_count),
-                                        items,
-                                    }));
-                                }
+                                // #2794: handle omitted args (0 -> copy, 1 ->
+                                // delete through end via +Infinity deleteCount).
+                                let arg_count = args.len();
+                                let mut args_iter = args.into_iter();
+                                let start = args_iter.next().unwrap_or(Expr::Number(0.0));
+                                let delete_count = match args_iter.next() {
+                                    Some(dc) => dc,
+                                    None if arg_count >= 1 => Expr::Number(f64::INFINITY),
+                                    None => Expr::Number(0.0),
+                                };
+                                let items: Vec<Expr> = args_iter.collect();
+                                return Ok(Ok(Expr::ArrayToSpliced {
+                                    array: Box::new(Expr::LocalGet(array_id)),
+                                    start: Box::new(start),
+                                    delete_count: Box::new(delete_count),
+                                    items,
+                                }));
                             }
                             "with" => {
                                 // Issue #515: only fold `arr.with(idx, val)` to
@@ -484,7 +521,7 @@ pub(super) fn try_local_array_methods(
                                             "Int8Array" | "Int16Array" | "Int32Array"
                                             | "Uint8Array" | "Uint8ClampedArray"
                                             | "Uint16Array" | "Uint32Array"
-                                            | "Float32Array" | "Float64Array"
+                                            | "Float16Array" | "Float32Array" | "Float64Array"
                                             | "BigInt64Array" | "BigUint64Array"
                                         ))
                                     })
@@ -506,7 +543,27 @@ pub(super) fn try_local_array_methods(
                                 // Fall through to general method dispatch
                             }
                             "copyWithin" => {
-                                if args.len() >= 2 {
+                                // #2879: typed-array receivers must NOT fold to
+                                // `Expr::ArrayCopyWithin` — that path treats the
+                                // receiver as an `ArrayHeader` with boxed f64 slots,
+                                // which is invalid for `TypedArrayHeader` raw
+                                // storage. Fall through so they reach the runtime
+                                // `js_typed_array_copy_within` arm in
+                                // `js_native_call_method`.
+                                let is_typed_array = ctx
+                                    .lookup_local_type(&arr_name)
+                                    .map(|ty| {
+                                        matches!(ty, Type::Named(n) if matches!(
+                                            n.as_str(),
+                                            "Int8Array" | "Int16Array" | "Int32Array"
+                                            | "Uint8Array" | "Uint8ClampedArray"
+                                            | "Uint16Array" | "Uint32Array"
+                                            | "Float16Array" | "Float32Array" | "Float64Array"
+                                            | "BigInt64Array" | "BigUint64Array"
+                                        ))
+                                    })
+                                    .unwrap_or(false);
+                                if !is_typed_array && args.len() >= 2 {
                                     let mut args_iter = args.into_iter();
                                     let target = args_iter.next().unwrap();
                                     let start = args_iter.next().unwrap();
@@ -561,43 +618,36 @@ pub(super) fn try_local_array_methods(
                                     Some(Type::Union(variants)) => variants.iter().any(ty_is_array),
                                     _ => false,
                                 };
+                                // #2856: Map/Set `entries`/`keys`/`values`
+                                // are NOT folded to the Array-materializing
+                                // `Map*`/`SetValues` HIR variants here. Those
+                                // variants are reserved for the for-of /
+                                // spread fast paths (which iterate the
+                                // collection directly); a *value-level* call
+                                // must return a real iterator OBJECT. Letting
+                                // these fall through to general dispatch routes
+                                // them to codegen's `is_map_expr`/`is_set_expr`
+                                // branch → `js_*_iter_obj`. The `is_map`/
+                                // `is_set` flags are still computed above so
+                                // the array fold below doesn't claim them.
+                                let _ = (is_map, is_set);
                                 match method_name {
                                     "entries" => {
-                                        if is_map {
-                                            return Ok(Ok(Expr::MapEntries(Box::new(
-                                                Expr::LocalGet(array_id),
-                                            ))));
-                                        }
-                                        if is_known_array {
+                                        if !is_map && !is_set && is_known_array {
                                             return Ok(Ok(Expr::ArrayEntries(Box::new(
                                                 Expr::LocalGet(array_id),
                                             ))));
                                         }
                                     }
                                     "keys" => {
-                                        if is_map {
-                                            return Ok(Ok(Expr::MapKeys(Box::new(
-                                                Expr::LocalGet(array_id),
-                                            ))));
-                                        }
-                                        if is_known_array {
+                                        if !is_map && !is_set && is_known_array {
                                             return Ok(Ok(Expr::ArrayKeys(Box::new(
                                                 Expr::LocalGet(array_id),
                                             ))));
                                         }
                                     }
                                     "values" => {
-                                        if is_map {
-                                            return Ok(Ok(Expr::MapValues(Box::new(
-                                                Expr::LocalGet(array_id),
-                                            ))));
-                                        }
-                                        if is_set {
-                                            return Ok(Ok(Expr::SetValues(Box::new(
-                                                Expr::LocalGet(array_id),
-                                            ))));
-                                        }
-                                        if is_known_array {
+                                        if !is_map && !is_set && is_known_array {
                                             return Ok(Ok(Expr::ArrayValues(Box::new(
                                                 Expr::LocalGet(array_id),
                                             ))));
@@ -605,8 +655,9 @@ pub(super) fn try_local_array_methods(
                                     }
                                     _ => unreachable!(),
                                 }
-                                // Fall through: receiver type unknown — let general
-                                // dispatch (js_native_call_method) inspect at runtime.
+                                // Fall through: Map/Set or unknown receiver —
+                                // general dispatch (codegen Map/Set branch or
+                                // runtime `js_native_call_method`) handles it.
                             }
                             // Map methods (only apply to actual Map/Set types)
                             "set" => {
@@ -780,14 +831,16 @@ pub(super) fn try_local_array_methods(
                             .unwrap_or(false);
                         if is_text_decoder {
                             if method_name == "decode" {
-                                if !args.is_empty() {
-                                    return Ok(Ok(Expr::TextDecoderDecode(Box::new(
-                                        args.into_iter().next().unwrap(),
-                                    ))));
+                                let decoder = lower_expr(ctx, &member.obj)?;
+                                let input = if !args.is_empty() {
+                                    args.into_iter().next().unwrap()
                                 } else {
-                                    // decode() with no args returns empty string
-                                    return Ok(Ok(Expr::String(String::new())));
-                                }
+                                    Expr::Undefined
+                                };
+                                return Ok(Ok(Expr::TextDecoderDecode {
+                                    decoder: Box::new(decoder),
+                                    input: Box::new(input),
+                                }));
                             }
                         }
                     }

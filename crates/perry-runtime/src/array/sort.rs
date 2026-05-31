@@ -56,12 +56,71 @@ pub extern "C" fn js_array_sort_default(arr: *mut ArrayHeader) -> *mut ArrayHead
         pairs.sort_by(|a, b| a.0.cmp(&b.0));
 
         for (i, (_, val)) in pairs.into_iter().enumerate() {
+            // GC_STORE_AUDIT(BARRIERED): default sort writes are followed by layout/barrier rebuild.
             *elements_ptr.add(i) = val;
         }
         rebuild_array_layout(arr);
 
         arr
     }
+}
+
+/// Validate a `sort` / `toSorted` comparator argument (#2796).
+///
+/// Per ECMA-262, the comparator must be either `undefined` or a callable
+/// function; any other value throws `TypeError` *before* sorting begins.
+/// Takes the raw NaN-boxed comparator value (NOT a pre-unboxed pointer) so
+/// it can distinguish `undefined`/`null`/numbers/etc.
+///
+/// Returns the resolved `ClosureHeader*` (as `i64`) for the comparator path,
+/// or `0` when the argument is `undefined` (use the default sort path).
+#[no_mangle]
+pub extern "C" fn js_validate_array_comparator(cmp_boxed: f64) -> i64 {
+    use crate::value::JSValue;
+    let jv = JSValue::from_bits(cmp_boxed.to_bits());
+    // undefined -> default sort path.
+    if jv.is_undefined() {
+        return 0;
+    }
+    // Callable function -> comparator path.
+    if jv.is_pointer() {
+        let ptr = jv.as_pointer::<ClosureHeader>();
+        if !ptr.is_null() && unsafe { (*ptr).type_tag == crate::closure::CLOSURE_MAGIC } {
+            return ptr as i64;
+        }
+    }
+    // Anything else (null, number, string, object, boolean) is a TypeError.
+    throw_invalid_comparator(cmp_boxed);
+}
+
+#[used]
+static KEEP_VALIDATE_ARRAY_COMPARATOR: extern "C" fn(f64) -> i64 = js_validate_array_comparator;
+
+#[cold]
+fn throw_invalid_comparator(cmp_boxed: f64) -> ! {
+    // Stringify the supplied value the way Node renders it in the message,
+    // e.g. "null", "1". `js_jsvalue_to_string` yields the JS String form.
+    let value_str = {
+        let sp = crate::value::js_jsvalue_to_string(cmp_boxed);
+        if sp.is_null() {
+            String::new()
+        } else {
+            unsafe {
+                let header = &*(sp as *const crate::string::StringHeader);
+                let bytes_ptr =
+                    (sp as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+                let slice = std::slice::from_raw_parts(bytes_ptr, header.byte_len as usize);
+                std::str::from_utf8(slice).unwrap_or("").to_string()
+            }
+        }
+    };
+    let message = format!(
+        "The comparison function must be either a function or undefined: {}",
+        value_str
+    );
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
 }
 
 /// sort - sort array in-place using a comparator closure
@@ -72,6 +131,11 @@ pub extern "C" fn js_array_sort_with_comparator(
     arr: *mut ArrayHeader,
     comparator: *const ClosureHeader,
 ) -> *mut ArrayHeader {
+    // #2796: a null comparator (validated `undefined`, or absent) means
+    // "use the default sort path".
+    if comparator.is_null() {
+        return js_array_sort_default(arr);
+    }
     unsafe {
         let arr = clean_arr_ptr(arr as *const ArrayHeader) as *mut ArrayHeader;
         if arr.is_null() {
@@ -129,6 +193,7 @@ pub extern "C" fn js_array_sort_with_comparator(
                 while j >= 0 {
                     let cmp = cmp_with(comparator, direct_call, *elements_ptr.add(j as usize), key);
                     if cmp > 0.0 {
+                        // GC_STORE_AUDIT(BARRIERED): insertion-sort shift is included in the rebuild below.
                         ptr::write(
                             elements_ptr.add((j + 1) as usize),
                             *elements_ptr.add(j as usize),
@@ -138,6 +203,7 @@ pub extern "C" fn js_array_sort_with_comparator(
                         break;
                     }
                 }
+                // GC_STORE_AUDIT(BARRIERED): insertion-sort key write is included in the rebuild below.
                 ptr::write(elements_ptr.add((j + 1) as usize), key);
             }
         } else {
@@ -156,6 +222,7 @@ pub extern "C" fn js_array_sort_with_comparator(
                         let cmp =
                             cmp_with(comparator, direct_call, *elements_ptr.add(j as usize), key);
                         if cmp > 0.0 {
+                            // GC_STORE_AUDIT(BARRIERED): large-sort insertion shift is included in the rebuild below.
                             ptr::write(
                                 elements_ptr.add((j + 1) as usize),
                                 *elements_ptr.add(j as usize),
@@ -165,6 +232,7 @@ pub extern "C" fn js_array_sort_with_comparator(
                             break;
                         }
                     }
+                    // GC_STORE_AUDIT(BARRIERED): large-sort insertion key write is included in the rebuild below.
                     ptr::write(elements_ptr.add((j + 1) as usize), key);
                 }
                 run_start = run_end;
@@ -187,6 +255,7 @@ pub extern "C" fn js_array_sort_with_comparator(
                     let mut l = left;
                     let mut r = mid;
                     let mut k = left;
+                    // GC_STORE_AUDIT(STACK): merge destination is a function-local Vec buffer, not GC heap.
                     while l < mid && r < right {
                         let cmp = cmp_with(comparator, direct_call, *src.add(l), *src.add(r));
                         if cmp <= 0.0 {
@@ -198,11 +267,13 @@ pub extern "C" fn js_array_sort_with_comparator(
                         }
                         k += 1;
                     }
+                    // GC_STORE_AUDIT(STACK): remaining left run copies into the temporary merge buffer.
                     while l < mid {
                         *dst.add(k) = *src.add(l);
                         l += 1;
                         k += 1;
                     }
+                    // GC_STORE_AUDIT(STACK): remaining right run copies into the temporary merge buffer.
                     while r < right {
                         *dst.add(k) = *src.add(r);
                         r += 1;
@@ -218,6 +289,7 @@ pub extern "C" fn js_array_sort_with_comparator(
 
             // If final result is in buf, copy back to elements
             if src != elements_ptr {
+                // GC_STORE_AUDIT(BARRIERED): merge buffer copyback is followed by layout/barrier rebuild.
                 ptr::copy_nonoverlapping(src, elements_ptr, length);
             }
         }

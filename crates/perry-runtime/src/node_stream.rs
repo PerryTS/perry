@@ -33,6 +33,7 @@ use crate::value::JSValue;
 use std::os::raw::c_int;
 
 mod async_iterator;
+mod readable_from_promises;
 
 #[path = "node_stream_event_emitter.rs"]
 mod event_emitter;
@@ -44,6 +45,9 @@ use event_emitter::{
     ns_remove_listener2, ns_set_max_listeners, remove_stream_listener_for_event,
     stream_listener_count_for_event,
 };
+// #3049 — `process.setMaxListeners` reuses the EventEmitter setter
+// validation (TypeError/RangeError + fractional/Infinity storage).
+pub(crate) use event_emitter::validate_max_listeners;
 pub use event_emitter::{
     js_node_stream_method_event_names, js_node_stream_method_get_max_listeners,
     js_node_stream_method_listener_count, js_node_stream_method_listeners,
@@ -72,6 +76,7 @@ const DUPLEX_SHAPE_ID: u32 = 0x7FFF_FEE0;
 // can't collide as method sets grow.
 const WEB_STREAM_SHAPE_ID: u32 = 0x7FFF_FF20;
 const READABLE_CHUNKS_KEY: &[u8] = b"__perryReadableChunks";
+const READABLE_SOURCE_ITERATOR_KEY: &[u8] = b"__perryReadableSourceIterator";
 const READABLE_ERROR_KEY: &[u8] = b"__perryReadableError";
 const READABLE_SIGNAL_KEY: &[u8] = b"__perryReadableSignal";
 const READABLE_READ_KEY: &[u8] = b"__perryReadableRead";
@@ -159,6 +164,79 @@ extern "C" fn ns_chain3(closure: *const ClosureHeader, _a: f64, _b: f64, _c: f64
     this_value(closure)
 }
 
+fn call_old_stream_on(old_stream: f64, event: &[u8], listener: *const ClosureHeader) {
+    let handle = raw_ptr_from_value(old_stream) as i64;
+    if handle == 0 {
+        return;
+    }
+    let Some(probe) = crate::object::event_emitter_handle_probe() else {
+        return;
+    };
+    if unsafe { !probe(handle) } {
+        return;
+    }
+    let Some(on) = crate::object::event_emitter_on() else {
+        return;
+    };
+    let event = crate::string::js_string_from_bytes(event.as_ptr(), event.len() as u32);
+    unsafe { on(handle, event, listener as i64) };
+}
+
+extern "C" fn ns_wrap_data(closure: *const ClosureHeader, chunk: f64) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let _ = push_chunk(stream, chunk);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn ns_wrap_end(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let _ = push_chunk(stream, f64::from_bits(TAG_NULL));
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn ns_wrap_error(closure: *const ClosureHeader, err: f64) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    destroy_stream(stream, err);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn ns_wrap_close(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    destroy_stream(stream, f64::from_bits(TAG_UNDEFINED));
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn ns_wrap1(closure: *const ClosureHeader, old_stream: f64) -> f64 {
+    let stream = this_value(closure);
+    let data = js_closure_alloc(ns_wrap_data as *const u8, 1);
+    let end = js_closure_alloc(ns_wrap_end as *const u8, 1);
+    let error = js_closure_alloc(ns_wrap_error as *const u8, 1);
+    let close = js_closure_alloc(ns_wrap_close as *const u8, 1);
+    js_closure_set_capture_ptr(data, 0, stream.to_bits() as i64);
+    js_closure_set_capture_ptr(end, 0, stream.to_bits() as i64);
+    js_closure_set_capture_ptr(error, 0, stream.to_bits() as i64);
+    js_closure_set_capture_ptr(close, 0, stream.to_bits() as i64);
+
+    call_old_stream_on(old_stream, b"data", data);
+    call_old_stream_on(old_stream, b"end", end);
+    call_old_stream_on(old_stream, b"error", error);
+    call_old_stream_on(old_stream, b"close", close);
+    call_old_stream_on(old_stream, b"destroy", close);
+    stream
+}
+
 extern "C" fn ns_readable_from_drain(closure: *const ClosureHeader) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -178,6 +256,9 @@ extern "C" fn ns_readable_event_microtask(closure: *const ClosureHeader) -> f64 
         return f64::from_bits(TAG_UNDEFINED);
     }
     let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    if !has_truthy_hidden(stream, hidden_readable_scheduled_key()) {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     set_hidden_value(
         stream,
         hidden_readable_scheduled_key(),
@@ -326,7 +407,7 @@ extern "C" fn ns_writable_final_callback_done(closure: *const ClosureHeader, err
         }
         return f64::from_bits(TAG_UNDEFINED);
     }
-    schedule_writable_finish(
+    schedule_writable_finish_then_transform_end(
         stream,
         if is_callable_value(callback) {
             Some(callback)
@@ -613,15 +694,10 @@ extern "C" fn ns_unshift1(closure: *const ClosureHeader, chunk: f64) -> f64 {
 }
 
 /// `readable.compose(stream)` (#1539): the instance-method form of
-/// `stream.compose`. Retained-chunk Readables can eagerly compose through a
-/// single Transform/PassThrough so downstream iterator helpers still see a
-/// readable chunk snapshot; unsupported forms keep the historical shape stub.
+/// `stream.compose`, routed through the shared compose builder so the same
+/// data-flow and error handling paths cover module and prototype calls.
 extern "C" fn ns_compose1(closure: *const ClosureHeader, arg: f64) -> f64 {
-    let source = this_value(closure);
-    if let Some(composed) = compose_readable_snapshot(source, arg) {
-        return composed;
-    }
-    js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
+    build_node_stream_compose(vec![this_value(closure), arg])
 }
 
 extern "C" fn ns_pipe2(closure: *const ClosureHeader, dest: f64, options: f64) -> f64 {
@@ -1166,6 +1242,11 @@ fn complete_writable_write(stream: f64, len: f64, callback: f64, err: f64) {
 }
 
 fn emit_writable_chunk(stream: f64, chunk: f64) {
+    // Custom Duplex sinks own readable output by calling push(); the generic
+    // Perry fallback auto-echoes only when there is no user write sink.
+    if has_truthy_hidden(stream, hidden_key(b"writableCustomSink")) {
+        return;
+    }
     if has_truthy_hidden(stream, hidden_readable_flag_key()) {
         mark_disturbed(stream);
         if readable_is_flowing(stream) {
@@ -1177,10 +1258,14 @@ fn emit_writable_chunk(stream: f64, chunk: f64) {
 }
 
 fn finish_stream(stream: f64, callback: Option<f64>) {
-    mark_stream_ended(stream);
-    refresh_readable_aborted_flag(stream);
+    let pair_peer = get_hidden_value(stream, hidden_key(b"duplexPairPeer"));
+    if pair_peer.is_none() {
+        mark_stream_ended(stream);
+        refresh_readable_aborted_flag(stream);
+    }
     mark_writable_ended(stream);
-    if get_hidden_value(stream, hidden_readable_flag_key()).is_none()
+    if pair_peer.is_none()
+        && get_hidden_value(stream, hidden_readable_flag_key()).is_none()
         && !has_truthy_hidden(stream, hidden_end_emitted_key())
     {
         set_hidden_value(stream, hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));
@@ -1192,7 +1277,7 @@ fn finish_stream(stream: f64, callback: Option<f64>) {
         set_pending_writable_finish_callback(stream, callback);
         return;
     }
-    schedule_writable_finish(stream, callback);
+    schedule_writable_finish_then_transform_end(stream, callback);
 }
 
 fn finish_stream_with_args(stream: f64, chunk: f64, encoding: f64, cb: f64) {
@@ -1589,6 +1674,10 @@ pub use pipeline::*;
 #[path = "node_stream_readwrite.rs"]
 mod readwrite;
 pub use readwrite::*;
+
+#[path = "node_stream_json.rs"]
+mod json_stream;
+pub use json_stream::*;
 
 #[path = "node_stream_constructors.rs"]
 mod constructors;

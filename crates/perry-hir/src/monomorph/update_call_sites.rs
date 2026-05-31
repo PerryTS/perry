@@ -368,9 +368,21 @@ fn update_call_sites_in_expr(
         | Expr::ArrayPushSpread { source: value, .. } => {
             update_call_sites_in_expr(value, ctx, lookup);
         }
-        Expr::ArrayIndexOf { array, value } | Expr::ArrayIncludes { array, value } => {
+        Expr::ArrayIndexOf {
+            array,
+            value,
+            from_index,
+        }
+        | Expr::ArrayIncludes {
+            array,
+            value,
+            from_index,
+        } => {
             update_call_sites_in_expr(array, ctx, lookup);
             update_call_sites_in_expr(value, ctx, lookup);
+            if let Some(fi) = from_index {
+                update_call_sites_in_expr(fi, ctx, lookup);
+            }
         }
         Expr::ArraySlice { array, start, end } => {
             update_call_sites_in_expr(array, ctx, lookup);
@@ -435,7 +447,10 @@ fn update_call_sites_in_expr(
             update_call_sites_in_expr(set, ctx, lookup);
         }
         // JSON operations
-        Expr::JsonParse(expr) | Expr::JsonStringify(expr) => {
+        Expr::JsonParse(expr)
+        | Expr::JsonStringify(expr)
+        | Expr::JsonRawJson(expr)
+        | Expr::JsonIsRawJson(expr) => {
             update_call_sites_in_expr(expr, ctx, lookup);
         }
         // Math operations
@@ -467,6 +482,7 @@ fn update_call_sites_in_expr(
             update_call_sites_in_expr(expr, ctx, lookup);
         }
         Expr::CryptoRandomUUID => {}
+        Expr::CryptoRandomUUIDv7 => {}
         // Date operations
         Expr::DateNow => {}
         Expr::DateNew(args) => {

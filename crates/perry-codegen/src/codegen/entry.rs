@@ -277,6 +277,7 @@ pub(super) fn compile_module_entry(
             closure_rest_params: closure_rest_params,
             local_closure_func_ids: HashMap::new(),
             local_closure_param_counts: HashMap::new(),
+            option_object_locals: HashMap::new(),
             namespace_imports: &cross_module.namespace_imports,
             namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
             namespace_member_prefixes: &cross_module.namespace_member_prefixes,
@@ -431,7 +432,7 @@ pub(super) fn compile_module_entry(
                 // don't need the full event loop.
                 for _ in 0..4 {
                     let _ = ctx.block().call(I32, "js_promise_run_microtasks", &[]);
-                    let _ = ctx.block().call(I32, "js_timer_tick", &[]);
+                    let _ = ctx.block().call(I32, "js_timer_tick_if_refed", &[]);
                     let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
                     let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
                 }
@@ -489,7 +490,7 @@ pub(super) fn compile_module_entry(
                 ctx.block()
                     .call_void("js_process_emit_before_exit", &[(DOUBLE, &zero_code)]);
                 let _ = ctx.block().call(I32, "js_promise_run_microtasks", &[]);
-                let _ = ctx.block().call(I32, "js_timer_tick", &[]);
+                let _ = ctx.block().call(I32, "js_timer_tick_if_refed", &[]);
                 let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
                 let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
                 ctx.block().ret(I32, "0");
@@ -693,6 +694,7 @@ pub(super) fn compile_module_entry(
             closure_rest_params: closure_rest_params,
             local_closure_func_ids: HashMap::new(),
             local_closure_param_counts: HashMap::new(),
+            option_object_locals: HashMap::new(),
             namespace_imports: &cross_module.namespace_imports,
             namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
             namespace_member_prefixes: &cross_module.namespace_member_prefixes,

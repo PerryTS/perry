@@ -3,6 +3,28 @@
 
 use super::*;
 
+/// JS index coercion for the String character-access methods (#2787).
+/// Applies `ToIntegerOrInfinity`: `undefined`, `null`, and `NaN` are all NaN /
+/// non-numeric bit patterns that map to `0`; finite values truncate toward
+/// zero; the result is clamped into `i32` so the integer-index helpers below
+/// see a safe value (a far-out-of-range magnitude clamps to a still-OOB index,
+/// which the helpers already handle). Codegen routes the raw NaN-boxed index
+/// through here instead of `fptosi`, which is undefined behavior on a NaN.
+#[no_mangle]
+pub extern "C" fn js_string_index_to_i32(index: f64) -> i32 {
+    if index.is_nan() {
+        return 0;
+    }
+    let truncated = index.trunc();
+    if truncated <= i32::MIN as f64 {
+        i32::MIN
+    } else if truncated >= i32::MAX as f64 {
+        i32::MAX
+    } else {
+        truncated as i32
+    }
+}
+
 /// Get character code at index (returns UTF-16 code unit, or NaN if out of bounds).
 /// Index is in UTF-16 code units (matches JS spec). For ASCII strings this is
 /// equivalent to byte indexing; for multi-byte UTF-8 we walk codepoints without
@@ -102,6 +124,7 @@ pub extern "C" fn js_string_to_char_array(s: i64) -> i64 {
         let nanboxed =
             f64::from_bits(crate::value::STRING_TAG | (ch_ptr as u64 & crate::value::POINTER_MASK));
         unsafe {
+            // GC_STORE_AUDIT(BARRIERED): char array slot is immediately recorded via note_array_slot.
             *elements.add(i) = nanboxed;
             crate::array::note_array_slot(arr, i, nanboxed.to_bits());
         }
@@ -109,38 +132,69 @@ pub extern "C" fn js_string_to_char_array(s: i64) -> i64 {
     arr as i64
 }
 
-/// Create a string from a character code (String.fromCharCode)
-/// Takes a single character code and returns a 1-character string
-#[no_mangle]
-pub extern "C" fn js_string_from_char_code(code: i32) -> *mut StringHeader {
-    if !(0..=0xFFFF).contains(&code) {
-        // Invalid character code, return empty string
-        return js_string_from_bytes(std::ptr::null(), 0);
+/// JS `ToUint16` for `String.fromCharCode` (#2788): a non-finite value
+/// (`NaN`/`±Inf`) maps to `0`; otherwise truncate toward zero and reduce
+/// modulo 2^16 into `[0, 65535]`. `rem_euclid` keeps the result non-negative,
+/// so `-1` wraps to `65535` and `0x1F600` wraps to `0xF600`.
+fn to_uint16(code: f64) -> u16 {
+    if !code.is_finite() {
+        return 0;
     }
+    code.trunc().rem_euclid(65536.0) as u16
+}
 
-    // For ASCII characters, create a simple 1-byte string
-    if code < 128 {
-        let byte = code as u8;
+/// Create a string from a character code (String.fromCharCode).
+/// The argument is coerced with `ToUint16` (#2788), so out-of-range and
+/// negative values wrap modulo 65536 rather than returning `""`. Codegen
+/// passes the raw NaN-boxed `f64` (not `fptosi`, which is UB on a NaN).
+#[no_mangle]
+pub extern "C" fn js_string_from_char_code(code: f64) -> *mut StringHeader {
+    let unit = to_uint16(code);
+
+    // For ASCII characters, create a simple 1-byte string.
+    if unit < 128 {
+        let byte = unit as u8;
         return js_string_from_bytes(&byte as *const u8, 1);
     }
 
-    // For non-ASCII, encode as UTF-8
-    let ch = char::from_u32(code as u32).unwrap_or('\u{FFFD}');
+    // For non-ASCII, encode as UTF-8. Lone surrogates (0xD800..=0xDFFF) are
+    // not valid Rust `char`s; emit U+FFFD (the documented WTF-8 / lone-
+    // surrogate categorical gap — Node would emit the lone surrogate).
+    let ch = char::from_u32(unit as u32).unwrap_or('\u{FFFD}');
     let mut buf = [0u8; 4];
     let encoded = ch.encode_utf8(&mut buf);
     js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32)
 }
 
+/// Throw `RangeError: Invalid code point <n>` for `String.fromCodePoint`,
+/// matching Node's message. Rust's `f64` Display drops the trailing `.0` for
+/// integer-valued floats (`1114112.0` -> "1114112") and keeps fractional
+/// digits (`3.14` -> "3.14"), so it matches JS number formatting here.
+fn throw_invalid_code_point(code: f64) -> ! {
+    let msg = format!("Invalid code point {}", code);
+    let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = crate::error::js_rangeerror_new(msg_str);
+    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
+    crate::exception::js_throw(f64::from_bits(err_value))
+}
+
 /// Create a string from a Unicode code point (String.fromCodePoint).
-/// Supports the full Unicode range (0..0x10FFFF), unlike fromCharCode (0..0xFFFF).
+/// Supports the full Unicode range (0..=0x10FFFF), unlike fromCharCode
+/// (0..=0xFFFF). Per spec (#2788), a negative, non-integer, or `> 0x10FFFF`
+/// argument throws `RangeError`. Codegen passes the raw NaN-boxed `f64` so the
+/// non-integer/non-finite cases are observable (a prior `fptosi` truncated
+/// `3.14` to `3` and silently produced a character).
 #[no_mangle]
-pub extern "C" fn js_string_from_code_point(code: i32) -> *mut StringHeader {
-    if !(0..=0x10FFFF).contains(&code) {
-        return js_string_from_bytes(std::ptr::null(), 0);
+pub extern "C" fn js_string_from_code_point(code: f64) -> *mut StringHeader {
+    if !code.is_finite() || code.fract() != 0.0 || code < 0.0 || code > 0x10FFFF as f64 {
+        throw_invalid_code_point(code);
     }
-    let ch = match char::from_u32(code as u32) {
+    let cp = code as u32;
+    let ch = match char::from_u32(cp) {
         Some(c) => c,
-        None => return js_string_from_bytes(std::ptr::null(), 0),
+        // Lone surrogate: a valid code point for fromCodePoint but not a Rust
+        // `char`. Emit U+FFFD (WTF-8 categorical gap); do NOT throw.
+        None => '\u{FFFD}',
     };
     let mut buf = [0u8; 4];
     let encoded = ch.encode_utf8(&mut buf);
@@ -162,20 +216,16 @@ pub extern "C" fn js_string_at(s: *const StringHeader, index: i32) -> f64 {
     if resolved < 0 || resolved >= len {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    // Decode the UTF-16 code unit at `resolved`. If it's a high surrogate followed
-    // by a low surrogate, decode the pair; otherwise the unit is the code point.
+    // #2948: `at()` is UTF-16 *code-unit* based, exactly like `charAt`/`[i]` —
+    // NOT code-point based like `codePointAt`. For an astral char stored as a
+    // surrogate pair, each index returns the lone surrogate code unit (Node:
+    // `"😀".at(0).charCodeAt(0) === 0xd83d`), it does NOT decode the pair.
     let unit = utf16[resolved as usize];
-    let cp: u32 = if (0xD800..=0xDBFF).contains(&unit) && (resolved + 1) < len {
-        let next = utf16[(resolved + 1) as usize];
-        if (0xDC00..=0xDFFF).contains(&next) {
-            0x10000 + ((unit as u32 - 0xD800) << 10) + (next as u32 - 0xDC00)
-        } else {
-            unit as u32
-        }
-    } else {
-        unit as u32
-    };
-    let ch = char::from_u32(cp).unwrap_or('\u{FFFD}');
+    // Encode the single code unit. A lone surrogate (0xD800..=0xDFFF) is not a
+    // valid Rust `char`, so it materializes as U+FFFD — the documented WTF-8 /
+    // lone-surrogate categorical gap (same shim as `fromCharCode`). BMP units
+    // round-trip exactly.
+    let ch = char::from_u32(unit as u32).unwrap_or('\u{FFFD}');
     let mut buf = [0u8; 4];
     let encoded = ch.encode_utf8(&mut buf);
     let ptr = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);

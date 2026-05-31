@@ -64,6 +64,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let signal_handle = blk.call(I64, "js_abort_signal_timeout", &[(DOUBLE, &ms)]);
                 return Ok(nanbox_pointer_inline(blk, &signal_handle));
             }
+            // #2582: `AbortSignal.abort(reason?)` — returns a pre-aborted signal.
+            if class_name == "AbortSignal" && method_name == "abort" {
+                let reason = if !args.is_empty() {
+                    lower_expr(ctx, &args[0])?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                let blk = ctx.block();
+                let signal_handle = blk.call(I64, "js_abort_signal_abort", &[(DOUBLE, &reason)]);
+                return Ok(nanbox_pointer_inline(blk, &signal_handle));
+            }
+            // #2582: `AbortSignal.any([signals])` — combined signal.
+            if class_name == "AbortSignal" && method_name == "any" {
+                let arr_box = if !args.is_empty() {
+                    lower_expr(ctx, &args[0])?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                let blk = ctx.block();
+                let arr_handle = unbox_to_i64(blk, &arr_box);
+                let signal_handle = blk.call(I64, "js_abort_signal_any", &[(I64, &arr_handle)]);
+                return Ok(nanbox_pointer_inline(blk, &signal_handle));
+            }
             let key = (class_name.clone(), method_name.clone());
             if let Some(fn_name) = ctx.methods.get(&key).cloned() {
                 let mut lowered: Vec<String> = Vec::with_capacity(args.len());

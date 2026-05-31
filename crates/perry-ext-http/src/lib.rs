@@ -48,6 +48,11 @@ extern crate perry_ext_http_server as _server_link;
 mod agent;
 pub use agent::*;
 
+// Client factory overload normalization (#3226 / #3227 / #3228) —
+// extracted from this file to stay under the 2000-line lint cap.
+mod client_overload;
+use client_overload::{merge_url_and_options, method_for_overload, parse_client_args};
+
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
@@ -64,11 +69,6 @@ const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
-
-extern "C" {
-    fn js_value_is_closure(value_bits: i64) -> i32;
-    fn js_object_get_field_by_name(obj: *const ObjectHeader, key: *mut StringHeader) -> JsValue;
-}
 
 // ------------------------------------------------------------------
 // Pending event queue + GC scanner
@@ -548,188 +548,6 @@ fn method_from_options(opts: &serde_json::Value) -> String {
         .and_then(|v| v.as_str())
         .map(|s| s.to_uppercase())
         .unwrap_or_else(|| "GET".to_string())
-}
-
-fn normalize_url(raw: String, default_protocol: &str) -> String {
-    if raw.starts_with("http://") || raw.starts_with("https://") {
-        raw
-    } else if raw.is_empty() {
-        String::new()
-    } else {
-        format!("{}://{}", default_protocol, raw)
-    }
-}
-
-unsafe fn object_ptr_from_value(value: f64) -> Option<*const ObjectHeader> {
-    let bits = value.to_bits();
-    let upper = bits >> 48;
-    let ptr = if upper >= 0x7FF8 {
-        (bits & PTR_MASK) as *const ObjectHeader
-    } else if upper == 0 && bits >= 0x10000 {
-        bits as *const ObjectHeader
-    } else {
-        return None;
-    };
-    (!ptr.is_null()).then_some(ptr)
-}
-
-unsafe fn get_object_field_raw(obj_f64: f64, field_name: &str) -> Option<JsValue> {
-    let obj_ptr = object_ptr_from_value(obj_f64)?;
-    let key = alloc_string(field_name);
-    Some(js_object_get_field_by_name(obj_ptr, key.as_raw()))
-}
-
-unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> Option<String> {
-    let field_val = get_object_field_raw(obj_f64, field_name)?;
-    if field_val.is_undefined() || field_val.is_null() {
-        return None;
-    }
-    if field_val.is_string() {
-        return read_str(field_val.as_string_ptr());
-    }
-    if field_val.is_number() {
-        return Some(format!("{}", field_val.to_number() as i64));
-    }
-    None
-}
-
-unsafe fn get_object_number_field(obj_f64: f64, field_name: &str) -> Option<f64> {
-    let field_val = get_object_field_raw(obj_f64, field_name)?;
-    if field_val.is_number() {
-        Some(field_val.to_number())
-    } else {
-        None
-    }
-}
-
-unsafe fn build_url_from_options_value(options_f64: f64, default_protocol: &str) -> String {
-    let protocol = get_object_string_field(options_f64, "protocol")
-        .unwrap_or_else(|| format!("{}:", default_protocol));
-    let protocol = protocol.trim_end_matches(':');
-
-    let hostname = get_object_string_field(options_f64, "hostname")
-        .or_else(|| get_object_string_field(options_f64, "host"))
-        .unwrap_or_else(|| "localhost".to_string());
-    let hostname = hostname.split(':').next().unwrap_or("localhost");
-
-    let port = get_object_string_field(options_f64, "port")
-        .or_else(|| get_object_number_field(options_f64, "port").map(|n| format!("{}", n as u16)));
-    let path = get_object_string_field(options_f64, "path").unwrap_or_else(|| "/".to_string());
-
-    match port {
-        Some(p) if !p.is_empty() => format!("{}://{}:{}{}", protocol, hostname, p, path),
-        _ => format!("{}://{}{}", protocol, hostname, path),
-    }
-}
-
-unsafe fn headers_from_options_value(options_f64: f64) -> HashMap<String, String> {
-    let Some(headers_val) = get_object_field_raw(options_f64, "headers") else {
-        return HashMap::new();
-    };
-    if headers_val.is_undefined() || headers_val.is_null() {
-        return HashMap::new();
-    }
-    let Some(json) = json_stringify(headers_val) else {
-        return HashMap::new();
-    };
-    if json.is_empty() || json == "null" || json == "undefined" {
-        return HashMap::new();
-    }
-    match serde_json::from_str::<serde_json::Value>(&json) {
-        Ok(opts) => headers_from_options(&opts),
-        Err(_) => HashMap::new(),
-    }
-}
-
-unsafe fn url_from_js_value(value: f64, default_protocol: &str) -> String {
-    if is_string_value(value) {
-        return normalize_url(
-            extract_string_value(value).unwrap_or_default(),
-            default_protocol,
-        );
-    }
-    if let Some(href) = get_object_string_field(value, "href") {
-        return normalize_url(href, default_protocol);
-    }
-    if object_ptr_from_value(value).is_some() {
-        return build_url_from_options_value(value, default_protocol);
-    }
-    let opts = parse_options_object(value).unwrap_or(serde_json::Value::Null);
-    match &opts {
-        serde_json::Value::String(s) => normalize_url(s.clone(), default_protocol),
-        serde_json::Value::Object(map) => {
-            if let Some(href) = map.get("href").and_then(|v| v.as_str()) {
-                normalize_url(href.to_string(), default_protocol)
-            } else {
-                url_from_options(&opts, default_protocol)
-            }
-        }
-        _ => url_from_options(&opts, default_protocol),
-    }
-}
-
-#[derive(Default)]
-struct RequestOverload {
-    primary: Option<f64>,
-    options: Option<f64>,
-    callback: i64,
-}
-
-unsafe fn parse_request_overload(args_array: i64) -> RequestOverload {
-    let mut out = RequestOverload::default();
-    let arr_ptr = args_array as *const ArrayHeader;
-    if arr_ptr.is_null() || (args_array as u64) >> 48 != 0 {
-        return out;
-    }
-    let len = (*arr_ptr).length as usize;
-    let elements = (arr_ptr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
-    for i in 0..len {
-        let bits = *elements.add(i);
-        if js_value_is_closure(bits as i64) != 0 {
-            out.callback = (bits & PTR_MASK) as i64;
-            continue;
-        }
-        let value = f64::from_bits(bits);
-        if out.primary.is_none() {
-            out.primary = Some(value);
-        } else if out.options.is_none() {
-            out.options = Some(value);
-        }
-    }
-    out
-}
-
-unsafe fn build_request_from_overload(
-    overload: RequestOverload,
-    default_protocol: &str,
-    force_get: bool,
-) -> Handle {
-    ensure_gc_scanner_registered();
-    let primary = overload
-        .primary
-        .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
-    let options = overload.options.unwrap_or(primary);
-
-    let url = url_from_js_value(primary, default_protocol);
-    let method = get_object_string_field(options, "method")
-        .map(|s| s.to_uppercase())
-        .unwrap_or_else(|| "GET".to_string());
-    let headers = headers_from_options_value(options);
-    let timeout = get_object_number_field(options, "timeout").map(|n| n.max(0.0) as u64);
-    let agent_handle = agent::agent_handle_from_options(options).unwrap_or(0);
-
-    let handle = make_request_handle(
-        method,
-        url,
-        headers,
-        timeout,
-        overload.callback,
-        agent_handle,
-    );
-    if force_get {
-        js_http_client_request_end(handle, f64::from_bits(TAG_UNDEFINED));
-    }
-    handle
 }
 
 // ------------------------------------------------------------------
@@ -1215,11 +1033,6 @@ pub unsafe extern "C" fn js_https_request(opts_f64: f64, callback_i64: i64) -> H
     request_common(opts_f64, callback_i64, "https")
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn js_https_request_variadic(args_array: i64) -> Handle {
-    build_request_from_overload(parse_request_overload(args_array), "https", false)
-}
-
 unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Handle {
     ensure_gc_scanner_registered();
     let (url, headers, timeout, agent_handle) = if is_string_value(arg_f64) {
@@ -1264,9 +1077,51 @@ pub unsafe extern "C" fn js_https_get(arg_f64: f64, callback_i64: i64) -> Handle
     get_common(arg_f64, callback_i64, "https")
 }
 
+// ------------------------------------------------------------------
+// FFI: overload-normalizing client factories (#3226 / #3227 / #3228)
+//
+// Codegen routes `http.request` / `http.get` / `https.request` /
+// `https.get` to these `*_overload` entry points with a single
+// `NA_VARARGS` argument — a JS array holding every user argument.
+// `parse_client_args` resolves `(url, options, callback)` by value
+// type so all overloads work: `(url[, cb])`, `(options[, cb])`, and
+// `(url, options[, cb])`. The URL supplies protocol/host/port/path;
+// options override method/headers/timeout/agent (and any explicitly
+// set protocol/host/port/path).
+// ------------------------------------------------------------------
+
+unsafe fn request_overload(args_array: i64, default_protocol: &str, force_get: bool) -> Handle {
+    ensure_gc_scanner_registered();
+    let parsed = parse_client_args(args_array);
+    let method = method_for_overload(parsed.opts, force_get);
+    let (url, headers, timeout, agent_handle) =
+        merge_url_and_options(parsed.url, parsed.opts, default_protocol);
+    let handle = make_request_handle(method, url, headers, timeout, parsed.callback, agent_handle);
+    if force_get {
+        // `get()` auto-`end()`s, kicking off the request.
+        js_http_client_request_end(handle, f64::from_bits(TAG_UNDEFINED));
+    }
+    handle
+}
+
 #[no_mangle]
-pub unsafe extern "C" fn js_https_get_variadic(args_array: i64) -> Handle {
-    build_request_from_overload(parse_request_overload(args_array), "https", true)
+pub unsafe extern "C" fn js_http_request_overload(args_array: i64) -> Handle {
+    request_overload(args_array, "http", false)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_https_request_overload(args_array: i64) -> Handle {
+    request_overload(args_array, "https", false)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_http_get_overload(args_array: i64) -> Handle {
+    request_overload(args_array, "http", true)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_https_get_overload(args_array: i64) -> Handle {
+    request_overload(args_array, "https", true)
 }
 
 // http.Agent / https.Agent (#2129 / #2154) lives in `agent.rs`.
@@ -1970,6 +1825,10 @@ mod force_link_http_server {
         pub fn js_node_http2_server_close();
         pub fn js_node_http2_server_on();
         pub fn js_node_http2_server_address_json();
+        // http2 settings helpers (#3168).
+        pub fn js_node_http2_get_default_settings();
+        pub fn js_node_http2_get_packed_settings();
+        pub fn js_node_http2_get_unpacked_settings();
     }
 }
 
@@ -2051,5 +1910,8 @@ static FORCE_LINK_HTTP_SERVER: &[unsafe extern "C" fn()] = {
         js_node_http2_server_close,
         js_node_http2_server_on,
         js_node_http2_server_address_json,
+        js_node_http2_get_default_settings,
+        js_node_http2_get_packed_settings,
+        js_node_http2_get_unpacked_settings,
     ]
 };

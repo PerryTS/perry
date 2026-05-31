@@ -170,6 +170,12 @@ jobs:
           # shared runner this has repeatedly terminated large test links with
           # SIGBUS. Use the system linker for the cargo-test gate.
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+          # Keep test artifacts small enough for the shared runner disk. The
+          # cargo-test job does not need line tables, and debug info was enough
+          # to make later package archives hit ENOSPC after several package
+          # test builds accumulated in target/debug.
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_PROFILE_DEV_DEBUG: "0"
         run: |
           (
             while sleep 60; do
@@ -187,20 +193,45 @@ jobs:
           # flakes) and races the GC/threading tests into intermittent SIGSEGV.
           # Run perry-runtime single-threaded so the tests can't interfere.
           RUST_TEST_THREADS=1 cargo test -p perry-runtime
+          find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete
           # The remaining workspace includes large `perry` / `perry-stdlib`
           # test binaries. Keep Cargo build jobs serialized so the runner
-          # does not link several of those large test binaries at once.
+          # does not link several of those large test binaries at once, then
+          # run packages one at a time and prune linked test executables so
+          # target/debug/deps does not exhaust the runner disk mid-job.
           export CARGO_BUILD_JOBS=1
-          cargo test --workspace \
-            --exclude perry-runtime \
-            --exclude perry-ui-macos \
-            --exclude perry-ui-ios \
-            --exclude perry-ui-visionos \
-            --exclude perry-ui-tvos \
-            --exclude perry-ui-watchos \
-            --exclude perry-ui-gtk4 \
-            --exclude perry-ui-android \
-            --exclude perry-ui-windows
+          workspace_packages="$(
+            cargo metadata --no-deps --format-version 1 | python3 -c '
+          import json
+          import sys
+
+          excluded = {
+              "perry-runtime",
+              "perry-ui-macos",
+              "perry-ui-ios",
+              "perry-ui-visionos",
+              "perry-ui-tvos",
+              "perry-ui-watchos",
+              "perry-ui-gtk4",
+              "perry-ui-android",
+              "perry-ui-windows",
+              "perry-doc-fixture-my-bindings",
+          }
+          metadata = json.load(sys.stdin)
+          workspace_members = set(metadata["workspace_members"])
+          for package in metadata["packages"]:
+              if package["id"] in workspace_members and package["name"] not in excluded:
+                  print(package["name"])
+          '
+          )"
+
+          for package in $workspace_packages; do
+            echo "::group::cargo test -p $package"
+            cargo test -p "$package"
+            echo "::endgroup::"
+            cargo clean -p "$package" || true
+            find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete
+          done
 
   # ---------------------------------------------------------------------------
   # Compiler-output regression gate

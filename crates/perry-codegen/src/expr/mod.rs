@@ -366,6 +366,11 @@ pub(crate) struct FnCtx<'a> {
     /// `local_closure_func_ids` for guarded direct closure calls: direct
     /// calls only fire when the static arity exactly matches the call site.
     pub local_closure_param_counts: std::collections::HashMap<u32, usize>,
+    /// LocalId → compile-time options object fields for immutable locals
+    /// initialized from object literals / anonymous-shape literals. This lets
+    /// native constructor lowering read `const init = {...}; new Request(url,
+    /// init)` with the same field extractor used for inline object literals.
+    pub option_object_locals: std::collections::HashMap<u32, Vec<(String, Expr)>>,
 
     // ── Cross-module import plumbing (Phase F) ──────────────────────
     /// Locals that are namespace imports (`import * as X from "./mod"`).
@@ -1458,6 +1463,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::MathMax(..)
         | Expr::MathMaxSpread(..)
         | Expr::StringCoerce(..)
+        | Expr::ObjectCoerce(..)
         | Expr::BooleanCoerce(..)
         | Expr::ArraySlice { .. }
         | Expr::ArrayShift(..)
@@ -1478,6 +1484,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::Delete(..)
         | Expr::Sequence(..)
         | Expr::ArrayFrom(..)
+        | Expr::IteratorFrom(..)
         | Expr::TaggedTemplateStrings { .. }
         | Expr::TemplateRaw(..)
         | Expr::ArrayFromMapped { .. }
@@ -1498,6 +1505,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ArraySplice { .. }
         | Expr::ObjectFromEntries(..)
         | Expr::ObjectGroupBy { .. }
+        | Expr::MapGroupBy { .. }
         | Expr::StringMatch { .. }
         | Expr::StringMatchAll { .. }
         | Expr::PropertyUpdate { .. }
@@ -1506,6 +1514,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::PathBasenameExt(..)
         | Expr::PathParse(..)
         | Expr::JsonParse(..)
+        | Expr::JsonRawJson(..)
+        | Expr::JsonIsRawJson(..)
         | Expr::JsonParseTyped { .. }
         | Expr::JsonParseReviver { .. }
         | Expr::JsonParseWithReviver(..) => instance_misc1::lower(ctx, expr),
@@ -1565,6 +1575,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
         Expr::CallSpread { .. } => call_spread::lower(ctx, expr),
         Expr::MathFround(..)
+        | Expr::MathF16round(..)
         | Expr::MapNewFromArray(..)
         | Expr::DateGetTime(..)
         | Expr::DateGetTimezoneOffset(..)
@@ -1577,6 +1588,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ProcessSetTitle(..)
         | Expr::RegExpExecIndex
         | Expr::CryptoRandomUUID
+        | Expr::CryptoRandomUUIDv7
         | Expr::CryptoRandomBytes(..)
         | Expr::CryptoSha256(..)
         | Expr::CryptoMd5(..)
@@ -1627,6 +1639,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::RegExpExecGroups => misc_methods::lower(ctx, expr),
         Expr::SetClear(..)
         | Expr::StringFromCodePoint(..)
+        | Expr::StringRaw { .. }
         | Expr::StringAt { .. }
         | Expr::StringCodePointAt { .. }
         | Expr::RegExpSource(..)
@@ -1683,13 +1696,17 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::SymbolFor(..)
         | Expr::SymbolKeyFor(..)
         | Expr::SymbolDescription(..)
+        | Expr::RegExpEscape(..)
         | Expr::SymbolToString(..)
         | Expr::ObjectGetOwnPropertySymbols(..)
         | Expr::TextEncoderNew
-        | Expr::TextDecoderNew
+        | Expr::TextDecoderNew { .. }
         | Expr::TextEncoderEncode(..)
         | Expr::TextEncoderEncodeInto { .. }
-        | Expr::TextDecoderDecode(..)
+        | Expr::TextDecoderDecode { .. }
+        | Expr::TextDecoderEncoding(..)
+        | Expr::TextDecoderFatal(..)
+        | Expr::TextDecoderIgnoreBom(..)
         | Expr::OsArch
         | Expr::OsType
         | Expr::OsPlatform
@@ -1711,7 +1728,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::OsMachine => string_regex_proc::lower(ctx, expr),
         Expr::OsVersion
         | Expr::ProcessMemoryUsage
-        | Expr::ProcessThreadCpuUsage
+        | Expr::ProcessThreadCpuUsage(..)
         | Expr::ProcessAvailableMemory
         | Expr::ProcessConstrainedMemory
         | Expr::ProcessPosixCredential(..)
@@ -1774,6 +1791,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::FinalizationRegistryRegister { .. }
         | Expr::FinalizationRegistryUnregister { .. }
         | Expr::ErrorNewWithCause { .. }
+        | Expr::ErrorNewWithOptions { .. }
         | Expr::EnvGet(..)
         | Expr::EnvGetDynamic(..)
         | Expr::ProcessEnv => array_methods::lower(ctx, expr),
@@ -1847,6 +1865,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ReflectConstruct { .. }
         | Expr::ReflectDefineProperty { .. }
         | Expr::ReflectGetPrototypeOf(..)
+        | Expr::ReflectSetPrototypeOf { .. }
+        | Expr::ReflectIsExtensible(..)
+        | Expr::ReflectPreventExtensions(..)
         | Expr::ReflectDefineMetadata { .. }
         | Expr::ReflectGetMetadata { .. }
         | Expr::ReflectGetOwnMetadata { .. }
@@ -1896,6 +1917,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::UrlParse(..)
         | Expr::UrlParseWithBase { .. }
         | Expr::UrlSearchParamsNew(..)
+        | Expr::UrlSearchParamsMissingArgs { .. }
         | Expr::UrlSearchParamsGet { .. }
         | Expr::UrlSearchParamsHas { .. }
         | Expr::UrlSearchParamsSet { .. }

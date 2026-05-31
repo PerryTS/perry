@@ -93,6 +93,8 @@ fn is_headers_method_name(name: &str) -> bool {
             | "has"
             | "keys"
             | "set"
+            | "Symbol.iterator"
+            | "@@iterator"
             | "values"
     )
 }
@@ -260,7 +262,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // JSON / Reflect stay "object" — they're namespaces,
                         // not constructors.
                         match property.as_str() {
-                            "process" | "console" | "globalThis" | "performance" => Some("object"),
+                            "process" | "console" | "globalThis" | "performance" | "navigator" => {
+                                Some("object")
+                            }
                             "Math" | "JSON" | "Reflect" => Some("object"),
                             n if is_global_this_builtin_function_name(n) => Some("function"),
                             _ => None,
@@ -724,10 +728,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 UpdateOp::Increment => blk.fadd(&old, "1.0"),
                 UpdateOp::Decrement => blk.fsub(&old, "1.0"),
             };
-            // GC_STORE_AUDIT(STACK/ROOT): update writes a local alloca or registered module-global root slot.
             if storage_is_root {
+                // Module globals are registered mutable GC roots and route
+                // through the root helper; the raw store below is stack-only.
                 emit_root_nanbox_store_on_block(blk, &new, &storage);
             } else {
+                // GC_STORE_AUDIT(STACK): update writes a function-local alloca;
+                // module globals use the root helper.
                 blk.store(DOUBLE, &new, &storage);
             }
             // Keep the parallel i32 counter slot in sync (if active).

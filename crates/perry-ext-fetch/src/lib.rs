@@ -8,16 +8,16 @@
 //! (closes #236), per-handle Response / Headers / Blob / Request /
 //! Stream pools.
 //!
-//! 41 `js_*` exports across the Fetch API:
+//! `js_*` exports cover the Fetch API surface Perry lowers directly:
 //!   - fetch core: get / get_with_auth / post / post_with_auth /
 //!     with_options / text + response_count debug counter
 //!   - response: status / statusText / ok / text / json /
 //!     array_buffer / blob / get_headers / clone / body /
-//!     static_json / static_redirect
+//!     static_json / static_redirect / static_error / metadata
 //!   - headers: new / set / append / get / has / delete / for_each
 //!   - stream: start / poll / status / close
 //!   - blob: size / type / text / array_buffer / bytes / slice / stream
-//!   - request: new / get_url / get_method / get_body
+//!   - request: new / metadata / body helpers
 
 use lazy_static::lazy_static;
 use perry_ffi::{
@@ -27,9 +27,20 @@ use perry_ffi::{
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+// Web Fetch constructor validation helpers (#2640 / #2643) — split out to
+// keep lib.rs under the 2,000-line lint gate.
+mod validation;
+use validation::{
+    is_forbidden_method, is_null_body_status, is_valid_status_text, normalize_method,
+    throw_range_error, throw_type_error,
+};
+
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 
 unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
     if ptr.is_null() {
@@ -66,6 +77,9 @@ struct FetchResponse {
     status_text: String,
     headers: HeadersStore,
     body: Vec<u8>,
+    type_name: String,
+    url: String,
+    redirected: bool,
 }
 
 #[derive(Clone, Default)]
@@ -154,6 +168,10 @@ lazy_static! {
     static ref REQUEST_HANDLES: Mutex<HashMap<usize, RequestData>> = Mutex::new(HashMap::new());
     static ref NEXT_REQUEST_ID: Mutex<usize> = Mutex::new(1);
 
+    static ref FORM_DATA_HANDLES: Mutex<HashMap<usize, FormDataStore>> =
+        Mutex::new(HashMap::new());
+    static ref NEXT_FORM_DATA_ID: Mutex<usize> = Mutex::new(1);
+
     static ref STREAM_HANDLES: Mutex<HashMap<usize, StreamState>> = Mutex::new(HashMap::new());
     static ref NEXT_STREAM_ID: Mutex<usize> = Mutex::new(1);
 
@@ -182,6 +200,44 @@ struct RequestData {
     url: String,
     method: String,
     body: Option<String>,
+    headers: HeadersStore,
+    destination: String,
+    referrer: String,
+    referrer_policy: String,
+    mode: String,
+    credentials: String,
+    cache: String,
+    redirect: String,
+    integrity: String,
+    keepalive: bool,
+    duplex: String,
+    signal: f64,
+}
+
+#[derive(Clone, Default)]
+struct FormDataStore {
+    entries: Vec<(String, String)>,
+}
+
+impl FormDataStore {
+    fn append(&mut self, name: String, value: String) {
+        self.entries.push((name, value));
+    }
+
+    fn get(&self, name: &str) -> Option<String> {
+        self.entries
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
+    }
+
+    fn get_all(&self, name: &str) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
+            .collect()
+    }
 }
 
 struct StreamState {
@@ -241,6 +297,98 @@ fn store_request(data: RequestData) -> usize {
     id
 }
 
+fn store_form_data(data: FormDataStore) -> usize {
+    let mut id_guard = NEXT_FORM_DATA_ID.lock().unwrap();
+    let id = *id_guard;
+    *id_guard += 1;
+    drop(id_guard);
+    FORM_DATA_HANDLES.lock().unwrap().insert(id, data);
+    id
+}
+
+fn tagged_bool(value: bool) -> f64 {
+    f64::from_bits(if value { TAG_TRUE } else { TAG_FALSE })
+}
+
+fn is_missing_value(value: f64) -> bool {
+    let bits = value.to_bits();
+    value == 0.0 || bits == TAG_UNDEFINED || bits == TAG_NULL
+}
+
+fn bool_from_js(value: f64) -> bool {
+    match value.to_bits() {
+        TAG_TRUE => true,
+        TAG_FALSE | TAG_NULL | TAG_UNDEFINED => false,
+        _ => value != 0.0,
+    }
+}
+
+fn default_abort_signal_value() -> f64 {
+    unsafe extern "C" {
+        fn js_abort_controller_new() -> *mut std::ffi::c_void;
+        fn js_abort_controller_signal(controller: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    }
+
+    unsafe {
+        let controller = js_abort_controller_new();
+        let signal = js_abort_controller_signal(controller);
+        f64::from_bits(JsValue::from_object_ptr(signal).bits())
+    }
+}
+
+fn signal_or_default(signal: f64) -> f64 {
+    if is_missing_value(signal) {
+        default_abort_signal_value()
+    } else {
+        signal
+    }
+}
+
+fn percent_decode_form_component(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let hi = (bytes[i + 1] as char).to_digit(16);
+                let lo = (bytes[i + 2] as char).to_digit(16);
+                if let (Some(hi), Some(lo)) = (hi, lo) {
+                    out.push(((hi << 4) | lo) as u8);
+                    i += 3;
+                } else {
+                    out.push(bytes[i]);
+                    i += 1;
+                }
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn form_data_from_urlencoded(body: &[u8]) -> FormDataStore {
+    let text = String::from_utf8_lossy(body);
+    let mut store = FormDataStore::default();
+    for pair in text.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let mut parts = pair.splitn(2, '=');
+        let name = percent_decode_form_component(parts.next().unwrap_or_default());
+        let value = percent_decode_form_component(parts.next().unwrap_or_default());
+        store.append(name, value);
+    }
+    store
+}
+
 #[no_mangle]
 pub extern "C" fn js_fetch_response_count() -> i64 {
     FETCH_RESPONSES.lock().unwrap().len() as i64
@@ -279,6 +427,8 @@ fn do_fetch(
                         .canonical_reason()
                         .unwrap_or("")
                         .to_string();
+                    let response_url = response.url().to_string();
+                    let redirected = response_url != url;
                     let headers = headers_from_header_map(response.headers());
                     let body = response.bytes().await.unwrap_or_default().to_vec();
                     Ok(FetchResponse {
@@ -286,6 +436,9 @@ fn do_fetch(
                         status_text,
                         headers,
                         body,
+                        type_name: "basic".to_string(),
+                        url: response_url,
+                        redirected,
                     })
                 }
                 Err(e) => Err(format!("Fetch error: {}", e)),
@@ -463,6 +616,33 @@ pub extern "C" fn js_fetch_response_ok(handle: f64) -> f64 {
         Some(r) if (200..300).contains(&r.status) => 1.0,
         _ => 0.0,
     }
+}
+
+#[no_mangle]
+pub extern "C" fn js_fetch_response_type(handle: f64) -> *mut StringHeader {
+    let id = handle_id(handle);
+    let g = FETCH_RESPONSES.lock().unwrap();
+    match g.get(&id) {
+        Some(r) => alloc_string(&r.type_name).as_raw(),
+        None => alloc_string("").as_raw(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_fetch_response_url(handle: f64) -> *mut StringHeader {
+    let id = handle_id(handle);
+    let g = FETCH_RESPONSES.lock().unwrap();
+    match g.get(&id) {
+        Some(r) => alloc_string(&r.url).as_raw(),
+        None => alloc_string("").as_raw(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_fetch_response_redirected(handle: f64) -> f64 {
+    let id = handle_id(handle);
+    let g = FETCH_RESPONSES.lock().unwrap();
+    tagged_bool(g.get(&id).map(|r| r.redirected).unwrap_or(false))
 }
 
 /// # Safety
@@ -898,13 +1078,34 @@ pub unsafe extern "C" fn js_response_new(
     status_text_ptr: *const StringHeader,
     headers_handle: f64,
 ) -> f64 {
-    let body = read_str(body_ptr).unwrap_or_default().into_bytes();
+    let body_opt = read_str(body_ptr);
+    let body_present = body_opt.is_some();
+    let body = body_opt.unwrap_or_default().into_bytes();
+    // NaN/0.0 are the codegen "no status field" sentinels → default 200.
+    // Otherwise truncate toward zero + range-check 200..=599 (#2640).
     let status = if status.is_nan() || status == 0.0 {
         200
     } else {
-        status as u16
+        let truncated = status.trunc();
+        if !(200.0..=599.0).contains(&truncated) {
+            throw_range_error("init[\"status\"] must be in the range of 200 to 599, inclusive.");
+        }
+        truncated as u16
     };
-    let status_text = read_str(status_text_ptr).unwrap_or_else(|| "OK".to_string());
+    let status_text = match read_str(status_text_ptr) {
+        Some(s) => {
+            if !is_valid_status_text(&s) {
+                throw_type_error("Invalid statusText");
+            }
+            s
+        }
+        None => String::new(),
+    };
+    if body_present && is_null_body_status(status) {
+        throw_type_error(&format!(
+            "Response constructor: Invalid response status code {status}"
+        ));
+    }
     let headers_id = handle_id(headers_handle);
     let headers = if headers_id != 0 {
         HEADERS_HANDLES
@@ -921,6 +1122,9 @@ pub unsafe extern "C" fn js_response_new(
         status_text,
         headers,
         body,
+        type_name: "default".to_string(),
+        url: String::new(),
+        redirected: false,
     }) as f64
 }
 
@@ -973,6 +1177,50 @@ pub unsafe extern "C" fn js_response_array_buffer(handle: f64) -> *mut Promise {
 /// # Safety
 /// `handle` must come from a previous fetch.
 #[no_mangle]
+pub unsafe extern "C" fn js_response_bytes(handle: f64) -> *mut Promise {
+    let promise = JsPromise::new();
+    let raw = promise.as_raw();
+    let id = handle_id(handle);
+    let body = FETCH_RESPONSES
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|r| r.body.clone());
+    match body {
+        Some(b) => {
+            let buf = perry_ffi::alloc_buffer(&b);
+            promise.resolve(JsValue::from_object_ptr(buf));
+        }
+        None => promise.reject_string("Invalid response handle"),
+    }
+    raw
+}
+
+/// # Safety
+/// `handle` must come from a previous fetch.
+#[no_mangle]
+pub unsafe extern "C" fn js_response_form_data(handle: f64) -> *mut Promise {
+    let promise = JsPromise::new();
+    let raw = promise.as_raw();
+    let id = handle_id(handle);
+    let body = FETCH_RESPONSES
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|r| r.body.clone());
+    match body {
+        Some(b) => {
+            let form_id = store_form_data(form_data_from_urlencoded(&b));
+            promise.resolve(JsValue::from_number(form_id as f64));
+        }
+        None => promise.reject_string("Invalid response handle"),
+    }
+    raw
+}
+
+/// # Safety
+/// `handle` must come from a previous fetch.
+#[no_mangle]
 pub unsafe extern "C" fn js_response_blob(handle: f64) -> *mut Promise {
     let promise = JsPromise::new();
     let raw = promise.as_raw();
@@ -1016,16 +1264,47 @@ pub extern "C" fn js_response_body(handle: f64) -> f64 {
 /// # Safety
 /// `value` is a NaN-boxed JsValue.
 #[no_mangle]
-pub unsafe extern "C" fn js_response_static_json(value: f64) -> f64 {
+pub unsafe extern "C" fn js_response_static_json(
+    value: f64,
+    init_status: f64,
+    init_status_text_ptr: *const StringHeader,
+    headers_handle: f64,
+) -> f64 {
     let v = JsValue::from_bits(value.to_bits());
     let body = perry_ffi::json_stringify(v).unwrap_or_default();
-    let mut headers = HeadersStore::default();
-    headers.set("content-type", "application/json");
+    // #2638: honor `init.status` / `init.statusText` / `init.headers`.
+    let status = if init_status.is_nan() || init_status == 0.0 {
+        200
+    } else {
+        init_status as u16
+    };
+    // Node's `Response.json` leaves statusText "" when not provided — it does
+    // not fall back to the status reason phrase.
+    let status_text = read_str(init_status_text_ptr).unwrap_or_default();
+    // Start from any user-provided headers, then add the default content-type
+    // only if the init headers didn't already set one.
+    let headers_id = handle_id(headers_handle);
+    let mut headers = if headers_id != 0 {
+        HEADERS_HANDLES
+            .lock()
+            .unwrap()
+            .get(&headers_id)
+            .cloned()
+            .unwrap_or_default()
+    } else {
+        HeadersStore::default()
+    };
+    if !headers.has("content-type") {
+        headers.set("content-type", "application/json");
+    }
     store_response(FetchResponse {
-        status: 200,
-        status_text: "OK".to_string(),
+        status,
+        status_text,
         headers,
         body: body.into_bytes(),
+        type_name: "default".to_string(),
+        url: String::new(),
+        redirected: false,
     }) as f64
 }
 
@@ -1047,6 +1326,22 @@ pub unsafe extern "C" fn js_response_static_redirect(
         status_text: "Found".to_string(),
         headers,
         body: Vec::new(),
+        type_name: "default".to_string(),
+        url: String::new(),
+        redirected: false,
+    }) as f64
+}
+
+#[no_mangle]
+pub extern "C" fn js_response_static_error() -> f64 {
+    store_response(FetchResponse {
+        status: 0,
+        status_text: String::new(),
+        headers: HeadersStore::default(),
+        body: Vec::new(),
+        type_name: "error".to_string(),
+        url: String::new(),
+        redirected: false,
     }) as f64
 }
 
@@ -1175,11 +1470,8 @@ pub extern "C" fn js_blob_stream(handle: f64) -> f64 {
 // ── Request ───────────────────────────────────────────────────────
 
 /// `new Request(url, init)` — stores url/method/body. The `headers_handle`
-/// arg matches perry-stdlib's 4-arg shape (declared in
-/// `crates/perry-codegen/src/runtime_decls.rs:1064`); it's currently ignored
-/// at the storage level (perry-ext-fetch's RequestData has no headers field
-/// yet), but accepting the arg keeps the ABI in sync with codegen so the f64
-/// arg lands in the right register.
+/// arg matches perry-stdlib's shape so the f64 arg lands in the right
+/// register (declared in `crates/perry-codegen/src/runtime_decls.rs:1064`).
 ///
 /// # Safety
 /// All string pointers must be null or Perry-runtime `StringHeader`s;
@@ -1189,12 +1481,58 @@ pub unsafe extern "C" fn js_request_new(
     url_ptr: *const StringHeader,
     method_ptr: *const StringHeader,
     body_ptr: *const StringHeader,
-    _headers_handle: f64,
+    headers_handle: f64,
+    referrer_ptr: *const StringHeader,
+    referrer_policy_ptr: *const StringHeader,
+    mode_ptr: *const StringHeader,
+    credentials_ptr: *const StringHeader,
+    cache_ptr: *const StringHeader,
+    redirect_ptr: *const StringHeader,
+    integrity_ptr: *const StringHeader,
+    keepalive: f64,
+    duplex_ptr: *const StringHeader,
+    signal: f64,
 ) -> f64 {
     let url = read_str(url_ptr).unwrap_or_default();
-    let method = read_str(method_ptr).unwrap_or_else(|| "GET".to_string());
+    let raw_method = read_str(method_ptr).unwrap_or_else(|| "GET".to_string());
+    // Forbidden methods rejected case-insensitively; message keeps the
+    // caller's original casing (Node parity). #2643
+    if is_forbidden_method(&raw_method.to_ascii_uppercase()) {
+        throw_type_error(&format!("'{raw_method}' HTTP method is unsupported."));
+    }
+    let method = normalize_method(&raw_method);
     let body = read_str(body_ptr);
-    store_request(RequestData { url, method, body }) as f64
+    if body.is_some() && (method == "GET" || method == "HEAD") {
+        throw_type_error("Request with GET/HEAD method cannot have body.");
+    }
+    let headers_id = handle_id(headers_handle);
+    let headers = if headers_id != 0 {
+        HEADERS_HANDLES
+            .lock()
+            .unwrap()
+            .get(&headers_id)
+            .cloned()
+            .unwrap_or_default()
+    } else {
+        HeadersStore::default()
+    };
+    store_request(RequestData {
+        url,
+        method,
+        body,
+        headers,
+        destination: String::new(),
+        referrer: read_str(referrer_ptr).unwrap_or_else(|| "about:client".to_string()),
+        referrer_policy: read_str(referrer_policy_ptr).unwrap_or_default(),
+        mode: read_str(mode_ptr).unwrap_or_else(|| "cors".to_string()),
+        credentials: read_str(credentials_ptr).unwrap_or_else(|| "same-origin".to_string()),
+        cache: read_str(cache_ptr).unwrap_or_else(|| "default".to_string()),
+        redirect: read_str(redirect_ptr).unwrap_or_else(|| "follow".to_string()),
+        integrity: read_str(integrity_ptr).unwrap_or_default(),
+        keepalive: bool_from_js(keepalive),
+        duplex: read_str(duplex_ptr).unwrap_or_else(|| "half".to_string()),
+        signal: signal_or_default(signal),
+    }) as f64
 }
 
 #[no_mangle]
@@ -1215,6 +1553,91 @@ pub extern "C" fn js_request_get_method(handle: f64) -> *mut StringHeader {
         Some(r) => alloc_string(&r.method).as_raw(),
         None => alloc_string("GET").as_raw(),
     }
+}
+
+fn request_string_field(handle: f64, f: impl FnOnce(&RequestData) -> &str) -> *mut StringHeader {
+    let id = handle_id(handle);
+    let g = REQUEST_HANDLES.lock().unwrap();
+    match g.get(&id) {
+        Some(r) => {
+            let s = f(r);
+            alloc_string(s).as_raw()
+        }
+        None => alloc_string("").as_raw(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_request_get_destination(handle: f64) -> *mut StringHeader {
+    request_string_field(handle, |r| &r.destination)
+}
+
+#[no_mangle]
+pub extern "C" fn js_request_get_referrer(handle: f64) -> *mut StringHeader {
+    request_string_field(handle, |r| &r.referrer)
+}
+
+#[no_mangle]
+pub extern "C" fn js_request_get_referrer_policy(handle: f64) -> *mut StringHeader {
+    request_string_field(handle, |r| &r.referrer_policy)
+}
+
+#[no_mangle]
+pub extern "C" fn js_request_get_mode(handle: f64) -> *mut StringHeader {
+    request_string_field(handle, |r| &r.mode)
+}
+
+#[no_mangle]
+pub extern "C" fn js_request_get_credentials(handle: f64) -> *mut StringHeader {
+    request_string_field(handle, |r| &r.credentials)
+}
+
+#[no_mangle]
+pub extern "C" fn js_request_get_cache(handle: f64) -> *mut StringHeader {
+    request_string_field(handle, |r| &r.cache)
+}
+
+#[no_mangle]
+pub extern "C" fn js_request_get_redirect(handle: f64) -> *mut StringHeader {
+    request_string_field(handle, |r| &r.redirect)
+}
+
+#[no_mangle]
+pub extern "C" fn js_request_get_integrity(handle: f64) -> *mut StringHeader {
+    request_string_field(handle, |r| &r.integrity)
+}
+
+#[no_mangle]
+pub extern "C" fn js_request_get_duplex(handle: f64) -> *mut StringHeader {
+    request_string_field(handle, |r| &r.duplex)
+}
+
+#[no_mangle]
+pub extern "C" fn js_request_get_keepalive(handle: f64) -> f64 {
+    let id = handle_id(handle);
+    let g = REQUEST_HANDLES.lock().unwrap();
+    tagged_bool(g.get(&id).map(|r| r.keepalive).unwrap_or(false))
+}
+
+#[no_mangle]
+pub extern "C" fn js_request_get_signal(handle: f64) -> f64 {
+    let id = handle_id(handle);
+    let g = REQUEST_HANDLES.lock().unwrap();
+    g.get(&id)
+        .map(|r| r.signal)
+        .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
+}
+
+#[no_mangle]
+pub extern "C" fn js_request_get_headers(handle: f64) -> f64 {
+    let id = handle_id(handle);
+    let headers = REQUEST_HANDLES
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|r| r.headers.clone())
+        .unwrap_or_default();
+    store_headers(headers) as f64
 }
 
 #[no_mangle]
@@ -1286,6 +1709,116 @@ pub unsafe extern "C" fn js_request_array_buffer(handle: f64) -> *mut Promise {
         None => promise.reject_string("Invalid request handle"),
     }
     raw
+}
+
+/// # Safety
+/// `handle` must come from a previous `js_request_new`.
+#[no_mangle]
+pub unsafe extern "C" fn js_request_blob(handle: f64) -> *mut Promise {
+    let promise = JsPromise::new();
+    let raw = promise.as_raw();
+    let id = handle_id(handle);
+    let data = REQUEST_HANDLES.lock().unwrap().get(&id).cloned();
+    match data {
+        Some(r) => {
+            let content_type = r.headers.get("content-type").unwrap_or_default();
+            let blob_id = store_blob(BlobData {
+                bytes: r.body.unwrap_or_default().into_bytes(),
+                content_type,
+            });
+            promise.resolve(JsValue::from_number(blob_id as f64));
+        }
+        None => promise.reject_string("Invalid request handle"),
+    }
+    raw
+}
+
+/// # Safety
+/// `handle` must come from a previous `js_request_new`.
+#[no_mangle]
+pub unsafe extern "C" fn js_request_bytes(handle: f64) -> *mut Promise {
+    let promise = JsPromise::new();
+    let raw = promise.as_raw();
+    match request_body_string(handle) {
+        Some(s) => {
+            let buf = perry_ffi::alloc_buffer(s.as_bytes());
+            promise.resolve(JsValue::from_object_ptr(buf));
+        }
+        None => promise.reject_string("Invalid request handle"),
+    }
+    raw
+}
+
+/// # Safety
+/// `handle` must come from a previous `js_request_new`.
+#[no_mangle]
+pub unsafe extern "C" fn js_request_form_data(handle: f64) -> *mut Promise {
+    let promise = JsPromise::new();
+    let raw = promise.as_raw();
+    match request_body_string(handle) {
+        Some(s) => {
+            let form_id = store_form_data(form_data_from_urlencoded(s.as_bytes()));
+            promise.resolve(JsValue::from_number(form_id as f64));
+        }
+        None => promise.reject_string("Invalid request handle"),
+    }
+    raw
+}
+
+/// # Safety
+/// `name_ptr` must be null or a Perry-runtime `StringHeader`.
+#[no_mangle]
+pub unsafe extern "C" fn js_form_data_get(handle: f64, name_ptr: *const StringHeader) -> f64 {
+    let id = handle_id(handle);
+    let Some(name) = read_str(name_ptr) else {
+        return f64::from_bits(TAG_NULL);
+    };
+    let g = FORM_DATA_HANDLES.lock().unwrap();
+    match g.get(&id).and_then(|f| f.get(&name)) {
+        Some(v) => f64::from_bits(JsValue::from_string_ptr(alloc_string(&v).as_raw()).bits()),
+        None => f64::from_bits(TAG_NULL),
+    }
+}
+
+/// # Safety
+/// `name_ptr` must be null or a Perry-runtime `StringHeader`.
+#[no_mangle]
+pub unsafe extern "C" fn js_form_data_get_all(handle: f64, name_ptr: *const StringHeader) -> f64 {
+    let id = handle_id(handle);
+    let name = read_str(name_ptr).unwrap_or_default();
+    let values = FORM_DATA_HANDLES
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|f| f.get_all(&name))
+        .unwrap_or_default();
+    let mut arr = perry_ffi::js_array_alloc(values.len() as u32);
+    for value in values {
+        arr = perry_ffi::js_array_push(arr, js_string_value(&value));
+    }
+    nanbox_array_ptr(arr)
+}
+
+#[no_mangle]
+pub extern "C" fn js_form_data_entries(handle: f64) -> f64 {
+    let id = handle_id(handle);
+    let entries = FORM_DATA_HANDLES
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|f| f.entries.clone())
+        .unwrap_or_default();
+    unsafe {
+        let mut arr = perry_ffi::js_array_alloc(entries.len() as u32);
+        for (name, value) in entries {
+            let mut pair = perry_ffi::js_array_alloc(2);
+            pair = perry_ffi::js_array_push(pair, js_string_value(&name));
+            pair = perry_ffi::js_array_push(pair, js_string_value(&value));
+            arr =
+                perry_ffi::js_array_push(arr, JsValue::from_bits(nanbox_array_ptr(pair).to_bits()));
+        }
+        nanbox_array_ptr(arr)
+    }
 }
 
 // `get_handle` / `register_handle` referenced for future surface;
@@ -1366,7 +1899,25 @@ mod tests {
         let url = alloc_string("https://example.com");
         let method = alloc_string("POST");
         let body = alloc_string(r#"{"x":1}"#);
-        let h = unsafe { js_request_new(url.as_raw(), method.as_raw(), body.as_raw(), 0.0) };
+        let null = std::ptr::null::<StringHeader>();
+        let h = unsafe {
+            js_request_new(
+                url.as_raw(),
+                method.as_raw(),
+                body.as_raw(),
+                0.0,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                0.0,
+                null,
+                0.0,
+            )
+        };
         assert!(h > 0.0);
         let url_ptr = js_request_get_url(h);
         let url_str =
@@ -1381,7 +1932,10 @@ mod tests {
     #[test]
     fn response_static_json() {
         let v = JsValue::from_string_ptr(alloc_string("hello").as_raw());
-        let resp = unsafe { js_response_static_json(f64::from_bits(v.bits())) };
+        // No init: status defaults to 200, no statusText, no headers.
+        let resp = unsafe {
+            js_response_static_json(f64::from_bits(v.bits()), 0.0, std::ptr::null(), 0.0)
+        };
         assert!(resp > 0.0);
         let status = js_fetch_response_status(resp);
         assert_eq!(status, 200.0);
@@ -1398,13 +1952,47 @@ mod tests {
         let url = alloc_string("https://example.com");
         let method = alloc_string("POST");
         let body = alloc_string(r#"{"x":1}"#);
-        let h = unsafe { js_request_new(url.as_raw(), method.as_raw(), body.as_raw(), 0.0) };
+        let null = std::ptr::null::<StringHeader>();
+        let h = unsafe {
+            js_request_new(
+                url.as_raw(),
+                method.as_raw(),
+                body.as_raw(),
+                0.0,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                0.0,
+                null,
+                0.0,
+            )
+        };
         assert!(h > 0.0);
         assert_eq!(request_body_string(h).as_deref(), Some(r#"{"x":1}"#));
 
         let url2 = alloc_string("https://example.com/empty");
-        let null = std::ptr::null::<StringHeader>();
-        let h2 = unsafe { js_request_new(url2.as_raw(), null, null, 0.0) };
+        let h2 = unsafe {
+            js_request_new(
+                url2.as_raw(),
+                null,
+                null,
+                0.0,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                0.0,
+                null,
+                0.0,
+            )
+        };
         assert_eq!(request_body_string(h2).as_deref(), Some(""));
 
         assert_eq!(request_body_string(99_999_999.0), None);

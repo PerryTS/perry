@@ -976,7 +976,7 @@ pub fn transform_expr(
         Expr::PathDirname(e) | Expr::PathBasename(e) | Expr::PathExtname(e) | Expr::PathResolve(e) | Expr::PathIsAbsolute(e) | Expr::PathToNamespacedPath(e) => {
             transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
-        Expr::JsonParse(e) | Expr::JsonStringify(e) => {
+        Expr::JsonParse(e) | Expr::JsonStringify(e) | Expr::JsonRawJson(e) | Expr::JsonIsRawJson(e) => {
             transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
         Expr::MathFloor(e) | Expr::MathCeil(e) | Expr::MathRound(e) | Expr::MathAbs(e) | Expr::MathSqrt(e) => {
@@ -1002,9 +1002,21 @@ pub fn transform_expr(
         Expr::ArrayPush { value, .. } | Expr::ArrayUnshift { value, .. } | Expr::ArrayPushSpread { source: value, .. } => {
             transform_expr(value, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
-        Expr::ArrayIndexOf { array, value } | Expr::ArrayIncludes { array, value } => {
+        Expr::ArrayIndexOf {
+            array,
+            value,
+            from_index,
+        }
+        | Expr::ArrayIncludes {
+            array,
+            value,
+            from_index,
+        } => {
             transform_expr(array, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(value, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            if let Some(fi) = from_index {
+                transform_expr(fi, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            }
         }
         Expr::ArraySlice { array, start, end } => {
             transform_expr(array, js_imports, extern_func_to_js, local_name_to_js, tracker);
@@ -1131,7 +1143,7 @@ pub fn transform_expr(
                 transform_expr(r, js_imports, extern_func_to_js, local_name_to_js, tracker);
             }
         }
-        Expr::ParseFloat(e) | Expr::NumberCoerce(e) | Expr::BigIntCoerce(e) | Expr::StringCoerce(e) | Expr::IsNaN(e) | Expr::IsUndefinedOrBareNan(e) | Expr::IsFinite(e) | Expr::StaticPluginResolve(e) => {
+        Expr::ParseFloat(e) | Expr::NumberCoerce(e) | Expr::BigIntCoerce(e) | Expr::StringCoerce(e) | Expr::ObjectCoerce(e) | Expr::IsNaN(e) | Expr::IsUndefinedOrBareNan(e) | Expr::IsFinite(e) | Expr::StaticPluginResolve(e) => {
             transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
         // JS Runtime expressions (already transformed, just recurse into subexpressions)
@@ -1235,7 +1247,7 @@ pub fn transform_expr(
         Expr::Null | Expr::Undefined | Expr::This | Expr::LocalGet(_) | Expr::GlobalGet(_) |
         Expr::FuncRef(_) | Expr::ClassRef(_) | Expr::EnumMember { .. } |
         Expr::RegExp { .. } | Expr::NativeModuleRef(_) | Expr::StaticFieldGet { .. } |
-        Expr::EnvGet(_) | Expr::ProcessUptime | Expr::ProcessMemoryUsage | Expr::ProcessEnv | Expr::MathRandom | Expr::CryptoRandomUUID | Expr::DateNow |
+        Expr::EnvGet(_) | Expr::ProcessUptime | Expr::ProcessMemoryUsage | Expr::ProcessEnv | Expr::MathRandom | Expr::CryptoRandomUUID | Expr::CryptoRandomUUIDv7 | Expr::DateNow |
         Expr::MapNew | Expr::SetNew | Expr::Update { .. } |
         Expr::ArrayPop(_) | Expr::ArrayShift(_) |
         // OS module expressions

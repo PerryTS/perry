@@ -49,7 +49,10 @@ pub(in crate::lower_call) fn build_headers_from_object(
     for (k, vexpr) in props {
         let key_expr = Expr::String(k.clone());
         let key_ptr = get_raw_string_ptr(ctx, &key_expr)?;
-        let val_ptr = get_raw_string_ptr(ctx, vexpr)?;
+        let value = lower_expr(ctx, vexpr)?;
+        let val_ptr = ctx
+            .block()
+            .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &value)]);
         ctx.block().call(
             DOUBLE,
             "js_headers_set",
@@ -74,6 +77,7 @@ pub(in crate::lower_call) fn build_headers_from_object(
 pub(crate) fn extract_options_fields(ctx: &FnCtx<'_>, e: &Expr) -> Option<Vec<(String, Expr)>> {
     match e {
         Expr::Object(props) => Some(props.clone()),
+        Expr::LocalGet(id) => ctx.option_object_locals.get(id).cloned(),
         Expr::New {
             class_name, args, ..
         } if class_name.starts_with("__AnonShape_") => {

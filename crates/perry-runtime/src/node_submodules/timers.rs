@@ -11,6 +11,72 @@ use crate::object::{js_object_alloc, js_object_set_field_by_name};
 use crate::string::js_string_from_bytes;
 use crate::value::JSValue;
 
+/// #3067 — `node:timers/promises` helpers reject a non-number `delay` and a
+/// non-object `options` with the same `TypeError [ERR_INVALID_ARG_TYPE]` shape
+/// Node emits. A missing (`undefined`) argument is allowed: Node defaults the
+/// delay and treats absent options as the empty object. `NaN` is a number, so
+/// it passes here (the warn/coerce path is tracked by #2966).
+fn validate_delay(delay: f64) {
+    let jv = JSValue::from_bits(delay.to_bits());
+    if jv.is_undefined() || crate::fs::validate::is_numeric(jv) {
+        return;
+    }
+    let message = format!(
+        "The \"delay\" argument must be of type number. Received {}",
+        crate::fs::validate::describe_received(delay)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+/// Accept `undefined` (no options) or a non-null, non-array object; anything
+/// else throws like Node's `validateObject`. Mirrors the `Array`/`null`
+/// detection used by `describe_received`.
+fn validate_options(options: f64) {
+    let jv = JSValue::from_bits(options.to_bits());
+    if jv.is_undefined() || is_plain_object(options) {
+        return;
+    }
+    let message = format!(
+        "The \"options\" argument must be of type object. Received {}",
+        crate::fs::validate::describe_received(options)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+/// True when `value` is a heap object that is not an array — the shape Node's
+/// `validateObject` admits for a timer `options` bag.
+fn is_plain_object(value: f64) -> bool {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let ptr = jv.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return false;
+    }
+    let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
+    gc_header.obj_type != crate::gc::GC_TYPE_ARRAY
+}
+
+fn options_ref(options: f64) -> bool {
+    let Some(value) = super::stream_promises::get_object_property(options, b"ref") else {
+        return true;
+    };
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_bool() {
+        return jv.as_bool();
+    }
+    let message = format!(
+        "The \"options.ref\" property must be of type boolean. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+fn promise_timer(delay_ms: f64, value: f64, has_ref: bool) -> *mut crate::promise::Promise {
+    crate::timer::js_set_timeout_value_ref(delay_ms, value, has_ref as i32)
+}
+
 /// node:timers/promises.setTimeout(delay, value?) — a Promise that resolves
 /// with `value` (or undefined) after `delay` ms. Composes the existing
 /// promise-returning timer primitive; the closure dispatch pads a missing
@@ -22,7 +88,10 @@ pub(crate) extern "C" fn timers_promises_set_timeout(
     value: f64,
     options: f64,
 ) -> f64 {
+    validate_delay(delay_ms);
+    validate_options(options);
     let signal = super::stream_promises::options_signal(options);
+    let has_ref = options_ref(options);
     if let Some(signal) = signal {
         if super::stream_promises::signal_aborted(signal) {
             let reason = super::stream_promises::signal_reason(signal);
@@ -31,20 +100,37 @@ pub(crate) extern "C" fn timers_promises_set_timeout(
             );
         }
     }
-    let promise = crate::timer::js_set_timeout_value(delay_ms, value);
+    let promise = promise_timer(delay_ms, value, has_ref);
     if let Some(signal) = signal {
         super::stream_promises::register_abort_listener(signal, promise);
     }
     crate::value::js_nanbox_pointer(promise as i64)
 }
 
-/// node:timers/promises.setImmediate(value?) — a Promise that resolves with
-/// `value` (or undefined) on a later turn. Refs #1213.
+/// node:timers/promises.setImmediate(value?, options?) — a Promise that
+/// resolves with `value` (or undefined) on a later turn and honors the same
+/// `signal` / `ref` option bag as the other timers/promises helpers.
+/// Refs #1213.
 pub(crate) extern "C" fn timers_promises_set_immediate(
     _closure: *const ClosureHeader,
     value: f64,
+    options: f64,
 ) -> f64 {
-    let promise = crate::timer::js_set_timeout_value(0.0, value);
+    validate_options(options);
+    let signal = super::stream_promises::options_signal(options);
+    let has_ref = options_ref(options);
+    if let Some(signal) = signal {
+        if super::stream_promises::signal_aborted(signal) {
+            let reason = super::stream_promises::signal_reason(signal);
+            return crate::value::js_nanbox_pointer(
+                crate::promise::js_promise_rejected(reason) as i64
+            );
+        }
+    }
+    let promise = promise_timer(0.0, value, has_ref);
+    if let Some(signal) = signal {
+        super::stream_promises::register_abort_listener(signal, promise);
+    }
     crate::value::js_nanbox_pointer(promise as i64)
 }
 
@@ -57,7 +143,7 @@ pub(crate) extern "C" fn timers_promises_scheduler_wait(
 }
 
 pub(crate) extern "C" fn timers_promises_scheduler_yield(_closure: *const ClosureHeader) -> f64 {
-    let promise = crate::promise::js_promise_resolved(f64::from_bits(TAG_UNDEFINED));
+    let promise = promise_timer(0.0, f64::from_bits(TAG_UNDEFINED), true);
     crate::value::js_nanbox_pointer(promise as i64)
 }
 
@@ -94,6 +180,7 @@ extern "C" fn timers_promises_interval_next(closure: *const ClosureHeader) -> f6
     let signal = js_closure_get_capture_f64(closure, 1);
     let delay_ms = js_closure_get_capture_f64(closure, 2);
     let closed = js_closure_get_capture_f64(closure, 3);
+    let has_ref = js_closure_get_capture_f64(closure, 4) != 0.0;
     if closed != 0.0 {
         return boxed_ptr(crate::promise::js_promise_resolved(iter_result(
             f64::from_bits(TAG_UNDEFINED),
@@ -108,7 +195,7 @@ extern "C" fn timers_promises_interval_next(closure: *const ClosureHeader) -> f6
         return boxed_ptr(crate::promise::js_promise_rejected(reason) as *const u8);
     }
 
-    let promise = crate::timer::js_set_timeout_value(delay_ms, iter_result(value, false));
+    let promise = promise_timer(delay_ms, iter_result(value, false), has_ref);
     if !JSValue::from_bits(signal.to_bits()).is_undefined() {
         super::stream_promises::register_abort_listener(signal, promise);
     }
@@ -138,16 +225,20 @@ pub(crate) extern "C" fn timers_promises_set_interval(
     value: f64,
     options: f64,
 ) -> f64 {
+    validate_delay(delay_ms);
+    validate_options(options);
     let signal = super::stream_promises::options_signal(options)
         .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
+    let has_ref = options_ref(options);
     let obj = js_object_alloc(0, 4);
     let obj_value = boxed_ptr(obj as *const u8);
 
-    let next = js_closure_alloc(timers_promises_interval_next as *const u8, 4);
+    let next = js_closure_alloc(timers_promises_interval_next as *const u8, 5);
     js_closure_set_capture_f64(next, 0, value);
     js_closure_set_capture_f64(next, 1, signal);
     js_closure_set_capture_f64(next, 2, delay_ms);
     js_closure_set_capture_f64(next, 3, 0.0);
+    js_closure_set_capture_f64(next, 4, has_ref as i32 as f64);
     js_object_set_field_by_name(obj, string_key(b"next"), boxed_ptr(next as *const u8));
 
     let ret = js_closure_alloc(timers_promises_interval_return as *const u8, 1);
@@ -180,36 +271,66 @@ pub(crate) extern "C" fn timers_promises_set_interval(
 fn callback_arg_to_i64(v: f64) -> i64 {
     (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
 }
+
+fn rest_array_values(rest: f64) -> Vec<f64> {
+    let value = JSValue::from_bits(rest.to_bits());
+    if !value.is_pointer() {
+        return Vec::new();
+    }
+
+    let arr = value.as_pointer::<crate::array::ArrayHeader>();
+    let len = crate::array::js_array_length(arr);
+    let mut values = Vec::with_capacity(len as usize);
+    for index in 0..len {
+        values.push(crate::array::js_array_get_f64(arr, index));
+    }
+    values
+}
+
 pub(crate) extern "C" fn timers_ns_set_timeout(
     _c: *const ClosureHeader,
     cb: f64,
     ms: f64,
-    arg0: f64,
+    rest: f64,
 ) -> f64 {
-    let args = [arg0];
+    let args = rest_array_values(rest);
     crate::value::js_nanbox_pointer(unsafe {
-        crate::timer::js_set_timeout_callback_args(callback_arg_to_i64(cb), ms, args.as_ptr(), 1)
+        crate::timer::js_set_timeout_callback_args(
+            callback_arg_to_i64(cb),
+            ms,
+            args.as_ptr(),
+            args.len() as i32,
+        )
     })
 }
 pub(crate) extern "C" fn timers_ns_set_interval(
     _c: *const ClosureHeader,
     cb: f64,
     ms: f64,
-    arg0: f64,
+    rest: f64,
 ) -> f64 {
-    let args = [arg0];
+    let args = rest_array_values(rest);
     crate::value::js_nanbox_pointer(unsafe {
-        crate::timer::js_set_interval_callback_args(callback_arg_to_i64(cb), ms, args.as_ptr(), 1)
+        crate::timer::js_set_interval_callback_args(
+            callback_arg_to_i64(cb),
+            ms,
+            args.as_ptr(),
+            args.len() as i32,
+        )
     })
 }
 pub(crate) extern "C" fn timers_ns_set_immediate(
     _c: *const ClosureHeader,
     cb: f64,
-    arg0: f64,
+    rest: f64,
 ) -> f64 {
-    let args = [arg0];
+    let args = rest_array_values(rest);
     crate::value::js_nanbox_pointer(unsafe {
-        crate::timer::js_set_immediate_callback_args(callback_arg_to_i64(cb), args.as_ptr(), 1)
+        crate::timer::js_set_immediate_callback_args(
+            callback_arg_to_i64(cb),
+            args.as_ptr(),
+            args.len() as i32,
+        )
     })
 }
 pub(crate) extern "C" fn timers_ns_clear_timeout(_c: *const ClosureHeader, arg: f64) -> f64 {

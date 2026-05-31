@@ -167,6 +167,381 @@ fn root_string_arg_handle<'scope>(
     }
 }
 
+fn throw_type_error_message(message: &[u8]) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+pub(crate) fn throw_object_value_of_nullish_receiver() -> ! {
+    throw_type_error_message(b"Cannot convert undefined or null to object")
+}
+
+pub(crate) fn throw_object_to_locale_string_nullish_receiver() -> ! {
+    throw_type_error_message(b"Object.prototype.toLocaleString called on null or undefined")
+}
+
+fn throw_object_to_string_not_function() -> ! {
+    crate::error::js_throw_type_error_not_a_function(
+        std::ptr::null(),
+        0,
+        b"toString".as_ptr(),
+        "toString".len(),
+    )
+}
+
+#[inline]
+unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return None;
+    }
+    let ptr = jsval.as_pointer::<u8>();
+    if ptr.is_null()
+        || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000
+        || !is_valid_obj_ptr(ptr as *const u8)
+    {
+        return None;
+    }
+    let addr = ptr as usize;
+    if crate::set::is_registered_set(addr)
+        || crate::map::is_registered_map(addr)
+        || crate::regex::is_regex_pointer(ptr as *const u8)
+        || crate::symbol::is_registered_symbol(addr)
+    {
+        return None;
+    }
+    let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    Some((ptr, (*gc_header).obj_type))
+}
+
+#[inline]
+unsafe fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
+    let (ptr, gc_type) = gc_pointer_and_type_from_value(value)?;
+    if gc_type == crate::gc::GC_TYPE_OBJECT {
+        Some(ptr as *mut ObjectHeader)
+    } else {
+        None
+    }
+}
+
+unsafe fn object_has_null_proto_flag(object: *const ObjectHeader) -> bool {
+    let gc_header =
+        (object as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    ((*gc_header)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO) != 0
+}
+
+unsafe fn call_object_to_string_method(object: f64) -> Option<f64> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object_handle = scope.root_nanbox_f64(object);
+    let receiver = object_handle.get_nanbox_f64();
+    let obj_ptr = object_ptr_from_value(receiver)?;
+    let key = crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
+    let key_handle = scope.root_string_ptr(key);
+    let key_ptr = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+    let method = js_object_get_field_by_name(obj_ptr as *const ObjectHeader, key_ptr);
+    if method.is_undefined() {
+        if own_key_present(obj_ptr, key_ptr) || object_has_null_proto_flag(obj_ptr) {
+            throw_object_to_string_not_function();
+        }
+        return None;
+    }
+    if method.is_null() {
+        throw_object_to_string_not_function();
+    }
+    let method_bits = method.bits();
+    if (method_bits & 0xFFFF_0000_0000_0000) != crate::value::POINTER_TAG {
+        throw_object_to_string_not_function();
+    }
+    let method_ptr = (method_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+    if !crate::closure::is_closure_ptr(method_ptr) {
+        throw_object_to_string_not_function();
+    }
+    let bound = crate::closure::clone_closure_rebind_this(method_bits, receiver);
+    let prev_this = crate::object::js_implicit_this_set(receiver);
+    let result = crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
+    crate::object::js_implicit_this_set(prev_this);
+    Some(result)
+}
+
+pub(crate) unsafe fn js_object_default_value_of(receiver: f64) -> f64 {
+    let jsval = JSValue::from_bits(receiver.to_bits());
+    if jsval.is_undefined() || jsval.is_null() {
+        throw_object_value_of_nullish_receiver();
+    }
+    receiver
+}
+
+pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
+    let jsval = JSValue::from_bits(receiver.to_bits());
+    if jsval.is_undefined() || jsval.is_null() {
+        throw_object_to_locale_string_nullish_receiver();
+    }
+    // #2808: numbers use `Number.prototype.toLocaleString` (thousands
+    // separators), so a number element / receiver formats as `1,000.5` rather
+    // than the bare `toString` form. Locale/option-aware grouping is not yet
+    // modeled — the default-locale grouping matches Node's en-US output for
+    // the common integer/decimal cases.
+    if jsval.is_number() {
+        let s = crate::date::js_number_to_locale_string(jsval.as_number());
+        return f64::from_bits(JSValue::string_ptr(s).bits());
+    }
+    // #2808: a Date value uses `Date.prototype.toLocaleString` (date+time
+    // rendering) rather than `[object Date]`.
+    if crate::date::is_date_value(receiver) {
+        let ts = crate::date::date_cell_timestamp(receiver);
+        let s = crate::date::js_date_to_locale_string(ts);
+        return f64::from_bits(JSValue::string_ptr(s).bits());
+    }
+    if !jsval.is_pointer() {
+        return js_native_call_method(
+            receiver,
+            b"toString".as_ptr() as *const i8,
+            "toString".len(),
+            std::ptr::null(),
+            0,
+        );
+    }
+    if let Some(result) = call_object_to_string_method(receiver) {
+        return result;
+    }
+    crate::object::js_object_to_string(receiver)
+}
+
+/// Shared implementation for `Object.prototype.isPrototypeOf`.
+pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64) -> bool {
+    let receiver_ptr = match object_ptr_from_value(receiver) {
+        Some(ptr) => ptr,
+        None => return false,
+    };
+
+    let target_jsval = JSValue::from_bits(target.to_bits());
+    if !target_jsval.is_pointer() {
+        return false;
+    }
+
+    if let Some(target_ptr) = object_ptr_from_value(target) {
+        let mut cid = crate::object::js_object_get_class_id(target_ptr as *const ObjectHeader);
+        let mut depth = 0usize;
+        let mut visited: [u32; 32] = [0; 32];
+        while cid != 0 && depth < visited.len() {
+            if visited[..depth].contains(&cid) {
+                break;
+            }
+            visited[depth] = cid;
+
+            let proto_obj = crate::object::class_registry::class_prototype_object(cid);
+            let mut next_cid = 0;
+            if !proto_obj.is_null() {
+                if std::ptr::addr_eq(proto_obj, receiver_ptr) {
+                    return true;
+                }
+                next_cid = crate::object::js_object_get_class_id(proto_obj as *const ObjectHeader);
+            }
+
+            if next_cid != 0 && next_cid != cid {
+                cid = next_cid;
+                depth += 1;
+                continue;
+            }
+
+            match crate::object::class_registry::get_parent_class_id(cid) {
+                Some(parent_id) if parent_id != 0 && parent_id != cid => {
+                    cid = parent_id;
+                    depth += 1;
+                }
+                _ => break,
+            }
+        }
+    } else {
+        let (_, target_gc_type) = match gc_pointer_and_type_from_value(target) {
+            Some(info) => info,
+            None => return false,
+        };
+        if target_gc_type != crate::gc::GC_TYPE_CLOSURE {
+            return false;
+        }
+    }
+
+    let mut current = target;
+    for _ in 0..32 {
+        let current_ptr = object_ptr_from_value(current);
+        let proto = crate::object::js_object_get_prototype_of(current);
+        let proto_jsval = JSValue::from_bits(proto.to_bits());
+        if proto_jsval.is_null() || proto_jsval.is_undefined() {
+            break;
+        }
+        let proto_ptr = match object_ptr_from_value(proto) {
+            Some(ptr) => ptr,
+            None => break,
+        };
+        if current_ptr.is_some_and(|ptr| std::ptr::addr_eq(ptr, proto_ptr)) {
+            break;
+        }
+        if std::ptr::addr_eq(proto_ptr, receiver_ptr) {
+            return true;
+        }
+        current = proto;
+    }
+
+    false
+}
+
+/// Dispatch a `%TypedArray%` instance method on an already-resolved
+/// `TypedArrayHeader` pointer. Returns `Some(result)` when handled, `None` when
+/// the method isn't a typed-array method (caller falls through to the generic
+/// dispatch tower / catch-all). Shared between the raw-pointer (#654) and
+/// NaN-boxed POINTER_TAG receiver paths so a `Uint8Array` local reaches the
+/// element-typed `js_typed_array_*` helpers regardless of how codegen boxed
+/// the receiver. Issues #2797 / #2798 / #2799 added the callback-bearing arms.
+unsafe fn dispatch_typed_array_method(
+    ta: *mut crate::typedarray::TypedArrayHeader,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    let arg0 = || -> f64 {
+        if args_len >= 1 && !args_ptr.is_null() {
+            *args_ptr
+        } else {
+            f64::NAN
+        }
+    };
+    let arg_closure = |i: usize| -> *const crate::closure::ClosureHeader {
+        if i < args_len && !args_ptr.is_null() {
+            let v = *args_ptr.add(i);
+            let bits = v.to_bits();
+            let tag = (bits >> 48) as u16;
+            if tag == 0x7FFD {
+                (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::closure::ClosureHeader
+            } else {
+                std::ptr::null()
+            }
+        } else {
+            std::ptr::null()
+        }
+    };
+    let r = match method_name {
+        "length" => crate::typedarray::js_typed_array_length(ta) as f64,
+        "at" => crate::typedarray::js_typed_array_at(ta, arg0()),
+        "sort" => {
+            // #2796: validate the comparator (function | undefined) before sorting.
+            let cmp = if args_len >= 1 && !args_ptr.is_null() {
+                crate::array::js_validate_array_comparator(*args_ptr)
+                    as *const crate::closure::ClosureHeader
+            } else {
+                std::ptr::null()
+            };
+            let result = if cmp.is_null() {
+                crate::typedarray::js_typed_array_sort_default(ta)
+            } else {
+                crate::typedarray::js_typed_array_sort_with_comparator(ta, cmp)
+            };
+            f64::from_bits(result as u64)
+        }
+        "toSorted" => {
+            let cmp = if args_len >= 1 && !args_ptr.is_null() {
+                crate::array::js_validate_array_comparator(*args_ptr)
+                    as *const crate::closure::ClosureHeader
+            } else {
+                std::ptr::null()
+            };
+            let result = if cmp.is_null() {
+                crate::typedarray::js_typed_array_to_sorted_default(ta)
+            } else {
+                crate::typedarray::js_typed_array_to_sorted_with_comparator(ta, cmp)
+            };
+            f64::from_bits(result as u64)
+        }
+        "toReversed" => f64::from_bits(crate::typedarray::js_typed_array_to_reversed(ta) as u64),
+        // #2879: bulk `set(source, offset?)` and `copyWithin`.
+        "set" => {
+            let source = arg0();
+            let offset = if args_len >= 2 && !args_ptr.is_null() {
+                *args_ptr.add(1)
+            } else {
+                0.0
+            };
+            crate::typedarray::js_typed_array_set_from(ta, source, offset)
+        }
+        "copyWithin" => {
+            let target = arg0();
+            let start = if args_len >= 2 && !args_ptr.is_null() {
+                *args_ptr.add(1)
+            } else {
+                0.0
+            };
+            let end = if args_len >= 3 && !args_ptr.is_null() {
+                *args_ptr.add(2)
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            f64::from_bits(
+                crate::typedarray::js_typed_array_copy_within(ta, target, start, end) as u64,
+            )
+        }
+        "with" => {
+            let idx = arg0();
+            let val = if args_len >= 2 && !args_ptr.is_null() {
+                *args_ptr.add(1)
+            } else {
+                f64::NAN
+            };
+            f64::from_bits(crate::typedarray::js_typed_array_with(ta, idx, val) as u64)
+        }
+        "findLast" => {
+            let cb = arg_closure(0);
+            if cb.is_null() {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            } else {
+                crate::typedarray::js_typed_array_find_last(ta, cb)
+            }
+        }
+        "findLastIndex" => {
+            let cb = arg_closure(0);
+            if cb.is_null() {
+                -1.0
+            } else {
+                crate::typedarray::js_typed_array_find_last_index(ta, cb)
+            }
+        }
+        // #2797/#2798/#2799: callback-bearing %TypedArray% methods. The codegen
+        // lowerers only fire for receivers it can statically prove are plain
+        // Arrays; a `Uint8Array` local reaches this dynamic dispatch tower,
+        // where these arms previously fell through to the undefined catch-all
+        // (so `ta.map`/`ta.reduce`/`ta.find` silently no-op'd).
+        "map" => {
+            let result = crate::typedarray::js_typed_array_map(ta, arg_closure(0));
+            f64::from_bits(JSValue::pointer(result as *mut u8).bits())
+        }
+        "filter" => {
+            let result = crate::typedarray::js_typed_array_filter(ta, arg_closure(0));
+            f64::from_bits(JSValue::pointer(result as *mut u8).bits())
+        }
+        "forEach" => crate::typedarray::js_typed_array_for_each(ta, arg_closure(0)),
+        "some" => crate::typedarray::js_typed_array_some(ta, arg_closure(0)),
+        "every" => crate::typedarray::js_typed_array_every(ta, arg_closure(0)),
+        "find" => crate::typedarray::js_typed_array_find(ta, arg_closure(0)),
+        "findIndex" => crate::typedarray::js_typed_array_find_index(ta, arg_closure(0)),
+        "reduce" | "reduceRight" => {
+            let cb = arg_closure(0);
+            // initial value present only when a 2nd arg was passed.
+            let (has_init, init) = if args_len >= 2 && !args_ptr.is_null() {
+                (1, *args_ptr.add(1))
+            } else {
+                (0, f64::NAN)
+            };
+            if method_name == "reduce" {
+                crate::typedarray::js_typed_array_reduce(ta, cb, has_init, init)
+            } else {
+                crate::typedarray::js_typed_array_reduce_right(ta, cb, has_init, init)
+            }
+        }
+        _ => return None,
+    };
+    Some(r)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_native_call_method(
     object: f64,
@@ -437,12 +812,16 @@ pub unsafe extern "C" fn js_native_call_method(
                 return crate::bigint::js_bigint_to_f64(bigint_ptr);
             }
             "toString" => {
-                let result_ptr = if args_len > 0 && !args_ptr.is_null() {
-                    let radix_f64 = *args_ptr;
-                    let radix = radix_f64 as i32;
-                    crate::bigint::js_bigint_to_string_radix(bigint_ptr, radix)
+                // #2864: ToNumber/ToInteger-coerce + validate the radix
+                // (RangeError for out-of-range), `None`/no-arg → decimal.
+                let radix = if args_len > 0 && !args_ptr.is_null() {
+                    crate::value::coerce_validate_radix(*args_ptr)
                 } else {
-                    crate::bigint::js_bigint_to_string(bigint_ptr)
+                    None
+                };
+                let result_ptr = match radix {
+                    Some(r) => crate::bigint::js_bigint_to_string_radix(bigint_ptr, r),
+                    None => crate::bigint::js_bigint_to_string(bigint_ptr),
                 };
                 return f64::from_bits(JSValue::string_ptr(result_ptr).bits());
             }
@@ -522,85 +901,8 @@ pub unsafe extern "C" fn js_native_call_method(
             let addr = raw_bits as usize;
             if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
                 let ta = addr as *mut crate::typedarray::TypedArrayHeader;
-                let arg0 = || -> f64 {
-                    if args_len >= 1 && !args_ptr.is_null() {
-                        unsafe { *args_ptr }
-                    } else {
-                        f64::NAN
-                    }
-                };
-                let arg_closure = |i: usize| -> *const crate::closure::ClosureHeader {
-                    if i < args_len && !args_ptr.is_null() {
-                        let v = unsafe { *args_ptr.add(i) };
-                        let bits = v.to_bits();
-                        let tag = (bits >> 48) as u16;
-                        if tag == 0x7FFD {
-                            (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::closure::ClosureHeader
-                        } else {
-                            std::ptr::null()
-                        }
-                    } else {
-                        std::ptr::null()
-                    }
-                };
-                match method_name {
-                    "length" => {
-                        return crate::typedarray::js_typed_array_length(ta) as f64;
-                    }
-                    "at" => {
-                        return crate::typedarray::js_typed_array_at(ta, arg0());
-                    }
-                    "sort" => {
-                        let cmp = arg_closure(0);
-                        let result = if cmp.is_null() {
-                            crate::typedarray::js_typed_array_sort_default(ta)
-                        } else {
-                            crate::typedarray::js_typed_array_sort_with_comparator(ta, cmp)
-                        };
-                        return f64::from_bits(result as u64);
-                    }
-                    "toSorted" => {
-                        let cmp = arg_closure(0);
-                        let result = if cmp.is_null() {
-                            crate::typedarray::js_typed_array_to_sorted_default(ta)
-                        } else {
-                            crate::typedarray::js_typed_array_to_sorted_with_comparator(ta, cmp)
-                        };
-                        return f64::from_bits(result as u64);
-                    }
-                    "toReversed" => {
-                        let result = crate::typedarray::js_typed_array_to_reversed(ta);
-                        return f64::from_bits(result as u64);
-                    }
-                    "with" => {
-                        let idx = arg0();
-                        let val = if args_len >= 2 && !args_ptr.is_null() {
-                            unsafe { *args_ptr.add(1) }
-                        } else {
-                            f64::NAN
-                        };
-                        let result = crate::typedarray::js_typed_array_with(ta, idx, val);
-                        return f64::from_bits(result as u64);
-                    }
-                    "findLast" => {
-                        let cb = arg_closure(0);
-                        if cb.is_null() {
-                            return f64::from_bits(crate::value::TAG_UNDEFINED);
-                        }
-                        return crate::typedarray::js_typed_array_find_last(ta, cb);
-                    }
-                    "findLastIndex" => {
-                        let cb = arg_closure(0);
-                        if cb.is_null() {
-                            return -1.0;
-                        }
-                        return crate::typedarray::js_typed_array_find_last_index(ta, cb);
-                    }
-                    _ => {
-                        // Fall through. Other methods aren't handled here
-                        // yet; they hit the primitive-method catch-all
-                        // below — better than silent no-op.
-                    }
+                if let Some(r) = dispatch_typed_array_method(ta, method_name, args_ptr, args_len) {
+                    return r;
                 }
             }
         }
@@ -747,7 +1049,22 @@ pub unsafe extern "C" fn js_native_call_method(
                 // helper. Static call sites for typed string receivers keep
                 // their inline paths in `lower_string_method.rs` and don't
                 // come through this dispatcher.
-                "indexOf" | "includes" | "lastIndexOf" | "startsWith" | "endsWith" | "concat" => {
+                "concat" => {
+                    let acc_handle = root_scope.root_string_ptr(receiver_string());
+                    for i in 0..args_len {
+                        let value = arg_at(i)
+                            .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
+                        let result = crate::string::js_string_concat_value(
+                            acc_handle.get_raw_const_ptr::<crate::StringHeader>(),
+                            value,
+                        );
+                        acc_handle.set_raw_const_ptr(result as *const crate::StringHeader);
+                    }
+                    let result = acc_handle.get_raw_const_ptr::<crate::StringHeader>()
+                        as *mut crate::StringHeader;
+                    return f64::from_bits(JSValue::string_ptr(result).bits());
+                }
+                "indexOf" | "includes" | "lastIndexOf" | "startsWith" | "endsWith" => {
                     let arg_str = |i: usize| -> *const crate::StringHeader {
                         if i < args_len && !args_ptr.is_null() {
                             let v = unsafe { *args_ptr.add(i) };
@@ -757,7 +1074,18 @@ pub unsafe extern "C" fn js_native_call_method(
                             std::ptr::null()
                         }
                     };
-                    let needle = arg_str(0);
+                    let search_arg_to_string = |method_id: i32| -> *const crate::StringHeader {
+                        let value = arg_at(0)
+                            .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
+                        crate::string::js_string_search_value_to_string(value, method_id)
+                            as *const crate::StringHeader
+                    };
+                    let needle = match method_name {
+                        "includes" => search_arg_to_string(0),
+                        "startsWith" => search_arg_to_string(1),
+                        "endsWith" => search_arg_to_string(2),
+                        _ => arg_str(0),
+                    };
                     // Integer-returning methods MUST return raw `i as f64` (not
                     // NaN-boxed INT32_TAG) — otherwise downstream comparisons
                     // like `idx < url.length` fail because NaN-boxed values
@@ -776,9 +1104,6 @@ pub unsafe extern "C" fn js_native_call_method(
                             "includes" | "startsWith" | "endsWith" => {
                                 f64::from_bits(JSValue::bool(false).bits())
                             }
-                            "concat" => f64::from_bits(
-                                JSValue::string_ptr(s_ptr as *mut crate::StringHeader).bits(),
-                            ),
                             _ => f64::from_bits(JSValue::undefined().bits()),
                         };
                     }
@@ -812,10 +1137,6 @@ pub unsafe extern "C" fn js_native_call_method(
                             let b = crate::string::js_string_ends_with_at(s_ptr, needle, at);
                             f64::from_bits(JSValue::bool(b != 0).bits())
                         }
-                        "concat" => {
-                            let r = crate::string::js_string_concat(s_ptr, needle);
-                            f64::from_bits(JSValue::string_ptr(r).bits())
-                        }
                         _ => f64::from_bits(JSValue::undefined().bits()),
                     };
                 }
@@ -846,8 +1167,28 @@ pub unsafe extern "C" fn js_native_call_method(
                     let r = crate::string::js_string_substring(s_ptr, start, end);
                     return f64::from_bits(JSValue::string_ptr(r).bits());
                 }
+                "substr" => {
+                    // Legacy substr(start, length); negative start from end,
+                    // 2nd arg is a length. i32::MIN = "length omitted" (#2897).
+                    let start = if args_len >= 1 { arg_i32(0) } else { 0 };
+                    let length = if args_len >= 2 { arg_i32(1) } else { i32::MIN };
+                    let r = crate::string::js_string_substr(s_ptr, start, length);
+                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                }
+                "toLocaleLowerCase" => {
+                    let locales =
+                        arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
+                    let r = crate::string::js_string_to_locale_lower_case(s_ptr, locales);
+                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                }
+                "toLocaleUpperCase" => {
+                    let locales =
+                        arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
+                    let r = crate::string::js_string_to_locale_upper_case(s_ptr, locales);
+                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                }
                 "repeat" => {
-                    let n = if args_len >= 1 { arg_i32(0) } else { 0 };
+                    let n = arg_at(0).unwrap_or(0.0);
                     let r = crate::string::js_string_repeat(s_ptr, n);
                     if r.is_null() {
                         return f64::from_bits(JSValue::undefined().bits());
@@ -888,9 +1229,37 @@ pub unsafe extern "C" fn js_native_call_method(
                 }
                 "replace" | "replaceAll" => {
                     // Two-arg shape: (pattern, replacement). pattern can be a
-                    // string OR a RegExp; replacement is a string. Function
-                    // replacements aren't supported here yet — they need
-                    // closure dispatch and aren't on hono's hot path.
+                    // string OR a RegExp; replacement is a string OR a function.
+                    // Function replacements over a RegExp pattern route to the
+                    // regex-fn helpers (#2867) so dynamically-dispatched
+                    // `str.replace(re, fn)` observes Node's callback argument
+                    // shape `(match, p1, ..., offset, string, groups?)`.
+                    if let (Some(pat_val), Some(repl_val)) = (arg_at(0), arg_at(1)) {
+                        let pat_jsv = JSValue::from_bits(pat_val.to_bits());
+                        let repl_jsv = JSValue::from_bits(repl_val.to_bits());
+                        if pat_jsv.is_pointer() && repl_jsv.is_pointer() {
+                            let repl_raw = (repl_val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+                            if crate::closure::is_closure_ptr(repl_raw) {
+                                let regex_ptr = pat_jsv.as_pointer::<crate::regex::RegExpHeader>();
+                                if !regex_ptr.is_null() {
+                                    let r = if method_name == "replaceAll" {
+                                        crate::regex::js_string_replace_all_regex_fn(
+                                            receiver_string(),
+                                            regex_ptr,
+                                            repl_val,
+                                        )
+                                    } else {
+                                        crate::regex::js_string_replace_regex_fn(
+                                            receiver_string(),
+                                            regex_ptr,
+                                            repl_val,
+                                        )
+                                    };
+                                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                                }
+                            }
+                        }
+                    }
                     let pat_handle = root_string_arg_handle(&root_scope, &arg_handles, 0);
                     let repl_handle = root_string_arg_handle(&root_scope, &arg_handles, 1);
                     let pat_str = || {
@@ -912,9 +1281,7 @@ pub unsafe extern "C" fn js_native_call_method(
                             // Probe whether the pointer is a RegExpHeader by
                             // checking the GC type tag the regex helpers
                             // already validate; if it's not, the regex helper
-                            // returns the original string unchanged. The
-                            // global flag on the RegExp determines whether
-                            // it replaces all or just the first.
+                            // returns the original string unchanged.
                             let regex_ptr = jsv.as_pointer::<crate::regex::RegExpHeader>();
                             // Heuristic: a non-null POINTER_TAG that's not a
                             // string/array (those have different GC type tags)
@@ -922,11 +1289,19 @@ pub unsafe extern "C" fn js_native_call_method(
                             // already validates internally and falls back
                             // safely on mismatch.
                             if !regex_ptr.is_null() {
-                                let r = crate::regex::js_string_replace_regex(
-                                    receiver_string(),
-                                    regex_ptr,
-                                    repl_str(),
-                                );
+                                let r = if method_name == "replaceAll" {
+                                    crate::regex::js_string_replace_all_regex(
+                                        receiver_string(),
+                                        regex_ptr,
+                                        repl_str(),
+                                    )
+                                } else {
+                                    crate::regex::js_string_replace_regex(
+                                        receiver_string(),
+                                        regex_ptr,
+                                        repl_str(),
+                                    )
+                                };
                                 return f64::from_bits(JSValue::string_ptr(r).bits());
                             }
                         }
@@ -990,6 +1365,20 @@ pub unsafe extern "C" fn js_native_call_method(
             return dispatch_buffer_method(raw_ptr, method_name, args_ptr, args_len);
         }
 
+        // TypedArray method dispatch for NaN-boxed (POINTER_TAG) receivers.
+        // The raw-pointer path above (#654) only fires when codegen leaves the
+        // typed-array pointer untagged; a `Uint8Array` local loaded as a value
+        // is NaN-boxed with POINTER_TAG and reaches here instead. Route the
+        // callback-bearing + immutable methods to the shared helper before the
+        // GC_TYPE_ARRAY check below (which only matches plain arrays).
+        // Issues #2797 / #2798 / #2799.
+        if crate::typedarray::lookup_typed_array_kind(raw_ptr).is_some() {
+            let ta = raw_ptr as *mut crate::typedarray::TypedArrayHeader;
+            if let Some(r) = dispatch_typed_array_method(ta, method_name, args_ptr, args_len) {
+                return r;
+            }
+        }
+
         // Array method dispatch: when the object is a real or lazy array at runtime,
         // dispatch callback-bearing array methods directly to the array runtime helpers.
         // This covers the `anyTypedVar.map(fn)` / `anyTypedVar.filter(fn)` pattern where
@@ -1048,22 +1437,16 @@ pub unsafe extern "C" fn js_native_call_method(
                     // sentinel and the next chained operation segfaulted.
                     "slice" => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let arg_i32 = |i: usize| -> i32 {
+                        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+                        let arg_value = |i: usize| -> f64 {
                             if i < args_len && !args_ptr.is_null() {
-                                let v = *args_ptr.add(i);
-                                if v.is_nan() || v.is_infinite() {
-                                    0
-                                } else {
-                                    v as i32
-                                }
+                                *args_ptr.add(i)
                             } else {
-                                0
+                                undefined
                             }
                         };
-                        let len = crate::array::js_array_length(arr) as i32;
-                        let start = if args_len >= 1 { arg_i32(0) } else { 0 };
-                        let end = if args_len >= 2 { arg_i32(1) } else { len };
-                        let result = crate::array::js_array_slice(arr, start, end);
+                        let result =
+                            crate::array::js_array_slice_values(arr, arg_value(0), arg_value(1));
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
                     // Issue #321 (effect Context/Layer): defensive `splice`
@@ -1090,9 +1473,15 @@ pub unsafe extern "C" fn js_native_call_method(
                             }
                         };
                         let start = if args_len >= 1 { arg_i32(0) } else { 0 };
-                        // Per spec: omitted deleteCount deletes through the end.
-                        // `js_array_splice` clamps to the live length.
-                        let delete_count = if args_len >= 2 { arg_i32(1) } else { i32::MAX };
+                        // Per spec: splice() deletes nothing, while
+                        // splice(start) deletes through the end.
+                        let delete_count = if args_len == 0 {
+                            0
+                        } else if args_len == 1 {
+                            i32::MAX
+                        } else {
+                            arg_i32(1)
+                        };
                         // Items to insert are args[2..].
                         let items: Vec<f64> = if args_len > 2 && !args_ptr.is_null() {
                             std::slice::from_raw_parts(args_ptr.add(2), args_len - 2).to_vec()
@@ -1119,9 +1508,15 @@ pub unsafe extern "C" fn js_native_call_method(
                         let arr = raw_ptr as *mut crate::array::ArrayHeader;
                         return crate::array::js_array_shift_f64(arr);
                     }
-                    "unshift" if args_len >= 1 && !args_ptr.is_null() => {
+                    "unshift" => {
+                        // #2814: zero-arg returns current length (no mutation);
+                        // 1+ args insert all items at the front in source order.
                         let arr = raw_ptr as *mut crate::array::ArrayHeader;
-                        let result = crate::array::js_array_unshift_f64(arr, *args_ptr);
+                        if args_len == 0 || args_ptr.is_null() {
+                            return crate::array::js_array_length(arr) as f64;
+                        }
+                        let result =
+                            crate::array::js_array_unshift_variadic(arr, args_ptr, args_len as u32);
                         return crate::array::js_array_length(result) as f64;
                     }
                     // Issue #515 followup: defensive `with` arm for arrays that
@@ -1204,9 +1599,10 @@ pub unsafe extern "C" fn js_native_call_method(
                     // receivers.
                     "sort" => {
                         let arr = raw_ptr as *mut crate::array::ArrayHeader;
+                        // #2796: validate comparator (function | undefined) before sorting.
                         let result = if args_len >= 1 && !args_ptr.is_null() {
-                            let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                            let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                            let cb_ptr = crate::array::js_validate_array_comparator(*args_ptr)
+                                as *const crate::closure::ClosureHeader;
                             crate::array::js_array_sort_with_comparator(arr, cb_ptr)
                         } else {
                             crate::array::js_array_sort_default(arr)
@@ -1241,8 +1637,16 @@ pub unsafe extern "C" fn js_native_call_method(
                         return crate::array::js_array_reduce_right(arr, cb_ptr, has_init, init);
                     }
                     "flat" => {
+                        // #2800: honor the optional depth argument. Omitted →
+                        // depth 1 (legacy `js_array_flat`); supplied → route to
+                        // the depth-aware helper, which applies JS number
+                        // coercion (NaN/≤0 → 0, +Infinity → fully flat).
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let result = crate::array::js_array_flat(arr);
+                        let result = if args_len >= 1 && !args_ptr.is_null() {
+                            crate::array::js_array_flat_depth(arr, *args_ptr)
+                        } else {
+                            crate::array::js_array_flat(arr)
+                        };
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
                     "flatMap" if args_len >= 1 && !args_ptr.is_null() => {
@@ -1252,22 +1656,39 @@ pub unsafe extern "C" fn js_native_call_method(
                         let result = crate::array::js_array_flatMap(arr, cb_ptr);
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
-                    "concat" if args_len >= 1 && !args_ptr.is_null() => {
-                        let arr = raw_ptr as *mut crate::array::ArrayHeader;
-                        let other_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let other_ptr = other_bits as *mut crate::array::ArrayHeader;
-                        let result = crate::array::js_array_concat(arr, other_ptr);
+                    "concat" => {
+                        // #2805: non-mutating, variadic concat with
+                        // Symbol.isConcatSpreadable handling.
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let result =
+                            crate::array::js_array_concat_variadic(arr, args_ptr, args_len as i32);
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
                     "indexOf" if args_len >= 1 && !args_ptr.is_null() => {
+                        // #2804: honor the optional fromIndex (2nd arg).
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
                         let value = *args_ptr;
-                        return crate::array::js_array_indexOf_jsvalue(arr, value) as f64;
+                        let (from_index, has_from) = if args_len >= 2 {
+                            (*args_ptr.add(1), 1)
+                        } else {
+                            (0.0, 0)
+                        };
+                        return crate::array::js_array_indexOf_jsvalue(
+                            arr, value, from_index, has_from,
+                        ) as f64;
                     }
                     "includes" if args_len >= 1 && !args_ptr.is_null() => {
+                        // #2804: honor the optional fromIndex (2nd arg).
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
                         let value = *args_ptr;
-                        let r = crate::array::js_array_includes_jsvalue(arr, value);
+                        let (from_index, has_from) = if args_len >= 2 {
+                            (*args_ptr.add(1), 1)
+                        } else {
+                            (0.0, 0)
+                        };
+                        let r = crate::array::js_array_includes_jsvalue(
+                            arr, value, from_index, has_from,
+                        );
                         return f64::from_bits(JSValue::bool(r != 0).bits());
                     }
                     "lastIndexOf" if args_len >= 1 && !args_ptr.is_null() => {
@@ -1288,25 +1709,50 @@ pub unsafe extern "C" fn js_native_call_method(
                         return crate::array::js_array_at(arr, *args_ptr);
                     }
                     "fill" if args_len >= 1 && !args_ptr.is_null() => {
+                        // #2801: honor the optional start/end range. One arg →
+                        // whole-array fill; 2+ args → range fill with the
+                        // supplied start and (defaulting to +Infinity →
+                        // clamps to length) end, mirroring the static path.
                         let arr = raw_ptr as *mut crate::array::ArrayHeader;
-                        let result = crate::array::js_array_fill(arr, *args_ptr);
+                        let value = *args_ptr;
+                        let result = if args_len >= 2 {
+                            let start = *args_ptr.add(1);
+                            let end = if args_len >= 3 {
+                                *args_ptr.add(2)
+                            } else {
+                                f64::INFINITY
+                            };
+                            crate::array::js_array_fill_range(arr, value, start, end)
+                        } else {
+                            crate::array::js_array_fill(arr, value)
+                        };
+                        return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+                    }
+                    "copyWithin" if args_len >= 1 && !args_ptr.is_null() => {
+                        // #2802: dynamic dispatch for Array.prototype.copyWithin.
+                        // Mirrors the static codegen path: require `target`,
+                        // default omitted `start` to 0, pass has_end=0 when
+                        // `end` is omitted. Mutates and returns the receiver.
+                        let arr = raw_ptr as *mut crate::array::ArrayHeader;
+                        let target = *args_ptr;
+                        let start = if args_len >= 2 { *args_ptr.add(1) } else { 0.0 };
+                        let (has_end, end) = if args_len >= 3 {
+                            (1, *args_ptr.add(2))
+                        } else {
+                            (0, 0.0)
+                        };
+                        let result =
+                            crate::array::js_array_copy_within(arr, target, start, has_end, end);
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
                     "join" => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let sep_ptr = if args_len >= 1 && !args_ptr.is_null() {
-                            let bits = (*args_ptr).to_bits();
-                            let tag = bits >> 48;
-                            if tag == 0x7FFF || tag == 0x7FFE {
-                                // STRING_TAG or SHORT_STRING tag
-                                (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::string::StringHeader
-                            } else {
-                                std::ptr::null()
-                            }
+                        let separator = if args_len >= 1 && !args_ptr.is_null() {
+                            *args_ptr
                         } else {
-                            std::ptr::null()
+                            f64::from_bits(crate::value::TAG_UNDEFINED)
                         };
-                        let s = crate::array::js_array_join(arr, sep_ptr);
+                        let s = crate::array::js_array_join_value(arr, separator);
                         return f64::from_bits(JSValue::string_ptr(s).bits());
                     }
                     // #321: a value-level `arr[Symbol.iterator]()` resolves to
@@ -1327,6 +1773,81 @@ pub unsafe extern "C" fn js_native_call_method(
                     }
                     "entries" => {
                         return crate::array::array_entries_iter(object);
+                    }
+                    // #2803: ES2023 immutable methods reaching the dynamic
+                    // dispatch tower (`(arr as any).toSorted()`, computed
+                    // `arr[m]()`, chained-call receivers that escape the HIR
+                    // fold). Each returns a NEW array and leaves the receiver
+                    // unchanged, mirroring the static codegen helpers.
+                    "toReversed" => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let result = crate::array::js_array_to_reversed(arr);
+                        return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+                    }
+                    "toSorted" => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        // #2796: validate comparator (function | undefined);
+                        // a null/undefined comparator routes to the default
+                        // (string) sort inside js_array_to_sorted_with_comparator.
+                        let cmp_ptr = if args_len >= 1 && !args_ptr.is_null() {
+                            crate::array::js_validate_array_comparator(*args_ptr)
+                                as *const crate::closure::ClosureHeader
+                        } else {
+                            std::ptr::null()
+                        };
+                        let result = crate::array::js_array_to_sorted_with_comparator(arr, cmp_ptr);
+                        return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+                    }
+                    "toSpliced" => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        // Per spec / #2794: toSpliced() inserts/deletes nothing,
+                        // toSpliced(start) deletes through the end. NaN-coercion
+                        // for the f64 start/deleteCount is handled in the helper.
+                        let start = if args_len >= 1 { *args_ptr } else { 0.0 };
+                        let delete_count = if args_len == 0 {
+                            0.0
+                        } else if args_len == 1 {
+                            f64::INFINITY
+                        } else {
+                            *args_ptr.add(1)
+                        };
+                        let items: Vec<f64> = if args_len > 2 && !args_ptr.is_null() {
+                            std::slice::from_raw_parts(args_ptr.add(2), args_len - 2).to_vec()
+                        } else {
+                            Vec::new()
+                        };
+                        let items_ptr = if items.is_empty() {
+                            std::ptr::null()
+                        } else {
+                            items.as_ptr()
+                        };
+                        let result = crate::array::js_array_to_spliced(
+                            arr,
+                            start,
+                            delete_count,
+                            items_ptr,
+                            items.len() as u32,
+                        );
+                        return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+                    }
+                    // #2808: Array.prototype.toLocaleString — calls each
+                    // non-nullish element's own toLocaleString(locales, options),
+                    // renders nullish/hole elements as empty fields, and joins
+                    // with commas. Routed here for any-typed / computed receivers.
+                    "toLocaleString" => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let locales = if args_len >= 1 && !args_ptr.is_null() {
+                            *args_ptr
+                        } else {
+                            f64::from_bits(crate::value::TAG_UNDEFINED)
+                        };
+                        let options = if args_len >= 2 && !args_ptr.is_null() {
+                            *args_ptr.add(1)
+                        } else {
+                            f64::from_bits(crate::value::TAG_UNDEFINED)
+                        };
+                        let s = crate::array::js_array_to_locale_string(arr, locales, options);
+                        return f64::from_bits(JSValue::string_ptr(s).bits());
                     }
                     _ => {} // not a handled array method — fall through to object dispatch
                 }
@@ -1364,6 +1885,67 @@ pub unsafe extern "C" fn js_native_call_method(
                     obj as *mut ObjectHeader,
                     method_name,
                 );
+            }
+            if let Some(result) =
+                crate::node_test::dispatch_object_method((*obj).class_id, method_name)
+            {
+                return result;
+            }
+            // #2856: Map/Set iterators returned from a value-level
+            // `m.entries()`/`.keys()`/`.values()` / `s.entries()` etc. carry
+            // dedicated class ids so `.next()` lands in the matching iterator
+            // dispatcher (mirroring the array iterator above).
+            if (*obj).class_id == crate::collection_iter_object::MAP_ITERATOR_CLASS_ID {
+                return crate::collection_iter_object::dispatch_map_iterator_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                );
+            }
+            if (*obj).class_id == crate::collection_iter_object::SET_ITERATOR_CLASS_ID {
+                return crate::collection_iter_object::dispatch_set_iterator_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                );
+            }
+            // #2874: lazy iterator-helper objects (`Iterator.from(x)` and the
+            // chain it produces: `.map`/`.filter`/`.take`/`.drop`/`.flatMap`/
+            // `.toArray`/`.forEach`/`.reduce`/`.some`/`.every`/`.find`/`.next`).
+            if (*obj).class_id == crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID {
+                return crate::iterator_helpers::dispatch_iterator_helper_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                    args_ptr,
+                    args_len,
+                );
+            }
+
+            // #2874: an iterator-helper method (`map`/`filter`/`take`/…) on a
+            // RAW iterator object — a generator, the runtime array/Map/Set
+            // iterators, or any `{ next() }`. Node resolves these on
+            // `Iterator.prototype`; wrap the iterator in an identity helper and
+            // dispatch there. Skipped when the object defines the name as an own
+            // callable field (the user's own method wins). Runs before the
+            // own-field scan so the cheap has-own check below stays in sync.
+            if crate::iterator_helpers::is_iterator_helper_method(method_name) {
+                let has_own = {
+                    let mk = crate::string::js_string_from_bytes(
+                        method_name.as_ptr(),
+                        method_name.len() as u32,
+                    );
+                    let fv = js_object_get_field_by_name(obj as *const _, mk);
+                    let fp =
+                        crate::value::js_nanbox_get_pointer(f64::from_bits(fv.bits())) as usize;
+                    !fv.is_undefined() && crate::closure::is_closure_ptr(fp)
+                };
+                if let Some(result) = crate::iterator_helpers::maybe_dispatch_helper_on_iterator(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                    args_ptr,
+                    args_len,
+                    has_own,
+                ) {
+                    return result;
+                }
             }
 
             // Scan object fields for a callable property (closure stored via IndexSet)
@@ -1641,17 +2223,32 @@ pub unsafe extern "C" fn js_native_call_method(
                         f64::from_bits(crate::value::TAG_UNDEFINED)
                     }
                     "size" => crate::map::js_map_size(map) as f64,
+                    // #2856: value-level iterator methods return real iterator
+                    // OBJECTS (not arrays), dispatched via class id.
                     "entries" => f64::from_bits(
-                        JSValue::pointer(crate::map::js_map_entries(map) as *mut u8).bits(),
+                        JSValue::pointer(
+                            crate::collection_iter_object::js_map_entries_iter_obj(map) as *mut u8,
+                        )
+                        .bits(),
                     ),
                     "keys" => f64::from_bits(
-                        JSValue::pointer(crate::map::js_map_keys(map) as *mut u8).bits(),
+                        JSValue::pointer(
+                            crate::collection_iter_object::js_map_keys_iter_obj(map) as *mut u8
+                        )
+                        .bits(),
                     ),
                     "values" => f64::from_bits(
-                        JSValue::pointer(crate::map::js_map_values(map) as *mut u8).bits(),
+                        JSValue::pointer(
+                            crate::collection_iter_object::js_map_values_iter_obj(map) as *mut u8,
+                        )
+                        .bits(),
                     ),
                     "forEach" if !args.is_empty() => {
-                        crate::map::js_map_foreach(map, args[0]);
+                        let this_arg = args
+                            .get(1)
+                            .copied()
+                            .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                        crate::map::js_map_foreach(map, args[0], this_arg);
                         f64::from_bits(crate::value::TAG_UNDEFINED)
                     }
                     _ => f64::from_bits(crate::value::TAG_UNDEFINED),
@@ -1682,6 +2279,60 @@ pub unsafe extern "C" fn js_native_call_method(
                         f64::from_bits(crate::value::TAG_UNDEFINED)
                     }
                     "size" => crate::set::js_set_size(set) as f64,
+                    // #2856: dynamic Set iterator methods previously fell
+                    // through to `undefined` (only add/has/delete/clear/size
+                    // were handled). Return real iterator objects; `entries`
+                    // yields `[v, v]` pairs.
+                    "values" | "keys" => f64::from_bits(
+                        JSValue::pointer(
+                            crate::collection_iter_object::js_set_values_iter_obj(set) as *mut u8,
+                        )
+                        .bits(),
+                    ),
+                    "entries" => f64::from_bits(
+                        JSValue::pointer(
+                            crate::collection_iter_object::js_set_entries_iter_obj(set) as *mut u8,
+                        )
+                        .bits(),
+                    ),
+                    "forEach" if !args.is_empty() => {
+                        let this_arg = args
+                            .get(1)
+                            .copied()
+                            .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                        crate::set::js_set_foreach(set, args[0], this_arg);
+                        f64::from_bits(crate::value::TAG_UNDEFINED)
+                    }
+                    // #2872: ES2024 Set composition methods. union/intersection/
+                    // difference/symmetricDifference return a new Set; the
+                    // is* predicates return a boolean.
+                    "union" if !args.is_empty() => f64::from_bits(
+                        JSValue::pointer(crate::set::js_set_union(set, args[0]) as *mut u8).bits(),
+                    ),
+                    "intersection" if !args.is_empty() => f64::from_bits(
+                        JSValue::pointer(crate::set::js_set_intersection(set, args[0]) as *mut u8)
+                            .bits(),
+                    ),
+                    "difference" if !args.is_empty() => f64::from_bits(
+                        JSValue::pointer(crate::set::js_set_difference(set, args[0]) as *mut u8)
+                            .bits(),
+                    ),
+                    "symmetricDifference" if !args.is_empty() => f64::from_bits(
+                        JSValue::pointer(
+                            crate::set::js_set_symmetric_difference(set, args[0]) as *mut u8
+                        )
+                        .bits(),
+                    ),
+                    "isSubsetOf" if !args.is_empty() => f64::from_bits(
+                        JSValue::bool(crate::set::js_set_is_subset_of(set, args[0]) != 0).bits(),
+                    ),
+                    "isSupersetOf" if !args.is_empty() => f64::from_bits(
+                        JSValue::bool(crate::set::js_set_is_superset_of(set, args[0]) != 0).bits(),
+                    ),
+                    "isDisjointFrom" if !args.is_empty() => f64::from_bits(
+                        JSValue::bool(crate::set::js_set_is_disjoint_from(set, args[0]) != 0)
+                            .bits(),
+                    ),
                     _ => f64::from_bits(crate::value::TAG_UNDEFINED),
                 };
             }
@@ -1728,6 +2379,28 @@ pub unsafe extern "C" fn js_native_call_method(
                 return crate::array::dispatch_array_iterator_method(
                     obj as *mut ObjectHeader,
                     method_name,
+                );
+            }
+            // #2856: same Map/Set-iterator class-id checks as the NaN-boxed path.
+            if (*obj).class_id == crate::collection_iter_object::MAP_ITERATOR_CLASS_ID {
+                return crate::collection_iter_object::dispatch_map_iterator_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                );
+            }
+            if (*obj).class_id == crate::collection_iter_object::SET_ITERATOR_CLASS_ID {
+                return crate::collection_iter_object::dispatch_set_iterator_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                );
+            }
+            // #2874: lazy iterator-helper objects, same as the NaN-boxed path.
+            if (*obj).class_id == crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID {
+                return crate::iterator_helpers::dispatch_iterator_helper_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                    args_ptr,
+                    args_len,
                 );
             }
 
@@ -1812,11 +2485,16 @@ pub unsafe extern "C" fn js_native_call_method(
 
     // Handle common method calls
     match method_name {
-        // Function.prototype.bind - returns the same function for native closures
-        // This is a simplification - real bind() creates a new function with bound 'this'
+        // Function.prototype.bind(thisArg, ...boundArgs) — create a distinct
+        // bound function with a fixed `this`, prepended partial args, and an
+        // adjusted `.name`/`.length` (#2840). For closure receivers route to
+        // the runtime bind helper; non-closure receivers fall back to the
+        // prior conservative behavior of returning the receiver unchanged.
         "bind" => {
-            // For native closures, we return the function as-is
-            // The 'this' binding is handled at the call site
+            let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+            if jsval.is_pointer() && crate::closure::is_closure_ptr(raw_ptr) {
+                return crate::closure::js_function_bind(object, args_ptr, args_len);
+            }
             return object;
         }
 
@@ -1836,57 +2514,98 @@ pub unsafe extern "C" fn js_native_call_method(
             if jsval.is_undefined() || jsval.is_null() {
                 return f64::from_bits(JSValue::bool(false).bits());
             }
-            return f64::from_bits(JSValue::bool(true).bits());
-        }
-
-        // `obj.propertyIsEnumerable(key)` — same shape as
-        // `hasOwnProperty`. Spec says true for own enumerable
-        // properties (the typical case for object literals). Without
-        // walking the receiver's keys, we approximate as
-        // `truthy receiver → true` — matches Node for ramda's
-        // `keys.js` IIFE (`!{toString:null}.propertyIsEnumerable('toString')`
-        // expects `true`, so `hasEnumBug` resolves to `false`).
-        // Arguments-like receivers also return true here, which
-        // matches the legacy non-Safari behavior ramda's IIFE checks
-        // against.
-        "propertyIsEnumerable" => {
-            if jsval.is_undefined() || jsval.is_null() {
-                return f64::from_bits(JSValue::bool(false).bits());
+            if jsval.is_pointer() {
+                let key_value = if args_len >= 1 && !args_ptr.is_null() {
+                    *args_ptr
+                } else {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                };
+                let key_str = crate::builtins::js_string_coerce(key_value);
+                if key_str.is_null() {
+                    return f64::from_bits(JSValue::bool(false).bits());
+                }
+                let obj_ptr = jsval.as_pointer::<ObjectHeader>();
+                if !obj_ptr.is_null() && is_valid_obj_ptr(obj_ptr as *const u8) {
+                    return f64::from_bits(
+                        JSValue::bool(own_key_present(obj_ptr as *mut ObjectHeader, key_str))
+                            .bits(),
+                    );
+                }
             }
             return f64::from_bits(JSValue::bool(true).bits());
         }
 
-        // `prim.isPrototypeOf(v)` — true iff the receiver appears in `v`'s
-        // prototype chain. #2058: a primitive receiver (number/string/boolean,
-        // reached via the `js_class_method_bind` value-read path) is never on
-        // another object's prototype chain, so the result is always `false`.
-        // Scoped to non-pointer receivers so object/class-prototype receivers
-        // keep their existing dispatch. Returning a clean boolean keeps
-        // `typeof n.isPrototypeOf === "function"` honest: the bound value is
-        // actually callable rather than throwing.
-        "isPrototypeOf" if !jsval.is_pointer() => {
-            return f64::from_bits(JSValue::bool(false).bits());
+        // `obj.propertyIsEnumerable(key)` — same shape as
+        // `hasOwnProperty`, but descriptor-aware for ordinary objects so
+        // non-enumerable properties installed by Error.captureStackTrace /
+        // Object.defineProperty report false.
+        "propertyIsEnumerable" => {
+            if jsval.is_undefined() || jsval.is_null() {
+                return f64::from_bits(JSValue::bool(false).bits());
+            }
+            if !jsval.is_pointer() {
+                return f64::from_bits(JSValue::bool(false).bits());
+            }
+            let key_value = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            let key_str = crate::builtins::js_string_coerce(key_value);
+            if key_str.is_null() {
+                return f64::from_bits(JSValue::bool(false).bits());
+            }
+            let obj_ptr = jsval.as_pointer::<ObjectHeader>();
+            if obj_ptr.is_null() || !is_valid_obj_ptr(obj_ptr as *const u8) {
+                return f64::from_bits(JSValue::bool(false).bits());
+            }
+            if !own_key_present(obj_ptr as *mut ObjectHeader, key_str) {
+                return f64::from_bits(JSValue::bool(false).bits());
+            }
+            let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let name_len = (*key_str).byte_len as usize;
+            let key_name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
+            {
+                Ok(s) => s,
+                Err(_) => return f64::from_bits(JSValue::bool(false).bits()),
+            };
+            let enumerable = get_property_attrs(obj_ptr as usize, &key_name)
+                .map(|attrs| attrs.enumerable())
+                .unwrap_or(true);
+            return f64::from_bits(JSValue::bool(enumerable).bits());
         }
 
-        // `prim.valueOf()` — a primitive's `valueOf` returns the primitive
-        // itself (number/boolean/string/bigint). #2058: makes the bound
-        // value-read `const f = n.valueOf` callable. Pointer receivers keep
-        // their existing object/handle-specific handling above.
-        "valueOf" if !jsval.is_pointer() => {
-            return object;
-        }
-
-        // `value.toLocaleString()` — for primitives Node returns the same
-        // string as `toString()` (no locale data). Delegate so the bound
-        // value-read (#2058) is callable.
-        "toLocaleString" if !jsval.is_pointer() => {
-            return js_native_call_method(
-                object,
-                b"toString".as_ptr() as *const i8,
-                "toString".len(),
-                args_ptr,
-                args_len,
+        // `obj.isPrototypeOf(v)` — true iff `obj` appears in `v`'s modeled
+        // prototype chain. Object.create links live in Perry's synthetic
+        // class/prototype side table; closure/static prototype links use
+        // `Object.getPrototypeOf` state. Primitive/nullish receivers or
+        // arguments are never a match.
+        "isPrototypeOf" => {
+            let arg = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return f64::from_bits(
+                JSValue::bool(js_object_is_prototype_of_value(object, arg)).bits(),
             );
+        }
+
+        // `Object.prototype.valueOf` returns the receiver after ToObject.
+        // Perry does not box primitives here; preserving the existing
+        // primitive return keeps #2058's bound primitive method reads working,
+        // while ordinary objects now get the inherited default instead of
+        // falling through to "valueOf is not a function".
+        "valueOf" => {
+            return js_object_default_value_of(object);
+        }
+
+        // `Object.prototype.toLocaleString` invokes the receiver's
+        // `toString`. If no custom method is present, fall back to the
+        // default `[object Tag]` string. Primitive receivers delegate to
+        // their existing `toString` behavior.
+        "toLocaleString" => {
+            return js_object_default_to_locale_string(object);
         }
 
         // Function.prototype.call(thisArg, ...args) — invoke the receiver
@@ -1997,11 +2716,13 @@ pub unsafe extern "C" fn js_native_call_method(
 
         // Array methods - delegate to array runtime
         "push" if jsval.is_pointer() => {
-            let arr =
+            let mut arr =
                 jsval.as_pointer::<crate::array::ArrayHeader>() as *mut crate::array::ArrayHeader;
-            if args_len > 0 && !args_ptr.is_null() {
-                let val = *args_ptr;
-                crate::array::js_array_push_f64(arr, val);
+            if !args_ptr.is_null() {
+                for i in 0..args_len {
+                    let val = *args_ptr.add(i);
+                    arr = crate::array::js_array_push_f64(arr, val);
+                }
             }
             return crate::array::js_array_length(arr) as f64;
         }

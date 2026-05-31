@@ -15,6 +15,8 @@ pub const TYPED_ARRAY_KIND_FLOAT64: u8 = 7;
 pub const TYPED_ARRAY_KIND_UINT8_CLAMPED: u8 = 8;
 pub const TYPED_ARRAY_KIND_BIGINT64: u8 = 9;
 pub const TYPED_ARRAY_KIND_BIGUINT64: u8 = 10;
+/// Float16Array (#2902): IEEE-754 binary16, 2-byte elements.
+pub const TYPED_ARRAY_KIND_FLOAT16: u8 = 11;
 
 /// Map a class name (e.g. "Int32Array") to its `TYPED_ARRAY_KIND_*` tag.
 pub fn typed_array_kind_for_name(name: &str) -> Option<u8> {
@@ -26,6 +28,7 @@ pub fn typed_array_kind_for_name(name: &str) -> Option<u8> {
         "Uint16Array" => Some(TYPED_ARRAY_KIND_UINT16),
         "Int32Array" => Some(TYPED_ARRAY_KIND_INT32),
         "Uint32Array" => Some(TYPED_ARRAY_KIND_UINT32),
+        "Float16Array" => Some(TYPED_ARRAY_KIND_FLOAT16),
         "Float32Array" => Some(TYPED_ARRAY_KIND_FLOAT32),
         "Float64Array" => Some(TYPED_ARRAY_KIND_FLOAT64),
         "BigInt64Array" => Some(TYPED_ARRAY_KIND_BIGINT64),
@@ -80,7 +83,7 @@ thread_local! {
     /// #503: when true, HIR lowering refuses compile-time `obj[expr]()` /
     /// `obj[expr]` on known stdlib namespace receivers (`process`, `fs`,
     /// `crypto`, `child_process`, `net`, `os`, `path`, `http`, `https`,
-    /// `http2`, `stream`, `url`, `util`, `events`, `dns`, `tls`,
+    /// `http2`, `stream`, `url`, `util`, `events`, `dgram`, `dns`, `tls`,
     /// `querystring`, `zlib`, `async_hooks`, `readline`, `string_decoder`,
     /// `tty`, `worker_threads`) unless the index is a string literal or
     /// compile-time-foldable string. (`buffer` is intentionally excluded —
@@ -386,6 +389,7 @@ pub const NODE_BUILTIN_MODULES: &[&str] = &[
     "string_decoder",
     "sys",
     "test",
+    "test/reporters",
     "timers",
     "timers/promises",
     "tls",

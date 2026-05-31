@@ -20,7 +20,7 @@ use crate::lower_string_method::{
     lower_string_concat_chain, lower_string_self_append,
 };
 #[allow(unused_imports)]
-use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::nanbox::{double_literal, POINTER_MASK_I64, TAG_UNDEFINED};
 #[allow(unused_imports)]
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
@@ -164,28 +164,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- arr.join(separator?) -> string --------
-        // The runtime takes a separator StringHeader (nullable). We
-        // intern "," as the default when no separator is given so the
-        // runtime side never sees a null pointer.
+        // The runtime wrapper applies Array.join separator semantics:
+        // omitted/undefined means comma; every other value is ToString.
         Expr::ArrayJoin { array, separator } => {
             let arr_box = lower_expr(ctx, array)?;
             let sep_box = if let Some(sep_expr) = separator {
                 lower_expr(ctx, sep_expr)?
             } else {
-                let key_idx = ctx.strings.intern(",");
-                let handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                ctx.block().load(DOUBLE, &handle_global)
+                double_literal(f64::from_bits(TAG_UNDEFINED))
             };
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            // SSO-safe separator unbox: `js_array_join` reads `byte_len`
-            // from the StringHeader, which segfaults on SSO inline bits.
-            // Same #214 bug class.
-            let sep_handle = unbox_str_handle(blk, &sep_box);
             let result = blk.call(
                 I64,
-                "js_array_join",
-                &[(I64, &arr_handle), (I64, &sep_handle)],
+                "js_array_join_value",
+                &[(I64, &arr_handle), (DOUBLE, &sep_box)],
             );
             Ok(nanbox_string_inline(blk, &result))
         }
@@ -312,6 +305,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_string_inline(blk, &handle))
         }
 
+        // -------- Object(value) coercion (#3149) --------
+        // js_object_coerce takes and returns a NaN-boxed JSValue (DOUBLE):
+        // nullish/primitive -> fresh {}, existing object passes through.
+        Expr::ObjectCoerce(operand) => {
+            let v = lower_expr(ctx, operand)?;
+            let blk = ctx.block();
+            Ok(blk.call(DOUBLE, "js_object_coerce", &[(DOUBLE, &v)]))
+        }
+
         // -------- Boolean(value) coercion --------
         // js_is_truthy is exactly the JS Boolean(value) coercion: it
         // returns 1 for truthy, 0 for falsy. We convert the i32 to
@@ -339,18 +341,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let end_d = if let Some(end_expr) = end {
                 lower_expr(ctx, end_expr)?
             } else {
-                // No end → pass i32::MAX so the runtime clamps to length.
-                // Encode as 2147483647.0 → fptosi → i32 max.
-                "2147483647.0".to_string()
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let start_i32 = blk.fptosi(DOUBLE, &start_d, I32);
-            let end_i32 = blk.fptosi(DOUBLE, &end_d, I32);
             let result = blk.call(
                 I64,
-                "js_array_slice",
-                &[(I64, &arr_handle), (I32, &start_i32), (I32, &end_i32)],
+                "js_array_slice_values",
+                &[(I64, &arr_handle), (DOUBLE, &start_d), (DOUBLE, &end_d)],
             );
             Ok(nanbox_pointer_inline(blk, &result))
         }
@@ -396,13 +394,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "0.0".to_string()
             };
             let blk = ctx.block();
-            let s_handle = unbox_to_i64(blk, &s_box);
+            let s_handle = blk.call(I64, "js_string_coerce", &[(DOUBLE, &s_box)]);
             Ok(blk.call(DOUBLE, "js_parse_int", &[(I64, &s_handle), (DOUBLE, &r_d)]))
         }
         Expr::ParseFloat(string) => {
             let s_box = lower_expr(ctx, string)?;
             let blk = ctx.block();
-            let s_handle = unbox_to_i64(blk, &s_box);
+            let s_handle = blk.call(I64, "js_string_coerce", &[(DOUBLE, &s_box)]);
             Ok(blk.call(DOUBLE, "js_parse_float", &[(I64, &s_handle)]))
         }
 
@@ -526,6 +524,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Refs #590.
         Expr::ObjectAssign { target, sources } => {
             let target_box = lower_expr(ctx, target)?;
+            let mut acc = ctx.block().call(
+                DOUBLE,
+                "js_object_assign_validate_target",
+                &[(DOUBLE, &target_box)],
+            );
             // Stash target in a temp slot if there are multiple sources, so
             // each helper call uses the same SSA value (defensive: helper
             // returns target_f64 unchanged, but the chain is clearer when we
@@ -534,9 +537,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // return target itself (matching `Object.assign(t)` which is a
             // valid no-op-and-return-target form).
             if sources.is_empty() {
-                return Ok(target_box);
+                return Ok(acc);
             }
-            let mut acc = target_box;
             for src in sources {
                 let src_box = lower_expr(ctx, src)?;
                 acc = ctx.block().call(

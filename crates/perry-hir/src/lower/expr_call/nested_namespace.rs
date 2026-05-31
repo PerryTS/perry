@@ -423,7 +423,11 @@ fn is_path_root(ctx: &LoweringContext, root_name: &str) -> bool {
 /// `"posix"`. Shared by the direct member form and the aliased-local form
 /// (`const w = path.win32; w.<method>(...)`, #1750). Returns `Err(args)` when
 /// no method matches so the caller can fall through to generic lowering.
-fn dispatch_path_subnamespace(sub: &str, method: &str, args: Vec<Expr>) -> Result<Expr, Vec<Expr>> {
+pub(super) fn dispatch_path_subnamespace(
+    sub: &str,
+    method: &str,
+    args: Vec<Expr>,
+) -> Result<Expr, Vec<Expr>> {
     // path.<sub>.join(...)
     if method == "join" {
         if args.is_empty() {
@@ -467,7 +471,7 @@ fn dispatch_path_subnamespace(sub: &str, method: &str, args: Vec<Expr>) -> Resul
             "parse" if !args.is_empty() => Some(M::Parse),
             "format" if !args.is_empty() => Some(M::Format),
             "relative" if args.len() >= 2 => Some(M::Relative),
-            "toNamespacedPath" if !args.is_empty() => Some(M::ToNamespacedPath),
+            "toNamespacedPath" | "_makeLong" if !args.is_empty() => Some(M::ToNamespacedPath),
             "matchesGlob" if args.len() >= 2 => Some(M::MatchesGlob),
             _ => None,
         };
@@ -539,7 +543,7 @@ fn dispatch_path_subnamespace(sub: &str, method: &str, args: Vec<Expr>) -> Resul
             "format" if !args.is_empty() => {
                 return Ok(Expr::PathFormat(Box::new(args.into_iter().next().unwrap())));
             }
-            "toNamespacedPath" if !args.is_empty() => {
+            "toNamespacedPath" | "_makeLong" if !args.is_empty() => {
                 return Ok(Expr::PathToNamespacedPath(Box::new(
                     args.into_iter().next().unwrap(),
                 )));

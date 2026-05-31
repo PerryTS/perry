@@ -29,7 +29,7 @@ pub(super) fn try_global_builtins(
                 let string_arg = if !args.is_empty() {
                     Box::new(args.remove(0))
                 } else {
-                    return Err(anyhow!("parseInt requires at least one argument"));
+                    Box::new(Expr::Undefined)
                 };
                 let radix_arg = if !args.is_empty() {
                     Some(Box::new(args.remove(0)))
@@ -45,7 +45,7 @@ pub(super) fn try_global_builtins(
                 if !args.is_empty() {
                     return Ok(Ok(Expr::ParseFloat(Box::new(args.remove(0)))));
                 } else {
-                    return Err(anyhow!("parseFloat requires one argument"));
+                    return Ok(Ok(Expr::ParseFloat(Box::new(Expr::Undefined))));
                 }
             }
             "Number" => {
@@ -60,8 +60,11 @@ pub(super) fn try_global_builtins(
                 if !args.is_empty() {
                     return Ok(Ok(Expr::BigIntCoerce(Box::new(args.remove(0)))));
                 } else {
-                    // BigInt() with no args returns 0n
-                    return Ok(Ok(Expr::BigInt("0".to_string())));
+                    // `BigInt()` with no args coerces `undefined`, which Node
+                    // rejects with `TypeError: Cannot convert undefined to a
+                    // BigInt` (#2754/#2907). Route through the coercion path
+                    // so the runtime throws instead of returning 0n.
+                    return Ok(Ok(Expr::BigIntCoerce(Box::new(Expr::Undefined))));
                 }
             }
             "String" => {
@@ -79,6 +82,29 @@ pub(super) fn try_global_builtins(
                     // Boolean() with no args returns false
                     return Ok(Ok(Expr::Bool(false)));
                 }
+            }
+            "Object"
+                if ctx.lookup_local("Object").is_none()
+                    && ctx.lookup_func("Object").is_none()
+                    && ctx.lookup_imported_func("Object").is_none() =>
+            {
+                // #3149: `Object(x)` called as a plain function (not `new`).
+                // ECMAScript §20.1.1.1: `Object()`/`Object(undefined)`/
+                // `Object(null)` yield a fresh `{}`; an existing object/array
+                // passes through; primitives yield an object placeholder (so
+                // `typeof Object(5) === "object"`). Pre-fix the bare call fell
+                // through to the generic dispatcher and returned `undefined`
+                // (the `new Object(...)` form already worked via
+                // `js_new_function_construct`). Route through `ObjectCoerce`,
+                // whose runtime (`js_object_coerce`) implements all cases.
+                // Shadow-safe: only fires when no local / user fn / imported
+                // fn named `Object` is in scope.
+                let arg = if args.is_empty() {
+                    Expr::Undefined
+                } else {
+                    args.remove(0)
+                };
+                return Ok(Ok(Expr::ObjectCoerce(Box::new(arg))));
             }
             "Array"
                 if ctx.lookup_local("Array").is_none()
@@ -577,7 +603,7 @@ pub(super) fn try_global_builtins(
                             ))));
                         }
                     }
-                    "toNamespacedPath" => {
+                    "toNamespacedPath" | "_makeLong" => {
                         if !args.is_empty() {
                             return Ok(Ok(Expr::PathToNamespacedPath(Box::new(
                                 args.into_iter().next().unwrap(),
@@ -603,7 +629,11 @@ pub(super) fn try_global_builtins(
             if module_name == "url" {
                 match func_name {
                     "fileURLToPath" => {
-                        if !args.is_empty() {
+                        // Only the 1-arg form takes the dedicated fast path. The
+                        // 2-arg form `fileURLToPath(url, { windows })` (#2975)
+                        // must fall through to the native dispatch table so the
+                        // options object reaches the runtime.
+                        if args.len() == 1 {
                             return Ok(Ok(Expr::FileURLToPath(Box::new(
                                 args.into_iter().next().unwrap(),
                             ))));

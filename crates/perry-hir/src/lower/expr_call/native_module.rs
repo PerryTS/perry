@@ -18,6 +18,14 @@ use super::super::{
 };
 use super::os::user_info_expr_for_call;
 
+fn path_submodule_name(module_name: &str) -> Option<&'static str> {
+    match module_name.strip_prefix("node:").unwrap_or(module_name) {
+        "path/posix" | "path.posix" => Some("posix"),
+        "path/win32" | "path.win32" => Some("win32"),
+        _ => None,
+    }
+}
+
 /// Peel runtime-transparent TypeScript wrappers (`as`, `as const`, `!`,
 /// `satisfies`, angle-bracket assertions, parens) off an expression so a
 /// cast receiver like `(Readable as any).toWeb(...)` still matches the
@@ -35,6 +43,13 @@ fn unwrap_ts_wrappers(e: &ast::Expr) -> &ast::Expr {
             _ => return cur,
         }
     }
+}
+
+fn is_node_stream_class_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
+    )
 }
 
 pub(super) fn try_native_module_methods(
@@ -125,14 +140,21 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::Undefined));
                         }
                         "setSourceMapsEnabled" => {
-                            // #1400: process.setSourceMapsEnabled(bool) —
-                            // toggles runtime source-map resolution in Node.
-                            // Perry compiles AOT and has no resolver to
-                            // toggle, so the call is a no-op returning
-                            // undefined. Without this, framework startup
-                            // code that conditionally enables maps crashes
-                            // on "value is not a function".
-                            return Ok(Ok(Expr::Undefined));
+                            // #1400 / #3108: process.setSourceMapsEnabled(bool)
+                            // toggles the live source-map flag. Perry compiles
+                            // AOT and has no resolver, so the flag drives
+                            // nothing observable — but it round-trips through
+                            // process.sourceMapsEnabled and validates that the
+                            // argument is a boolean (else ERR_INVALID_ARG_TYPE),
+                            // matching Node. Lower to the runtime setter,
+                            // passing the original argument for validation.
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "setSourceMapsEnabled".to_string(),
+                                args,
+                            }));
                         }
                         "getBuiltinModule" => {
                             return Ok(Ok(Expr::NativeMethodCall {
@@ -182,21 +204,15 @@ pub(super) fn try_native_module_methods(
                             // didn't persist; #1344 has since wired writes
                             // through `std::env::set_var`, so we lower to a
                             // runtime call that actually reads the file.
-                            // Default the optional path to `.env` (Node's
-                            // default) so the dispatch-table row's single
-                            // NA_STR arg stays satisfied for the no-arg call
-                            // form.
-                            let call_args = if args.is_empty() {
-                                vec![Expr::String(".env".to_string())]
-                            } else {
-                                args
-                            };
+                            // Keep the original JS value: the runtime handles
+                            // omitted/undefined/null defaulting plus Buffer
+                            // and file-URL path objects.
                             return Ok(Ok(Expr::NativeMethodCall {
                                 module: "process".to_string(),
                                 class_name: None,
                                 object: None,
                                 method: "loadEnvFile".to_string(),
-                                args: call_args,
+                                args,
                             }));
                         }
                         "exit" => {
@@ -231,11 +247,16 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::ProcessUmask(mask)));
                         }
                         "threadCpuUsage" => {
-                            // process.threadCpuUsage() — CPU time used by
-                            // the current thread, as { user, system } in
-                            // microseconds. Ignores any arguments (Node
-                            // accepts none).
-                            return Ok(Ok(Expr::ProcessThreadCpuUsage));
+                            // process.threadCpuUsage(prior?) — CPU time used
+                            // by the current thread, as { user, system } in
+                            // microseconds. If prior is given, returns the
+                            // validated delta.
+                            let prior = if !args.is_empty() {
+                                Some(Box::new(args.into_iter().next().unwrap()))
+                            } else {
+                                None
+                            };
+                            return Ok(Ok(Expr::ProcessThreadCpuUsage(prior)));
                         }
                         "availableMemory" => {
                             // process.availableMemory() — free system memory
@@ -405,6 +426,34 @@ pub(super) fn try_native_module_methods(
                 }
             }
 
+            // node:v8 module methods (#3137/#3138). serialize/deserialize and
+            // the heap-stat helpers lower to a receiver-less NativeMethodCall
+            // dispatched in codegen to the `js_v8_*` runtime entry points.
+            let is_v8_module =
+                obj_name == "v8" || ctx.lookup_builtin_module_alias(&obj_name) == Some("v8");
+            if is_v8_module {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let method_name = method_ident.sym.as_ref();
+                    match method_name {
+                        "serialize"
+                        | "deserialize"
+                        | "getHeapStatistics"
+                        | "getHeapCodeStatistics"
+                        | "getHeapSpaceStatistics"
+                        | "cachedDataVersionTag" => {
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "v8".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name.to_string(),
+                                args,
+                            }));
+                        }
+                        _ => {} // Fall through to generic handling
+                    }
+                }
+            }
+
             // Check for Buffer static methods. Issue #831: aliased
             // imports of Buffer (`import { Buffer as RuntimeBuffer } from
             // "node:buffer"`) must route through the same dedicated
@@ -549,6 +598,19 @@ pub(super) fn try_native_module_methods(
                     match method_name {
                         "from" => {
                             let data = args.first().cloned().unwrap_or(Expr::Undefined);
+                            // #2774: `Uint8Array.from(src, mapFn, thisArg?)` — run
+                            // the mapped materialization first (which validates
+                            // mapFn + binds thisArg), then truncate to Uint8.
+                            if let Some(map_fn) = args.get(1).cloned() {
+                                let this_arg = args.get(2).cloned().map(Box::new);
+                                return Ok(Ok(Expr::Uint8ArrayFrom(Box::new(
+                                    Expr::ArrayFromMapped {
+                                        iterable: Box::new(data),
+                                        map_fn: Box::new(map_fn),
+                                        this_arg,
+                                    },
+                                ))));
+                            }
                             return Ok(Ok(Expr::Uint8ArrayFrom(Box::new(data))));
                         }
                         // Issue #871 (part 2): `Uint8Array.of(a, b, c, ...)` —
@@ -601,50 +663,10 @@ pub(super) fn try_native_module_methods(
                         // `result === target` and orphans target's symbol-keyed
                         // properties since the side table is keyed by raw pointer.
                         //
-                        // Special case: no target at all (`Object.assign()`) is
-                        // a TypeError per spec; we coerce to an empty object literal.
-                        // Special case: `Object.assign({}, ...)` with a fresh empty
-                        // object-literal target — the user is explicitly asking for
-                        // a fresh object, so we keep the old ObjectSpread path
-                        // (matches `{...src1, ...src2}` semantics, no observable
-                        // difference and avoids regressing the no-spread fold below).
                         "assign" => {
-                            if args.is_empty() {
-                                return Ok(Ok(Expr::Object(Vec::new())));
-                            }
                             let mut iter = args.into_iter();
-                            let target = iter.next().unwrap();
+                            let target = iter.next().unwrap_or(Expr::Undefined);
                             let sources: Vec<Expr> = iter.collect();
-                            // `Object.assign({}, ...sources)` — fresh empty object as
-                            // target. Preserve the literal-friendly fast paths
-                            // (no_spread fold to plain Object, otherwise ObjectSpread)
-                            // since there's no pre-existing identity / class_id to
-                            // preserve and downstream codegen has more aggressive
-                            // inlining for these shapes.
-                            if matches!(&target, Expr::Object(props) if props.is_empty()) {
-                                let mut parts: Vec<(Option<String>, Expr)> = Vec::new();
-                                for arg in &sources {
-                                    match arg {
-                                        Expr::Object(props) => {
-                                            for (key, val) in props {
-                                                parts.push((Some(key.clone()), val.clone()));
-                                            }
-                                        }
-                                        _ => {
-                                            parts.push((None, arg.clone()));
-                                        }
-                                    }
-                                }
-                                let has_spread = parts.iter().any(|(k, _)| k.is_none());
-                                if !has_spread {
-                                    let static_props: Vec<(String, Expr)> = parts
-                                        .into_iter()
-                                        .filter_map(|(k, v)| k.map(|key| (key, v)))
-                                        .collect();
-                                    return Ok(Ok(Expr::Object(static_props)));
-                                }
-                                return Ok(Ok(Expr::ObjectSpread { parts }));
-                            }
                             // Real `Object.assign(target, ...sources)` — mutate target.
                             return Ok(Ok(Expr::ObjectAssign {
                                 target: Box::new(target),
@@ -696,9 +718,10 @@ pub(super) fn try_native_module_methods(
                             ))));
                         }
                         "create" => {
-                            return Ok(Ok(Expr::ObjectCreate(Box::new(
-                                args.into_iter().next().unwrap_or(Expr::Undefined),
-                            ))));
+                            let mut it = args.into_iter();
+                            let proto = it.next().unwrap_or(Expr::Undefined);
+                            let props = it.next().map(Box::new);
+                            return Ok(Ok(Expr::ObjectCreate(Box::new(proto), props)));
                         }
                         "isFrozen" => {
                             return Ok(Ok(Expr::ObjectIsFrozen(Box::new(
@@ -885,6 +908,33 @@ pub(super) fn try_native_module_methods(
                 }
             }
 
+            // Check for RegExp static methods: RegExp.escape (#2899)
+            if obj_name == "RegExp" {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    if method_ident.sym.as_ref() == "escape" {
+                        let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
+                        return Ok(Ok(Expr::RegExpEscape(Box::new(arg))));
+                    }
+                }
+            }
+
+            // Check for Map static methods: Map.groupBy
+            if obj_name == "Map" {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let method_name = method_ident.sym.as_ref();
+                    if method_name == "groupBy" && args.len() >= 2 {
+                        let mut iter = args.into_iter();
+                        let items = iter.next().unwrap();
+                        let key_fn = iter.next().unwrap();
+                        let key_fn = ctx.maybe_wrap_builtin_callback(key_fn, &call.args[1]);
+                        return Ok(Ok(Expr::MapGroupBy {
+                            items: Box::new(items),
+                            key_fn: Box::new(key_fn),
+                        }));
+                    }
+                }
+            }
+
             if obj_name == "Reflect" {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
@@ -893,9 +943,14 @@ pub(super) fn try_native_module_methods(
                             let mut it = args.into_iter();
                             let target = it.next().unwrap_or(Expr::Undefined);
                             let key = it.next().unwrap_or(Expr::Undefined);
+                            // #2766: optional `receiver` (3rd arg) used as the
+                            // `this` binding for accessor getters. Default to
+                            // `undefined` — the runtime substitutes `target`.
+                            let receiver = it.next().unwrap_or(Expr::Undefined);
                             return Ok(Ok(Expr::ReflectGet {
                                 target: Box::new(target),
                                 key: Box::new(key),
+                                receiver: Box::new(receiver),
                             }));
                         }
                         "set" => {
@@ -1054,14 +1109,29 @@ pub(super) fn try_native_module_methods(
                                 property_key,
                             }));
                         }
-                        "setPrototypeOf" => return Ok(Ok(Expr::Bool(true))),
+                        "setPrototypeOf" => {
+                            // #2761: Reflect-specific — boolean result (false on
+                            // rejected change) + TypeError on bad args, distinct
+                            // from Object.setPrototypeOf (returns the object).
+                            let mut it = args.into_iter();
+                            let target = it.next().unwrap_or(Expr::Undefined);
+                            let proto = it.next().unwrap_or(Expr::Undefined);
+                            return Ok(Ok(Expr::ReflectSetPrototypeOf {
+                                target: Box::new(target),
+                                proto: Box::new(proto),
+                            }));
+                        }
                         "isExtensible" => {
+                            // #2762: Reflect-specific semantics (boolean +
+                            // TypeError on non-object), NOT Object.isExtensible.
                             let target = args.into_iter().next().unwrap_or(Expr::Undefined);
-                            return Ok(Ok(Expr::ObjectIsExtensible(Box::new(target))));
+                            return Ok(Ok(Expr::ReflectIsExtensible(Box::new(target))));
                         }
                         "preventExtensions" => {
+                            // #2762: Reflect-specific semantics (boolean +
+                            // TypeError on non-object), NOT Object.preventExtensions.
                             let target = args.into_iter().next().unwrap_or(Expr::Undefined);
-                            return Ok(Ok(Expr::ObjectPreventExtensions(Box::new(target))));
+                            return Ok(Ok(Expr::ReflectPreventExtensions(Box::new(target))));
                         }
                         _ => {}
                     }
@@ -1097,9 +1167,13 @@ pub(super) fn try_native_module_methods(
                             // variant so codegen can handle Map/Set/Array sources
                             // uniformly (materialize + js_array_map).
                             if let Some(map_fn) = args.get(1).cloned() {
+                                // #2773: carry the optional thisArg (3rd arg) so
+                                // a non-arrow mapFn can bind `this`.
+                                let this_arg = args.get(2).cloned().map(Box::new);
                                 return Ok(Ok(Expr::ArrayFromMapped {
                                     iterable: Box::new(value),
                                     map_fn: Box::new(map_fn),
+                                    this_arg,
                                 }));
                             }
                             // Check if the source is a generator call — use iterator protocol
@@ -1173,6 +1247,22 @@ pub(super) fn try_native_module_methods(
                     }
                 }
 
+                if let Some(submodule) = path_submodule_name(module_name) {
+                    if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                        let method_name = method_ident.sym.to_string();
+                        return Ok(
+                            match super::nested_namespace::dispatch_path_subnamespace(
+                                submodule,
+                                &method_name,
+                                args,
+                            ) {
+                                Ok(expr) => Ok(expr),
+                                Err(args) => Err(args),
+                            },
+                        );
+                    }
+                }
+
                 // Skip modules handled specifically below (path, fs, child_process, etc.)
                 // `net` used to be in this list back when its method calls
                 // were short-circuited into `Expr::NetCreateConnection` etc.
@@ -1228,10 +1318,17 @@ pub(super) fn try_native_module_methods(
                                 crate::lower_bail!(member.span, "{}", msg);
                             }
                         }
+                        let class_name = if module_name == "stream"
+                            && imported_method.is_some_and(is_node_stream_class_name)
+                        {
+                            imported_method.map(str::to_string)
+                        } else {
+                            None
+                        };
                         return Ok(Ok(Expr::NativeMethodCall {
                             module: module_name.to_string(),
-                            class_name: None, // Will be set by js_transform if needed
-                            object: None,     // Static call on module itself
+                            class_name,
+                            object: None, // Static call on module itself
                             method: method_name,
                             args,
                         }));

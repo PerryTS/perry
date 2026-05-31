@@ -63,6 +63,10 @@ crates/perry-codegen/src/lower_call/native/mod.rs
 # HIR `Expr` enum + dependency-walker arms; splitting would need parallel
 # updates across every variant of the walker traits. Tracked alongside #793.
 crates/perry-hir/src/ir/expr.rs
+# HIR member-expression lowering tower; already over the line-count threshold
+# on main after the process allowed-flags additions. Split by member family is
+# tracked alongside the lower/codegen file-size cleanup in #1435.
+crates/perry-hir/src/lower/expr_member.rs
 # Object field get/set + handle/native dispatch shim; grew past the limit
 # after the #1419 KeyObject/.export/.equals routing + main's process-module
 # additions. Splitting tracked under #1435.
@@ -111,6 +115,19 @@ crates/perry-stdlib/src/streams.rs
 # Native proof regression fixtures: intentionally broad golden tests that keep
 # related source snippets and assertions together for optimizer/codegen review.
 crates/perry-codegen/tests/native_proof_regressions.rs
+# Member-expression lowering tower (one big match over member/property/call
+# shapes, plus per-namespace literal builders). Crossed the limit at 2121 LOC
+# after #3161 inlined the full allowedNodeEnvironmentFlags string list into
+# `process_allowed_node_flags_literal`. Splitting the per-namespace literal
+# builders into a sibling module is tracked under #1435.
+crates/perry-hir/src/lower/expr_member.rs
+# node:process surface (env/argv/hrtime/cpuUsage/resourceUsage + EventEmitter
+# wiring + warning/deprecation emit). Crossed the limit at 2047 LOC after the
+# argument-validation batch landed on main without a split (#3493 setuid/setgid/
+# umask, #3516 exit/chdir/hrtime/cpuUsage, #3518 warning events, #3496 CPU-
+# snapshot/listener-limit validation). Splitting per concern (env/timing/
+# signals/emitter) is tracked under #1435.
+crates/perry-runtime/src/process.rs
 EOF
 )
 

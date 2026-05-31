@@ -234,6 +234,10 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
         0
     };
 
+    if let Some(entries) = crate::array::entries_array_for_small_handle_id(raw_addr as i64) {
+        return entries;
+    }
+
     // Buffers allocated from the small-buffer slab do not carry a GC header.
     // Detect them before any GC-header probing below; otherwise arbitrary slab
     // bytes immediately before the BufferHeader can be misread as a String or
@@ -266,6 +270,33 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
     if is_string_src {
         let s_ptr = raw_addr as *const crate::string::StringHeader;
         return unsafe { js_array_from_string_codepoints(s_ptr) };
+    }
+
+    // Small native handles (Fetch Headers, streams, timers, etc.) are NaN-boxed
+    // as pointer-shaped ids. `Array.from(handle)` / `[...handle]` reach this
+    // helper after codegen strips the tag, so ask the generic iterator resolver
+    // before treating the id as a non-array and returning [].
+    if raw_addr > 0 && raw_addr < 0x100000 {
+        if let Some(dispatch) = crate::object::handle_property_dispatch() {
+            let method = b"@@iterator";
+            let iter_fn = unsafe { dispatch(raw_addr as i64, method.as_ptr(), method.len()) };
+            let fn_raw = crate::value::js_nanbox_get_pointer(iter_fn) as usize;
+            if iter_fn.to_bits() != crate::value::TAG_UNDEFINED
+                && fn_raw >= 0x10000
+                && crate::closure::is_closure_ptr(fn_raw)
+            {
+                let fn_ptr = fn_raw as *const crate::closure::ClosureHeader;
+                let iter = crate::closure::js_closure_call0(fn_ptr);
+                if js_array_is_array(iter).to_bits() == crate::value::TAG_TRUE {
+                    let ptr = crate::value::js_nanbox_get_pointer(iter) as *mut ArrayHeader;
+                    if !ptr.is_null() {
+                        return ptr;
+                    }
+                }
+                return js_iterator_to_array(iter);
+            }
+        }
+        return js_array_alloc(0);
     }
 
     // Check if this is actually a Set (type unknown at compile time)
@@ -317,7 +348,17 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
             // (the runtime array-iterator class id / a stored `.next` closure).
             unsafe {
                 let iter_f64 = crate::value::js_nanbox_pointer(raw_addr as i64);
-                let is_array_iterator = (*obj).class_id == ARRAY_ITERATOR_CLASS_ID;
+                // #2856: Map/Set iterator objects dispatch `.next()` /
+                // `[Symbol.iterator]()` via class id (no stored symbol prop or
+                // `.next` field), so detect them here so `[...m.entries()]` /
+                // `Array.from(s.values())` drive the iterator protocol.
+                let is_array_iterator = (*obj).class_id == ARRAY_ITERATOR_CLASS_ID
+                    || (*obj).class_id == crate::collection_iter_object::MAP_ITERATOR_CLASS_ID
+                    || (*obj).class_id == crate::collection_iter_object::SET_ITERATOR_CLASS_ID
+                    // #2874: lazy iterator-helper objects (`Iterator.from(x).map(f)`)
+                    // dispatch `.next()` via class id, so `[...it]` / `Array.from(it)`
+                    // must drive the iterator protocol.
+                    || (*obj).class_id == crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID;
                 let is_iterable = is_array_iterator || {
                     let iter_sym = crate::symbol::well_known_symbol("iterator");
                     if iter_sym.is_null() {
@@ -383,6 +424,7 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
                 (src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
             let dst_elements =
                 (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            // GC_STORE_AUDIT(BARRIERED): clone bulk copy is followed by exact layout/barrier rebuild.
             ptr::copy_nonoverlapping(src_elements, dst_elements, len as usize);
             (*result).length = len;
             rebuild_array_layout_exact(result);
@@ -444,12 +486,14 @@ pub extern "C" fn js_array_entries(arr: *const ArrayHeader) -> *mut ArrayHeader 
             let pair = js_array_alloc(2);
             (*pair).length = 2;
             let pair_elems = (pair as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            // GC_STORE_AUDIT(BARRIERED): entries pair slots are immediately recorded via note_array_slot.
             *pair_elems.add(0) = i as f64;
             *pair_elems.add(1) = *src_elements.add(i);
             note_array_slot(pair, 0, (i as f64).to_bits());
             note_array_slot(pair, 1, (*src_elements.add(i)).to_bits());
             // NaN-box the inner array pointer so the outer storage slot keeps tag info.
             let pair_value = crate::value::js_nanbox_pointer(pair as i64);
+            // GC_STORE_AUDIT(BARRIERED): outer entries slot is immediately recorded via note_array_slot.
             *dst_elements.add(i) = pair_value;
             note_array_slot(result, i, pair_value.to_bits());
         }
@@ -482,6 +526,7 @@ pub extern "C" fn js_array_keys(arr: *const ArrayHeader) -> *mut ArrayHeader {
         (*result).length = len;
         let dst_elements = (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         for i in 0..len as usize {
+            // GC_STORE_AUDIT(POINTER_FREE): keys array stores numeric indices only.
             *dst_elements.add(i) = i as f64;
         }
         result
@@ -516,6 +561,7 @@ pub extern "C" fn js_array_values(arr: *const ArrayHeader) -> *mut ArrayHeader {
                 (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
             let dst_elements =
                 (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            // GC_STORE_AUDIT(BARRIERED): values bulk copy is followed by layout/barrier rebuild.
             ptr::copy_nonoverlapping(src_elements, dst_elements, len as usize);
             (*result).length = len;
             rebuild_array_layout(result);

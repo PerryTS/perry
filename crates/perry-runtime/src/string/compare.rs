@@ -182,6 +182,60 @@ pub(crate) unsafe fn js_string_key_bytes<'a>(
     None
 }
 
+/// Validate and coerce the search string for String.prototype.includes,
+/// startsWith, and endsWith.
+///
+/// The ECMAScript path is IsRegExp(searchString) before ToString(searchString):
+/// a real RegExp or an object with truthy Symbol.match must throw, while
+/// Symbol.match === false/null explicitly opts out and then stringifies.
+#[no_mangle]
+pub extern "C" fn js_string_search_value_to_string(
+    value: f64,
+    method_id: i32,
+) -> *mut StringHeader {
+    if string_search_is_regexp(value) {
+        throw_regexp_search_type_error(method_id);
+    }
+    crate::value::js_jsvalue_to_string(value)
+}
+
+fn string_search_is_regexp(value: f64) -> bool {
+    let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return false;
+    }
+
+    let raw_ptr = jsval.as_pointer::<u8>() as usize;
+    if raw_ptr < 0x10000 || crate::symbol::is_registered_symbol(raw_ptr) {
+        return false;
+    }
+
+    let match_sym = crate::symbol::well_known_symbol("match");
+    if !match_sym.is_null() {
+        let match_sym_f64 =
+            f64::from_bits(crate::value::JSValue::pointer(match_sym as *const u8).bits());
+        let matcher = unsafe { crate::symbol::js_object_get_symbol_property(value, match_sym_f64) };
+        if matcher.to_bits() != crate::value::TAG_UNDEFINED {
+            return crate::value::js_is_truthy(matcher) != 0;
+        }
+    }
+
+    crate::regex::is_regex_pointer(jsval.as_pointer::<u8>())
+}
+
+fn throw_regexp_search_type_error(method_id: i32) -> ! {
+    let method = match method_id {
+        1 => "startsWith",
+        2 => "endsWith",
+        _ => "includes",
+    };
+    let message =
+        format!("First argument to String.prototype.{method} must not be a regular expression");
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 /// Check if a string starts with a prefix
 #[no_mangle]
 pub extern "C" fn js_string_starts_with(
@@ -327,31 +381,55 @@ pub extern "C" fn js_string_ends_with_at(
 }
 
 /// String.prototype.normalize(form) — Unicode normalization.
-/// `form` is one of: NFC (default), NFD, NFKC, NFKD. Pass null/empty for default NFC.
+///
+/// `form_value` is the raw NaN-boxed argument (or NaN-boxed `undefined`
+/// when the call site omitted it). Per ECMA-262 §22.1.3.13: when `form` is
+/// `undefined` the form defaults to `"NFC"`; otherwise the form is coerced
+/// with `ToString` and must be exactly one of `"NFC"`, `"NFD"`, `"NFKC"`,
+/// `"NFKD"` — anything else (including explicit `null` → `"null"`, the empty
+/// string, or `"BAD"`) throws a `RangeError`. (#2782)
 #[no_mangle]
 pub extern "C" fn js_string_normalize(
     s: *const StringHeader,
-    form: *const StringHeader,
+    form_value: f64,
 ) -> *mut StringHeader {
     if !is_valid_string_ptr(s) {
         return js_string_from_bytes(std::ptr::null(), 0);
     }
     let str_data = string_as_str(s);
-    let form_str = if is_valid_string_ptr(form) {
-        string_as_str(form)
+
+    // `undefined` (omitted argument) → default NFC. Note: explicit `null`
+    // is NOT undefined — it stringifies to "null" and falls through to the
+    // invalid-form error path below.
+    let form_jsval = crate::value::JSValue::from_bits(form_value.to_bits());
+    let form_owned: String = if form_jsval.is_undefined() {
+        "NFC".to_string()
     } else {
-        "NFC"
+        let form_ptr = crate::value::js_jsvalue_to_string(form_value);
+        if is_valid_string_ptr(form_ptr) {
+            string_as_str(form_ptr).to_string()
+        } else {
+            String::new()
+        }
     };
+
     use unicode_normalization::UnicodeNormalization;
-    let normalized: String = match form_str {
+    let normalized: String = match form_owned.as_str() {
         "NFC" => str_data.nfc().collect(),
         "NFD" => str_data.nfd().collect(),
         "NFKC" => str_data.nfkc().collect(),
         "NFKD" => str_data.nfkd().collect(),
-        _ => str_data.nfc().collect(),
+        _ => throw_invalid_normalize_form(),
     };
     let bytes = normalized.as_bytes();
     js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+}
+
+fn throw_invalid_normalize_form() -> ! {
+    let message = "The normalization form should be one of NFC, NFD, NFKC, NFKD.";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_rangeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
 /// String.prototype.localeCompare(other) — returns negative/zero/positive number.

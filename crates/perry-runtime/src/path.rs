@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::string::{js_string_from_bytes, StringHeader};
+use crate::string::{js_string_from_bytes, js_string_materialize_to_heap, StringHeader};
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
@@ -111,20 +111,32 @@ fn string_from_header_or_throw(ptr: *const StringHeader) -> String {
     unsafe { string_from_header(ptr) }.unwrap_or_else(|| throw_invalid_path_arg_type())
 }
 
-pub(crate) fn resolve_posix_str(path_str: &str) -> String {
-    if path_str.is_empty() {
-        return std::env::current_dir()
-            .map(|cwd| cwd.to_string_lossy().to_string())
-            .unwrap_or_default();
+fn optional_suffix_from_header_or_throw(ptr: *const StringHeader) -> String {
+    let undefined_handle = (crate::value::TAG_UNDEFINED & crate::value::POINTER_MASK) as usize;
+    if ptr as usize == undefined_handle {
+        String::new()
+    } else {
+        string_from_header_or_throw(ptr)
     }
-    if Path::new(path_str).is_absolute() {
+}
+
+pub(crate) fn resolve_posix_str(path_str: &str) -> String {
+    let mut resolved = if path_str.is_empty() {
+        std::env::current_dir()
+            .map(|cwd| cwd.to_string_lossy().to_string())
+            .unwrap_or_default()
+    } else if Path::new(path_str).is_absolute() {
         normalize_str(path_str)
     } else {
         match std::env::current_dir() {
             Ok(cwd) => normalize_str(&format!("{}/{}", cwd.to_string_lossy(), path_str)),
             Err(_) => normalize_str(path_str),
         }
+    };
+    while resolved.len() > 1 && resolved.ends_with('/') {
+        resolved.pop();
     }
+    resolved
 }
 
 /// Join two path segments. Node's `path.join` concatenates with `/` and
@@ -301,6 +313,11 @@ fn split_win32(input: &str) -> Win32Split<'_> {
     }
 }
 
+fn is_win32_drive_prefix(prefix: &str) -> bool {
+    let bytes = prefix.as_bytes();
+    bytes.len() == 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic()
+}
+
 /// Win32 normalization. Treats both `/` and `\` as separators (matching
 /// Node), preserves a leading drive letter (`C:`), collapses repeated
 /// separators, resolves `.` and `..`, and emits backslash separators.
@@ -426,6 +443,10 @@ fn win32_resolve_inner(path_str: &str) -> String {
     normalize_win32_str(&path)
 }
 
+pub(crate) fn resolve_win32_str(path_str: &str) -> String {
+    win32_resolve_inner(path_str)
+}
+
 /// Get directory name from path. Per Node spec, the root's dirname is the
 /// root itself (`/` → `/`), not an empty string — Rust's `Path::parent`
 /// returns `None` there, which we treat as "stay at root".
@@ -504,31 +525,7 @@ pub extern "C" fn js_path_is_absolute(path_ptr: *const StringHeader) -> i32 {
 #[no_mangle]
 pub extern "C" fn js_path_resolve(path_ptr: *const StringHeader) -> *mut StringHeader {
     let path_str = string_from_header_or_throw(path_ptr);
-
-    if path_str.is_empty() {
-        return match std::env::current_dir() {
-            Ok(cwd) => string_to_js(&cwd.to_string_lossy()),
-            Err(_) => string_to_js(""),
-        };
-    }
-
-    match std::fs::canonicalize(&path_str) {
-        Ok(abs_path) => string_to_js(&abs_path.to_string_lossy()),
-        Err(_) => {
-            // If canonicalize fails (file doesn't exist), try to construct absolute path
-            if Path::new(&path_str).is_absolute() {
-                string_to_js(&path_str)
-            } else {
-                match std::env::current_dir() {
-                    Ok(cwd) => {
-                        let joined = cwd.join(&path_str);
-                        string_to_js(&joined.to_string_lossy())
-                    }
-                    Err(_) => string_to_js(&path_str),
-                }
-            }
-        }
-    }
+    string_to_js(&resolve_posix_str(&path_str))
 }
 
 /// Normalize a path: collapse `.` segments, resolve `..`, dedupe separators.
@@ -579,29 +576,74 @@ pub extern "C" fn js_path_normalize(path_ptr: *const StringHeader) -> *mut Strin
     string_to_js(&normalize_str(&path_str))
 }
 
+/// Validate that a `path.relative` operand is a string, materializing it to a
+/// heap `StringHeader`. Throws `TypeError [ERR_INVALID_ARG_TYPE]` naming the
+/// offending argument (`from` / `to`) for non-string values, matching Node.
+fn require_relative_arg(value: f64, arg_name: &str) -> *const StringHeader {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if jv.is_any_string() {
+        let ptr = js_string_materialize_to_heap(value);
+        if !ptr.is_null() {
+            return ptr;
+        }
+    }
+    let message = format!(
+        "The \"{}\" argument must be of type string. Received {}",
+        arg_name,
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+/// Validating entry point for the compiled `path.relative(from, to)` fast path.
+/// Both operands arrive NaN-boxed so their type can be checked before the
+/// underlying string-only helper is invoked (#2995).
+#[no_mangle]
+pub extern "C" fn js_path_relative_checked(from_f64: f64, to_f64: f64) -> *mut StringHeader {
+    let from = require_relative_arg(from_f64, "from");
+    let to = require_relative_arg(to_f64, "to");
+    js_path_relative(from, to)
+}
+
+/// `path.win32.relative(from, to)` validating entry point — see
+/// [`js_path_relative_checked`].
+#[no_mangle]
+pub extern "C" fn js_path_win32_relative_checked(from_f64: f64, to_f64: f64) -> *mut StringHeader {
+    let from = require_relative_arg(from_f64, "from");
+    let to = require_relative_arg(to_f64, "to");
+    js_path_win32_relative(from, to)
+}
+
+/// Keepalive anchors: these are emitted only from generated code, so the
+/// whole-program auto-optimize bitcode pass would otherwise dead-strip them.
+#[used]
+static KEEP_PATH_RELATIVE_CHECKED: extern "C" fn(f64, f64) -> *mut StringHeader =
+    js_path_relative_checked;
+#[used]
+static KEEP_PATH_WIN32_RELATIVE_CHECKED: extern "C" fn(f64, f64) -> *mut StringHeader =
+    js_path_win32_relative_checked;
+
 #[no_mangle]
 pub extern "C" fn js_path_relative(
     from_ptr: *const StringHeader,
     to_ptr: *const StringHeader,
 ) -> *mut StringHeader {
-    unsafe {
-        let from = string_from_header(from_ptr).unwrap_or_default();
-        let to = string_from_header(to_ptr).unwrap_or_default();
-        let from_norm = resolve_posix_str(&from);
-        let to_norm = resolve_posix_str(&to);
-        let from_segs: Vec<&str> = from_norm.split('/').filter(|s| !s.is_empty()).collect();
-        let to_segs: Vec<&str> = to_norm.split('/').filter(|s| !s.is_empty()).collect();
-        let common = from_segs
-            .iter()
-            .zip(to_segs.iter())
-            .take_while(|(a, b)| a == b)
-            .count();
-        let ups = from_segs.len() - common;
-        let mut parts: Vec<&str> = std::iter::repeat_n("..", ups).collect();
-        parts.extend(to_segs[common..].iter().copied());
-        let result = parts.join("/");
-        string_to_js(&result)
-    }
+    let from = string_from_header_or_throw(from_ptr);
+    let to = string_from_header_or_throw(to_ptr);
+    let from_norm = resolve_posix_str(&from);
+    let to_norm = resolve_posix_str(&to);
+    let from_segs: Vec<&str> = from_norm.split('/').filter(|s| !s.is_empty()).collect();
+    let to_segs: Vec<&str> = to_norm.split('/').filter(|s| !s.is_empty()).collect();
+    let common = from_segs
+        .iter()
+        .zip(to_segs.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let ups = from_segs.len() - common;
+    let mut parts: Vec<&str> = std::iter::repeat_n("..", ups).collect();
+    parts.extend(to_segs[common..].iter().copied());
+    let result = parts.join("/");
+    string_to_js(&result)
 }
 
 #[no_mangle]
@@ -609,25 +651,23 @@ pub extern "C" fn js_path_basename_ext(
     path_ptr: *const StringHeader,
     ext_ptr: *const StringHeader,
 ) -> *mut StringHeader {
-    unsafe {
-        let path_str = match string_from_header(path_ptr) {
-            Some(s) => s,
-            None => return string_to_js(""),
-        };
-        let ext_str = string_from_header(ext_ptr).unwrap_or_default();
-        let path = Path::new(&path_str);
-        let base = match path.file_name() {
-            Some(name) => name.to_string_lossy().to_string(),
-            None => return string_to_js(""),
-        };
-        if !ext_str.is_empty()
-            && base.ends_with(&ext_str)
-            && (base.len() > ext_str.len() || !path_str.contains('/'))
-        {
-            string_to_js(&base[..base.len() - ext_str.len()])
-        } else {
-            string_to_js(&base)
-        }
+    let path_str = string_from_header_or_throw(path_ptr);
+    let ext_str = optional_suffix_from_header_or_throw(ext_ptr);
+    if !ext_str.is_empty() && ext_str == path_str {
+        return string_to_js("");
+    }
+    let path = Path::new(&path_str);
+    let base = match path.file_name() {
+        Some(name) => name.to_string_lossy().to_string(),
+        None => return string_to_js(""),
+    };
+    if !ext_str.is_empty()
+        && base.ends_with(&ext_str)
+        && (base.len() > ext_str.len() || !path_str.contains('/'))
+    {
+        string_to_js(&base[..base.len() - ext_str.len()])
+    } else {
+        string_to_js(&base)
     }
 }
 
@@ -655,69 +695,112 @@ pub extern "C" fn js_path_parse(path_ptr: *const StringHeader) -> *mut crate::ob
     obj
 }
 
+/// Throw `TypeError [ERR_INVALID_ARG_TYPE]` for a `path.format` descriptor that
+/// is not an object (Node validates the top-level `pathObject` argument).
+fn throw_invalid_path_object(value: f64) -> ! {
+    let message = format!(
+        "The \"pathObject\" argument must be of type object. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+/// A single descriptor field read from a `path.format` argument: its
+/// Node-`ToString`-coerced text and whether the raw value is truthy.
+/// Node's `_format` uses `pathObject.field || ''`, so falsy fields (including
+/// `0`, `false`, `null`, `""`) contribute nothing.
+struct FormatField {
+    coerced: String,
+    truthy: bool,
+}
+
+/// Read a descriptor field by name and coerce it the way Node does (template
+/// literal / `||` semantics): truthy values are stringified via the standard
+/// `ToString`, falsy values become empty.
+fn read_format_field(obj_ptr: *mut crate::object::ObjectHeader, name: &str) -> FormatField {
+    use crate::object::js_object_get_field_by_name;
+    let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let val = js_object_get_field_by_name(obj_ptr, key_ptr);
+    let raw = f64::from_bits(val.bits());
+    if crate::value::js_is_truthy(raw) == 0 {
+        return FormatField {
+            coerced: String::new(),
+            truthy: false,
+        };
+    }
+    let s_ptr = crate::value::js_jsvalue_to_string(raw);
+    let coerced = unsafe { string_from_header(s_ptr) }.unwrap_or_default();
+    FormatField {
+        coerced,
+        truthy: true,
+    }
+}
+
+/// Shared `path.format` implementation for both posix (`sep = '/'`) and win32
+/// (`sep = '\\'`). Mirrors Node's `_format`:
+/// `dir = pathObject.dir || pathObject.root; base = pathObject.base ||
+/// `${name||''}${formatExt(ext)}`; if (!dir) return base; return dir ===
+/// pathObject.root ? dir+base : dir+sep+base;`
+fn format_descriptor(obj_f64: f64, sep: char) -> String {
+    use crate::value::js_nanbox_get_pointer;
+
+    let jv = crate::value::JSValue::from_bits(obj_f64.to_bits());
+    // Node: typeof pathObject !== 'object' || pathObject === null throws.
+    // Objects and arrays are POINTER_TAG values; strings/numbers/bool/null/
+    // undefined are not.
+    if !jv.is_pointer() {
+        throw_invalid_path_object(obj_f64);
+    }
+    let obj_ptr = js_nanbox_get_pointer(obj_f64) as *mut crate::object::ObjectHeader;
+    if obj_ptr.is_null() {
+        throw_invalid_path_object(obj_f64);
+    }
+
+    let dir_f = read_format_field(obj_ptr, "dir");
+    let root_f = read_format_field(obj_ptr, "root");
+    let base_f = read_format_field(obj_ptr, "base");
+    let name_f = read_format_field(obj_ptr, "name");
+    let ext_f = read_format_field(obj_ptr, "ext");
+
+    // formatExt: ensure a leading dot when ext is truthy.
+    let ext = if ext_f.truthy && !ext_f.coerced.starts_with('.') {
+        format!(".{}", ext_f.coerced)
+    } else {
+        ext_f.coerced.clone()
+    };
+
+    // base = pathObject.base || `${name||''}${formatExt(ext)}`
+    let base = if base_f.truthy {
+        base_f.coerced.clone()
+    } else {
+        format!("{}{}", name_f.coerced, ext)
+    };
+
+    // dir = pathObject.dir || pathObject.root
+    let (dir, dir_from_root) = if dir_f.truthy {
+        (dir_f.coerced.clone(), false)
+    } else {
+        (root_f.coerced.clone(), true)
+    };
+
+    if dir.is_empty() {
+        return base;
+    }
+
+    // dir === pathObject.root ? dir+base : dir+sep+base. dir equals root when
+    // it fell through to root, or when the (string) dir and root values match.
+    let no_sep = dir_from_root || (dir_f.truthy && root_f.truthy && dir == root_f.coerced);
+    if no_sep {
+        format!("{dir}{base}")
+    } else {
+        format!("{dir}{sep}{base}")
+    }
+}
+
 /// Build a path from a `{ dir, base, root, name, ext }` descriptor.
 #[no_mangle]
 pub extern "C" fn js_path_format(obj_f64: f64) -> *mut StringHeader {
-    use crate::object::js_object_get_field_by_name;
-    use crate::value::js_nanbox_get_pointer;
-
-    // Extract object pointer
-    let obj_ptr = js_nanbox_get_pointer(obj_f64) as *mut crate::object::ObjectHeader;
-    if obj_ptr.is_null() {
-        return string_to_js("");
-    }
-
-    // Helper: read a string field by name (returns "" if undefined/missing)
-    let get_str = |name: &str| -> String {
-        let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let val = js_object_get_field_by_name(obj_ptr, key_ptr);
-        if val.is_undefined() {
-            return String::new();
-        }
-        let ptr = val.as_string_ptr();
-        unsafe { string_from_header(ptr) }.unwrap_or_default()
-    };
-
-    let dir = get_str("dir");
-    let root = get_str("root");
-    let base = get_str("base");
-    let name = get_str("name");
-    let mut ext = get_str("ext");
-    // Node inserts the separator dot when `ext` is provided without
-    // one: path.format({ name: "file", ext: "txt" }) === "file.txt".
-    if !ext.is_empty() && !ext.starts_with('.') {
-        ext.insert(0, '.');
-    }
-    let has_tail = !base.is_empty() || !name.is_empty() || !ext.is_empty();
-
-    // dir takes precedence over root; name+ext fallback when base missing
-    let mut result = if !dir.is_empty() {
-        let mut s = dir.clone();
-        // Node always inserts a separator between dir and base, even when
-        // dir already ends with `/`. If there is no tail, keep dir as-is
-        // (path.format(path.parse("/")) === "/").
-        if has_tail {
-            s.push('/');
-        }
-        s
-    } else if !root.is_empty() {
-        let mut s = root.clone();
-        if !s.ends_with('/') {
-            s.push('/');
-        }
-        s
-    } else {
-        String::new()
-    };
-
-    if !base.is_empty() {
-        result.push_str(&base);
-    } else {
-        result.push_str(&name);
-        result.push_str(&ext);
-    }
-
-    string_to_js(&result)
+    string_to_js(&format_descriptor(obj_f64, '/'))
 }
 
 #[no_mangle]
@@ -763,6 +846,28 @@ pub extern "C" fn js_path_to_namespaced_path(path_ptr: *const StringHeader) -> *
         let s = string_from_header(path_ptr).unwrap_or_default();
         string_to_js(&s)
     }
+}
+
+fn string_value_to_namespaced_path(value: f64, win32: bool) -> f64 {
+    let path_ptr = js_string_materialize_to_heap(value);
+    if path_ptr.is_null() {
+        return value;
+    }
+
+    let Some(path) = (unsafe { string_from_header(path_ptr as *const StringHeader) }) else {
+        return value;
+    };
+    let result = if win32 {
+        win32_to_namespaced_path(&path)
+    } else {
+        path
+    };
+    f64::from_bits(crate::value::JSValue::string_ptr(string_to_js(&result)).bits())
+}
+
+#[no_mangle]
+pub extern "C" fn js_path_to_namespaced_path_value(value: f64) -> f64 {
+    string_value_to_namespaced_path(value, false)
 }
 
 fn brace_alternation<'a>(pattern: &'a str, open: usize) -> Option<(usize, Vec<&'a str>)> {
@@ -932,18 +1037,16 @@ pub extern "C" fn js_path_win32_basename_ext(
     path_ptr: *const StringHeader,
     ext_ptr: *const StringHeader,
 ) -> *mut StringHeader {
-    unsafe {
-        let path_str = match string_from_header(path_ptr) {
-            Some(s) => s,
-            None => return string_to_js(""),
-        };
-        let ext_str = string_from_header(ext_ptr).unwrap_or_default();
-        let base = win32_basename_inner(&path_str);
-        if !ext_str.is_empty() && base.ends_with(&ext_str) && base.len() > ext_str.len() {
-            string_to_js(&base[..base.len() - ext_str.len()])
-        } else {
-            string_to_js(&base)
-        }
+    let path_str = string_from_header_or_throw(path_ptr);
+    let ext_str = optional_suffix_from_header_or_throw(ext_ptr);
+    if !ext_str.is_empty() && ext_str == path_str {
+        return string_to_js("");
+    }
+    let base = win32_basename_inner(&path_str);
+    if !ext_str.is_empty() && base.ends_with(&ext_str) && base.len() > ext_str.len() {
+        string_to_js(&base[..base.len() - ext_str.len()])
+    } else {
+        string_to_js(&base)
     }
 }
 
@@ -1041,12 +1144,8 @@ pub extern "C" fn js_path_win32_extname(path_ptr: *const StringHeader) -> *mut S
             None => return string_to_js(""),
         };
         let base = win32_basename_inner(&path_str);
-        // Node's rule: leading-dot files have no extension.
-        // `extname(".bashrc") === ""`, but `extname("a.b.c") === ".c"`.
-        match base.rfind('.') {
-            Some(idx) if idx > 0 => string_to_js(&base[idx..]),
-            _ => string_to_js(""),
-        }
+        let (ext, _) = split_extension(&base);
+        string_to_js(&ext)
     }
 }
 
@@ -1134,9 +1233,6 @@ pub extern "C" fn js_path_win32_parse(
             d.push('\\');
         }
         d.push_str(&head_segments.join("\\"));
-        if d.is_empty() {
-            d.push('.');
-        }
         // Pop trailing separator from dir unless dir IS the root.
         if d.ends_with('\\') && d != root {
             d.pop();
@@ -1144,11 +1240,7 @@ pub extern "C" fn js_path_win32_parse(
         (base, d)
     };
 
-    // Match POSIX rule: leading-dot basename has no extension.
-    let (name, ext) = match base.rfind('.') {
-        Some(idx) if idx > 0 => (base[..idx].to_string(), base[idx..].to_string()),
-        _ => (base.clone(), String::new()),
-    };
+    let (ext, name) = split_extension(&base);
 
     let packed = b"root\0dir\0base\0ext\0name\0";
     let obj = js_object_alloc_with_shape(0x7FFF_FF21, 5, packed.as_ptr(), packed.len() as u32);
@@ -1168,54 +1260,7 @@ pub extern "C" fn js_path_win32_parse(
 /// version but emits backslash separators.
 #[no_mangle]
 pub extern "C" fn js_path_win32_format(obj_f64: f64) -> *mut StringHeader {
-    use crate::object::js_object_get_field_by_name;
-    use crate::value::js_nanbox_get_pointer;
-
-    let obj_ptr = js_nanbox_get_pointer(obj_f64) as *mut crate::object::ObjectHeader;
-    if obj_ptr.is_null() {
-        return string_to_js("");
-    }
-    let get_str = |name: &str| -> String {
-        let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let val = js_object_get_field_by_name(obj_ptr, key_ptr);
-        if val.is_undefined() {
-            return String::new();
-        }
-        let ptr = val.as_string_ptr();
-        unsafe { string_from_header(ptr) }.unwrap_or_default()
-    };
-    let dir = get_str("dir");
-    let root = get_str("root");
-    let base = get_str("base");
-    let name = get_str("name");
-    let mut ext = get_str("ext");
-    if !ext.is_empty() && !ext.starts_with('.') {
-        ext.insert(0, '.');
-    }
-    let has_tail = !base.is_empty() || !name.is_empty() || !ext.is_empty();
-
-    let mut result = if !dir.is_empty() {
-        let mut s = dir.clone();
-        if has_tail && !s.ends_with('\\') && !s.ends_with('/') {
-            s.push('\\');
-        }
-        s
-    } else if !root.is_empty() {
-        let mut s = root.clone();
-        if !s.ends_with('\\') && !s.ends_with('/') {
-            s.push('\\');
-        }
-        s
-    } else {
-        String::new()
-    };
-    if !base.is_empty() {
-        result.push_str(&base);
-    } else {
-        result.push_str(&name);
-        result.push_str(&ext);
-    }
-    string_to_js(&result)
+    string_to_js(&format_descriptor(obj_f64, '\\'))
 }
 
 fn current_dir_as_win32() -> Option<String> {
@@ -1293,6 +1338,11 @@ pub extern "C" fn js_path_win32_to_namespaced_path(
 }
 
 #[no_mangle]
+pub extern "C" fn js_path_win32_to_namespaced_path_value(value: f64) -> f64 {
+    string_value_to_namespaced_path(value, true)
+}
+
+#[no_mangle]
 pub extern "C" fn js_path_win32_matches_glob(
     path_ptr: *const StringHeader,
     pattern_ptr: *const StringHeader,
@@ -1320,23 +1370,51 @@ pub extern "C" fn js_path_win32_resolve_join(
     a_ptr: *const StringHeader,
     b_ptr: *const StringHeader,
 ) -> *mut StringHeader {
-    unsafe {
-        let a = string_from_header(a_ptr).unwrap_or_default();
-        let b = string_from_header(b_ptr).unwrap_or_default();
-        let b_split = split_win32(&b);
-        let joined = if b_split.is_absolute {
-            b
-        } else if a.is_empty() {
-            b
-        } else if b.is_empty() {
-            a
-        } else if a.ends_with('\\') || a.ends_with('/') {
-            format!("{}{}", a, b)
+    let a = string_from_header_or_throw(a_ptr);
+    let b = string_from_header_or_throw(b_ptr);
+    let b_split = split_win32(&b);
+    let joined = if b_split.is_absolute {
+        b.clone()
+    } else if b.is_empty() {
+        a.clone()
+    } else if is_win32_drive_prefix(b_split.prefix) {
+        let a_split = split_win32(&a);
+        let same_drive = a_split.prefix.eq_ignore_ascii_case(b_split.prefix);
+        if a.is_empty() {
+            b.clone()
+        } else if a_split.is_absolute && (a_split.prefix.is_empty() || same_drive) {
+            let base = if a_split.prefix.is_empty() {
+                format!("{}{}", b_split.prefix, a_split.rest)
+            } else {
+                a.clone()
+            };
+            if b_split.rest.is_empty() || b_split.rest == "." {
+                base
+            } else {
+                join_win32_paths(&base, b_split.rest)
+            }
+        } else if !a_split.is_absolute && (a_split.prefix.is_empty() || same_drive) {
+            let base = if a_split.prefix.is_empty() {
+                format!("{}{}", b_split.prefix, a)
+            } else {
+                a.clone()
+            };
+            if b_split.rest.is_empty() || b_split.rest == "." {
+                base
+            } else {
+                join_win32_paths(&base, b_split.rest)
+            }
         } else {
-            format!("{}\\{}", a, b)
-        };
-        string_to_js(&normalize_win32_str(&joined))
-    }
+            b.clone()
+        }
+    } else if a.is_empty() {
+        b.clone()
+    } else if a.ends_with('\\') || a.ends_with('/') {
+        format!("{}{}", a, b)
+    } else {
+        format!("{}\\{}", a, b)
+    };
+    string_to_js(&normalize_win32_str(&joined))
 }
 
 /// Resolve a win32 path to an absolute form. If the input isn't absolute,
@@ -1363,55 +1441,36 @@ pub extern "C" fn js_path_win32_relative(
     from_ptr: *const StringHeader,
     to_ptr: *const StringHeader,
 ) -> *mut StringHeader {
-    unsafe {
-        let from = string_from_header(from_ptr).unwrap_or_default();
-        let to = string_from_header(to_ptr).unwrap_or_default();
-        // Resolve both inputs to absolute, normalized form (matches Node).
-        let from_abs = {
-            let s = split_win32(&from);
-            if s.is_absolute {
-                normalize_win32_str(&from)
-            } else {
-                normalize_win32_str(&format!("C:\\{}", from))
-            }
-        };
-        let to_abs = {
-            let s = split_win32(&to);
-            if s.is_absolute {
-                normalize_win32_str(&to)
-            } else {
-                normalize_win32_str(&format!("C:\\{}", to))
-            }
-        };
-        let from_split = split_win32(&from_abs);
-        let to_split = split_win32(&to_abs);
-        // Different roots (e.g. different drives, or drive vs UNC) → return
-        // `to` unchanged, matching Node's behavior.
-        if from_split.prefix.eq_ignore_ascii_case(to_split.prefix) {
-            // Same root — compute segment-wise relative path.
-        } else {
-            return string_to_js(&to_abs);
-        }
-        let from_segs: Vec<&str> = from_split
-            .rest
-            .split(is_win32_sep)
-            .filter(|s| !s.is_empty())
-            .collect();
-        let to_segs: Vec<&str> = to_split
-            .rest
-            .split(is_win32_sep)
-            .filter(|s| !s.is_empty())
-            .collect();
-        let common = from_segs
-            .iter()
-            .zip(to_segs.iter())
-            .take_while(|(a, b)| a.eq_ignore_ascii_case(b))
-            .count();
-        let ups = from_segs.len() - common;
-        let mut parts: Vec<&str> = std::iter::repeat_n("..", ups).collect();
-        parts.extend(to_segs[common..].iter().copied());
-        string_to_js(&parts.join("\\"))
+    let from = string_from_header_or_throw(from_ptr);
+    let to = string_from_header_or_throw(to_ptr);
+    let from_abs = win32_resolve_inner(&from);
+    let to_abs = win32_resolve_inner(&to);
+    let from_split = split_win32(&from_abs);
+    let to_split = split_win32(&to_abs);
+    // Different roots (e.g. different drives, or drive vs UNC) → return
+    // `to` unchanged, matching Node's behavior.
+    if !from_split.prefix.eq_ignore_ascii_case(to_split.prefix) {
+        return string_to_js(&to_abs);
     }
+    let from_segs: Vec<&str> = from_split
+        .rest
+        .split(is_win32_sep)
+        .filter(|s| !s.is_empty())
+        .collect();
+    let to_segs: Vec<&str> = to_split
+        .rest
+        .split(is_win32_sep)
+        .filter(|s| !s.is_empty())
+        .collect();
+    let common = from_segs
+        .iter()
+        .zip(to_segs.iter())
+        .take_while(|(a, b)| a.eq_ignore_ascii_case(b))
+        .count();
+    let ups = from_segs.len() - common;
+    let mut parts: Vec<&str> = std::iter::repeat_n("..", ups).collect();
+    parts.extend(to_segs[common..].iter().copied());
+    string_to_js(&parts.join("\\"))
 }
 
 #[cfg(test)]

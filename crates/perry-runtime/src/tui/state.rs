@@ -19,6 +19,7 @@
 //! coarse "something changed, redo it" signal. Good enough for a TUI
 //! whose paint cost is dominated by the cell-grid diff anyway.
 
+use std::any::Any;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
@@ -48,6 +49,32 @@ pub fn scan_state_slot_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>
     for bits in s.iter_mut() {
         visitor.visit_nanbox_u64_slot(bits);
     }
+}
+
+#[derive(Default)]
+pub(crate) struct StateSlotRootScanState {
+    index: usize,
+}
+
+pub(crate) fn new_state_slot_root_scan_state() -> Box<dyn Any> {
+    Box::<StateSlotRootScanState>::default()
+}
+
+pub(crate) fn scan_state_slot_roots_mut_step(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    state: &mut dyn Any,
+    remaining: &mut usize,
+) -> bool {
+    let state = state
+        .downcast_mut::<StateSlotRootScanState>()
+        .expect("tui state root scanner state type");
+    let mut slots = crate::gc::lock_gc_root_registry(&SLOTS);
+    while *remaining > 0 && state.index < slots.len() {
+        visitor.visit_nanbox_u64_slot(&mut slots[state.index]);
+        state.index += 1;
+        *remaining -= 1;
+    }
+    state.index >= slots.len()
 }
 
 /// Allocate a fresh state slot with the given initial value (NaN-boxed

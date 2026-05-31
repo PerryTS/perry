@@ -76,6 +76,10 @@ pub fn describe_received(value: f64) -> String {
     if jv.is_bigint() {
         return format!("type bigint ({}n)", bigint_decimal(value));
     }
+    if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
+        let ptr = unsafe { crate::symbol::js_symbol_to_string(value) } as *const StringHeader;
+        return format!("type symbol ({})", string_header_to_string(ptr));
+    }
     if is_numeric(jv) {
         let n = if jv.is_int32() {
             jv.as_int32() as f64
@@ -101,11 +105,7 @@ pub fn describe_received(value: f64) -> String {
     "an unsupported value".to_string()
 }
 
-/// Read a JS string value (heap `StringHeader` or inline SSO) into a Rust
-/// `String`. Used by `describe_received` to render a `Received type string
-/// ('…')` clause.
-fn read_js_string(value: f64) -> String {
-    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+fn string_header_to_string(ptr: *const StringHeader) -> String {
     if ptr.is_null() {
         return String::new();
     }
@@ -114,6 +114,14 @@ fn read_js_string(value: f64) -> String {
         let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
     }
+}
+
+/// Read a JS string value (heap `StringHeader` or inline SSO) into a Rust
+/// `String`. Used by `describe_received` to render a `Received type string
+/// ('…')` clause.
+fn read_js_string(value: f64) -> String {
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    string_header_to_string(ptr)
 }
 
 /// Render a string the way Node's `determineSpecificType` does for the
@@ -167,12 +175,16 @@ pub(crate) fn throw_invalid_path_arg(arg_name: &str, value: f64) -> ! {
 
 /// Throw `Error [EBADF]` for a numeric fd that is not an open descriptor.
 fn throw_ebadf(syscall: &'static str) -> ! {
+    crate::exception::js_throw(build_ebadf_error_value(syscall))
+}
+
+pub(crate) fn build_ebadf_error_value(syscall: &'static str) -> f64 {
     let message = format!("EBADF: bad file descriptor, {}", syscall);
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "EBADF");
     crate::node_submodules::register_error_syscall(msg, syscall);
     let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::value::js_nanbox_pointer(err as i64)
 }
 
 pub fn throw_type_error_with_code(message: &str, code: &'static str) -> ! {
@@ -181,6 +193,61 @@ pub fn throw_type_error_with_code(message: &str, code: &'static str) -> ! {
     let err = crate::error::js_typeerror_new(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
+
+/// Validate a `node:events` listener argument (#3072).
+///
+/// `listener_bits` is the *raw NaN-box bit pattern* of the JS value passed
+/// for an EventEmitter listener (codegen routes these methods through
+/// `NA_JSV`, so the callee receives the full value rather than a
+/// pre-stripped pointer). Returns the closure pointer as an `i64` when the
+/// value is callable; otherwise throws `TypeError [ERR_INVALID_ARG_TYPE]`
+/// with Node's `The "listener" argument must be of type function. Received …`
+/// message — matching `EventEmitter#on/once/addListener/prependListener/
+/// prependOnceListener/removeListener/off`.
+///
+/// Shared by both EventEmitter implementations (`perry-stdlib::events` and
+/// the out-of-tree `perry-ext-events`) so the validation, error class, code
+/// and message stay byte-identical regardless of which one is linked.
+///
+/// # Safety
+///
+/// `name_ptr`/`name_len` must describe a valid UTF-8 byte range (typically a
+/// `&'static str`). Callers pass `"listener"`.
+#[no_mangle]
+pub unsafe extern "C" fn js_validate_event_listener(
+    listener_bits: i64,
+    name_ptr: *const u8,
+    name_len: u32,
+) -> i64 {
+    let value = f64::from_bits(listener_bits as u64);
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_pointer() {
+        let ptr = jv.as_pointer::<u8>() as usize;
+        if crate::closure::is_closure_ptr(ptr) {
+            return ptr as i64;
+        }
+    }
+    let name = if name_ptr.is_null() || name_len == 0 {
+        "listener".to_string()
+    } else {
+        let bytes = std::slice::from_raw_parts(name_ptr, name_len as usize);
+        String::from_utf8_lossy(bytes).into_owned()
+    };
+    let message = format!(
+        "The \"{name}\" argument must be of type function. Received {}",
+        describe_received(value)
+    );
+    throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+/// `#[used]` keepalive so the auto-optimize whole-program-LLVM rebuild does
+/// not dead-strip this codegen-invoked `#[no_mangle]` entry point (see
+/// project_auto_optimize_keepalive_3320). Called only from generated `.o`
+/// via the stdlib/ext events validators, so without an anchor the bitcode
+/// internalizer drops it and the default `perry file.ts -o out` link fails.
+#[used]
+static KEEP_JS_VALIDATE_EVENT_LISTENER: unsafe extern "C" fn(i64, *const u8, u32) -> i64 =
+    js_validate_event_listener;
 
 /// Validate the first argument of a path-only `fs` sync function (one that
 /// does NOT accept a file descriptor — `accessSync`, `statSync`, `mkdirSync`,
@@ -254,6 +321,24 @@ pub(crate) fn throw_ebadf_pub(syscall: &'static str) -> ! {
     throw_ebadf(syscall)
 }
 
+/// Issue #3332 — callback-style fd helpers (`fs.close`, `fs.fsync`,
+/// `fs.fdatasync`, `fs.fchmod`) must DELIVER the `EBADF` error to the
+/// callback rather than throw it. The fd *type* validation still throws
+/// synchronously (matching Node's `validateInt32` on a non-numeric fd);
+/// only the "valid type but unknown descriptor" case becomes a deferred
+/// callback error. Returns `Some(err_value)` when the fd is not open,
+/// `None` when it is registered.
+pub(crate) fn fd_open_callback_error(value: f64, syscall: &'static str) -> Option<f64> {
+    validate_fd(value);
+    let jv = JSValue::from_bits(value.to_bits());
+    let fd = numeric_to_i32(jv);
+    if crate::fs::fd_is_registered(fd) {
+        None
+    } else {
+        Some(build_ebadf_error_value(syscall))
+    }
+}
+
 /// Validate that `value` is a finite integer in `[min, max]`. On type or
 /// range failure throws Node's `ERR_INVALID_ARG_TYPE` / `ERR_OUT_OF_RANGE`
 /// with the same `Received` clause shape Node uses.
@@ -303,8 +388,25 @@ pub(crate) fn validate_int32(value: f64, arg_name: &str, min: i64, max: i64) {
     }
 }
 
-fn format_received_number(n: f64) -> String {
-    if n.fract() == 0.0 && n.is_finite() && n.abs() < 1e21 {
+/// Render an `f64` the way Node prints it in a `Received …` clause for
+/// value errors (`ERR_OUT_OF_RANGE` / `ERR_INVALID_ARG_VALUE`): integers
+/// without a fractional part, and `NaN`/`Infinity`/`-Infinity` spelled out
+/// (Rust's `Display` would print `inf`/`NaN`). Shared by the `net`/`fs`/
+/// `buffer` validators and the `process` exit/cpuUsage validators
+/// (#3039-#3049).
+pub fn format_received_number(n: f64) -> String {
+    if n.is_nan() {
+        return "NaN".to_string();
+    }
+    if n.is_infinite() {
+        return if n.is_sign_negative() {
+            "-Infinity"
+        } else {
+            "Infinity"
+        }
+        .to_string();
+    }
+    if n.fract() == 0.0 && n.abs() < 1e21 {
         format!("{}", n as i64)
     } else {
         format!("{}", n)
@@ -338,5 +440,16 @@ pub fn throw_range_error_named(message: &str, code: &'static str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
     let err = crate::error::js_rangeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// Throw a plain `Error` (name `"Error"`) carrying an explicit Node error
+/// `code`. Used by `node:crypto` Sign/Verify finalized-state guards (#2963),
+/// which raise `Error [ERR_CRYPTO_INVALID_STATE]: Not initialised` once a
+/// handle has been consumed by `.sign()`/`.verify()`.
+pub fn throw_error_with_code(message: &str, code: &'static str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, code);
+    let err = crate::error::js_error_new_with_message(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }

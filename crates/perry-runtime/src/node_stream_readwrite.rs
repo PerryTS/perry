@@ -22,55 +22,6 @@ pub(super) fn mark_disturbed(stream: f64) {
     set_visible_readable_did_read(stream, true);
 }
 
-pub(super) fn push_json_number(buf: &mut String, value: f64) {
-    if value.is_nan() || value.is_infinite() {
-        buf.push_str("null");
-    } else if value.fract() == 0.0 && value.abs() < (i64::MAX as f64) {
-        let mut itoa_buf = itoa::Buffer::new();
-        buf.push_str(itoa_buf.format(value as i64));
-    } else {
-        let mut ryu_buf = ryu::Buffer::new();
-        buf.push_str(ryu_buf.format(value));
-    }
-}
-
-pub(crate) unsafe fn try_stringify_node_stream_json(ptr: *const u8, buf: &mut String) -> bool {
-    if ptr.is_null() {
-        return false;
-    }
-    let obj = ptr as *const ObjectHeader;
-    let readable = own_field_by_key_bytes(obj, READABLE_FLAG_KEY).is_some();
-    let writable = own_field_by_key_bytes(obj, WRITABLE_FLAG_KEY).is_some();
-    if readable == writable {
-        return false;
-    }
-
-    buf.push_str(r#"{"_events":{},"#);
-    if readable {
-        let hwm =
-            own_field_by_key_bytes(obj, READABLE_HWM_KEY).unwrap_or_else(|| default_hwm(false));
-        let length = own_field_by_key_bytes(obj, READABLE_BUFFERED_KEY).unwrap_or(0.0);
-        buf.push_str(r#""_readableState":{"highWaterMark":"#);
-        push_json_number(buf, hwm);
-        buf.push_str(r#","buffer":[],"bufferIndex":0,"length":"#);
-        push_json_number(buf, length);
-        buf.push_str(r#","pipes":[],"awaitDrainWriters":null}}"#);
-    } else {
-        let hwm = own_field_by_key_bytes(obj, b"writableHighWaterMark")
-            .unwrap_or_else(|| default_hwm(false));
-        let length = 0.0;
-        let corked = own_field_by_key_bytes(obj, WRITABLE_CORKED_KEY).unwrap_or(0.0);
-        buf.push_str(r#""_writableState":{"highWaterMark":"#);
-        push_json_number(buf, hwm);
-        buf.push_str(r#","length":"#);
-        push_json_number(buf, length);
-        buf.push_str(r#","corked":"#);
-        push_json_number(buf, corked);
-        buf.push_str(r#","writelen":0,"bufferedIndex":0,"pendingcb":0}}"#);
-    }
-    true
-}
-
 pub(super) unsafe fn own_field_by_key_bytes(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
     if obj.is_null() {
         return None;
@@ -317,7 +268,7 @@ pub(super) fn flush_pending_readable_chunks(stream: f64) {
             buffer_pending_readable_chunk(stream, chunk);
             continue;
         }
-        consume_readable_buffered_front(stream, chunk);
+        super::readable_from_promises::consume_readable_buffered_front(stream, chunk);
         emit_readable_data_unchecked(stream, chunk);
     }
     if stream_hidden_ended(stream)
@@ -614,6 +565,10 @@ pub(super) fn end_pipe_destinations(stream: f64) {
 pub(super) fn schedule_readable_from_drain(stream: f64) {
     if readable_hidden_chunks(stream).is_none()
         || has_truthy_hidden(stream, hidden_drain_scheduled_key())
+        || has_truthy_hidden(
+            stream,
+            super::readable_from_promises::hidden_readable_from_promise_pending_key(),
+        )
         || readable_is_paused(stream)
         || stream_destroyed(stream)
     {
@@ -652,6 +607,14 @@ pub(super) fn queue_readable_event(stream: f64) {
     let closure = js_closure_alloc(ns_readable_event_microtask as *const u8, 1);
     js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
     crate::builtins::js_queue_microtask(closure as i64);
+}
+
+pub(super) fn cancel_readable_event(stream: f64) {
+    set_hidden_value(
+        stream,
+        hidden_readable_scheduled_key(),
+        f64::from_bits(TAG_FALSE),
+    );
 }
 
 pub(super) fn schedule_readable_end(stream: f64) {
@@ -719,6 +682,16 @@ pub(super) fn schedule_writable_finish(stream: f64, callback: Option<f64>) {
     crate::builtins::js_queue_microtask(closure as i64);
 }
 
+pub(super) fn schedule_writable_finish_then_transform_end(stream: f64, callback: Option<f64>) {
+    schedule_writable_finish(stream, callback);
+    let finish_ready = has_truthy_hidden(stream, hidden_finish_scheduled_key())
+        || has_truthy_hidden(stream, hidden_finish_emitted_key());
+    let final_pending = has_truthy_hidden(stream, hidden_writable_final_pending_key());
+    if is_transform_stream(stream) && finish_ready && !final_pending {
+        schedule_readable_end(stream);
+    }
+}
+
 pub(super) fn set_pending_writable_finish_callback(stream: f64, callback: Option<f64>) {
     let value = callback.unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
     set_hidden_value(stream, hidden_writable_pending_finish_callback_key(), value);
@@ -743,7 +716,7 @@ pub(super) fn schedule_pending_writable_finish_if_ready(stream: f64) {
         return;
     }
     let callback = take_pending_writable_finish_callback(stream);
-    schedule_writable_finish(stream, callback);
+    schedule_writable_finish_then_transform_end(stream, callback);
 }
 
 pub(super) fn emit_readable_end_once(stream: f64) {
@@ -763,10 +736,10 @@ pub(super) fn emit_readable_end_once(stream: f64) {
         refresh_readable_aborted_flag(stream);
         let _ = emit_stream_event(stream, string_value(b"end"), &[]);
         end_pipe_destinations(stream);
-        // autoDestroy (default) tears readable-only streams down after
-        // 'end'. Duplex streams defer `close` until BOTH readable `end`
-        // and writable `finish` have fired; whichever side finishes second
-        // performs the close. Refs node-suite/stream/readable/closed-flag.
+        // autoDestroy tears readable-only streams down after 'end'. Duplex
+        // streams defer `close` until both readable `end` and writable
+        // `finish` have fired; whichever side finishes second performs the
+        // close. Refs node-suite/stream/readable/closed-flag.
         if stream_auto_destroy_enabled(stream) {
             let writable_pending = get_hidden_value(stream, hidden_writable_flag_key()).is_some()
                 && !has_truthy_hidden(stream, hidden_finish_emitted_key());
@@ -835,32 +808,6 @@ pub(super) fn clear_pending_readable_chunks(stream: f64) {
     );
 }
 
-fn consume_readable_buffered_front(stream: f64, chunk: f64) {
-    let Some(chunks) = readable_hidden_chunks(stream) else {
-        return;
-    };
-    if !is_array_like_value(chunks) {
-        clear_readable_buffer(stream);
-        return;
-    }
-    let arr = raw_ptr_from_value(chunks) as *mut crate::array::ArrayHeader;
-    let len = crate::array::js_array_length(arr);
-    if len == 0 {
-        clear_readable_buffer(stream);
-        return;
-    }
-    let _ = crate::array::js_array_shift_f64(arr);
-    if len == 1 {
-        clear_readable_buffer(stream);
-        return;
-    }
-    let consumed = chunk_byte_len(chunk) as f64;
-    let remaining =
-        (get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0) - consumed).max(0.0);
-    set_hidden_value(stream, hidden_buffered_key(), remaining);
-    set_hidden_value(stream, hidden_key(b"readableLength"), remaining);
-}
-
 pub(super) fn read_stream_with_size_arg(stream: f64, size: f64) -> f64 {
     let size_value = JSValue::from_bits(size.to_bits());
     if size_value.is_undefined() || !size_value.is_number() {
@@ -881,6 +828,7 @@ pub(super) fn read_stream_default_size(stream: f64) -> f64 {
 pub(super) fn read_stream_available_default(stream: f64) -> f64 {
     if get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0) <= 0.0 {
         if stream_hidden_ended(stream) {
+            cancel_readable_event(stream);
             refresh_readable_aborted_flag(stream);
         }
         return f64::from_bits(TAG_NULL);
@@ -894,6 +842,7 @@ pub(super) fn read_stream_available_default(stream: f64) -> f64 {
     }
     if values.is_empty() {
         if stream_hidden_ended(stream) {
+            cancel_readable_event(stream);
             refresh_readable_aborted_flag(stream);
         }
         return f64::from_bits(TAG_NULL);
@@ -930,6 +879,7 @@ pub(super) fn read_stream_exact_size(stream: f64, size: f64) -> f64 {
         .max(0.0) as usize;
     if available == 0 {
         if stream_hidden_ended(stream) {
+            cancel_readable_event(stream);
             refresh_readable_aborted_flag(stream);
         }
         return f64::from_bits(TAG_NULL);
@@ -1052,11 +1002,14 @@ pub(super) fn drain_readable_from_events(stream: f64) {
                 if !emit_destroyed_tail {
                     return;
                 }
-                consume_readable_buffered_front(stream, chunk);
+                super::readable_from_promises::consume_readable_buffered_front(stream, chunk);
                 emit_readable_data_unchecked(stream, chunk);
                 return;
             }
-            consume_readable_buffered_front(stream, chunk);
+            if super::readable_from_promises::attach_readable_from_promise_chunk(stream, chunk) {
+                return;
+            }
+            super::readable_from_promises::consume_readable_buffered_front(stream, chunk);
             emit_readable_data_unchecked(stream, chunk);
             if stream_destroyed(stream) {
                 emit_destroyed_tail = true;
@@ -1587,9 +1540,21 @@ pub(super) fn collection_iterable_chunks(raw: usize) -> Option<f64> {
     None
 }
 
-pub(super) fn normalize_readable_from_input(iterable: f64) -> f64 {
+pub(super) struct NormalizedReadableInput {
+    pub chunks: f64,
+    pub source_iterator: Option<f64>,
+}
+
+fn normalized_readable_chunks(chunks: f64) -> NormalizedReadableInput {
+    NormalizedReadableInput {
+        chunks,
+        source_iterator: None,
+    }
+}
+
+pub(super) fn normalize_readable_from_input(iterable: f64) -> NormalizedReadableInput {
     if let Some(chunks) = readable_hidden_chunks(iterable) {
-        return chunks;
+        return normalized_readable_chunks(chunks);
     }
     let raw = raw_ptr_from_value(iterable);
     if raw >= 0x10000
@@ -1597,24 +1562,65 @@ pub(super) fn normalize_readable_from_input(iterable: f64) -> f64 {
         && crate::buffer::is_uint8array_buffer(raw)
         && !crate::buffer::is_array_buffer(raw)
     {
-        return uint8array_byte_chunks(raw);
+        return normalized_readable_chunks(uint8array_byte_chunks(raw));
     }
     if let Some(chunks) = typed_uint8array_byte_chunks(raw) {
-        return chunks;
+        return normalized_readable_chunks(chunks);
     }
     if let Some(chunks) = collection_iterable_chunks(raw) {
-        return chunks;
+        return normalized_readable_chunks(chunks);
     }
     if is_array_like_value(iterable) {
-        return iterable;
+        return normalized_readable_chunks(iterable);
+    }
+    if is_single_chunk_value(iterable) {
+        let arr = crate::array::js_array_alloc(1);
+        let arr = crate::array::js_array_push_f64(arr, iterable);
+        return normalized_readable_chunks(box_pointer(arr as *const u8));
+    }
+    if let Some((chunks, source_iterator)) = flatten_async_iterable_with_source(iterable) {
+        return NormalizedReadableInput {
+            chunks: box_pointer(chunks as *const u8),
+            source_iterator,
+        };
+    }
+    if let Some((chunks, source_iterator)) = flatten_sync_iterable_value(iterable) {
+        return NormalizedReadableInput {
+            chunks: box_pointer(chunks as *const u8),
+            source_iterator,
+        };
     }
 
     let arr = crate::array::js_array_alloc(1);
-    if is_single_chunk_value(iterable) {
-        let arr = crate::array::js_array_push_f64(arr, iterable);
-        return box_pointer(arr as *const u8);
+    normalized_readable_chunks(box_pointer(arr as *const u8))
+}
+
+fn flatten_sync_iterable_value(
+    value: f64,
+) -> Option<(*mut crate::array::ArrayHeader, Option<f64>)> {
+    if has_symbol_async_iterator(value) {
+        return None;
     }
-    box_pointer(arr as *const u8)
+    if crate::object::js_util_types_is_generator_object(value).to_bits() == TAG_TRUE {
+        return crate::array::sync_iterator_to_array_if_not_async(value)
+            .map(|chunks| (chunks, Some(value)));
+    }
+    let iter = crate::symbol::js_get_iterator(value);
+    if iter.to_bits() != value.to_bits() {
+        return crate::array::sync_iterator_to_array_if_not_async(iter)
+            .map(|chunks| (chunks, Some(iter)));
+    }
+    None
+}
+
+fn has_symbol_async_iterator(value: f64) -> bool {
+    let sym = crate::symbol::well_known_symbol("asyncIterator");
+    if sym.is_null() {
+        return false;
+    }
+    let sym_value = f64::from_bits(JSValue::pointer(sym as *const u8).bits());
+    let method = unsafe { crate::symbol::js_object_get_symbol_property(value, sym_value) };
+    is_callable_value(method)
 }
 
 pub(super) fn readable_from_options(opts: f64) -> f64 {
@@ -1805,6 +1811,30 @@ pub(crate) fn js_node_stream_hidden_error(stream: f64) -> Option<f64> {
     readable_hidden_error(stream)
 }
 
+pub(crate) fn js_node_stream_is_classic_stream(stream: f64) -> bool {
+    get_hidden_value(stream, hidden_readable_flag_key()).is_some()
+        || get_hidden_value(stream, hidden_writable_flag_key()).is_some()
+}
+
+pub(crate) fn js_node_stream_has_readable_side(stream: f64) -> bool {
+    get_hidden_value(stream, hidden_readable_flag_key()).is_some()
+}
+
+pub(crate) fn js_node_stream_has_writable_side(stream: f64) -> bool {
+    get_hidden_value(stream, hidden_writable_flag_key()).is_some()
+}
+
+pub(crate) fn js_node_stream_readable_side_done(stream: f64) -> bool {
+    !js_node_stream_has_readable_side(stream)
+        || stream_hidden_ended(stream)
+        || has_truthy_hidden(stream, hidden_end_emitted_key())
+}
+
+pub(crate) fn js_node_stream_writable_side_done(stream: f64) -> bool {
+    !js_node_stream_has_writable_side(stream)
+        || has_truthy_hidden(stream, hidden_finish_emitted_key())
+}
+
 #[cfg(test)]
 pub(crate) fn js_node_stream_is_stub_ended_after_read(stream: f64) -> bool {
     probe_read_once(stream);
@@ -1863,7 +1893,7 @@ pub(super) fn readable_methods() -> [(&'static str, StubFn); 39] {
         ("read", cast1(ns_read1)),
         ("pipe", cast2(ns_pipe2)),
         ("unpipe", cast1(ns_unpipe1)),
-        ("wrap", cast1(ns_chain1)),
+        ("wrap", cast1(ns_wrap1)),
         ("pause", cast0(ns_pause0)),
         ("resume", cast0(ns_resume0)),
         ("destroy", cast1(ns_destroy1)),
@@ -1943,7 +1973,7 @@ pub(super) fn duplex_methods() -> [(&'static str, StubFn); 32] {
         ("read", cast1(ns_read1)),
         ("pipe", cast2(ns_pipe2)),
         ("unpipe", cast1(ns_unpipe1)),
-        ("wrap", cast1(ns_chain1)),
+        ("wrap", cast1(ns_wrap1)),
         ("pause", cast0(ns_pause0)),
         ("resume", cast0(ns_resume0)),
         ("setEncoding", cast1(ns_set_encoding1)),

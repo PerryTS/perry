@@ -62,7 +62,7 @@ pub(super) fn build_object_static_method_call(method: &str, args: Vec<Expr>) -> 
         "values" => Expr::ObjectValues(Box::new(iter.next().unwrap_or(Expr::Undefined))),
         "entries" => Expr::ObjectEntries(Box::new(iter.next().unwrap_or(Expr::Undefined))),
         "assign" => {
-            let target = iter.next().unwrap_or(Expr::Object(Vec::new()));
+            let target = iter.next().unwrap_or(Expr::Undefined);
             let sources: Vec<Expr> = iter.collect();
             Expr::ObjectAssign {
                 target: Box::new(target),
@@ -70,7 +70,11 @@ pub(super) fn build_object_static_method_call(method: &str, args: Vec<Expr>) -> 
             }
         }
         "fromEntries" => Expr::ObjectFromEntries(Box::new(iter.next().unwrap_or(Expr::Undefined))),
-        "create" => Expr::ObjectCreate(Box::new(iter.next().unwrap_or(Expr::Undefined))),
+        "create" => {
+            let proto = iter.next().unwrap_or(Expr::Undefined);
+            let props = iter.next().map(Box::new);
+            Expr::ObjectCreate(Box::new(proto), props)
+        }
         "freeze" => Expr::ObjectFreeze(Box::new(iter.next().unwrap_or(Expr::Undefined))),
         "seal" => Expr::ObjectSeal(Box::new(iter.next().unwrap_or(Expr::Undefined))),
         "preventExtensions" => {

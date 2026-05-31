@@ -8,13 +8,18 @@
 //! timer pump fires on the UI thread.
 
 use crate::promise::{js_promise_new, js_promise_resolve, Promise};
+use std::any::Any;
 use std::collections::HashMap;
 use std::os::raw::c_int;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Mutex,
 };
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+extern "C" {
+    fn js_stdlib_has_active_handles() -> i32;
+}
 
 /// A scheduled timer
 struct Timer {
@@ -24,6 +29,8 @@ struct Timer {
     promise: *mut Promise,
     /// The value to resolve with (typically undefined/0.0)
     value: f64,
+    /// Whether this promise timer should keep the event loop alive.
+    has_ref: bool,
 }
 
 // SAFETY: Promise pointers are only accessed from the pump thread
@@ -54,24 +61,26 @@ pub extern "C" fn js_timer_now() -> f64 {
 /// Returns the promise that will be resolved
 #[no_mangle]
 pub extern "C" fn js_set_timeout(delay_ms: f64) -> *mut Promise {
-    ensure_initialized();
-
-    let promise = js_promise_new();
-    let delay = Duration::from_millis(normalize_timer_delay(delay_ms));
-    let deadline = Instant::now() + delay;
-
-    TIMER_QUEUE.lock().unwrap().push(Timer {
-        deadline,
-        promise,
-        value: 0.0, // setTimeout resolves with undefined
-    });
-
-    promise
+    schedule_promise_timer(delay_ms, 0.0, true)
 }
 
 /// Schedule a timer with a specific resolve value
 #[no_mangle]
 pub extern "C" fn js_set_timeout_value(delay_ms: f64, value: f64) -> *mut Promise {
+    schedule_promise_timer(delay_ms, value, true)
+}
+
+/// Schedule a promise timer with explicit event-loop liveness.
+#[no_mangle]
+pub extern "C" fn js_set_timeout_value_ref(
+    delay_ms: f64,
+    value: f64,
+    has_ref: i32,
+) -> *mut Promise {
+    schedule_promise_timer(delay_ms, value, has_ref != 0)
+}
+
+fn schedule_promise_timer(delay_ms: f64, value: f64, has_ref: bool) -> *mut Promise {
     ensure_initialized();
 
     let promise = js_promise_new();
@@ -82,9 +91,28 @@ pub extern "C" fn js_set_timeout_value(delay_ms: f64, value: f64) -> *mut Promis
         deadline,
         promise,
         value,
+        has_ref,
     });
 
     promise
+}
+
+fn has_refed_promise_timer() -> bool {
+    TIMER_QUEUE
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|timer| timer.has_ref)
+}
+
+fn other_event_sources_keep_loop_alive() -> bool {
+    js_callback_timer_has_pending() != 0
+        || js_interval_timer_has_pending() != 0
+        || unsafe { js_stdlib_has_active_handles() != 0 }
+}
+
+fn should_run_unref_promise_timers() -> bool {
+    has_refed_promise_timer() || other_event_sources_keep_loop_alive()
 }
 
 /// Process any expired timers, resolving their promises
@@ -92,6 +120,7 @@ pub extern "C" fn js_set_timeout_value(delay_ms: f64, value: f64) -> *mut Promis
 #[no_mangle]
 pub extern "C" fn js_timer_tick() -> i32 {
     let now = Instant::now();
+    let allow_unref = should_run_unref_promise_timers();
     let mut fired = 0;
 
     // Collect expired timers
@@ -100,7 +129,7 @@ pub extern "C" fn js_timer_tick() -> i32 {
         let mut expired = Vec::new();
         let mut i = 0;
         while i < queue.len() {
-            if queue[i].deadline <= now {
+            if queue[i].deadline <= now && (queue[i].has_ref || allow_unref) {
                 expired.push(queue.remove(i));
             } else {
                 i += 1;
@@ -127,22 +156,32 @@ pub extern "C" fn js_timer_tick() -> i32 {
 /// Check if there are any pending timers
 #[no_mangle]
 pub extern "C" fn js_timer_has_pending() -> i32 {
-    if TIMER_QUEUE.lock().unwrap().is_empty() {
-        0
-    } else {
+    if has_refed_promise_timer() {
         1
+    } else {
+        0
     }
+}
+
+/// Compatibility entry used by generated startup drains. `js_timer_tick`
+/// itself enforces promise timer liveness, so this wrapper keeps older
+/// generated call sites explicit without duplicating the policy.
+#[no_mangle]
+pub extern "C" fn js_timer_tick_if_refed() -> i32 {
+    js_timer_tick()
 }
 
 /// Get the time until the next timer fires (in ms), or -1 if no timers
 #[no_mangle]
 pub extern "C" fn js_timer_next_deadline() -> f64 {
     let now = Instant::now();
+    let allow_unref = should_run_unref_promise_timers();
 
     TIMER_QUEUE
         .lock()
         .unwrap()
         .iter()
+        .filter(|t| t.has_ref || allow_unref)
         .map(|t| {
             if t.deadline <= now {
                 0.0
@@ -201,6 +240,57 @@ struct CallbackTimer {
 // SAFETY: closure pointers point to global compiled code data
 unsafe impl Send for CallbackTimer {}
 
+pub const MOCK_TIMERS_API_DATE: u32 = 1 << 0;
+pub const MOCK_TIMERS_API_SET_TIMEOUT: u32 = 1 << 1;
+pub const MOCK_TIMERS_API_SET_INTERVAL: u32 = 1 << 2;
+pub const MOCK_TIMERS_API_SET_IMMEDIATE: u32 = 1 << 3;
+pub const MOCK_TIMERS_ALL_APIS: u32 = MOCK_TIMERS_API_DATE
+    | MOCK_TIMERS_API_SET_TIMEOUT
+    | MOCK_TIMERS_API_SET_INTERVAL
+    | MOCK_TIMERS_API_SET_IMMEDIATE;
+
+#[derive(Clone)]
+struct MockCallbackTimer {
+    id: i64,
+    kind: CallbackTimerKind,
+    due_ms: f64,
+    callback: i64,
+    args: Vec<f64>,
+    context: crate::async_context::AsyncContextSnapshot,
+    cleared: bool,
+}
+
+unsafe impl Send for MockCallbackTimer {}
+
+#[derive(Clone)]
+struct MockIntervalTimer {
+    id: i64,
+    callback: i64,
+    interval_ms: u64,
+    next_ms: f64,
+    args: Vec<f64>,
+    context: crate::async_context::AsyncContextSnapshot,
+    cleared: bool,
+}
+
+unsafe impl Send for MockIntervalTimer {}
+
+struct MockTimersState {
+    enabled: bool,
+    apis: u32,
+    current_ms: f64,
+    callbacks: Vec<MockCallbackTimer>,
+    intervals: Vec<MockIntervalTimer>,
+}
+
+static MOCK_TIMERS: Mutex<MockTimersState> = Mutex::new(MockTimersState {
+    enabled: false,
+    apis: 0,
+    current_ms: 0.0,
+    callbacks: Vec::new(),
+    intervals: Vec::new(),
+});
+
 static CALLBACK_TIMERS: Mutex<Vec<CallbackTimer>> = Mutex::new(Vec::new());
 // Shared id counter across callback timers AND intervals so a handle id is
 // globally unique. Node treats Timeout/Interval as the same internal Timer
@@ -232,6 +322,30 @@ fn with_timer_uncaught_trap<F: FnOnce()>(f: F) {
         crate::os::emit_process_uncaught_exception(exc);
     }
     crate::exception::js_try_end();
+}
+
+fn call_timer_callback(
+    id: i64,
+    callback: i64,
+    args: &[f64],
+    context: &crate::async_context::AsyncContextSnapshot,
+) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callback_handle =
+        scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
+    let arg_handles = scope.root_nanbox_f64_slice(args);
+    let previous = crate::async_context::enter_context(context);
+    let mut previous = previous;
+    let previous_roots = crate::async_context::root_snapshot(&scope, &previous);
+    let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+    let cb = callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
+    let prev_this = crate::object::js_implicit_this_set(timer_handle_value(id));
+    with_timer_uncaught_trap(|| unsafe {
+        crate::closure::js_closure_call_array(cb as i64, a.as_ptr(), a.len() as i64);
+    });
+    crate::object::js_implicit_this_set(prev_this);
+    crate::async_context::refresh_snapshot_from_roots(&mut previous, &previous_roots);
+    crate::async_context::restore_context(previous);
 }
 
 fn next_timer_id() -> i64 {
@@ -331,6 +445,254 @@ pub fn is_known_timer_id(id: i64) -> bool {
         .as_ref()
         .map(|map| map.contains_key(&id))
         .unwrap_or(false)
+}
+
+fn throw_mock_timer_invalid_state(message: &str) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, "ERR_INVALID_STATE");
+    let err = crate::error::js_error_new_with_message(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn ensure_mock_timers_enabled() {
+    if !MOCK_TIMERS.lock().unwrap().enabled {
+        throw_mock_timer_invalid_state(
+            "Invalid state: You should enable MockTimers first by calling the .enable function",
+        );
+    }
+}
+
+pub fn js_mock_timers_real_now_ms() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as f64)
+        .unwrap_or(0.0)
+}
+
+pub fn js_mock_timers_date_now() -> Option<f64> {
+    let state = MOCK_TIMERS.lock().unwrap();
+    (state.enabled && (state.apis & MOCK_TIMERS_API_DATE) != 0).then_some(state.current_ms)
+}
+
+pub fn js_mock_timers_enable(apis: u32, now_ms: f64) {
+    let mut state = MOCK_TIMERS.lock().unwrap();
+    if state.enabled {
+        throw_mock_timer_invalid_state("Invalid state: MockTimers is already enabled!");
+    }
+    state.enabled = true;
+    state.apis = apis;
+    state.current_ms = now_ms;
+    state.callbacks.clear();
+    state.intervals.clear();
+}
+
+pub fn js_mock_timers_reset() {
+    let mut state = MOCK_TIMERS.lock().unwrap();
+    state.enabled = false;
+    state.apis = 0;
+    state.current_ms = 0.0;
+    state.callbacks.clear();
+    state.intervals.clear();
+}
+
+pub fn js_mock_timers_set_time(now_ms: f64) {
+    ensure_mock_timers_enabled();
+    MOCK_TIMERS.lock().unwrap().current_ms = now_ms;
+}
+
+pub fn js_mock_timers_tick(ms: f64) {
+    ensure_mock_timers_enabled();
+    let target = {
+        let state = MOCK_TIMERS.lock().unwrap();
+        state.current_ms + ms
+    };
+    mock_timers_advance_to(target);
+}
+
+pub fn js_mock_timers_run_all() {
+    ensure_mock_timers_enabled();
+    const RUN_LIMIT: usize = 100_000;
+    for _ in 0..RUN_LIMIT {
+        let next_due = {
+            let state = MOCK_TIMERS.lock().unwrap();
+            state
+                .callbacks
+                .iter()
+                .filter(|timer| !timer.cleared)
+                .map(|timer| timer.due_ms)
+                .chain(
+                    state
+                        .intervals
+                        .iter()
+                        .filter(|timer| !timer.cleared)
+                        .map(|timer| timer.next_ms),
+                )
+                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        };
+        let Some(target) = next_due else {
+            return;
+        };
+        mock_timers_advance_to(target);
+        let has_more = {
+            let state = MOCK_TIMERS.lock().unwrap();
+            state.callbacks.iter().any(|timer| !timer.cleared)
+        };
+        if !has_more {
+            return;
+        }
+    }
+    throw_mock_timer_invalid_state("Invalid state: MockTimers runAll() reached the timer limit");
+}
+
+fn schedule_mock_callback_timer(
+    callback: i64,
+    delay_ms: f64,
+    args: Vec<f64>,
+    kind: CallbackTimerKind,
+) -> Option<i64> {
+    let api = match kind {
+        CallbackTimerKind::Timeout => MOCK_TIMERS_API_SET_TIMEOUT,
+        CallbackTimerKind::Immediate => MOCK_TIMERS_API_SET_IMMEDIATE,
+    };
+    let mut state = MOCK_TIMERS.lock().unwrap();
+    if !state.enabled || (state.apis & api) == 0 {
+        return None;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callback_handle =
+        scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
+    let arg_handles = scope.root_nanbox_f64_slice(&args);
+    let delay = normalize_timer_delay(delay_ms);
+    let id = next_timer_id();
+    let due_ms = state.current_ms + delay as f64;
+    state.callbacks.push(MockCallbackTimer {
+        id,
+        kind,
+        due_ms,
+        callback: callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>() as i64,
+        args: crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles),
+        context: crate::async_context::capture_context(),
+        cleared: false,
+    });
+    set_timer_ref_state(id, true);
+    Some(id)
+}
+
+fn schedule_mock_interval_timer(callback: i64, interval_ms: f64, args: Vec<f64>) -> Option<i64> {
+    let mut state = MOCK_TIMERS.lock().unwrap();
+    if !state.enabled || (state.apis & MOCK_TIMERS_API_SET_INTERVAL) == 0 {
+        return None;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callback_handle =
+        scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
+    let arg_handles = scope.root_nanbox_f64_slice(&args);
+    let interval = normalize_timer_delay(interval_ms);
+    let id = next_timer_id();
+    let next_ms = state.current_ms + interval as f64;
+    state.intervals.push(MockIntervalTimer {
+        id,
+        callback: callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>() as i64,
+        interval_ms: interval,
+        next_ms,
+        args: crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles),
+        context: crate::async_context::capture_context(),
+        cleared: false,
+    });
+    set_timer_ref_state(id, true);
+    Some(id)
+}
+
+fn mock_timers_advance_to(target_ms: f64) {
+    loop {
+        let action = {
+            let mut state = MOCK_TIMERS.lock().unwrap();
+            state.callbacks.retain(|timer| !timer.cleared);
+            state.intervals.retain(|timer| !timer.cleared);
+
+            let mut best: Option<(f64, i64, bool, usize)> = None;
+            for (idx, timer) in state.callbacks.iter().enumerate() {
+                if timer.due_ms <= target_ms {
+                    let candidate = (timer.due_ms, timer.id, false, idx);
+                    if best.map_or(true, |current| {
+                        (candidate.0, candidate.1) < (current.0, current.1)
+                    }) {
+                        best = Some(candidate);
+                    }
+                }
+            }
+            for (idx, timer) in state.intervals.iter().enumerate() {
+                if timer.next_ms <= target_ms {
+                    let candidate = (timer.next_ms, timer.id, true, idx);
+                    if best.map_or(true, |current| {
+                        (candidate.0, candidate.1) < (current.0, current.1)
+                    }) {
+                        best = Some(candidate);
+                    }
+                }
+            }
+
+            let Some((due_ms, _id, is_interval, idx)) = best else {
+                state.current_ms = target_ms;
+                return;
+            };
+            state.current_ms = due_ms;
+            if is_interval {
+                let timer = state.intervals[idx].clone();
+                let interval = timer.interval_ms.max(1) as f64;
+                state.intervals[idx].next_ms = due_ms + interval;
+                Some((timer.id, timer.callback, timer.args, timer.context))
+            } else {
+                let timer = state.callbacks.remove(idx);
+                Some((timer.id, timer.callback, timer.args, timer.context))
+            }
+        };
+        if let Some((id, callback, args, context)) = action {
+            call_timer_callback(id, callback, &args, &context);
+        }
+    }
+}
+
+fn mock_clear_timeout(timer_id: i64) {
+    let mut state = MOCK_TIMERS.lock().unwrap();
+    for timer in state.callbacks.iter_mut() {
+        if timer.id == timer_id && timer.kind == CallbackTimerKind::Timeout {
+            timer.cleared = true;
+        }
+    }
+    for timer in state.intervals.iter_mut() {
+        if timer.id == timer_id {
+            timer.cleared = true;
+        }
+    }
+    state.callbacks.retain(|timer| !timer.cleared);
+    state.intervals.retain(|timer| !timer.cleared);
+}
+
+fn mock_clear_interval(timer_id: i64) {
+    let mut state = MOCK_TIMERS.lock().unwrap();
+    for timer in state.intervals.iter_mut() {
+        if timer.id == timer_id {
+            timer.cleared = true;
+        }
+    }
+    for timer in state.callbacks.iter_mut() {
+        if timer.id == timer_id && timer.kind == CallbackTimerKind::Timeout {
+            timer.cleared = true;
+        }
+    }
+    state.callbacks.retain(|timer| !timer.cleared);
+    state.intervals.retain(|timer| !timer.cleared);
+}
+
+fn mock_clear_immediate(timer_id: i64) {
+    let mut state = MOCK_TIMERS.lock().unwrap();
+    for timer in state.callbacks.iter_mut() {
+        if timer.id == timer_id && timer.kind == CallbackTimerKind::Immediate {
+            timer.cleared = true;
+        }
+    }
+    state.callbacks.retain(|timer| !timer.cleared);
 }
 
 #[no_mangle]
@@ -505,6 +867,9 @@ fn schedule_callback_timer(
     type_name: &str,
     kind: CallbackTimerKind,
 ) -> i64 {
+    if let Some(id) = schedule_mock_callback_timer(callback, delay_ms, args.clone(), kind) {
+        return id;
+    }
     ensure_initialized();
 
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -727,6 +1092,7 @@ pub extern "C" fn js_callback_timer_next_deadline() -> f64 {
 /// handles are distinct and are only canceled by `clearImmediate`.
 #[no_mangle]
 pub extern "C" fn clearTimeout(timer_id: i64) {
+    mock_clear_timeout(timer_id);
     {
         let mut timers = CALLBACK_TIMERS.lock().unwrap();
         for timer in timers.iter_mut() {
@@ -751,6 +1117,7 @@ pub extern "C" fn clearTimeout(timer_id: i64) {
 /// canceled by `clearImmediate`.
 #[no_mangle]
 pub extern "C" fn clearImmediate(timer_id: i64) {
+    mock_clear_immediate(timer_id);
     let mut timers = CALLBACK_TIMERS.lock().unwrap();
     for timer in timers.iter_mut() {
         if timer.id == timer_id && timer.kind == CallbackTimerKind::Immediate {
@@ -845,6 +1212,9 @@ pub extern "C" fn setInterval(callback: i64, interval_ms: f64) -> i64 {
 }
 
 fn schedule_interval_timer(callback: i64, interval_ms: f64, args: Vec<f64>) -> i64 {
+    if let Some(id) = schedule_mock_interval_timer(callback, interval_ms, args.clone()) {
+        return id;
+    }
     ensure_initialized();
 
     let interval = normalize_timer_delay(interval_ms);
@@ -886,6 +1256,7 @@ pub unsafe extern "C" fn js_set_interval_callback_args(
 /// Immediate handles are distinct and are only canceled by `clearImmediate`.
 #[no_mangle]
 pub extern "C" fn clearInterval(interval_id: i64) {
+    mock_clear_interval(interval_id);
     {
         let mut timers = INTERVAL_TIMERS.lock().unwrap();
         for timer in timers.iter_mut() {
@@ -1063,6 +1434,217 @@ pub fn scan_timer_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
             crate::async_context::scan_snapshot_roots_mut(&mut timer.context, visitor);
         }
     }
+
+    {
+        let mut state = MOCK_TIMERS.lock().unwrap();
+        for timer in state.callbacks.iter_mut() {
+            if !timer.cleared && timer.callback != 0 {
+                visitor.visit_i64_slot(&mut timer.callback);
+            }
+            for arg in &mut timer.args {
+                visitor.visit_nanbox_f64_slot(arg);
+            }
+            crate::async_context::scan_snapshot_roots_mut(&mut timer.context, visitor);
+        }
+        for timer in state.intervals.iter_mut() {
+            if !timer.cleared && timer.callback != 0 {
+                visitor.visit_i64_slot(&mut timer.callback);
+            }
+            for arg in &mut timer.args {
+                visitor.visit_nanbox_f64_slot(arg);
+            }
+            crate::async_context::scan_snapshot_roots_mut(&mut timer.context, visitor);
+        }
+    }
+}
+
+const TIMER_SCAN_TIMEOUTS: u8 = 0;
+const TIMER_SCAN_CALLBACKS: u8 = 1;
+const TIMER_SCAN_INTERVALS: u8 = 2;
+const TIMER_SCAN_DONE: u8 = 3;
+
+#[derive(Default)]
+pub(crate) struct TimerRootScanState {
+    phase: u8,
+    index: usize,
+    slot: usize,
+    arg_index: usize,
+    context_entry: usize,
+    context_store: usize,
+}
+
+impl TimerRootScanState {
+    fn advance_to(&mut self, phase: u8) {
+        self.phase = phase;
+        self.index = 0;
+        self.slot = 0;
+        self.arg_index = 0;
+        self.context_entry = 0;
+        self.context_store = 0;
+    }
+
+    fn finish_timer(&mut self) {
+        self.slot = 0;
+        self.arg_index = 0;
+        self.context_entry = 0;
+        self.context_store = 0;
+    }
+}
+
+pub(crate) fn new_timer_root_scan_state() -> Box<dyn Any> {
+    Box::<TimerRootScanState>::default()
+}
+
+pub(crate) fn scan_timer_roots_mut_step(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    state: &mut dyn Any,
+    remaining: &mut usize,
+) -> bool {
+    let state = state
+        .downcast_mut::<TimerRootScanState>()
+        .expect("timer root scanner state type");
+    while state.phase != TIMER_SCAN_DONE {
+        let done = match state.phase {
+            TIMER_SCAN_TIMEOUTS => scan_timeout_timers_step(visitor, state, remaining),
+            TIMER_SCAN_CALLBACKS => scan_callback_timers_step(visitor, state, remaining),
+            TIMER_SCAN_INTERVALS => scan_interval_timers_step(visitor, state, remaining),
+            TIMER_SCAN_DONE => true,
+            _ => true,
+        };
+        if !done {
+            return false;
+        }
+        state.advance_to(state.phase.saturating_add(1));
+    }
+    true
+}
+
+#[inline]
+fn consume_timer_root_work(remaining: &mut usize) -> bool {
+    if *remaining == 0 {
+        return false;
+    }
+    *remaining -= 1;
+    true
+}
+
+fn scan_timeout_timers_step(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    state: &mut TimerRootScanState,
+    remaining: &mut usize,
+) -> bool {
+    let mut q = TIMER_QUEUE.lock().unwrap();
+    while state.index < q.len() {
+        let timer = &mut q[state.index];
+        while state.slot < 2 {
+            if !consume_timer_root_work(remaining) {
+                return false;
+            }
+            match state.slot {
+                0 => visitor.visit_raw_mut_ptr_slot(&mut timer.promise),
+                1 => visitor.visit_nanbox_f64_slot(&mut timer.value),
+                _ => false,
+            };
+            state.slot += 1;
+        }
+        state.index += 1;
+        state.finish_timer();
+    }
+    true
+}
+
+fn scan_callback_timers_step(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    state: &mut TimerRootScanState,
+    remaining: &mut usize,
+) -> bool {
+    let mut q = CALLBACK_TIMERS.lock().unwrap();
+    while state.index < q.len() {
+        let timer = &mut q[state.index];
+        if state.slot == 0 {
+            if !consume_timer_root_work(remaining) {
+                return false;
+            }
+            if !timer.cleared && timer.callback != 0 {
+                visitor.visit_i64_slot(&mut timer.callback);
+            }
+            state.slot = 1;
+        }
+        if state.slot == 1 {
+            while state.arg_index < timer.args.len() {
+                if !consume_timer_root_work(remaining) {
+                    return false;
+                }
+                visitor.visit_nanbox_f64_slot(&mut timer.args[state.arg_index]);
+                state.arg_index += 1;
+            }
+            state.slot = 2;
+            state.arg_index = 0;
+        }
+        if state.slot == 2 {
+            if !crate::async_context::scan_snapshot_roots_mut_step(
+                &mut timer.context,
+                visitor,
+                &mut state.context_entry,
+                &mut state.context_store,
+                remaining,
+            ) {
+                return false;
+            }
+            state.slot = 3;
+            state.context_entry = 0;
+            state.context_store = 0;
+        }
+        if state.slot == 3 {
+            while state.arg_index < timer.args.len() {
+                if !consume_timer_root_work(remaining) {
+                    return false;
+                }
+                visitor.visit_nanbox_f64_slot(&mut timer.args[state.arg_index]);
+                state.arg_index += 1;
+            }
+            state.slot = 4;
+            state.arg_index = 0;
+        }
+        state.index += 1;
+        state.finish_timer();
+    }
+    true
+}
+
+fn scan_interval_timers_step(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    state: &mut TimerRootScanState,
+    remaining: &mut usize,
+) -> bool {
+    let mut q = INTERVAL_TIMERS.lock().unwrap();
+    while state.index < q.len() {
+        let timer = &mut q[state.index];
+        if state.slot == 0 {
+            if !consume_timer_root_work(remaining) {
+                return false;
+            }
+            if !timer.cleared && timer.callback != 0 {
+                visitor.visit_i64_slot(&mut timer.callback);
+            }
+            state.slot = 1;
+        }
+        if state.slot == 1 {
+            if !crate::async_context::scan_snapshot_roots_mut_step(
+                &mut timer.context,
+                visitor,
+                &mut state.context_entry,
+                &mut state.context_store,
+                remaining,
+            ) {
+                return false;
+            }
+            state.slot = 2;
+        }
+        state.index += 1;
+        state.finish_timer();
+    }
+    true
 }
 
 #[cfg(test)]
@@ -1096,6 +1678,7 @@ pub(crate) fn test_seed_timer_scanner_roots(
         deadline,
         promise,
         value,
+        has_ref: true,
     });
     CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
         id: TEST_CALLBACK_TIMER_ID,
@@ -1118,6 +1701,28 @@ pub(crate) fn test_seed_timer_scanner_roots(
         context,
         cleared: false,
     });
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_many_timeout_roots(values: &[f64]) {
+    let deadline = Instant::now() + Duration::from_secs(86_400);
+    let mut q = TIMER_QUEUE.lock().unwrap();
+    q.clear();
+    for &value in values {
+        q.push(Timer {
+            deadline,
+            promise: std::ptr::null_mut(),
+            value,
+            has_ref: true,
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_all_timer_scanner_roots() {
+    TIMER_QUEUE.lock().unwrap().clear();
+    CALLBACK_TIMERS.lock().unwrap().clear();
+    INTERVAL_TIMERS.lock().unwrap().clear();
 }
 
 #[cfg(test)]
