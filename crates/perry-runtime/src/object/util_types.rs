@@ -294,10 +294,21 @@ pub extern "C" fn js_util_types_is_proxy(value: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_util_types_is_map_iterator(value: f64) -> f64 {
-    nanbox_bool(crate::map::is_registered_map_iterator(jsvalue_addr(value)))
+    let addr = jsvalue_addr(value);
+    // #2856: real Map iterator objects carry a dedicated class id. The
+    // legacy side-table marker on materialized arrays is kept as a fallback
+    // for any path that still produces a marked array.
+    nanbox_bool(
+        crate::collection_iter_object::is_map_iterator_addr(addr)
+            || crate::map::is_registered_map_iterator(addr),
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_util_types_is_set_iterator(value: f64) -> f64 {
-    nanbox_bool(crate::set::is_registered_set_iterator(jsvalue_addr(value)))
+    let addr = jsvalue_addr(value);
+    nanbox_bool(
+        crate::collection_iter_object::is_set_iterator_addr(addr)
+            || crate::set::is_registered_set_iterator(addr),
+    )
 }

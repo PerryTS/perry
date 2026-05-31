@@ -234,6 +234,10 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
         0
     };
 
+    if let Some(entries) = crate::array::entries_array_for_small_handle_id(raw_addr as i64) {
+        return entries;
+    }
+
     // Buffers allocated from the small-buffer slab do not carry a GC header.
     // Detect them before any GC-header probing below; otherwise arbitrary slab
     // bytes immediately before the BufferHeader can be misread as a String or
@@ -266,6 +270,33 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
     if is_string_src {
         let s_ptr = raw_addr as *const crate::string::StringHeader;
         return unsafe { js_array_from_string_codepoints(s_ptr) };
+    }
+
+    // Small native handles (Fetch Headers, streams, timers, etc.) are NaN-boxed
+    // as pointer-shaped ids. `Array.from(handle)` / `[...handle]` reach this
+    // helper after codegen strips the tag, so ask the generic iterator resolver
+    // before treating the id as a non-array and returning [].
+    if raw_addr > 0 && raw_addr < 0x100000 {
+        if let Some(dispatch) = crate::object::handle_property_dispatch() {
+            let method = b"@@iterator";
+            let iter_fn = unsafe { dispatch(raw_addr as i64, method.as_ptr(), method.len()) };
+            let fn_raw = crate::value::js_nanbox_get_pointer(iter_fn) as usize;
+            if iter_fn.to_bits() != crate::value::TAG_UNDEFINED
+                && fn_raw >= 0x10000
+                && crate::closure::is_closure_ptr(fn_raw)
+            {
+                let fn_ptr = fn_raw as *const crate::closure::ClosureHeader;
+                let iter = crate::closure::js_closure_call0(fn_ptr);
+                if js_array_is_array(iter).to_bits() == crate::value::TAG_TRUE {
+                    let ptr = crate::value::js_nanbox_get_pointer(iter) as *mut ArrayHeader;
+                    if !ptr.is_null() {
+                        return ptr;
+                    }
+                }
+                return js_iterator_to_array(iter);
+            }
+        }
+        return js_array_alloc(0);
     }
 
     // Check if this is actually a Set (type unknown at compile time)
@@ -317,7 +348,17 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
             // (the runtime array-iterator class id / a stored `.next` closure).
             unsafe {
                 let iter_f64 = crate::value::js_nanbox_pointer(raw_addr as i64);
-                let is_array_iterator = (*obj).class_id == ARRAY_ITERATOR_CLASS_ID;
+                // #2856: Map/Set iterator objects dispatch `.next()` /
+                // `[Symbol.iterator]()` via class id (no stored symbol prop or
+                // `.next` field), so detect them here so `[...m.entries()]` /
+                // `Array.from(s.values())` drive the iterator protocol.
+                let is_array_iterator = (*obj).class_id == ARRAY_ITERATOR_CLASS_ID
+                    || (*obj).class_id == crate::collection_iter_object::MAP_ITERATOR_CLASS_ID
+                    || (*obj).class_id == crate::collection_iter_object::SET_ITERATOR_CLASS_ID
+                    // #2874: lazy iterator-helper objects (`Iterator.from(x).map(f)`)
+                    // dispatch `.next()` via class id, so `[...it]` / `Array.from(it)`
+                    // must drive the iterator protocol.
+                    || (*obj).class_id == crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID;
                 let is_iterable = is_array_iterator || {
                     let iter_sym = crate::symbol::well_known_symbol("iterator");
                     if iter_sym.is_null() {

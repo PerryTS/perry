@@ -877,98 +877,81 @@ pub extern "C" fn js_map_delete(map: *mut MapHeader, key: f64) -> i32 {
         let size = (*map).size;
         let entries = entries_ptr_mut(map);
 
-        // Capture the swapped-in key (if any) before writing, so we can
-        // patch its position in the side-table after the swap-and-pop.
-        let mut swapped_key: Option<f64> = None;
-        if (idx as u32) < size - 1 {
-            let last_key = ptr::read(entries.add(((size - 1) as usize) * 2));
-            let last_value = ptr::read(entries.add(((size - 1) as usize) * 2 + 1));
-            let key_slot = entries.add((idx as usize) * 2);
-            let value_slot = entries.add((idx as usize) * 2 + 1);
-            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map swap-remove slots use the shared external-slot helper.
+        // #2831: preserve insertion order. JS Map iteration must keep the
+        // relative order of surviving entries after a delete (and a
+        // delete-then-re-add appends at the end). The previous swap-and-pop
+        // moved the last entry into the hole, reordering iteration. Shift
+        // every entry after `idx` down by one slot instead.
+        for i in (idx as usize)..(size as usize - 1) {
+            let next_key = ptr::read(entries.add((i + 1) * 2));
+            let next_value = ptr::read(entries.add((i + 1) * 2 + 1));
+            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map compaction slots use the shared external-slot helper.
             crate::gc::runtime_store_external_jsvalue_slot(
                 map as usize,
-                key_slot as usize,
-                last_key.to_bits(),
+                entries.add(i * 2) as usize,
+                next_key.to_bits(),
             );
             crate::gc::runtime_store_external_jsvalue_slot(
                 map as usize,
-                value_slot as usize,
-                last_value.to_bits(),
+                entries.add(i * 2 + 1) as usize,
+                next_value.to_bits(),
             );
-            swapped_key = Some(last_key);
         }
 
         (*map).size = size - 1;
 
-        // Update side-table: drop the deleted key (if it was indexed),
-        // and if we swap-popped, patch the swapped key's stored index.
-        let key_bits = key.to_bits();
-        let swapped_bits = swapped_key.map(|f| f.to_bits());
-        if is_safe_numeric_key(key_bits) || swapped_bits.map(is_safe_numeric_key).unwrap_or(false) {
-            MAP_INDEX.with(|midx| {
-                let mut midx = midx.borrow_mut();
-                if let Some(slot) = midx.get_mut(&(map as usize)) {
-                    if is_safe_numeric_key(key_bits) {
-                        slot.remove(&NumericKey(key_bits));
-                    }
-                    if let Some(sb) = swapped_bits {
-                        if is_safe_numeric_key(sb) {
-                            if let Some(entry) = slot.get_mut(&NumericKey(sb)) {
-                                *entry = idx as u32;
-                            }
-                        }
-                    }
-                }
-            });
-        }
-
-        // Mirror string-key index maintenance: drop the deleted key from
-        // its bucket; on swap-pop, rewrite the swapped key's stored
-        // index from `size-1` to `idx`.
-        let key_str_h = if is_string_like(key_bits) {
-            string_content_hash(key_bits)
-        } else {
-            None
-        };
-        let swapped_str_h = swapped_bits.and_then(|sb| {
-            if is_string_like(sb) {
-                string_content_hash(sb)
-            } else {
-                None
-            }
-        });
-        if key_str_h.is_some() || swapped_str_h.is_some() {
-            MAP_STRING_INDEX.with(|sidx| {
-                let mut sidx = sidx.borrow_mut();
-                if let Some(slot) = sidx.get_mut(&(map as usize)) {
-                    if let Some(h) = key_str_h {
-                        // Drop the deleted-key index from its bucket.
-                        let drop_idx = idx as u32;
-                        if let Some(bucket) = slot.get_mut(&h) {
-                            bucket.retain(|&i| i != drop_idx);
-                            if bucket.is_empty() {
-                                slot.remove(&h);
-                            }
-                        }
-                    }
-                    if let Some(h) = swapped_str_h {
-                        // Rewrite the swapped key's stored index.
-                        let old_idx = (size - 1) as u32;
-                        let new_idx = idx as u32;
-                        if let Some(bucket) = slot.get_mut(&h) {
-                            for entry in bucket.iter_mut() {
-                                if *entry == old_idx {
-                                    *entry = new_idx;
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-        }
+        // The shift changes the entry index of every surviving key at or
+        // after `idx`, so the O(1) lookup side-tables can't be patched in
+        // place cheaply — rebuild them from the compacted buffer. Small
+        // maps don't use the side-table fast path (linear scan under
+        // SIDE_TABLE_THRESHOLD), so this only matters for large maps where
+        // a full rebuild is still O(size) like the shift itself.
+        rebuild_map_index(map);
         1
     }
+}
+
+/// Rebuild the numeric + string lookup side-tables for `map` from its
+/// current compacted entries buffer. Used after an order-preserving
+/// `delete` shifts entry indexes (#2831).
+unsafe fn rebuild_map_index(map: *mut MapHeader) {
+    if map.is_null() {
+        return;
+    }
+    let size = (*map).size as usize;
+    let capacity = (*map).capacity as usize;
+    if size > capacity || size > 16_000_000 || (*map).entries.is_null() {
+        return;
+    }
+    let entries = entries_ptr(map);
+    MAP_INDEX.with(|idx| {
+        let mut idx = idx.borrow_mut();
+        let slot = idx
+            .entry(map as usize)
+            .or_insert_with(crate::fast_hash::new_ptr_hash_map);
+        slot.clear();
+        for i in 0..size {
+            let key_bits = ptr::read(entries.add(i * 2)).to_bits();
+            if is_safe_numeric_key(key_bits) {
+                slot.insert(NumericKey(key_bits), i as u32);
+            }
+        }
+    });
+    MAP_STRING_INDEX.with(|idx| {
+        let mut idx = idx.borrow_mut();
+        let slot = idx
+            .entry(map as usize)
+            .or_insert_with(std::collections::HashMap::new);
+        slot.clear();
+        for i in 0..size {
+            let key_bits = ptr::read(entries.add(i * 2)).to_bits();
+            if is_string_like(key_bits) {
+                if let Some(h) = string_content_hash(key_bits) {
+                    slot.entry(h).or_insert_with(Vec::new).push(i as u32);
+                }
+            }
+        }
+    });
 }
 
 /// Clear all entries from the map
@@ -1330,9 +1313,12 @@ pub extern "C" fn js_map_from_iterable(value: f64) -> *mut MapHeader {
 #[used]
 static KEEP_JS_MAP_FROM_ITERABLE: extern "C" fn(f64) -> *mut MapHeader = js_map_from_iterable;
 
-/// Iterate over map entries, calling a callback with (value, key, map) for each
+/// `Map.prototype.forEach(callback, thisArg)` — calls `callback` with the
+/// full `(value, key, map)` argument triple (#2830) and binds `thisArg` as
+/// the callback's `this` for non-arrow functions. `this_arg` is `undefined`
+/// when omitted at the call site.
 #[no_mangle]
-pub extern "C" fn js_map_foreach(map: *const MapHeader, callback: f64) {
+pub extern "C" fn js_map_foreach(map: *const MapHeader, callback: f64, this_arg: f64) {
     let map = clean_map_ptr(map);
     if map.is_null() {
         return;
@@ -1340,14 +1326,13 @@ pub extern "C" fn js_map_foreach(map: *const MapHeader, callback: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let map_handle = scope.root_raw_const_ptr(map);
     let callback_handle = scope.root_nanbox_f64(callback);
+    let this_handle = scope.root_nanbox_f64(this_arg);
     unsafe {
         let map = map_handle.get_raw_const_ptr::<MapHeader>();
         let size = (*map).size as usize;
-
-        // Extract the closure pointer from the NaN-boxed callback.
-        // The callback may be NaN-boxed with POINTER_TAG (0x7FFD) or
-        // passed as a raw pointer (i64 bitcast to f64). Mask off the
-        // upper 16 bits to get the real 48-bit pointer.
+        // The collection itself is the third callback argument and the
+        // identity user code compares `self === m` against.
+        let map_value = crate::value::js_nanbox_pointer(map as i64);
 
         for i in 0..size {
             let map = map_handle.get_raw_const_ptr::<MapHeader>();
@@ -1357,10 +1342,15 @@ pub extern "C" fn js_map_foreach(map: *const MapHeader, callback: f64) {
             let entries = entries_ptr(map);
             let key = ptr::read(entries.add(i * 2));
             let value = ptr::read(entries.add(i * 2 + 1));
-            let closure_ptr = (callback_handle.get_nanbox_u64() & 0x0000_FFFF_FFFF_FFFF)
-                as *const crate::closure::ClosureHeader;
-            // Call closure with (value, key) - Map.forEach callback signature
-            crate::closure::js_closure_call2(closure_ptr, value, key);
+            let args = [value, key, map_value];
+            let cb = callback_handle.get_nanbox_f64();
+            let this_v = this_handle.get_nanbox_f64();
+            // Bind `thisArg` for the duration of the call (matches the
+            // URLSearchParams.forEach pattern); `js_native_call_value`
+            // dispatches the NaN-boxed callback with the full arg vector.
+            let prev_this = crate::object::js_implicit_this_set(this_v);
+            let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
+            crate::object::js_implicit_this_set(prev_this);
         }
     }
 }

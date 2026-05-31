@@ -244,6 +244,7 @@ pub(super) fn test_gc_collect_emergency_full_trace_json() -> serde_json::Value {
 }
 
 pub fn gc_init() {
+    crate::perf_hooks::init_time_origin();
     gc_register_budgeted_mutable_root_scanner_with_source(
         scan_runtime_handle_roots_mut,
         scan_runtime_handle_roots_mut_step,

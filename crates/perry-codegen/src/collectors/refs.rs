@@ -191,6 +191,7 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         | Expr::Await(operand)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
+        | Expr::ObjectCoerce(operand)
         | Expr::BooleanCoerce(operand)
         | Expr::NumberCoerce(operand)
         | Expr::IsFinite(operand)
@@ -212,6 +213,7 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         | Expr::SetSize(operand)
         | Expr::SetClear(operand)
         | Expr::ArrayFrom(operand)
+        | Expr::IteratorFrom(operand)
         | Expr::Uint8ArrayFrom(operand)
         | Expr::IteratorToArray(operand)
         | Expr::GetIterator(operand)
@@ -241,6 +243,8 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         | Expr::Uint8ArrayNew(Some(operand))
         | Expr::Uint8ArrayLength(operand)
         | Expr::JsonParse(operand)
+        | Expr::JsonRawJson(operand)
+        | Expr::JsonIsRawJson(operand)
         | Expr::MathSqrt(operand)
         | Expr::MathFloor(operand)
         | Expr::MathCeil(operand)
@@ -646,9 +650,16 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk(items, out);
             walk(key_fn, out);
         }
-        Expr::ArrayFromMapped { iterable, map_fn } => {
+        Expr::ArrayFromMapped {
+            iterable,
+            map_fn,
+            this_arg,
+        } => {
             walk(iterable, out);
             walk(map_fn, out);
+            if let Some(t) = this_arg {
+                walk(t, out);
+            }
         }
         Expr::RegExpTest { regex, string } | Expr::RegExpExec { regex, string } => {
             walk(regex, out);

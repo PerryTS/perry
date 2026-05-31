@@ -95,7 +95,7 @@ pub(crate) fn lower_array_method(
             Ok(nanbox_string_inline(blk, &result_handle))
         }
         "concat" => {
-            // arr.concat(other) — call js_array_concat_new (non-mutating).
+            // #2805: arr.concat(...args) — spec-complete, non-mutating, variadic.
             // Issue #637: pre-fix this called `js_array_concat` (mutating
             // — used internally by spread-into-array desugar) which wrote
             // `other`'s elements into `recv`'s storage. When `recv` was the
@@ -107,18 +107,35 @@ pub(crate) fn lower_array_method(
             // allocated keys_arrays of OTHER objects via GC reuse. The
             // user-visible `.concat()` is spec-non-mutating; route to the
             // dedicated non-mutating helper.
-            // For simplicity we only handle single-argument concat.
-            if args.len() != 1 {
-                return Ok(recv_box);
+            //
+            // Lower every argument into an alloca buffer of raw NaN-boxed
+            // doubles, then call `js_array_concat_variadic(recv, ptr, count)`
+            // which applies Symbol.isConcatSpreadable / array-like spreading
+            // and always returns a fresh array (receiver unchanged). Mirrors
+            // the `unshift` variadic pattern below.
+            let mut item_vals: Vec<String> = Vec::with_capacity(args.len());
+            for a in args {
+                item_vals.push(lower_expr(ctx, a)?);
             }
-            let other_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let other_handle = unbox_to_i64(blk, &other_box);
+            let n = item_vals.len();
+            let (buf_reg, count_str) = if n == 0 {
+                // No args: pass a null buffer + 0 count (concat() returns a copy).
+                ("null".to_string(), "0".to_string())
+            } else {
+                let buf_reg = blk.next_reg();
+                blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
+                for (i, val) in item_vals.iter().enumerate() {
+                    let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                    blk.store(DOUBLE, val, &slot);
+                }
+                (buf_reg, format!("{}", n))
+            };
             let result = blk.call(
                 I64,
-                "js_array_concat_new",
-                &[(I64, &recv_handle), (I64, &other_handle)],
+                "js_array_concat_variadic",
+                &[(I64, &recv_handle), (PTR, &buf_reg), (I32, &count_str)],
             );
             Ok(nanbox_pointer_inline(blk, &result))
         }
@@ -791,7 +808,20 @@ pub(crate) fn lower_array_method(
         // `.next().value` was then `undefined` (same class of bug as #800's
         // `lastIndexOf`). Route through the runtime's generic dispatch so the
         // `ARRAY_ITERATOR_CLASS_ID` check reaches `dispatch_array_iterator_method`.
-        "next" | "return" | "throw" => {
+        // #2808: `Array.prototype.toLocaleString` has no static HIR fold, so a
+        // typed / `as any` array receiver reaches this codegen path. The old
+        // catch-all returned the receiver unchanged (so `JSON.stringify` saw
+        // the array, not the joined locale string). Route through the runtime
+        // dispatch tower, which walks elements and calls each element's own
+        // `toLocaleString(locales, options)`.
+        //
+        // #2803 defensive: `toReversed` / `toSorted` / `toSpliced` normally fold
+        // to dedicated `Expr::ArrayTo*` nodes upstream, but if that fold ever
+        // bails for an `any`-typed receiver they would otherwise hit the
+        // receiver-returning catch-all below. Dispatching them dynamically here
+        // keeps the immutable-copy semantics (the runtime arms added in #2803).
+        "next" | "return" | "throw" | "toLocaleString" | "toReversed" | "toSorted"
+        | "toSpliced" => {
             let mut lowered_args = Vec::with_capacity(args.len());
             for a in args {
                 lowered_args.push(lower_expr(ctx, a)?);
@@ -830,6 +860,57 @@ pub(crate) fn lower_array_method(
                 ],
             );
             Ok(result)
+        }
+        // #3148: TypedArray.prototype.set(source, offset?). Copies elements
+        // from an Array/TypedArray source into this typed array. The runtime
+        // helper no-ops for non-typed-array receivers, so it is safe under the
+        // broadened `is_array_expr` (which also routes plain arrays here).
+        "set" => {
+            let src_box = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
+            let off_box = if args.len() >= 2 {
+                lower_expr(ctx, &args[1])?
+            } else {
+                double_literal(0.0)
+            };
+            let blk = ctx.block();
+            let recv_handle = unbox_to_i64(blk, &recv_box);
+            Ok(blk.call(
+                DOUBLE,
+                "js_typed_array_set_from",
+                &[(I64, &recv_handle), (DOUBLE, &src_box), (DOUBLE, &off_box)],
+            ))
+        }
+        // #3148: TypedArray.prototype.subarray(begin?, end?) — returns a new
+        // same-kind TypedArray over the selected range.
+        "subarray" => {
+            let (has_begin, begin_box) = if let Some(a) = args.first() {
+                ("1".to_string(), lower_expr(ctx, a)?)
+            } else {
+                ("0".to_string(), double_literal(0.0))
+            };
+            let (has_end, end_box) = if args.len() >= 2 {
+                ("1".to_string(), lower_expr(ctx, &args[1])?)
+            } else {
+                ("0".to_string(), double_literal(0.0))
+            };
+            let blk = ctx.block();
+            let recv_handle = unbox_to_i64(blk, &recv_box);
+            let result = blk.call(
+                I64,
+                "js_typed_array_subarray",
+                &[
+                    (I64, &recv_handle),
+                    (I32, &has_begin),
+                    (DOUBLE, &begin_box),
+                    (I32, &has_end),
+                    (DOUBLE, &end_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &result))
         }
         // Best-effort fallback: lower args for side effects, return
         // the receiver.
