@@ -230,23 +230,43 @@ pub extern "C" fn js_url_path_to_file_url(path_f64: f64) -> f64 {
     crate::value::js_nanbox_pointer(obj as i64)
 }
 
+/// `url.domainToASCII(domain)` (#3059). Node Web-IDL-stringifies the argument
+/// (`String(domain)`; a Symbol throws TypeError) and runs the full WHATWG host
+/// parser, so a numeric / IPv4-shorthand domain canonicalizes to a dotted-quad
+/// IPv4 address (`123` → `"0.0.0.123"`, `0x7f.1` → `"127.0.0.1"`) rather than
+/// being treated as a literal label. Unparsable hosts yield `""`.
 #[no_mangle]
 pub extern "C" fn js_url_domain_to_ascii(input_f64: f64) -> f64 {
-    let input = get_string_content(input_f64);
+    let input = string_from_header(js_url_coerce_string(input_f64));
     if input.chars().any(|c| c.is_ascii_whitespace()) {
         return create_string_f64("");
     }
-    let out = idna::domain_to_ascii(&input).unwrap_or_else(|_| String::new());
+    // `whatwg_canonicalize_host` runs IDNA *and* the WHATWG numeric/IPv4 host
+    // parser, matching Node's `domainToASCII` exactly (IDN → punycode, numeric
+    // → IPv4, invalid → None → ""). It supersedes the bare `idna::domain_to_ascii`.
+    let out = whatwg_canonicalize_host(&input).unwrap_or_default();
     create_string_f64(&out)
 }
 
+/// `url.domainToUnicode(domain)` (#3059). Mirrors `domainToASCII`'s coercion
+/// and WHATWG host parsing, but returns the Unicode IDN form. For numeric /
+/// IPv4-shorthand hosts Node returns the canonical IPv4 address (`123` →
+/// `"0.0.0.123"`); for registrable hostnames it returns the decoded Unicode
+/// (`xn--mnchen-3ya.de` → `münchen.de`); invalid hosts yield `""`.
 #[no_mangle]
 pub extern "C" fn js_url_domain_to_unicode(input_f64: f64) -> f64 {
-    let input = get_string_content(input_f64);
+    let input = string_from_header(js_url_coerce_string(input_f64));
     if input.chars().any(|c| c.is_ascii_whitespace()) {
         return create_string_f64("");
     }
-    let (out, _) = idna::domain_to_unicode(&input);
+    let out = match whatwg_canonicalize_host(&input) {
+        // Out-of-range / unparsable host → "" (matches Node).
+        None => String::new(),
+        // Numeric / IPv4-shorthand → canonical IPv4 address (Node yields the IP).
+        Some(canon) if is_ipv4_host(&canon) => canon,
+        // Registrable hostname → Unicode IDN form.
+        Some(_) => idna::domain_to_unicode(&input).0,
+    };
     create_string_f64(&out)
 }
 

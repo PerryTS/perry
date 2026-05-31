@@ -134,9 +134,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let url_v = lower_expr(ctx, url)?;
             let url_handle = unbox_to_i64(ctx.block(), &url_v);
             let val_v = lower_expr(ctx, value)?;
-            let val_str_ptr =
+            // #3056: the hostname setter Web-IDL-stringifies its RHS
+            // (`String(value)`, Symbols throw) so `u.hostname = 123` becomes
+            // the host string `"123"` (then canonicalized to `"0.0.0.123"` in
+            // the runtime). Other setters keep the existing string-pointer
+            // extraction to avoid behavioural drift.
+            let val_str_ptr = if matches!(expr, Expr::UrlSetHostname { .. }) {
                 ctx.block()
-                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &val_v)]);
+                    .call(I64, "js_url_coerce_string", &[(DOUBLE, &val_v)])
+            } else {
+                ctx.block()
+                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &val_v)])
+            };
             ctx.block()
                 .call_void(runtime_fn, &[(I64, &url_handle), (I64, &val_str_ptr)]);
             // Assignment expression evaluates to the value on the RHS.
