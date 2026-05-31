@@ -61,9 +61,69 @@ pub extern "C" fn js_zlib_resolve_level(opts: f64) -> i32 {
     }
 }
 
+/// Validate the `level`/`strategy` arguments to a zlib stream's
+/// `.params(level, strategy, cb)` (#3285) and return the clamped flate2
+/// compression level (`0..=9`).
+///
+/// Both args arrive NaN-boxed exactly as passed from JS. Mirroring Node:
+/// a non-numeric `level` or `strategy` throws `TypeError [ERR_INVALID_ARG_TYPE]`;
+/// a `level` outside `-1..=9` or a `strategy` outside `0..=4` throws
+/// `RangeError [ERR_OUT_OF_RANGE]`. The level argument is validated first.
+/// `Z_DEFAULT_COMPRESSION` (`-1`) maps to the zlib default level (`6`). The
+/// `strategy` value is validated but not otherwise applied (flate2 exposes no
+/// strategy knob); validation parity is the observable behavior.
+///
+/// The ext-zlib crate can't reach Perry's number/string typing or the
+/// `js_throw` machinery, so it calls back here just like `js_zlib_resolve_level`.
+#[no_mangle]
+pub extern "C" fn js_zlib_validate_params(level: f64, strategy: f64) -> i32 {
+    const DEFAULT_LEVEL: i32 = 6;
+
+    fn as_number(v: f64, arg: &str) -> f64 {
+        let jv = crate::value::JSValue::from_bits(v.to_bits());
+        if jv.is_int32() {
+            jv.as_int32() as f64
+        } else if jv.is_number() {
+            f64::from_bits(v.to_bits())
+        } else {
+            let received = crate::fs::validate::describe_received(v);
+            let message =
+                format!("The \"{arg}\" argument must be of type number. Received {received}");
+            crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+        }
+    }
+
+    let level_num = as_number(level, "level");
+    let strategy_num = as_number(strategy, "strategy");
+
+    let level_i = level_num as i32;
+    if !(-1..=9).contains(&level_i) {
+        let message = format!(
+            "The value of \"level\" is out of range. It must be >= -1 and <= 9. Received {level_i}"
+        );
+        crate::fs::validate::throw_range_error_with_code(&message);
+    }
+
+    let strategy_i = strategy_num as i32;
+    if !(0..=4).contains(&strategy_i) {
+        let message = format!(
+            "The value of \"strategy\" is out of range. It must be >= 0 and <= 4. Received {strategy_i}"
+        );
+        crate::fs::validate::throw_range_error_with_code(&message);
+    }
+
+    if level_i < 0 {
+        DEFAULT_LEVEL
+    } else {
+        level_i
+    }
+}
+
 /// Keep the codegen-emitted symbol alive through the whole-program LLVM
 /// bitcode rebuild performed by auto-optimize (see
 /// `project_auto_optimize_keepalive_3320`). Called only from generated `.o` /
 /// `perry-ext-zlib`, so without an explicit anchor the dead-stripper drops it.
 #[used]
 static KEEP_JS_ZLIB_RESOLVE_LEVEL: extern "C" fn(f64) -> i32 = js_zlib_resolve_level;
+#[used]
+static KEEP_JS_ZLIB_VALIDATE_PARAMS: extern "C" fn(f64, f64) -> i32 = js_zlib_validate_params;
