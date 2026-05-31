@@ -55,6 +55,25 @@ pub(super) fn lower_builtin_new(
         return Ok(None);
     }
     match class_name {
+        "Utf8Stream"
+            if import_src
+                .map(|source| source.strip_prefix("node:").unwrap_or(source) == "fs")
+                .unwrap_or(false) =>
+        {
+            let options = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for arg in args.iter().skip(1) {
+                let _ = lower_expr(ctx, arg)?;
+            }
+            Ok(Some(ctx.block().call(
+                DOUBLE,
+                "js_fs_utf8_stream_new",
+                &[(DOUBLE, &options)],
+            )))
+        }
         "EvalError" | "URIError" => {
             let msg_box = if let Some(message) = args.first() {
                 lower_expr(ctx, message)?

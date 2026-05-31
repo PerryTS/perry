@@ -1009,6 +1009,7 @@ const FS_NAMESPACE_EXPORT_KEYS: &[&[u8]] = &[
     b"WriteStream",
     b"FileReadStream",
     b"FileWriteStream",
+    b"Utf8Stream",
     b"_toUnixTimestamp",
     b"Dir",
     b"opendir",
@@ -1529,6 +1530,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("util", "diff") => Some(2),
         ("dns" | "dns/promises", "Resolver") => Some(0),
         ("fs", "ReadStream" | "WriteStream") => Some(2),
+        ("fs", "Utf8Stream") => Some(0),
         ("fs", "Dir" | "Dirent") => Some(3),
         ("fs", "Stats") => Some(14),
         ("fs", "_toUnixTimestamp") => Some(1),
@@ -2208,6 +2210,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("fs", "FileReadStream")
             | ("fs", "FileWriteStream")
             | ("fs", "ReadStream")
+            | ("fs", "Utf8Stream")
             | ("fs", "WriteStream")
             | ("fs", "closeSync")
             | ("fs", "close")

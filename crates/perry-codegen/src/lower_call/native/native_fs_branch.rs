@@ -1,4 +1,229 @@
 
+{
+    if (module == "fs" || module == "node:fs") && object.is_some() {
+        let recv = object.unwrap();
+        let undefined = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        match method {
+            "write" if !args.is_empty() => {
+                let stream = lower_expr(ctx, recv)?;
+                let data = lower_expr(ctx, &args[0])?;
+                for arg in args.iter().skip(1) {
+                    let _ = lower_expr(ctx, arg)?;
+                }
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_fs_utf8_stream_write",
+                    &[(DOUBLE, &stream), (DOUBLE, &data)],
+                ));
+            }
+            "flush" => {
+                let stream = lower_expr(ctx, recv)?;
+                let callback = if let Some(arg) = args.first() {
+                    lower_expr(ctx, arg)?
+                } else {
+                    undefined()
+                };
+                for arg in args.iter().skip(1) {
+                    let _ = lower_expr(ctx, arg)?;
+                }
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_fs_utf8_stream_flush",
+                    &[(DOUBLE, &stream), (DOUBLE, &callback)],
+                ));
+            }
+            "flushSync" => {
+                let stream = lower_expr(ctx, recv)?;
+                for arg in args {
+                    let _ = lower_expr(ctx, arg)?;
+                }
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_fs_utf8_stream_flush_sync",
+                    &[(DOUBLE, &stream)],
+                ));
+            }
+            "end" => {
+                let stream = lower_expr(ctx, recv)?;
+                let chunk = if let Some(arg) = args.first() {
+                    lower_expr(ctx, arg)?
+                } else {
+                    undefined()
+                };
+                for arg in args.iter().skip(1) {
+                    let _ = lower_expr(ctx, arg)?;
+                }
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_fs_utf8_stream_end",
+                    &[(DOUBLE, &stream), (DOUBLE, &chunk)],
+                ));
+            }
+            "destroy" | "close" => {
+                let stream = lower_expr(ctx, recv)?;
+                for arg in args {
+                    let _ = lower_expr(ctx, arg)?;
+                }
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_fs_utf8_stream_destroy",
+                    &[(DOUBLE, &stream)],
+                ));
+            }
+            "reopen" => {
+                let stream = lower_expr(ctx, recv)?;
+                let file = if let Some(arg) = args.first() {
+                    lower_expr(ctx, arg)?
+                } else {
+                    undefined()
+                };
+                for arg in args.iter().skip(1) {
+                    let _ = lower_expr(ctx, arg)?;
+                }
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_fs_utf8_stream_reopen",
+                    &[(DOUBLE, &stream), (DOUBLE, &file)],
+                ));
+            }
+            "on" | "addListener" => {
+                let stream = lower_expr(ctx, recv)?;
+                let event = if let Some(arg) = args.first() {
+                    lower_expr(ctx, arg)?
+                } else {
+                    undefined()
+                };
+                let cb = if let Some(arg) = args.get(1) {
+                    lower_expr(ctx, arg)?
+                } else {
+                    undefined()
+                };
+                for arg in args.iter().skip(2) {
+                    let _ = lower_expr(ctx, arg)?;
+                }
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_fs_utf8_stream_on",
+                    &[(DOUBLE, &stream), (DOUBLE, &event), (DOUBLE, &cb)],
+                ));
+            }
+            "once" => {
+                let stream = lower_expr(ctx, recv)?;
+                let event = if let Some(arg) = args.first() {
+                    lower_expr(ctx, arg)?
+                } else {
+                    undefined()
+                };
+                let cb = if let Some(arg) = args.get(1) {
+                    lower_expr(ctx, arg)?
+                } else {
+                    undefined()
+                };
+                for arg in args.iter().skip(2) {
+                    let _ = lower_expr(ctx, arg)?;
+                }
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_fs_utf8_stream_once",
+                    &[(DOUBLE, &stream), (DOUBLE, &event), (DOUBLE, &cb)],
+                ));
+            }
+            "off" | "removeListener" => {
+                let stream = lower_expr(ctx, recv)?;
+                let event = if let Some(arg) = args.first() {
+                    lower_expr(ctx, arg)?
+                } else {
+                    undefined()
+                };
+                let cb = if let Some(arg) = args.get(1) {
+                    lower_expr(ctx, arg)?
+                } else {
+                    undefined()
+                };
+                for arg in args.iter().skip(2) {
+                    let _ = lower_expr(ctx, arg)?;
+                }
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_fs_utf8_stream_off",
+                    &[(DOUBLE, &stream), (DOUBLE, &event), (DOUBLE, &cb)],
+                ));
+            }
+            "removeAllListeners" => {
+                let stream = lower_expr(ctx, recv)?;
+                let event = if let Some(arg) = args.first() {
+                    lower_expr(ctx, arg)?
+                } else {
+                    undefined()
+                };
+                for arg in args.iter().skip(1) {
+                    let _ = lower_expr(ctx, arg)?;
+                }
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_fs_utf8_stream_remove_all",
+                    &[(DOUBLE, &stream), (DOUBLE, &event)],
+                ));
+            }
+            "listenerCount" => {
+                let stream = lower_expr(ctx, recv)?;
+                let event = if let Some(arg) = args.first() {
+                    lower_expr(ctx, arg)?
+                } else {
+                    undefined()
+                };
+                for arg in args.iter().skip(1) {
+                    let _ = lower_expr(ctx, arg)?;
+                }
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_fs_utf8_stream_listener_count",
+                    &[(DOUBLE, &stream), (DOUBLE, &event)],
+                ));
+            }
+            "emit" => {
+                let stream = lower_expr(ctx, recv)?;
+                let event = if let Some(arg) = args.first() {
+                    lower_expr(ctx, arg)?
+                } else {
+                    undefined()
+                };
+                let arg = if let Some(arg) = args.get(1) {
+                    lower_expr(ctx, arg)?
+                } else {
+                    undefined()
+                };
+                for extra in args.iter().skip(2) {
+                    let _ = lower_expr(ctx, extra)?;
+                }
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_fs_utf8_stream_emit",
+                    &[(DOUBLE, &stream), (DOUBLE, &event), (DOUBLE, &arg)],
+                ));
+            }
+            "append" | "contentMode" | "fd" | "file" | "fsync" | "maxLength" | "minLength"
+            | "mkdir" | "mode" | "periodicFlush" | "sync" | "writing" | "destroyed"
+                if args.is_empty() =>
+            {
+                let stream = lower_expr(ctx, recv)?;
+                let key_idx = ctx.strings.intern(method);
+                let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let blk = ctx.block();
+                let stream_bits = blk.bitcast_double_to_i64(&stream);
+                let key_box = blk.load(DOUBLE, &key_global);
+                let key_bits = blk.bitcast_double_to_i64(&key_box);
+                let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_object_get_field_by_name_f64",
+                    &[(I64, &stream_bits), (I64, &key_raw)],
+                ));
+            }
+            _ => {}
+        }
+    }
+
     // fs module functions: readdirSync, statSync, mkdirSync, etc.
     // These are receiver-less NativeMethodCalls (`import { readdirSync }
     // from 'fs'` → `NativeMethodCall { module: "fs", object: None }`).
@@ -6,6 +231,18 @@
     // returning TAG_UNDEFINED.
     if (module == "fs" || module == "node:fs") && object.is_none() {
         match method {
+            "Utf8Stream" => {
+                let options = if let Some(arg) = args.first() {
+                    lower_expr(ctx, arg)?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_fs_utf8_stream_call_without_new",
+                    &[(DOUBLE, &options)],
+                ));
+            }
             "readFileSync" if !args.is_empty() => {
                 let path = lower_expr(ctx, &args[0])?;
                 let options = if args.len() >= 2 {
@@ -455,3 +692,4 @@
             }
         }
     }
+}

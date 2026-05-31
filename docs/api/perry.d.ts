@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2373 entries across 104 modules
+// Coverage: 2374 entries across 104 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1347,6 +1347,8 @@ declare module "fs" {
   export class ReadStream { [key: string]: any; }
   /** stdlib */
   export class Stats { [key: string]: any; }
+  /** stdlib */
+  export class Utf8Stream { [key: string]: any; }
   /** stdlib */
   export class WriteStream { [key: string]: any; }
   /** stdlib */

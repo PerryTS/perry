@@ -207,7 +207,8 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 if native_module_has_enumerable_key(&module_name, key_name) {
                     if module_name == "fs" {
                         match key_name {
-                            "ReadStream" | "WriteStream" | "FileReadStream" | "FileWriteStream" => {
+                            "ReadStream" | "WriteStream" | "FileReadStream" | "FileWriteStream"
+                            | "Utf8Stream" => {
                                 let get =
                                     super::native_module::fs_namespace_descriptor_getter_value(
                                         key_name,

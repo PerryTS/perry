@@ -946,6 +946,14 @@ pub unsafe extern "C" fn js_new_function_construct(
                 crate::tty::js_tty_write_stream_new(fd)
             };
         }
+        if module == "fs" && method == "Utf8Stream" {
+            let options = if !args_ptr.is_null() && args_len > 0 {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return crate::fs::js_fs_utf8_stream_new(options);
+        }
         if module == "fs"
             && matches!(
                 method.as_str(),

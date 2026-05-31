@@ -435,6 +435,25 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_fs_create_write_stream", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.createReadStream(path[, options]) — returns NaN-boxed stream object.
     module.declare_function("js_fs_create_read_stream", DOUBLE, &[DOUBLE, DOUBLE]);
+    // fs.Utf8Stream constructor dispatch.
+    module.declare_function("js_fs_utf8_stream_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_call_without_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_write", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_flush", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_flush_sync", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_end", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_destroy", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_reopen", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_on", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_once", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_off", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_remove_all", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_fs_utf8_stream_listener_count",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_fs_utf8_stream_emit", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     // fs.readFile(path, encoding, callback) — Node-compatible callback variant.
     module.declare_function(
         "js_fs_read_file_callback",

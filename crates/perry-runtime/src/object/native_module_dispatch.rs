@@ -900,6 +900,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("fs", "ReadStream") | ("fs", "FileReadStream") => {
             crate::fs::js_fs_create_read_stream(arg(0), arg(1))
         }
+        ("fs", "Utf8Stream") => crate::fs::js_fs_utf8_stream_call_without_new(arg(0)),
         ("fs", "readFile") => crate::fs::js_fs_read_file_callback(arg(0), arg(1), arg(2)),
         ("fs", "writeFile") => crate::fs::js_fs_write_file_callback(arg(0), arg(1), arg(2), arg(3)),
         ("fs", "appendFile") => {

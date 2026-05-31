@@ -62,9 +62,8 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
                 "Stats" => crate::fs::is_fs_stats_instance_value(value),
                 "Dir" => crate::fs::is_fs_dir_instance_value(value),
                 "Dirent" => crate::fs::is_fs_dirent_instance_value(value),
-                "ReadStream" | "FileReadStream" | "WriteStream" | "FileWriteStream" => {
-                    crate::fs::is_fs_stream_instance_value(value, method.as_str())
-                }
+                "ReadStream" | "FileReadStream" | "WriteStream" | "FileWriteStream"
+                | "Utf8Stream" => crate::fs::is_fs_stream_instance_value(value, method.as_str()),
                 _ => false,
             };
             if matched {
@@ -296,6 +295,13 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     }
     if class_id == crate::fs::CLASS_ID_FS_WRITE_STREAM {
         return if crate::fs::is_fs_stream_instance_value(value, "WriteStream") {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == crate::fs::CLASS_ID_FS_UTF8_STREAM {
+        return if crate::fs::is_fs_stream_instance_value(value, "Utf8Stream") {
             true_val
         } else {
             false_val

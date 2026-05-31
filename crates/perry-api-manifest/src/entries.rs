@@ -3315,6 +3315,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("fs", "WriteStream"),
     class("fs", "FileReadStream"),
     class("fs", "FileWriteStream"),
+    class("fs", "Utf8Stream"),
     method("fs", "_toUnixTimestamp", false, None),
     method("fs", "watchFile", false, None),
     method("fs", "unwatchFile", false, None),

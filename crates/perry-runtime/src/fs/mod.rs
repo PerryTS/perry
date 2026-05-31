@@ -40,6 +40,7 @@ pub(crate) const CLASS_ID_FS_DIRENT: u32 = 0xFFFF_0087;
 pub(crate) const CLASS_ID_FS_READ_STREAM: u32 = 0xFFFF_0088;
 pub(crate) const CLASS_ID_FS_WRITE_STREAM: u32 = 0xFFFF_0089;
 pub(crate) const CLASS_ID_FS_STATS_EXPORT: u32 = 0xFFFF_008A;
+pub(crate) const CLASS_ID_FS_UTF8_STREAM: u32 = 0xFFFF_008B;
 
 thread_local! {
     static FD_REGISTRY: RefCell<StdHashMap<i32, fs::File>> = RefCell::new(StdHashMap::new());
@@ -120,6 +121,7 @@ pub(crate) fn is_fs_stream_instance_value(value: f64, constructor_name: &str) ->
         "WriteStream" | "FileWriteStream" => {
             object_class_id(value) == Some(CLASS_ID_FS_WRITE_STREAM)
         }
+        "Utf8Stream" => object_class_id(value) == Some(CLASS_ID_FS_UTF8_STREAM),
         _ => false,
     }
 }

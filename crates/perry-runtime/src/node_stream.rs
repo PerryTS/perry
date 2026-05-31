@@ -1332,6 +1332,9 @@ fn stream_value_from_handle(stream_handle: i64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_emit(stream_handle: i64, event: f64, arg: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
+    if let Some(result) = crate::fs::utf8_stream_emit_value(stream, event, arg) {
+        return result;
+    }
     let mut args = crate::array::js_array_alloc(0);
     if arg.to_bits() != TAG_UNDEFINED {
         args = crate::array::js_array_push_f64(args, arg);
@@ -1345,11 +1348,21 @@ pub extern "C" fn js_node_stream_method_emit_args(
     event: f64,
     args_ptr: i64,
 ) -> f64 {
-    emit_stream_event_from_array(
-        stream_value_from_handle(stream_handle),
-        event,
-        args_ptr as *const crate::array::ArrayHeader,
-    )
+    let stream = stream_value_from_handle(stream_handle);
+    let first_arg = if args_ptr == 0 {
+        f64::from_bits(TAG_UNDEFINED)
+    } else {
+        let args = args_ptr as *mut crate::array::ArrayHeader;
+        if crate::array::js_array_length(args) > 0 {
+            f64::from_bits(crate::array::js_array_get(args, 0).bits())
+        } else {
+            f64::from_bits(TAG_UNDEFINED)
+        }
+    };
+    if let Some(result) = crate::fs::utf8_stream_emit_value(stream, event, first_arg) {
+        return result;
+    }
+    emit_stream_event_from_array(stream, event, args_ptr as *const crate::array::ArrayHeader)
 }
 
 /// `readable.push(chunk)` on a typed stream instance (#1539). Tracks the
@@ -1606,6 +1619,9 @@ pub extern "C" fn js_node_stream_method_write(
     cb: f64,
 ) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
+    if let Some(result) = crate::fs::utf8_stream_write_value(stream, chunk) {
+        return result;
+    }
     write_writable_chunk(stream, chunk, enc, cb)
 }
 
@@ -1622,6 +1638,9 @@ pub extern "C" fn js_node_stream_method_write3(
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_end(stream_handle: i64, chunk: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
+    if let Some(result) = crate::fs::utf8_stream_end_value(stream, chunk) {
+        return result;
+    }
     finish_stream_with_args(
         stream,
         chunk,
@@ -1639,6 +1658,9 @@ pub extern "C" fn js_node_stream_method_end3(
     cb: f64,
 ) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
+    if let Some(result) = crate::fs::utf8_stream_end_value(stream, chunk) {
+        return result;
+    }
     finish_stream_with_args(stream, chunk, encoding, cb);
     stream
 }

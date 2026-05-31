@@ -174,6 +174,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "WriteStream" | "FileWriteStream" if imported_from_fs => 0xFFFF0089u32,
                 "fs.Stats" => 0xFFFF008Au32,
                 "Stats" if imported_from_fs => 0xFFFF008Au32,
+                "fs.Utf8Stream" => 0xFFFF008Bu32,
+                "Utf8Stream" if imported_from_fs => 0xFFFF008Bu32,
                 "ReadStream" | "tty.ReadStream" => 0xFFFF0084u32,
                 "WriteStream" | "tty.WriteStream" => 0xFFFF0085u32,
                 "SecureContext" | "tls.SecureContext" => 0xFFFF00B5u32,
