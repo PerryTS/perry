@@ -1415,12 +1415,26 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("stream/promises", "finished")
             | (
                 "readline",
-                "clearLine"
+                // #3698: `createInterface` is a callable export too (the
+                // named import must be function-valued, matching Node).
+                "createInterface"
+                    | "clearLine"
                     | "clearScreenDown"
                     | "cursorTo"
                     | "moveCursor"
                     | "emitKeypressEvents",
             )
+            // #3212: node:readline/promises callable exports.
+            | (
+                "readline/promises",
+                "createInterface" | "Interface" | "Readline",
+            )
+            // #3698: node:tls.connect import-surface fix — the manifest-claimed
+            // named/namespace import must be function-valued (typeof ===
+            // "function"). Deeper TLS behavior is tracked separately
+            // (#3196-#3200); only `connect` is in the api-manifest today, so
+            // it's the only tls symbol exposed here.
+            | ("tls", "connect")
             | ("module", "createRequire")
             | ("module", "findPackageJSON")
             | ("module", "findSourceMap")
