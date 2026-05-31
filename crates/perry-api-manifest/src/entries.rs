@@ -568,9 +568,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_any("p0")],
         TypeSpec::Void,
     ),
-    // node:dns is currently a runtime-only shape stub: deterministic
-    // inventory helpers, constants, Resolver method shapes, and a local-only
-    // promises lookup for `localhost`. It does not perform external DNS IO.
+    // node:dns is currently runtime-only and deterministic: inventory
+    // helpers, constants, Resolver method shapes, and lookup/lookupService
+    // for localhost/loopback. It does not perform external DNS IO.
     method("dns", "lookup", false, None),
     method("dns", "lookupService", false, None),
     method("dns", "resolve", false, None),
@@ -594,6 +594,21 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("dns", "getDefaultResultOrder", false, None),
     class("dns", "Resolver"),
     method("dns", "Resolver", false, None),
+    method("dns", "resolve", true, Some("Resolver")),
+    method("dns", "resolve4", true, Some("Resolver")),
+    method("dns", "resolve6", true, Some("Resolver")),
+    method("dns", "resolveAny", true, Some("Resolver")),
+    method("dns", "resolveCaa", true, Some("Resolver")),
+    method("dns", "resolveCname", true, Some("Resolver")),
+    method("dns", "resolveMx", true, Some("Resolver")),
+    method("dns", "resolveNaptr", true, Some("Resolver")),
+    method("dns", "resolveNs", true, Some("Resolver")),
+    method("dns", "resolvePtr", true, Some("Resolver")),
+    method("dns", "resolveSoa", true, Some("Resolver")),
+    method("dns", "resolveSrv", true, Some("Resolver")),
+    method("dns", "resolveTlsa", true, Some("Resolver")),
+    method("dns", "resolveTxt", true, Some("Resolver")),
+    method("dns", "reverse", true, Some("Resolver")),
     method("dns", "cancel", true, Some("Resolver")),
     method("dns", "getServers", true, Some("Resolver")),
     method("dns", "setServers", true, Some("Resolver")),
@@ -648,8 +663,25 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("dns/promises", "getDefaultResultOrder", false, None),
     class("dns/promises", "Resolver"),
     method("dns/promises", "Resolver", false, None),
+    method("dns/promises", "resolve", true, Some("Resolver")),
+    method("dns/promises", "resolve4", true, Some("Resolver")),
+    method("dns/promises", "resolve6", true, Some("Resolver")),
+    method("dns/promises", "resolveAny", true, Some("Resolver")),
+    method("dns/promises", "resolveCaa", true, Some("Resolver")),
+    method("dns/promises", "resolveCname", true, Some("Resolver")),
+    method("dns/promises", "resolveMx", true, Some("Resolver")),
+    method("dns/promises", "resolveNaptr", true, Some("Resolver")),
+    method("dns/promises", "resolveNs", true, Some("Resolver")),
+    method("dns/promises", "resolvePtr", true, Some("Resolver")),
+    method("dns/promises", "resolveSoa", true, Some("Resolver")),
+    method("dns/promises", "resolveSrv", true, Some("Resolver")),
+    method("dns/promises", "resolveTlsa", true, Some("Resolver")),
+    method("dns/promises", "resolveTxt", true, Some("Resolver")),
+    method("dns/promises", "reverse", true, Some("Resolver")),
     method("dns/promises", "cancel", true, Some("Resolver")),
     method("dns/promises", "getServers", true, Some("Resolver")),
+    method("dns/promises", "setServers", true, Some("Resolver")),
+    method("dns/promises", "setLocalAddress", true, Some("Resolver")),
     // node:dgram UDP support is currently a runtime-only shape stub:
     // createSocket returns a socket-like object with callable methods so
     // feature detection and inventory probes compile without claiming packet IO.
