@@ -1104,6 +1104,24 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "http"
+                    && class_name == "IncomingMessage"
+                    && is_http_incoming_message_method_name(&property_name)
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "http"
+                    && class_name == "IncomingMessage"
+                    && is_http_incoming_message_runtime_property_name(&property_name)
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else {
                     // Issue #577 — `req.method` / `res.statusCode` etc.
                     // get rewritten to `__get_<name>` so the property
@@ -1975,6 +1993,14 @@ fn is_classic_stream_method_name(prop: &str) -> bool {
             | "setMaxListeners"
             | "getMaxListeners"
     )
+}
+
+fn is_http_incoming_message_method_name(prop: &str) -> bool {
+    matches!(prop, "setEncoding")
+}
+
+fn is_http_incoming_message_runtime_property_name(prop: &str) -> bool {
+    matches!(prop, "rawHeaders")
 }
 
 fn is_dns_resolver_method_name(prop: &str) -> bool {
