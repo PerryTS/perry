@@ -856,9 +856,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("events", "removeAllListeners", true, None),
     // EventEmitter additions wired in v0.5.922 (issue #850).
     property("events", "defaultMaxListeners"),
+    property("events", "usingDomains"),
     property("events", "errorMonitor"),
     property("events", "captureRejections"),
     property("events", "captureRejectionSymbol"),
+    method("events", "init", true, None),
     method("events", "once", true, None),
     method("events", "addListener", true, None),
     method("events", "prependListener", true, None),
@@ -874,6 +876,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `events.listenerCount` / `events.getMaxListeners` /
     // `events.setMaxListeners`).
     method("events", "once", false, None),
+    method("events", "init", false, None),
     method("events", "addAbortListener", false, None),
     method("events", "getEventListeners", false, None),
     method("events", "listenerCount", false, None),

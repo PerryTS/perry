@@ -1541,7 +1541,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "listenerCount",
         class_filter: None,
         runtime: "js_node_stream_method_listener_count",
-        args: &[NA_F64],
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -1580,7 +1580,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         runtime: "js_event_emitter_on",
         // NA_JSV (#3072): pass the full NaN-boxed listener so the runtime can
         // validate it is callable and throw ERR_INVALID_ARG_TYPE otherwise.
-        args: &[NA_STR, NA_JSV],
+        args: &[NA_F64, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1589,7 +1589,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "emit",
         class_filter: None,
         runtime: "js_event_emitter_emit",
-        args: &[NA_STR, NA_VARARGS],
+        args: &[NA_F64, NA_VARARGS],
         ret: NR_F64,
     },
     NativeModSig {
@@ -1599,7 +1599,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_event_emitter_remove_listener",
         // NA_JSV (#3072): validate the listener is callable before removal.
-        args: &[NA_STR, NA_JSV],
+        args: &[NA_F64, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1608,7 +1608,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "removeAllListeners",
         class_filter: None,
         runtime: "js_event_emitter_remove_all_listeners",
-        args: &[NA_STR],
+        args: &[NA_F64],
         ret: NR_PTR,
     },
     // EventEmitter additions (#850) — `once` / `addListener` (alias for
@@ -1623,7 +1623,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_event_emitter_once",
         // NA_JSV (#3072): validate the listener is callable.
-        args: &[NA_STR, NA_JSV],
+        args: &[NA_F64, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1633,7 +1633,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_event_emitter_on",
         // NA_JSV (#3072): validate the listener is callable.
-        args: &[NA_STR, NA_JSV],
+        args: &[NA_F64, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1643,7 +1643,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_event_emitter_prepend_listener",
         // NA_JSV (#3072): validate the listener is callable.
-        args: &[NA_STR, NA_JSV],
+        args: &[NA_F64, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1653,7 +1653,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_event_emitter_prepend_once_listener",
         // NA_JSV (#3072): validate the listener is callable.
-        args: &[NA_STR, NA_JSV],
+        args: &[NA_F64, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1663,7 +1663,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_event_emitter_remove_listener",
         // NA_JSV (#3072): validate the listener is callable.
-        args: &[NA_STR, NA_JSV],
+        args: &[NA_F64, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1672,7 +1672,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "listenerCount",
         class_filter: None,
         runtime: "js_event_emitter_listener_count",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_F64, NA_PTR],
         ret: NR_F64,
     },
     NativeModSig {
@@ -1681,7 +1681,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "listeners",
         class_filter: None,
         runtime: "js_event_emitter_listeners",
-        args: &[NA_STR],
+        args: &[NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1690,7 +1690,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "rawListeners",
         class_filter: None,
         runtime: "js_event_emitter_raw_listeners",
-        args: &[NA_STR],
+        args: &[NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1730,7 +1730,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "once",
         class_filter: None,
         runtime: "js_events_once",
-        args: &[NA_F64, NA_STR, NA_F64],
+        args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1739,7 +1739,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "on",
         class_filter: None,
         runtime: "js_events_on",
-        args: &[NA_F64, NA_STR, NA_F64],
+        args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1757,7 +1757,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "getEventListeners",
         class_filter: None,
         runtime: "js_events_get_event_listeners",
-        args: &[NA_F64, NA_STR],
+        args: &[NA_F64, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1766,7 +1766,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "listenerCount",
         class_filter: None,
         runtime: "js_events_listener_count",
-        args: &[NA_F64, NA_STR],
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {

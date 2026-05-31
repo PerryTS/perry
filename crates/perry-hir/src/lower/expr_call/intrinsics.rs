@@ -861,11 +861,11 @@ pub(super) fn try_iife_call_rewrite(
 /// `path.join.apply(...)`).
 ///
 /// Fix: when the callee is exactly `<ns>.<method>.{apply,call}` and `<ns>`
-/// is a known native-module namespace binding (so `this` is irrelevant —
-/// these are plain free functions), rewrite the AST to the equivalent
-/// direct call and re-dispatch through `lower_call`, reusing every
-/// existing per-method lowering. `thisArg` is dropped (correct for
-/// namespace functions, which ignore `this`).
+/// is a known native-module namespace binding, rewrite the AST to the
+/// equivalent direct call and re-dispatch through `lower_call`, reusing
+/// every existing per-method lowering. `thisArg` is dropped for ordinary
+/// namespace functions, which ignore `this`; legacy methods that use their
+/// receiver must fall through.
 ///
 /// Conservative scope:
 ///   - `.call(thisArg, a, b, …)`         → `ns.method(a, b, …)`
@@ -906,9 +906,9 @@ pub(super) fn try_native_module_method_apply_call(
     let ast::Expr::Member(inner) = outer.obj.as_ref() else {
         return Ok(None);
     };
-    if !matches!(&inner.prop, ast::MemberProp::Ident(_)) {
+    let ast::MemberProp::Ident(inner_prop) = &inner.prop else {
         return Ok(None);
-    }
+    };
     let ast::Expr::Ident(ns_id) = inner.obj.as_ref() else {
         return Ok(None);
     };
@@ -916,9 +916,16 @@ pub(super) fn try_native_module_method_apply_call(
     // Namespace bindings register both an alias (require / `import * as`)
     // and a `(module, None)` native-module entry; named imports register
     // `(module, Some(symbol))` and must NOT match here.
-    let is_module_ns = ctx.lookup_builtin_module_alias(ns_name).is_some()
-        || matches!(ctx.lookup_native_module(ns_name), Some((_, None)));
-    if !is_module_ns {
+    let module_name = ctx.lookup_builtin_module_alias(ns_name).or_else(|| {
+        match ctx.lookup_native_module(ns_name) {
+            Some((module_name, None)) => Some(module_name),
+            _ => None,
+        }
+    });
+    let Some(module_name) = module_name else {
+        return Ok(None);
+    };
+    if module_name == "events" && inner_prop.sym.as_ref() == "init" {
         return Ok(None);
     }
 

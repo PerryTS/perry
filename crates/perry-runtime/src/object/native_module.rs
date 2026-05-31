@@ -603,6 +603,20 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
         return f64::from_bits(bits);
     }
 
+    if module_name == "events" && property_name == "init" {
+        let func = events_init_thunk as *const u8;
+        crate::closure::js_register_closure_arity(func, 1);
+        let closure = crate::closure::js_closure_alloc(func, 0);
+        set_bound_native_closure_name(closure, "init");
+        set_builtin_closure_length(closure as usize, 1);
+        let value = crate::value::js_nanbox_pointer(closure as i64);
+        NATIVE_CALLABLE_EXPORTS.with(|c| {
+            c.borrow_mut().insert(key, value.to_bits());
+            crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+        });
+        return value;
+    }
+
     let method_bytes: &'static [u8] = property_name.as_bytes().to_vec().leak();
     let ns = js_create_native_module_namespace(module_name.as_ptr(), module_name.len());
     let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
@@ -639,6 +653,16 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 
     if module_name == "events" && property_name == "EventEmitter" {
         crate::closure::closure_set_dynamic_prop(closure_addr, "defaultMaxListeners", 10.0);
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "usingDomains",
+            f64::from_bits(JSValue::bool(false).bits()),
+        );
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "init",
+            bound_native_callable_export_value("events", "init"),
+        );
     }
 
     if module_name == "util" && property_name == "promisify" {
@@ -668,6 +692,29 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
         crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
     });
     value
+}
+
+extern "C" fn events_init_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _options: f64,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    let js = JSValue::from_bits(this.to_bits());
+    if js.is_pointer() {
+        let obj = crate::value::js_nanbox_get_pointer(this) as *mut ObjectHeader;
+        if !obj.is_null() && is_valid_obj_ptr(obj as *const u8) {
+            let events_obj = js_object_alloc_null_proto(0, 0);
+            let events_value = crate::value::js_nanbox_pointer(events_obj as i64);
+            let undefined = f64::from_bits(JSValue::undefined().bits());
+            let events_key = crate::string::js_string_from_bytes(b"_events".as_ptr(), 7);
+            let count_key = crate::string::js_string_from_bytes(b"_eventsCount".as_ptr(), 12);
+            let max_key = crate::string::js_string_from_bytes(b"_maxListeners".as_ptr(), 13);
+            js_object_set_field_by_name(obj, events_key, events_value);
+            js_object_set_field_by_name(obj, count_key, 0.0);
+            js_object_set_field_by_name(obj, max_key, undefined);
+        }
+    }
+    f64::from_bits(JSValue::undefined().bits())
 }
 
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
@@ -1227,6 +1274,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("child_process", "spawnSync")
             | ("child_process", "fork")
             | ("events", "EventEmitter")
+            | ("events", "init")
             | ("events", "on")
             | ("stream", "compose")
             | ("stream", "duplexPair")
@@ -2890,6 +2938,7 @@ pub(crate) unsafe fn get_native_module_constant(
         "events" => match property {
             "defaultMaxListeners" => Some(10.0),
             "captureRejections" => Some(f64::from_bits(JSValue::bool(false).bits())),
+            "usingDomains" => Some(f64::from_bits(JSValue::bool(false).bits())),
             "errorMonitor" => Some(crate::symbol::js_symbol_for(str_val("events.errorMonitor"))),
             "captureRejectionSymbol" => {
                 Some(crate::symbol::js_symbol_for(str_val("nodejs.rejection")))

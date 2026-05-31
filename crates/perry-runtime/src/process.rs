@@ -1027,6 +1027,34 @@ fn warning_value_to_string(v: f64) -> String {
     }
 }
 
+fn error_object_pointer(value: f64) -> Option<*mut crate::error::ErrorHeader> {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let ptr = crate::value::js_nanbox_get_pointer(value) as *mut u8;
+    if ptr.is_null() || !crate::object::is_valid_obj_ptr(ptr as *const u8) {
+        return None;
+    }
+    unsafe {
+        let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*gc_header).obj_type == crate::gc::GC_TYPE_ERROR {
+            Some(ptr as *mut crate::error::ErrorHeader)
+        } else {
+            None
+        }
+    }
+}
+
+fn error_string_field(error: *mut crate::error::ErrorHeader, name: &str) -> String {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = crate::object::js_object_get_field_by_name_f64(
+        error as *const crate::object::ObjectHeader,
+        key,
+    );
+    warning_value_to_string(value)
+}
+
 fn object_from_value(value: f64) -> Option<*mut crate::object::ObjectHeader> {
     let jv = JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
@@ -1138,6 +1166,41 @@ fn schedule_warning(warning: f64, label: &str, code: &str, msg: &str, detail: &s
     crate::builtins::js_queue_next_tick(callback_handle.get_raw_const_ptr::<ClosureHeader>() as i64);
 }
 
+pub fn emit_warning_via_process_emit_warning(warning: f64) {
+    let process = crate::object::js_create_native_module_namespace(b"process".as_ptr(), 7);
+    let process_obj =
+        crate::value::js_nanbox_get_pointer(process) as *const crate::object::ObjectHeader;
+    if process_obj.is_null() {
+        js_process_emit_warning(
+            warning,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+        return;
+    }
+    let key = js_string_from_bytes(b"emitWarning".as_ptr(), 11);
+    let method = crate::object::js_object_get_field_by_name_f64(process_obj, key);
+    let method_js = JSValue::from_bits(method.to_bits());
+    if method_js.is_pointer()
+        && crate::closure::is_closure_ptr(crate::value::js_nanbox_get_pointer(method) as usize)
+    {
+        let args = [
+            warning,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        ];
+        unsafe {
+            let _ = crate::closure::js_native_call_value(method, args.as_ptr(), args.len());
+        }
+    } else {
+        js_process_emit_warning(
+            warning,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+    }
+}
+
 /// process.emitWarning(warning[, type, code, ctor]) -> undefined.
 ///
 /// The direct-call lowering still passes the first three JS values here. The
@@ -1146,6 +1209,20 @@ fn schedule_warning(warning: f64, label: &str, code: &str, msg: &str, detail: &s
 /// after the current synchronous frame.
 #[no_mangle]
 pub extern "C" fn js_process_emit_warning(warning: f64, type_name: f64, code: f64) {
+    let type_js = JSValue::from_bits(type_name.to_bits());
+    let code_js = JSValue::from_bits(code.to_bits());
+    if type_js.is_undefined() && code_js.is_undefined() {
+        if let Some(error) = error_object_pointer(warning) {
+            let mut label = error_string_field(error, "name");
+            if label.is_empty() {
+                label = "Warning".to_string();
+            }
+            let msg = error_string_field(error, "message");
+            schedule_warning(warning, &label, "", &msg, "");
+            return;
+        }
+    }
+
     let msg = warning_value_to_string(warning);
 
     let (raw_type, raw_code, detail) = if let Some(options) = object_from_value(type_name) {

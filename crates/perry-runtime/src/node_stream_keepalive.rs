@@ -124,7 +124,7 @@ static KEEP_NS_METHOD_REMOVE_ALL_LISTENERS: extern "C" fn(i64, f64) -> f64 =
 static KEEP_NS_METHOD_EVENT_NAMES: extern "C" fn(i64) -> i64 =
     super::js_node_stream_method_event_names;
 #[used]
-static KEEP_NS_METHOD_LISTENER_COUNT: extern "C" fn(i64, f64) -> f64 =
+static KEEP_NS_METHOD_LISTENER_COUNT: extern "C" fn(i64, f64, f64) -> f64 =
     super::js_node_stream_method_listener_count;
 #[used]
 static KEEP_NS_METHOD_LISTENERS: extern "C" fn(i64, f64) -> i64 =

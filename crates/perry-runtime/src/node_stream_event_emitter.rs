@@ -6,6 +6,7 @@ use crate::value::JSValue;
 const STREAM_EVENT_NAMES_KEY: &[u8] = b"__perryStreamEventNames";
 const STREAM_LISTENERS_PREFIX: &[u8] = b"__perryStreamListeners:";
 const STREAM_ONCE_PREFIX: &[u8] = b"__perryStreamOnce:";
+const STREAM_WARNED_PREFIX: &[u8] = b"__perryStreamWarned:";
 
 pub(super) extern "C" fn ns_set_max_listeners(closure: *const ClosureHeader, value: f64) -> f64 {
     set_stream_max_listeners(super::this_value(closure), value)
@@ -203,13 +204,25 @@ pub extern "C" fn js_node_stream_method_remove_all_listeners(
     stream
 }
 
-pub(super) extern "C" fn ns_listener_count(closure: *const ClosureHeader, event: f64) -> f64 {
-    stream_listener_count_for_event(super::this_value(closure), event) as f64
+pub(super) extern "C" fn ns_listener_count(
+    closure: *const ClosureHeader,
+    event: f64,
+    listener: f64,
+) -> f64 {
+    stream_listener_count_for_event_filtered(super::this_value(closure), event, listener) as f64
 }
 
 #[no_mangle]
-pub extern "C" fn js_node_stream_method_listener_count(stream_handle: i64, event: f64) -> f64 {
-    stream_listener_count_for_event(super::stream_value_from_handle(stream_handle), event) as f64
+pub extern "C" fn js_node_stream_method_listener_count(
+    stream_handle: i64,
+    event: f64,
+    listener: f64,
+) -> f64 {
+    stream_listener_count_for_event_filtered(
+        super::stream_value_from_handle(stream_handle),
+        event,
+        listener,
+    ) as f64
 }
 
 pub(super) extern "C" fn ns_event_names(closure: *const ClosureHeader) -> f64 {
@@ -265,12 +278,12 @@ fn add_stream_listener_for_event_with_options(
     once: bool,
     prepend: bool,
 ) {
-    if event_identity_bytes(event).is_none() {
-        return;
-    }
     if !is_callable_value(cb) {
         throw_invalid_listener_type();
     }
+    let Some(event) = normalize_event_value(event) else {
+        return;
+    };
     add_stream_listener(stream, event, cb, once, prepend);
     if super::string_value_eq(event, b"data") {
         super::readable_data_listener_added(stream);
@@ -312,8 +325,33 @@ fn event_identity_bytes(event: f64) -> Option<Vec<u8>> {
         return Some(out);
     }
     let mut out = b"str:".to_vec();
-    out.extend_from_slice(&string_bytes(event)?);
+    let normalized = normalize_event_value(event)?;
+    out.extend_from_slice(&string_bytes(normalized)?);
     Some(out)
+}
+
+fn normalize_event_value(event: f64) -> Option<f64> {
+    if unsafe { crate::symbol::js_is_symbol(event) } != 0 {
+        return Some(event);
+    }
+    let ptr = crate::value::js_jsvalue_to_string(event);
+    if ptr.is_null() {
+        None
+    } else {
+        Some(f64::from_bits(JSValue::string_ptr(ptr).bits()))
+    }
+}
+
+fn event_display(event: f64) -> String {
+    let ptr = crate::value::js_jsvalue_to_string(event);
+    if ptr.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    }
 }
 
 fn event_key(prefix: &[u8], event: f64) -> Option<*mut crate::string::StringHeader> {
@@ -416,6 +454,63 @@ fn set_listener_storage(stream: f64, event: f64, listeners: f64, once: f64) {
     }
 }
 
+fn event_warned_key(event: f64) -> Option<*mut crate::string::StringHeader> {
+    event_key(STREAM_WARNED_PREFIX, event)
+}
+
+fn js_string_value(value: &str) -> f64 {
+    let ptr = crate::string::js_string_from_bytes(value.as_ptr(), value.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+fn set_object_prop(obj: *mut crate::object::ObjectHeader, name: &str, value: f64) {
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    crate::object::js_object_set_field_by_name(obj, key, value);
+}
+
+fn emit_max_listeners_warning(stream: f64, event: f64, count: usize, max: f64) {
+    let display = event_display(event);
+    let max_display = format_max_listeners_received(max);
+    let message = format!(
+        "Possible EventEmitter memory leak detected. {count} {display} listeners added to [EventEmitter]. MaxListeners is {max_display}. Use emitter.setMaxListeners() to increase limit"
+    );
+    let message_ptr = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let warning = crate::error::js_error_new_with_message(message_ptr);
+    let warning_value = crate::value::js_nanbox_pointer(warning as i64);
+    set_object_prop(
+        warning as *mut crate::object::ObjectHeader,
+        "name",
+        js_string_value("MaxListenersExceededWarning"),
+    );
+    set_object_prop(
+        warning as *mut crate::object::ObjectHeader,
+        "emitter",
+        stream,
+    );
+    set_object_prop(warning as *mut crate::object::ObjectHeader, "type", event);
+    set_object_prop(
+        warning as *mut crate::object::ObjectHeader,
+        "count",
+        count as f64,
+    );
+    crate::process::emit_warning_via_process_emit_warning(warning_value);
+}
+
+fn maybe_emit_max_listeners_warning(stream: f64, event: f64, count: usize) {
+    let max = stream_max_listeners(stream);
+    if max == 0.0 || max.is_infinite() || (count as f64) <= max {
+        return;
+    }
+    let Some(key) = event_warned_key(event) else {
+        return;
+    };
+    if super::has_truthy_hidden(stream, key) {
+        return;
+    }
+    super::set_hidden_value(stream, key, bool_value(true));
+    emit_max_listeners_warning(stream, event, count, max);
+}
+
 fn add_stream_listener(stream: f64, event: f64, cb: f64, once: bool, prepend: bool) {
     emit_meta_event(stream, b"newListener", &[event, cb]);
     note_event_name(stream, event);
@@ -452,6 +547,7 @@ fn add_stream_listener(stream: f64, event: f64, cb: f64, once: bool, prepend: bo
         super::box_pointer(out_listeners as *const u8),
         super::box_pointer(out_once as *const u8),
     );
+    maybe_emit_max_listeners_warning(stream, event, (len + 1) as usize);
 }
 
 fn bool_value(value: bool) -> f64 {
@@ -508,10 +604,16 @@ fn remove_event_name(stream: f64, event: f64) {
 fn prune_event_if_empty(stream: f64, event: f64) {
     if stream_listener_count_for_event(stream, event) == 0 {
         remove_event_name(stream, event);
+        if let Some(key) = event_warned_key(event) {
+            super::set_hidden_value(stream, key, bool_value(false));
+        }
     }
 }
 
 pub(super) fn remove_stream_listener_for_event(stream: f64, event: f64, cb: f64) -> bool {
+    let Some(event) = normalize_event_value(event) else {
+        return false;
+    };
     let Some((listeners, once_flags)) = listener_storage(stream, event) else {
         return false;
     };
@@ -524,7 +626,8 @@ pub(super) fn remove_stream_listener_for_event(stream: f64, event: f64, cb: f64)
     let mut remove_idx = None;
     for i in (0..len).rev() {
         let listener = crate::array::js_array_get_f64(listeners_arr, i);
-        if listener.to_bits() == cb.to_bits() {
+        let once = crate::value::js_is_truthy(crate::array::js_array_get_f64(once_arr, i)) != 0;
+        if listener_matches_filter(listener, once, cb) {
             remove_idx = Some(i);
             break;
         }
@@ -555,7 +658,7 @@ pub(super) fn remove_stream_listener_for_event(stream: f64, event: f64, cb: f64)
 }
 
 fn remove_all_stream_listeners_for_event(stream: f64, event: f64) {
-    if event_identity_bytes(event).is_none() {
+    if JSValue::from_bits(event.to_bits()).is_undefined() {
         for name in event_names_snapshot(stream) {
             remove_all_stream_listeners_for_event(stream, name);
         }
@@ -566,6 +669,17 @@ fn remove_all_stream_listeners_for_event(stream: f64, event: f64) {
         );
         return;
     }
+    let Some(event) = normalize_event_value(event) else {
+        for name in event_names_snapshot(stream) {
+            remove_all_stream_listeners_for_event(stream, name);
+        }
+        super::set_hidden_value(
+            stream,
+            hidden_event_names_key(),
+            super::box_pointer(crate::array::js_array_alloc(0) as *const u8),
+        );
+        return;
+    };
     let removed = listener_snapshot(stream, event);
     let empty_listeners = super::box_pointer(crate::array::js_array_alloc(0) as *const u8);
     let empty_once = super::box_pointer(crate::array::js_array_alloc(0) as *const u8);
@@ -617,6 +731,40 @@ pub(super) fn stream_listener_count_for_event(stream: f64, event: f64) -> usize 
     listener_snapshot(stream, event).len()
 }
 
+fn wrapped_listener_value(value: f64) -> Option<f64> {
+    let js = JSValue::from_bits(value.to_bits());
+    if !js.is_pointer() {
+        return None;
+    }
+    let ptr = super::raw_ptr_from_value(value);
+    if !crate::closure::is_closure_ptr(ptr) {
+        return None;
+    }
+    let listener = crate::closure::closure_get_dynamic_prop(ptr, "listener");
+    if JSValue::from_bits(listener.to_bits()).is_undefined() {
+        None
+    } else {
+        Some(listener)
+    }
+}
+
+fn listener_matches_filter(listener: f64, once: bool, filter: f64) -> bool {
+    listener.to_bits() == filter.to_bits()
+        || (once
+            && wrapped_listener_value(filter)
+                .is_some_and(|wrapped| wrapped.to_bits() == listener.to_bits()))
+}
+
+fn stream_listener_count_for_event_filtered(stream: f64, event: f64, listener: f64) -> usize {
+    if JSValue::from_bits(listener.to_bits()).is_undefined() {
+        return stream_listener_count_for_event(stream, event);
+    }
+    listener_snapshot(stream, event)
+        .into_iter()
+        .filter(|(candidate, once)| listener_matches_filter(*candidate, *once, listener))
+        .count()
+}
+
 fn stream_event_names_array(stream: f64) -> *mut crate::array::ArrayHeader {
     let mut out = crate::array::js_array_alloc(0);
     for name in event_names_snapshot(stream) {
@@ -625,6 +773,87 @@ fn stream_event_names_array(stream: f64) -> *mut crate::array::ArrayHeader {
         }
     }
     out
+}
+
+fn remove_one_once_listener(stream: f64, event: f64, cb: f64) -> bool {
+    let Some((listeners, once_flags)) = listener_storage(stream, event) else {
+        return false;
+    };
+    if !super::is_array_like_value(listeners) || !super::is_array_like_value(once_flags) {
+        return false;
+    }
+    let listeners_arr = super::raw_ptr_from_value(listeners) as *const crate::array::ArrayHeader;
+    let once_arr = super::raw_ptr_from_value(once_flags) as *const crate::array::ArrayHeader;
+    let len = crate::array::js_array_length(listeners_arr);
+    let mut remove_idx = None;
+    for i in 0..len {
+        let listener = crate::array::js_array_get_f64(listeners_arr, i);
+        let once = crate::value::js_is_truthy(crate::array::js_array_get_f64(once_arr, i)) != 0;
+        if once && listener.to_bits() == cb.to_bits() {
+            remove_idx = Some(i);
+            break;
+        }
+    }
+    let Some(remove_idx) = remove_idx else {
+        return false;
+    };
+    let mut out_listeners = crate::array::js_array_alloc(len);
+    let mut out_once = crate::array::js_array_alloc(len);
+    for i in 0..len {
+        let listener = crate::array::js_array_get_f64(listeners_arr, i);
+        if i == remove_idx {
+            continue;
+        }
+        out_listeners = crate::array::js_array_push_f64(out_listeners, listener);
+        out_once =
+            crate::array::js_array_push_f64(out_once, crate::array::js_array_get_f64(once_arr, i));
+    }
+    set_listener_storage(
+        stream,
+        event,
+        super::box_pointer(out_listeners as *const u8),
+        super::box_pointer(out_once as *const u8),
+    );
+    prune_event_if_empty(stream, event);
+    emit_meta_event(stream, b"removeListener", &[event, cb]);
+    true
+}
+
+pub(super) extern "C" fn stream_once_wrapper(closure: *const ClosureHeader, rest: f64) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(super::TAG_UNDEFINED);
+    }
+    let stream = js_closure_get_capture_f64(closure, 0);
+    let event = js_closure_get_capture_f64(closure, 1);
+    let listener = js_closure_get_capture_f64(closure, 2);
+    let mut args = Vec::new();
+    if JSValue::from_bits(rest.to_bits()).is_pointer() {
+        let arr = super::raw_ptr_from_value(rest) as *const crate::array::ArrayHeader;
+        if !arr.is_null() {
+            let len = crate::array::js_array_length(arr);
+            for i in 0..len {
+                args.push(crate::array::js_array_get_f64(arr, i));
+            }
+        }
+    }
+    let _ = remove_one_once_listener(stream, event, listener);
+    call_listener_args(stream, listener, &args)
+}
+
+fn make_once_wrapper(stream: f64, event: f64, listener: f64) -> f64 {
+    crate::closure::js_register_closure_rest(stream_once_wrapper as *const u8, 0);
+    let wrapper = js_closure_alloc(stream_once_wrapper as *const u8, 3);
+    js_closure_set_capture_f64(wrapper, 0, stream);
+    js_closure_set_capture_f64(wrapper, 1, event);
+    js_closure_set_capture_f64(wrapper, 2, listener);
+    let value = super::box_pointer(wrapper as *const u8);
+    crate::closure::closure_set_dynamic_prop(wrapper as usize, "listener", listener);
+    crate::closure::closure_set_dynamic_prop(
+        wrapper as usize,
+        "name",
+        js_string_value("bound onceWrapper"),
+    );
+    value
 }
 
 fn stream_listeners_array_for_event(
@@ -636,13 +865,7 @@ fn stream_listeners_array_for_event(
     let mut out = crate::array::js_array_alloc(snapshot.len() as u32);
     for (listener, once) in snapshot {
         if raw && once {
-            let obj = crate::object::js_object_alloc(0, 1);
-            crate::object::js_object_set_field_by_name(
-                obj,
-                super::hidden_key(b"listener"),
-                listener,
-            );
-            out = crate::array::js_array_push_f64(out, super::box_pointer(obj as *const u8));
+            out = crate::array::js_array_push_f64(out, make_once_wrapper(stream, event, listener));
         } else {
             out = crate::array::js_array_push_f64(out, listener);
         }
@@ -705,9 +928,9 @@ pub(super) fn emit_stream_event_from_array(
 }
 
 pub(super) fn emit_stream_event(stream: f64, event: f64, args: &[f64]) -> f64 {
-    if event_identity_bytes(event).is_none() {
+    let Some(event) = normalize_event_value(event) else {
         return f64::from_bits(super::TAG_FALSE);
-    }
+    };
     if super::string_value_eq(event, b"error") {
         if let Some(first) = args.first() {
             super::set_hidden_value(stream, super::hidden_error_key(), *first);

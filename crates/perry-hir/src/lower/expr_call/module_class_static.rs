@@ -74,6 +74,10 @@ pub(super) fn try_module_class_static(
                                 // is a String method on the property value.
                                 | ("os", "EOL")
                                 | ("os", "devNull")
+                                // `events.init` is a legacy function that
+                                // initializes its `this` receiver via
+                                // `events.init.call(target)`.
+                                | ("events", "init")
                         );
                         // Unimplemented-API gate (#463) for the chained
                         // `mod.X.Y()` case. The lower_member gate fires

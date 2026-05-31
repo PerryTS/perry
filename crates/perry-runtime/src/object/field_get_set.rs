@@ -2308,6 +2308,9 @@ pub extern "C" fn js_object_get_field_by_name(
             let nb_ptr = crate::value::js_nanbox_pointer(obj as i64);
             let module_name = get_module_name_from_namespace(nb_ptr);
             if !module_name.is_empty() {
+                if let Some(value) = own_data_field_by_name(obj, key) {
+                    return value;
+                }
                 let property_name =
                     std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
                 if let Some(val) = get_native_module_constant(module_name, property_name, nb_ptr) {

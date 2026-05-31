@@ -108,7 +108,11 @@ fn stream_event_names_raw_listeners_and_prepend_chainability() {
         native.to_bits()
     );
     assert_eq!(
-        js_node_stream_method_listener_count(handle, string_value("data")),
+        js_node_stream_method_listener_count(
+            handle,
+            string_value("data"),
+            f64::from_bits(TAG_UNDEFINED)
+        ),
         1.0
     );
 }
@@ -170,7 +174,11 @@ fn stream_listener_count_and_listeners_reflect_data_end_storage() {
     let _ = js_node_stream_method_on(native_handle, string_value("data"), cb4);
     let _ = js_node_stream_method_on(native_handle, string_value("data"), cb5);
     assert_eq!(
-        js_node_stream_method_listener_count(native_handle, string_value("data")),
+        js_node_stream_method_listener_count(
+            native_handle,
+            string_value("data"),
+            f64::from_bits(TAG_UNDEFINED),
+        ),
         2.0
     );
     let native_arr = js_node_stream_method_listeners(native_handle, string_value("data"))

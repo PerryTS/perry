@@ -167,9 +167,13 @@ pub(super) fn register_stub_arities() {
     register(ns_set_max_listeners as *const u8, 1);
     register(ns_get_max_listeners as *const u8, 0);
     register(ns_event_names as *const u8, 0);
-    register(ns_listener_count as *const u8, 1);
+    register(ns_listener_count as *const u8, 2);
     register(ns_listeners as *const u8, 1);
     register(ns_raw_listeners as *const u8, 1);
+    crate::closure::js_register_closure_rest(
+        super::event_emitter::stream_once_wrapper as *const u8,
+        0,
+    );
     register(ns_undefined0 as *const u8, 0);
     register(ns_push1 as *const u8, 1);
     register(ns_unshift1 as *const u8, 1);

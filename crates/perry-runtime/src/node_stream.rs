@@ -179,6 +179,7 @@ fn call_old_stream_on(old_stream: f64, event: &[u8], listener: *const ClosureHea
         return;
     };
     let event = crate::string::js_string_from_bytes(event.as_ptr(), event.len() as u32);
+    let event = f64::from_bits(JSValue::string_ptr(event).bits());
     unsafe { on(handle, event, listener as i64) };
 }
 
