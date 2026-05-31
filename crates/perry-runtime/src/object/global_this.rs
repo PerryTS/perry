@@ -1341,6 +1341,19 @@ extern "C" fn object_assign_thunk(
     validated
 }
 
+/// `Object.hasOwn(obj, key)` (ES2022) reified as a callable value so the
+/// feature-detect idiom `typeof Object.hasOwn === "undefined" ? … :
+/// Object.hasOwn` (iconv-lite's merge-exports, #3527) binds a real callable
+/// instead of a non-callable handle. Backed by the same runtime helper as
+/// `Object.prototype.hasOwnProperty.call(obj, key)`.
+extern "C" fn object_hasown_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    obj: f64,
+    key: f64,
+) -> f64 {
+    super::object_ops::js_object_has_own(obj, key)
+}
+
 extern "C" fn array_is_array_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
@@ -1466,6 +1479,7 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
                 false,
             );
             install_constructor_static(ctor, "assign", object_assign_thunk as *const u8, 1, true);
+            install_constructor_static(ctor, "hasOwn", object_hasown_thunk as *const u8, 2, false);
         }
         "Array" => {
             install_constructor_static(

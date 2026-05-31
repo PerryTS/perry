@@ -642,6 +642,21 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"parse",
             b"decode",
         ]),
+        "url" => Some(&[
+            b"Url",
+            b"parse",
+            b"resolve",
+            b"resolveObject",
+            b"format",
+            b"URL",
+            b"URLSearchParams",
+            b"domainToASCII",
+            b"domainToUnicode",
+            b"pathToFileURL",
+            b"fileURLToPath",
+            b"fileURLToPathBuffer",
+            b"urlToHttpOptions",
+        ]),
         "util" => Some(&[
             b"aborted",
             b"callbackify",
@@ -818,6 +833,19 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
         return bound_native_callable_export_value("util", "debuglog");
     }
 
+    // #3679: node:v8 lifecycle namespaces. `v8.startupSnapshot` /
+    // `v8.promiseHooks` are object-valued exports; resolve them to
+    // dedicated native-module namespace objects so `typeof === "object"` and
+    // their methods dispatch through `dispatch_native_module_method`.
+    if module_name == "v8" && matches!(property_name, "startupSnapshot" | "promiseHooks") {
+        let submodule = if property_name == "startupSnapshot" {
+            "v8.startupSnapshot"
+        } else {
+            "v8.promiseHooks"
+        };
+        return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
+    }
+
     if let Some(val) = get_native_module_constant(module_name, property_name, 0.0) {
         return val;
     }
@@ -853,7 +881,12 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     crate::closure::js_closure_set_capture_f64(closure, 0, ns);
     crate::closure::js_closure_set_capture_ptr(closure, 1, method_bytes.as_ptr() as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 2, method_bytes.len() as i64);
-    set_bound_native_closure_name(closure, property_name);
+    let exposed_name = if module_name == "url" && property_name == "resolveObject" {
+        "urlResolveObject"
+    } else {
+        property_name
+    };
+    set_bound_native_closure_name(closure, exposed_name);
     let value = crate::value::js_nanbox_pointer(closure as i64);
     let closure_addr = closure as usize;
 
@@ -929,6 +962,8 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
+        ("url", "Url") => Some(0),
+        ("url", "resolveObject") => Some(2),
         ("process", "setSourceMapsEnabled") => Some(1),
         (
             "process",
@@ -1848,6 +1883,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util/types", "isBoxedPrimitive")
             | ("url", "URL")
             | ("url", "URLSearchParams")
+            | ("url", "Url")
             | ("url", "fileURLToPath")
             | ("url", "fileURLToPathBuffer")
             | ("url", "pathToFileURL")
@@ -1857,6 +1893,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("url", "format")
             | ("url", "parse")
             | ("url", "resolve")
+            | ("url", "resolveObject")
             | ("punycode", "decode")
             | ("punycode", "encode")
             | ("punycode", "toASCII")
@@ -2003,6 +2040,31 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("http2", "createServer")
             | ("http2", "createSecureServer")
             | ("http2", "Server")
+            // #3680/#3679: node:v8 class constructors + diagnostic-control
+            // helpers read as callable values (`typeof v8.Serializer ===
+            // "function"`). Construction routes through new_dynamic.rs; the
+            // top-level helpers are no-op callables.
+            | ("v8", "Serializer")
+            | ("v8", "DefaultSerializer")
+            | ("v8", "Deserializer")
+            | ("v8", "DefaultDeserializer")
+            | ("v8", "setFlagsFromString")
+            | ("v8", "takeCoverage")
+            | ("v8", "stopCoverage")
+            | ("v8", "setHeapSnapshotNearHeapLimit")
+            // #3679: v8.startupSnapshot / v8.promiseHooks namespace methods read
+            // as callable values (`typeof v8.startupSnapshot.isBuildingSnapshot
+            // === "function"`). Invocation routes through
+            // dispatch_native_module_method on the sub-namespace tag.
+            | ("v8.startupSnapshot", "isBuildingSnapshot")
+            | ("v8.startupSnapshot", "addSerializeCallback")
+            | ("v8.startupSnapshot", "addDeserializeCallback")
+            | ("v8.startupSnapshot", "setDeserializeMainFunction")
+            | ("v8.promiseHooks", "onInit")
+            | ("v8.promiseHooks", "onBefore")
+            | ("v8.promiseHooks", "onAfter")
+            | ("v8.promiseHooks", "onSettled")
+            | ("v8.promiseHooks", "createHook")
     )
 }
 
