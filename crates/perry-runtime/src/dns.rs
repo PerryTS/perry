@@ -325,8 +325,10 @@ fn lookup_service(address: &str, port: u16) -> Result<(String, String), String> 
 
 #[cfg(unix)]
 unsafe fn getnameinfo(sa: &SocketAddr) -> Result<(String, String), String> {
+    // POSIX NI_MAXSERV is 32; libc does not expose it on every Unix target.
+    const NI_MAXSERV: usize = 32;
     let mut host_buf = [0i8; libc::NI_MAXHOST as usize];
-    let mut serv_buf = [0i8; libc::NI_MAXSERV as usize];
+    let mut serv_buf = [0i8; NI_MAXSERV];
 
     let (sa_ptr, sa_len): (*const libc::sockaddr, libc::socklen_t) = match sa {
         SocketAddr::V4(v4) => {
