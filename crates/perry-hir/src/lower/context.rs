@@ -72,6 +72,7 @@ impl LoweringContext {
             pre_registered_module_vars: HashSet::new(),
             module_level_ids: HashSet::new(),
             scope_depth: 0,
+            scope_local_marks: Vec::new(),
             inside_block_scope: 0,
             namespace_vars: Vec::new(),
             current_namespace: None,
@@ -79,6 +80,7 @@ impl LoweringContext {
             uses_fetch: false,
             uses_webassembly: false,
             suppress_stdlib_dispatch_guard_once: false,
+            unresolved_ident_as_global: false,
             var_hoisted_ids: HashSet::new(),
             functions_index: HashMap::new(),
             classes_index: HashMap::new(),
@@ -1122,9 +1124,11 @@ impl LoweringContext {
 
     pub(crate) fn enter_scope(&mut self) -> (usize, usize, usize) {
         // Function/closure boundary: new locals are no longer module-level.
+        let local_mark = self.locals.len();
         self.scope_depth += 1;
+        self.scope_local_marks.push(local_mark);
         (
-            self.locals.len(),
+            local_mark,
             self.native_instances.len(),
             self.functions.len(),
         )
@@ -1133,6 +1137,7 @@ impl LoweringContext {
     pub(crate) fn exit_scope(&mut self, mark: (usize, usize, usize)) {
         debug_assert!(self.scope_depth > 0, "exit_scope called at module depth");
         self.scope_depth = self.scope_depth.saturating_sub(1);
+        self.scope_local_marks.pop();
         self.locals.truncate(mark.0);
         self.native_instances.truncate(mark.1);
         // Remove index entries for functions being truncated, then restore any

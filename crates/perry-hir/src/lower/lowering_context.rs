@@ -200,6 +200,10 @@ pub struct LoweringContext {
     /// Current function/closure nesting depth (`enter_scope` bumps this,
     /// `exit_scope` decrements). 0 == still at module top level.
     pub(crate) scope_depth: usize,
+    /// Stack of local-vector marks for active function/closure/catch scopes.
+    /// Function-body var prebinding uses the top mark to distinguish
+    /// parameters/current-scope locals from outer captures with the same name.
+    pub(crate) scope_local_marks: Vec<usize>,
     /// Block scope nesting counter (for bare `{}`, `if`, loops, try/finally).
     /// A local only counts as module-level when both `scope_depth == 0` and
     /// `inside_block_scope == 0`; `const captured = i` inside a top-level for
@@ -226,6 +230,10 @@ pub struct LoweringContext {
     /// (clears) it on read so a dynamic key *inside the index* (`ns[fs[evil]]`)
     /// is still refused.
     pub(crate) suppress_stdlib_dispatch_guard_once: bool,
+    /// Compatibility escape hatch for legacy member/global lowering. Bare
+    /// unresolvable identifiers throw ReferenceError, but member receivers are
+    /// still allowed to use the existing GlobalGet sentinel path.
+    pub(crate) unresolved_ident_as_global: bool,
     pub(crate) var_hoisted_ids: HashSet<LocalId>,
     /// Shadow index: function name -> index in `functions` Vec (last entry for shadowing)
     pub(crate) functions_index: HashMap<String, usize>,

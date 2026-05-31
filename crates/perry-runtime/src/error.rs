@@ -516,6 +516,22 @@ pub extern "C" fn js_throw_reference_error_unresolvable_assignment(name: f64) ->
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64))
 }
 
+fn throw_reference_error_message(message: &'static [u8]) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = js_referenceerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+#[no_mangle]
+pub extern "C" fn js_throw_reference_error_unresolved_get() -> f64 {
+    throw_reference_error_message(b"identifier is not defined")
+}
+
+#[no_mangle]
+pub extern "C" fn js_throw_reference_error_unresolved_assignment() -> f64 {
+    throw_reference_error_message(b"assignment to undeclared variable")
+}
+
 fn throw_capture_stack_trace_target_type_error() -> ! {
     let message = b"The \"targetObject\" argument must be an object";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);

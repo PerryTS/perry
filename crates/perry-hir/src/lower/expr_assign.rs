@@ -272,7 +272,10 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                 Ok(*value)
             } else {
                 if ctx.strict_mode {
-                    return Ok(throw_reference_error_unresolvable_assignment(&name));
+                    return Ok(Expr::Sequence(vec![
+                        *value,
+                        throw_reference_error_unresolvable_assignment(&name),
+                    ]));
                 }
                 // Variable not found in scope — likely a closure capture that wasn't
                 // properly tracked. Create an implicit local to avoid hard failure.

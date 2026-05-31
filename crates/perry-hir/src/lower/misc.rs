@@ -106,6 +106,21 @@ pub(crate) fn push_class_dedup(module: &mut Module, class: Class) {
     }
 }
 
+/// Function declarations with the same name in the same scope follow JS's
+/// "last declaration wins" semantics. Keep the latest HIR body and avoid
+/// emitting duplicate LLVM symbols for the same scoped function name.
+pub(crate) fn push_function_decl_dedup(module: &mut Module, func: Function) {
+    if let Some(existing) = module
+        .functions
+        .iter_mut()
+        .find(|existing| existing.name == func.name)
+    {
+        *existing = func;
+    } else {
+        module.functions.push(func);
+    }
+}
+
 /// Fill in `Class::extends_name` for classes whose parent is the result of
 /// calling a statically-resolvable factory function — but ONLY when the
 /// parent's field initializers are closure-free (no `LocalGet` reads). The
