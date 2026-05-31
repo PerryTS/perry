@@ -721,6 +721,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_os_uptime", DOUBLE, &[]);
     module.declare_function("js_os_user_info", I64, &[]);
     module.declare_function("js_os_user_info_buffer", I64, &[]);
+    // #3004 — dynamic-options form: inspects `options.encoding` at runtime.
+    module.declare_function("js_os_user_info_options", I64, &[I64]);
 
     // ========== Crypto ==========
     module.declare_function("js_crypto_aes256_decrypt", I64, &[I64, I64, I64]);
