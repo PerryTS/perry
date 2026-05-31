@@ -67,6 +67,8 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             | "exec"
             | "prepare"
             | "createTagStore"
+            | "createSession"
+            | "applyChangeset"
             | "enableLoadExtension"
             | "loadExtension"
             | "location"
@@ -110,6 +112,20 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     ) {
         if let Some(result) =
             crate::sqlite::dispatch_node_sqlite_statement_method(handle, method_name, &args)
+        {
+            return result;
+        }
+    }
+
+    // node:sqlite Session handle. This follows DatabaseSync dispatch because
+    // `close` overlaps and the database lifecycle rules should win for DBs.
+    #[cfg(feature = "database-sqlite")]
+    if matches!(
+        method_name,
+        "changeset" | "patchset" | "close" | "__perry_dispose__" | "@@__perry_wk_dispose"
+    ) {
+        if let Some(result) =
+            crate::sqlite::dispatch_node_sqlite_session_method(handle, method_name, &args)
         {
             return result;
         }
@@ -1269,6 +1285,10 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         {
             return v;
         }
+        if let Some(v) = crate::sqlite::dispatch_node_sqlite_session_property(handle, property_name)
+        {
+            return v;
+        }
     }
 
     // Server-side node:http request/response handles whose static
@@ -2049,6 +2069,8 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     perry_runtime::js_set_native_querystring_dispatch(
         crate::querystring::js_querystring_native_dispatch,
     );
+    #[cfg(feature = "database-sqlite")]
+    perry_runtime::js_set_native_sqlite_dispatch(crate::sqlite::js_node_sqlite_native_dispatch);
 
     // #2533: route captured / aliased http/https/http2 `createServer` back to
     // the perry-ext-http-server factories. Only registered when the http ext

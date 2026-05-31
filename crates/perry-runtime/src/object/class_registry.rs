@@ -818,6 +818,19 @@ pub unsafe extern "C" fn js_new_function_construct(
     args_len: usize,
 ) -> f64 {
     if let Some((module, method)) = bound_native_callable_module_and_method(func_value) {
+        if module == "sqlite"
+            && matches!(
+                method.as_str(),
+                "DatabaseSync" | "Session" | "StatementSync"
+            )
+        {
+            let ptr =
+                crate::value::JS_NATIVE_SQLITE_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+            if !ptr.is_null() {
+                let dispatch: crate::value::JsNativeSqliteDispatchFn = std::mem::transmute(ptr);
+                return dispatch(method.as_ptr(), method.len(), args_ptr, args_len, 1);
+            }
+        }
         if module == "tty" && matches!(method.as_str(), "ReadStream" | "WriteStream") {
             let fd = if !args_ptr.is_null() && args_len > 0 {
                 *args_ptr

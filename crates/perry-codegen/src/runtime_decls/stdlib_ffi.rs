@@ -653,9 +653,39 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         &[I64, DOUBLE, DOUBLE],
     );
     module.declare_function(
+        "js_node_sqlite_database_sync_function",
+        I32,
+        &[I64, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_aggregate",
+        I32,
+        &[I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_enable_defensive",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_set_authorizer",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
         "js_node_sqlite_database_sync_create_tag_store",
         I64,
         &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_create_session",
+        I64,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_apply_changeset",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE],
     );
     module.declare_function(
         "js_node_sqlite_database_sync_enable_load_extension",
@@ -716,6 +746,12 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_sqlite_sql_tag_store_size", DOUBLE, &[I64]);
     module.declare_function("js_node_sqlite_sql_tag_store_capacity", DOUBLE, &[I64]);
     module.declare_function("js_node_sqlite_sql_tag_store_db", I64, &[I64]);
+    module.declare_function("js_node_sqlite_session_call", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_session_new", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_session_changeset", I64, &[I64]);
+    module.declare_function("js_node_sqlite_session_patchset", I64, &[I64]);
+    module.declare_function("js_node_sqlite_session_close", I32, &[I64]);
+    module.declare_function("js_node_sqlite_session_dispose", I32, &[I64]);
 
     // ========== OS ==========
     module.declare_function("js_os_cpus", I64, &[]);

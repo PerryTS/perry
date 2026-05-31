@@ -1445,6 +1445,22 @@ pub(crate) unsafe fn dispatch_native_module_method(
                 dispatch(method_name.as_ptr(), method_name.len(), args_ptr, args_len)
             }
         }
+        ("sqlite", _) => {
+            let ptr =
+                crate::value::JS_NATIVE_SQLITE_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+            if ptr.is_null() {
+                f64::from_bits(JSValue::undefined().bits())
+            } else {
+                let dispatch: crate::value::JsNativeSqliteDispatchFn = std::mem::transmute(ptr);
+                dispatch(
+                    method_name.as_ptr(),
+                    method_name.len(),
+                    args_ptr,
+                    args_len,
+                    0,
+                )
+            }
+        }
         ("crypto.Certificate", _) => {
             let qualified: &[u8] = match method_name {
                 "verifySpkac" => b"Certificate.verifySpkac",

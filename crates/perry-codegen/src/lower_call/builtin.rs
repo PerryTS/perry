@@ -46,6 +46,7 @@ pub(super) fn lower_builtin_new(
         ("Pool", Some(src)) => src != "pg",
         ("Database", Some(src)) => src != "better-sqlite3",
         ("DatabaseSync", Some(src)) => src != "sqlite",
+        ("Session", Some(src)) => src != "sqlite",
         ("StatementSync", Some(src)) => src != "sqlite",
         ("Redis", Some(src)) => src != "ioredis" && src != "redis",
         ("MongoClient", Some(src)) => src != "mongodb",
@@ -438,6 +439,25 @@ pub(super) fn lower_builtin_new(
             let handle = blk.call(
                 I64,
                 "js_node_sqlite_statement_sync_new",
+                &[(DOUBLE, &arg0), (DOUBLE, &arg1)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "Session" => {
+            let arg0 = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let arg1 = if let Some(arg) = args.get(1) {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_node_sqlite_session_new",
                 &[(DOUBLE, &arg0), (DOUBLE, &arg1)],
             );
             Ok(Some(nanbox_pointer_inline(blk, &handle)))

@@ -766,7 +766,12 @@ pub(crate) fn lower_module_decl(
                                                     "async_hooks",
                                                     "AsyncLocalStorage" | "AsyncResource"
                                                 ) | ("dns" | "dns/promises", "Resolver")
-                                                    | ("sqlite", "DatabaseSync" | "StatementSync")
+                                                    | (
+                                                        "sqlite",
+                                                        "DatabaseSync"
+                                                            | "Session"
+                                                            | "StatementSync"
+                                                    )
                                             );
                                             if is_known_native_class {
                                                 ctx.register_native_instance(
@@ -830,6 +835,9 @@ pub(crate) fn lower_module_decl(
                                                             }
                                                             ("sqlite", "createTagStore") => {
                                                                 Some("SQLTagStore")
+                                                            }
+                                                            ("sqlite", "createSession") => {
+                                                                Some("Session")
                                                             }
                                                             _ => None,
                                                         };

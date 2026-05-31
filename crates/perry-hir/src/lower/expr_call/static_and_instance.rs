@@ -336,6 +336,7 @@ pub(super) fn try_static_method_and_instance(
                         ("better-sqlite3", "prepare") => Some("Statement"),
                         ("sqlite", "prepare") => Some("StatementSync"),
                         ("sqlite", "createTagStore") => Some("SQLTagStore"),
+                        ("sqlite", "createSession") => Some("Session"),
                         ("mongodb", "db") => Some("Database"),
                         ("mongodb", "collection") => Some("Collection"),
                         ("mysql2", "getConnection") | ("mysql2/promise", "getConnection") => {
