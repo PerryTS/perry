@@ -446,6 +446,10 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "eventNames") => ptr_to_f64(crate::os::js_process_event_names() as *const u8),
         ("process", "setMaxListeners") => crate::os::js_process_set_max_listeners(arg(0)),
         ("process", "getMaxListeners") => crate::os::js_process_get_max_listeners(),
+        ("process", "emitWarning") => {
+            crate::process::js_process_emit_warning(arg(0), arg(1), arg(2));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
         ("process", "getBuiltinModule") => crate::process::js_process_get_builtin_module(arg(0)),
         ("module", "isBuiltin") => crate::process::js_module_is_builtin(arg(0)),
         ("process", "cwd") => str_to_f64(crate::os::js_process_cwd()),
@@ -471,6 +475,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::process::js_process_load_env_file(arg(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
+        ("events", "init") => f64::from_bits(crate::value::TAG_UNDEFINED),
         ("process", "getgroups") => crate::process::js_process_getgroups(),
         ("process", "setuid") => {
             crate::process::js_process_setuid(arg(0));

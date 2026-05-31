@@ -859,6 +859,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("events", "removeAllListeners", true, None),
     // EventEmitter additions wired in v0.5.922 (issue #850).
     property("events", "defaultMaxListeners"),
+    property("events", "usingDomains"),
     property("events", "errorMonitor"),
     property("events", "captureRejections"),
     property("events", "captureRejectionSymbol"),
@@ -882,6 +883,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("events", "listenerCount", false, None),
     method("events", "getMaxListeners", false, None),
     method("events", "setMaxListeners", false, None),
+    method("events", "init", false, None),
     // Module-level `events.on(emitter, name)` — async-iterable queue,
     // PR #1257.
     method("events", "on", false, None),

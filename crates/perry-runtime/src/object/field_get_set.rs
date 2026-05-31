@@ -1256,6 +1256,34 @@ unsafe fn closure_dynamic_prop_by_key(obj: usize, key: *const crate::StringHeade
     }
 }
 
+unsafe fn native_module_own_field_by_key(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Option<JSValue> {
+    if key.is_null() {
+        return None;
+    }
+    let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let key_len = (*key).byte_len as usize;
+    let target = std::slice::from_raw_parts(key_ptr, key_len);
+    if target == b"__module__" {
+        return None;
+    }
+    let keys = (*obj).keys_array;
+    if keys.is_null() {
+        return None;
+    }
+    let key_count = crate::array::js_array_length(keys);
+    for i in 0..key_count {
+        let stored = crate::array::js_array_get(keys, i);
+        let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        if crate::string::js_string_key_bytes(stored, &mut sso_buf) == Some(target) {
+            return Some(js_object_get_field(obj, i));
+        }
+    }
+    None
+}
+
 #[no_mangle]
 pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
@@ -2390,6 +2418,9 @@ pub extern "C" fn js_object_get_field_by_name(
             if !module_name.is_empty() {
                 let property_name =
                     std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
+                if let Some(value) = native_module_own_field_by_key(obj, key) {
+                    return value;
+                }
                 if let Some(val) = get_native_module_constant(module_name, property_name, nb_ptr) {
                     return JSValue::from_bits(val.to_bits());
                 }
