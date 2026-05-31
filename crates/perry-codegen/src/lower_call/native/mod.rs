@@ -194,6 +194,12 @@ pub(crate) fn lower_native_method_call(
             "getHeapCodeStatistics" => Some(("js_v8_get_heap_code_statistics", false)),
             "getHeapSpaceStatistics" => Some(("js_v8_get_heap_space_statistics", false)),
             "cachedDataVersionTag" => Some(("js_v8_cached_data_version_tag", false)),
+            // #3679: diagnostic-control / coverage helpers — Node-shaped no-op
+            // callables returning `undefined` (Perry has no V8 engine to drive
+            // real flag mutation or coverage capture). Args are evaluated for
+            // side effects then ignored.
+            "setFlagsFromString" | "takeCoverage" | "stopCoverage"
+            | "setHeapSnapshotNearHeapLimit" => Some(("js_v8_noop_undefined", false)),
             _ => None,
         };
         if let Some((fname, takes_arg)) = runtime {
