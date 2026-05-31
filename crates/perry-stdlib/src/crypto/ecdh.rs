@@ -236,21 +236,33 @@ pub unsafe fn dispatch_ecdh(handle: i64, method: &str, args: &[f64]) -> f64 {
             ecdh_output(&public, (!encoding.is_empty()).then_some(encoding.as_str()))
         }
         "getPublicKey" => {
-            let guard = h.private_key.lock().unwrap();
-            let key = match guard.as_ref() {
+            // #2964 — Node throws ERR_CRYPTO_OPERATION_FAILED when no key has
+            // been generated/set on the ECDH instance. Clone the key out and
+            // release the lock BEFORE any throw: `throw_error_with_code`
+            // longjmps and would otherwise skip the MutexGuard's Drop,
+            // leaving the lock held for the next getter call.
+            let key = h.private_key.lock().unwrap().clone();
+            let key = match key {
                 Some(key) => key,
-                None => return f64::from_bits(0x7FFC_0000_0000_0001),
+                None => perry_runtime::fs::validate::throw_error_with_code(
+                    "Failed to get ECDH public key",
+                    "ERR_CRYPTO_OPERATION_FAILED",
+                ),
             };
             let encoding = arg_string(args, 0);
             let format = arg_string(args, 1);
-            let public = p256_public_bytes(key, &format);
+            let public = p256_public_bytes(&key, &format);
             ecdh_output(&public, (!encoding.is_empty()).then_some(encoding.as_str()))
         }
         "getPrivateKey" | "dhGetPrivateKey" => {
-            let guard = h.private_key.lock().unwrap();
-            let key = match guard.as_ref() {
+            // #2964 — see getPublicKey above; release the lock before throwing.
+            let key = h.private_key.lock().unwrap().clone();
+            let key = match key {
                 Some(key) => key,
-                None => return f64::from_bits(0x7FFC_0000_0000_0001),
+                None => perry_runtime::fs::validate::throw_error_with_code(
+                    "Failed to get ECDH private key",
+                    "ERR_CRYPTO_OPERATION_FAILED",
+                ),
             };
             let encoding = arg_string(args, 0);
             let bytes = key.to_bytes();
@@ -388,6 +400,9 @@ pub unsafe fn dispatch_diffie_hellman(handle: i64, method: &str, args: &[f64]) -
         }
         "getPublicKey" | "dhGetPublicKey" => {
             let encoding = arg_string(args, 0);
+            // #2964 — Node throws ERR_CRYPTO_INVALID_STATE when no public key
+            // exists yet (neither generateKeys() nor setPublicKey() ran, and
+            // no private key from which to derive one).
             let public = {
                 let public_guard = h.public_key.lock().unwrap();
                 public_guard.as_ref().cloned()
@@ -398,19 +413,30 @@ pub unsafe fn dispatch_diffie_hellman(handle: i64, method: &str, args: &[f64]) -
                     .unwrap()
                     .as_ref()
                     .map(|private| dh_public_from_private(&h.prime, &h.generator, private))
-            })
-            .unwrap_or_default();
+            });
+            let public = match public {
+                Some(public) => public,
+                None => perry_runtime::fs::validate::throw_error_with_code(
+                    "No public key - did you forget to generate one?",
+                    "ERR_CRYPTO_INVALID_STATE",
+                ),
+            };
             ecdh_output(&public, (!encoding.is_empty()).then_some(encoding.as_str()))
         }
         "getPrivateKey" | "dhGetPrivateKey" => {
             let encoding = arg_string(args, 0);
-            let private = h
-                .private_key
-                .lock()
-                .unwrap()
-                .as_ref()
-                .cloned()
-                .unwrap_or_default();
+            // #2964 — Node throws ERR_CRYPTO_INVALID_STATE before a private
+            // key has been generated or set. Bind the clone to a local so the
+            // lock guard is released before the throw arm runs (otherwise the
+            // longjmp leaves the mutex held for a subsequent getter).
+            let private_opt = h.private_key.lock().unwrap().as_ref().cloned();
+            let private = match private_opt {
+                Some(private) => private,
+                None => perry_runtime::fs::validate::throw_error_with_code(
+                    "No private key - did you forget to generate one?",
+                    "ERR_CRYPTO_INVALID_STATE",
+                ),
+            };
             ecdh_output(
                 &private,
                 (!encoding.is_empty()).then_some(encoding.as_str()),
