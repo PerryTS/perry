@@ -102,6 +102,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "ReferenceError" => 0xFFFF0012u32,
                 "SyntaxError" => 0xFFFF0013u32,
                 "AggregateError" => 0xFFFF0014u32,
+                // #2875: SuppressedError instances are ObjectHeaders stamped
+                // with this class id and registered as extending Error.
+                "SuppressedError" => 0xFFFF003Bu32,
                 "EvalError" | "globalThis.EvalError" => 0xFFFF0015u32,
                 "URIError" | "globalThis.URIError" => 0xFFFF0016u32,
                 // Uint8Array / Buffer — runtime detects these via a

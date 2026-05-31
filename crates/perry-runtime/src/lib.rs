@@ -39,6 +39,7 @@ pub mod collection_iter_object;
 pub mod color_parse;
 pub mod date;
 pub mod dgram;
+pub mod disposable;
 pub mod error;
 pub mod event_pump;
 pub mod event_target;

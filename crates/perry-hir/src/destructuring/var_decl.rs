@@ -236,6 +236,14 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 "EventEmitter" => Some("events".to_string()),
                                 "AsyncLocalStorage" => Some("async_hooks".to_string()),
                                 "AsyncResource" => Some("async_hooks".to_string()),
+                                // #2875: explicit-resource-management stacks.
+                                // Registering the binding as a native instance
+                                // routes `stack.use/.adopt/.defer/.dispose/
+                                // .move/.disposed` through the
+                                // `__disposable__` dispatch rows.
+                                "DisposableStack" | "AsyncDisposableStack" => {
+                                    Some("__disposable__".to_string())
+                                }
                                 "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
                                 "Redis" => Some("ioredis".to_string()),
                                 "LRUCache" => Some("lru-cache".to_string()),
