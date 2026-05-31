@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2003 entries across 95 modules
+// Coverage: 2055 entries across 95 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -943,57 +943,113 @@ declare module "dns" {
   /** stdlib */
   export const ADDRCONFIG: any;
   /** stdlib */
+  export const ADDRCONFIG: any;
+  /** stdlib */
   export const ADDRGETNETWORKPARAMS: any;
+  /** stdlib */
+  export const ADDRGETNETWORKPARAMS: any;
+  /** stdlib */
+  export const ALL: any;
   /** stdlib */
   export const ALL: any;
   /** stdlib */
   export const BADFAMILY: any;
   /** stdlib */
+  export const BADFAMILY: any;
+  /** stdlib */
   export const BADFLAGS: any;
+  /** stdlib */
+  export const BADFLAGS: any;
+  /** stdlib */
+  export const BADHINTS: any;
   /** stdlib */
   export const BADHINTS: any;
   /** stdlib */
   export const BADNAME: any;
   /** stdlib */
+  export const BADNAME: any;
+  /** stdlib */
   export const BADQUERY: any;
+  /** stdlib */
+  export const BADQUERY: any;
+  /** stdlib */
+  export const BADRESP: any;
   /** stdlib */
   export const BADRESP: any;
   /** stdlib */
   export const BADSTR: any;
   /** stdlib */
+  export const BADSTR: any;
+  /** stdlib */
   export const CANCELLED: any;
+  /** stdlib */
+  export const CANCELLED: any;
+  /** stdlib */
+  export const CONNREFUSED: any;
   /** stdlib */
   export const CONNREFUSED: any;
   /** stdlib */
   export const DESTRUCTION: any;
   /** stdlib */
+  export const DESTRUCTION: any;
+  /** stdlib */
   export const EOF: any;
+  /** stdlib */
+  export const EOF: any;
+  /** stdlib */
+  export const FILE: any;
   /** stdlib */
   export const FILE: any;
   /** stdlib */
   export const FORMERR: any;
   /** stdlib */
+  export const FORMERR: any;
+  /** stdlib */
   export const LOADIPHLPAPI: any;
+  /** stdlib */
+  export const LOADIPHLPAPI: any;
+  /** stdlib */
+  export const NODATA: any;
   /** stdlib */
   export const NODATA: any;
   /** stdlib */
   export const NOMEM: any;
   /** stdlib */
+  export const NOMEM: any;
+  /** stdlib */
   export const NONAME: any;
+  /** stdlib */
+  export const NONAME: any;
+  /** stdlib */
+  export const NOTFOUND: any;
   /** stdlib */
   export const NOTFOUND: any;
   /** stdlib */
   export const NOTIMP: any;
   /** stdlib */
+  export const NOTIMP: any;
+  /** stdlib */
   export const NOTINITIALIZED: any;
+  /** stdlib */
+  export const NOTINITIALIZED: any;
+  /** stdlib */
+  export const REFUSED: any;
   /** stdlib */
   export const REFUSED: any;
   /** stdlib */
   export const SERVFAIL: any;
   /** stdlib */
+  export const SERVFAIL: any;
+  /** stdlib */
+  export const TIMEOUT: any;
+  /** stdlib */
   export const TIMEOUT: any;
   /** stdlib */
   export const V4MAPPED: any;
+  /** stdlib */
+  export const V4MAPPED: any;
+  /** stdlib */
+  export const promises: any;
   /** stdlib */
   export function Resolver(...args: any[]): any;
   /** stdlib */
@@ -1043,6 +1099,54 @@ declare module "dns" {
 declare module "dns/promises" {
   /** stdlib */
   export class Resolver { [key: string]: any; }
+  /** stdlib */
+  export const ADDRGETNETWORKPARAMS: any;
+  /** stdlib */
+  export const BADFAMILY: any;
+  /** stdlib */
+  export const BADFLAGS: any;
+  /** stdlib */
+  export const BADHINTS: any;
+  /** stdlib */
+  export const BADNAME: any;
+  /** stdlib */
+  export const BADQUERY: any;
+  /** stdlib */
+  export const BADRESP: any;
+  /** stdlib */
+  export const BADSTR: any;
+  /** stdlib */
+  export const CANCELLED: any;
+  /** stdlib */
+  export const CONNREFUSED: any;
+  /** stdlib */
+  export const DESTRUCTION: any;
+  /** stdlib */
+  export const EOF: any;
+  /** stdlib */
+  export const FILE: any;
+  /** stdlib */
+  export const FORMERR: any;
+  /** stdlib */
+  export const LOADIPHLPAPI: any;
+  /** stdlib */
+  export const NODATA: any;
+  /** stdlib */
+  export const NOMEM: any;
+  /** stdlib */
+  export const NONAME: any;
+  /** stdlib */
+  export const NOTFOUND: any;
+  /** stdlib */
+  export const NOTIMP: any;
+  /** stdlib */
+  export const NOTINITIALIZED: any;
+  /** stdlib */
+  export const REFUSED: any;
+  /** stdlib */
+  export const SERVFAIL: any;
+  /** stdlib */
+  export const TIMEOUT: any;
   /** stdlib */
   export function Resolver(...args: any[]): any;
   /** stdlib */

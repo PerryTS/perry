@@ -440,6 +440,9 @@ pub(super) struct CipherState {
     aad: Vec<u8>,
     auto_padding: bool,
     finished: bool,
+    /// True once `.update()` has been called. Node rejects `setAAD()` after
+    /// any cipher data has been fed in (#2962).
+    updated: bool,
 }
 
 #[inline]
@@ -450,6 +453,22 @@ pub(super) fn nanbox_pointer_f64(ptr: usize) -> f64 {
 #[inline]
 pub(super) fn nanbox_undefined() -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
+/// Throw `Error [ERR_CRYPTO_INVALID_STATE]: Invalid state for operation <op>`
+/// — Node's shape for `setAutoPadding`/`getAuthTag`/`setAuthTag`/`setAAD`
+/// called in the wrong order (#2962).
+fn throw_invalid_state_for(op: &str) -> ! {
+    let message = format!("Invalid state for operation {op}");
+    perry_runtime::fs::validate::throw_error_with_code(&message, "ERR_CRYPTO_INVALID_STATE")
+}
+
+/// Throw a plain `Error` (no `.code`) with the given message — Node uses this
+/// shape for `cipher.update()` after `final()` (#2962).
+unsafe fn throw_plain_error(message: &str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = perry_runtime::error::js_error_new_with_message(msg);
+    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
 }
 
 pub(super) unsafe fn create_cipher_handle(
@@ -514,6 +533,7 @@ pub(super) unsafe fn create_cipher_handle(
             aad: Vec::new(),
             auto_padding: true,
             finished: false,
+            updated: false,
         }),
     });
     nanbox_pointer_f64(handle as usize)
@@ -558,6 +578,29 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
         Some(h) => h,
         None => return nanbox_undefined(),
     };
+    // #2962 — validate the Node Cipher/Decipher state machine BEFORE taking
+    // the working lock below. The `throw_*` helpers `longjmp` out of this
+    // frame, which would otherwise leave the per-handle `Mutex` locked on this
+    // thread and deadlock the next dispatch call. Read the flags under a
+    // short-lived guard, drop it, then throw.
+    {
+        let g = h.state.lock().unwrap();
+        let finished = g.finished;
+        let updated = g.updated;
+        drop(g);
+        match method {
+            "final" if finished => perry_runtime::fs::validate::throw_error_with_code(
+                "Invalid state",
+                "ERR_CRYPTO_INVALID_STATE",
+            ),
+            "update" if finished => throw_plain_error("Trying to add data in unsupported state"),
+            "setAutoPadding" if finished => throw_invalid_state_for("setAutoPadding"),
+            "setAuthTag" if finished => throw_invalid_state_for("setAuthTag"),
+            "getAuthTag" if !finished => throw_invalid_state_for("getAuthTag"),
+            "setAAD" if updated || finished => throw_invalid_state_for("setAAD"),
+            _ => {}
+        }
+    }
     let mut guard = h.state.lock().unwrap();
     let state = &mut *guard;
     match method {
@@ -569,9 +612,8 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
         // length-wise (empty + total == total) and avoids the partial-block
         // bookkeeping that streaming CBC would need.
         "update" => {
-            if state.finished {
-                return nanbox_undefined();
-            }
+            // Finalized-state rejection handled in the pre-lock guard above.
+            state.updated = true;
             if args.is_empty() {
                 let buf = alloc_buffer_from_slice(&[]);
                 return nanbox_pointer_f64(buf as usize);
@@ -586,10 +628,7 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
         // full output. For GCM-encrypt this also stashes the 16-byte auth
         // tag in `auth_tag` for a subsequent `.getAuthTag()` call.
         "final" => {
-            if state.finished {
-                let buf = alloc_buffer_from_slice(&[]);
-                return nanbox_pointer_f64(buf as usize);
-            }
+            // Repeated-final rejection handled in the pre-lock guard above.
             state.finished = true;
             let plaintext_or_ct = std::mem::take(&mut state.buffer);
             let output: Vec<u8> = match (state.kind, state.encrypt) {
@@ -1030,19 +1069,24 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
         // `.getAuthTag()` — GCM-encrypt only. Returns the 16-byte tag
         // that `.final()` stashed. Calling this before `.final()` (or on
         // a non-GCM cipher) yields undefined.
-        "getAuthTag" => match state.auth_tag.as_ref() {
-            Some(tag) => {
-                let buf = alloc_buffer_from_slice(tag);
-                nanbox_pointer_f64(buf as usize)
+        "getAuthTag" => {
+            // Before-final rejection handled in the pre-lock guard above;
+            // after `final()` the stashed tag is returned.
+            match state.auth_tag.as_ref() {
+                Some(tag) => {
+                    let buf = alloc_buffer_from_slice(tag);
+                    nanbox_pointer_f64(buf as usize)
+                }
+                None => nanbox_undefined(),
             }
-            None => nanbox_undefined(),
-        },
+        }
         // `.setAuthTag(tag)` — GCM-decrypt only. Stores the tag so
         // `.final()` can authenticate. Returns the handle (Node returns
         // `this`); the chain-call surface in Perry doesn't rely on the
         // return shape, but mirroring Node's API matters for the rare
         // chained `d.setAuthTag(t).update(x).final()` case.
         "setAuthTag" => {
+            // After-final rejection handled in the pre-lock guard above.
             if args.is_empty() {
                 return nanbox_undefined();
             }
@@ -1053,6 +1097,8 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
         }
         // `.setAAD(buf)` — bind additional authenticated data for GCM.
         "setAAD" => {
+            // After-update / after-final rejection handled in the pre-lock
+            // guard above.
             if args.is_empty() {
                 state.aad.clear();
             } else {
@@ -1065,6 +1111,7 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
         // padding for CBC/ECB and allows callers to disable it for exact
         // block-size inputs. Return `this` for chaining.
         "setAutoPadding" => {
+            // After-final rejection handled in the pre-lock guard above.
             state.auto_padding = args.first().copied().map(js_truthy).unwrap_or(true);
             nanbox_pointer_f64(handle as usize)
         }

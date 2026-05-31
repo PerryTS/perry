@@ -248,10 +248,22 @@ pub(super) fn try_local_array_methods(
                             "slice" => {
                                 // arr.slice(start, end?) - returns new array
                                 // Only convert to ArraySlice if we KNOW it's an Array type
-                                // (Type::Any could be a string, which has its own .slice() method)
+                                // (Type::Any could be a string, which has its own .slice() method).
+                                // TypedArray receivers (#3148) also route here so
+                                // `int32arr.slice(1,3)` returns a same-kind TypedArray
+                                // (js_array_slice delegates via lookup_typed_array_kind).
                                 let is_definitely_array = ctx
                                     .lookup_local_type(&arr_name)
-                                    .map(|ty| matches!(ty, Type::Array(_)))
+                                    .map(|ty| {
+                                        matches!(ty, Type::Array(_))
+                                            || matches!(ty, Type::Named(n) if matches!(
+                                                n.as_str(),
+                                                "Int8Array" | "Int16Array" | "Int32Array"
+                                                | "Uint16Array" | "Uint32Array"
+                                                | "Float32Array" | "Float64Array"
+                                                | "BigInt64Array" | "BigUint64Array"
+                                            ))
+                                    })
                                     .unwrap_or(false);
                                 if is_definitely_array && !args.is_empty() {
                                     let mut args_iter = args.into_iter();

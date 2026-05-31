@@ -1695,6 +1695,28 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
 pub(crate) fn is_array_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match static_type_of(ctx, e) {
         Some(HirType::Array(_)) | Some(HirType::Tuple(_)) => true,
+        // #3148: %TypedArray% receivers route their not-already-folded methods
+        // (fill / reverse / keys / values / entries / set / subarray) through
+        // `lower_array_method`; the generic `js_array_*` helpers delegate to the
+        // element-typed `js_typed_array_*` impls via `lookup_typed_array_kind`.
+        // Uint8Array / Uint8ClampedArray are intentionally excluded — they are
+        // buffer-backed and dispatched by `dispatch_buffer_method`.
+        Some(HirType::Named(ref n))
+            if matches!(
+                n.as_str(),
+                "Int8Array"
+                    | "Int16Array"
+                    | "Int32Array"
+                    | "Uint16Array"
+                    | "Uint32Array"
+                    | "Float32Array"
+                    | "Float64Array"
+                    | "BigInt64Array"
+                    | "BigUint64Array"
+            ) =>
+        {
+            true
+        }
         // `T | null`, `T | undefined`, `T[] | null` — when an `if (x)`
         // guard narrows away the null/undefined, the truthy branch
         // still has the same union type in the HIR, so recognize

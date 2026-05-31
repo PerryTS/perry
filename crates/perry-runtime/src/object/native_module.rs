@@ -1865,6 +1865,82 @@ pub(crate) unsafe fn get_module_name_from_namespace(namespace_obj: f64) -> &'sta
     std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap_or("")
 }
 
+fn dns_lookup_flag_constant(property: &str) -> Option<f64> {
+    #[cfg(unix)]
+    fn ai_addrconfig() -> f64 {
+        libc::AI_ADDRCONFIG as f64
+    }
+    #[cfg(windows)]
+    fn ai_addrconfig() -> f64 {
+        0x0400 as f64
+    }
+    #[cfg(not(any(unix, windows)))]
+    fn ai_addrconfig() -> f64 {
+        0x0020 as f64
+    }
+    #[cfg(unix)]
+    fn ai_v4mapped() -> f64 {
+        libc::AI_V4MAPPED as f64
+    }
+    #[cfg(windows)]
+    fn ai_v4mapped() -> f64 {
+        0x0800 as f64
+    }
+    #[cfg(not(any(unix, windows)))]
+    fn ai_v4mapped() -> f64 {
+        0x0008 as f64
+    }
+    #[cfg(unix)]
+    fn ai_all() -> f64 {
+        libc::AI_ALL as f64
+    }
+    #[cfg(windows)]
+    fn ai_all() -> f64 {
+        0x0100 as f64
+    }
+    #[cfg(not(any(unix, windows)))]
+    fn ai_all() -> f64 {
+        0x0010 as f64
+    }
+
+    match property {
+        "ADDRCONFIG" => Some(ai_addrconfig()),
+        "V4MAPPED" => Some(ai_v4mapped()),
+        "ALL" => Some(ai_all()),
+        _ => None,
+    }
+}
+
+fn dns_error_alias(property: &str) -> Option<&'static str> {
+    match property {
+        "NODATA" => Some("ENODATA"),
+        "FORMERR" => Some("EFORMERR"),
+        "SERVFAIL" => Some("ESERVFAIL"),
+        "NOTFOUND" => Some("ENOTFOUND"),
+        "NOTIMP" => Some("ENOTIMP"),
+        "REFUSED" => Some("EREFUSED"),
+        "BADQUERY" => Some("EBADQUERY"),
+        "BADNAME" => Some("EBADNAME"),
+        "BADFAMILY" => Some("EBADFAMILY"),
+        "BADRESP" => Some("EBADRESP"),
+        "CONNREFUSED" => Some("ECONNREFUSED"),
+        "TIMEOUT" => Some("ETIMEOUT"),
+        "EOF" => Some("EOF"),
+        "FILE" => Some("EFILE"),
+        "NOMEM" => Some("ENOMEM"),
+        "DESTRUCTION" => Some("EDESTRUCTION"),
+        "BADSTR" => Some("EBADSTR"),
+        "BADFLAGS" => Some("EBADFLAGS"),
+        "NONAME" => Some("ENONAME"),
+        "BADHINTS" => Some("EBADHINTS"),
+        "NOTINITIALIZED" => Some("ENOTINITIALIZED"),
+        "LOADIPHLPAPI" => Some("ELOADIPHLPAPI"),
+        "ADDRGETNETWORKPARAMS" => Some("EADDRGETNETWORKPARAMS"),
+        "CANCELLED" => Some("ECANCELLED"),
+        _ => None,
+    }
+}
+
 /// Return constant (non-method) property values for native modules.
 /// Returns None for method names, which should create bound closures instead.
 pub(crate) unsafe fn get_native_module_constant(
@@ -2524,6 +2600,12 @@ pub(crate) unsafe fn get_native_module_constant(
             "constants" => Some(crate::process::js_module_constants()),
             _ => None,
         },
+        "dns" => match property {
+            "promises" => Some(create_sub_namespace("dns/promises")),
+            _ => dns_lookup_flag_constant(property)
+                .or_else(|| dns_error_alias(property).map(|alias| str_val(alias))),
+        },
+        "dns/promises" => dns_error_alias(property).map(|alias| str_val(alias)),
         "constants" => fs_const(property)
             .or_else(|| os_signal_const(property))
             .or_else(|| os_errno_const(property))
