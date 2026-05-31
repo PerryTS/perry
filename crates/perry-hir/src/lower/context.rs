@@ -59,6 +59,7 @@ impl LoweringContext {
             native_instances: Vec::new(),
             ui_widget_type_aliases: HashMap::new(),
             current_class: None,
+            current_strict: false,
             extern_func_types: Vec::new(),
             source_file_path: source_file_path.into(),
             exportable_object_vars: HashSet::new(),
@@ -262,6 +263,7 @@ impl LoweringContext {
                     enclosing_class: None,
                     is_async: false,
                     is_generator: false,
+                    is_strict: self.current_strict,
                 };
             }
         }
@@ -747,6 +749,7 @@ impl LoweringContext {
             body: ctor_body,
             is_async: false,
             is_generator: false,
+            is_strict: true,
             was_plain_async: false,
             was_unrolled: false,
             is_exported: false,

@@ -178,6 +178,7 @@ pub(super) fn compile_function(
         current_closure_ptr: None,
         enums,
         is_async_fn: f.is_async,
+        is_strict_fn: f.is_strict,
         static_field_globals,
         class_ids,
         class_keys_globals: &cross_module.class_keys_globals,

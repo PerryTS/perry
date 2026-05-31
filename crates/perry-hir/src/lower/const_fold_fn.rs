@@ -93,7 +93,11 @@ pub(crate) fn try_const_fold_function_construct(
         ))
     })?;
 
-    let lowered = lower_fn_expr(ctx, fn_expr).map_err(|e| {
+    let outer_strict = ctx.current_strict;
+    ctx.current_strict = false;
+    let lowered_result = lower_fn_expr(ctx, fn_expr);
+    ctx.current_strict = outer_strict;
+    let lowered = lowered_result.map_err(|e| {
         // The synthesized body parsed but couldn't lower (an unsupported
         // feature inside the generated function). Surface it as a clear
         // error at the original call site rather than the broken

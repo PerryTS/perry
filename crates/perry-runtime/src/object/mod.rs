@@ -304,6 +304,29 @@ pub extern "C" fn js_implicit_this_get() -> f64 {
     IMPLICIT_THIS.with(|c| f64::from_bits(c.get()))
 }
 
+/// Read implicit `this` using ordinary (non-strict) function binding rules.
+#[no_mangle]
+pub extern "C" fn js_implicit_this_get_sloppy() -> f64 {
+    let value = js_implicit_this_get();
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() || jv.is_null() {
+        return js_get_global_this();
+    }
+    if jv.is_bool() {
+        return crate::builtins::js_boxed_boolean_new(value);
+    }
+    if jv.is_any_string() {
+        return crate::builtins::js_boxed_string_new(value);
+    }
+    let bits = value.to_bits();
+    if jv.is_int32()
+        || (jv.is_number() && ((bits >> 48) != 0 || bits <= crate::gc::GC_HEADER_SIZE as u64))
+    {
+        return crate::builtins::js_boxed_number_new(value);
+    }
+    value
+}
+
 /// Set the implicit `this` and return the previous value.
 /// Callers must restore the previous value to scope the binding to the
 /// duration of a single method-style call.

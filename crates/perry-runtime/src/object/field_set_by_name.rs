@@ -191,6 +191,23 @@ pub extern "C" fn js_object_set_field_by_name(
             return;
         }
     }
+    // Property writes to primitive values operate on temporary wrapper objects
+    // and do not persist. More importantly for Perry's raw-f64 numbers, they
+    // must never fall through to the ObjectHeader dereference path below.
+    {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        let jv = JSValue::from_bits(bits);
+        if (jv.is_number() && top16 != 0)
+            || jv.is_bool()
+            || jv.is_any_string()
+            || jv.is_undefined()
+            || jv.is_null()
+            || jv.is_bigint()
+        {
+            return;
+        }
+    }
     // #2089: a `Date` is a NaN-boxed pointer to an 8-byte `DateCell`. Setting
     // an arbitrary property on it (`date.foo = x`) must NOT deref the small
     // cell as an `ObjectHeader` below (memory corruption). Perry doesn't model
