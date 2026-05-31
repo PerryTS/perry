@@ -7,10 +7,10 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
 | Whole-module gaps (zero coverage) | 16 | 427 | n/a |
-| Partial-module gaps | 31 | 1672 | 390 |
+| Partial-module gaps | 31 | 1656 | 406 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2381** |  |
+| **Total true gaps** |  | **2365** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
@@ -1727,29 +1727,13 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:readline
 
-**Gap APIs: 26** · Already covered: 3
+**Gap APIs: 10** · Already covered: 19
 
 #### Missing from Perry
 
-- `readline.clearLine(stream, dir[, callback])`
-- `readline.clearScreenDown(stream[, callback])`
-- `readline.cursorTo(stream, x[, y][, callback])`
-- `readline.moveCursor(stream, dx, dy[, callback])`
-- `readline.emitKeypressEvents(stream[, interface])`
 - `rl[Symbol.dispose]()`
-- `rl.pause()`
-- `rl.resume()`
-- `rl.prompt([preserveCursor])`
-- `rl.setPrompt(prompt)`
-- `rl.getPrompt()`
-- `rl.write(data[, key])`
-- `rl.getCursorPos()`
 - `rl[Symbol.asyncIterator]()`
-- `rl.line`
 - `rl.cursor`
-- `rl.terminal`
-- `'line'`
-- `'close'`
 - `'pause'`
 - `'resume'`
 - `'history'`
@@ -1763,8 +1747,24 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | API | Coverage source |
 |-----|-----------------|
 | `readline.createInterface(options)` | `ffi:js_readline_create_interface` |
+| `readline.clearLine(stream, dir[, callback])` | `rt:js_readline_clear_line_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
+| `readline.clearScreenDown(stream[, callback])` | `rt:js_readline_clear_screen_down_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
+| `readline.cursorTo(stream, x[, y][, callback])` | `rt:js_readline_cursor_to_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
+| `readline.moveCursor(stream, dx, dy[, callback])` | `rt:js_readline_move_cursor_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
+| `readline.emitKeypressEvents(stream[, interface])` | `rt:js_readline_emit_keypress_events_args`; `test-parity/node-suite/readline/helpers/emit-keypress-events.ts` |
 | `rl.close()` | `manifest:readline.close` |
+| `rl.pause()` | `ffi:js_readline_pause`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.resume()` | `ffi:js_readline_resume`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.prompt([preserveCursor])` | `ffi:js_readline_prompt`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.setPrompt(prompt)` | `ffi:js_readline_set_prompt`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.getPrompt()` | `ffi:js_readline_get_prompt`; `test-parity/node-suite/readline/interface/control-methods.ts` |
 | `rl.question(query[, options], callback)` | `manifest:readline.question` |
+| `rl.write(data[, key])` | `ffi:js_readline_write`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.getCursorPos()` | `ffi:js_readline_get_cursor_pos`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.line` | `ffi:js_readline_line`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.terminal` | `ffi:js_readline_terminal`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `'line'` | `ffi:js_readline_on`; `test-parity/node-suite/readline/interface/stream-line-close-events.ts` |
+| `'close'` | `ffi:js_readline_on`; `test-parity/node-suite/readline/interface/stream-line-close-events.ts` |
 
 ### node:async_hooks
 

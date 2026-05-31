@@ -1431,6 +1431,21 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("stream", "Duplex") => crate::node_stream::js_node_stream_duplex_new(arg(0)),
         ("stream", "Transform") => crate::node_stream::js_node_stream_transform_new(arg(0)),
         ("stream", "PassThrough") => crate::node_stream::js_node_stream_passthrough_new(arg(0)),
+        ("readline", "clearLine") => {
+            crate::readline_helpers::js_readline_clear_line_args(pack_args())
+        }
+        ("readline", "clearScreenDown") => {
+            crate::readline_helpers::js_readline_clear_screen_down_args(pack_args())
+        }
+        ("readline", "cursorTo") => {
+            crate::readline_helpers::js_readline_cursor_to_args(pack_args())
+        }
+        ("readline", "moveCursor") => {
+            crate::readline_helpers::js_readline_move_cursor_args(pack_args())
+        }
+        ("readline", "emitKeypressEvents") => {
+            crate::readline_helpers::js_readline_emit_keypress_events_args(pack_args())
+        }
 
         // ── node:dns / node:dns/promises configuration ──
         ("dns", "getServers") => crate::dns::dns_get_servers_value(),
