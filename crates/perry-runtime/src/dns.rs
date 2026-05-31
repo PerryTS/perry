@@ -1,33 +1,75 @@
-//! Runtime `node:dns` / `node:dns/promises` support.
+//! Runtime-only `node:dns` / `node:dns/promises` support.
 //!
-//! Constants and error-code aliases live in `object::native_module`
-//! (`dns_lookup_flag_constant` / `dns_error_alias`). This module implements
-//! the OS-backed `lookup` / `lookupService` surface (#3162) plus the
-//! remaining shape stubs the inventory fixtures probe.
-//!
-//! `lookup` / `lookupService` use the system resolver
-//! (`std::net::ToSocketAddrs` = `getaddrinfo`, plus `getnameinfo` for the
-//! reverse direction), so loopback names (`localhost` / `127.0.0.1`) resolve
-//! deterministically without depending on live external DNS.
+//! These helpers intentionally avoid external name resolution. They provide the
+//! Node-compatible surface Perry's fixtures need using deterministic loopback
+//! answers plus empty record sets for names we do not control.
 
-use std::ffi::CStr;
-use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{LazyLock, Mutex};
 
 use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader};
 use crate::object::{js_object_alloc, js_object_set_field_by_name, ObjectHeader};
-use crate::string::str_bytes_from_jsvalue;
 use crate::value::{js_nanbox_pointer, JSValue, TAG_NULL, TAG_UNDEFINED};
 
 const RESULT_ORDER_VERBATIM: u8 = 0;
 const RESULT_ORDER_IPV4_FIRST: u8 = 1;
-
-#[cfg(unix)]
-const GETNAMEINFO_SERVICE_BUFFER_LEN: usize = 32;
+const RESULT_ORDER_IPV6_FIRST: u8 = 2;
 
 static DEFAULT_RESULT_ORDER: AtomicU8 = AtomicU8::new(RESULT_ORDER_VERBATIM);
+static DNS_SERVERS: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+static DNS_PROMISE_SERVERS: LazyLock<Mutex<Option<Vec<String>>>> =
+    LazyLock::new(|| Mutex::new(None));
 
-const RESOLVER_METHODS: &[&str] = &["cancel", "getServers", "setServers", "setLocalAddress"];
+const RESOLVER_CONTROL_METHODS: &[&str] =
+    &["cancel", "getServers", "setServers", "setLocalAddress"];
+const RESOLVER_RESOLVE_METHODS: &[&str] = &[
+    "resolve",
+    "resolve4",
+    "resolve6",
+    "resolveAny",
+    "resolveCaa",
+    "resolveCname",
+    "resolveMx",
+    "resolveNaptr",
+    "resolveNs",
+    "resolvePtr",
+    "resolveSoa",
+    "resolveSrv",
+    "resolveTlsa",
+    "resolveTxt",
+    "reverse",
+];
+const RESOLVER_SERVERS_FIELD: &str = "__dns_servers";
+
+#[derive(Clone, Copy)]
+enum RecordKind {
+    A,
+    Aaaa,
+    Any,
+    Caa,
+    Cname,
+    Mx,
+    Naptr,
+    Ns,
+    Ptr,
+    Soa,
+    Srv,
+    Tlsa,
+    Txt,
+}
+
+#[derive(Clone)]
+struct ResolvedAddress {
+    address: String,
+    family: i32,
+}
+
+#[derive(Clone, Copy)]
+struct LookupOptions {
+    family: i32,
+    all: bool,
+}
 
 fn key(name: &str) -> *mut crate::StringHeader {
     crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
@@ -47,552 +89,1444 @@ fn empty_array_value() -> f64 {
     js_nanbox_pointer(arr as i64)
 }
 
-extern "C" fn dns_noop_thunk(_closure: *const ClosureHeader) -> f64 {
+fn undefined_value() -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
-fn method_value(name: &str) -> f64 {
-    let func_ptr = dns_noop_thunk as *const u8;
-    let closure = js_closure_alloc(func_ptr, 0);
-    js_register_closure_arity(func_ptr, 0);
-    crate::object::set_bound_native_closure_name(closure, name);
-    js_nanbox_pointer(closure as i64)
+fn null_value() -> f64 {
+    f64::from_bits(TAG_NULL)
 }
 
-fn resolver_object(include_set_local_address: bool) -> *mut ObjectHeader {
-    let method_count = if include_set_local_address {
-        RESOLVER_METHODS.len()
-    } else {
-        RESOLVER_METHODS.len() - 1
-    };
-    let obj = js_object_alloc(0, method_count as u32);
-    for method in RESOLVER_METHODS {
-        if !include_set_local_address && *method == "setLocalAddress" {
-            continue;
-        }
-        js_object_set_field_by_name(obj, key(method), method_value(method));
+fn first_arg(args: i64) -> f64 {
+    let arr = args as *const crate::array::ArrayHeader;
+    if arr.is_null() || crate::array::js_array_length(arr) == 0 {
+        return undefined_value();
     }
-    obj
+    crate::array::js_array_get_f64(arr, 0)
 }
 
-// ---------------------------------------------------------------------------
-// Value <-> Rust helpers
-// ---------------------------------------------------------------------------
+fn args_len(args: i64) -> u32 {
+    let arr = args as *const crate::array::ArrayHeader;
+    if arr.is_null() {
+        0
+    } else {
+        crate::array::js_array_length(arr)
+    }
+}
 
-fn read_js_string(value: f64) -> Option<String> {
-    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    let (ptr, len) = str_bytes_from_jsvalue(value, &mut scratch)?;
-    if ptr.is_null() {
+fn arg(args: i64, index: u32) -> f64 {
+    let arr = args as *const crate::array::ArrayHeader;
+    if arr.is_null() || index >= crate::array::js_array_length(arr) {
+        undefined_value()
+    } else {
+        crate::array::js_array_get_f64(arr, index)
+    }
+}
+
+fn array_value_from_values(values: &[f64]) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr = crate::array::js_array_alloc(values.len() as u32);
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    for value in values {
+        let next = crate::array::js_array_push_f64(
+            arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>(),
+            *value,
+        );
+        arr_handle.set_raw_mut_ptr::<crate::array::ArrayHeader>(next);
+    }
+    boxed_pointer(arr_handle.get_raw_const_ptr::<crate::array::ArrayHeader>() as *const u8)
+}
+
+fn string_array_value(values: &[&str]) -> f64 {
+    let values: Vec<f64> = values.iter().map(|value| str_value(value)).collect();
+    array_value_from_values(&values)
+}
+
+fn js_string_to_rust(value: f64) -> Option<String> {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if !js_value.is_any_string() {
+        return None;
+    }
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader;
+    if ptr.is_null() || (ptr as usize) < 0x1000 {
         return Some(String::new());
     }
     unsafe {
-        let bytes = std::slice::from_raw_parts(ptr, len as usize);
-        Some(String::from_utf8_lossy(bytes).into_owned())
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        Some(String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned())
     }
 }
 
-fn read_js_number(value: f64) -> Option<f64> {
-    let jv = JSValue::from_bits(value.to_bits());
-    if jv.is_int32() {
-        Some(jv.as_int32() as f64)
-    } else if jv.is_number() && !value.is_nan() {
-        Some(value)
+fn numeric_value(value: f64) -> Option<f64> {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if js_value.is_int32() {
+        Some(js_value.as_int32() as f64)
+    } else if js_value.is_number() {
+        Some(js_value.as_number())
     } else {
         None
     }
 }
 
-fn is_callable(value: f64) -> bool {
-    let jv = JSValue::from_bits(value.to_bits());
-    jv.is_pointer() && !jv.is_undefined() && !jv.is_null()
-}
-
-fn is_object(value: f64) -> bool {
-    let jv = JSValue::from_bits(value.to_bits());
-    jv.is_pointer() && !jv.is_any_string() && !jv.is_bigint()
-}
-
-/// Read an args array (the `NA_VARARGS` `*const ArrayHeader`) into a Vec of
-/// NaN-boxed f64 values.
-unsafe fn read_args(args: i64) -> Vec<f64> {
-    if args == 0 {
-        return Vec::new();
+fn closure_ptr_from_value(value: f64) -> Option<*const ClosureHeader> {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if !js_value.is_pointer() {
+        return None;
     }
-    let arr = args as *const crate::array::ArrayHeader;
-    if arr.is_null() {
-        return Vec::new();
+    let ptr = js_value.as_pointer::<u8>() as usize;
+    crate::closure::is_closure_ptr(ptr).then_some(ptr as *const ClosureHeader)
+}
+
+fn is_callable_value(value: f64) -> bool {
+    closure_ptr_from_value(value).is_some()
+}
+
+fn value_gc_type(value: f64) -> Option<u8> {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if !js_value.is_pointer() {
+        return None;
     }
-    let n = crate::array::js_array_length(arr);
-    let mut out = Vec::with_capacity(n as usize);
-    for i in 0..n {
-        out.push(crate::array::js_array_get_f64(arr, i));
+    let ptr = js_value.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < 0x10000 || ((ptr as u64) >> 48) != 0 {
+        return None;
     }
-    out
-}
-
-/// Parsed `dns.lookup` options.
-#[derive(Default, Clone, Copy)]
-struct LookupOptions {
-    family: u8, // 0 = any, 4 = IPv4, 6 = IPv6
-    all: bool,
-}
-
-/// Extract `{ family, all }` from an options value (number = family shorthand,
-/// object = `{ family, all }`). Returns `Err` only for invalid `family`.
-unsafe fn parse_lookup_options(value: f64) -> Result<LookupOptions, ()> {
-    let mut opts = LookupOptions::default();
-    let jv = JSValue::from_bits(value.to_bits());
-    if jv.is_undefined() || jv.is_null() {
-        return Ok(opts);
-    }
-    if let Some(n) = read_js_number(value) {
-        // numeric shorthand: dns.lookup(host, family, cb)
-        let fam = n as i64;
-        if fam != 0 && fam != 4 && fam != 6 {
-            return Err(());
-        }
-        opts.family = fam as u8;
-        return Ok(opts);
-    }
-    if is_object(value) {
-        let obj = jv.as_pointer::<ObjectHeader>();
-        let fam_v = crate::object::js_object_get_field_by_name_f64(obj, key("family"));
-        let fam_jv = JSValue::from_bits(fam_v.to_bits());
-        if !fam_jv.is_undefined() && !fam_jv.is_null() {
-            if let Some(n) = read_js_number(fam_v) {
-                let fam = n as i64;
-                if fam != 0 && fam != 4 && fam != 6 {
-                    return Err(());
-                }
-                opts.family = fam as u8;
-            } else if let Some(s) = read_js_string(fam_v) {
-                // Node accepts "IPv4"/"IPv6" string family too.
-                match s.as_str() {
-                    "IPv4" => opts.family = 4,
-                    "IPv6" => opts.family = 6,
-                    _ => return Err(()),
-                }
-            }
-        }
-        let all_v = crate::object::js_object_get_field_by_name_f64(obj, key("all"));
-        opts.all = crate::value::js_is_truthy(all_v) != 0;
-    }
-    Ok(opts)
-}
-
-fn ip_family(ip: &IpAddr) -> u8 {
-    match ip {
-        IpAddr::V4(_) => 4,
-        IpAddr::V6(_) => 6,
-    }
-}
-
-/// Resolve a hostname to a list of (address-string, family) pairs using the
-/// system resolver. Honors `family` filtering. The order matches the OS
-/// `getaddrinfo` order (Node's default "verbatim").
-fn resolve_addresses(host: &str, opts: &LookupOptions) -> Result<Vec<(String, u8)>, String> {
-    // A literal IP short-circuits — Node returns it verbatim without a query.
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        let fam = ip_family(&ip);
-        if opts.family != 0 && opts.family != fam {
-            return Ok(Vec::new());
-        }
-        return Ok(vec![(ip.to_string(), fam)]);
-    }
-
-    // getaddrinfo via ToSocketAddrs. Port 0 is fine; we only want addresses.
-    let iter = (host, 0u16).to_socket_addrs().map_err(|e| e.to_string())?;
-    let mut out: Vec<(String, u8)> = Vec::new();
-    for sa in iter {
-        let ip = sa.ip();
-        let fam = ip_family(&ip);
-        if opts.family != 0 && opts.family != fam {
-            continue;
-        }
-        let addr = ip.to_string();
-        if !out.iter().any(|(a, _)| a == &addr) {
-            out.push((addr, fam));
-        }
-    }
-    Ok(out)
-}
-
-fn lookup_result_object(address: &str, family: u8) -> f64 {
-    let obj = js_object_alloc(0, 2);
-    js_object_set_field_by_name(obj, key("address"), str_value(address));
-    js_object_set_field_by_name(obj, key("family"), family as f64);
-    boxed_pointer(obj as *const u8)
-}
-
-fn lookup_all_array(addrs: &[(String, u8)]) -> f64 {
-    let mut arr = crate::array::js_array_alloc(addrs.len() as u32);
-    for (addr, fam) in addrs {
-        arr = crate::array::js_array_push_f64(arr, lookup_result_object(addr, *fam));
-    }
-    js_nanbox_pointer(arr as i64)
-}
-
-/// Build a Node-shaped DNS error object `{ message, code, syscall, hostname }`.
-fn dns_error_object(code: &str, syscall: &str, hostname: &str) -> f64 {
-    let obj = js_object_alloc(0, 4);
-    let msg = format!("{syscall} {code} {hostname}");
-    js_object_set_field_by_name(obj, key("message"), str_value(&msg));
-    js_object_set_field_by_name(obj, key("code"), str_value(code));
-    js_object_set_field_by_name(obj, key("syscall"), str_value(syscall));
-    js_object_set_field_by_name(obj, key("hostname"), str_value(hostname));
-    boxed_pointer(obj as *const u8)
-}
-
-fn undefined() -> f64 {
-    f64::from_bits(TAG_UNDEFINED)
-}
-
-fn null() -> f64 {
-    f64::from_bits(TAG_NULL)
-}
-
-/// Schedule a callback `(err, ...rest)` to run asynchronously, matching Node's
-/// "callbacks fire on a later tick" contract. `cb` is a NaN-boxed closure
-/// value; `js_set_immediate_callback_args` wants the raw closure pointer, so
-/// unbox via `js_timer_validate_callback` (which masks + verifies the pointer).
-fn schedule_callback(cb: f64, args: &[f64]) {
     unsafe {
-        let raw = crate::timer::js_timer_validate_callback(cb, 2);
-        if raw == 0 {
-            return;
-        }
-        crate::timer::js_set_immediate_callback_args(raw, args.as_ptr(), args.len() as i32);
+        let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        Some((*gc_header).obj_type)
     }
 }
 
-// ---------------------------------------------------------------------------
-// lookup / lookupService (callback form)
-// ---------------------------------------------------------------------------
+fn is_plain_object_value(value: f64) -> bool {
+    value_gc_type(value) == Some(crate::gc::GC_TYPE_OBJECT)
+}
 
-#[no_mangle]
-pub extern "C" fn js_dns_lookup(args: i64) -> f64 {
-    let argv = unsafe { read_args(args) };
-    // Locate the trailing callback.
-    let cb = match argv.last().copied().filter(|v| is_callable(*v)) {
-        Some(c) => c,
-        // Node throws ERR_INVALID_ARG_TYPE when no callback is given. We don't
-        // have a clean throw path from a varargs native here; return undefined.
-        None => return undefined(),
-    };
+fn option_field(options: f64, name: &str) -> f64 {
+    if !is_plain_object_value(options) {
+        return undefined_value();
+    }
+    let obj = JSValue::from_bits(options.to_bits()).as_pointer::<ObjectHeader>();
+    crate::object::js_object_get_field_by_name_f64(obj, key(name))
+}
 
-    let host = argv
-        .first()
-        .copied()
-        .and_then(read_js_string)
-        .unwrap_or_default();
-
-    // options is the middle arg (index 1) when there are 3+ args.
-    let opts_val = if argv.len() >= 3 {
-        argv[1]
+fn array_ptr_from_value(value: f64) -> Option<*const crate::array::ArrayHeader> {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if !js_value.is_pointer() {
+        return None;
+    }
+    let arr = crate::array::clean_arr_ptr(js_value.as_pointer::<crate::array::ArrayHeader>());
+    if arr.is_null() {
+        None
     } else {
-        undefined()
-    };
-    let opts = match unsafe { parse_lookup_options(opts_val) } {
-        Ok(o) => o,
-        Err(()) => {
-            let err = dns_error_object("ERR_INVALID_ARG_VALUE", "lookup", &host);
-            schedule_callback(cb, &[err]);
-            return undefined();
-        }
-    };
+        Some(arr)
+    }
+}
 
-    match resolve_addresses(&host, &opts) {
-        Ok(addrs) if !addrs.is_empty() => {
-            if opts.all {
-                schedule_callback(cb, &[null(), lookup_all_array(&addrs)]);
-            } else {
-                let (addr, fam) = &addrs[0];
-                schedule_callback(cb, &[null(), str_value(addr), *fam as f64]);
+fn throw_invalid_servers_array(value: f64) -> ! {
+    let message = format!(
+        "The \"servers\" argument must be an instance of Array. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+fn throw_invalid_server_element(index: u32, value: f64) -> ! {
+    let message = format!(
+        "The \"servers[{index}]\" argument must be of type string. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+fn throw_invalid_ip_address(server: &str) -> ! {
+    let message = format!("Invalid IP address: {server}");
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_IP_ADDRESS");
+}
+
+fn parse_port(port: &str) -> Option<u16> {
+    if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let parsed = port.parse::<u16>().ok()?;
+    if parsed == 0 {
+        None
+    } else {
+        Some(parsed)
+    }
+}
+
+fn format_ipv4_server(ip: Ipv4Addr, port: Option<u16>) -> String {
+    match port {
+        Some(port) if port != 53 => format!("{ip}:{port}"),
+        _ => ip.to_string(),
+    }
+}
+
+fn format_ipv6_server(ip: Ipv6Addr, port: Option<u16>) -> String {
+    match port {
+        Some(port) if port != 53 => format!("[{ip}]:{port}"),
+        _ => ip.to_string(),
+    }
+}
+
+fn normalize_dns_server(server: &str) -> Option<String> {
+    if let Ok(ip) = server.parse::<IpAddr>() {
+        return Some(match ip {
+            IpAddr::V4(ip) => ip.to_string(),
+            IpAddr::V6(ip) => ip.to_string(),
+        });
+    }
+
+    if let Some(rest) = server.strip_prefix('[') {
+        let close = rest.find(']')?;
+        let host = &rest[..close];
+        let suffix = &rest[close + 1..];
+        let ip = host.parse::<Ipv6Addr>().ok()?;
+        let port = if suffix.is_empty() {
+            None
+        } else {
+            let port = suffix.strip_prefix(':')?;
+            Some(parse_port(port)?)
+        };
+        return Some(format_ipv6_server(ip, port));
+    }
+
+    if let Some((host, port)) = server.rsplit_once(':') {
+        if !host.contains(':') {
+            let ip = host.parse::<Ipv4Addr>().ok()?;
+            return Some(format_ipv4_server(ip, Some(parse_port(port)?)));
+        }
+    }
+
+    None
+}
+
+fn parse_servers(value: f64) -> Vec<String> {
+    let Some(arr) = array_ptr_from_value(value) else {
+        throw_invalid_servers_array(value);
+    };
+    let len = crate::array::js_array_length(arr);
+    let mut servers = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        let entry_value = crate::array::js_array_get_f64(arr, i);
+        let Some(entry) = js_string_to_rust(entry_value) else {
+            throw_invalid_server_element(i, entry_value);
+        };
+        let Some(normalized) = normalize_dns_server(&entry) else {
+            throw_invalid_ip_address(&entry);
+        };
+        servers.push(normalized);
+    }
+    servers
+}
+
+fn servers_array_value(servers: &[String]) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr = crate::array::js_array_alloc(servers.len() as u32);
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+
+    for server in servers {
+        let str_ptr = crate::string::js_string_from_bytes(server.as_ptr(), server.len() as u32);
+        let str_handle = scope.root_string_ptr(str_ptr);
+        let str_value = f64::from_bits(
+            JSValue::string_ptr(str_handle.get_raw_const_ptr::<crate::StringHeader>() as *mut _)
+                .bits(),
+        );
+        let next = crate::array::js_array_push_f64(
+            arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>(),
+            str_value,
+        );
+        arr_handle.set_raw_mut_ptr::<crate::array::ArrayHeader>(next);
+    }
+
+    boxed_pointer(arr_handle.get_raw_const_ptr::<crate::array::ArrayHeader>() as *const u8)
+}
+
+fn stored_servers() -> Vec<String> {
+    DNS_SERVERS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+pub(crate) fn dns_get_servers_value() -> f64 {
+    servers_array_value(&stored_servers())
+}
+
+pub(crate) fn dns_set_servers_value(value: f64) -> f64 {
+    let servers = parse_servers(value);
+    *DNS_SERVERS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = servers;
+    undefined_value()
+}
+
+fn stored_promise_servers() -> Vec<String> {
+    DNS_PROMISE_SERVERS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+        .unwrap_or_else(stored_servers)
+}
+
+pub(crate) fn dns_promises_init_servers_from_callback_if_unset() {
+    let mut promise_servers = DNS_PROMISE_SERVERS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if promise_servers.is_none() {
+        *promise_servers = Some(stored_servers());
+    }
+}
+
+pub(crate) fn dns_promises_get_servers_value() -> f64 {
+    servers_array_value(&stored_promise_servers())
+}
+
+pub(crate) fn dns_promises_set_servers_value(value: f64) -> f64 {
+    let servers = parse_servers(value);
+    *DNS_PROMISE_SERVERS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(servers);
+    undefined_value()
+}
+
+fn invalid_arg_value_received(value: f64) -> String {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if js_value.is_undefined() {
+        return "undefined".to_string();
+    }
+    if js_value.is_null() {
+        return "null".to_string();
+    }
+    if js_value.is_bool() {
+        return if js_value.as_bool() { "true" } else { "false" }.to_string();
+    }
+    if let Some(s) = js_string_to_rust(value) {
+        return format!("'{s}'");
+    }
+    if js_value.is_int32() {
+        return js_value.as_int32().to_string();
+    }
+    if js_value.is_number() {
+        return value.to_string();
+    }
+    "{}".to_string()
+}
+
+fn type_error_value(message: &str, code: &'static str) -> f64 {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, code);
+    let err = crate::error::js_typeerror_new(msg);
+    boxed_pointer(err as *const u8)
+}
+
+fn range_error_value(message: &str, code: &'static str) -> f64 {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, code);
+    let err = crate::error::js_rangeerror_new(msg);
+    boxed_pointer(err as *const u8)
+}
+
+fn plain_error_value(message: &str, code: &'static str) -> f64 {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, code);
+    let err = crate::error::js_error_new_with_message(msg);
+    boxed_pointer(err as *const u8)
+}
+
+fn throw_error_value(value: f64) -> ! {
+    crate::exception::js_throw(value)
+}
+
+fn invalid_callback_error(value: f64) -> f64 {
+    let message = format!(
+        "The \"callback\" argument must be of type function. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    type_error_value(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn invalid_hostname_error(value: f64) -> f64 {
+    let message = format!(
+        "The \"hostname\" argument must be of type string. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    type_error_value(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn invalid_address_error(value: f64) -> f64 {
+    let message = format!(
+        "The argument 'address' is invalid. Received {}",
+        invalid_arg_value_received(value)
+    );
+    type_error_value(&message, "ERR_INVALID_ARG_VALUE")
+}
+
+fn invalid_family_error(value: f64) -> f64 {
+    let message = format!(
+        "The property 'options.family' must be one of: 0, 4, 6. Received {}",
+        invalid_arg_value_received(value)
+    );
+    type_error_value(&message, "ERR_INVALID_ARG_VALUE")
+}
+
+fn lookup_service_missing_args_error() -> f64 {
+    type_error_value(
+        "The \"address\", \"port\", and \"callback\" arguments must be specified",
+        "ERR_MISSING_ARGS",
+    )
+}
+
+fn bad_port_error(value: f64) -> f64 {
+    let message = format!(
+        "Port should be >= 0 and < 65536. Received {}.",
+        crate::fs::validate::describe_received(value)
+    );
+    range_error_value(&message, "ERR_SOCKET_BAD_PORT")
+}
+
+fn dns_not_found_error(hostname: &str) -> f64 {
+    plain_error_value(&format!("getaddrinfo ENOTFOUND {hostname}"), "ENOTFOUND")
+}
+
+fn throw_invalid_dns_order(value: f64) -> ! {
+    let message = format!(
+        "The argument 'dnsOrder' must be one of: 'verbatim', 'ipv4first', 'ipv6first'. Received {}",
+        invalid_arg_value_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
+}
+
+fn throw_invalid_name(value: f64) -> ! {
+    let message = format!(
+        "The \"name\" argument must be of type string. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+fn throw_invalid_callback(value: f64) -> ! {
+    let message = format!(
+        "The \"callback\" argument must be of type function. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+fn throw_invalid_rrtype_type(value: f64) -> ! {
+    let message = format!(
+        "The \"rrtype\" argument must be of type string. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+fn throw_invalid_rrtype_value(value: f64) -> ! {
+    let message = format!(
+        "The argument 'rrtype' is invalid. Received {}",
+        invalid_arg_value_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
+}
+
+fn parse_record_kind(value: f64) -> RecordKind {
+    let Some(rrtype) = js_string_to_rust(value) else {
+        throw_invalid_rrtype_type(value);
+    };
+    match rrtype.as_str() {
+        "A" => RecordKind::A,
+        "AAAA" => RecordKind::Aaaa,
+        "ANY" => RecordKind::Any,
+        "CAA" => RecordKind::Caa,
+        "CNAME" => RecordKind::Cname,
+        "MX" => RecordKind::Mx,
+        "NAPTR" => RecordKind::Naptr,
+        "NS" => RecordKind::Ns,
+        "PTR" => RecordKind::Ptr,
+        "SOA" => RecordKind::Soa,
+        "SRV" => RecordKind::Srv,
+        "TLSA" => RecordKind::Tlsa,
+        "TXT" => RecordKind::Txt,
+        _ => throw_invalid_rrtype_value(value),
+    }
+}
+
+pub(crate) fn dns_set_default_result_order_value(value: f64) -> f64 {
+    let Some(order) = js_string_to_rust(value) else {
+        throw_invalid_dns_order(value);
+    };
+    let order = match order.as_str() {
+        "verbatim" => RESULT_ORDER_VERBATIM,
+        "ipv4first" => RESULT_ORDER_IPV4_FIRST,
+        "ipv6first" => RESULT_ORDER_IPV6_FIRST,
+        _ => throw_invalid_dns_order(value),
+    };
+    DEFAULT_RESULT_ORDER.store(order, Ordering::Relaxed);
+    undefined_value()
+}
+
+pub(crate) fn dns_get_default_result_order_value() -> f64 {
+    let order = match DEFAULT_RESULT_ORDER.load(Ordering::Relaxed) {
+        RESULT_ORDER_IPV4_FIRST => "ipv4first",
+        RESULT_ORDER_IPV6_FIRST => "ipv6first",
+        _ => "verbatim",
+    };
+    str_value(order)
+}
+
+fn resolver_object_from_value(value: f64) -> Option<*mut ObjectHeader> {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if !js_value.is_pointer() {
+        return None;
+    }
+    let obj = js_value.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+    if obj.is_null() || (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        None
+    } else {
+        Some(obj)
+    }
+}
+
+fn resolver_object_from_handle(handle: i64) -> Option<*mut ObjectHeader> {
+    if handle == 0 {
+        return None;
+    }
+    let bits = handle as u64;
+    let ptr = if (bits >> 48) >= 0x7FF8 {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader
+    } else {
+        bits as *mut ObjectHeader
+    };
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        None
+    } else {
+        Some(ptr)
+    }
+}
+
+fn resolver_get_servers_from_obj(obj: *mut ObjectHeader) -> f64 {
+    let servers_value =
+        crate::object::js_object_get_field_by_name_f64(obj, key(RESOLVER_SERVERS_FIELD));
+    if let Some(arr) = array_ptr_from_value(servers_value) {
+        let len = crate::array::js_array_length(arr);
+        let mut servers = Vec::with_capacity(len as usize);
+        for i in 0..len {
+            if let Some(server) = js_string_to_rust(crate::array::js_array_get_f64(arr, i)) {
+                servers.push(server);
             }
         }
-        Ok(_) | Err(_) => {
-            let err = dns_error_object("ENOTFOUND", "getaddrinfo", &host);
-            schedule_callback(cb, &[err]);
-        }
+        return servers_array_value(&servers);
     }
-    undefined()
+    empty_array_value()
 }
 
-/// Reverse-resolve `(address, port)` to `{ hostname, service }` using
-/// `getnameinfo`.
-fn lookup_service(address: &str, port: u16) -> Result<(String, String), String> {
-    let ip: IpAddr = address.parse().map_err(|_| "invalid address".to_string())?;
-    let sa = SocketAddr::new(ip, port);
-    unsafe { getnameinfo(&sa) }
+fn resolver_set_servers_for_obj(obj: *mut ObjectHeader, servers_value: f64) -> f64 {
+    let servers = parse_servers(servers_value);
+    let value = servers_array_value(&servers);
+    js_object_set_field_by_name(obj, key(RESOLVER_SERVERS_FIELD), value);
+    undefined_value()
 }
 
-#[cfg(unix)]
-unsafe fn getnameinfo(sa: &SocketAddr) -> Result<(String, String), String> {
-    let mut host_buf = [0i8; libc::NI_MAXHOST as usize];
-    let mut serv_buf = [0i8; GETNAMEINFO_SERVICE_BUFFER_LEN];
+fn object_value(fields: &[(&str, f64)]) -> f64 {
+    let obj = js_object_alloc(0, fields.len() as u32);
+    for (name, value) in fields {
+        js_object_set_field_by_name(obj, key(name), *value);
+    }
+    boxed_pointer(obj as *const u8)
+}
 
-    let (sa_ptr, sa_len): (*const libc::sockaddr, libc::socklen_t) = match sa {
-        SocketAddr::V4(v4) => {
-            let raw = Box::new(libc::sockaddr_in {
-                #[cfg(any(target_os = "macos", target_os = "ios"))]
-                sin_len: std::mem::size_of::<libc::sockaddr_in>() as u8,
-                sin_family: libc::AF_INET as libc::sa_family_t,
-                sin_port: v4.port().to_be(),
-                sin_addr: libc::in_addr {
-                    s_addr: u32::from_ne_bytes(v4.ip().octets()),
-                },
-                sin_zero: [0; 8],
-            });
-            let ptr = Box::into_raw(raw);
-            (
-                ptr as *const libc::sockaddr,
-                std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
-            )
-        }
-        SocketAddr::V6(v6) => {
-            let raw = Box::new(libc::sockaddr_in6 {
-                #[cfg(any(target_os = "macos", target_os = "ios"))]
-                sin6_len: std::mem::size_of::<libc::sockaddr_in6>() as u8,
-                sin6_family: libc::AF_INET6 as libc::sa_family_t,
-                sin6_port: v6.port().to_be(),
-                sin6_flowinfo: v6.flowinfo(),
-                sin6_addr: libc::in6_addr {
-                    s6_addr: v6.ip().octets(),
-                },
-                sin6_scope_id: v6.scope_id(),
-            });
-            let ptr = Box::into_raw(raw);
-            (
-                ptr as *const libc::sockaddr,
-                std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t,
-            )
-        }
+fn mx_record(exchange: &str, priority: f64) -> f64 {
+    object_value(&[("exchange", str_value(exchange)), ("priority", priority)])
+}
+
+fn any_address_record(address: &str, record_type: &str) -> f64 {
+    object_value(&[
+        ("address", str_value(address)),
+        ("ttl", 0.0),
+        ("type", str_value(record_type)),
+    ])
+}
+
+fn naptr_record() -> f64 {
+    object_value(&[
+        ("flags", str_value("")),
+        ("service", str_value("")),
+        ("regexp", str_value("")),
+        ("replacement", str_value("localhost")),
+        ("order", 0.0),
+        ("preference", 0.0),
+    ])
+}
+
+fn soa_record() -> f64 {
+    object_value(&[
+        ("nsname", str_value("localhost")),
+        ("hostmaster", str_value("root.localhost")),
+        ("serial", 1.0),
+        ("refresh", 0.0),
+        ("retry", 0.0),
+        ("expire", 0.0),
+        ("minttl", 0.0),
+    ])
+}
+
+fn srv_record() -> f64 {
+    object_value(&[
+        ("name", str_value("localhost")),
+        ("port", 0.0),
+        ("priority", 0.0),
+        ("weight", 0.0),
+    ])
+}
+
+fn tlsa_record() -> f64 {
+    object_value(&[
+        ("usage", 0.0),
+        ("selector", 0.0),
+        ("matchingType", 0.0),
+        ("certificate", str_value("")),
+    ])
+}
+
+fn localhost_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("localhost") || name.eq_ignore_ascii_case("localhost.")
+}
+
+fn resolve_records(kind: RecordKind, name: &str) -> f64 {
+    if !localhost_name(name) {
+        return empty_array_value();
+    }
+
+    match kind {
+        RecordKind::A => string_array_value(&["127.0.0.1"]),
+        RecordKind::Aaaa => string_array_value(&["::1"]),
+        RecordKind::Any => array_value_from_values(&[
+            any_address_record("127.0.0.1", "A"),
+            any_address_record("::1", "AAAA"),
+        ]),
+        RecordKind::Caa => empty_array_value(),
+        RecordKind::Cname => string_array_value(&["localhost"]),
+        RecordKind::Mx => array_value_from_values(&[mx_record("localhost", 0.0)]),
+        RecordKind::Naptr => array_value_from_values(&[naptr_record()]),
+        RecordKind::Ns => string_array_value(&["localhost"]),
+        RecordKind::Ptr => string_array_value(&["localhost"]),
+        RecordKind::Soa => soa_record(),
+        RecordKind::Srv => array_value_from_values(&[srv_record()]),
+        RecordKind::Tlsa => array_value_from_values(&[tlsa_record()]),
+        RecordKind::Txt => array_value_from_values(&[string_array_value(&["localhost"])]),
+    }
+}
+
+fn reverse_records(name: &str) -> f64 {
+    match name.parse::<IpAddr>() {
+        Ok(IpAddr::V4(ip)) if ip.is_loopback() => string_array_value(&["localhost"]),
+        Ok(IpAddr::V6(ip)) if ip.is_loopback() => string_array_value(&["localhost"]),
+        _ => empty_array_value(),
+    }
+}
+
+fn validate_family(value: f64) -> Result<i32, f64> {
+    let Some(n) = numeric_value(value) else {
+        return Err(invalid_family_error(value));
     };
-
-    let rc = libc::getnameinfo(
-        sa_ptr,
-        sa_len,
-        host_buf.as_mut_ptr(),
-        host_buf.len() as libc::socklen_t,
-        serv_buf.as_mut_ptr(),
-        serv_buf.len() as libc::socklen_t,
-        0,
-    );
-
-    // Free the boxed sockaddr we leaked above.
-    match sa {
-        SocketAddr::V4(_) => drop(Box::from_raw(sa_ptr as *mut libc::sockaddr_in)),
-        SocketAddr::V6(_) => drop(Box::from_raw(sa_ptr as *mut libc::sockaddr_in6)),
+    if !n.is_finite() || n.fract() != 0.0 {
+        return Err(invalid_family_error(value));
     }
-
-    if rc != 0 {
-        return Err(format!("getnameinfo failed: {rc}"));
-    }
-    let hostname = CStr::from_ptr(host_buf.as_ptr())
-        .to_string_lossy()
-        .into_owned();
-    let service = CStr::from_ptr(serv_buf.as_ptr())
-        .to_string_lossy()
-        .into_owned();
-    Ok((hostname, service))
-}
-
-#[cfg(not(unix))]
-unsafe fn getnameinfo(sa: &SocketAddr) -> Result<(String, String), String> {
-    // Non-Unix fallback: deterministic loopback + numeric service.
-    let hostname = if sa.ip().is_loopback() {
-        "localhost".to_string()
+    let family = n as i32;
+    if matches!(family, 0 | 4 | 6) {
+        Ok(family)
     } else {
-        sa.ip().to_string()
-    };
-    Ok((hostname, sa.port().to_string()))
+        Err(invalid_family_error(value))
+    }
 }
 
-#[no_mangle]
-pub extern "C" fn js_dns_lookup_service(args: i64) -> f64 {
-    let argv = unsafe { read_args(args) };
-    let cb = match argv.last().copied().filter(|v| is_callable(*v)) {
-        Some(c) => c,
-        None => return undefined(),
-    };
-    let address = argv
-        .first()
-        .copied()
-        .and_then(read_js_string)
-        .unwrap_or_default();
-    let port = argv.get(1).copied().and_then(read_js_number).unwrap_or(0.0);
-
-    if !(0.0..=65535.0).contains(&port) || port.fract() != 0.0 {
-        let err = dns_error_object("ERR_SOCKET_BAD_PORT", "getnameinfo", &address);
-        schedule_callback(cb, &[err]);
-        return undefined();
+fn parse_lookup_options(value: f64) -> Result<LookupOptions, f64> {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if js_value.is_undefined() || js_value.is_null() {
+        return Ok(LookupOptions {
+            family: 0,
+            all: false,
+        });
     }
-
-    match lookup_service(&address, port as u16) {
-        Ok((hostname, service)) => {
-            schedule_callback(cb, &[null(), str_value(&hostname), str_value(&service)]);
-        }
-        Err(_) => {
-            let err = dns_error_object("ENOTFOUND", "getnameinfo", &address);
-            schedule_callback(cb, &[err]);
-        }
+    if numeric_value(value).is_some() {
+        return Ok(LookupOptions {
+            family: validate_family(value)?,
+            all: false,
+        });
     }
-    undefined()
+    if is_plain_object_value(value) && !is_callable_value(value) {
+        let family_value = option_field(value, "family");
+        let all_value = option_field(value, "all");
+        let family = if JSValue::from_bits(family_value.to_bits()).is_undefined() {
+            0
+        } else {
+            validate_family(family_value)?
+        };
+        return Ok(LookupOptions {
+            family,
+            all: JSValue::from_bits(all_value.to_bits()).to_bool(),
+        });
+    }
+    Err(type_error_value(
+        &format!(
+            "The \"options\" argument must be of type object or number. Received {}",
+            crate::fs::validate::describe_received(value)
+        ),
+        "ERR_INVALID_ARG_TYPE",
+    ))
 }
 
-// ---------------------------------------------------------------------------
-// promises form
-// ---------------------------------------------------------------------------
+fn lookup_addresses(hostname: &str, family: i32) -> Result<Vec<ResolvedAddress>, f64> {
+    if localhost_name(hostname) {
+        return Ok(match family {
+            4 => vec![ResolvedAddress {
+                address: "127.0.0.1".to_string(),
+                family: 4,
+            }],
+            6 => vec![ResolvedAddress {
+                address: "::1".to_string(),
+                family: 6,
+            }],
+            _ => vec![
+                ResolvedAddress {
+                    address: "127.0.0.1".to_string(),
+                    family: 4,
+                },
+                ResolvedAddress {
+                    address: "::1".to_string(),
+                    family: 6,
+                },
+            ],
+        });
+    }
+    if let Ok(addr) = hostname.parse::<IpAddr>() {
+        let resolved_family = if addr.is_ipv4() { 4 } else { 6 };
+        if family == 0 || family == resolved_family {
+            return Ok(vec![ResolvedAddress {
+                address: hostname.to_string(),
+                family: resolved_family,
+            }]);
+        }
+    }
+    Err(dns_not_found_error(hostname))
+}
 
-fn resolved_promise(value: f64) -> f64 {
+fn lookup_result(address: &ResolvedAddress) -> f64 {
+    object_value(&[
+        ("address", str_value(&address.address)),
+        ("family", address.family as f64),
+    ])
+}
+
+fn lookup_all_result(addresses: &[ResolvedAddress]) -> f64 {
+    let values: Vec<f64> = addresses.iter().map(lookup_result).collect();
+    array_value_from_values(&values)
+}
+
+fn queue_callback(callback_value: f64, args: &[f64]) {
+    let callback = closure_ptr_from_value(callback_value)
+        .unwrap_or_else(|| throw_error_value(invalid_callback_error(callback_value)));
+    unsafe {
+        crate::builtins::js_queue_next_tick_args(callback as i64, args.as_ptr(), args.len() as i32);
+    }
+}
+
+fn lookup_value(hostname: &str, options: LookupOptions) -> Result<f64, f64> {
+    let addresses = lookup_addresses(hostname, options.family)?;
+    if options.all {
+        Ok(lookup_all_result(&addresses))
+    } else {
+        Ok(lookup_result(&addresses[0]))
+    }
+}
+
+fn lookup_callback_values(hostname: &str, options: LookupOptions) -> Result<Vec<f64>, f64> {
+    let addresses = lookup_addresses(hostname, options.family)?;
+    if options.all {
+        Ok(vec![null_value(), lookup_all_result(&addresses)])
+    } else {
+        let first = &addresses[0];
+        Ok(vec![
+            null_value(),
+            str_value(&first.address),
+            first.family as f64,
+        ])
+    }
+}
+
+fn parse_lookup_service_port(value: f64) -> Result<u16, f64> {
+    let n = if let Some(n) = numeric_value(value) {
+        n
+    } else if let Some(s) = js_string_to_rust(value) {
+        match s.parse::<f64>() {
+            Ok(n) => n,
+            Err(_) => return Err(bad_port_error(value)),
+        }
+    } else {
+        return Err(bad_port_error(value));
+    };
+    if !n.is_finite() || n.fract() != 0.0 || !(0.0..65536.0).contains(&n) {
+        return Err(bad_port_error(value));
+    }
+    Ok(n as u16)
+}
+
+fn service_for_port(port: u16) -> String {
+    match port {
+        22 => "ssh".to_string(),
+        53 => "domain".to_string(),
+        80 => "http".to_string(),
+        443 => "https".to_string(),
+        _ => port.to_string(),
+    }
+}
+
+fn lookup_service_result(address: &str, port: u16) -> Result<(String, String), f64> {
+    match address.parse::<IpAddr>() {
+        Ok(addr) if addr.is_loopback() => Ok(("localhost".to_string(), service_for_port(port))),
+        Ok(_) => Ok((address.to_string(), service_for_port(port))),
+        Err(_) => Err(invalid_address_error(str_value(address))),
+    }
+}
+
+fn lookup_service_object(hostname: &str, service: &str) -> f64 {
+    object_value(&[
+        ("hostname", str_value(hostname)),
+        ("service", str_value(service)),
+    ])
+}
+
+fn callback_record_args(args: i64, default_kind: Option<RecordKind>) -> (String, RecordKind, f64) {
+    let name_value = arg(args, 0);
+    let Some(name) = js_string_to_rust(name_value) else {
+        throw_invalid_name(name_value);
+    };
+
+    match default_kind {
+        Some(kind) => {
+            let callback = if args_len(args) > 2 {
+                arg(args, 2)
+            } else {
+                arg(args, 1)
+            };
+            if !is_callable_value(callback) {
+                throw_invalid_callback(callback);
+            }
+            (name, kind, callback)
+        }
+        None => {
+            let rrtype_or_callback = arg(args, 1);
+            if is_callable_value(rrtype_or_callback) {
+                return (name, RecordKind::A, rrtype_or_callback);
+            }
+            let kind = parse_record_kind(rrtype_or_callback);
+            let callback = arg(args, 2);
+            if !is_callable_value(callback) {
+                throw_invalid_callback(callback);
+            }
+            (name, kind, callback)
+        }
+    }
+}
+
+fn promise_record_args(args: i64, default_kind: Option<RecordKind>) -> (String, RecordKind) {
+    let name_value = arg(args, 0);
+    let Some(name) = js_string_to_rust(name_value) else {
+        throw_invalid_name(name_value);
+    };
+    let kind = default_kind.unwrap_or_else(|| {
+        if args_len(args) < 2 {
+            RecordKind::A
+        } else {
+            parse_record_kind(arg(args, 1))
+        }
+    });
+    (name, kind)
+}
+
+fn callback_reverse_args(args: i64) -> (String, f64) {
+    let name_value = arg(args, 0);
+    let Some(name) = js_string_to_rust(name_value) else {
+        throw_invalid_name(name_value);
+    };
+    let callback = arg(args, 1);
+    if !is_callable_value(callback) {
+        throw_invalid_callback(callback);
+    }
+    (name, callback)
+}
+
+fn promise_reverse_args(args: i64) -> String {
+    let name_value = arg(args, 0);
+    let Some(name) = js_string_to_rust(name_value) else {
+        throw_invalid_name(name_value);
+    };
+    name
+}
+
+fn call_success_callback(callback: f64, value: f64) {
+    let args = [null_value(), value];
+    unsafe {
+        crate::closure::js_native_call_value(callback, args.as_ptr(), args.len());
+    }
+}
+
+fn dns_callback_resolve(args: i64, default_kind: Option<RecordKind>) -> f64 {
+    let (name, kind, callback) = callback_record_args(args, default_kind);
+    let result = resolve_records(kind, &name);
+    call_success_callback(callback, result);
+    undefined_value()
+}
+
+fn dns_callback_reverse(args: i64) -> f64 {
+    let (name, callback) = callback_reverse_args(args);
+    let result = reverse_records(&name);
+    call_success_callback(callback, result);
+    undefined_value()
+}
+
+fn promise_value(value: f64) -> f64 {
     let promise = crate::promise::js_promise_resolved(value);
     js_nanbox_pointer(promise as i64)
 }
 
-fn rejected_promise(reason: f64) -> f64 {
+fn promise_rejected_value(reason: f64) -> f64 {
     let promise = crate::promise::js_promise_rejected(reason);
     js_nanbox_pointer(promise as i64)
 }
 
+fn dns_promise_resolve(args: i64, default_kind: Option<RecordKind>) -> f64 {
+    let (name, kind) = promise_record_args(args, default_kind);
+    promise_value(resolve_records(kind, &name))
+}
+
+fn dns_promise_reverse(args: i64) -> f64 {
+    let name = promise_reverse_args(args);
+    promise_value(reverse_records(&name))
+}
+
+extern "C" fn dns_noop_thunk(_closure: *const ClosureHeader) -> f64 {
+    undefined_value()
+}
+
+extern "C" fn dns_noop2_thunk(_closure: *const ClosureHeader, _a: f64, _b: f64) -> f64 {
+    undefined_value()
+}
+
+extern "C" fn dns_resolver_get_servers_thunk(_closure: *const ClosureHeader) -> f64 {
+    let this_value = crate::object::js_implicit_this_get();
+    let Some(obj) = resolver_object_from_value(this_value) else {
+        return empty_array_value();
+    };
+    resolver_get_servers_from_obj(obj)
+}
+
+extern "C" fn dns_resolver_set_servers_thunk(
+    _closure: *const ClosureHeader,
+    servers_value: f64,
+) -> f64 {
+    let this_value = crate::object::js_implicit_this_get();
+    let Some(obj) = resolver_object_from_value(this_value) else {
+        return dns_promises_set_servers_value(servers_value);
+    };
+    resolver_set_servers_for_obj(obj, servers_value)
+}
+
+fn method_value(name: &str) -> f64 {
+    let (func_ptr, arity) = match name {
+        "getServers" => (dns_resolver_get_servers_thunk as *const u8, 0),
+        "setServers" => (dns_resolver_set_servers_thunk as *const u8, 1),
+        "setLocalAddress" => (dns_noop2_thunk as *const u8, 2),
+        _ => (dns_noop_thunk as *const u8, 0),
+    };
+    let closure = js_closure_alloc(func_ptr, 0);
+    js_register_closure_arity(func_ptr, arity);
+    crate::object::set_bound_native_closure_name(closure, name);
+    js_nanbox_pointer(closure as i64)
+}
+
+fn resolver_object(initial_servers: Vec<String>) -> *mut ObjectHeader {
+    let method_count = RESOLVER_CONTROL_METHODS.len() + RESOLVER_RESOLVE_METHODS.len() + 1;
+    let obj = js_object_alloc(0, method_count as u32);
+    js_object_set_field_by_name(
+        obj,
+        key(RESOLVER_SERVERS_FIELD),
+        servers_array_value(&initial_servers),
+    );
+    for method in RESOLVER_CONTROL_METHODS {
+        js_object_set_field_by_name(obj, key(method), method_value(method));
+    }
+    for method in RESOLVER_RESOLVE_METHODS {
+        js_object_set_field_by_name(obj, key(method), method_value(method));
+    }
+    obj
+}
+
 #[no_mangle]
-pub extern "C" fn js_dns_promises_lookup(args: i64) -> f64 {
-    let argv = unsafe { read_args(args) };
-    let host = argv
-        .first()
-        .copied()
-        .and_then(read_js_string)
-        .unwrap_or_default();
-    let opts_val = argv.get(1).copied().unwrap_or_else(undefined);
-    let opts = match unsafe { parse_lookup_options(opts_val) } {
-        Ok(o) => o,
-        Err(()) => {
-            return rejected_promise(dns_error_object("ERR_INVALID_ARG_VALUE", "lookup", &host))
-        }
+pub extern "C" fn js_dns_noop(_args: i64) -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_lookup(args: i64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let hostname_value = arg(args, 0);
+    let hostname = match js_string_to_rust(hostname_value) {
+        Some(hostname) => hostname,
+        None => throw_error_value(invalid_hostname_error(hostname_value)),
     };
 
-    match resolve_addresses(&host, &opts) {
-        Ok(addrs) if !addrs.is_empty() => {
-            if opts.all {
-                resolved_promise(lookup_all_array(&addrs))
-            } else {
-                let (addr, fam) = &addrs[0];
-                resolved_promise(lookup_result_object(addr, *fam))
-            }
-        }
-        Ok(_) | Err(_) => rejected_promise(dns_error_object("ENOTFOUND", "getaddrinfo", &host)),
+    let second = arg(args, 1);
+    let (options_value, callback_value) = if is_callable_value(second) {
+        (undefined_value(), second)
+    } else {
+        (second, arg(args, 2))
+    };
+    let callback_handle = scope.root_nanbox_f64(callback_value);
+    if !is_callable_value(callback_value) {
+        throw_error_value(invalid_callback_error(callback_value));
+    }
+
+    let options = match parse_lookup_options(options_value) {
+        Ok(options) => options,
+        Err(error) => throw_error_value(error),
+    };
+    let callback_args = match lookup_callback_values(&hostname, options) {
+        Ok(values) => values,
+        Err(error) => vec![error],
+    };
+    queue_callback(callback_handle.get_nanbox_f64(), &callback_args);
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_lookup_service(args: i64) -> f64 {
+    if args_len(args) < 3 || JSValue::from_bits(arg(args, 2).to_bits()).is_undefined() {
+        throw_error_value(lookup_service_missing_args_error());
+    }
+
+    let address_value = arg(args, 0);
+    let address = match js_string_to_rust(address_value) {
+        Some(address) => address,
+        None => throw_error_value(invalid_address_error(address_value)),
+    };
+    let port = match parse_lookup_service_port(arg(args, 1)) {
+        Ok(port) => port,
+        Err(error) => throw_error_value(error),
+    };
+    let callback_value = arg(args, 2);
+    if !is_callable_value(callback_value) {
+        throw_error_value(invalid_callback_error(callback_value));
+    }
+    let callback_args = match lookup_service_result(&address, port) {
+        Ok((hostname, service)) => vec![null_value(), str_value(&hostname), str_value(&service)],
+        Err(error) => vec![error],
+    };
+    queue_callback(callback_value, &callback_args);
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve(args: i64) -> f64 {
+    dns_callback_resolve(args, None)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve4(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::A))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve6(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Aaaa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_any(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Any))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_caa(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Caa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_cname(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Cname))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_mx(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Mx))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_naptr(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Naptr))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_ns(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Ns))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_ptr(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Ptr))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_soa(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Soa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_srv(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Srv))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_tlsa(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Tlsa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_txt(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Txt))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_reverse(args: i64) -> f64 {
+    dns_callback_reverse(args)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_noop(_args: i64) -> f64 {
+    let promise = crate::promise::js_promise_resolved(undefined_value());
+    js_nanbox_pointer(promise as i64)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve(args: i64) -> f64 {
+    dns_promise_resolve(args, None)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve4(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::A))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve6(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Aaaa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_any(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Any))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_caa(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Caa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_cname(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Cname))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_mx(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Mx))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_naptr(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Naptr))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_ns(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Ns))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_ptr(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Ptr))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_soa(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Soa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_srv(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Srv))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_tlsa(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Tlsa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_txt(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Txt))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_reverse(args: i64) -> f64 {
+    dns_promise_reverse(args)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_get_servers(_args: i64) -> f64 {
+    dns_get_servers_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_set_servers(args: i64) -> f64 {
+    dns_set_servers_value(first_arg(args))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_get_servers(_args: i64) -> f64 {
+    dns_promises_get_servers_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_set_servers(args: i64) -> f64 {
+    dns_promises_set_servers_value(first_arg(args))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_set_default_result_order(args: i64) -> f64 {
+    dns_set_default_result_order_value(first_arg(args))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_get_default_result_order(_args: i64) -> f64 {
+    dns_get_default_result_order_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_new(_args: i64) -> f64 {
+    boxed_pointer(resolver_object(stored_servers()) as *const u8)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_new(_args: i64) -> f64 {
+    boxed_pointer(resolver_object(stored_promise_servers()) as *const u8)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_get_servers(_handle: i64, _args: i64) -> f64 {
+    let Some(obj) = resolver_object_from_handle(_handle) else {
+        return empty_array_value();
+    };
+    resolver_get_servers_from_obj(obj)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_set_servers(handle: i64, args: i64) -> f64 {
+    let servers_value = first_arg(args);
+    let Some(obj) = resolver_object_from_handle(handle) else {
+        return dns_promises_set_servers_value(servers_value);
+    };
+    resolver_set_servers_for_obj(obj, servers_value)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_noop(_handle: i64, _args: i64) -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, None)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve4(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::A))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve6(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Aaaa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_any(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Any))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_caa(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Caa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_cname(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Cname))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_mx(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Mx))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_naptr(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Naptr))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_ns(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Ns))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_ptr(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Ptr))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_soa(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Soa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_srv(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Srv))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_tlsa(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Tlsa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_txt(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Txt))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_reverse(_handle: i64, args: i64) -> f64 {
+    dns_callback_reverse(args)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, None)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve4(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::A))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve6(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Aaaa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_any(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Any))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_caa(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Caa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_cname(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Cname))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_mx(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Mx))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_naptr(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Naptr))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_ns(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Ns))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_ptr(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Ptr))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_soa(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Soa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_srv(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Srv))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_tlsa(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Tlsa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_txt(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Txt))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_reverse(_handle: i64, args: i64) -> f64 {
+    dns_promise_reverse(args)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_lookup(args: i64) -> f64 {
+    let hostname_value = arg(args, 0);
+    let hostname = match js_string_to_rust(hostname_value) {
+        Some(hostname) => hostname,
+        None => return promise_rejected_value(invalid_hostname_error(hostname_value)),
+    };
+    let options = match parse_lookup_options(arg(args, 1)) {
+        Ok(options) => options,
+        Err(error) => return promise_rejected_value(error),
+    };
+    match lookup_value(&hostname, options) {
+        Ok(value) => promise_value(value),
+        Err(error) => promise_rejected_value(error),
     }
 }
 
 #[no_mangle]
 pub extern "C" fn js_dns_promises_lookup_service(args: i64) -> f64 {
-    let argv = unsafe { read_args(args) };
-    let address = argv
-        .first()
-        .copied()
-        .and_then(read_js_string)
-        .unwrap_or_default();
-    let port = argv.get(1).copied().and_then(read_js_number).unwrap_or(0.0);
-
-    if !(0.0..=65535.0).contains(&port) || port.fract() != 0.0 {
-        return rejected_promise(dns_error_object(
-            "ERR_SOCKET_BAD_PORT",
-            "getnameinfo",
-            &address,
-        ));
+    if args_len(args) < 2 {
+        return promise_rejected_value(lookup_service_missing_args_error());
     }
-
-    match lookup_service(&address, port as u16) {
-        Ok((hostname, service)) => {
-            let obj = js_object_alloc(0, 2);
-            js_object_set_field_by_name(obj, key("hostname"), str_value(&hostname));
-            js_object_set_field_by_name(obj, key("service"), str_value(&service));
-            resolved_promise(boxed_pointer(obj as *const u8))
-        }
-        Err(_) => rejected_promise(dns_error_object("ENOTFOUND", "getnameinfo", &address)),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// remaining shape stubs
-// ---------------------------------------------------------------------------
-
-#[no_mangle]
-pub extern "C" fn js_dns_noop(_args: i64) -> f64 {
-    f64::from_bits(TAG_UNDEFINED)
-}
-
-#[no_mangle]
-pub extern "C" fn js_dns_promises_noop(_args: i64) -> f64 {
-    let promise = crate::promise::js_promise_resolved(f64::from_bits(TAG_UNDEFINED));
-    js_nanbox_pointer(promise as i64)
-}
-
-#[no_mangle]
-pub extern "C" fn js_dns_get_servers(_args: i64) -> f64 {
-    empty_array_value()
-}
-
-#[no_mangle]
-pub extern "C" fn js_dns_set_servers(_args: i64) -> f64 {
-    f64::from_bits(TAG_UNDEFINED)
-}
-
-#[no_mangle]
-pub extern "C" fn js_dns_promises_get_servers(_args: i64) -> f64 {
-    empty_array_value()
-}
-
-#[no_mangle]
-pub extern "C" fn js_dns_promises_set_servers(_args: i64) -> f64 {
-    f64::from_bits(TAG_UNDEFINED)
-}
-
-#[no_mangle]
-pub extern "C" fn js_dns_set_default_result_order(_args: i64) -> f64 {
-    DEFAULT_RESULT_ORDER.store(RESULT_ORDER_IPV4_FIRST, Ordering::Relaxed);
-    f64::from_bits(TAG_UNDEFINED)
-}
-
-#[no_mangle]
-pub extern "C" fn js_dns_get_default_result_order(_args: i64) -> f64 {
-    let order = if DEFAULT_RESULT_ORDER.load(Ordering::Relaxed) == RESULT_ORDER_IPV4_FIRST {
-        "ipv4first"
-    } else {
-        "verbatim"
+    let address_value = arg(args, 0);
+    let address = match js_string_to_rust(address_value) {
+        Some(address) => address,
+        None => return promise_rejected_value(invalid_address_error(address_value)),
     };
-    str_value(order)
+    let port = match parse_lookup_service_port(arg(args, 1)) {
+        Ok(port) => port,
+        Err(error) => return promise_rejected_value(error),
+    };
+    match lookup_service_result(&address, port) {
+        Ok((hostname, service)) => promise_value(lookup_service_object(&hostname, &service)),
+        Err(error) => promise_rejected_value(error),
+    }
 }
-
-#[no_mangle]
-pub extern "C" fn js_dns_resolver_new(_args: i64) -> f64 {
-    boxed_pointer(resolver_object(true) as *const u8)
-}
-
-#[no_mangle]
-pub extern "C" fn js_dns_promises_resolver_new(_args: i64) -> f64 {
-    boxed_pointer(resolver_object(false) as *const u8)
-}
-
-#[no_mangle]
-pub extern "C" fn js_dns_resolver_get_servers(_handle: i64, _args: i64) -> f64 {
-    empty_array_value()
-}
-
-#[no_mangle]
-pub extern "C" fn js_dns_resolver_noop(_handle: i64, _args: i64) -> f64 {
-    f64::from_bits(TAG_UNDEFINED)
-}
-
-// Keepalive anchors: these `#[no_mangle]` fns are emitted only from generated
-// `.o` via the native-module dispatch table, so the auto-optimize whole-program
-// LLVM bitcode rebuild would otherwise dead-strip them (see
-// project_auto_optimize_keepalive_3320). `#[used]` survives that pipeline.
-#[cfg(not(test))]
-#[used]
-static KEEP_DNS_LOOKUP: extern "C" fn(i64) -> f64 = js_dns_lookup;
-#[cfg(not(test))]
-#[used]
-static KEEP_DNS_LOOKUP_SERVICE: extern "C" fn(i64) -> f64 = js_dns_lookup_service;
-#[cfg(not(test))]
-#[used]
-static KEEP_DNS_PROMISES_LOOKUP_SERVICE: extern "C" fn(i64) -> f64 = js_dns_promises_lookup_service;

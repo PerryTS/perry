@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2132 entries across 99 modules.
+Total: 2164 entries across 99 modules.
 
 ## Modules
 
@@ -816,20 +816,35 @@ Total: 2132 entries across 99 modules.
 - `lookup` — module
 - `lookupService` — module
 - `resolve` — module
+- `resolve` — instance *(class: `Resolver`)*
 - `resolve4` — module
+- `resolve4` — instance *(class: `Resolver`)*
 - `resolve6` — module
+- `resolve6` — instance *(class: `Resolver`)*
 - `resolveAny` — module
+- `resolveAny` — instance *(class: `Resolver`)*
 - `resolveCaa` — module
+- `resolveCaa` — instance *(class: `Resolver`)*
 - `resolveCname` — module
+- `resolveCname` — instance *(class: `Resolver`)*
 - `resolveMx` — module
+- `resolveMx` — instance *(class: `Resolver`)*
 - `resolveNaptr` — module
+- `resolveNaptr` — instance *(class: `Resolver`)*
 - `resolveNs` — module
+- `resolveNs` — instance *(class: `Resolver`)*
 - `resolvePtr` — module
+- `resolvePtr` — instance *(class: `Resolver`)*
 - `resolveSoa` — module
+- `resolveSoa` — instance *(class: `Resolver`)*
 - `resolveSrv` — module
+- `resolveSrv` — instance *(class: `Resolver`)*
 - `resolveTlsa` — module
+- `resolveTlsa` — instance *(class: `Resolver`)*
 - `resolveTxt` — module
+- `resolveTxt` — instance *(class: `Resolver`)*
 - `reverse` — module
+- `reverse` — instance *(class: `Resolver`)*
 - `setDefaultResultOrder` — module
 - `setLocalAddress` — instance *(class: `Resolver`)*
 - `setServers` — module
@@ -909,22 +924,39 @@ Total: 2132 entries across 99 modules.
 - `lookup` — module
 - `lookupService` — module
 - `resolve` — module
+- `resolve` — instance *(class: `Resolver`)*
 - `resolve4` — module
+- `resolve4` — instance *(class: `Resolver`)*
 - `resolve6` — module
+- `resolve6` — instance *(class: `Resolver`)*
 - `resolveAny` — module
+- `resolveAny` — instance *(class: `Resolver`)*
 - `resolveCaa` — module
+- `resolveCaa` — instance *(class: `Resolver`)*
 - `resolveCname` — module
+- `resolveCname` — instance *(class: `Resolver`)*
 - `resolveMx` — module
+- `resolveMx` — instance *(class: `Resolver`)*
 - `resolveNaptr` — module
+- `resolveNaptr` — instance *(class: `Resolver`)*
 - `resolveNs` — module
+- `resolveNs` — instance *(class: `Resolver`)*
 - `resolvePtr` — module
+- `resolvePtr` — instance *(class: `Resolver`)*
 - `resolveSoa` — module
+- `resolveSoa` — instance *(class: `Resolver`)*
 - `resolveSrv` — module
+- `resolveSrv` — instance *(class: `Resolver`)*
 - `resolveTlsa` — module
+- `resolveTlsa` — instance *(class: `Resolver`)*
 - `resolveTxt` — module
+- `resolveTxt` — instance *(class: `Resolver`)*
 - `reverse` — module
+- `reverse` — instance *(class: `Resolver`)*
 - `setDefaultResultOrder` — module
+- `setLocalAddress` — instance *(class: `Resolver`)*
 - `setServers` — module
+- `setServers` — instance *(class: `Resolver`)*
 
 ### Properties
 

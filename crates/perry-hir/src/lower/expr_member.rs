@@ -1923,7 +1923,25 @@ fn is_classic_stream_method_name(prop: &str) -> bool {
 fn is_dns_resolver_method_name(prop: &str) -> bool {
     matches!(
         prop,
-        "cancel" | "getServers" | "setServers" | "setLocalAddress"
+        "cancel"
+            | "getServers"
+            | "setServers"
+            | "setLocalAddress"
+            | "resolve"
+            | "resolve4"
+            | "resolve6"
+            | "resolveAny"
+            | "resolveCaa"
+            | "resolveCname"
+            | "resolveMx"
+            | "resolveNaptr"
+            | "resolveNs"
+            | "resolvePtr"
+            | "resolveSoa"
+            | "resolveSrv"
+            | "resolveTlsa"
+            | "resolveTxt"
+            | "reverse"
     )
 }
 
