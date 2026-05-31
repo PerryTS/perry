@@ -403,17 +403,49 @@ pub extern "C" fn js_object_set_field_by_name(
             }
         }
 
-        if !key.is_null()
-            && (key as usize) > 0x10000
-            && key_to_str_for_diag(key) == "href"
-            && crate::url::is_url_object_shape(obj)
-        {
-            let value_string = crate::value::js_jsvalue_to_string(value);
-            let value_string_handle = scope.root_string_ptr(value_string);
+        if !key.is_null() && (key as usize) > 0x10000 && crate::url::is_url_object_shape(obj) {
+            let key_str = key_to_str_for_diag(key);
             let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-            let value_string = value_string_handle.get_raw_mut_ptr::<crate::StringHeader>();
-            crate::url::js_url_set_href(obj, value_string);
-            return;
+            let value = value_handle.get_nanbox_f64();
+            match key_str.as_str() {
+                "pathname" => {
+                    crate::url::js_url_set_pathname(obj, value);
+                    return;
+                }
+                "search" => {
+                    crate::url::js_url_set_search(obj, value);
+                    return;
+                }
+                "hash" => {
+                    crate::url::js_url_set_hash(obj, value);
+                    return;
+                }
+                "protocol" => {
+                    crate::url::js_url_set_protocol(obj, value);
+                    return;
+                }
+                "hostname" => {
+                    crate::url::js_url_set_hostname(obj, value);
+                    return;
+                }
+                "port" => {
+                    crate::url::js_url_set_port(obj, value);
+                    return;
+                }
+                "username" => {
+                    crate::url::js_url_set_username(obj, value);
+                    return;
+                }
+                "password" => {
+                    crate::url::js_url_set_password(obj, value);
+                    return;
+                }
+                "href" => {
+                    crate::url::js_url_set_href(obj, value);
+                    return;
+                }
+                _ => {}
+            }
         }
 
         // Check Object.freeze/seal/preventExtensions flags

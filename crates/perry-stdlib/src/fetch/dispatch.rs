@@ -314,33 +314,23 @@ pub fn dispatch_headers_property(headers_id: usize, prop: &str) -> Option<f64> {
         let guard = HEADERS_REGISTRY.lock().unwrap();
         guard.get(&headers_id)?;
     }
-    let name_bytes: &'static [u8] = match prop {
-        "append" => b"append",
-        "delete" => b"delete",
-        "entries" => b"entries",
-        "forEach" => b"forEach",
-        "get" => b"get",
-        "getSetCookie" => b"getSetCookie",
-        "has" => b"has",
-        "keys" => b"keys",
-        "set" => b"set",
-        "values" => b"values",
+    let method_name: &'static str = match prop {
+        "append" => "append",
+        "delete" => "delete",
+        // WHATWG aliases `Headers.prototype[Symbol.iterator]` to `entries`.
+        // The property value must be identical to `headers.entries`, so both
+        // names return the same cached bound-method closure.
+        "entries" | "Symbol.iterator" | "@@iterator" => "entries",
+        "forEach" => "forEach",
+        "get" => "get",
+        "getSetCookie" => "getSetCookie",
+        "has" => "has",
+        "keys" => "keys",
+        "set" => "set",
+        "values" => "values",
         _ => return None,
     };
-    extern "C" {
-        fn js_class_method_bind(
-            instance: f64,
-            method_name_ptr: *const u8,
-            method_name_len: usize,
-        ) -> f64;
-    }
-    Some(unsafe {
-        js_class_method_bind(
-            handle_to_f64(headers_id),
-            name_bytes.as_ptr(),
-            name_bytes.len(),
-        )
-    })
+    Some(headers_bound_method_value(headers_id, method_name))
 }
 
 /// Try to dispatch a method call on a Response handle. Returns `Some(result)`
@@ -460,7 +450,7 @@ pub fn dispatch_headers_method(headers_id: usize, method: &str, args: &[f64]) ->
             // Hono's type-stripped JS takes (#1649).
             "keys" => Some(js_headers_keys(h_f64)),
             "values" => Some(js_headers_values(h_f64)),
-            "entries" => Some(js_headers_entries(h_f64)),
+            "entries" | "Symbol.iterator" | "@@iterator" => Some(js_headers_entries(h_f64)),
             _ => None,
         }
     }

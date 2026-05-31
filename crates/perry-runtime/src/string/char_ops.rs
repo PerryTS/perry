@@ -216,20 +216,16 @@ pub extern "C" fn js_string_at(s: *const StringHeader, index: i32) -> f64 {
     if resolved < 0 || resolved >= len {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    // Decode the UTF-16 code unit at `resolved`. If it's a high surrogate followed
-    // by a low surrogate, decode the pair; otherwise the unit is the code point.
+    // #2948: `at()` is UTF-16 *code-unit* based, exactly like `charAt`/`[i]` —
+    // NOT code-point based like `codePointAt`. For an astral char stored as a
+    // surrogate pair, each index returns the lone surrogate code unit (Node:
+    // `"😀".at(0).charCodeAt(0) === 0xd83d`), it does NOT decode the pair.
     let unit = utf16[resolved as usize];
-    let cp: u32 = if (0xD800..=0xDBFF).contains(&unit) && (resolved + 1) < len {
-        let next = utf16[(resolved + 1) as usize];
-        if (0xDC00..=0xDFFF).contains(&next) {
-            0x10000 + ((unit as u32 - 0xD800) << 10) + (next as u32 - 0xDC00)
-        } else {
-            unit as u32
-        }
-    } else {
-        unit as u32
-    };
-    let ch = char::from_u32(cp).unwrap_or('\u{FFFD}');
+    // Encode the single code unit. A lone surrogate (0xD800..=0xDFFF) is not a
+    // valid Rust `char`, so it materializes as U+FFFD — the documented WTF-8 /
+    // lone-surrogate categorical gap (same shim as `fromCharCode`). BMP units
+    // round-trip exactly.
+    let ch = char::from_u32(unit as u32).unwrap_or('\u{FFFD}');
     let mut buf = [0u8; 4];
     let encoded = ch.encode_utf8(&mut buf);
     let ptr = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);

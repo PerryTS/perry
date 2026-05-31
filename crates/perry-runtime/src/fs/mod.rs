@@ -931,23 +931,34 @@ fn open_file_for_write_flag(path: &str, flag: &str) -> std::io::Result<fs::File>
     opts.open(path)
 }
 
-/// `fs.renameSync(from, to)` — returns 1 on success, 0 on failure.
-#[no_mangle]
-pub extern "C" fn js_fs_rename_sync(from_value: f64, to_value: f64) -> i32 {
+/// Core `rename` op. Returns `Ok(())` on success or a NaN-boxed Node-shaped
+/// fs error (with `code`/`syscall`/`path`/`dest`) on failure. Shared by the
+/// sync FFI (which throws), the callback wrapper, and the promise thunk so
+/// destination-side failures (#2735) are no longer silently dropped.
+pub(crate) unsafe fn js_fs_rename_result(from_value: f64, to_value: f64) -> Result<(), f64> {
     crate::fs::validate::validate_path("oldPath", from_value);
     crate::fs::validate::validate_path("newPath", to_value);
+    let from = match decode_path_value(from_value) {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+    let to = match decode_path_value(to_value) {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+    match fs::rename(&from, &to) {
+        Ok(_) => Ok(()),
+        Err(err) => Err(build_fs_error_value_with_dest(&err, "rename", &from, &to)),
+    }
+}
+
+/// `fs.renameSync(from, to)` — returns 1 on success, throws on failure.
+#[no_mangle]
+pub extern "C" fn js_fs_rename_sync(from_value: f64, to_value: f64) -> i32 {
     unsafe {
-        let from = match decode_path_value(from_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-        let to = match decode_path_value(to_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-        match fs::rename(from, to) {
-            Ok(_) => 1,
-            Err(_) => 0,
+        match js_fs_rename_result(from_value, to_value) {
+            Ok(()) => 1,
+            Err(err_val) => crate::exception::js_throw(err_val),
         }
     }
 }
@@ -962,43 +973,55 @@ pub extern "C" fn js_fs_copy_file_sync(from_value: f64, to_value: f64) -> i32 {
     )
 }
 
-#[no_mangle]
-pub extern "C" fn js_fs_copy_file_sync_flags(
+/// Core `copyFile` op. Returns `Ok(())` or a NaN-boxed Node-shaped fs error
+/// with `code`/`syscall: "copyfile"`/`path`/`dest`. Preserves the explicit
+/// `COPYFILE_EXCL` destination-exists `EEXIST` case while also surfacing
+/// generic copy failures such as a missing source or destination parent
+/// (#2737) that previously collapsed to a silent no-op.
+pub(crate) unsafe fn js_fs_copy_file_result(
     from_value: f64,
     to_value: f64,
     flags_value: f64,
-) -> i32 {
+) -> Result<(), f64> {
     crate::fs::validate::validate_path("src", from_value);
     crate::fs::validate::validate_path("dest", to_value);
     let flags_jv = crate::value::JSValue::from_bits(flags_value.to_bits());
     if !flags_jv.is_undefined() {
         crate::fs::validate::validate_int32(flags_value, "mode", 0, 7);
     }
+    let from = match decode_path_value(from_value) {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+    let to = match decode_path_value(to_value) {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+    let excl = flags_value.is_finite() && (flags_value as i64 & 1) == 1;
+    if excl && Path::new(&to).exists() {
+        // Node: `EEXIST: file already exists, copyfile '<src>' -> '<dst>'`.
+        let err = std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "destination already exists",
+        );
+        return Err(build_fs_error_value_with_dest(&err, "copyfile", &from, &to));
+    }
+    match fs::copy(&from, &to) {
+        Ok(_) => Ok(()),
+        Err(err) => Err(build_fs_error_value_with_dest(&err, "copyfile", &from, &to)),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_fs_copy_file_sync_flags(
+    from_value: f64,
+    to_value: f64,
+    flags_value: f64,
+) -> i32 {
     unsafe {
-        let from = match decode_path_value(from_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-        let to = match decode_path_value(to_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-        let excl = flags_value.is_finite() && (flags_value as i64 & 1) == 1;
-        if excl && Path::new(&to).exists() {
-            // Node throws `EEXIST: file already exists, copyfile '<src>' -> '<dst>'`.
-            // Surface the same via `js_throw` so user `try/catch` fires; the
-            // existing code path silently returned 0 which left callers
-            // believing the copy was a no-op.
-            let err = std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                "destination already exists",
-            );
-            let err_val = build_fs_error_value(&err, "copyfile", &to);
-            crate::exception::js_throw(err_val);
-        }
-        match fs::copy(from, to) {
-            Ok(_) => 1,
-            Err(_) => 0,
+        match js_fs_copy_file_result(from_value, to_value, flags_value) {
+            Ok(()) => 1,
+            Err(err_val) => crate::exception::js_throw(err_val),
         }
     }
 }
@@ -1216,28 +1239,36 @@ pub extern "C" fn js_fs_rmdir_sync_options(path_value: f64, options_value: f64) 
     }
 }
 
+/// Core path-based `truncate` op. Node surfaces the `open` syscall error
+/// when the path can't be opened for truncation (ENOENT / EISDIR / EACCES),
+/// so failures are reported with `code`/`syscall: "open"`/`path` (#2743)
+/// instead of collapsing to a silent no-op.
+pub(crate) unsafe fn js_fs_truncate_result(path_value: f64, len_value: f64) -> Result<(), f64> {
+    let path_str = match decode_path_value(path_value) {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+    let len = if len_value.is_finite() && len_value >= 0.0 {
+        len_value as u64
+    } else {
+        0
+    };
+    match fs::OpenOptions::new().write(true).open(&path_str) {
+        Ok(file) => match file.set_len(len) {
+            Ok(()) => Ok(()),
+            Err(err) => Err(build_fs_error_value(&err, "ftruncate", &path_str)),
+        },
+        Err(err) => Err(build_fs_error_value(&err, "open", &path_str)),
+    }
+}
+
 /// `fs.truncateSync(path, len)` — truncate/extend a file by path.
 #[no_mangle]
 pub extern "C" fn js_fs_truncate_sync(path_value: f64, len_value: f64) -> i32 {
     unsafe {
-        let path_str = match decode_path_value(path_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-        let len = if len_value.is_finite() && len_value >= 0.0 {
-            len_value as u64
-        } else {
-            0
-        };
-        match fs::OpenOptions::new().write(true).open(path_str) {
-            Ok(file) => {
-                if file.set_len(len).is_ok() {
-                    1
-                } else {
-                    0
-                }
-            }
-            Err(_) => 0,
+        match js_fs_truncate_result(path_value, len_value) {
+            Ok(()) => 1,
+            Err(err_val) => crate::exception::js_throw(err_val),
         }
     }
 }
@@ -1557,23 +1588,60 @@ pub extern "C" fn js_fs_futimes_sync(fd_value: f64, atime_value: f64, mtime_valu
     })
 }
 
+/// Core hard-`link` op. Returns `Ok(())` or a NaN-boxed Node-shaped fs error
+/// with `code`/`syscall: "link"`/`path`/`dest`. Surfaces missing-source
+/// (ENOENT), missing-destination-parent (ENOENT), and existing-destination
+/// (EEXIST) failures that previously collapsed to a silent no-op (#2738).
+pub(crate) unsafe fn js_fs_link_result(from_value: f64, to_value: f64) -> Result<(), f64> {
+    let from = match decode_path_value(from_value) {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+    let to = match decode_path_value(to_value) {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+    match fs::hard_link(&from, &to) {
+        Ok(()) => Ok(()),
+        Err(err) => Err(build_fs_error_value_with_dest(&err, "link", &from, &to)),
+    }
+}
+
 /// `fs.linkSync(existingPath, newPath)` — create a hard link.
 #[no_mangle]
 pub extern "C" fn js_fs_link_sync(from_value: f64, to_value: f64) -> i32 {
     unsafe {
-        let from = match decode_path_value(from_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-        let to = match decode_path_value(to_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-        if fs::hard_link(from, to).is_ok() {
-            1
-        } else {
-            0
+        match js_fs_link_result(from_value, to_value) {
+            Ok(()) => 1,
+            Err(err_val) => crate::exception::js_throw(err_val),
         }
+    }
+}
+
+/// Core `symlink` op. Returns `Ok(())` or a NaN-boxed Node-shaped fs error
+/// with `code`/`syscall: "symlink"`/`path`/`dest`. Dangling targets are
+/// allowed (Node behavior); destination-side failures such as a missing
+/// destination parent (ENOENT) or existing destination (EEXIST) now surface
+/// instead of collapsing to a silent no-op (#2740). Node sets `path` to the
+/// target and `dest` to the link path.
+pub(crate) unsafe fn js_fs_symlink_result(target_value: f64, path_value: f64) -> Result<(), f64> {
+    let target = match decode_path_value(target_value) {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+    let path = match decode_path_value(path_value) {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+    #[cfg(unix)]
+    let res = std::os::unix::fs::symlink(&target, &path);
+    #[cfg(windows)]
+    let res = std::os::windows::fs::symlink_file(&target, &path);
+    match res {
+        Ok(()) => Ok(()),
+        Err(err) => Err(build_fs_error_value_with_dest(
+            &err, "symlink", &target, &path,
+        )),
     }
 }
 
@@ -1581,29 +1649,9 @@ pub extern "C" fn js_fs_link_sync(from_value: f64, to_value: f64) -> i32 {
 #[no_mangle]
 pub extern "C" fn js_fs_symlink_sync(target_value: f64, path_value: f64) -> i32 {
     unsafe {
-        let target = match decode_path_value(target_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-        let path = match decode_path_value(path_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-        #[cfg(unix)]
-        {
-            if std::os::unix::fs::symlink(target, path).is_ok() {
-                1
-            } else {
-                0
-            }
-        }
-        #[cfg(windows)]
-        {
-            if std::os::windows::fs::symlink_file(target, path).is_ok() {
-                1
-            } else {
-                0
-            }
+        match js_fs_symlink_result(target_value, path_value) {
+            Ok(()) => 1,
+            Err(err_val) => crate::exception::js_throw(err_val),
         }
     }
 }
@@ -1757,6 +1805,26 @@ unsafe fn build_fs_error_value(err: &std::io::Error, syscall: &'static str, path
     crate::node_submodules::register_error_code_pub(msg_ptr, code);
     crate::node_submodules::register_error_syscall(msg_ptr, syscall);
     crate::node_submodules::register_error_path(msg_ptr, path.to_string());
+    crate::value::js_nanbox_pointer(err_ptr as i64)
+}
+
+/// Build a Node-shaped fs error carrying both `path` and `dest`, for the
+/// two-path mutators (rename/copyFile/link/symlink). Node's message reads
+/// `CODE: <desc>, <syscall> '<path>' -> '<dest>'` and exposes `.path`/`.dest`.
+unsafe fn build_fs_error_value_with_dest(
+    err: &std::io::Error,
+    syscall: &'static str,
+    path: &str,
+    dest: &str,
+) -> f64 {
+    let code = io_error_code(err);
+    let msg = format!("{}: {}, {} '{}' -> '{}'", code, err, syscall, path, dest);
+    let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
+    crate::node_submodules::register_error_code_pub(msg_ptr, code);
+    crate::node_submodules::register_error_syscall(msg_ptr, syscall);
+    crate::node_submodules::register_error_path(msg_ptr, path.to_string());
+    crate::node_submodules::register_error_dest(msg_ptr, dest.to_string());
     crate::value::js_nanbox_pointer(err_ptr as i64)
 }
 

@@ -13,6 +13,7 @@ mod cmp;
 mod coding;
 mod copy_bytes;
 mod copy_write;
+mod dataview;
 mod encode;
 mod from;
 mod header;
@@ -21,6 +22,7 @@ mod mutate;
 mod numeric;
 mod query;
 mod transcode;
+mod u8_codec;
 pub mod validate;
 mod view;
 
@@ -59,10 +61,19 @@ pub use encode::{
     js_buffer_to_string_range, js_value_to_string_with_encoding,
 };
 
+// ---- Re-exports: TC39 Uint8Array base64/hex codecs (#2901) ----
+pub use u8_codec::{
+    js_u8_from_base64, js_u8_from_hex, js_u8_set_from_base64, js_u8_set_from_hex, js_u8_to_base64,
+    js_u8_to_hex,
+};
+
 // ---- Re-exports: indexed access / slice / Uint8Array.set ----
 pub use access::{
     js_buffer_get, js_buffer_set, js_buffer_set_from, js_buffer_set_from_value, js_buffer_slice,
 };
+
+// ---- Re-exports: DataView numeric accessors (#2878) ----
+pub use dataview::{js_data_view_get, js_data_view_set, DataViewKind};
 
 // ---- Re-exports: copy / write ----
 pub use copy_bytes::js_buffer_copy_bytes_from;

@@ -143,13 +143,22 @@ pub(super) fn lower_builtin_new(
             } else {
                 double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
-            for a in args.iter().skip(1) {
-                let _ = lower_expr(ctx, a)?;
-            }
+            let offset_i32 = if args.len() >= 2 {
+                let offset = lower_expr(ctx, &args[1])?;
+                ctx.block().fptosi(DOUBLE, &offset, I32)
+            } else {
+                "0".to_string()
+            };
+            let length_i32 = if args.len() >= 3 {
+                let length = lower_expr(ctx, &args[2])?;
+                ctx.block().fptosi(DOUBLE, &length, I32)
+            } else {
+                "-1".to_string()
+            };
             Ok(Some(ctx.block().call(
                 DOUBLE,
                 "js_data_view_new",
-                &[(DOUBLE, &view_box)],
+                &[(DOUBLE, &view_box), (I32, &offset_i32), (I32, &length_i32)],
             )))
         }
         "RegExp" => {
@@ -476,6 +485,56 @@ pub(super) fn lower_builtin_new(
             );
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        // #2875: TC39 explicit-resource-management stacks. `new
+        // DisposableStack()` / `new AsyncDisposableStack()` allocate a
+        // GC-managed stack object (NaN-boxed pointer) so the instance methods
+        // (`use` / `adopt` / `defer` / `dispose` / `move` / `disposed`)
+        // dispatch through the `__disposable__` rows in native_table.
+        "DisposableStack" => {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_disposable_stack_new", &[]);
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "AsyncDisposableStack" => {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_async_disposable_stack_new", &[]);
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        // #2875: `new SuppressedError(error, suppressed, message?)` — an
+        // Error-subclass object carrying `.error` / `.suppressed` /
+        // `.message` / `.name`. The runtime ctor registers the class id as
+        // extending Error (once) so `instanceof Error` holds; the property
+        // reads flow through the ordinary by-name object getter.
+        "SuppressedError" => {
+            let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let error = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                undef.clone()
+            };
+            let suppressed = if let Some(a) = args.get(1) {
+                lower_expr(ctx, a)?
+            } else {
+                undef.clone()
+            };
+            let message = if let Some(a) = args.get(2) {
+                lower_expr(ctx, a)?
+            } else {
+                undef.clone()
+            };
+            let blk = ctx.block();
+            Ok(Some(blk.call(
+                DOUBLE,
+                "js_suppressed_error_new",
+                &[(DOUBLE, &error), (DOUBLE, &suppressed), (DOUBLE, &message)],
+            )))
+        }
         // decimal.js Decimal — `new Decimal(value)` where value is a number,
         // string, or another Decimal. Routes through `js_decimal_coerce_to_handle`
         // which NaN-decodes the JSValue and dispatches to `from_number` /
@@ -700,15 +759,17 @@ pub(super) fn lower_builtin_new(
 
         "Headers" => {
             // new Headers(init?) — init can be an object literal or another
-            // Headers/array iterable. Only inline object literals are
-            // handled so far; anything else falls back to empty.
+            // Headers/array iterable.
             let h = ctx.block().call(DOUBLE, "js_headers_new", &[]);
             if !args.is_empty() {
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
                     for (k, vexpr) in &props {
                         let key_expr = Expr::String(k.clone());
                         let key_ptr = get_raw_string_ptr(ctx, &key_expr)?;
-                        let val_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                        let value = lower_expr(ctx, vexpr)?;
+                        let val_ptr =
+                            ctx.block()
+                                .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &value)]);
                         ctx.block().call(
                             DOUBLE,
                             "js_headers_set",
@@ -716,7 +777,12 @@ pub(super) fn lower_builtin_new(
                         );
                     }
                 } else {
-                    let _ = lower_expr(ctx, &args[0])?;
+                    let init = lower_expr(ctx, &args[0])?;
+                    ctx.block().call(
+                        DOUBLE,
+                        "js_headers_init_from_value",
+                        &[(DOUBLE, &h), (DOUBLE, &init)],
+                    );
                 }
             }
             Ok(Some(h))

@@ -151,6 +151,10 @@ pub fn try_lower_property_get_method_call(
             .unwrap_or(false);
         if !has_user_to_string {
             let v = lower_expr(ctx, object)?;
+            // Always lower the raw arg value too: for a Number/BigInt receiver
+            // the string is the radix (ToNumber-coerced at runtime, #2864), not
+            // an encoding. Disambiguation is by receiver type at runtime.
+            let arg_box = lower_expr(ctx, &args[0])?;
             let enc_tag_i32 = if let Expr::String(s) = &args[0] {
                 let lower = s.to_ascii_lowercase();
                 let tag: i32 = match lower.as_str() {
@@ -165,15 +169,14 @@ pub fn try_lower_property_get_method_call(
                 };
                 tag.to_string()
             } else {
-                let enc_box = lower_expr(ctx, &args[0])?;
                 let blk = ctx.block();
-                blk.call(I32, "js_encoding_tag_from_value", &[(DOUBLE, &enc_box)])
+                blk.call(I32, "js_encoding_tag_from_value", &[(DOUBLE, &arg_box)])
             };
             let blk = ctx.block();
             let handle = blk.call(
                 I64,
-                "js_value_to_string_with_encoding",
-                &[(DOUBLE, &v), (I32, &enc_tag_i32)],
+                "js_value_to_string_with_encoding_or_radix",
+                &[(DOUBLE, &v), (I32, &enc_tag_i32), (DOUBLE, &arg_box)],
             );
             return Ok(Some(nanbox_string_inline(blk, &handle)));
         }
@@ -205,13 +208,16 @@ pub fn try_lower_property_get_method_call(
             .unwrap_or(false);
         if !has_user_to_string {
             let v = lower_expr(ctx, object)?;
-            let radix_d = lower_expr(ctx, &args[0])?;
+            // Pass the *raw* NaN-boxed radix value (not an `fptosi` i32). The
+            // runtime performs ECMAScript ToNumber/ToInteger coercion and
+            // `RangeError` validation on it (#2864); an `fptosi` here would
+            // silently collapse NaN/Infinity/string radices to 0 or garbage.
+            let radix_v = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
-            let radix_i32 = blk.fptosi(DOUBLE, &radix_d, I32);
             let handle = blk.call(
                 I64,
                 "js_jsvalue_to_string_radix",
-                &[(DOUBLE, &v), (I32, &radix_i32)],
+                &[(DOUBLE, &v), (DOUBLE, &radix_v)],
             );
             return Ok(Some(nanbox_string_inline(blk, &handle)));
         }
@@ -557,14 +563,19 @@ pub fn try_lower_property_get_method_call(
             // `undefined`. The runtime returns a real Array; we
             // NaN-box-pointer the result for downstream
             // `.length` / `forEach` / `Array.from` use.
+            // #2856: a value-level `.entries()`/`.keys()`/`.values()` call
+            // returns a real iterator OBJECT (`.next()`-bearing, not an
+            // Array). The eager Array materializers (`js_map_entries` etc.)
+            // are still used by the for-of/spread fast paths via the
+            // `Expr::MapEntries`/etc HIR variants.
             "entries" | "keys" | "values" if args.is_empty() => {
                 let m_box = lower_expr(ctx, object)?;
                 let blk = ctx.block();
                 let m_handle = unbox_to_i64(blk, &m_box);
                 let runtime_fn = match property.as_str() {
-                    "entries" => "js_map_entries",
-                    "keys" => "js_map_keys",
-                    "values" => "js_map_values",
+                    "entries" => "js_map_entries_iter_obj",
+                    "keys" => "js_map_keys_iter_obj",
+                    "values" => "js_map_values_iter_obj",
                     _ => unreachable!(),
                 };
                 let result = blk.call(I64, runtime_fn, &[(I64, &m_handle)]);
@@ -626,12 +637,59 @@ pub fn try_lower_property_get_method_call(
             // spread shapes. Pre-fix `new Set([1]).values()`
             // returned `undefined` because the HIR-level fold at
             // expr_call.rs only fires for `Expr::Ident` receivers.
-            "values" | "keys" if args.is_empty() => {
+            // #2856: value-level Set iterator methods return real iterator
+            // objects. `entries` was previously missing here and on the
+            // typed-Set HIR path; for Sets `entries` yields `[v, v]` pairs.
+            "values" | "keys" | "entries" if args.is_empty() => {
                 let s_box = lower_expr(ctx, object)?;
                 let blk = ctx.block();
                 let s_handle = unbox_to_i64(blk, &s_box);
-                let result = blk.call(I64, "js_set_to_array", &[(I64, &s_handle)]);
+                let runtime_fn = match property.as_str() {
+                    "values" => "js_set_values_iter_obj",
+                    "keys" => "js_set_keys_iter_obj",
+                    "entries" => "js_set_entries_iter_obj",
+                    _ => unreachable!(),
+                };
+                let result = blk.call(I64, runtime_fn, &[(I64, &s_handle)]);
                 return Ok(Some(crate::expr::nanbox_pointer_inline_pub(blk, &result)));
+            }
+            // #2872: ES2024 Set composition methods. union/intersection/
+            // difference/symmetricDifference take a set-like `other` and
+            // return a NEW Set; isSubsetOf/isSupersetOf/isDisjointFrom return
+            // a boolean. The runtime fns receive the receiver as an I64 set
+            // handle and `other` as a NaN-boxed f64.
+            "union" | "intersection" | "difference" | "symmetricDifference" if args.len() == 1 => {
+                let s_box = lower_expr(ctx, object)?;
+                let other_box = lower_expr(ctx, &args[0])?;
+                let blk = ctx.block();
+                let s_handle = unbox_to_i64(blk, &s_box);
+                let runtime_fn = match property.as_str() {
+                    "union" => "js_set_union",
+                    "intersection" => "js_set_intersection",
+                    "difference" => "js_set_difference",
+                    "symmetricDifference" => "js_set_symmetric_difference",
+                    _ => unreachable!(),
+                };
+                let result = blk.call(I64, runtime_fn, &[(I64, &s_handle), (DOUBLE, &other_box)]);
+                return Ok(Some(crate::expr::nanbox_pointer_inline_pub(blk, &result)));
+            }
+            "isSubsetOf" | "isSupersetOf" | "isDisjointFrom" if args.len() == 1 => {
+                let s_box = lower_expr(ctx, object)?;
+                let other_box = lower_expr(ctx, &args[0])?;
+                let blk = ctx.block();
+                let s_handle = unbox_to_i64(blk, &s_box);
+                let runtime_fn = match property.as_str() {
+                    "isSubsetOf" => "js_set_is_subset_of",
+                    "isSupersetOf" => "js_set_is_superset_of",
+                    "isDisjointFrom" => "js_set_is_disjoint_from",
+                    _ => unreachable!(),
+                };
+                let i32_v = blk.call(
+                    crate::types::I32,
+                    runtime_fn,
+                    &[(I64, &s_handle), (DOUBLE, &other_box)],
+                );
+                return Ok(Some(crate::expr::i32_bool_to_nanbox(blk, &i32_v)));
             }
             _ => {}
         }
@@ -643,21 +701,45 @@ pub fn try_lower_property_get_method_call(
     // Route to the runtime forEach implementations which iterate
     // entries and call the callback via js_closure_call2.
     if property == "forEach" && !args.is_empty() {
+        // #2830: lower the optional `thisArg` (args[1]) and pass it through
+        // so the callback's `this` is bound; the runtime calls the callback
+        // with the full `(value, key, collection)` triple. Map.forEach
+        // returns `undefined`.
         if is_map_expr(ctx, object) {
             let m_box = lower_expr(ctx, object)?;
             let cb_box = lower_expr(ctx, &args[0])?;
+            let this_arg = if args.len() >= 2 {
+                lower_expr(ctx, &args[1])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let m_handle = unbox_to_i64(blk, &m_box);
-            blk.call_void("js_map_foreach", &[(I64, &m_handle), (DOUBLE, &cb_box)]);
-            return Ok(Some(double_literal(0.0)));
+            blk.call_void(
+                "js_map_foreach",
+                &[(I64, &m_handle), (DOUBLE, &cb_box), (DOUBLE, &this_arg)],
+            );
+            return Ok(Some(double_literal(f64::from_bits(
+                crate::nanbox::TAG_UNDEFINED,
+            ))));
         }
         if is_set_expr(ctx, object) {
             let s_box = lower_expr(ctx, object)?;
             let cb_box = lower_expr(ctx, &args[0])?;
+            let this_arg = if args.len() >= 2 {
+                lower_expr(ctx, &args[1])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let s_handle = unbox_to_i64(blk, &s_box);
-            blk.call_void("js_set_foreach", &[(I64, &s_handle), (DOUBLE, &cb_box)]);
-            return Ok(Some(double_literal(0.0)));
+            blk.call_void(
+                "js_set_foreach",
+                &[(I64, &s_handle), (DOUBLE, &cb_box), (DOUBLE, &this_arg)],
+            );
+            return Ok(Some(double_literal(f64::from_bits(
+                crate::nanbox::TAG_UNDEFINED,
+            ))));
         }
         // URLSearchParams.forEach((value, key, this) => …). The HIR
         // variant `Expr::UrlSearchParamsForEach` only fires when the

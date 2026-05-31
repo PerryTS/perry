@@ -225,3 +225,9 @@ pub(crate) fn promise_value_fs(value: f64) -> f64 {
 pub(crate) fn promise_undefined_fs() -> f64 {
     promise_value_fs(f64::from_bits(crate::value::TAG_UNDEFINED))
 }
+
+pub(crate) fn promise_rejected_fs(reason: f64) -> f64 {
+    let promise = crate::promise::js_promise_new();
+    crate::promise::js_promise_reject(promise, reason);
+    f64::from_bits(crate::value::JSValue::pointer(promise as *const u8).bits())
+}

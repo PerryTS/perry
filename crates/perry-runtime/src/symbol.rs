@@ -1148,6 +1148,30 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             }
         }
     }
+    // Web Fetch and other stdlib handle-backed values are small ids
+    // NaN-boxed as POINTER. A computed `handle[Symbol.iterator]` reaches the
+    // symbol resolver directly, bypassing the normal string-key handle
+    // property dispatcher. Map the well-known symbol back to the dispatcher so
+    // `Headers` can expose its `entries` method as the iterator function.
+    if (bits >> 48) == 0x7FFD {
+        let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
+        if id > 0 && id < 0x100000 {
+            let iter_wk = well_known_symbol("iterator");
+            if !iter_wk.is_null() {
+                let iter_f64 =
+                    f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
+                if sym_key_from_f64(sym_f64) == sym_key_from_f64(iter_f64) {
+                    if let Some(dispatch) = crate::object::handle_property_dispatch() {
+                        let prop = b"@@iterator";
+                        let value = dispatch(id, prop.as_ptr(), prop.len());
+                        if value.to_bits() != TAG_UNDEFINED {
+                            return value;
+                        }
+                    }
+                }
+            }
+        }
+    }
     if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
         return v;
     }
@@ -1270,6 +1294,35 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             if sym_key_from_f64(sym_f64) == sym_key_from_f64(iter_f64) {
                 let mname = b"values";
                 return crate::object::js_class_method_bind(obj_f64, mname.as_ptr(), mname.len());
+            }
+        }
+    }
+    // #2856: `Map.prototype[Symbol.iterator]` aliases `entries`, and
+    // `Set.prototype[Symbol.iterator]` aliases `values`. Bind the matching
+    // method so `m[Symbol.iterator]()` returns a real iterator object (and
+    // `Symbol.iterator in m` / `typeof m[Symbol.iterator]` are correct).
+    if raw_addr >= 0x10000 {
+        let iter_wk = well_known_symbol("iterator");
+        if !iter_wk.is_null() {
+            let iter_f64 =
+                f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
+            if sym_key_from_f64(sym_f64) == sym_key_from_f64(iter_f64) {
+                if crate::map::is_registered_map(raw_addr) {
+                    let mname = b"entries";
+                    return crate::object::js_class_method_bind(
+                        obj_f64,
+                        mname.as_ptr(),
+                        mname.len(),
+                    );
+                }
+                if crate::set::is_registered_set(raw_addr) {
+                    let mname = b"values";
+                    return crate::object::js_class_method_bind(
+                        obj_f64,
+                        mname.as_ptr(),
+                        mname.len(),
+                    );
+                }
             }
         }
     }
@@ -1398,7 +1451,16 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
             let fn_ptr = crate::value::js_nanbox_get_pointer(call_target)
                 as *const crate::closure::ClosureHeader;
             if !fn_ptr.is_null() {
-                return crate::closure::js_closure_call0(fn_ptr);
+                let iter = crate::closure::js_closure_call0(fn_ptr);
+                // Several Perry host-backed collections expose iterator
+                // helpers as eager arrays for direct `.entries()` parity. When
+                // the same function is reached through `Symbol.iterator`, wrap
+                // that array in the runtime array iterator so generic protocol
+                // consumers can drive `.next()`.
+                if crate::array::js_array_is_array(iter).to_bits() == crate::value::TAG_TRUE {
+                    return crate::array::array_values_iter(iter);
+                }
+                return iter;
             }
         }
     }
@@ -1413,6 +1475,12 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
 /// with POINTER_TAG before handing the result to user code.
 #[no_mangle]
 pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64 {
+    // #2818: ToObject(null/undefined) throws TypeError, matching Node. Other
+    // primitives box successfully and enumerate no own symbols (empty array).
+    let jv = crate::JSValue::from_bits(obj_f64.to_bits());
+    if jv.is_null() || jv.is_undefined() {
+        crate::object::has_own_helpers::throw_to_object_nullish_type_error();
+    }
     let obj_key = obj_key_from_f64(obj_f64);
     if obj_key == 0 {
         return crate::array::js_array_alloc(0) as i64;

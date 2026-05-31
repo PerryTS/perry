@@ -61,7 +61,11 @@ pub const NATIVE_MODULES: &[&str] = &[
     "buffer",
     "assert",
     "assert/strict",
+    "test",
     "child_process",
+    "dns",
+    "dns/promises",
+    "dgram",
     "net",
     "tls",
     "stream",
@@ -75,6 +79,8 @@ pub const NATIVE_MODULES: &[&str] = &[
     "constants",
     "util",
     "util/types",
+    "dns",
+    "dns/promises",
     "url",
     "lru-cache",
     "commander",
@@ -90,12 +96,16 @@ pub const NATIVE_MODULES: &[&str] = &[
     "cron",
     "fastify",
     "async_hooks",
+    // #2875: internal module backing DisposableStack/AsyncDisposableStack
+    // instance-method dispatch (no JS import surface).
+    "__disposable__",
     "readline",
     "string_decoder",
     "querystring",
     "cluster",
     "tty",
     "perf_hooks",
+    "v8",
     "process",
     "perry/tui",
     "perry/ui",
@@ -131,7 +141,13 @@ pub const NATIVE_MODULES: &[&str] = &[
 /// `node_submodules` runtime table rather than `NATIVE_MODULES`.
 /// Keeping these separate preserves the compiler's submodule import
 /// lowering while still allowing manifest/docs entries for the subpath.
-pub const NODE_SUBMODULES: &[&str] = &["stream/promises", "punycode.ucs2", "sys"];
+pub const NODE_SUBMODULES: &[&str] = &[
+    "stream/promises",
+    "punycode.ucs2",
+    "sys",
+    "test",
+    "test/reporters",
+];
 
 /// Modules handled entirely by `perry-runtime` — the linker doesn't
 /// need to pull in `perry-stdlib` for these. Migrated from
@@ -145,13 +161,19 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "buffer",
     "assert",
     "assert/strict",
+    "test",
     "child_process",
+    "dns",
+    "dns/promises",
+    "dgram",
     "stream",
     "module",
     "url",
     "console",
     "util",
     "util/types",
+    "dns",
+    "dns/promises",
     "process",
     "perry/ui",
     "perry/system",
@@ -164,6 +186,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "perry/background",
     "tty",
     "perf_hooks",
+    "v8",
 ];
 
 const fn method(
@@ -269,6 +292,12 @@ const ZLIB_STREAM_OPTS: &[ParamSpec] = &[ParamSpec::Named {
     optional: true,
 }];
 const ZLIB_CALLBACK_ARGS: &[ParamSpec] = &[p_any("buffer"), p_any("callback")];
+/// #2935 — optional `{ level, ... }` options object for one-shot codecs.
+const ZLIB_OPTIONS_PARAM: ParamSpec = ParamSpec::Named {
+    name: "options",
+    ty: TypeSpec::Any,
+    optional: true,
+};
 const fn zlib_stream_factory(name: &'static str) -> ApiEntry {
     method_sig("zlib", name, false, None, ZLIB_STREAM_OPTS, TypeSpec::Any)
 }
@@ -534,6 +563,113 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_any("p0")],
         TypeSpec::Void,
     ),
+    // node:dns is currently a runtime-only shape stub: deterministic
+    // inventory helpers, constants, Resolver method shapes, and a local-only
+    // promises lookup for `localhost`. It does not perform external DNS IO.
+    method("dns", "lookup", false, None),
+    method("dns", "lookupService", false, None),
+    method("dns", "resolve", false, None),
+    method("dns", "resolve4", false, None),
+    method("dns", "resolve6", false, None),
+    method("dns", "resolveAny", false, None),
+    method("dns", "resolveCaa", false, None),
+    method("dns", "resolveCname", false, None),
+    method("dns", "resolveMx", false, None),
+    method("dns", "resolveNaptr", false, None),
+    method("dns", "resolveNs", false, None),
+    method("dns", "resolvePtr", false, None),
+    method("dns", "resolveSoa", false, None),
+    method("dns", "resolveSrv", false, None),
+    method("dns", "resolveTlsa", false, None),
+    method("dns", "resolveTxt", false, None),
+    method("dns", "reverse", false, None),
+    method("dns", "getServers", false, None),
+    method("dns", "setServers", false, None),
+    method("dns", "setDefaultResultOrder", false, None),
+    method("dns", "getDefaultResultOrder", false, None),
+    class("dns", "Resolver"),
+    method("dns", "Resolver", false, None),
+    method("dns", "cancel", true, Some("Resolver")),
+    method("dns", "getServers", true, Some("Resolver")),
+    method("dns", "setServers", true, Some("Resolver")),
+    method("dns", "setLocalAddress", true, Some("Resolver")),
+    property("dns", "ADDRCONFIG"),
+    property("dns", "V4MAPPED"),
+    property("dns", "ALL"),
+    property("dns", "NODATA"),
+    property("dns", "FORMERR"),
+    property("dns", "SERVFAIL"),
+    property("dns", "NOTFOUND"),
+    property("dns", "NOTIMP"),
+    property("dns", "REFUSED"),
+    property("dns", "BADQUERY"),
+    property("dns", "BADNAME"),
+    property("dns", "BADFAMILY"),
+    property("dns", "BADRESP"),
+    property("dns", "CONNREFUSED"),
+    property("dns", "TIMEOUT"),
+    property("dns", "EOF"),
+    property("dns", "FILE"),
+    property("dns", "NOMEM"),
+    property("dns", "DESTRUCTION"),
+    property("dns", "BADSTR"),
+    property("dns", "BADFLAGS"),
+    property("dns", "NONAME"),
+    property("dns", "BADHINTS"),
+    property("dns", "NOTINITIALIZED"),
+    property("dns", "LOADIPHLPAPI"),
+    property("dns", "ADDRGETNETWORKPARAMS"),
+    property("dns", "CANCELLED"),
+    method("dns/promises", "lookup", false, None),
+    method("dns/promises", "lookupService", false, None),
+    method("dns/promises", "resolve", false, None),
+    method("dns/promises", "resolve4", false, None),
+    method("dns/promises", "resolve6", false, None),
+    method("dns/promises", "resolveAny", false, None),
+    method("dns/promises", "resolveCaa", false, None),
+    method("dns/promises", "resolveCname", false, None),
+    method("dns/promises", "resolveMx", false, None),
+    method("dns/promises", "resolveNaptr", false, None),
+    method("dns/promises", "resolveNs", false, None),
+    method("dns/promises", "resolvePtr", false, None),
+    method("dns/promises", "resolveSoa", false, None),
+    method("dns/promises", "resolveSrv", false, None),
+    method("dns/promises", "resolveTlsa", false, None),
+    method("dns/promises", "resolveTxt", false, None),
+    method("dns/promises", "reverse", false, None),
+    method("dns/promises", "getServers", false, None),
+    method("dns/promises", "setServers", false, None),
+    method("dns/promises", "setDefaultResultOrder", false, None),
+    method("dns/promises", "getDefaultResultOrder", false, None),
+    class("dns/promises", "Resolver"),
+    method("dns/promises", "Resolver", false, None),
+    method("dns/promises", "cancel", true, Some("Resolver")),
+    method("dns/promises", "getServers", true, Some("Resolver")),
+    // node:dgram UDP support is currently a runtime-only shape stub:
+    // createSocket returns a socket-like object with callable methods so
+    // feature detection and inventory probes compile without claiming packet IO.
+    method("dgram", "createSocket", false, None),
+    class("dgram", "Socket"),
+    method("dgram", "Socket", false, None),
+    method("dgram", "send", true, Some("Socket")),
+    method("dgram", "bind", true, Some("Socket")),
+    method("dgram", "close", true, Some("Socket")),
+    method("dgram", "address", true, Some("Socket")),
+    method("dgram", "connect", true, Some("Socket")),
+    method("dgram", "disconnect", true, Some("Socket")),
+    method("dgram", "addMembership", true, Some("Socket")),
+    method("dgram", "dropMembership", true, Some("Socket")),
+    method("dgram", "setBroadcast", true, Some("Socket")),
+    method("dgram", "setMulticastTTL", true, Some("Socket")),
+    method("dgram", "setMulticastLoopback", true, Some("Socket")),
+    method("dgram", "setMulticastInterface", true, Some("Socket")),
+    method("dgram", "setTTL", true, Some("Socket")),
+    method("dgram", "setRecvBufferSize", true, Some("Socket")),
+    method("dgram", "setSendBufferSize", true, Some("Socket")),
+    method("dgram", "getRecvBufferSize", true, Some("Socket")),
+    method("dgram", "getSendBufferSize", true, Some("Socket")),
+    method("dgram", "ref", true, Some("Socket")),
+    method("dgram", "unref", true, Some("Socket")),
     method_sig(
         "net",
         "createConnection",
@@ -623,6 +759,29 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `server.on('connection', s => …)` is the dominant case) keep
     // dispatching instead of throwing "not a function".
     method("net", "address", true, Some("Socket")),
+    // #2549 — `net.Socket` state / counter / metadata property getters.
+    // Lowered as zero-arg `NativeMethodCall`s (bare member reads), so the
+    // manifest counterpart is a `has_receiver: true` Method entry.
+    method("net", "pending", true, Some("Socket")),
+    method("net", "connecting", true, Some("Socket")),
+    method("net", "destroyed", true, Some("Socket")),
+    method("net", "readyState", true, Some("Socket")),
+    method("net", "bytesRead", true, Some("Socket")),
+    method("net", "bytesWritten", true, Some("Socket")),
+    method("net", "timeout", true, Some("Socket")),
+    method("net", "localAddress", true, Some("Socket")),
+    method("net", "localPort", true, Some("Socket")),
+    method("net", "localFamily", true, Some("Socket")),
+    method("net", "remoteAddress", true, Some("Socket")),
+    method("net", "remotePort", true, Some("Socket")),
+    method("net", "remoteFamily", true, Some("Socket")),
+    method("net", "bufferSize", true, Some("Socket")),
+    method(
+        "net",
+        "autoSelectFamilyAttemptedAddresses",
+        true,
+        Some("Socket"),
+    ),
     method("net", "once", true, Some("Socket")),
     method("net", "addListener", true, Some("Socket")),
     method("net", "off", true, Some("Socket")),
@@ -763,6 +922,17 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         Some("AsyncResource"),
     ),
     method("async_hooks", "bind", true, Some("AsyncResource")),
+    // #2875: DisposableStack / AsyncDisposableStack instance methods. The
+    // `__disposable__` module is internal (synthesized by the var-decl
+    // native-instance registration), so it has no JS import surface — these
+    // entries exist solely to satisfy the dispatch-table drift gate.
+    method("__disposable__", "use", true, None),
+    method("__disposable__", "adopt", true, None),
+    method("__disposable__", "defer", true, None),
+    method("__disposable__", "dispose", true, None),
+    method("__disposable__", "disposeAsync", true, None),
+    method("__disposable__", "move", true, None),
+    method("__disposable__", "disposed", true, None),
     // AsyncResource — Nest's `@nestjs/core` request-scoped DI uses
     // this to bind a callback to a synthetic async resource. The
     // stub in `node:async_hooks` JS module satisfies callers that
@@ -1326,12 +1496,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("cheerio", "children", true, None),
     method("cheerio", "parent", true, None),
     method("cheerio", "hasClass", true, None),
+    // #2935: gzipSync/deflateSync accept an optional `{ level }` options
+    // object as the 2nd argument (dispatch is NA_JSV, so the data slot
+    // accepts a string or Buffer alike).
     method_sig(
         "zlib",
         "gzipSync",
         false,
         None,
-        &[p_str("p0")],
+        &[p_any("p0"), ZLIB_OPTIONS_PARAM],
         TypeSpec::String,
     ),
     method_sig(
@@ -1339,7 +1512,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         "gunzipSync",
         false,
         None,
-        &[p_str("p0")],
+        &[p_any("p0")],
         TypeSpec::String,
     ),
     method_sig(
@@ -1347,7 +1520,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         "deflateSync",
         false,
         None,
-        &[p_str("p0")],
+        &[p_any("p0"), ZLIB_OPTIONS_PARAM],
         TypeSpec::String,
     ),
     method_sig(
@@ -1355,7 +1528,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         "inflateSync",
         false,
         None,
-        &[p_str("p0")],
+        &[p_any("p0")],
         TypeSpec::String,
     ),
     method_sig(
@@ -2546,6 +2719,24 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("module", "isBuiltin", false, None),
     class("module", "SourceMap"),
     method("module", "SourceMap", false, None),
+    // node:test — shape-only runner surface. Runtime returns no-op function
+    // values and plain objects for mock/snapshot so feature probes work; Perry
+    // does not execute Node's test runner.
+    method("test", "skip", false, None),
+    method("test", "todo", false, None),
+    method("test", "only", false, None),
+    method("test", "suite", false, None),
+    method("test", "describe", false, None),
+    method("test", "it", false, None),
+    method("test", "before", false, None),
+    method("test", "after", false, None),
+    method("test", "beforeEach", false, None),
+    method("test", "afterEach", false, None),
+    method("test", "run", false, None),
+    property("test", "mock"),
+    method("test", "fn", false, Some("mock")),
+    method("test", "property", false, Some("mock")),
+    property("test", "snapshot"),
     // process — properties mapped to Expr::Process* / Expr::Os* in expr_member.rs.
     method("process", "abort", false, None),
     method("process", "cwd", false, None),
@@ -2641,11 +2832,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // at the same address.
     method("querystring", "decode", false, None),
     method("querystring", "encode", false, None),
-    // node:cluster — shape-only surface. The fixture probes
-    // typeof properties + reads constants; we never actually fork.
-    // Methods are wired through `is_native_module_callable_export`
-    // (bound-method closure path) so `typeof cluster.fork === "function"`
-    // holds without us implementing a real fork.
+    // node:cluster — primary lifecycle surface. `setupPrimary` /
+    // `setupMaster`, `fork`, and `disconnect` route through the native
+    // module bound-method path; handle sharing/listening distribution is
+    // outside this manifest entry.
     method("cluster", "fork", false, None),
     method("cluster", "disconnect", false, None),
     method("cluster", "setupPrimary", false, None),
@@ -2804,13 +2994,21 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     //     the rest are documented stubs) ---
     method("util", "inspect", false, None),
     method("util", "format", false, None),
+    method("util", "convertProcessSignalToExitCode", false, None),
+    method("util", "debug", false, None),
+    method("util", "diff", false, None),
     // #2514: libuv-style errno helpers.
     method("util", "getSystemErrorName", false, None),
     method("util", "getSystemErrorMessage", false, None),
     method("util", "getSystemErrorMap", false, None),
+    method("util", "aborted", false, None),
+    method("util", "transferableAbortController", false, None),
+    method("util", "transferableAbortSignal", false, None),
+    method("util", "getCallSites", false, None),
     method("util", "parseEnv", false, None),
     // #2514: util.toUSVString(value) → string with lone surrogates replaced.
     method("util", "toUSVString", false, None),
+    method("util", "setTraceSigInt", false, None),
     // `util.formatWithOptions(options, format[, ...args])` — identical to
     // `util.format` except the first arg is an `util.inspect` options bag
     // applied to any `%o`/`%O` placeholders. Required by the `debug` npm
@@ -2820,6 +3018,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "formatWithOptions", false, None),
     method("util", "promisify", false, None),
     method("util", "callbackify", false, None),
+    method("util", "debuglog", false, None),
     method("util", "deprecate", false, None),
     method("util", "inherits", false, None),
     method_sig(
@@ -2833,6 +3032,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "isDeepStrictEqual", false, None),
     method("util", "parseArgs", false, None),
     method("util", "stripVTControlCharacters", false, None),
+    method("util", "styleText", false, None),
     class("util", "TextEncoder"),
     class("util", "TextDecoder"),
     // util.types — Node's runtime type-introspection namespace. Required
@@ -2882,13 +3082,21 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // runtime routes `node:sys` through the util namespace.
     method("sys", "inspect", false, None),
     method("sys", "format", false, None),
+    method("sys", "convertProcessSignalToExitCode", false, None),
+    method("sys", "debug", false, None),
+    method("sys", "diff", false, None),
     method("sys", "getSystemErrorName", false, None),
     method("sys", "getSystemErrorMessage", false, None),
     method("sys", "getSystemErrorMap", false, None),
+    method("sys", "aborted", false, None),
+    method("sys", "transferableAbortController", false, None),
+    method("sys", "transferableAbortSignal", false, None),
+    method("sys", "getCallSites", false, None),
     method("sys", "parseEnv", false, None),
     method("sys", "formatWithOptions", false, None),
     method("sys", "promisify", false, None),
     method("sys", "callbackify", false, None),
+    method("sys", "debuglog", false, None),
     method("sys", "deprecate", false, None),
     method("sys", "inherits", false, None),
     method_sig(
@@ -2902,7 +3110,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "isDeepStrictEqual", false, None),
     method("sys", "parseArgs", false, None),
     method("sys", "stripVTControlCharacters", false, None),
+    method("sys", "styleText", false, None),
     method("sys", "toUSVString", false, None),
+    method("sys", "setTraceSigInt", false, None),
     class("sys", "TextEncoder"),
     class("sys", "TextDecoder"),
     property("sys", "types"),
@@ -2951,6 +3161,58 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("assert/strict", "strict", false, None),
     property("assert/strict", "strict"),
     class("assert/strict", "AssertionError"),
+    property("dns", "ADDRCONFIG"),
+    property("dns", "V4MAPPED"),
+    property("dns", "ALL"),
+    property("dns", "NODATA"),
+    property("dns", "FORMERR"),
+    property("dns", "SERVFAIL"),
+    property("dns", "NOTFOUND"),
+    property("dns", "NOTIMP"),
+    property("dns", "REFUSED"),
+    property("dns", "BADQUERY"),
+    property("dns", "BADNAME"),
+    property("dns", "BADFAMILY"),
+    property("dns", "BADRESP"),
+    property("dns", "CONNREFUSED"),
+    property("dns", "TIMEOUT"),
+    property("dns", "EOF"),
+    property("dns", "FILE"),
+    property("dns", "NOMEM"),
+    property("dns", "DESTRUCTION"),
+    property("dns", "BADSTR"),
+    property("dns", "BADFLAGS"),
+    property("dns", "NONAME"),
+    property("dns", "BADHINTS"),
+    property("dns", "NOTINITIALIZED"),
+    property("dns", "LOADIPHLPAPI"),
+    property("dns", "ADDRGETNETWORKPARAMS"),
+    property("dns", "CANCELLED"),
+    property("dns", "promises"),
+    property("dns/promises", "NODATA"),
+    property("dns/promises", "FORMERR"),
+    property("dns/promises", "SERVFAIL"),
+    property("dns/promises", "NOTFOUND"),
+    property("dns/promises", "NOTIMP"),
+    property("dns/promises", "REFUSED"),
+    property("dns/promises", "BADQUERY"),
+    property("dns/promises", "BADNAME"),
+    property("dns/promises", "BADFAMILY"),
+    property("dns/promises", "BADRESP"),
+    property("dns/promises", "CONNREFUSED"),
+    property("dns/promises", "TIMEOUT"),
+    property("dns/promises", "EOF"),
+    property("dns/promises", "FILE"),
+    property("dns/promises", "NOMEM"),
+    property("dns/promises", "DESTRUCTION"),
+    property("dns/promises", "BADSTR"),
+    property("dns/promises", "BADFLAGS"),
+    property("dns/promises", "NONAME"),
+    property("dns/promises", "BADHINTS"),
+    property("dns/promises", "NOTINITIALIZED"),
+    property("dns/promises", "LOADIPHLPAPI"),
+    property("dns/promises", "ADDRGETNETWORKPARAMS"),
+    property("dns/promises", "CANCELLED"),
     // --- stream (Web Streams API + Node stream classes — see
     //     perry-stdlib/src/streams.rs and perry-ext-streams) ---
     class("stream", "Readable"),
@@ -3098,11 +3360,31 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // value-read passes the #463 surface gate and resolves to `undefined`.
     class("child_process", "ChildProcess"),
     property("child_process", "Stream"),
-    // --- tty (only `isatty` is implemented; ReadStream / WriteStream
-    //     are wrapped via process.stdin / process.stdout) ---
+    // --- tty ---
     method("tty", "isatty", false, None),
     class("tty", "ReadStream"),
     class("tty", "WriteStream"),
+    // Constructor-style factory dispatch (`tty.ReadStream(fd)` /
+    // `tty.WriteStream(fd)`) — `has_receiver: false` rows in
+    // NATIVE_MODULE_TABLE need a matching Method entry so the
+    // dispatch->manifest drift guard (manifest_consistency.rs) passes.
+    method("tty", "ReadStream", false, None),
+    method("tty", "WriteStream", false, None),
+    method("tty", "setRawMode", true, Some("ReadStream")),
+    method("tty", "getColorDepth", true, Some("WriteStream")),
+    method("tty", "hasColors", true, Some("WriteStream")),
+    method("tty", "_refreshSize", true, Some("WriteStream")),
+    method("tty", "cursorTo", true, Some("WriteStream")),
+    method("tty", "moveCursor", true, Some("WriteStream")),
+    method("tty", "clearLine", true, Some("WriteStream")),
+    method("tty", "clearScreenDown", true, Some("WriteStream")),
+    method("tty", "getWindowSize", true, Some("WriteStream")),
+    method("tty", "on", true, Some("WriteStream")),
+    method("tty", "addListener", true, Some("WriteStream")),
+    method("tty", "once", true, Some("WriteStream")),
+    method("tty", "removeListener", true, Some("WriteStream")),
+    method("tty", "off", true, Some("WriteStream")),
+    method("tty", "removeAllListeners", true, Some("WriteStream")),
     // --- perf_hooks (W3C User Timing on `performance` + PerformanceObserver) ---
     method("perf_hooks", "now", false, None),
     method("perf_hooks", "mark", false, None),
@@ -3116,10 +3398,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perf_hooks", "toJSON", false, None),
     method("perf_hooks", "clearResourceTimings", false, None),
     method("perf_hooks", "setResourceTimingBufferSize", false, None),
-    // #1478: stub — records the entry (no-op today, see codegen).
+    // Resource timing entries are recorded through the perf_hooks timeline.
     method("perf_hooks", "markResourceTiming", false, None),
-    // #1335: returns `fn` unchanged today; the spec'd "wraps fn to
-    // record a 'function' timeline entry" piece isn't recorded yet.
+    // timerify returns a wrapper that emits observer-visible function entries.
     method("perf_hooks", "timerify", false, None),
     // #1336: monitorEventLoopDelay() / createHistogram() return a
     // Histogram-shaped object whose method/property reads route
@@ -3154,6 +3435,16 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         true,
         Some("PerformanceObserver"),
     ),
+    // --- node:v8 (#3137/#3138/#3142) ---
+    method("v8", "serialize", false, None),
+    method("v8", "deserialize", false, None),
+    method("v8", "getHeapStatistics", false, None),
+    method("v8", "getHeapCodeStatistics", false, None),
+    method("v8", "getHeapSpaceStatistics", false, None),
+    method("v8", "cachedDataVersionTag", false, None),
+    class("v8", "GCProfiler"),
+    method("v8", "start", true, Some("GCProfiler")),
+    method("v8", "stop", true, Some("GCProfiler")),
     // --- buffer (module-level helpers in addition to the Buffer class
     //     already registered above) ---
     method("buffer", "alloc", false, None),
@@ -3163,6 +3454,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("buffer", "of", false, None),
     method("buffer", "concat", false, None),
     method("buffer", "copyBytesFrom", false, None),
+    // #2901: TC39 `Uint8Array.fromBase64` / `fromHex` static factories,
+    // routed through the buffer module (Uint8Array ≡ Buffer in Perry).
+    method("buffer", "fromBase64", false, None),
+    method("buffer", "fromHex", false, None),
     method("buffer", "isBuffer", false, None),
     method("buffer", "isEncoding", false, None),
     method("buffer", "byteLength", false, None),

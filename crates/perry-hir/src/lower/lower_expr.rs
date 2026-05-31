@@ -263,6 +263,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     && name != "ReferenceError"
                     && name != "EvalError"
                     && name != "URIError"
+                    && name != "AggregateError"
                     && name != "Promise"
                     && name != "Map"
                     && name != "Set"
@@ -272,6 +273,9 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     && name != "WeakSet"
                     && name != "WeakRef"
                     && name != "FinalizationRegistry"
+                    && name != "DisposableStack"
+                    && name != "AsyncDisposableStack"
+                    && name != "SuppressedError"
                     && name != "Proxy"
                     && name != "Reflect"
                     && name != "Uint8Array"
@@ -586,6 +590,14 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 // "object" via the global-this short-circuit.
                 if let ast::Expr::Ident(id) = unary.arg.as_ref() {
                     if id.sym.as_ref() == "Function" && ctx.lookup_local("Function").is_none() {
+                        return Ok(Expr::String("function".to_string()));
+                    }
+                    // #2874: global `Iterator` (TC39 iterator-helpers) is a
+                    // constructor function in Node 22+.
+                    if id.sym.as_ref() == "Iterator"
+                        && ctx.lookup_local("Iterator").is_none()
+                        && ctx.lookup_func("Iterator").is_none()
+                    {
                         return Ok(Expr::String("function".to_string()));
                     }
                     // #1454: global timer builtins (+ fetch) are functions, but
