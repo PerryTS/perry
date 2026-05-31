@@ -167,6 +167,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "PerformanceObserverEntryList" => 0xFFFF0088u32,
                 "PerformanceResourceTiming" => 0xFFFF0086u32,
                 "Console" => 0xFFFF0083u32,
+                "Event" | "globalThis.Event" => 0xFFFF2403u32,
+                "CustomEvent" | "globalThis.CustomEvent" => 0xFFFF2404u32,
+                "DOMException" | "globalThis.DOMException" => 0xFFFF2405u32,
                 // node:fs constructor exports. Keep these ids in sync with
                 // perry-runtime/src/fs/mod.rs and instanceof.rs.
                 "fs.Dir" => 0xFFFF0086u32,

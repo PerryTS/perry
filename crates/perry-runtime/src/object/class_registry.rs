@@ -1146,7 +1146,8 @@ pub unsafe extern "C" fn js_new_function_construct(
                     .get(1)
                     .copied()
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-                let event = crate::event_target::js_event_new(event_type, options);
+                let event =
+                    crate::event_target::js_event_new(event_type, options, args.len() as u32);
                 return crate::value::js_nanbox_pointer(event as i64);
             }
             "CustomEvent" => {
@@ -1158,7 +1159,11 @@ pub unsafe extern "C" fn js_new_function_construct(
                     .get(1)
                     .copied()
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-                let event = crate::event_target::js_custom_event_new(event_type, options);
+                let event = crate::event_target::js_custom_event_new(
+                    event_type,
+                    options,
+                    args.len() as u32,
+                );
                 return crate::value::js_nanbox_pointer(event as i64);
             }
             "DOMException" => {

@@ -69,6 +69,63 @@ show(
 );
 show("listener order", order.join("|"));
 
+const plain = new Event("plain");
+plain.preventDefault();
+show(
+  "plain prevent default",
+  plain.cancelable,
+  plain.defaultPrevented,
+  target.dispatchEvent(plain),
+);
+
+const removableTarget = new EventTarget();
+const removableOrder: string[] = [];
+function removable() {
+  removableOrder.push("hit");
+}
+removableTarget.addEventListener("remove", removable);
+removableTarget.addEventListener("remove", removable);
+removableTarget.dispatchEvent(new Event("remove"));
+removableTarget.removeEventListener("remove", removable);
+removableTarget.dispatchEvent(new Event("remove"));
+show("dedupe remove", removableOrder.join("|"));
+
+const captureTarget = new EventTarget();
+const captureOrder: string[] = [];
+function captured() {
+  captureOrder.push("hit");
+}
+captureTarget.addEventListener("capture", captured, true);
+captureTarget.addEventListener("capture", captured, false);
+captureTarget.dispatchEvent(new Event("capture"));
+captureTarget.removeEventListener("capture", captured, false);
+captureTarget.dispatchEvent(new Event("capture"));
+show("capture remove", captureOrder.join("|"));
+
+const onceTarget = new EventTarget();
+const onceOrder: string[] = [];
+onceTarget.addEventListener("once", () => onceOrder.push("once"), {
+  once: true,
+});
+onceTarget.dispatchEvent(new Event("once"));
+onceTarget.dispatchEvent(new Event("once"));
+show("once option", onceOrder.join("|"));
+
+const signaledTarget = new EventTarget();
+const signalOrder: string[] = [];
+const listenerSignal = new AbortController();
+signaledTarget.addEventListener("signal", () => signalOrder.push("live"), {
+  signal: listenerSignal.signal,
+});
+listenerSignal.abort();
+signaledTarget.dispatchEvent(new Event("signal"));
+const alreadyAborted = AbortSignal.abort();
+signaledTarget.addEventListener("signal", () => signalOrder.push("pre"), {
+  signal: alreadyAborted,
+});
+signaledTarget.dispatchEvent(new Event("signal"));
+show("signal option", signalOrder.join("|"));
+
 const custom = new CustomEvent("beta", {
   detail: { answer: 42 },
   cancelable: true,
@@ -105,4 +162,22 @@ show(
   reason.code,
   reason.constructor === DOMException,
   reason instanceof DOMException,
+);
+
+function showError(label: string, fn: () => unknown) {
+  try {
+    fn();
+    show(label, "ok");
+  } catch (error) {
+    show(label, (error as any).name, (error as any).code);
+  }
+}
+
+showError("event missing type", () => new (Event as any)());
+showError("custom missing type", () => new (CustomEvent as any)());
+showError("dispatch missing event", () =>
+  (new EventTarget() as any).dispatchEvent(),
+);
+showError("dispatch plain object", () =>
+  new EventTarget().dispatchEvent({ type: "plain" } as any),
 );

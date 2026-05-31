@@ -23,6 +23,14 @@ pub(super) fn lower_event_target_call(
         let target_box = lower_expr(ctx, object)?;
         let event_box = lower_expr(ctx, &args[0])?;
         let listener_box = lower_expr(ctx, &args[1])?;
+        let options_box = if let Some(options) = args.get(2) {
+            lower_expr(ctx, options)?
+        } else {
+            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+        };
+        for a in args.iter().skip(3) {
+            let _ = lower_expr(ctx, a)?;
+        }
         let blk = ctx.block();
         let target = unbox_to_i64(blk, &target_box);
         let event = blk.call(
@@ -32,18 +40,30 @@ pub(super) fn lower_event_target_call(
         );
         let listener = unbox_to_i64(blk, &listener_box);
         let runtime = if property == "addEventListener" {
-            "js_event_target_add_event_listener"
+            "js_event_target_add_event_listener_with_options"
         } else {
-            "js_event_target_remove_event_listener"
+            "js_event_target_remove_event_listener_with_options"
         };
-        blk.call_void(runtime, &[(I64, &target), (I64, &event), (I64, &listener)]);
+        blk.call_void(
+            runtime,
+            &[
+                (I64, &target),
+                (I64, &event),
+                (I64, &listener),
+                (DOUBLE, &options_box),
+            ],
+        );
         return Ok(Some(double_literal(f64::from_bits(
             crate::nanbox::TAG_UNDEFINED,
         ))));
     }
-    if property == "dispatchEvent" && !args.is_empty() {
+    if property == "dispatchEvent" {
         let target_box = lower_expr(ctx, object)?;
-        let event_box = lower_expr(ctx, &args[0])?;
+        let event_box = if let Some(event) = args.first() {
+            lower_expr(ctx, event)?
+        } else {
+            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+        };
         for a in args.iter().skip(1) {
             let _ = lower_expr(ctx, a)?;
         }

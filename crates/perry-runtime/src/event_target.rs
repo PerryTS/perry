@@ -59,6 +59,23 @@ fn string_value(bytes: &[u8]) -> f64 {
     crate::value::js_nanbox_string(s as i64)
 }
 
+fn is_undefined(value: f64) -> bool {
+    JSValue::from_bits(value.to_bits()).is_undefined()
+}
+
+fn throw_missing_arg(name: &str) -> ! {
+    let message = format!("The \"{name}\" argument must be specified");
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_MISSING_ARGS")
+}
+
+fn throw_invalid_event(value: f64) -> ! {
+    let message = format!(
+        "The \"event\" argument must be an instance of Event. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
 fn string_from_value(value: f64) -> *mut StringHeader {
     crate::builtins::js_string_coerce(value)
 }
@@ -93,6 +110,33 @@ unsafe fn option_detail(options: f64) -> f64 {
     } else {
         value
     }
+}
+
+unsafe fn listener_capture(options: f64) -> bool {
+    let js_value = JSValue::from_bits(options.to_bits());
+    if js_value.is_undefined() || js_value.is_null() {
+        return false;
+    }
+    if js_value.is_pointer() {
+        return crate::value::js_is_truthy(own_option_value(options, b"capture")) != 0;
+    }
+    crate::value::js_is_truthy(options) != 0
+}
+
+unsafe fn listener_option_bool(options: f64, name: &[u8]) -> bool {
+    let js_value = JSValue::from_bits(options.to_bits());
+    if js_value.is_undefined() || js_value.is_null() || !js_value.is_pointer() {
+        return false;
+    }
+    crate::value::js_is_truthy(own_option_value(options, name)) != 0
+}
+
+unsafe fn listener_signal(options: f64) -> Option<*mut ObjectHeader> {
+    let js_value = JSValue::from_bits(options.to_bits());
+    if js_value.is_undefined() || js_value.is_null() || !js_value.is_pointer() {
+        return None;
+    }
+    crate::url::abort::abort_signal_ptr_from_value(own_option_value(options, b"signal"))
 }
 
 fn set_event_field(event: *mut ObjectHeader, name: &[u8], value: f64) {
@@ -222,15 +266,33 @@ fn construct_event(
     event
 }
 
+fn is_event_instance(event: *const ObjectHeader) -> bool {
+    if event.is_null() {
+        return false;
+    }
+    let class_id = unsafe { (*event).class_id };
+    class_id == CLASS_ID_EVENT || class_id == CLASS_ID_CUSTOM_EVENT
+}
+
 /// `new Event(type, options?)`.
 #[no_mangle]
-pub extern "C" fn js_event_new(type_value: f64, options: f64) -> *mut ObjectHeader {
+pub extern "C" fn js_event_new(type_value: f64, options: f64, argc: u32) -> *mut ObjectHeader {
+    if argc == 0 {
+        throw_missing_arg("type");
+    }
     construct_event(type_value, options, CLASS_ID_EVENT, b"Event", None)
 }
 
 /// `new CustomEvent(type, options?)`.
 #[no_mangle]
-pub extern "C" fn js_custom_event_new(type_value: f64, options: f64) -> *mut ObjectHeader {
+pub extern "C" fn js_custom_event_new(
+    type_value: f64,
+    options: f64,
+    argc: u32,
+) -> *mut ObjectHeader {
+    if argc == 0 {
+        throw_missing_arg("type");
+    }
     let detail = unsafe { option_detail(options) };
     construct_event(
         type_value,
@@ -366,6 +428,121 @@ unsafe fn event_array(
     Some(arr)
 }
 
+fn listener_record_object(record: f64) -> Option<*mut ObjectHeader> {
+    let value = JSValue::from_bits(record.to_bits());
+    if !value.is_pointer() {
+        return None;
+    }
+    let ptr = value.as_pointer::<u8>() as usize;
+    if crate::closure::is_closure_ptr(ptr) {
+        return None;
+    }
+    value_as_ptr::<ObjectHeader>(record)
+}
+
+fn listener_record_callback(record: f64) -> f64 {
+    let Some(record_ptr) = listener_record_object(record) else {
+        return record;
+    };
+    let callback = js_object_get_field_by_name_f64(record_ptr, key(b"_callback"));
+    if is_undefined(callback) {
+        record
+    } else {
+        callback
+    }
+}
+
+fn listener_record_capture(record: f64) -> bool {
+    let Some(record_ptr) = listener_record_object(record) else {
+        return false;
+    };
+    crate::value::js_is_truthy(js_object_get_field_by_name_f64(
+        record_ptr,
+        key(b"_capture"),
+    )) != 0
+}
+
+fn listener_record_once(record: f64) -> bool {
+    let Some(record_ptr) = listener_record_object(record) else {
+        return false;
+    };
+    crate::value::js_is_truthy(js_object_get_field_by_name_f64(record_ptr, key(b"_once"))) != 0
+}
+
+fn listener_record_matches(record: f64, listener: f64, capture: bool) -> bool {
+    listener_record_callback(record).to_bits() == listener.to_bits()
+        && listener_record_capture(record) == capture
+}
+
+fn make_listener_record(listener: f64, capture: bool, once: bool) -> f64 {
+    let record = js_object_alloc(0, 0);
+    js_object_set_field_by_name(record, key(b"_callback"), listener);
+    js_object_set_field_by_name(record, key(b"_capture"), bool_value(capture));
+    js_object_set_field_by_name(record, key(b"_once"), bool_value(once));
+    boxed_ptr(record)
+}
+
+unsafe fn remove_event_listener_value_with_capture(
+    target: *mut ObjectHeader,
+    event_name_ptr: *const StringHeader,
+    listener: f64,
+    capture: bool,
+) {
+    let Some(bag) = listeners_bag(target) else {
+        return;
+    };
+    let Some(arr) = event_array(bag, event_name_ptr, false) else {
+        return;
+    };
+    let out = js_array_alloc(0);
+    let len = js_array_length(arr);
+    let mut changed = false;
+    let mut result = out;
+    for i in 0..len {
+        let current = f64::from_bits(js_array_get(arr, i).bits());
+        if !changed && listener_record_matches(current, listener, capture) {
+            changed = true;
+            continue;
+        }
+        result = js_array_push_f64(result, current);
+    }
+    if changed {
+        js_object_set_field_by_name(bag, event_name_ptr, boxed_ptr(result));
+    }
+}
+
+unsafe fn remove_event_listener_with_capture(
+    target: *mut ObjectHeader,
+    event_name_ptr: *const StringHeader,
+    callback_ptr: i64,
+    capture: bool,
+) {
+    if callback_ptr == 0 {
+        return;
+    }
+    remove_event_listener_value_with_capture(
+        target,
+        event_name_ptr,
+        boxed_ptr(callback_ptr as *mut u8),
+        capture,
+    );
+}
+
+extern "C" fn event_target_abort_remove_listener(
+    closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let target = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader;
+    let event_name_ptr =
+        crate::closure::js_closure_get_capture_ptr(closure, 1) as *const StringHeader;
+    let callback_ptr = crate::closure::js_closure_get_capture_ptr(closure, 2);
+    let capture =
+        crate::value::js_is_truthy(crate::closure::js_closure_get_capture_f64(closure, 3)) != 0;
+    unsafe {
+        remove_event_listener_with_capture(target, event_name_ptr, callback_ptr, capture);
+    }
+    undefined_value()
+}
+
 /// `new EventTarget()`.
 #[no_mangle]
 pub extern "C" fn js_event_target_new() -> *mut ObjectHeader {
@@ -388,8 +565,31 @@ pub unsafe extern "C" fn js_event_target_add_event_listener(
     event_name_ptr: *const StringHeader,
     callback_ptr: i64,
 ) {
+    js_event_target_add_event_listener_with_options(
+        target,
+        event_name_ptr,
+        callback_ptr,
+        undefined_value(),
+    );
+}
+
+/// `target.addEventListener(type, listener, options)`.
+#[no_mangle]
+pub unsafe extern "C" fn js_event_target_add_event_listener_with_options(
+    target: *mut ObjectHeader,
+    event_name_ptr: *const StringHeader,
+    callback_ptr: i64,
+    options: f64,
+) {
     if callback_ptr == 0 {
         return;
+    }
+    let capture = listener_capture(options);
+    let once = listener_option_bool(options, b"once");
+    if let Some(signal) = listener_signal(options) {
+        if crate::url::js_abort_signal_is_aborted(signal) != 0 {
+            return;
+        }
     }
     let Some(bag) = listeners_bag(target) else {
         return;
@@ -400,13 +600,28 @@ pub unsafe extern "C" fn js_event_target_add_event_listener(
     let listener = boxed_ptr(callback_ptr as *mut u8);
     let len = js_array_length(arr);
     for i in 0..len {
-        if js_array_get(arr, i).bits() == listener.to_bits() {
+        let current = f64::from_bits(js_array_get(arr, i).bits());
+        if listener_record_matches(current, listener, capture) {
             return;
         }
     }
-    let updated = js_array_push_f64(arr, listener);
+    let updated = js_array_push_f64(arr, make_listener_record(listener, capture, once));
     if updated != arr {
         js_object_set_field_by_name(bag, event_name_ptr, boxed_ptr(updated));
+    }
+    if let Some(signal) = listener_signal(options) {
+        let func = event_target_abort_remove_listener as *const u8;
+        crate::closure::js_register_closure_arity(func, 0);
+        let abort_listener = crate::closure::js_closure_alloc(func, 4);
+        crate::closure::js_closure_set_capture_ptr(abort_listener, 0, target as i64);
+        crate::closure::js_closure_set_capture_ptr(abort_listener, 1, event_name_ptr as i64);
+        crate::closure::js_closure_set_capture_ptr(abort_listener, 2, callback_ptr);
+        crate::closure::js_closure_set_capture_f64(abort_listener, 3, bool_value(capture));
+        crate::url::js_abort_signal_add_listener(
+            signal,
+            string_value(b"abort"),
+            boxed_ptr(abort_listener),
+        );
     }
 }
 
@@ -417,31 +632,28 @@ pub unsafe extern "C" fn js_event_target_remove_event_listener(
     event_name_ptr: *const StringHeader,
     callback_ptr: i64,
 ) {
-    if callback_ptr == 0 {
-        return;
-    }
-    let Some(bag) = listeners_bag(target) else {
-        return;
-    };
-    let Some(arr) = event_array(bag, event_name_ptr, false) else {
-        return;
-    };
-    let listener = boxed_ptr(callback_ptr as *mut u8);
-    let out = js_array_alloc(0);
-    let len = js_array_length(arr);
-    let mut changed = false;
-    let mut result = out;
-    for i in 0..len {
-        let current = js_array_get(arr, i);
-        if current.bits() == listener.to_bits() {
-            changed = true;
-            continue;
-        }
-        result = js_array_push_f64(result, f64::from_bits(current.bits()));
-    }
-    if changed {
-        js_object_set_field_by_name(bag, event_name_ptr, boxed_ptr(result));
-    }
+    js_event_target_remove_event_listener_with_options(
+        target,
+        event_name_ptr,
+        callback_ptr,
+        undefined_value(),
+    );
+}
+
+/// `target.removeEventListener(type, listener, options)`.
+#[no_mangle]
+pub unsafe extern "C" fn js_event_target_remove_event_listener_with_options(
+    target: *mut ObjectHeader,
+    event_name_ptr: *const StringHeader,
+    callback_ptr: i64,
+    options: f64,
+) {
+    remove_event_listener_with_capture(
+        target,
+        event_name_ptr,
+        callback_ptr,
+        listener_capture(options),
+    );
 }
 
 fn event_type_ptr(event: f64) -> Option<*const StringHeader> {
@@ -473,8 +685,14 @@ pub unsafe extern "C" fn js_event_target_dispatch_event(
         return bool_value(true);
     }
     let Some(event_ptr) = value_as_ptr::<ObjectHeader>(event) else {
-        return bool_value(true);
+        if is_undefined(event) {
+            throw_missing_arg("event");
+        }
+        throw_invalid_event(event);
     };
+    if !is_event_instance(event_ptr) {
+        throw_invalid_event(event);
+    }
     let Some(event_name_ptr) = event_type_ptr(event) else {
         return bool_value(true);
     };
@@ -489,17 +707,25 @@ pub unsafe extern "C" fn js_event_target_dispatch_event(
             let len = js_array_length(arr);
             let mut callbacks = Vec::with_capacity(len as usize);
             for i in 0..len {
-                callbacks.push(f64::from_bits(js_array_get(arr, i).bits()));
+                let record = f64::from_bits(js_array_get(arr, i).bits());
+                callbacks.push((
+                    listener_record_callback(record),
+                    listener_record_capture(record),
+                    listener_record_once(record),
+                ));
             }
             callbacks
         })
         .unwrap_or_default();
 
     let args = [event];
-    for callback in callbacks {
+    for (callback, capture, once) in callbacks {
         let Some(callable) = closure_value_from_listener(callback) else {
             continue;
         };
+        if once {
+            remove_event_listener_value_with_capture(target, event_name_ptr, callback, capture);
+        }
         let prev_this = crate::object::js_implicit_this_set(target_value);
         let _ = crate::closure::js_native_call_value(callable, args.as_ptr(), args.len());
         crate::object::js_implicit_this_set(prev_this);
@@ -542,7 +768,10 @@ pub unsafe extern "C" fn js_event_target_get_event_listeners(
     let mut result = out;
     for i in 0..len {
         let current = js_array_get(arr, i);
-        result = js_array_push_f64(result, f64::from_bits(current.bits()));
+        result = js_array_push_f64(
+            result,
+            listener_record_callback(f64::from_bits(current.bits())),
+        );
     }
     result
 }

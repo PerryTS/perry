@@ -298,10 +298,11 @@ pub(super) fn lower_builtin_new(
                 let _ = lower_expr(ctx, a)?;
             }
             let blk = ctx.block();
+            let argc = args.len().to_string();
             let handle = blk.call(
                 I64,
                 "js_event_new",
-                &[(DOUBLE, &event_type), (DOUBLE, &options)],
+                &[(DOUBLE, &event_type), (DOUBLE, &options), (I32, &argc)],
             );
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
@@ -320,10 +321,11 @@ pub(super) fn lower_builtin_new(
                 let _ = lower_expr(ctx, a)?;
             }
             let blk = ctx.block();
+            let argc = args.len().to_string();
             let handle = blk.call(
                 I64,
                 "js_custom_event_new",
-                &[(DOUBLE, &event_type), (DOUBLE, &options)],
+                &[(DOUBLE, &event_type), (DOUBLE, &options), (I32, &argc)],
             );
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
