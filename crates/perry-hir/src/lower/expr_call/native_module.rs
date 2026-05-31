@@ -181,20 +181,24 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::Undefined));
                         }
                         "hasUncaughtExceptionCaptureCallback" => {
-                            // #1406: returns a boolean indicating whether
-                            // a capture callback has been installed via
-                            // setUncaughtExceptionCaptureCallback. Perry
-                            // doesn't expose that hook, so the answer is
-                            // always `false`.
-                            return Ok(Ok(Expr::Bool(false)));
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "hasUncaughtExceptionCaptureCallback".to_string(),
+                                args,
+                            }));
                         }
-                        "setUncaughtExceptionCaptureCallback" => {
-                            // #1406: installs a single callback that
-                            // intercepts uncaught exceptions before they
-                            // reach the `uncaughtException` event. Perry
-                            // doesn't have the hook to install — the call
-                            // is a no-op returning undefined.
-                            return Ok(Ok(Expr::Undefined));
+                        "setUncaughtExceptionCaptureCallback"
+                        | "addUncaughtExceptionCaptureCallback" => {
+                            let method_name = method_ident.sym.as_ref().to_string();
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name,
+                                args,
+                            }));
                         }
                         "loadEnvFile" => {
                             // #1399 / #2135: process.loadEnvFile(path?)

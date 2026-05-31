@@ -456,6 +456,27 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "uptime") => crate::os::js_process_uptime(),
         ("process", "memoryUsage") => crate::process::js_process_memory_usage(),
         ("process", "threadCpuUsage") => crate::process::js_process_thread_cpu_usage(arg(0)),
+        ("process", "availableMemory") => crate::process::js_process_available_memory(),
+        ("process", "constrainedMemory") => crate::process::js_process_constrained_memory(),
+        ("process", "resourceUsage") => crate::process::js_process_resource_usage(),
+        ("process", "getActiveResourcesInfo") => crate::process::js_process_active_resources_info(),
+        ("process", "getuid") => crate::process::js_process_getuid(),
+        ("process", "geteuid") => crate::process::js_process_geteuid(),
+        ("process", "getgid") => crate::process::js_process_getgid(),
+        ("process", "getegid") => crate::process::js_process_getegid(),
+        ("process", "sourceMapsEnabled") => crate::process::js_process_source_maps_enabled(),
+        ("process", "setSourceMapsEnabled") => {
+            crate::process::js_process_set_source_maps_enabled(arg(0))
+        }
+        ("process", "hasUncaughtExceptionCaptureCallback") => {
+            crate::process::js_process_has_uncaught_exception_capture_callback()
+        }
+        ("process", "setUncaughtExceptionCaptureCallback") => {
+            crate::process::js_process_set_uncaught_exception_capture_callback(arg(0))
+        }
+        ("process", "addUncaughtExceptionCaptureCallback") => {
+            crate::process::js_process_add_uncaught_exception_capture_callback(arg(0))
+        }
         ("process", "nextTick") => {
             // Validate the callback and forward trailing args (#3046).
             unsafe { crate::os::js_process_next_tick(arg_bits(0), pack_args_from(1)) };
@@ -504,6 +525,23 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "kill") => crate::os::js_process_kill(arg(0), arg(1)),
         ("process", "exit") => {
             crate::process::js_process_exit(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "abort") => {
+            crate::process::js_process_abort();
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "umask") => {
+            let mask = arg(0);
+            let mask_value = JSValue::from_bits(mask.to_bits());
+            if mask_value.is_undefined() {
+                crate::process::js_process_umask()
+            } else {
+                crate::process::js_process_umask_set(mask)
+            }
+        }
+        ("process", "emitWarning") => {
+            crate::process::js_process_emit_warning(arg(0), arg(1), arg(2));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "hrtime") => crate::os::js_process_hrtime(arg(0)),
