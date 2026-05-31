@@ -582,6 +582,11 @@ impl SH for Expr {
             Expr::RegisterFunctionPrototypeMethod { func, method_name, value, } => { tag(h, 464); func.as_ref().hash(h); method_name.hash(h); value.as_ref().hash(h); }
             Expr::GetFunctionPrototypeMethod { func, method_name } => { tag(h, 1465); func.as_ref().hash(h); method_name.hash(h); }
             Expr::WebAssemblyValidate(bytes) => { tag(h, 12027); bytes.as_ref().hash(h); }
+            Expr::WebAssemblyCompile(bytes) => { tag(h, 12050); bytes.as_ref().hash(h); }
+            Expr::WebAssemblyModuleNew(bytes) => { tag(h, 12051); bytes.as_ref().hash(h); }
+            Expr::WebAssemblyModuleExports(module) => { tag(h, 12052); module.as_ref().hash(h); }
+            Expr::WebAssemblyModuleImports(module) => { tag(h, 12053); module.as_ref().hash(h); }
+            Expr::WebAssemblyModuleCustomSections { module, name } => { tag(h, 12054); module.as_ref().hash(h); name.as_ref().hash(h); }
             Expr::WebAssemblyInstantiate(bytes) => { tag(h, 12028); bytes.as_ref().hash(h); }
             Expr::WebAssemblyCallExport { instance, name, args, } => { tag(h, 12029); instance.as_ref().hash(h); name.as_ref().hash(h); args.hash(h); }
             Expr::DynamicImport { paths, arg } => { tag(h, 12030); for p in paths { p.hash(h); } arg.as_ref().hash(h); }

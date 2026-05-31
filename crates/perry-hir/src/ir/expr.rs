@@ -724,6 +724,19 @@ pub enum Expr {
     // `crates/perry-runtime/src/webassembly.rs` for the FFI shape.
     /// `WebAssembly.validate(bytes)` -> boolean
     WebAssemblyValidate(Box<Expr>),
+    /// `WebAssembly.compile(bytes)` -> Promise<WebAssembly.Module>
+    WebAssemblyCompile(Box<Expr>),
+    /// `new WebAssembly.Module(bytes)` -> WebAssembly.Module wrapper
+    WebAssemblyModuleNew(Box<Expr>),
+    /// `WebAssembly.Module.exports(module)` -> export descriptors
+    WebAssemblyModuleExports(Box<Expr>),
+    /// `WebAssembly.Module.imports(module)` -> import descriptors
+    WebAssemblyModuleImports(Box<Expr>),
+    /// `WebAssembly.Module.customSections(module, name)` -> ArrayBuffer[]
+    WebAssemblyModuleCustomSections {
+        module: Box<Expr>,
+        name: Box<Expr>,
+    },
     /// `WebAssembly.instantiate(bytes)` -> opaque instance handle (Perry
     /// MVP shape — sync, no Promise, no `{module, instance}` pair).
     WebAssemblyInstantiate(Box<Expr>),

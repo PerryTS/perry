@@ -247,6 +247,22 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     args,
                 });
             }
+            if obj_name == "WebAssembly" && prop_ident.sym.as_ref() == "Module" {
+                let args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                if let Some(bytes) = args.into_iter().next() {
+                    ctx.uses_webassembly = true;
+                    return Ok(Expr::WebAssemblyModuleNew(Box::new(bytes)));
+                }
+            }
             let is_util_module = obj_name == "util"
                 || obj_name == "sys"
                 || ctx.lookup_builtin_module_alias(obj_name) == Some("util")

@@ -1445,6 +1445,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::MathLog1p(..)
         | Expr::MathRandom
         | Expr::WebAssemblyValidate(..)
+        | Expr::WebAssemblyCompile(..)
+        | Expr::WebAssemblyModuleNew(..)
+        | Expr::WebAssemblyModuleExports(..)
+        | Expr::WebAssemblyModuleImports(..)
+        | Expr::WebAssemblyModuleCustomSections { .. }
         | Expr::WebAssemblyInstantiate(..)
         | Expr::WebAssemblyCallExport { .. }
         | Expr::JsonStringifyFull(..)
