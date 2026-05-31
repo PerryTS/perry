@@ -341,6 +341,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "Reflect"
             | "performance"
             | "process"
+            | "navigator"
     )
 }
 
@@ -353,7 +354,14 @@ pub(crate) fn is_global_this_builtin_function_name(name: &str) -> bool {
     is_global_this_builtin_name(name)
         && !matches!(
             name,
-            "globalThis" | "console" | "Math" | "JSON" | "Reflect" | "performance" | "process"
+            "globalThis"
+                | "console"
+                | "Math"
+                | "JSON"
+                | "Reflect"
+                | "performance"
+                | "process"
+                | "navigator"
         )
 }
 

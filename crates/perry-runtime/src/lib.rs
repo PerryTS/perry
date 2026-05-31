@@ -56,6 +56,7 @@ pub mod math;
 pub mod native_abi;
 pub mod native_arena;
 pub mod native_handle;
+pub mod navigator;
 pub mod net_validate;
 pub mod node_stream;
 pub mod node_submodules;

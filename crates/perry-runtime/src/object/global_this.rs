@@ -170,6 +170,10 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
 pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] =
     &["console", "process", "Math", "JSON", "Reflect"];
 
+// Note: `navigator` (#2923) is installed on the singleton directly (see
+// `populate_global_this_builtins`) rather than via this generic namespace
+// loop because it needs its own field-populated object, not an empty stub.
+
 /// JS global built-in functions exposed as function-valued properties on
 /// `globalThis`. Unlike constructor sentinels, these call through to Perry's
 /// real direct-call runtime helpers so rebinding works:
@@ -1014,6 +1018,14 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let pkey = crate::string::js_string_from_bytes(pname.as_ptr(), pname.len() as u32);
         let pval = crate::perf_hooks::performance_namespace();
         js_object_set_field_by_name(singleton, pkey, pval);
+    }
+    // #2923: `globalThis.navigator` — Node's browser-compatible runtime
+    // metadata object. typeof is "object". Built once per process.
+    {
+        let nname = b"navigator";
+        let nkey = crate::string::js_string_from_bytes(nname.as_ptr(), nname.len() as u32);
+        let nval = crate::navigator::js_navigator_object();
+        js_object_set_field_by_name(singleton, nkey, nval);
     }
 }
 
