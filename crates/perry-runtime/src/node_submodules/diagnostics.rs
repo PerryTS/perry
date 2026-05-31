@@ -65,7 +65,7 @@ pub(crate) struct DiagChannelState {
     pub(crate) name: f64,
     pub(crate) obj: *mut ObjectHeader,
     pub(crate) subscribers: Vec<f64>,
-    pub(crate) stores: Vec<(f64, Option<f64>)>,
+    pub(crate) stores: Vec<(f64, f64)>,
 }
 
 pub(crate) struct DiagTracingState {
@@ -313,6 +313,29 @@ pub(crate) fn channel_key(name: f64) -> Option<DiagChannelKey> {
     None
 }
 
+fn is_symbol_value(value: f64) -> bool {
+    let bits = value.to_bits();
+    let tag = bits & crate::value::TAG_MASK;
+    tag == crate::value::POINTER_TAG && unsafe { crate::symbol::js_is_symbol(value) } != 0
+}
+
+fn describe_name_or_channels_received(value: f64) -> String {
+    if is_symbol_value(value) {
+        let ptr = unsafe { crate::symbol::js_symbol_to_string(value) };
+        let rendered = crate::url::get_string_content(crate::value::js_nanbox_string(ptr));
+        return format!("type symbol ({rendered})");
+    }
+    crate::fs::validate::describe_received(value)
+}
+
+fn throw_invalid_name_or_channels(value: f64) -> ! {
+    let message = format!(
+        "The \"nameOrChannels\" argument must be of type string or an instance of TracingChannel or Object. Received {}",
+        describe_name_or_channels_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
 pub(crate) fn diagnostics_channel_is_channel_instance_value(value: f64) -> bool {
     let js_value = JSValue::from_bits(value.to_bits());
     if !js_value.is_pointer() {
@@ -538,6 +561,15 @@ pub(crate) fn throw_type_error_no_code(message: &[u8]) -> ! {
     crate::exception::js_throw(boxed_ptr(err))
 }
 
+fn type_error_value(message: &[u8]) -> f64 {
+    let s = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    boxed_ptr(crate::error::js_typeerror_new(s))
+}
+
+fn schedule_transform_not_callable() {
+    schedule_uncaught(type_error_value(b"transform is not a function"));
+}
+
 pub(crate) fn next_diag_id() -> i64 {
     NEXT_DIAG_ID.with(|n| {
         let mut n = n.borrow_mut();
@@ -589,18 +621,6 @@ pub(crate) fn cast3(f: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64
 #[allow(clippy::missing_transmute_annotations)]
 pub(crate) fn cast4(
     f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64) -> f64,
-) -> *const u8 {
-    f as *const u8
-}
-#[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cast5(
-    f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64) -> f64,
-) -> *const u8 {
-    f as *const u8
-}
-#[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cast7(
-    f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64, f64) -> f64,
 ) -> *const u8 {
     f as *const u8
 }
@@ -1018,11 +1038,6 @@ pub(crate) extern "C" fn diag_channel_bind_store(
 ) -> f64 {
     ensure_subscriber_owner_thread();
     let id = method_id(closure);
-    let transform = if valid_closure_value(transform) {
-        Some(transform)
-    } else {
-        None
-    };
     let mut inserted = false;
     DIAG_CHANNELS.with(|m| {
         if let Some(c) = m.borrow_mut().get_mut(&id) {
@@ -1199,8 +1214,10 @@ pub(crate) extern "C" fn diag_channel_run_stores(
     js_closure_set_capture_ptr(next, 4, cb_args_arr.to_bits() as i64);
     let mut next_value = boxed_ptr(next);
     for (store, transform) in stores.into_iter().rev() {
-        let context = if let Some(t) = transform {
-            match catch_js(|| js_closure_call1(closure_ptr(t), data)) {
+        let context = if transform.to_bits() == TAG_UNDEFINED {
+            data
+        } else if valid_closure_value(transform) {
+            match catch_js(|| js_closure_call1(closure_ptr(transform), data)) {
                 Ok(context) => context,
                 Err(err) => {
                     schedule_uncaught(err);
@@ -1208,7 +1225,8 @@ pub(crate) extern "C" fn diag_channel_run_stores(
                 }
             }
         } else {
-            data
+            schedule_transform_not_callable();
+            continue;
         };
         let chain = js_closure_alloc(cast0(store_chain_thunk), 3);
         js_register_closure_arity(cast0(store_chain_thunk), 0);
@@ -1482,8 +1500,7 @@ pub(crate) extern "C" fn diag_trace_promise(
 
 pub(crate) extern "C" fn diag_trace_wrapped_callback(
     closure: *const ClosureHeader,
-    err: f64,
-    res: f64,
+    all_args: f64,
 ) -> f64 {
     let callback = js_closure_get_capture_f64(closure, 0);
     let context = js_closure_get_capture_f64(closure, 1);
@@ -1491,6 +1508,9 @@ pub(crate) extern "C" fn diag_trace_wrapped_callback(
     let async_end = js_closure_get_capture_ptr(closure, 3);
     let error = js_closure_get_capture_ptr(closure, 4);
     let context_obj = crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader;
+    let cb_args = unbox_arg_array(all_args);
+    let err = cb_args.first().copied().unwrap_or_else(undefined);
+    let res = cb_args.get(1).copied().unwrap_or_else(undefined);
 
     if crate::value::js_is_truthy(err) != 0 {
         set_field_value(context_obj, "error", err);
@@ -1500,7 +1520,8 @@ pub(crate) extern "C" fn diag_trace_wrapped_callback(
     }
 
     publish_channel(async_start, context);
-    let result = match catch_js(|| call_fn_value(callback, undefined(), &[err, res])) {
+    let callback_this = crate::object::js_implicit_this_get();
+    let result = match catch_js(|| call_fn_value(callback, callback_this, &cb_args)) {
         Ok(result) => result,
         Err(callback_err) => {
             publish_channel(async_end, context);
@@ -1511,19 +1532,50 @@ pub(crate) extern "C" fn diag_trace_wrapped_callback(
     result
 }
 
-pub(crate) extern "C" fn diag_trace_callback(
-    closure: *const ClosureHeader,
-    fn_value: f64,
-    _position: f64,
-    context: f64,
-    this_arg: f64,
-    callback: f64,
-    err: f64,
-    res: f64,
-) -> f64 {
-    if !valid_closure_value(callback) {
-        throw_invalid_arg();
+fn trace_callback_method_closure(id: i64) -> f64 {
+    let func = cast1(diag_trace_callback);
+    let c = js_closure_alloc(func, 1);
+    js_closure_set_capture_ptr(c, 0, id);
+    js_register_closure_synthetic_arguments(func, 0);
+    boxed_ptr(c)
+}
+
+fn trace_callback_position(position: f64, arg_len: usize) -> Option<usize> {
+    let jv = JSValue::from_bits(position.to_bits());
+    let raw = if jv.is_undefined() {
+        -1.0
+    } else if jv.is_int32() {
+        jv.as_int32() as f64
+    } else if jv.is_number() {
+        jv.as_number()
+    } else {
+        -1.0
+    };
+    if !raw.is_finite() {
+        return None;
     }
+    let mut idx = raw.trunc() as isize;
+    if idx < 0 {
+        idx += arg_len as isize;
+    }
+    if idx < 0 || idx as usize >= arg_len {
+        None
+    } else {
+        Some(idx as usize)
+    }
+}
+
+pub(crate) extern "C" fn diag_trace_callback(closure: *const ClosureHeader, all_args: f64) -> f64 {
+    let all = unbox_arg_array(all_args);
+    let fn_value = all.first().copied().unwrap_or_else(undefined);
+    let position = all.get(1).copied().unwrap_or_else(undefined);
+    let context = all.get(2).copied().unwrap_or_else(undefined);
+    let this_arg = all.get(3).copied().unwrap_or_else(undefined);
+    let mut call_args = if all.len() > 4 {
+        all[4..].to_vec()
+    } else {
+        Vec::new()
+    };
     let events = DIAG_TRACES.with(|m| {
         m.borrow()
             .get(&method_id(closure))
@@ -1537,20 +1589,30 @@ pub(crate) extern "C" fn diag_trace_callback(
             .unwrap_or(false)
     });
     if !active {
-        return call_fn_value(fn_value, this_arg, &[callback, err, res]);
+        return call_fn_value(fn_value, this_arg, &call_args);
     }
 
-    let wrapped = js_closure_alloc(diag_trace_wrapped_callback as *const u8, 5);
+    let Some(callback_index) = trace_callback_position(position, call_args.len()) else {
+        throw_invalid_arg();
+    };
+    let callback = call_args[callback_index];
+    if !valid_closure_value(callback) {
+        throw_invalid_arg();
+    }
+
+    let wrapped_func = cast1(diag_trace_wrapped_callback);
+    let wrapped = js_closure_alloc(wrapped_func, 5);
     js_closure_set_capture_f64(wrapped, 0, callback);
     js_closure_set_capture_f64(wrapped, 1, context);
     js_closure_set_capture_ptr(wrapped, 2, events[2]);
     js_closure_set_capture_ptr(wrapped, 3, events[3]);
     js_closure_set_capture_ptr(wrapped, 4, events[4]);
-    js_register_closure_arity(diag_trace_wrapped_callback as *const u8, 2);
+    js_register_closure_synthetic_arguments(wrapped_func, 0);
     let wrapped_value = boxed_ptr(wrapped);
+    call_args[callback_index] = wrapped_value;
 
     publish_channel(events[0], context);
-    match catch_js(|| call_fn_value(fn_value, this_arg, &[wrapped_value, err, res])) {
+    match catch_js(|| call_fn_value(fn_value, this_arg, &call_args)) {
         Ok(ret) => {
             publish_channel(events[1], context);
             ret
@@ -1573,7 +1635,7 @@ pub(crate) extern "C" fn thunk_diag_tracing_channel(
     name_or_channels: f64,
 ) -> f64 {
     let id = next_diag_id();
-    let events = if channel_key(name_or_channels).is_some() {
+    let events = if decode_string_value(name_or_channels).is_some() {
         [
             ensure_channel(tracing_event_name(name_or_channels, "start")),
             ensure_channel(tracing_event_name(name_or_channels, "end")),
@@ -1581,6 +1643,8 @@ pub(crate) extern "C" fn thunk_diag_tracing_channel(
             ensure_channel(tracing_event_name(name_or_channels, "asyncEnd")),
             ensure_channel(tracing_event_name(name_or_channels, "error")),
         ]
+    } else if is_symbol_value(name_or_channels) {
+        throw_invalid_name_or_channels(name_or_channels);
     } else if (name_or_channels.to_bits() & crate::value::POINTER_TAG) == crate::value::POINTER_TAG
     {
         [
@@ -1591,7 +1655,7 @@ pub(crate) extern "C" fn thunk_diag_tracing_channel(
             channel_from_object_property(name_or_channels, "error"),
         ]
     } else {
-        throw_invalid_arg();
+        throw_invalid_name_or_channels(name_or_channels);
     };
     let obj = js_object_alloc(0, 12);
     set_field_value(obj, "start", channel_obj(events[0]));
@@ -1620,11 +1684,7 @@ pub(crate) extern "C" fn thunk_diag_tracing_channel(
         "tracePromise",
         method_closure(cast3(diag_trace_promise), 3, id),
     );
-    set_field_value(
-        obj,
-        "traceCallback",
-        method_closure(cast7(diag_trace_callback), 7, id),
-    );
+    set_field_value(obj, "traceCallback", trace_callback_method_closure(id));
     DIAG_TRACES.with(|m| {
         m.borrow_mut().insert(id, DiagTracingState { obj, events });
     });
