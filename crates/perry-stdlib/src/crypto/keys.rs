@@ -90,31 +90,24 @@ pub unsafe extern "C" fn js_crypto_generate_key_sync(
     buf
 }
 
-/// #2955 — Node's callback-form `crypto` APIs are asynchronous: the API
-/// returns `undefined` first, queued microtasks run, and the `(err, value)`
-/// callback fires on a *later* tick. Perry computes the result synchronously
-/// (random/KDF/keygen are cheap enough to do inline), then schedules the
-/// callback through `setImmediate` so it observes Node's ordering — the
-/// synchronous "after" code and any `Promise.resolve().then(...)` microtask
-/// both run before the callback. `setImmediate` roots the NaN-boxed args
-/// across the event-loop turn, so a heap result (Buffer/ArrayBuffer) survives
-/// GC until the callback fires.
 pub(super) unsafe fn call_node_style_callback2(callback_bits: f64, err: f64, value: f64) {
-    let raw = (callback_bits.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
-    if (raw as u64) < 0x1000 {
+    let raw = callback_bits.to_bits() & 0x0000_FFFF_FFFF_FFFF;
+    if raw < 0x1000 {
         return;
     }
-    let args = [err, value];
-    perry_runtime::timer::js_set_immediate_callback_args(raw, args.as_ptr(), args.len() as i32);
+    perry_runtime::closure::js_closure_call2(
+        raw as *const perry_runtime::ClosureHeader,
+        err,
+        value,
+    );
 }
 
 pub(super) unsafe fn call_node_style_callback3(callback_bits: f64, err: f64, a: f64, b: f64) {
-    let raw = (callback_bits.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
-    if (raw as u64) < 0x1000 {
+    let raw = callback_bits.to_bits() & 0x0000_FFFF_FFFF_FFFF;
+    if raw < 0x1000 {
         return;
     }
-    let args = [err, a, b];
-    perry_runtime::timer::js_set_immediate_callback_args(raw, args.as_ptr(), args.len() as i32);
+    perry_runtime::closure::js_closure_call3(raw as *const perry_runtime::ClosureHeader, err, a, b);
 }
 
 #[no_mangle]

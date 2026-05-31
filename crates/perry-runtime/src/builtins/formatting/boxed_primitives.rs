@@ -86,17 +86,6 @@ pub fn scan_boxed_primitive_payload_roots_mut(visitor: &mut crate::gc::RuntimeRo
     });
 }
 
-/// The wrapped primitive value of a boxed `Number`/`String`/`Boolean` object,
-/// NaN-boxed. For these built-in wrappers, `OrdinaryToPrimitive` (any hint)
-/// yields exactly this payload: `new Number(1).valueOf() === 1`,
-/// `new String("a").toString() === "a"`, `new Boolean(true).valueOf() === true`.
-/// Returns `None` for any value that is not a boxed primitive wrapper. Used by
-/// the addition ToPrimitive path (#3563).
-#[inline]
-pub(crate) fn boxed_primitive_value(value: f64) -> Option<f64> {
-    boxed_primitive_payload(value).map(|(_, payload)| payload)
-}
-
 #[inline]
 pub(super) fn boxed_primitive_payload(value: f64) -> Option<(u32, f64)> {
     let jv = crate::value::JSValue::from_bits(value.to_bits());

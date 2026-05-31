@@ -6,7 +6,7 @@
 use anyhow::Result;
 use perry_diagnostics::{Diagnostic, DiagnosticCode, Diagnostics, FileId, SourceCache, Span};
 use swc_common::{input::StringInput, sync::Lrc, FileName, SourceMap};
-use swc_ecma_ast::{Module, ModuleItem, Program};
+use swc_ecma_ast::Module;
 use swc_ecma_parser::{lexer::Lexer, Parser, Syntax, TsSyntax};
 
 // Re-export AST types for consumers that need to inspect the AST
@@ -74,7 +74,7 @@ pub fn parse_typescript_with_cache(
     let mut parser = Parser::new_from(lexer);
     let mut diagnostics = Diagnostics::new();
 
-    let module = parse_program_as_module(&mut parser).map_err(|e| {
+    let module = parser.parse_module().map_err(|e| {
         // Convert SWC error to our diagnostic
         let span = Span::new(file_id, e.span().lo.0, e.span().hi.0);
         let diag = Diagnostic::error(DiagnosticCode::ParseError, format!("{}", e.kind().msg()))
@@ -84,20 +84,17 @@ pub fn parse_typescript_with_cache(
         anyhow::anyhow!("Parse error: {}", e.kind().msg())
     })?;
 
-    let recoverable_errors = parser.take_errors();
-    for error in &recoverable_errors {
+    // Collect recoverable errors as warnings
+    for error in parser.take_errors() {
         let span = Span::new(file_id, error.span().lo.0, error.span().hi.0);
         diagnostics.push(
-            Diagnostic::error(
+            Diagnostic::warning(
                 DiagnosticCode::ParseError,
                 format!("{}", error.kind().msg()),
             )
             .with_span(span)
             .build(),
         );
-    }
-    if let Some(error) = recoverable_errors.first() {
-        anyhow::bail!("Parse error: {}", error.kind().msg());
     }
 
     Ok(ParseResult {
@@ -135,28 +132,16 @@ pub fn parse_typescript(source: &str, filename: &str) -> Result<Module> {
 
     let mut parser = Parser::new_from(lexer);
 
-    let module = parse_program_as_module(&mut parser)
+    let module = parser
+        .parse_module()
         .map_err(|e| anyhow::anyhow!("Parse error: {:?}", e))?;
 
-    let recoverable_errors = parser.take_errors();
-    if let Some(error) = recoverable_errors.first() {
-        return Err(anyhow::anyhow!("Parse error: {:?}", error));
+    // Check for recoverable errors
+    for error in parser.take_errors() {
+        eprintln!("Parse warning: {:?}", error);
     }
 
     Ok(module)
-}
-
-fn parse_program_as_module(
-    parser: &mut Parser<Lexer>,
-) -> std::result::Result<Module, swc_ecma_parser::error::Error> {
-    match parser.parse_program()? {
-        Program::Module(module) => Ok(module),
-        Program::Script(script) => Ok(Module {
-            span: script.span,
-            body: script.body.into_iter().map(ModuleItem::Stmt).collect(),
-            shebang: script.shebang,
-        }),
-    }
 }
 
 /// Utility to convert SWC span to our span type.
@@ -223,24 +208,6 @@ mod tests {
         let mut cache = SourceCache::new();
 
         let result = parse_typescript_with_cache(source, "test.ts", &mut cache);
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_non_strict_script_reserved_word_binding() {
-        let source = r#""USE STRICT"; var public = 1; var await = 2;"#;
-
-        let module = parse_typescript(source, "test.js").unwrap();
-
-        assert_eq!(module.body.len(), 3);
-    }
-
-    #[test]
-    fn test_parse_strict_script_rejects_reserved_word_binding() {
-        let source = r#""use strict"; var public = 1;"#;
-
-        let result = parse_typescript(source, "test.js");
 
         assert!(result.is_err());
     }

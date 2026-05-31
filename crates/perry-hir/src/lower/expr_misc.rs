@@ -23,25 +23,12 @@
 //! cross-references that need careful coordination.
 
 use anyhow::{anyhow, Result};
-use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use crate::ir::{BinaryOp, Expr, UpdateOp};
 use crate::lower_patterns::unescape_template;
 
 use super::{lower_expr, LoweringContext};
-
-fn throw_type_error_const_assignment(name: &str) -> Expr {
-    Expr::Call {
-        callee: Box::new(Expr::ExternFuncRef {
-            name: "js_throw_type_error_const_assignment".to_string(),
-            param_types: vec![Type::String],
-            return_type: Type::Any,
-        }),
-        args: vec![Expr::String(name.to_string())],
-        type_args: vec![],
-    }
-}
 
 pub(super) fn lower_cond(ctx: &mut LoweringContext, cond: &ast::CondExpr) -> Result<Expr> {
     let condition = Box::new(lower_expr(ctx, &cond.test)?);
@@ -119,9 +106,6 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
             let id = ctx
                 .lookup_local(&name)
                 .ok_or_else(|| anyhow!("Undefined variable in update expression: {}", name))?;
-            if ctx.is_local_immutable(id) {
-                return Ok(throw_type_error_const_assignment(&name));
-            }
             let op = match update.op {
                 ast::UpdateOp::PlusPlus => UpdateOp::Increment,
                 ast::UpdateOp::MinusMinus => UpdateOp::Decrement,

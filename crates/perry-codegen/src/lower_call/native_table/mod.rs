@@ -23,7 +23,6 @@ mod net_events;
 mod node_core;
 mod node_dns;
 mod node_misc;
-mod node_v8;
 mod thread_lodash;
 mod tui;
 mod utils_crypto;
@@ -141,7 +140,6 @@ pub(super) const NR_VOID: NativeRetKind = NativeRetKind::Void;
 pub(super) static NATIVE_MODULE_TABLE: LazyLock<Vec<NativeModSig>> = LazyLock::new(|| {
     let mut v: Vec<NativeModSig> = Vec::new();
     v.extend_from_slice(node_core::NODE_CORE_ROWS);
-    v.extend_from_slice(node_v8::NODE_V8_ROWS);
     v.extend_from_slice(node_dns::NODE_DNS_ROWS);
     v.extend_from_slice(fastify::FASTIFY_ROWS);
     v.extend_from_slice(databases::DATABASES_ROWS);

@@ -60,10 +60,6 @@ const TAG_END_SPARSE_ARRAY: u8 = b'@';
 const TAG_BEGIN_DENSE_ARRAY: u8 = b'A';
 const TAG_END_DENSE_ARRAY: u8 = b'$';
 const TAG_DATE: u8 = b'D';
-const TAG_BEGIN_JS_MAP: u8 = b';';
-const TAG_END_JS_MAP: u8 = b':';
-const TAG_BEGIN_JS_SET: u8 = b'\'';
-const TAG_END_JS_SET: u8 = b',';
 const TAG_ARRAY_BUFFER: u8 = b'B';
 const TAG_HOST_OBJECT: u8 = b'\\';
 
@@ -228,14 +224,6 @@ impl Serializer {
                     self.write_double(crate::date::js_date_get_time(value));
                     return;
                 }
-                if crate::map::is_registered_map(raw) {
-                    self.write_map(raw as *const crate::map::MapHeader);
-                    return;
-                }
-                if crate::set::is_registered_set(raw) {
-                    self.write_set(raw as *const crate::set::SetHeader);
-                    return;
-                }
                 if let Some(arr) = cp_array_ptr(value) {
                     self.write_dense_array(arr);
                     return;
@@ -383,39 +371,6 @@ impl Serializer {
         self.depth -= 1;
     }
 
-    fn write_map(&mut self, map: *const crate::map::MapHeader) {
-        if self.depth >= MAX_DEPTH {
-            self.out.push(TAG_UNDEFINED);
-            return;
-        }
-        self.depth += 1;
-        let size = crate::map::js_map_size(map);
-        self.out.push(TAG_BEGIN_JS_MAP);
-        for i in 0..size {
-            self.write_value(crate::map::js_map_entry_key_at(map, i));
-            self.write_value(crate::map::js_map_entry_value_at(map, i));
-        }
-        self.out.push(TAG_END_JS_MAP);
-        self.write_varint(size as u64 * 2);
-        self.depth -= 1;
-    }
-
-    fn write_set(&mut self, set: *const crate::set::SetHeader) {
-        if self.depth >= MAX_DEPTH {
-            self.out.push(TAG_UNDEFINED);
-            return;
-        }
-        self.depth += 1;
-        let size = crate::set::js_set_size(set);
-        self.out.push(TAG_BEGIN_JS_SET);
-        for i in 0..size {
-            self.write_value(crate::set::js_set_value_at(set, i));
-        }
-        self.out.push(TAG_END_JS_SET);
-        self.write_varint(size as u64);
-        self.depth -= 1;
-    }
-
     /// Walk an object's own enumerable fields allocation-free, mirroring the
     /// JSON stringifier: names live in `keys_array`, values are positional
     /// (inline slots up to `max(field_count, 8)`, the rest via overflow).
@@ -553,8 +508,6 @@ impl<'a> Deserializer<'a> {
                 TAG_BEGIN_JS_OBJECT => self.read_object()?,
                 TAG_BEGIN_DENSE_ARRAY => self.read_dense_array()?,
                 TAG_BEGIN_SPARSE_ARRAY => self.read_sparse_array()?,
-                TAG_BEGIN_JS_MAP => self.read_map()?,
-                TAG_BEGIN_JS_SET => self.read_set()?,
                 TAG_ARRAY_BUFFER => self.read_array_buffer()?,
                 TAG_HOST_OBJECT => self.read_host_object()?,
                 TAG_OBJECT_REFERENCE => {
@@ -667,39 +620,6 @@ impl<'a> Deserializer<'a> {
             if JSValue::from_bits(key.to_bits()).is_number() {
                 crate::array::js_array_set_f64_extend(arr, key as u32, val);
             }
-        }
-        Some(boxed)
-    }
-
-    fn read_map(&mut self) -> Option<f64> {
-        let map = crate::map::js_map_alloc(4);
-        let boxed = cp_box_ptr(map as *const u8);
-        self.id_table.push(boxed);
-        loop {
-            if self.peek_byte() == Some(TAG_END_JS_MAP) {
-                self.pos += 1;
-                self.read_varint()?;
-                break;
-            }
-            let key = self.read_value()?;
-            let value = self.read_value()?;
-            crate::map::js_map_set(map, key, value);
-        }
-        Some(boxed)
-    }
-
-    fn read_set(&mut self) -> Option<f64> {
-        let set = crate::set::js_set_alloc(4);
-        let boxed = cp_box_ptr(set as *const u8);
-        self.id_table.push(boxed);
-        loop {
-            if self.peek_byte() == Some(TAG_END_JS_SET) {
-                self.pos += 1;
-                self.read_varint()?;
-                break;
-            }
-            let value = self.read_value()?;
-            crate::set::js_set_add(set, value);
         }
         Some(boxed)
     }

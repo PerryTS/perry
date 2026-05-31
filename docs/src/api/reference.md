@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2166 entries across 98 modules.
+Total: 2123 entries across 99 modules.
 
 ## Modules
 
@@ -101,6 +101,7 @@ Total: 2166 entries across 98 modules.
 - [`uuid`](#uuid)
 - [`v8`](#v8)
 - [`validator`](#validator)
+- [`wasi`](#wasi)
 - [`worker_threads`](#worker-threads)
 - [`ws`](#ws)
 - [`zlib`](#zlib)
@@ -2759,68 +2760,18 @@ Total: 2166 entries across 98 modules.
 
 ### Classes
 
-- `DefaultDeserializer`
-- `DefaultSerializer`
-- `Deserializer`
 - `GCProfiler`
-- `Serializer`
 
 ### Methods
 
-- `DefaultDeserializer` — module
-- `DefaultSerializer` — module
-- `Deserializer` — module
-- `Serializer` — module
-- `_getDataCloneError` — instance *(class: `Serializer`)*
-- `_getDataCloneError` — instance *(class: `DefaultSerializer`)*
-- `_setTreatArrayBufferViewsAsHostObjects` — instance *(class: `Serializer`)*
-- `_setTreatArrayBufferViewsAsHostObjects` — instance *(class: `DefaultSerializer`)*
-- `cachedDataVersionTag` — module
 - `cachedDataVersionTag` — module
 - `deserialize` — module
-- `deserialize` — module
-- `getHeapCodeStatistics` — module
 - `getHeapCodeStatistics` — module
 - `getHeapSpaceStatistics` — module
-- `getHeapSpaceStatistics` — module
 - `getHeapStatistics` — module
-- `getHeapStatistics` — module
-- `getWireFormatVersion` — instance *(class: `Deserializer`)*
-- `getWireFormatVersion` — instance *(class: `DefaultDeserializer`)*
-- `readDouble` — instance *(class: `Deserializer`)*
-- `readDouble` — instance *(class: `DefaultDeserializer`)*
-- `readHeader` — instance *(class: `Deserializer`)*
-- `readHeader` — instance *(class: `DefaultDeserializer`)*
-- `readRawBytes` — instance *(class: `Deserializer`)*
-- `readRawBytes` — instance *(class: `DefaultDeserializer`)*
-- `readUint32` — instance *(class: `Deserializer`)*
-- `readUint32` — instance *(class: `DefaultDeserializer`)*
-- `readUint64` — instance *(class: `Deserializer`)*
-- `readUint64` — instance *(class: `DefaultDeserializer`)*
-- `readValue` — instance *(class: `Deserializer`)*
-- `readValue` — instance *(class: `DefaultDeserializer`)*
-- `releaseBuffer` — instance *(class: `Serializer`)*
-- `releaseBuffer` — instance *(class: `DefaultSerializer`)*
-- `serialize` — module
 - `serialize` — module
 - `start` — instance *(class: `GCProfiler`)*
 - `stop` — instance *(class: `GCProfiler`)*
-- `transferArrayBuffer` — instance *(class: `Serializer`)*
-- `transferArrayBuffer` — instance *(class: `DefaultSerializer`)*
-- `transferArrayBuffer` — instance *(class: `Deserializer`)*
-- `transferArrayBuffer` — instance *(class: `DefaultDeserializer`)*
-- `writeDouble` — instance *(class: `Serializer`)*
-- `writeDouble` — instance *(class: `DefaultSerializer`)*
-- `writeHeader` — instance *(class: `Serializer`)*
-- `writeHeader` — instance *(class: `DefaultSerializer`)*
-- `writeRawBytes` — instance *(class: `Serializer`)*
-- `writeRawBytes` — instance *(class: `DefaultSerializer`)*
-- `writeUint32` — instance *(class: `Serializer`)*
-- `writeUint32` — instance *(class: `DefaultSerializer`)*
-- `writeUint64` — instance *(class: `Serializer`)*
-- `writeUint64` — instance *(class: `DefaultSerializer`)*
-- `writeValue` — instance *(class: `Serializer`)*
-- `writeValue` — instance *(class: `DefaultSerializer`)*
 
 ## `validator`
 
@@ -2831,6 +2782,24 @@ Total: 2166 entries across 98 modules.
 - `isJSON` — module
 - `isURL` — module
 - `isUUID` — module
+
+## `wasi`
+
+### Classes
+
+- `WASI`
+
+### Methods
+
+- `WASI` — module
+- `finalizeBindings` — instance *(class: `WASI`)*
+- `getImportObject` — instance *(class: `WASI`)*
+- `initialize` — instance *(class: `WASI`)*
+- `start` — instance *(class: `WASI`)*
+
+### Properties
+
+- `wasiImport`
 
 ## `worker_threads`
 

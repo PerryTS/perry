@@ -43,9 +43,6 @@ pub(crate) fn lower_pattern_binding_into(
                 .map(|ann| extract_ts_type(&ann.type_ann))
                 .unwrap_or(Type::Any);
             let id = ctx.define_local(name.clone(), ty.clone());
-            if !mutable {
-                ctx.mark_local_immutable(id);
-            }
             result.push(Stmt::Let {
                 id,
                 name,

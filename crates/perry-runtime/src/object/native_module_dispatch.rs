@@ -447,18 +447,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "setMaxListeners") => crate::os::js_process_set_max_listeners(arg(0)),
         ("process", "getMaxListeners") => crate::os::js_process_get_max_listeners(),
         ("process", "getBuiltinModule") => crate::process::js_process_get_builtin_module(arg(0)),
-        ("module", "enableCompileCache") => crate::process::js_module_enable_compile_cache(arg(0)),
-        ("module", "findSourceMap") => crate::process::js_module_find_source_map(arg(0)),
-        ("module", "flushCompileCache") => crate::process::js_module_flush_compile_cache(),
-        ("module", "getCompileCacheDir") => crate::process::js_module_get_compile_cache_dir(),
         ("module", "isBuiltin") => crate::process::js_module_is_builtin(arg(0)),
-        ("module", "SourceMap") => crate::process::js_module_source_map_new(arg(0)),
-        ("module", "createRequire") => crate::process::js_module_create_require(arg(0)),
-        ("module", "findPackageJSON") => {
-            crate::process::js_module_find_package_json(arg(0), arg(1))
-        }
-        ("module", "syncBuiltinESMExports") => crate::process::js_module_sync_builtin_esm_exports(),
-        ("module", "runMain") => crate::process::js_module_run_main(),
         ("process", "cwd") => str_to_f64(crate::os::js_process_cwd()),
         ("process", "uptime") => crate::os::js_process_uptime(),
         ("process", "memoryUsage") => crate::process::js_process_memory_usage(),
@@ -523,6 +512,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("tty", "isatty") => crate::tty::js_tty_isatty(arg(0)),
         ("tty", "ReadStream") => crate::tty::js_tty_read_stream_new(arg(0)),
         ("tty", "WriteStream") => crate::tty::js_tty_write_stream_new(arg(0)),
+
+        // ── wasi module ──
+        ("wasi", "WASI") => crate::wasi::js_wasi_constructor_call(arg(0)),
 
         // ── net module legacy/internal helpers ──
         ("net", "_normalizeArgs") => crate::net_validate::js_net_normalize_args(arg(0)),
@@ -1272,9 +1264,11 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::object::js_util_types_is_boxed_primitive(arg(0))
         }
         // ── url module (module-level functions return NaN-boxed JS values) ──
-        ("url", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0)),
-        ("url", "fileURLToPathBuffer") => crate::url::js_url_file_url_to_path_buffer(arg(0)),
-        ("url", "pathToFileURL") => crate::url::js_url_path_to_file_url(arg(0)),
+        ("url", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0), arg(1)),
+        ("url", "fileURLToPathBuffer") => {
+            crate::url::js_url_file_url_to_path_buffer(arg(0), arg(1))
+        }
+        ("url", "pathToFileURL") => crate::url::js_url_path_to_file_url(arg(0), arg(1)),
         ("url", "domainToASCII") => crate::url::js_url_domain_to_ascii(arg(0)),
         ("url", "domainToUnicode") => crate::url::js_url_domain_to_unicode(arg(0)),
         ("url", "urlToHttpOptions") => crate::url::js_url_to_http_options(arg(0)),
@@ -1377,75 +1371,6 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("stream", "Duplex") => crate::node_stream::js_node_stream_duplex_new(arg(0)),
         ("stream", "Transform") => crate::node_stream::js_node_stream_transform_new(arg(0)),
         ("stream", "PassThrough") => crate::node_stream::js_node_stream_passthrough_new(arg(0)),
-        ("v8", "serialize") => crate::v8::js_v8_serialize(arg(0)),
-        ("v8", "deserialize") => crate::v8::js_v8_deserialize(arg(0)),
-        ("v8", "cachedDataVersionTag") => crate::v8::js_v8_cached_data_version_tag(arg(0)),
-        ("v8", "getHeapStatistics") => crate::v8::js_v8_get_heap_statistics(arg(0)),
-        ("v8", "getHeapCodeStatistics") => {
-            crate::v8::js_v8_get_heap_code_statistics(arg(0), arg(1))
-        }
-        ("v8", "getHeapSpaceStatistics") => crate::v8::js_v8_get_heap_space_statistics(arg(0)),
-        ("v8", "Serializer") => crate::v8::js_v8_serializer_new(),
-        ("v8", "DefaultSerializer") => crate::v8::js_v8_default_serializer_new(),
-        ("v8", "Deserializer") => crate::v8::js_v8_deserializer_new(arg(0)),
-        ("v8", "DefaultDeserializer") => crate::v8::js_v8_default_deserializer_new(arg(0)),
-        ("v8.Serializer" | "v8.DefaultSerializer", "writeHeader") => {
-            crate::v8::js_v8_serializer_write_header(obj as i64)
-        }
-        ("v8.Serializer" | "v8.DefaultSerializer", "writeValue") => {
-            crate::v8::js_v8_serializer_write_value(obj as i64, arg(0))
-        }
-        ("v8.Serializer" | "v8.DefaultSerializer", "releaseBuffer") => {
-            crate::v8::js_v8_serializer_release_buffer(obj as i64)
-        }
-        ("v8.Serializer" | "v8.DefaultSerializer", "transferArrayBuffer") => {
-            crate::v8::js_v8_serializer_transfer_array_buffer(obj as i64, arg(0), arg(1))
-        }
-        ("v8.Serializer" | "v8.DefaultSerializer", "writeUint32") => {
-            crate::v8::js_v8_serializer_write_uint32(obj as i64, arg(0))
-        }
-        ("v8.Serializer" | "v8.DefaultSerializer", "writeUint64") => {
-            crate::v8::js_v8_serializer_write_uint64(obj as i64, arg(0), arg(1))
-        }
-        ("v8.Serializer" | "v8.DefaultSerializer", "writeDouble") => {
-            crate::v8::js_v8_serializer_write_double(obj as i64, arg(0))
-        }
-        ("v8.Serializer" | "v8.DefaultSerializer", "writeRawBytes") => {
-            crate::v8::js_v8_serializer_write_raw_bytes(obj as i64, arg(0))
-        }
-        ("v8.Serializer" | "v8.DefaultSerializer", "_getDataCloneError") => {
-            crate::v8::js_v8_serializer_get_data_clone_error(obj as i64, arg(0))
-        }
-        ("v8.Serializer" | "v8.DefaultSerializer", "_setTreatArrayBufferViewsAsHostObjects") => {
-            crate::v8::js_v8_serializer_set_treat_array_buffer_views_as_host_objects(
-                obj as i64,
-                arg(0),
-            )
-        }
-        ("v8.Deserializer" | "v8.DefaultDeserializer", "readHeader") => {
-            crate::v8::js_v8_deserializer_read_header(obj as i64)
-        }
-        ("v8.Deserializer" | "v8.DefaultDeserializer", "readValue") => {
-            crate::v8::js_v8_deserializer_read_value(obj as i64)
-        }
-        ("v8.Deserializer" | "v8.DefaultDeserializer", "transferArrayBuffer") => {
-            crate::v8::js_v8_deserializer_transfer_array_buffer(obj as i64, arg(0), arg(1))
-        }
-        ("v8.Deserializer" | "v8.DefaultDeserializer", "getWireFormatVersion") => {
-            crate::v8::js_v8_deserializer_get_wire_format_version(obj as i64)
-        }
-        ("v8.Deserializer" | "v8.DefaultDeserializer", "readUint32") => {
-            crate::v8::js_v8_deserializer_read_uint32(obj as i64)
-        }
-        ("v8.Deserializer" | "v8.DefaultDeserializer", "readUint64") => {
-            crate::v8::js_v8_deserializer_read_uint64(obj as i64)
-        }
-        ("v8.Deserializer" | "v8.DefaultDeserializer", "readDouble") => {
-            crate::v8::js_v8_deserializer_read_double(obj as i64)
-        }
-        ("v8.Deserializer" | "v8.DefaultDeserializer", "readRawBytes") => {
-            crate::v8::js_v8_deserializer_read_raw_bytes(obj as i64, arg(0))
-        }
 
         // #2130: captured-then-called child_process methods (`const spawn =
         // require('child_process').spawn; spawn(...)`, Node's canonical test

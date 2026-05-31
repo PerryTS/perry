@@ -1327,7 +1327,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     "Uint8Array" | "Int8Array" | "Uint8ClampedArray"
                     | "Uint16Array" | "Int16Array"
                     | "Uint32Array" | "Int32Array"
-                    | "Float32Array" | "Float64Array"
+                    | "Float16Array" | "Float32Array" | "Float64Array"
                 )
             );
             // #321: when the receiver's static type can NOT be proven to

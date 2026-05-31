@@ -20,42 +20,6 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
-    NativeModSig {
-        module: "module",
-        has_receiver: false,
-        method: "findSourceMap",
-        class_filter: None,
-        runtime: "js_module_find_source_map",
-        args: &[NA_F64],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "module",
-        has_receiver: false,
-        method: "enableCompileCache",
-        class_filter: None,
-        runtime: "js_module_enable_compile_cache",
-        args: &[NA_F64],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "module",
-        has_receiver: false,
-        method: "getCompileCacheDir",
-        class_filter: None,
-        runtime: "js_module_get_compile_cache_dir",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "module",
-        has_receiver: false,
-        method: "flushCompileCache",
-        class_filter: None,
-        runtime: "js_module_flush_compile_cache",
-        args: &[],
-        ret: NR_F64,
-    },
     // #3120: module.findPackageJSON(specifier[, base]) — walks parent
     // directories from the resolved specifier looking for package.json.
     // `specifier` (string) and `base` (string or URL object) both ride in
@@ -67,40 +31,6 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_module_find_package_json",
         args: &[NA_F64, NA_F64],
-        ret: NR_F64,
-    },
-    // #3119: module.createRequire(filenameOrURL) → a CommonJS-shaped require
-    // function (resolve/cache/extensions/main). The argument rides in the
-    // NaN-boxed F64 slot.
-    NativeModSig {
-        module: "module",
-        has_receiver: false,
-        method: "createRequire",
-        class_filter: None,
-        runtime: "js_module_create_require",
-        args: &[NA_F64],
-        ret: NR_F64,
-    },
-    // #3126: module.syncBuiltinESMExports() → undefined (no-op for the
-    // non-patched case). Extra arguments are ignored.
-    NativeModSig {
-        module: "module",
-        has_receiver: false,
-        method: "syncBuiltinESMExports",
-        class_filter: None,
-        runtime: "js_module_sync_builtin_esm_exports",
-        args: &[],
-        ret: NR_F64,
-    },
-    // #3263: module.runMain() → undefined (entrypoint already run in a
-    // native-compiled binary).
-    NativeModSig {
-        module: "module",
-        has_receiver: false,
-        method: "runMain",
-        class_filter: None,
-        runtime: "js_module_run_main",
-        args: &[],
         ret: NR_F64,
     },
     // ========== Node test runner shape stubs ==========
@@ -337,6 +267,16 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "WriteStream",
         class_filter: None,
         runtime: "js_tty_write_stream_new",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    // ========== Node WASI ==========
+    NativeModSig {
+        module: "wasi",
+        has_receiver: false,
+        method: "WASI",
+        class_filter: None,
+        runtime: "js_wasi_constructor_call",
         args: &[NA_F64],
         ret: NR_F64,
     },
@@ -596,7 +536,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "fileURLToPath",
         class_filter: None,
         runtime: "js_url_file_url_to_path",
-        args: &[NA_F64],
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -605,7 +545,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "fileURLToPathBuffer",
         class_filter: None,
         runtime: "js_url_file_url_to_path_buffer",
-        args: &[NA_F64],
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -614,7 +554,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "pathToFileURL",
         class_filter: None,
         runtime: "js_url_path_to_file_url",
-        args: &[NA_F64],
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
