@@ -45,6 +45,9 @@ use event_emitter::{
     ns_remove_listener2, ns_set_max_listeners, remove_stream_listener_for_event,
     stream_listener_count_for_event,
 };
+// #3049 — `process.setMaxListeners` reuses the EventEmitter setter
+// validation (TypeError/RangeError + fractional/Infinity storage).
+pub(crate) use event_emitter::validate_max_listeners;
 pub use event_emitter::{
     js_node_stream_method_event_names, js_node_stream_method_get_max_listeners,
     js_node_stream_method_listener_count, js_node_stream_method_listeners,

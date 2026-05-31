@@ -454,7 +454,13 @@ pub(crate) unsafe fn dispatch_native_module_method(
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "chdir") => {
-            crate::os::js_process_chdir(arg_event_ptr(0));
+            // #3043 — route dynamic/method-value chdir calls through the
+            // full-value validator (matching the static codegen path) so a
+            // non-string argument throws TypeError [ERR_INVALID_ARG_TYPE]
+            // instead of silently no-oping on a null string pointer.
+            unsafe {
+                crate::process::js_process_chdir_jsv(arg(0));
+            }
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "loadEnvFile") => {

@@ -665,6 +665,20 @@ pub extern "C" fn js_process_hrtime(prior: f64) -> f64 {
         );
         crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
+    // #3039 — a supplied prior tuple must have exactly two elements; Node
+    // throws RangeError [ERR_OUT_OF_RANGE] ("It must be 2. Received <len>")
+    // for any other length.
+    if !prior_jv.is_undefined() {
+        let arr = prior_jv.as_pointer::<crate::array::ArrayHeader>();
+        let len = crate::array::js_array_length(arr);
+        if len != 2 {
+            let message = format!(
+                "The value of \"time\" is out of range. It must be 2. Received {}",
+                len
+            );
+            crate::fs::validate::throw_range_error_with_code(&message);
+        }
+    }
     let elapsed = get_hrtime_start().elapsed();
     let total_ns = elapsed.as_nanos() as u64 + 1_000_000_000;
     let mut secs = (total_ns / 1_000_000_000) as i64;
@@ -726,7 +740,7 @@ struct ProcessListener {
 struct ProcessEmitter {
     events: HashMap<String, Vec<ProcessListener>>,
     event_order: Vec<String>,
-    max_listeners: i32,
+    max_listeners: f64,
 }
 
 impl ProcessEmitter {
@@ -734,7 +748,7 @@ impl ProcessEmitter {
         Self {
             events: HashMap::new(),
             event_order: Vec::new(),
-            max_listeners: 10,
+            max_listeners: 10.0,
         }
     }
 
@@ -1041,17 +1055,21 @@ pub extern "C" fn js_process_event_names() -> *mut ArrayHeader {
 
 #[no_mangle]
 pub extern "C" fn js_process_set_max_listeners(value: f64) -> f64 {
-    if value.is_finite() && value >= 0.0 {
-        PROCESS_EMITTER.with(|emitter| {
-            emitter.borrow_mut().max_listeners = value as i32;
-        });
-    }
+    // #3049 — share the EventEmitter setter validation: non-numbers throw
+    // TypeError [ERR_INVALID_ARG_TYPE]; NaN/negative throw RangeError
+    // [ERR_OUT_OF_RANGE]; finite non-negative (incl. fractional and
+    // Infinity) are stored verbatim and read back exactly by
+    // getMaxListeners(). Returns `process` so it chains like Node.
+    let validated = crate::node_stream::validate_max_listeners(value);
+    PROCESS_EMITTER.with(|emitter| {
+        emitter.borrow_mut().max_listeners = validated;
+    });
     process_namespace_value()
 }
 
 #[no_mangle]
 pub extern "C" fn js_process_get_max_listeners() -> f64 {
-    PROCESS_EMITTER.with(|emitter| emitter.borrow().max_listeners as f64)
+    PROCESS_EMITTER.with(|emitter| emitter.borrow().max_listeners)
 }
 
 pub fn scan_process_event_listener_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {

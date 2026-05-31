@@ -57,7 +57,7 @@ fn throw_max_listeners_out_of_range(n: f64) -> ! {
     crate::fs::validate::throw_range_error_with_code(&message)
 }
 
-fn validate_max_listeners(value: f64) -> f64 {
+pub(crate) fn validate_max_listeners(value: f64) -> f64 {
     let js_value = JSValue::from_bits(value.to_bits());
     if !crate::fs::validate::is_numeric(js_value) {
         throw_max_listeners_invalid_type(value);
