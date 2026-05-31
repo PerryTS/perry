@@ -645,6 +645,20 @@ pub unsafe extern "C" fn js_event_emitter_new_with_options(options: f64) -> Hand
     register_handle(emitter)
 }
 
+// `#[used]` keepalive anchors for the EventEmitter constructor entry points.
+// `new EventEmitter()` codegen calls `js_event_emitter_new_with_options`
+// (builtin.rs) which is reachable only from generated `.o`; the default
+// `perry file.ts -o out` auto-optimize whole-program-LLVM rebuild internalizes
+// + dead-strips unreferenced `#[no_mangle]` symbols, so without an anchor the
+// link fails with `Undefined symbols: _js_event_emitter_new_with_options`
+// (see project_auto_optimize_keepalive_3320). Anchoring both constructor
+// shapes keeps `new EventEmitter()` compiling under auto-optimize.
+#[used]
+static KEEP_JS_EVENT_EMITTER_NEW: extern "C" fn() -> Handle = js_event_emitter_new;
+#[used]
+static KEEP_JS_EVENT_EMITTER_NEW_WITH_OPTIONS: unsafe extern "C" fn(f64) -> Handle =
+    js_event_emitter_new_with_options;
+
 pub fn is_event_emitter_handle(handle: Handle) -> bool {
     get_handle::<EventEmitterHandle>(handle).is_some()
 }

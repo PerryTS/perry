@@ -374,6 +374,26 @@ pub extern "C" fn js_event_emitter_new() -> Handle {
     register_handle(EventEmitterHandle::new())
 }
 
+/// `new EventEmitter(options?)` — the constructor shape codegen actually
+/// emits for `new EventEmitter()` (see `lower_call/builtin.rs`). The bundled
+/// perry-stdlib EventEmitter already exposes this entry point, but the
+/// default `node:events` flip routes to perry-ext-events (well_known_bindings
+/// .toml), which previously only defined `js_event_emitter_new` — so any
+/// `new EventEmitter(...)` failed to link with
+/// `Undefined symbols: _js_event_emitter_new_with_options`. perry-ext-events
+/// does not model the `captureRejections` option, so the options object is
+/// accepted and ignored here; listener-argument validation (#3072) is the
+/// behavior this crate is concerned with.
+///
+/// # Safety
+///
+/// `_options` is a NaN-boxed JS value; it is not dereferenced.
+#[no_mangle]
+pub unsafe extern "C" fn js_event_emitter_new_with_options(_options: f64) -> Handle {
+    ensure_gc_scanner_registered();
+    register_handle(EventEmitterHandle::new())
+}
+
 /// `emitter.on(eventName, listener)` — register a listener.
 /// Also serves as `addListener` (wired at the codegen layer).
 ///
