@@ -204,6 +204,30 @@ fn normalize_native_module_alias(module_name: &str) -> &str {
     }
 }
 
+pub(crate) fn webcrypto_namespace() -> f64 {
+    js_create_native_module_namespace(b"crypto.webcrypto".as_ptr(), "crypto.webcrypto".len())
+}
+
+pub(crate) fn install_global_webcrypto(singleton: *mut ObjectHeader) {
+    let key = crate::string::js_string_from_bytes(b"crypto".as_ptr(), "crypto".len() as u32);
+    js_object_set_field_by_name(singleton, key, webcrypto_namespace());
+}
+
+pub(crate) fn install_webcrypto_constructor_proto(proto_obj: *mut ObjectHeader, ctor_value: f64) {
+    let constructor = "constructor";
+    let key = crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
+    js_object_set_field_by_name(proto_obj, key, ctor_value);
+    super::set_builtin_property_attrs(
+        proto_obj as usize,
+        constructor.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+}
+
+pub(crate) fn subtle_crypto_namespace() -> f64 {
+    js_create_native_module_namespace(b"crypto.subtle".as_ptr(), "crypto.subtle".len())
+}
+
 // #3677: `Object.keys(zlib.constants)` enumeration. Node exposes the full
 // Z_*/BROTLI_*/ZSTD_* table as enumerable own keys (170 keys). Every key here
 // is backed by a value in `zlib_const` (the value-read dispatch), so
@@ -1407,6 +1431,8 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "path.posix"
             | "path.win32"
             | "timers/promises"
+            | "crypto.webcrypto"
+            | "crypto.subtle"
     )
 }
 
@@ -2882,15 +2908,11 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             // performance.timerify(fn) returns a wrapper that preserves the
             // result and emits observer-visible function entries.
             | ("perf_hooks", "timerify")
-            // #1366: `crypto.getRandomValues` is the WebCrypto sync
-            // randomness API. Perry lowers the call form via a
-            // synthetic `$$cryptoFillRandom` method on the buffer
-            // (see `lower/expr_call/module_static.rs`), but reading
-            // it as a value (`typeof crypto.getRandomValues ===
-            // "function"`, `const f = crypto.getRandomValues`)
-            // needs the property-read form to be a bound-method
-            // closure.
-            | ("crypto", "getRandomValues")
+            // `globalThis.crypto` is backed by the `crypto.webcrypto`
+            // singleton. Its methods must read as callable bound functions
+            // for feature checks and rebound calls.
+            | ("crypto.webcrypto", "getRandomValues")
+            | ("crypto.webcrypto", "randomUUID")
             | ("buffer.Buffer", "from")
             | ("buffer.Buffer", "alloc")
             | ("buffer.Buffer", "allocUnsafe")
@@ -4748,6 +4770,7 @@ pub(crate) unsafe fn get_native_module_constant(
         "crypto" => match property {
             "constants" => Some(create_sub_namespace("crypto.constants")),
             "Certificate" => Some(create_sub_namespace("crypto.Certificate")),
+            "webcrypto" => Some(webcrypto_namespace()),
             // #1366: `crypto.subtle` is the WebCrypto SubtleCrypto
             // instance. Resolve to a sub-namespace so `typeof
             // crypto.subtle === "object"` matches Node and call
@@ -4756,7 +4779,22 @@ pub(crate) unsafe fn get_native_module_constant(
             // object. The actual `subtle.<method>(...)` lowering
             // is handled statically by HIR (see
             // `lower/expr_call/nested_namespace.rs`).
-            "subtle" => Some(create_sub_namespace("crypto.subtle")),
+            "subtle" => Some(subtle_crypto_namespace()),
+            _ => None,
+        },
+        "crypto.webcrypto" => match property {
+            "subtle" => Some(subtle_crypto_namespace()),
+            "constructor" => Some(js_get_global_this_builtin_value(
+                b"Crypto".as_ptr(),
+                "Crypto".len(),
+            )),
+            _ => None,
+        },
+        "crypto.subtle" => match property {
+            "constructor" => Some(js_get_global_this_builtin_value(
+                b"SubtleCrypto".as_ptr(),
+                "SubtleCrypto".len(),
+            )),
             _ => None,
         },
         "crypto.constants" => crypto_const(property),

@@ -2663,6 +2663,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `WebCrypto*` HIR variant. Listing `subtle` here flips the strict
     // strict-API gate (#463) so unimported `crypto.subtle` reads inside
     // an import-style binding don't silently return undefined.
+    property("crypto", "webcrypto"),
     property("crypto", "subtle"),
     // os — methods mapped to Expr::Os* in expr_call.rs.
     property("os", "default"),
@@ -3039,9 +3040,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("module", "isBuiltin", false, None),
     class("module", "SourceMap"),
     method("module", "SourceMap", false, None),
-    // node:test — shape-only runner surface. Runtime returns no-op function
-    // values and plain objects for mock/snapshot so feature probes work; Perry
-    // does not execute Node's test runner.
+    // node:test — deterministic runner, mock tracker, timer, reporter, and
+    // snapshot helpers used by the curated node-suite parity coverage.
+    method("test", "default", false, None),
+    method("test", "test", false, None),
     method("test", "skip", false, None),
     method("test", "todo", false, None),
     method("test", "only", false, None),
@@ -3055,8 +3057,24 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("test", "run", false, None),
     property("test", "mock"),
     method("test", "fn", false, Some("mock")),
+    method("test", "method", false, Some("mock")),
+    method("test", "getter", false, Some("mock")),
+    method("test", "setter", false, Some("mock")),
     method("test", "property", false, Some("mock")),
+    method("test", "reset", false, Some("mock")),
+    method("test", "restoreAll", false, Some("mock")),
+    method("test", "enable", false, Some("timers")),
+    method("test", "tick", false, Some("timers")),
+    method("test", "runAll", false, Some("timers")),
+    method("test", "setTime", false, Some("timers")),
     property("test", "snapshot"),
+    method(
+        "test",
+        "setDefaultSnapshotSerializers",
+        false,
+        Some("snapshot"),
+    ),
+    method("test", "setResolveSnapshotPath", false, Some("snapshot")),
     // node:test/reporters — reporter constructors exposed by the runtime
     // submodule. Formatting behavior remains covered by the node:test suite.
     property("test/reporters", "default"),

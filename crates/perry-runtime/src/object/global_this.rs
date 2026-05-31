@@ -148,6 +148,9 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "URLSearchParams",
     "AbortController",
     "AbortSignal",
+    "Crypto",
+    "CryptoKey",
+    "SubtleCrypto",
     "FormData",
     "Blob",
     "File",
@@ -1052,6 +1055,7 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             "length".to_string(),
             super::PropertyAttrs::new(false, false, true),
         );
+        let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
         if name == "Error" {
             install_error_static_methods(closure_ptr);
         }
@@ -1078,6 +1082,9 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             populate_builtin_prototype_methods(name, proto_obj);
             if matches!(name, "MessageChannel" | "MessagePort" | "BroadcastChannel") {
                 crate::messaging::populate_messaging_prototype(name, proto_obj, ctor_value);
+            }
+            if matches!(name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
+                super::native_module::install_webcrypto_constructor_proto(proto_obj, ctor_value);
             }
             // #2145: link per-kind typed-array constructors into the
             // `%TypedArray%` chain. `Int8Array.__proto__ === %TypedArray%`
@@ -1211,6 +1218,7 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let value = super::native_module::bound_native_callable_export_value("perf_hooks", name);
         js_object_set_field_by_name(singleton, key, value);
     }
+    super::native_module::install_global_webcrypto(singleton);
     // #2923: `globalThis.navigator` — Node's browser-compatible runtime
     // metadata object. typeof is "object". Built once per process.
     {

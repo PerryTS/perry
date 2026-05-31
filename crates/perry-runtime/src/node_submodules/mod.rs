@@ -148,7 +148,8 @@ use fs_promises::{
 use stream_promises::{thunk_streamP_finished, thunk_streamP_pipeline, value_from_ptr};
 use test::{
     thunk_reporter_dot, thunk_reporter_junit, thunk_reporter_lcov, thunk_reporter_spec,
-    thunk_reporter_tap, thunk_test, thunk_test_hook, thunk_test_run,
+    thunk_reporter_tap, thunk_test, thunk_test_hook, thunk_test_only, thunk_test_run,
+    thunk_test_skip, thunk_test_todo,
 };
 use timers::{
     timers_ns_clear_immediate, timers_ns_clear_interval, timers_ns_clear_timeout,
@@ -644,6 +645,22 @@ const SUBMODULES: &[SubmoduleSpec] = &[
                 thunk: ExportThunk::Fn3(thunk_test),
             },
             ExportSpec {
+                name: "skip",
+                thunk: ExportThunk::Fn3(thunk_test_skip),
+            },
+            ExportSpec {
+                name: "todo",
+                thunk: ExportThunk::Fn3(thunk_test_todo),
+            },
+            ExportSpec {
+                name: "only",
+                thunk: ExportThunk::Fn3(thunk_test_only),
+            },
+            ExportSpec {
+                name: "suite",
+                thunk: ExportThunk::Fn3(thunk_test),
+            },
+            ExportSpec {
                 name: "describe",
                 thunk: ExportThunk::Fn3(thunk_test),
             },
@@ -859,7 +876,14 @@ fn ensure_export_singleton(
     submod: &'static SubmoduleSpec,
     export: &'static ExportSpec,
 ) -> *mut ClosureHeader {
-    let key = (submod.key.as_ptr() as usize, export.name.as_ptr() as usize);
+    let key_name = if submod.key == "test" && matches!(export.name, "default" | "test") {
+        find_export(submod, "test")
+            .map(|canonical| canonical.name)
+            .unwrap_or(export.name)
+    } else {
+        export.name
+    };
+    let key = (submod.key.as_ptr() as usize, key_name.as_ptr() as usize);
     if let Some(cached) = EXPORT_SINGLETONS.with(|m| m.borrow().get(&key).copied()) {
         return cached;
     }
@@ -889,6 +913,14 @@ fn ensure_export_singleton(
             "yield",
             f64::from_bits(JSValue::pointer(yield_fn as *const u8).bits()),
         );
+    }
+    if submod.key == "test"
+        && matches!(
+            export.name,
+            "default" | "test" | "suite" | "describe" | "it"
+        )
+    {
+        test::decorate_test_export(allocated);
     }
     EXPORT_SINGLETONS.with(|m| {
         m.borrow_mut().insert(key, allocated);

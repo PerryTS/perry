@@ -1489,7 +1489,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         ast::MemberProp::Ident(p) if p.sym.as_ref() == "prototype"
                             || p.sym.as_ref() == "__proto__"
                     );
-                    if !outer_is_prototype_or_proto {
+                    if !outer_is_prototype_or_proto && property != "crypto" {
                         object_expr = Expr::GlobalGet(0);
                     }
                 }
