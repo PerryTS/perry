@@ -3018,6 +3018,11 @@ pub fn run_with_parse_cache(
                             }
                         }
                         perry_hir::ImportSpecifier::Default { local } => {
+                            // Some historical submodules model their default
+                            // import as the namespace object. Other submodules
+                            // with CommonJS-style default objects route through
+                            // the explicit "default" export below.
+                            //
                             // For `node:diagnostics_channel`, the CJS-wrap
                             // converts `require('node:diagnostics_channel')`
                             // into `import diagChan from 'node:diagnostics_channel'`
@@ -3028,10 +3033,7 @@ pub fn run_with_parse_cache(
                             // not the function-singleton form, which would
                             // produce `(function).tracingChannel is not a
                             // function` because functions don't carry the
-                            // module's exported methods. The four pre-#906
-                            // submodules (`timers/promises` etc.) keep the
-                            // function-singleton routing because no real
-                            // code reads them as namespace objects.
+                            // module's exported methods.
                             if matches!(
                                 submod_key.as_str(),
                                 "diagnostics_channel" | "timers" | "sys" | "trace_events"
@@ -3046,9 +3048,10 @@ pub fn run_with_parse_cache(
                                 }
                             } else {
                                 // Default imports route to "default" — these
-                                // submodules don't have meaningful defaults
-                                // but tracking them keeps the catch-all from
-                                // firing on `import x from "node:..."`.
+                                // submodules either expose a real default
+                                // (`node:sys` aliases `node:util`) or need a
+                                // tracked placeholder to keep the catch-all
+                                // from firing on `import x from "node:..."`.
                                 import_function_node_submodule.insert(
                                     local.clone(),
                                     (submod_key.clone(), "default".to_string()),

@@ -49,6 +49,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "ethers",
     "mongodb",
     "better-sqlite3",
+    "sqlite",
     "tursodb",
     "iroh",
     "node-cron",
@@ -57,6 +58,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "https",
     "http2",
     "events",
+    "domain",
     "os",
     "buffer",
     "assert",
@@ -143,9 +145,11 @@ pub const NATIVE_MODULES: &[&str] = &[
 /// Keeping these separate preserves the compiler's submodule import
 /// lowering while still allowing manifest/docs entries for the subpath.
 pub const NODE_SUBMODULES: &[&str] = &[
+    "diagnostics_channel",
     "fs/promises",
     "stream/promises",
     "stream/consumers",
+    "stream/web",
     "readline/promises",
     "punycode.ucs2",
     "sys",
@@ -200,6 +204,25 @@ const fn method(
     has_receiver: bool,
     class_filter: Option<&'static str>,
 ) -> ApiEntry {
+    method_entry(module, name, has_receiver, class_filter, true)
+}
+
+const fn internal_method(
+    module: &'static str,
+    name: &'static str,
+    has_receiver: bool,
+    class_filter: Option<&'static str>,
+) -> ApiEntry {
+    method_entry(module, name, has_receiver, class_filter, false)
+}
+
+const fn method_entry(
+    module: &'static str,
+    name: &'static str,
+    has_receiver: bool,
+    class_filter: Option<&'static str>,
+    module_export: bool,
+) -> ApiEntry {
     ApiEntry {
         module,
         name,
@@ -209,6 +232,7 @@ const fn method(
         },
         source: ApiSource::Stdlib,
         stub: false,
+        module_export: module_export && !has_receiver && class_filter.is_none(),
         abi_version: None,
         params: &[],
         returns: TypeSpec::Any,
@@ -226,6 +250,45 @@ const fn method_sig(
     params: &'static [ParamSpec],
     returns: TypeSpec,
 ) -> ApiEntry {
+    method_sig_entry(
+        module,
+        name,
+        has_receiver,
+        class_filter,
+        params,
+        returns,
+        true,
+    )
+}
+
+const fn internal_method_sig(
+    module: &'static str,
+    name: &'static str,
+    has_receiver: bool,
+    class_filter: Option<&'static str>,
+    params: &'static [ParamSpec],
+    returns: TypeSpec,
+) -> ApiEntry {
+    method_sig_entry(
+        module,
+        name,
+        has_receiver,
+        class_filter,
+        params,
+        returns,
+        false,
+    )
+}
+
+const fn method_sig_entry(
+    module: &'static str,
+    name: &'static str,
+    has_receiver: bool,
+    class_filter: Option<&'static str>,
+    params: &'static [ParamSpec],
+    returns: TypeSpec,
+    module_export: bool,
+) -> ApiEntry {
     ApiEntry {
         module,
         name,
@@ -235,6 +298,7 @@ const fn method_sig(
         },
         source: ApiSource::Stdlib,
         stub: false,
+        module_export: module_export && !has_receiver && class_filter.is_none(),
         abi_version: None,
         params,
         returns,
@@ -248,6 +312,21 @@ const fn property(module: &'static str, name: &'static str) -> ApiEntry {
         kind: ApiKind::Property,
         source: ApiSource::Stdlib,
         stub: false,
+        module_export: true,
+        abi_version: None,
+        params: &[],
+        returns: TypeSpec::Any,
+    }
+}
+
+const fn internal_property(module: &'static str, name: &'static str) -> ApiEntry {
+    ApiEntry {
+        module,
+        name,
+        kind: ApiKind::Property,
+        source: ApiSource::Stdlib,
+        stub: false,
+        module_export: false,
         abi_version: None,
         params: &[],
         returns: TypeSpec::Any,
@@ -261,6 +340,21 @@ const fn class(module: &'static str, name: &'static str) -> ApiEntry {
         kind: ApiKind::Class,
         source: ApiSource::Stdlib,
         stub: false,
+        module_export: true,
+        abi_version: None,
+        params: &[],
+        returns: TypeSpec::Any,
+    }
+}
+
+const fn internal_class(module: &'static str, name: &'static str) -> ApiEntry {
+    ApiEntry {
+        module,
+        name,
+        kind: ApiKind::Class,
+        source: ApiSource::Stdlib,
+        stub: false,
+        module_export: false,
         abi_version: None,
         params: &[],
         returns: TypeSpec::Any,
@@ -502,6 +596,30 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("better-sqlite3", "pluck", true, None),
     method("better-sqlite3", "columns", true, None),
     method("better-sqlite3", "transaction", true, None),
+    // node:sqlite (#3183/#3184). Node's builtin synchronous SQLite
+    // module exposes `DatabaseSync` (constructor) and `StatementSync`
+    // (returned by `db.prepare`). The observable method surface reuses
+    // Perry's existing rusqlite backend (`js_sqlite_*`); these entries
+    // register the module so the strict-API import gate recognizes
+    // `import { DatabaseSync } from "node:sqlite"` and the dispatch
+    // tables route `exec`/`prepare`/`run`/`get`/`all`/`iterate`/
+    // `columns`/`close` to the shared statement registry.
+    method_sig(
+        "sqlite",
+        "DatabaseSync",
+        false,
+        None,
+        &[p_str("p0")],
+        TypeSpec::Any,
+    ),
+    method("sqlite", "prepare", true, None),
+    method("sqlite", "run", true, None),
+    method("sqlite", "get", true, None),
+    method("sqlite", "all", true, None),
+    method("sqlite", "exec", true, None),
+    method("sqlite", "close", true, None),
+    method("sqlite", "iterate", true, None),
+    method("sqlite", "columns", true, None),
     // tursodb (#424). open / exec / execBatch / close /
     // lastInsertRowid / isAutocommit shipped in v0.5.543; queryAll /
     // queryOne shipped in v0.5.553 (close the row-as-object gap by
@@ -682,9 +800,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("dns/promises", "getServers", true, Some("Resolver")),
     method("dns/promises", "setServers", true, Some("Resolver")),
     method("dns/promises", "setLocalAddress", true, Some("Resolver")),
-    // node:dgram UDP support is currently a runtime-only shape stub:
-    // createSocket returns a socket-like object with callable methods so
-    // feature detection and inventory probes compile without claiming packet IO.
+    // node:dgram has deterministic in-process loopback coverage for the
+    // unicast subset; multicast/queue option methods remain shape-compatible.
     method("dgram", "createSocket", false, None),
     class("dgram", "Socket"),
     method("dgram", "Socket", false, None),
@@ -692,10 +809,25 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("dgram", "bind", true, Some("Socket")),
     method("dgram", "close", true, Some("Socket")),
     method("dgram", "address", true, Some("Socket")),
+    method("dgram", "remoteAddress", true, Some("Socket")),
     method("dgram", "connect", true, Some("Socket")),
     method("dgram", "disconnect", true, Some("Socket")),
+    method("dgram", "on", true, Some("Socket")),
+    method("dgram", "addListener", true, Some("Socket")),
+    method("dgram", "once", true, Some("Socket")),
+    method("dgram", "off", true, Some("Socket")),
+    method("dgram", "removeListener", true, Some("Socket")),
+    method("dgram", "emit", true, Some("Socket")),
+    method("dgram", "listenerCount", true, Some("Socket")),
     method("dgram", "addMembership", true, Some("Socket")),
     method("dgram", "dropMembership", true, Some("Socket")),
+    method("dgram", "addSourceSpecificMembership", true, Some("Socket")),
+    method(
+        "dgram",
+        "dropSourceSpecificMembership",
+        true,
+        Some("Socket"),
+    ),
     method("dgram", "setBroadcast", true, Some("Socket")),
     method("dgram", "setMulticastTTL", true, Some("Socket")),
     method("dgram", "setMulticastLoopback", true, Some("Socket")),
@@ -705,6 +837,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("dgram", "setSendBufferSize", true, Some("Socket")),
     method("dgram", "getRecvBufferSize", true, Some("Socket")),
     method("dgram", "getSendBufferSize", true, Some("Socket")),
+    method("dgram", "getSendQueueSize", true, Some("Socket")),
+    method("dgram", "getSendQueueCount", true, Some("Socket")),
     method("dgram", "ref", true, Some("Socket")),
     method("dgram", "unref", true, Some("Socket")),
     method_sig(
@@ -884,6 +1018,21 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_str("p0"), p_any("p1"), p_str("p2"), p_any("p3")],
         TypeSpec::Any,
     ),
+    method("tls", "getCiphers", false, None),
+    method("tls", "getCACertificates", false, None),
+    method("tls", "setDefaultCACertificates", false, None),
+    method("tls", "checkServerIdentity", false, None),
+    method("tls", "createSecureContext", false, None),
+    class("tls", "SecureContext"),
+    method("tls", "SecureContext", false, None),
+    property("tls", "DEFAULT_ECDH_CURVE"),
+    property("tls", "DEFAULT_MAX_VERSION"),
+    property("tls", "DEFAULT_MIN_VERSION"),
+    property("tls", "DEFAULT_CIPHERS"),
+    property("tls", "rootCertificates"),
+    property("tls", "CLIENT_RENEG_LIMIT"),
+    property("tls", "CLIENT_RENEG_WINDOW"),
+    property("events", "default"),
     method_sig("events", "EventEmitter", false, None, &[], TypeSpec::Any),
     method("events", "on", true, None),
     method("events", "emit", true, None),
@@ -906,6 +1055,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("events", "eventNames", true, None),
     method("events", "setMaxListeners", true, None),
     method("events", "getMaxListeners", true, None),
+    method("events", "domain", true, None),
     // Module-level helpers (`events.once` / `events.getEventListeners` /
     // `events.listenerCount` / `events.getMaxListeners` /
     // `events.setMaxListeners`).
@@ -919,6 +1069,22 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Module-level `events.on(emitter, name)` — async-iterable queue,
     // PR #1257.
     method("events", "on", false, None),
+    method_sig("domain", "Domain", false, None, &[], TypeSpec::Any),
+    method_sig("domain", "createDomain", false, None, &[], TypeSpec::Any),
+    method_sig("domain", "create", false, None, &[], TypeSpec::Any),
+    property("domain", "_stack"),
+    property("domain", "active"),
+    property("domain", "members"),
+    method("domain", "on", true, None),
+    method("domain", "addListener", true, None),
+    method("domain", "emit", true, None),
+    method("domain", "run", true, None),
+    method("domain", "bind", true, None),
+    method("domain", "intercept", true, None),
+    method("domain", "add", true, None),
+    method("domain", "remove", true, None),
+    method("domain", "enter", true, None),
+    method("domain", "exit", true, None),
     method_sig(
         "lru-cache",
         "default",
@@ -942,6 +1108,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("commander", "action", true, None),
     method("commander", "parse", true, None),
     method("commander", "opts", true, None),
+    property("async_hooks", "default"),
     method("async_hooks", "createHook", false, None),
     method("async_hooks", "executionAsyncId", false, None),
     method("async_hooks", "triggerAsyncId", false, None),
@@ -2271,7 +2438,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_any("p0")],
         TypeSpec::Any,
     ),
-    method_sig(
+    internal_method_sig(
         "worker_threads",
         "getWorkerData",
         false,
@@ -2279,7 +2446,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[],
         TypeSpec::Any,
     ),
-    method_sig(
+    internal_method_sig(
         "worker_threads",
         "workerData",
         false,
@@ -2287,7 +2454,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[],
         TypeSpec::Any,
     ),
-    method_sig(
+    internal_method_sig(
         "worker_threads",
         "parentPort",
         false,
@@ -2368,11 +2535,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // up in the dispatch-table extraction.
     method("crypto", "randomBytes", false, None),
     method("crypto", "randomUUID", false, None),
-    method("crypto", "randomUUIDv7", false, None),
+    internal_method("crypto", "randomUUIDv7", false, None),
     method("crypto", "randomInt", false, None),
     method("crypto", "hash", false, None),
-    method("crypto", "sha256", false, None),
-    method("crypto", "md5", false, None),
+    internal_method("crypto", "sha256", false, None),
+    internal_method("crypto", "md5", false, None),
     method("crypto", "getRandomValues", false, None),
     // crypto.randomFill(buffer[, offset][, size], callback) /
     // randomFillSync(buffer, offset?, size?) — fills the
@@ -2454,6 +2621,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // an import-style binding don't silently return undefined.
     property("crypto", "subtle"),
     // os — methods mapped to Expr::Os* in expr_call.rs.
+    property("os", "default"),
     method("os", "platform", false, None),
     method("os", "availableParallelism", false, None),
     method("os", "arch", false, None),
@@ -2522,11 +2690,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("constants", "O_NOFOLLOW"),
     property("constants", "O_NOCTTY"),
     property("constants", "O_DIRECTORY"),
+    #[cfg(target_os = "linux")]
     property("constants", "O_DIRECT"),
+    #[cfg(target_os = "linux")]
     property("constants", "O_NOATIME"),
     property("constants", "O_NONBLOCK"),
     property("constants", "O_SYNC"),
     property("constants", "O_DSYNC"),
+    #[cfg(target_os = "macos")]
+    property("constants", "O_SYMLINK"),
     property("constants", "O_CREAT"),
     property("constants", "O_TRUNC"),
     property("constants", "O_APPEND"),
@@ -2585,6 +2757,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("constants", "SIGALRM"),
     property("constants", "SIGTERM"),
     property("constants", "SIGCHLD"),
+    #[cfg(target_os = "linux")]
+    property("constants", "SIGSTKFLT"),
     property("constants", "SIGCONT"),
     property("constants", "SIGSTOP"),
     property("constants", "SIGTSTP"),
@@ -2597,7 +2771,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("constants", "SIGPROF"),
     property("constants", "SIGWINCH"),
     property("constants", "SIGIO"),
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    property("constants", "SIGPOLL"),
+    #[cfg(target_os = "linux")]
+    property("constants", "SIGPWR"),
     property("constants", "SIGSYS"),
+    #[cfg(target_os = "macos")]
+    property("constants", "SIGINFO"),
     property("constants", "E2BIG"),
     property("constants", "EACCES"),
     property("constants", "EADDRINUSE"),
@@ -2687,6 +2867,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("constants", "RTLD_NOW"),
     property("constants", "RTLD_GLOBAL"),
     property("constants", "RTLD_LOCAL"),
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     property("constants", "RTLD_DEEPBIND"),
     property("constants", "OPENSSL_VERSION_NUMBER"),
     property("constants", "SSL_OP_ALL"),
@@ -2744,6 +2925,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("constants", "POINT_CONVERSION_UNCOMPRESSED"),
     property("constants", "POINT_CONVERSION_HYBRID"),
     // path — methods mapped to Expr::Path* in expr_call.rs.
+    property("path", "default"),
     method("path", "join", false, None),
     method("path", "dirname", false, None),
     method("path", "basename", false, None),
@@ -2764,6 +2946,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Direct Node path submodules. Runtime aliases `path/posix` and
     // `path/win32` to the existing `path.posix` / `path.win32`
     // native-module namespaces.
+    property("path/posix", "default"),
     method("path/posix", "join", false, None),
     method("path/posix", "dirname", false, None),
     method("path/posix", "basename", false, None),
@@ -2781,6 +2964,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("path/posix", "delimiter"),
     property("path/posix", "posix"),
     property("path/posix", "win32"),
+    property("path/win32", "default"),
     method("path/win32", "join", false, None),
     method("path/win32", "dirname", false, None),
     method("path/win32", "basename", false, None),
@@ -2837,6 +3021,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("test", "fn", false, Some("mock")),
     method("test", "property", false, Some("mock")),
     property("test", "snapshot"),
+    // node:test/reporters — reporter constructors exposed by the runtime
+    // submodule. Formatting behavior remains covered by the node:test suite.
+    property("test/reporters", "default"),
+    method("test/reporters", "spec", false, None),
+    method("test/reporters", "tap", false, None),
+    method("test/reporters", "dot", false, None),
+    method("test/reporters", "junit", false, None),
+    method("test/reporters", "lcov", false, None),
     // process — properties mapped to Expr::Process* / Expr::Os* in expr_member.rs.
     method("process", "abort", false, None),
     method("process", "cwd", false, None),
@@ -2918,21 +3110,21 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "setgroups", false, None),
     method("process", "initgroups", false, None),
     method("process", "emitWarning", false, None),
-    method("process", "on", false, None),
-    method("process", "addListener", false, None),
-    method("process", "once", false, None),
-    method("process", "prependListener", false, None),
-    method("process", "prependOnceListener", false, None),
-    method("process", "emit", false, None),
-    method("process", "listeners", false, None),
-    method("process", "rawListeners", false, None),
-    method("process", "eventNames", false, None),
-    method("process", "listenerCount", false, None),
-    method("process", "removeListener", false, None),
-    method("process", "off", false, None),
-    method("process", "removeAllListeners", false, None),
-    method("process", "setMaxListeners", false, None),
-    method("process", "getMaxListeners", false, None),
+    internal_method("process", "on", false, None),
+    internal_method("process", "addListener", false, None),
+    internal_method("process", "once", false, None),
+    internal_method("process", "prependListener", false, None),
+    internal_method("process", "prependOnceListener", false, None),
+    internal_method("process", "emit", false, None),
+    internal_method("process", "listeners", false, None),
+    internal_method("process", "rawListeners", false, None),
+    internal_method("process", "eventNames", false, None),
+    internal_method("process", "listenerCount", false, None),
+    internal_method("process", "removeListener", false, None),
+    internal_method("process", "off", false, None),
+    internal_method("process", "removeAllListeners", false, None),
+    internal_method("process", "setMaxListeners", false, None),
+    internal_method("process", "getMaxListeners", false, None),
     method("process", "cpuUsage", false, None),
     method("process", "resourceUsage", false, None),
     method("process", "getActiveResourcesInfo", false, None),
@@ -2953,6 +3145,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // ===========================================================
     class("buffer", "Buffer"),
     class("events", "EventEmitter"),
+    class("domain", "Domain"),
     class("ws", "WebSocketServer"),
     class("ws", "WebSocket"),
     class("net", "Socket"),
@@ -2969,12 +3162,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("string_decoder", "StringDecoder"),
     method("string_decoder", "write", true, Some("StringDecoder")),
     method("string_decoder", "end", true, Some("StringDecoder")),
-    property("string_decoder", "lastNeed"),
-    property("string_decoder", "lastTotal"),
-    property("string_decoder", "lastChar"),
-    property("string_decoder", "encoding"),
+    internal_property("string_decoder", "lastNeed"),
+    internal_property("string_decoder", "lastTotal"),
+    internal_property("string_decoder", "lastChar"),
+    internal_property("string_decoder", "encoding"),
     // node:querystring — legacy URL-encoded form parser. Greenfield
     // (deprecated since Node 11 but still imported by many npm pkgs).
+    property("querystring", "default"),
     method("querystring", "escape", false, None),
     method("querystring", "unescape", false, None),
     method("querystring", "unescapeBuffer", false, None),
@@ -2998,7 +3192,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("cluster", "isPrimary"),
     property("cluster", "isMaster"),
     property("cluster", "isWorker"),
-    property("cluster", "worker"),
+    internal_property("cluster", "worker"),
     property("cluster", "workers"),
     property("cluster", "settings"),
     property("cluster", "schedulingPolicy"),
@@ -3012,8 +3206,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // as properties so the #463 strict gate doesn't bail out at compile
     // time; `get_native_module_constant` returns `undefined` at
     // runtime.
-    property("cluster", "on"),
-    property("cluster", "addListener"),
+    internal_property("cluster", "on"),
+    internal_property("cluster", "addListener"),
     // ===========================================================
     // #513 Phase A: backfill receiver-less surface for modules that
     // previously had zero entries. Without these, `module_has_any_entries`
@@ -3119,12 +3313,22 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fs", "watch", false, None),
     property("fs", "promises"),
     property("fs", "constants"),
+    // --- node:diagnostics_channel direct submodule.
+    property("diagnostics_channel", "default"),
+    class("diagnostics_channel", "Channel"),
+    method("diagnostics_channel", "channel", false, None),
+    method("diagnostics_channel", "hasSubscribers", false, None),
+    method("diagnostics_channel", "subscribe", false, None),
+    method("diagnostics_channel", "tracingChannel", false, None),
+    method("diagnostics_channel", "unsubscribe", false, None),
     // --- node:fs/promises direct submodule (#2728). Only the named exports
     // Perry actually backs with runtime thunks (see
     // `perry-runtime::node_submodules::fs_promises`) are declared. FileHandle
     // methods (ftruncate/fchown/futimes etc.) and `mkdtempDisposable` are
     // intentionally omitted — they are tracked separately (#2133). The parent
     // `fs.promises` namespace above still resolves to the same surface.
+    property("fs/promises", "default"),
+    property("fs/promises", "constants"),
     method("fs/promises", "access", false, None),
     method("fs/promises", "appendFile", false, None),
     method("fs/promises", "chmod", false, None),
@@ -3183,6 +3387,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- util (a small surface — Perry implements util.inspect /
     //     util.format / util.promisify shapes through builtins.rs;
     //     the rest are documented stubs) ---
+    property("util", "default"),
     method("util", "inspect", false, None),
     method("util", "format", false, None),
     method("util", "convertProcessSignalToExitCode", false, None),
@@ -3210,6 +3415,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "promisify", false, None),
     method("util", "callbackify", false, None),
     method("util", "debuglog", false, None),
+    method("util", "_extend", false, None),
+    method("util", "_errnoException", false, None),
+    method("util", "_exceptionWithHostPort", false, None),
     method("util", "deprecate", false, None),
     method("util", "inherits", false, None),
     method_sig(
@@ -3224,6 +3432,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "parseArgs", false, None),
     method("util", "stripVTControlCharacters", false, None),
     method("util", "styleText", false, None),
+    // MIMEType/MIMEParams are exposed both as classes (for `new`) and as
+    // bare-call native dispatch rows in NODE_CORE_ROWS; the method twin
+    // satisfies the dispatch-counterpart drift guard.
+    method("util", "MIMEType", false, None),
+    method("util", "MIMEParams", false, None),
+    class("util", "MIMEType"),
+    class("util", "MIMEParams"),
     class("util", "TextEncoder"),
     class("util", "TextDecoder"),
     // util.types — Node's runtime type-introspection namespace. The
@@ -3279,6 +3494,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- sys: deprecated alias for node:util. Keep this module-level
     // surface aligned with the public `util` manifest rows above; the
     // runtime routes `node:sys` through the util namespace.
+    property("sys", "default"),
     method("sys", "inspect", false, None),
     method("sys", "format", false, None),
     method("sys", "convertProcessSignalToExitCode", false, None),
@@ -3296,6 +3512,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "promisify", false, None),
     method("sys", "callbackify", false, None),
     method("sys", "debuglog", false, None),
+    method("sys", "_extend", false, None),
+    method("sys", "_errnoException", false, None),
+    method("sys", "_exceptionWithHostPort", false, None),
     method("sys", "deprecate", false, None),
     method("sys", "inherits", false, None),
     method_sig(
@@ -3312,6 +3531,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "styleText", false, None),
     method("sys", "toUSVString", false, None),
     method("sys", "setTraceSigInt", false, None),
+    method("sys", "MIMEType", false, None),
+    method("sys", "MIMEParams", false, None),
+    class("sys", "MIMEType"),
+    class("sys", "MIMEParams"),
     class("sys", "TextEncoder"),
     class("sys", "TextDecoder"),
     property("sys", "types"),
@@ -3430,18 +3653,40 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("stream/promises", "pipeline", false, None),
     method("stream/promises", "finished", false, None),
     // Direct `node:stream/consumers` submodule exports.
+    property("stream/consumers", "default"),
     method("stream/consumers", "arrayBuffer", false, None),
     method("stream/consumers", "blob", false, None),
     method("stream/consumers", "buffer", false, None),
     method("stream/consumers", "bytes", false, None),
     method("stream/consumers", "json", false, None),
     method("stream/consumers", "text", false, None),
+    // Direct `node:stream/web` submodule exports. The constructors are backed
+    // by Perry's Web Streams runtime; remaining semantic gaps stay tracked by
+    // the stream/web parity issues.
+    property("stream/web", "default"),
+    class("stream/web", "ReadableStream"),
+    class("stream/web", "ReadableStreamDefaultReader"),
+    class("stream/web", "ReadableStreamBYOBReader"),
+    class("stream/web", "ReadableStreamBYOBRequest"),
+    class("stream/web", "ReadableByteStreamController"),
+    class("stream/web", "ReadableStreamDefaultController"),
+    class("stream/web", "TransformStream"),
+    class("stream/web", "TransformStreamDefaultController"),
+    class("stream/web", "WritableStream"),
+    class("stream/web", "WritableStreamDefaultWriter"),
+    class("stream/web", "WritableStreamDefaultController"),
+    class("stream/web", "ByteLengthQueuingStrategy"),
+    class("stream/web", "CountQueuingStrategy"),
+    class("stream/web", "TextEncoderStream"),
+    class("stream/web", "TextDecoderStream"),
+    class("stream/web", "CompressionStream"),
+    class("stream/web", "DecompressionStream"),
     // `require('stream')` returns the legacy `Stream` constructor itself,
     // which has its own `.prototype` (it extends EventEmitter). The
     // `node_modules/send` package (express's static-file backend) does
     // `util.inherits(SendStream, require('stream'))`, which reads
     // `Stream.prototype` — the gate rejects the access without this entry.
-    property("stream", "prototype"),
+    internal_property("stream", "prototype"),
     // #1533: `stream.promises` namespace (`await pipeline(...)` /
     // `finished(...)`). The read resolves to a `stream/promises`-tagged
     // namespace object; its members are gated under that submodule name.
@@ -3451,7 +3696,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `Readable.from(iterable)` — Node's static factory. Resolves
     // through the `Readable.foo` -> `stream.foo` route in
     // `lower_call.rs`, so the gate keys off `stream.from`.
-    method("stream", "from", false, None),
+    internal_method("stream", "from", false, None),
     // #1534/#1746: static introspection helpers — `Readable.isDisturbed(s)`,
     // `Readable.isErrored(s)`, `Readable.isReadable(s)`, and
     // `stream.isWritable(s)` (also re-exported module-level). Perry tracks
@@ -3480,8 +3725,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // #1540: Web-stream interop helpers — Readable/Writable .toWeb /
     // .fromWeb. Stubs return a fresh Duplex (data isn't propagated
     // between Node and WHATWG universes yet).
-    method("stream", "toWeb", false, None),
-    method("stream", "fromWeb", false, None),
+    internal_method("stream", "toWeb", false, None),
+    internal_method("stream", "fromWeb", false, None),
     // EventEmitter methods on stream instances. node:stream extends
     // EventEmitter — every Readable/Writable/Duplex/Transform/PassThrough
     // exposes the full `.on('data'|'end'|'error'|'close'|...)` /
@@ -3565,7 +3810,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `child_process` export (Node returns `undefined`) — registered so the
     // value-read passes the #463 surface gate and resolves to `undefined`.
     class("child_process", "ChildProcess"),
-    property("child_process", "Stream"),
+    internal_property("child_process", "Stream"),
     // --- tty ---
     method("tty", "isatty", false, None),
     class("tty", "ReadStream"),
@@ -3600,22 +3845,22 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("wasi", "finalizeBindings", true, Some("WASI")),
     property("wasi", "wasiImport"),
     // --- perf_hooks (W3C User Timing on `performance` + PerformanceObserver) ---
-    method("perf_hooks", "now", false, None),
-    method("perf_hooks", "mark", false, None),
-    method("perf_hooks", "measure", false, None),
-    method("perf_hooks", "getEntries", false, None),
-    method("perf_hooks", "getEntriesByName", false, None),
-    method("perf_hooks", "getEntriesByType", false, None),
-    method("perf_hooks", "clearMarks", false, None),
-    method("perf_hooks", "clearMeasures", false, None),
-    method("perf_hooks", "eventLoopUtilization", false, None),
-    method("perf_hooks", "toJSON", false, None),
-    method("perf_hooks", "clearResourceTimings", false, None),
-    method("perf_hooks", "setResourceTimingBufferSize", false, None),
+    internal_method("perf_hooks", "now", false, None),
+    internal_method("perf_hooks", "mark", false, None),
+    internal_method("perf_hooks", "measure", false, None),
+    internal_method("perf_hooks", "getEntries", false, None),
+    internal_method("perf_hooks", "getEntriesByName", false, None),
+    internal_method("perf_hooks", "getEntriesByType", false, None),
+    internal_method("perf_hooks", "clearMarks", false, None),
+    internal_method("perf_hooks", "clearMeasures", false, None),
+    internal_method("perf_hooks", "eventLoopUtilization", false, None),
+    internal_method("perf_hooks", "toJSON", false, None),
+    internal_method("perf_hooks", "clearResourceTimings", false, None),
+    internal_method("perf_hooks", "setResourceTimingBufferSize", false, None),
     // Resource timing entries are recorded through the perf_hooks timeline.
-    method("perf_hooks", "markResourceTiming", false, None),
+    internal_method("perf_hooks", "markResourceTiming", false, None),
     // timerify returns a wrapper that emits observer-visible function entries.
-    method("perf_hooks", "timerify", false, None),
+    internal_method("perf_hooks", "timerify", false, None),
     // #1336: monitorEventLoopDelay() / createHistogram() return a
     // Histogram-shaped object whose method/property reads route
     // through the internal `perf_histogram` namespace (not listed in
@@ -3624,15 +3869,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Stub — every stat reads 0 and the mutators are no-ops.
     method("perf_hooks", "monitorEventLoopDelay", false, None),
     method("perf_hooks", "createHistogram", false, None),
-    property("perf_hooks", "timeOrigin"),
-    property("perf_hooks", "nodeTiming"),
+    internal_property("perf_hooks", "timeOrigin"),
+    internal_property("perf_hooks", "nodeTiming"),
     property("perf_hooks", "performance"),
     property("perf_hooks", "constants"),
     class("perf_hooks", "PerformanceObserver"),
     // PerformanceObserver.supportedEntryTypes — static array of entry-type
     // names. Read inline (`PerformanceObserver.supportedEntryTypes.includes(...)`)
     // it resolves as a perf_hooks property; declare it so the read isn't gated.
-    property("perf_hooks", "supportedEntryTypes"),
+    internal_property("perf_hooks", "supportedEntryTypes"),
     class("perf_hooks", "PerformanceEntry"),
     class("perf_hooks", "PerformanceMark"),
     class("perf_hooks", "PerformanceMeasure"),
@@ -3659,22 +3904,67 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("v8", "GCProfiler"),
     method("v8", "start", true, Some("GCProfiler")),
     method("v8", "stop", true, Some("GCProfiler")),
+    // #3680: class-based serialization. Serializer / Deserializer plus the
+    // Default* subclasses, with their write*/read* instance methods.
+    class("v8", "Serializer"),
+    class("v8", "DefaultSerializer"),
+    class("v8", "Deserializer"),
+    class("v8", "DefaultDeserializer"),
+    method("v8", "writeHeader", true, Some("Serializer")),
+    method("v8", "writeValue", true, Some("Serializer")),
+    method("v8", "writeUint32", true, Some("Serializer")),
+    method("v8", "writeUint64", true, Some("Serializer")),
+    method("v8", "writeDouble", true, Some("Serializer")),
+    method("v8", "writeRawBytes", true, Some("Serializer")),
+    method("v8", "releaseBuffer", true, Some("Serializer")),
+    method("v8", "readHeader", true, Some("Deserializer")),
+    method("v8", "readValue", true, Some("Deserializer")),
+    method("v8", "readUint32", true, Some("Deserializer")),
+    method("v8", "readUint64", true, Some("Deserializer")),
+    method("v8", "readDouble", true, Some("Deserializer")),
+    method("v8", "readRawBytes", true, Some("Deserializer")),
+    // #3679: lifecycle namespaces + diagnostic-control helpers.
+    property("v8", "startupSnapshot"),
+    property("v8", "promiseHooks"),
+    method("v8", "setFlagsFromString", false, None),
+    method("v8", "takeCoverage", false, None),
+    method("v8", "stopCoverage", false, None),
+    method("v8", "setHeapSnapshotNearHeapLimit", false, None),
+    method("v8", "isBuildingSnapshot", true, Some("startupSnapshot")),
+    method("v8", "addSerializeCallback", true, Some("startupSnapshot")),
+    method(
+        "v8",
+        "addDeserializeCallback",
+        true,
+        Some("startupSnapshot"),
+    ),
+    method(
+        "v8",
+        "setDeserializeMainFunction",
+        true,
+        Some("startupSnapshot"),
+    ),
+    method("v8", "onInit", true, Some("promiseHooks")),
+    method("v8", "onBefore", true, Some("promiseHooks")),
+    method("v8", "onAfter", true, Some("promiseHooks")),
+    method("v8", "onSettled", true, Some("promiseHooks")),
+    method("v8", "createHook", true, Some("promiseHooks")),
     // --- buffer (module-level helpers in addition to the Buffer class
     //     already registered above) ---
-    method("buffer", "alloc", false, None),
-    method("buffer", "allocUnsafe", false, None),
-    method("buffer", "allocUnsafeSlow", false, None),
-    method("buffer", "from", false, None),
-    method("buffer", "of", false, None),
-    method("buffer", "concat", false, None),
-    method("buffer", "copyBytesFrom", false, None),
+    internal_method("buffer", "alloc", false, None),
+    internal_method("buffer", "allocUnsafe", false, None),
+    internal_method("buffer", "allocUnsafeSlow", false, None),
+    internal_method("buffer", "from", false, None),
+    internal_method("buffer", "of", false, None),
+    internal_method("buffer", "concat", false, None),
+    internal_method("buffer", "copyBytesFrom", false, None),
     // #2901: TC39 `Uint8Array.fromBase64` / `fromHex` static factories,
     // routed through the buffer module (Uint8Array ≡ Buffer in Perry).
-    method("buffer", "fromBase64", false, None),
-    method("buffer", "fromHex", false, None),
-    method("buffer", "isBuffer", false, None),
-    method("buffer", "isEncoding", false, None),
-    method("buffer", "byteLength", false, None),
+    internal_method("buffer", "fromBase64", false, None),
+    internal_method("buffer", "fromHex", false, None),
+    internal_method("buffer", "isBuffer", false, None),
+    internal_method("buffer", "isEncoding", false, None),
+    internal_method("buffer", "byteLength", false, None),
     // Issue #800: WHATWG base64 aliases exposed from node:buffer.
     method("buffer", "atob", false, None),
     method("buffer", "btoa", false, None),
@@ -3695,6 +3985,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("buffer", "kMaxLength"),
     property("buffer", "kStringMaxLength"),
     // --- url (additional helpers) ---
+    property("url", "default"),
     method("url", "fileURLToPath", false, None),
     method("url", "fileURLToPathBuffer", false, None),
     method("url", "pathToFileURL", false, None),
@@ -3709,8 +4000,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("url", "resolveObject", false, None),
     // Issue #1211: Blob/File object-URL registry — paired with the
     // `resolveObjectURL` export on `node:buffer`.
-    method("url", "createObjectURL", false, None),
-    method("url", "revokeObjectURL", false, None),
+    internal_method("url", "createObjectURL", false, None),
+    internal_method("url", "revokeObjectURL", false, None),
     // --- punycode (deprecated module, #2513). Top-level string helpers +
     //     the `version` property. `ucs2.*` array helpers are a follow-up. ---
     method("punycode", "decode", false, None),
@@ -3798,9 +4089,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("https", "get", false, None),
     property("https", "globalAgent"),
     class("https", "Server"),
-    class("https", "ClientRequest"),
-    class("https", "IncomingMessage"),
-    class("https", "ServerResponse"),
+    internal_class("https", "ClientRequest"),
+    internal_class("https", "IncomingMessage"),
+    internal_class("https", "ServerResponse"),
     // #2129 — `new https.Agent(options?)`. The instance is tagged as
     // ("http", "Agent") in destructuring/var_decl.rs so it shares the
     // method surface; only the constructor's default protocol differs.
@@ -4211,6 +4502,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "resume", true, Some("IncomingMessage")),
     method("http", "destroy", true, Some("IncomingMessage")),
     method("http", "read", true, Some("IncomingMessage")),
+    method("http", "setEncoding", true, Some("IncomingMessage")),
     // Issue #769 — `ClientRequest.setTimeout(ms)` for `http.request` /
     // `http.get` returns. Class filter differs from any existing http
     // method, so the manifest-consistency drift guard requires a row
@@ -4316,7 +4608,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http2", "getDefaultSettings", false, None),
     method("http2", "getPackedSettings", false, None),
     method("http2", "getUnpackedSettings", false, None),
-    class("http2", "Http2SecureServer"),
+    internal_class("http2", "Http2SecureServer"),
     class("http2", "Http2ServerRequest"),
     class("http2", "Http2ServerResponse"),
     // `http2.constants` — the frozen object of HTTP2_HEADER_* / NGHTTP2_* /

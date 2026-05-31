@@ -136,6 +136,7 @@ pub mod stdlib_stubs;
 /// derived from `build.rs`'s dispatch-table walk.
 pub mod stub_diag;
 pub mod thread;
+pub mod tls;
 /// TTY support (#347 Phase 3): tty.isatty, process.std{in,out,err}.isTTY,
 /// process.stdout.columns/.rows, SIGWINCH 'resize' event handler. Lives
 /// in runtime (not stdlib) because it's a thin libc wrapper with no
@@ -163,6 +164,7 @@ pub mod util_abort;
 pub mod util_call_sites;
 pub mod util_debuglog;
 pub mod util_diff;
+pub mod util_mime;
 pub mod util_parse_args;
 pub mod util_parse_env;
 pub mod util_promisify;
@@ -216,8 +218,9 @@ pub use value::{
 pub use value::{
     js_set_handle_array_get, js_set_handle_array_length, js_set_handle_call_method,
     js_set_handle_object_get_property, js_set_handle_to_string, js_set_handle_typeof,
-    js_set_native_crypto_dispatch, js_set_native_http_dispatch, js_set_native_module_js_loader,
-    js_set_native_querystring_dispatch, js_set_native_zlib_dispatch, js_set_new_from_handle_v8,
+    js_set_native_crypto_dispatch, js_set_native_domain_dispatch, js_set_native_http_dispatch,
+    js_set_native_module_js_loader, js_set_native_querystring_dispatch,
+    js_set_native_zlib_dispatch, js_set_new_from_handle_v8,
 };
 
 // Extension pump registration — allows extensions to register pump functions

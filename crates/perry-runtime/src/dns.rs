@@ -740,6 +740,27 @@ fn validate_family(value: f64) -> Result<i32, f64> {
     }
 }
 
+fn ipv4_loopback_address() -> ResolvedAddress {
+    ResolvedAddress {
+        address: "127.0.0.1".to_string(),
+        family: 4,
+    }
+}
+
+fn ipv6_loopback_address() -> ResolvedAddress {
+    ResolvedAddress {
+        address: "::1".to_string(),
+        family: 6,
+    }
+}
+
+fn default_loopback_addresses() -> Vec<ResolvedAddress> {
+    match DEFAULT_RESULT_ORDER.load(Ordering::Relaxed) {
+        RESULT_ORDER_IPV6_FIRST => vec![ipv6_loopback_address(), ipv4_loopback_address()],
+        _ => vec![ipv4_loopback_address(), ipv6_loopback_address()],
+    }
+}
+
 fn parse_lookup_options(value: f64) -> Result<LookupOptions, f64> {
     let js_value = JSValue::from_bits(value.to_bits());
     if js_value.is_undefined() || js_value.is_null() {
@@ -779,24 +800,9 @@ fn parse_lookup_options(value: f64) -> Result<LookupOptions, f64> {
 fn lookup_addresses(hostname: &str, family: i32) -> Result<Vec<ResolvedAddress>, f64> {
     if localhost_name(hostname) {
         return Ok(match family {
-            4 => vec![ResolvedAddress {
-                address: "127.0.0.1".to_string(),
-                family: 4,
-            }],
-            6 => vec![ResolvedAddress {
-                address: "::1".to_string(),
-                family: 6,
-            }],
-            _ => vec![
-                ResolvedAddress {
-                    address: "127.0.0.1".to_string(),
-                    family: 4,
-                },
-                ResolvedAddress {
-                    address: "::1".to_string(),
-                    family: 6,
-                },
-            ],
+            4 => vec![ipv4_loopback_address()],
+            6 => vec![ipv6_loopback_address()],
+            _ => default_loopback_addresses(),
         });
     }
     if let Ok(addr) = hostname.parse::<IpAddr>() {

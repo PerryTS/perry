@@ -31,6 +31,15 @@ use std::collections::{HashMap, HashSet};
 mod warnings;
 use warnings::maybe_emit_max_listeners_warning;
 
+mod domain;
+pub use domain::{
+    is_event_emitter_handle, js_event_emitter_domain_value, js_event_emitter_get_domain,
+    js_event_emitter_set_domain,
+};
+
+mod handle_probes;
+use handle_probes::stream_value_from_handle;
+
 const TAG_FALSE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0003);
 const TAG_TRUE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0004);
 const TAG_NULL_F64_BITS: u64 = 0x7FFC_0000_0000_0002;
@@ -254,6 +263,7 @@ pub struct EventEmitterHandle {
     /// Constructor-level `{ captureRejections: true }` flag. When enabled,
     /// rejected promises returned from listeners are routed to `"error"`.
     capture_rejections: bool,
+    pub(crate) domain_handle: Option<Handle>,
 }
 
 // SAFETY: pending records hold raw GC-managed pointers, but the
@@ -325,6 +335,7 @@ impl EventEmitterHandle {
             max_listeners: 10.0,
             warned_events: HashSet::new(),
             capture_rejections: false,
+            domain_handle: None,
         }
     }
 
@@ -473,21 +484,6 @@ fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
         None
     } else {
         Some(ptr)
-    }
-}
-
-fn stream_value_from_handle(handle: Handle) -> Option<f64> {
-    let addr = handle as u64;
-    if !(MIN_HEAP_POINTER..=MAX_HEAP_POINTER).contains(&addr) || addr & 0x7 != 0 {
-        return None;
-    }
-    let value = js_nanbox_pointer(handle);
-    let readable = perry_runtime::node_stream::js_node_stream_is_readable(value);
-    let writable = perry_runtime::node_stream::js_node_stream_is_writable(value);
-    if readable.to_bits() == TAG_NULL_F64_BITS && writable.to_bits() == TAG_NULL_F64_BITS {
-        None
-    } else {
-        Some(value)
     }
 }
 
@@ -807,10 +803,6 @@ static KEEP_JS_EVENT_EMITTER_NEW: extern "C" fn() -> Handle = js_event_emitter_n
 static KEEP_JS_EVENT_EMITTER_NEW_WITH_OPTIONS: unsafe extern "C" fn(f64) -> Handle =
     js_event_emitter_new_with_options;
 
-pub fn is_event_emitter_handle(handle: Handle) -> bool {
-    get_handle::<EventEmitterHandle>(handle).is_some()
-}
-
 /// EventEmitter.on(eventName, listener) — also serves as `addListener`.
 /// Register a listener for the specified event.
 /// Returns the emitter handle for chaining.
@@ -1054,6 +1046,15 @@ pub unsafe extern "C" fn js_event_emitter_emit(
             let rejected_once = reject_pending_once_promises_for_error(emitter, first_arg);
             had_listeners = had_listeners || has_error_once || rejected_once;
             if snapshot.is_empty() && !has_error_once && !rejected_once {
+                if let Some(domain) = emitter.domain_handle {
+                    let _ = crate::domain::js_domain_emit_error(
+                        domain,
+                        first_arg,
+                        js_nanbox_pointer(handle),
+                        false,
+                    );
+                    return TAG_FALSE_F64;
+                }
                 perry_runtime::exception::js_throw(first_arg);
             }
         }
@@ -1113,6 +1114,16 @@ pub unsafe extern "C" fn js_event_emitter_emit0(handle: Handle, event_bits: i64)
             );
             had_listeners = had_listeners || has_error_once || rejected_once;
             if snapshot.is_empty() && !has_error_once && !rejected_once {
+                if let Some(domain) = emitter.domain_handle {
+                    let err = f64::from_bits(TAG_UNDEFINED_F64_BITS);
+                    let _ = crate::domain::js_domain_emit_error(
+                        domain,
+                        err,
+                        js_nanbox_pointer(handle),
+                        false,
+                    );
+                    return TAG_FALSE_F64;
+                }
                 perry_runtime::exception::js_throw(f64::from_bits(TAG_UNDEFINED_F64_BITS));
             }
         }

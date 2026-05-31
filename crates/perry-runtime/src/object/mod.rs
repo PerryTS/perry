@@ -30,6 +30,7 @@ mod class_constructors;
 mod class_gc_roots;
 mod class_handles;
 mod class_registry;
+mod collection_proto_thunks;
 mod delete_rest;
 mod descriptors;
 mod field_get_set;

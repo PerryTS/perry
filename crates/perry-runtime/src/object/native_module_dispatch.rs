@@ -566,6 +566,16 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("tty", "ReadStream") => crate::tty::js_tty_read_stream_new(arg(0)),
         ("tty", "WriteStream") => crate::tty::js_tty_write_stream_new(arg(0)),
 
+        // ── tls module helpers ──
+        ("tls", "getCiphers") => crate::tls::js_tls_get_ciphers(),
+        ("tls", "getCACertificates") => crate::tls::js_tls_get_ca_certificates(arg(0)),
+        ("tls", "setDefaultCACertificates") => {
+            crate::tls::js_tls_set_default_ca_certificates(arg(0))
+        }
+        ("tls", "checkServerIdentity") => crate::tls::js_tls_check_server_identity(arg(0), arg(1)),
+        ("tls", "createSecureContext") => crate::tls::js_tls_create_secure_context(arg(0)),
+        ("tls", "SecureContext") => crate::tls::js_tls_secure_context_new(arg(0)),
+
         // ── wasi module ──
         ("wasi", "WASI") => crate::wasi::js_wasi_constructor_call(arg(0)),
 
@@ -967,13 +977,29 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("path", "dirname") => str_to_f64(crate::path::js_path_dirname(require_path_str_ptr(0))),
         ("path", "basename") => path_basename_value(false),
         ("path", "extname") => str_to_f64(crate::path::js_path_extname(require_path_str_ptr(0))),
+        ("path", "normalize") => {
+            str_to_f64(crate::path::js_path_normalize(require_path_str_ptr(0)))
+        }
         ("path", "resolve") => path_resolve_value(false),
         ("path", "join") => path_join_value(false),
+        ("path", "relative") => str_to_f64(crate::path::js_path_relative(
+            require_path_str_ptr(0),
+            require_path_str_ptr(1),
+        )),
         ("path", "isAbsolute") => {
             bool_to_f64(crate::path::js_path_is_absolute(require_path_str_ptr(0)))
         }
         ("path", "toNamespacedPath") => crate::path::js_path_to_namespaced_path_value(arg(0)),
         ("path", "_makeLong") => crate::path::js_path_to_namespaced_path_value(arg(0)),
+        ("path", "matchesGlob") => bool_to_f64(crate::path::js_path_matches_glob(
+            require_path_str_ptr(0),
+            require_path_str_ptr(1),
+        )),
+        ("path", "parse") => f64::from_bits(
+            JSValue::pointer(crate::path::js_path_parse(require_path_str_ptr(0)) as *const u8)
+                .bits(),
+        ),
+        ("path", "format") => str_to_f64(crate::path::js_path_format(arg(0))),
 
         // #1740: dynamic sub-namespace method dispatch — `path[k].method(...)`
         // where `k` resolves to "win32"/"posix" at runtime. `path[k].sep`
@@ -1078,6 +1104,19 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util", "debuglog") | ("util", "debug") => {
             crate::util_debuglog::js_util_debuglog(arg(0), arg(1))
         }
+        ("util", "_extend") => crate::util_mime::js_util_extend(arg(0), arg(1)),
+        ("util", "_errnoException") => {
+            crate::util_mime::js_util_errno_exception(arg(0), arg(1), arg(2))
+        }
+        ("util", "_exceptionWithHostPort") => crate::util_mime::js_util_exception_with_host_port(
+            arg(0),
+            arg(1),
+            arg(2),
+            arg(3),
+            arg(4),
+        ),
+        ("util", "MIMEType") => crate::util_mime::js_util_mime_type_new(arg(0)),
+        ("util", "MIMEParams") => crate::util_mime::js_util_mime_params_new(),
         ("util", "diff") => crate::util_diff::js_util_diff(arg(0), arg(1)),
         ("util", "isArray") => crate::array::js_array_is_array(arg(0)),
         ("util", "isDeepStrictEqual") => {
@@ -1307,6 +1346,11 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("punycode.ucs2", "decode") => crate::punycode::js_punycode_ucs2_decode(arg(0)),
         ("punycode.ucs2", "encode") => crate::punycode::js_punycode_ucs2_encode(arg(0)),
 
+        // ── dgram namespace (`node:dgram` / `dgram`) ──
+        ("dgram", "createSocket") | ("dgram", "Socket") => {
+            crate::dgram::js_dgram_create_socket(pack_args())
+        }
+
         // ── console module namespace (`node:console` / `console`) ──
         ("console", "Console") => crate::builtins::js_console_new2(arg(0), arg(1)),
         ("console", "log") | ("console", "info") | ("console", "debug") | ("console", "dirxml") => {
@@ -1508,9 +1552,23 @@ pub(crate) unsafe fn dispatch_native_module_method(
                 dispatch(method_name.as_ptr(), method_name.len(), args_ptr, args_len)
             }
         }
-        ("querystring", "unescapeBuffer") => {
+        (
+            "querystring",
+            "unescapeBuffer" | "unescape" | "escape" | "stringify" | "encode" | "parse" | "decode",
+        ) => {
             let ptr = crate::value::JS_NATIVE_QUERYSTRING_DISPATCH
                 .load(std::sync::atomic::Ordering::SeqCst);
+            if ptr.is_null() {
+                f64::from_bits(JSValue::undefined().bits())
+            } else {
+                let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                    std::mem::transmute(ptr);
+                dispatch(method_name.as_ptr(), method_name.len(), args_ptr, args_len)
+            }
+        }
+        ("domain", "Domain" | "createDomain" | "create") => {
+            let ptr =
+                crate::value::JS_NATIVE_DOMAIN_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
             if ptr.is_null() {
                 f64::from_bits(JSValue::undefined().bits())
             } else {
@@ -1541,6 +1599,67 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // `start()` returns undefined; `stop()` returns the report object.
         ("v8.GCProfiler", "start") => f64::from_bits(JSValue::undefined().bits()),
         ("v8.GCProfiler", "stop") => crate::node_v8::js_v8_gc_profiler_report(),
+
+        // #3680: `v8.Serializer` / `v8.DefaultSerializer` instance methods.
+        // The registry id lives in field[1] of the namespace object; the
+        // runtime re-derives it from the receiver value.
+        ("v8.Serializer", m) | ("v8.DefaultSerializer", m) => {
+            let recv = crate::value::js_nanbox_pointer(obj as i64);
+            match m {
+                "writeHeader" => crate::node_v8::v8_serializer_write_header(recv),
+                "writeValue" => crate::node_v8::v8_serializer_write_value(recv, arg(0)),
+                "writeUint32" => crate::node_v8::v8_serializer_write_uint32(recv, arg(0)),
+                "writeUint64" => crate::node_v8::v8_serializer_write_uint64(recv, arg(0), arg(1)),
+                "writeDouble" => crate::node_v8::v8_serializer_write_double(recv, arg(0)),
+                "writeRawBytes" => crate::node_v8::v8_serializer_write_raw_bytes(recv, arg(0)),
+                "releaseBuffer" => crate::node_v8::v8_serializer_release_buffer(recv),
+                // `_setTreatArrayBufferViewsAsHostObjects` is a no-op for us
+                // (our writer always treats them as host objects).
+                _ => f64::from_bits(JSValue::undefined().bits()),
+            }
+        }
+
+        // #3680: `v8.Deserializer` / `v8.DefaultDeserializer` instance methods.
+        ("v8.Deserializer", m) | ("v8.DefaultDeserializer", m) => {
+            let recv = crate::value::js_nanbox_pointer(obj as i64);
+            match m {
+                "readHeader" => crate::node_v8::v8_deserializer_read_header(recv),
+                "readValue" => crate::node_v8::v8_deserializer_read_value(recv),
+                "readUint32" => crate::node_v8::v8_deserializer_read_uint32(recv),
+                "readUint64" => crate::node_v8::v8_deserializer_read_uint64(recv),
+                "readDouble" => crate::node_v8::v8_deserializer_read_double(recv),
+                "readRawBytes" => crate::node_v8::v8_deserializer_read_raw_bytes(recv, arg(0)),
+                _ => f64::from_bits(JSValue::undefined().bits()),
+            }
+        }
+
+        // #3679: `v8.startupSnapshot` namespace methods. Perry never builds a
+        // startup snapshot, so `isBuildingSnapshot()` is `0` and the
+        // serialize/deserialize-callback registrars throw like Node does when
+        // called outside a snapshot-building context.
+        ("v8.startupSnapshot", m) => match m {
+            "isBuildingSnapshot" => crate::node_v8::js_v8_is_building_snapshot(),
+            "addSerializeCallback" | "addDeserializeCallback" | "setDeserializeMainFunction" => {
+                crate::fs::validate::throw_type_error_with_code(
+                    "Operation not allowed when not building startup snapshot.",
+                    "ERR_NOT_BUILDING_SNAPSHOT",
+                )
+            }
+            _ => f64::from_bits(JSValue::undefined().bits()),
+        },
+
+        // #3679: `v8.promiseHooks` namespace. Hook registrars return a stop
+        // function (Node returns a callable that removes the hook); we hand
+        // back a no-op callable so `const stop = onInit(fn); stop()` works.
+        ("v8.promiseHooks", m) => match m {
+            "onInit" | "onBefore" | "onAfter" | "onSettled" | "createHook" => {
+                let c = crate::closure::js_closure_alloc_singleton(
+                    crate::node_v8::js_v8_noop_undefined as *const u8,
+                );
+                crate::value::js_nanbox_pointer(c as i64)
+            }
+            _ => f64::from_bits(JSValue::undefined().bits()),
+        },
 
         // #2533: captured / aliased server factories
         // (`const createServer = options.createServer || createServerHTTP;
