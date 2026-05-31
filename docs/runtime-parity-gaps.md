@@ -27,6 +27,14 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 - `node:stream` — 76
 - `node:worker_threads` — 60
 
+### Issue #3598 docs/API closure note
+
+Issue #3598 ("Node API compatibility epic: globalThis and Web-compatible Node globals") was closed on 2026-05-31 as superseded by granular child issues. The submitted child PRs cover runtime slices for DOM events, WebSocket, URL/encoding/microtasks, fetch/body globals and methods, MessageChannel delivery, WebAssembly shape/metadata, WebCrypto, Navigator/URLPattern/encoding streams, structuredClone transfer options, and abort/weakref-related DOM globals.
+
+This branch intentionally does **not** cherry-pick or stack those feature PRs. The generated manifest surfaces on current `origin/main` were audited with `./scripts/regen_api_docs.sh`; `docs/src/api/reference.md` and `docs/api/perry.d.ts` produced no diff, and `crates/perry-api-manifest/src/entries.rs` was not changed. That means this closure PR does not truthfully decrement the generated API/type counts for globals that only exist on the open feature branches.
+
+Residual #3598 work that should remain tracked by child issues includes true WeakRef/FinalizationRegistry weak semantics, BroadcastChannel delivery semantics, deeper FormData/File/Blob/multipart/body parity, full WebAssembly Instance/Memory/Table/Global/streaming execution surface beyond the current host-shim shape, full TextEncoderStream/TextDecoderStream transform behavior, and URLPattern behavior tied to the Node 22 target.
+
 ## Whole-module gaps
 
 Modules with **zero** Perry coverage across the manifest, `Expr::*` variants, or FFI exports. Every parity-reference API in these modules is a gap. Listed in descending API-count order.
@@ -2036,6 +2044,8 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 **Total APIs: 389** · Perry covers: 107 · Gap: 282
 
 Web-global coverage is determined heuristically — Perry implements many of these via dedicated `Expr::*` lowering (e.g. `Expr::FetchWithOptions`, `Expr::TextEncoderEncode`, `Expr::UrlNew`) and `js_*` FFI surfaces (Headers/Request/Response/Blob via perry-ext-fetch and perry-stdlib). The covered list below is curated; the gap list is everything else in the parity reference's Web / Global APIs section.
+
+The counts above are the last generated parity-gap counts on this branch. They were not manually decremented for #3598 draft PRs because those runtime changes are deliberately not stacked here. Regenerate this section after the child PRs land on `main` so the Web/global counts can move with the code that actually exposes the globals.
 
 ### Web globals — covered (sampled)
 
