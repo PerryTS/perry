@@ -1377,9 +1377,11 @@ pub extern "C" fn js_fs_truncate_sync(path_value: f64, len_value: f64) -> i32 {
     }
 }
 
-/// `fs.ftruncateSync(fd, len)` — truncate/extend an open registry fd.
-#[no_mangle]
-pub extern "C" fn js_fs_ftruncate_sync(fd_value: f64, len_value: f64) -> i32 {
+/// Core fd-based `ftruncate` op. Surfaces `EBADF` for a closed/unknown fd and
+/// the underlying syscall error (e.g. `EINVAL`) when `set_len` fails, instead
+/// of collapsing to a silent status-0 (#2749). Returns a NaN-boxed Node-shaped
+/// fs error carrying `code`/`syscall: "ftruncate"`.
+pub(crate) unsafe fn js_fs_ftruncate_result(fd_value: f64, len_value: f64) -> Result<(), f64> {
     let fd = fd_value as i32;
     let len = if len_value.is_finite() && len_value >= 0.0 {
         len_value as u64
@@ -1389,14 +1391,25 @@ pub extern "C" fn js_fs_ftruncate_sync(fd_value: f64, len_value: f64) -> i32 {
     FD_REGISTRY.with(|r| {
         let reg = r.borrow();
         let Some(file) = reg.get(&fd) else {
-            return 0;
+            return Err(crate::fs::validate::build_ebadf_error_value("ftruncate"));
         };
-        if file.set_len(len).is_ok() {
-            1
-        } else {
-            0
+        match file.set_len(len) {
+            Ok(()) => Ok(()),
+            Err(err) => Err(build_fs_error_value_no_path(&err, "ftruncate")),
         }
     })
+}
+
+/// `fs.ftruncateSync(fd, len)` — truncate/extend an open registry fd.
+#[no_mangle]
+pub extern "C" fn js_fs_ftruncate_sync(fd_value: f64, len_value: f64) -> i32 {
+    crate::fs::validate::validate_fd(fd_value);
+    unsafe {
+        match js_fs_ftruncate_result(fd_value, len_value) {
+            Ok(()) => 1,
+            Err(err_val) => crate::exception::js_throw(err_val),
+        }
+    }
 }
 
 /// `fs.fsyncSync(fd)` — flush an open registry fd.
@@ -1491,35 +1504,58 @@ pub extern "C" fn js_fs_fchown_sync(fd_value: f64, uid_value: f64, gid_value: f6
     if !crate::fs::fd_is_registered(fd_value as i32) {
         crate::fs::validate::throw_ebadf_pub("fchown");
     }
-    fchown_sync_inner(fd_value as i32, uid_value, gid_value)
+    unsafe {
+        match js_fs_fchown_result(fd_value as i32, uid_value, gid_value) {
+            Ok(()) => 1,
+            Err(err_val) => crate::exception::js_throw(err_val),
+        }
+    }
 }
 
-pub(crate) fn fchown_sync_inner(fd: i32, uid_value: f64, gid_value: f64) -> i32 {
+/// Core fd-based `fchown` op. Surfaces the syscall failure (e.g. `EPERM` for a
+/// non-root chown) as a NaN-boxed Node-shaped fs error with `code`/`syscall:
+/// "fchown"` instead of collapsing to a silent status-0 (#2749). Assumes the
+/// fd has already been validated/registered; a missing fd returns `EBADF`.
+pub(crate) unsafe fn js_fs_fchown_result(
+    fd: i32,
+    uid_value: f64,
+    gid_value: f64,
+) -> Result<(), f64> {
     #[cfg(unix)]
     {
         FD_REGISTRY.with(|r| {
             let reg = r.borrow();
             let Some(file) = reg.get(&fd) else {
-                return 0;
+                return Err(crate::fs::validate::build_ebadf_error_value("fchown"));
             };
-            let rc = unsafe {
-                libc::fchown(
-                    file.as_raw_fd(),
-                    uid_value as libc::uid_t,
-                    gid_value as libc::gid_t,
-                )
-            };
+            let rc = libc::fchown(
+                file.as_raw_fd(),
+                uid_value as libc::uid_t,
+                gid_value as libc::gid_t,
+            );
             if rc == 0 {
-                1
+                Ok(())
             } else {
-                0
+                Err(build_fs_error_value_no_path(
+                    &std::io::Error::last_os_error(),
+                    "fchown",
+                ))
             }
         })
     }
     #[cfg(not(unix))]
     {
         let _ = (fd, uid_value, gid_value);
-        1
+        Ok(())
+    }
+}
+
+pub(crate) fn fchown_sync_inner(fd: i32, uid_value: f64, gid_value: f64) -> i32 {
+    unsafe {
+        match js_fs_fchown_result(fd, uid_value, gid_value) {
+            Ok(()) => 1,
+            Err(_) => 0,
+        }
     }
 }
 
@@ -1672,14 +1708,20 @@ pub extern "C" fn js_fs_lutimes_sync(path_value: f64, atime_value: f64, mtime_va
     }
 }
 
-/// `fs.futimesSync(fd, atime, mtime)`.
-#[no_mangle]
-pub extern "C" fn js_fs_futimes_sync(fd_value: f64, atime_value: f64, mtime_value: f64) -> i32 {
+/// Core fd-based `futimes` op. Surfaces `EBADF` for a closed/unknown fd and
+/// the underlying `futimens` syscall failure as a NaN-boxed Node-shaped fs
+/// error with `code`/`syscall: "futime"` instead of a silent status-0 (#2749).
+/// Node names this syscall `"futime"` (singular), so the error mirrors that.
+pub(crate) unsafe fn js_fs_futimes_result(
+    fd_value: f64,
+    atime_value: f64,
+    mtime_value: f64,
+) -> Result<(), f64> {
     let fd = fd_value as i32;
     FD_REGISTRY.with(|r| {
         let reg = r.borrow();
         let Some(file) = reg.get(&fd) else {
-            return 0;
+            return Err(crate::fs::validate::build_ebadf_error_value("futime"));
         };
         #[cfg(unix)]
         {
@@ -1688,20 +1730,33 @@ pub extern "C" fn js_fs_futimes_sync(fd_value: f64, atime_value: f64, mtime_valu
                 seconds_to_timespec(atime_value),
                 seconds_to_timespec(mtime_value),
             ];
-            unsafe {
-                if libc::futimens(file.as_raw_fd(), times.as_ptr()) == 0 {
-                    1
-                } else {
-                    0
-                }
+            if libc::futimens(file.as_raw_fd(), times.as_ptr()) == 0 {
+                Ok(())
+            } else {
+                Err(build_fs_error_value_no_path(
+                    &std::io::Error::last_os_error(),
+                    "futime",
+                ))
             }
         }
         #[cfg(not(unix))]
         {
             let _ = (file, atime_value, mtime_value);
-            1
+            Ok(())
         }
     })
+}
+
+/// `fs.futimesSync(fd, atime, mtime)`.
+#[no_mangle]
+pub extern "C" fn js_fs_futimes_sync(fd_value: f64, atime_value: f64, mtime_value: f64) -> i32 {
+    crate::fs::validate::validate_fd(fd_value);
+    unsafe {
+        match js_fs_futimes_result(fd_value, atime_value, mtime_value) {
+            Ok(()) => 1,
+            Err(err_val) => crate::exception::js_throw(err_val),
+        }
+    }
 }
 
 /// Core hard-`link` op. Returns `Ok(())` or a NaN-boxed Node-shaped fs error
