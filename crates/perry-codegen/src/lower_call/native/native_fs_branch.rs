@@ -262,6 +262,23 @@
                     &[(DOUBLE, &path), (DOUBLE, &options)],
                 ));
             }
+            "openAsBlob" => {
+                let path = if let Some(arg) = args.first() {
+                    lower_expr(ctx, arg)?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                let options = if args.len() >= 2 {
+                    lower_expr(ctx, &args[1])?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_fs_open_as_blob",
+                    &[(DOUBLE, &path), (DOUBLE, &options)],
+                ));
+            }
             "readdirSync" if !args.is_empty() => {
                 // Issue #631: forward the optional `options` arg
                 // (e.g. `{withFileTypes:true}`) so the runtime can
@@ -572,7 +589,16 @@
             }
             "globSync" if !args.is_empty() => {
                 let p = lower_expr(ctx, &args[0])?;
-                let raw = ctx.block().call(DOUBLE, "js_fs_glob_sync", &[(DOUBLE, &p)]);
+                let options = if args.len() >= 2 {
+                    lower_expr(ctx, &args[1])?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                let raw = ctx.block().call(
+                    DOUBLE,
+                    "js_fs_glob_sync_options",
+                    &[(DOUBLE, &p), (DOUBLE, &options)],
+                );
                 let raw_bits = ctx.block().bitcast_double_to_i64(&raw);
                 return Ok(crate::expr::nanbox_pointer_inline(ctx.block(), &raw_bits));
             }

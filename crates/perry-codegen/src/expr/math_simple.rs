@@ -250,6 +250,39 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .block()
                 .call(DOUBLE, "js_webassembly_validate", &[(DOUBLE, &v)]))
         }
+        Expr::WebAssemblyCompile(bytes) => {
+            let v = lower_expr(ctx, bytes)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_webassembly_compile", &[(DOUBLE, &v)]))
+        }
+        Expr::WebAssemblyModuleNew(bytes) => {
+            let v = lower_expr(ctx, bytes)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_webassembly_module_new", &[(DOUBLE, &v)]))
+        }
+        Expr::WebAssemblyModuleExports(module) => {
+            let v = lower_expr(ctx, module)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_webassembly_module_exports", &[(DOUBLE, &v)]))
+        }
+        Expr::WebAssemblyModuleImports(module) => {
+            let v = lower_expr(ctx, module)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_webassembly_module_imports", &[(DOUBLE, &v)]))
+        }
+        Expr::WebAssemblyModuleCustomSections { module, name } => {
+            let module_v = lower_expr(ctx, module)?;
+            let name_v = lower_expr(ctx, name)?;
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_webassembly_module_custom_sections",
+                &[(DOUBLE, &module_v), (DOUBLE, &name_v)],
+            ))
+        }
         Expr::WebAssemblyInstantiate(bytes) => {
             let v = lower_expr(ctx, bytes)?;
             Ok(ctx

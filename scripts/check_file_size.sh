@@ -128,6 +128,15 @@ crates/perry-hir/src/lower/expr_member.rs
 # snapshot/listener-limit validation). Splitting per concern (env/timing/
 # signals/emitter) is tracked under #1435.
 crates/perry-runtime/src/process.rs
+# fs directory glob/watch glue crossed the gate on current main; split glob
+# walking from watcher dispatch alongside the fs modularization tracked in #1435.
+crates/perry-runtime/src/fs/dir_glob_watch.rs
+# Shared stdlib dispatch bridge crossed the gate on current main; split per
+# dispatch family with the stdlib dispatch cleanup tracked in #1435.
+crates/perry-stdlib/src/common/dispatch.rs
+# sqlite stdlib remains a monolithic binding surface on current main; split
+# statements/sessions/backups/functions in the sqlite cleanup tracked in #1435.
+crates/perry-stdlib/src/sqlite.rs
 EOF
 )
 

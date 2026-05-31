@@ -24,6 +24,22 @@ fn text_encoder_encode_into(args: Vec<Expr>) -> Expr {
     }
 }
 
+fn new_callee_name<'a>(ctx: &LoweringContext, new_expr: &'a ast::NewExpr) -> Option<&'a str> {
+    match new_expr.callee.as_ref() {
+        ast::Expr::Ident(class_ident) => Some(class_ident.sym.as_ref()),
+        ast::Expr::Member(member)
+            if matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if obj.sym.as_ref() == "globalThis")
+                && ctx.lookup_local("globalThis").is_none() =>
+        {
+            match &member.prop {
+                ast::MemberProp::Ident(prop_ident) => Some(prop_ident.sym.as_ref()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 pub(super) fn try_textencoder_decoder(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -37,8 +53,7 @@ pub(super) fn try_textencoder_decoder(
                 let method_name = method_ident.sym.as_ref();
                 // Check if the receiver is new TextEncoder() or new TextDecoder()
                 if let ast::Expr::New(new_expr) = member.obj.as_ref() {
-                    if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
-                        let class_name = class_ident.sym.as_ref();
+                    if let Some(class_name) = new_callee_name(ctx, new_expr) {
                         if class_name == "TextEncoder" && method_name == "encode" {
                             let str_arg = if !args.is_empty() {
                                 args.into_iter().next().unwrap()

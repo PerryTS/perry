@@ -262,9 +262,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // JSON / Reflect stay "object" — they're namespaces,
                         // not constructors.
                         match property.as_str() {
-                            "process" | "console" | "globalThis" | "performance" | "navigator" => {
-                                Some("object")
-                            }
+                            "process" | "console" | "globalThis" | "performance" | "navigator"
+                            | "crypto" => Some("object"),
                             "Math" | "JSON" | "Reflect" => Some("object"),
                             n if is_global_this_builtin_function_name(n) => Some("function"),
                             _ => None,

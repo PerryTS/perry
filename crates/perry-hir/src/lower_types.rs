@@ -128,6 +128,71 @@ fn infer_native_arena_call_return_type(
     }
 }
 
+fn url_encoding_constructor_type(ctx: &LoweringContext, callee: &ast::Expr) -> Option<Type> {
+    fn class_type(name: &str) -> Option<Type> {
+        match name {
+            "URL" | "URLSearchParams" | "TextEncoder" | "TextDecoder" => {
+                Some(Type::Named(name.to_string()))
+            }
+            _ => None,
+        }
+    }
+
+    fn module_constructor_type(module_name: &str, method_name: Option<&str>) -> Option<Type> {
+        match (module_name, method_name) {
+            ("url", Some("URL")) => class_type("URL"),
+            ("url", Some("URLSearchParams")) => class_type("URLSearchParams"),
+            ("util", Some("TextEncoder")) => class_type("TextEncoder"),
+            ("util", Some("TextDecoder")) => class_type("TextDecoder"),
+            _ => None,
+        }
+    }
+
+    match callee {
+        ast::Expr::Ident(ident) => {
+            let name = ident.sym.as_ref();
+            if let Some(ty) = class_type(name) {
+                return Some(ty);
+            }
+            ctx.lookup_native_module(name)
+                .and_then(|(module_name, method_name)| {
+                    module_constructor_type(module_name, method_name)
+                })
+        }
+        ast::Expr::Member(member) => {
+            let (ast::Expr::Ident(obj), ast::MemberProp::Ident(prop)) =
+                (member.obj.as_ref(), &member.prop)
+            else {
+                return None;
+            };
+            let obj_name = obj.sym.as_ref();
+            let prop_name = prop.sym.as_ref();
+            if obj_name == "globalThis" && ctx.lookup_local("globalThis").is_none() {
+                return class_type(prop_name);
+            }
+            if let Some(module_name) = ctx.lookup_builtin_module_alias(obj_name) {
+                if let Some(ty) = module_constructor_type(module_name, Some(prop_name)) {
+                    return Some(ty);
+                }
+            }
+            if let Some((module_name, None)) = ctx.lookup_native_module(obj_name) {
+                return module_constructor_type(module_name, Some(prop_name));
+            }
+            None
+        }
+        ast::Expr::Paren(paren) => url_encoding_constructor_type(ctx, &paren.expr),
+        ast::Expr::TsAs(ts_as) => url_encoding_constructor_type(ctx, &ts_as.expr),
+        ast::Expr::TsTypeAssertion(ts_assert) => {
+            url_encoding_constructor_type(ctx, &ts_assert.expr)
+        }
+        ast::Expr::TsNonNull(non_null) => url_encoding_constructor_type(ctx, &non_null.expr),
+        ast::Expr::TsConstAssertion(const_assert) => {
+            url_encoding_constructor_type(ctx, &const_assert.expr)
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
     match expr {
         // Literals
@@ -330,6 +395,9 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
         // (otherwise `s.has(...)` falls back to dynamic-method lookup and
         // returns `undefined`).
         ast::Expr::New(new_expr) => {
+            if let Some(ty) = url_encoding_constructor_type(ctx, new_expr.callee.as_ref()) {
+                return ty;
+            }
             if let ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
                 let name = ident.sym.to_string();
                 if let Some(type_args) = new_expr.type_args.as_ref() {

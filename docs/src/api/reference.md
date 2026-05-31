@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2403 entries across 104 modules.
+Total: 2405 entries across 104 modules.
 
 ## Modules
 
@@ -1183,20 +1183,8 @@ Total: 2403 entries across 104 modules.
 
 ## `fs`
 
-### Classes
-
-- `Dir`
-- `Dirent`
-- `FileReadStream`
-- `FileWriteStream`
-- `ReadStream`
-- `Stats`
-- `Utf8Stream`
-- `WriteStream`
-
 ### Methods
 
-- `_toUnixTimestamp` — module
 - `_toUnixTimestamp` — module
 - `access` — module
 - `accessSync` — module
@@ -1245,7 +1233,6 @@ Total: 2403 entries across 104 modules.
 - `mkdir` — module
 - `mkdirSync` — module
 - `mkdtemp` — module
-- `mkdtempDisposableSync` — module
 - `mkdtempSync` — module
 - `open` — module
 - `openSync` — module
@@ -1314,7 +1301,6 @@ Total: 2403 entries across 104 modules.
 - `lutimes` — module
 - `mkdir` — module
 - `mkdtemp` — module
-- `mkdtempDisposable` — module
 - `open` — module
 - `opendir` — module
 - `readFile` — module
@@ -2783,14 +2769,27 @@ Total: 2403 entries across 104 modules.
 - `afterEach` — module
 - `before` — module
 - `beforeEach` — module
+- `default` — module
 - `describe` — module
+- `enable` — module *(class: `timers`)*
 - `fn` — module *(class: `mock`)*
+- `getter` — module *(class: `mock`)*
 - `it` — module
+- `method` — module *(class: `mock`)*
 - `only` — module
 - `property` — module *(class: `mock`)*
+- `reset` — module *(class: `mock`)*
+- `restoreAll` — module *(class: `mock`)*
 - `run` — module
+- `runAll` — module *(class: `timers`)*
+- `setDefaultSnapshotSerializers` — module *(class: `snapshot`)*
+- `setResolveSnapshotPath` — module *(class: `snapshot`)*
+- `setTime` — module *(class: `timers`)*
+- `setter` — module *(class: `mock`)*
 - `skip` — module
 - `suite` — module
+- `test` — module
+- `tick` — module *(class: `timers`)*
 - `todo` — module
 
 ### Properties

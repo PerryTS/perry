@@ -2,6 +2,16 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1047 — fix(node): expose net.Stream / timers.promises / zlib.codes namespace aliases
+
+External contributor PR #3509 (Andrew DiZenzo), rebased onto current `main` and merged with the metadata folded in. Closes #2689, #2682, #2688.
+
+- **`net.Stream`** — exposed as the `net.Socket` alias: manifest method/class entries, namespace-property resolution (`net.Stream` → `bound_native_callable_export_value("net", "Socket")`), and dynamic `instanceof` now matches a live socket handle for both `net.Socket` and `net.Stream` via `net_socket_handle_probe`.
+- **`timers.promises` + `node:timers/promises`** — `timers.promises` parent-namespace property plus the `timers/promises` subpath shape (`setTimeout`/`setImmediate`/`setInterval`/`scheduler`) routed through the runtime `node_submodules` table. Added `timers` and `timers/promises` to `NODE_SUBMODULES` so `is_known_module` recognizes them (the `known_modules_consistent_with_manifest` unit test gates this).
+- **`zlib.codes`** — Node-compatible forward + reverse return-code table (`Z_OK` ↔ `0`, …) via `zlib_codes_object()`.
+
+Rebase conflict resolution dropped the PR's duplicate `is_net_socket_method_name` (main already added a fuller copy) and kept main's larger `NODE_SUBMODULES` / native-module namespace-key lists. Regenerated `docs/src/api/reference.md` + `docs/api/perry.d.ts` from the manifest.
+
 ## v0.5.1046 — fix(stdlib): compile node:domain without bundled-events
 
 **Hotfix — main default-feature build was broken.** `crates/perry-stdlib/src/domain.rs` (added by #3535) called `crate::events::{is_event_emitter_handle, js_event_emitter_get_domain, js_event_emitter_set_domain}` unconditionally at six sites, but `mod events` is `#[cfg(feature = "bundled-events")]`-gated (since v0.5.546, so the well-known bindings table can flip `import 'events'` to `perry-ext-events`). `mod domain` itself is **not** feature-gated, so any build with `bundled-events` off — notably the auto-optimize compile path the `compiler-output-regression` CI gate exercises — failed with `error[E0433]: cannot find 'events' in 'crate'`. `cargo-test` masked it because the test build pulls `full` (which includes `bundled-events`).
