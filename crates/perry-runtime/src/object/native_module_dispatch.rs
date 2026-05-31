@@ -301,10 +301,14 @@ pub(crate) unsafe fn dispatch_native_module_method(
             ptr_addr(v)
         }
     };
-    let arg_event_ptr = |n: usize| -> *const crate::StringHeader {
+    let _arg_event_ptr = |n: usize| -> *const crate::StringHeader {
         crate::value::js_get_string_pointer_unified(arg(n)) as *const crate::StringHeader
     };
-    let arg_closure_ptr = |n: usize| -> *const crate::closure::ClosureHeader {
+    // Raw NaN-box bits of arg `n` (undefined when missing). Used by the
+    // process EventEmitter arms so the runtime can coerce event names and
+    // validate listeners against the full JS value (#3047/#3046).
+    let arg_bits = |n: usize| -> i64 { arg(n).to_bits() as i64 };
+    let _arg_closure_ptr = |n: usize| -> *const crate::closure::ClosureHeader {
         if n >= args_len {
             return std::ptr::null();
         }
@@ -413,33 +417,31 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
 
         // ── process EventEmitter API ──
-        ("process", "on") => crate::os::js_process_on(arg_event_ptr(0), arg_closure_ptr(1)),
-        ("process", "addListener") => {
-            crate::os::js_process_add_listener(arg_event_ptr(0), arg_closure_ptr(1))
-        }
-        ("process", "once") => crate::os::js_process_once(arg_event_ptr(0), arg_closure_ptr(1)),
+        ("process", "on") => crate::os::js_process_on(arg_bits(0), arg_bits(1)),
+        ("process", "addListener") => crate::os::js_process_add_listener(arg_bits(0), arg_bits(1)),
+        ("process", "once") => crate::os::js_process_once(arg_bits(0), arg_bits(1)),
         ("process", "prependListener") => {
-            crate::os::js_process_prepend_listener(arg_event_ptr(0), arg_closure_ptr(1))
+            crate::os::js_process_prepend_listener(arg_bits(0), arg_bits(1))
         }
         ("process", "prependOnceListener") => {
-            crate::os::js_process_prepend_once_listener(arg_event_ptr(0), arg_closure_ptr(1))
+            crate::os::js_process_prepend_once_listener(arg_bits(0), arg_bits(1))
         }
-        ("process", "emit") => crate::os::js_process_emit(arg_event_ptr(0), pack_args_from(1)),
+        ("process", "emit") => crate::os::js_process_emit(arg_bits(0), pack_args_from(1)),
         ("process", "removeListener") => {
-            crate::os::js_process_remove_listener(arg_event_ptr(0), arg_closure_ptr(1))
+            crate::os::js_process_remove_listener(arg_bits(0), arg_bits(1))
         }
-        ("process", "off") => crate::os::js_process_off(arg_event_ptr(0), arg_closure_ptr(1)),
+        ("process", "off") => crate::os::js_process_off(arg_bits(0), arg_bits(1)),
         ("process", "removeAllListeners") => {
-            crate::os::js_process_remove_all_listeners(arg_event_ptr(0))
+            crate::os::js_process_remove_all_listeners(arg_bits(0))
         }
         ("process", "listenerCount") => {
-            crate::os::js_process_listener_count(arg_event_ptr(0), arg_closure_ptr(1))
+            crate::os::js_process_listener_count(arg_bits(0), arg_bits(1))
         }
         ("process", "listeners") => {
-            ptr_to_f64(crate::os::js_process_listeners(arg_event_ptr(0)) as *const u8)
+            ptr_to_f64(crate::os::js_process_listeners(arg_bits(0)) as *const u8)
         }
         ("process", "rawListeners") => {
-            ptr_to_f64(crate::os::js_process_raw_listeners(arg_event_ptr(0)) as *const u8)
+            ptr_to_f64(crate::os::js_process_raw_listeners(arg_bits(0)) as *const u8)
         }
         ("process", "eventNames") => ptr_to_f64(crate::os::js_process_event_names() as *const u8),
         ("process", "setMaxListeners") => crate::os::js_process_set_max_listeners(arg(0)),
@@ -450,7 +452,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "uptime") => crate::os::js_process_uptime(),
         ("process", "memoryUsage") => crate::process::js_process_memory_usage(),
         ("process", "nextTick") => {
-            crate::os::js_process_next_tick(arg_closure_ptr(0));
+            // Validate the callback and forward trailing args (#3046).
+            unsafe { crate::os::js_process_next_tick(arg_bits(0), pack_args_from(1)) };
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "chdir") => {

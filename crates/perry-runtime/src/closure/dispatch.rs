@@ -593,6 +593,29 @@ pub extern "C" fn js_closure_call7(
             dispatch_bound_function(closure, &[arg0, arg1, arg2, arg3, arg4, arg5, arg6])
         };
     }
+    if let Some((fixed_arity, synth)) = lookup_closure_rest_full(func_ptr) {
+        return unsafe {
+            dispatch_rest_bundled(
+                closure,
+                func_ptr,
+                &[arg0, arg1, arg2, arg3, arg4, arg5, arg6],
+                fixed_arity,
+                synth,
+            )
+        };
+    }
+    if let Some(declared) = lookup_closure_arity(func_ptr) {
+        if declared > 7 {
+            return unsafe {
+                dispatch_with_arity(
+                    closure,
+                    func_ptr,
+                    &[arg0, arg1, arg2, arg3, arg4, arg5, arg6],
+                    declared,
+                )
+            };
+        }
+    }
     let func: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64, f64) -> f64 =
         unsafe { std::mem::transmute(func_ptr) };
     func(closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6)
@@ -624,6 +647,29 @@ pub extern "C" fn js_closure_call8(
         return unsafe {
             dispatch_bound_function(closure, &[arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7])
         };
+    }
+    if let Some((fixed_arity, synth)) = lookup_closure_rest_full(func_ptr) {
+        return unsafe {
+            dispatch_rest_bundled(
+                closure,
+                func_ptr,
+                &[arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7],
+                fixed_arity,
+                synth,
+            )
+        };
+    }
+    if let Some(declared) = lookup_closure_arity(func_ptr) {
+        if declared > 8 {
+            return unsafe {
+                dispatch_with_arity(
+                    closure,
+                    func_ptr,
+                    &[arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7],
+                    declared,
+                )
+            };
+        }
     }
     let func: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64, f64, f64) -> f64 =
         unsafe { std::mem::transmute(func_ptr) };

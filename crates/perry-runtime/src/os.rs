@@ -791,18 +791,74 @@ fn process_namespace_value() -> f64 {
     crate::object::js_create_native_module_namespace(b"process".as_ptr(), "process".len())
 }
 
+/// Coerce a raw NaN-boxed JS value into Node's EventEmitter event-name key
+/// (#3047). The `process` global is an EventEmitter, so non-symbol event
+/// names follow `ToString` semantics: `123` → `"123"`, `null` → `"null"`,
+/// `undefined` → `"undefined"`, `{}` → `"[object Object]"`. Strings pass
+/// through unchanged.
+///
+/// Returns `None` only when the value carries no string representation we
+/// can read back (it should not happen for the supported primitive/object
+/// inputs). Symbol event names are not yet keyed by identity — they coerce
+/// to their `String(sym)` form here, which is sufficient for the
+/// string-keyed emitter but does not preserve per-symbol identity.
+fn coerce_event_name(event_bits: i64) -> Option<String> {
+    let value = f64::from_bits(event_bits as u64);
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    // Fast path: already a heap/SSO string — read it directly so we never
+    // round-trip a perfectly good string through ToString.
+    if jv.is_string() || jv.is_short_string() {
+        let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+        return read_event_name(ptr);
+    }
+    let coerced = crate::value::js_jsvalue_to_string(value);
+    read_event_name(coerced)
+}
+
+/// Validate an EventEmitter listener argument supplied as raw NaN-box bits
+/// and return its closure pointer (#3047). Non-callable values throw Node's
+/// `TypeError [ERR_INVALID_ARG_TYPE]` with the shared `"listener"` message
+/// via `js_validate_event_listener`, matching `perry-stdlib::events`.
+fn validate_listener(listener_bits: i64) -> *const crate::closure::ClosureHeader {
+    let name = "listener";
+    let ptr = unsafe {
+        crate::fs::validate::js_validate_event_listener(
+            listener_bits,
+            name.as_ptr(),
+            name.len() as u32,
+        )
+    };
+    ptr as *const crate::closure::ClosureHeader
+}
+
+/// Extract a closure pointer from raw NaN-box bits *without* throwing, for
+/// the lookup-style methods (`removeListener`/`off`/`listenerCount`) where
+/// Node simply finds no match for a non-callable rather than raising. A
+/// non-closure value yields a null pointer that matches no stored listener.
+fn listener_lookup_ptr(listener_bits: i64) -> *const crate::closure::ClosureHeader {
+    let value = f64::from_bits(listener_bits as u64);
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if jv.is_pointer() {
+        let ptr = jv.as_pointer::<u8>() as usize;
+        if crate::closure::is_closure_ptr(ptr) {
+            return ptr as *const crate::closure::ClosureHeader;
+        }
+    }
+    std::ptr::null()
+}
+
 fn register_process_listener(
-    event_ptr: *const StringHeader,
-    callback: *const crate::closure::ClosureHeader,
+    event_bits: i64,
+    listener_bits: i64,
     once: bool,
     prepend: bool,
 ) -> f64 {
-    let Some(event) = read_event_name(event_ptr) else {
+    // Node validates the listener *before* coercing the event name, so an
+    // invalid listener throws even for an odd event value.
+    let callback = validate_listener(listener_bits);
+    let Some(event) = coerce_event_name(event_bits) else {
         return process_namespace_value();
     };
-    if callback.is_null() {
-        return process_namespace_value();
-    }
 
     PROCESS_EMITTER.with(|emitter| {
         let mut emitter = emitter.borrow_mut();
@@ -826,8 +882,8 @@ fn boxed_bool(value: bool) -> f64 {
     })
 }
 
-fn listener_array(event_ptr: *const StringHeader, _raw: bool) -> *mut ArrayHeader {
-    let Some(event) = read_event_name(event_ptr) else {
+fn listener_array(event_bits: i64, _raw: bool) -> *mut ArrayHeader {
+    let Some(event) = coerce_event_name(event_bits) else {
         return crate::array::js_array_alloc(0);
     };
     let callbacks = PROCESS_EMITTER.with(|emitter| {
@@ -863,7 +919,7 @@ fn collect_emit_args(args: *const ArrayHeader) -> Vec<f64> {
     values
 }
 
-fn emit_process_event(event: &str, args: &[f64]) -> bool {
+pub(crate) fn emit_process_event(event: &str, args: &[f64]) -> bool {
     let listeners = PROCESS_EMITTER.with(|emitter| {
         let mut emitter = emitter.borrow_mut();
         let Some(listeners) = emitter.events.get_mut(event) else {
@@ -900,47 +956,37 @@ fn emit_process_event(event: &str, args: &[f64]) -> bool {
     true
 }
 
-/// process.on(event, handler) — register an event listener.
+/// process.on(event, listener) — register an event listener.
+///
+/// `event_bits`/`listener_bits` are the raw NaN-boxed JS values (codegen
+/// routes both through `NA_JSV`) so the event name is coerced with
+/// `ToString` and a non-callable listener throws `ERR_INVALID_ARG_TYPE`
+/// (#3047), matching Node's EventEmitter argument handling.
 #[no_mangle]
-pub extern "C" fn js_process_on(
-    event_ptr: *const StringHeader,
-    handler: *const crate::closure::ClosureHeader,
-) -> f64 {
-    register_process_listener(event_ptr, handler, false, false)
+pub extern "C" fn js_process_on(event_bits: i64, listener_bits: i64) -> f64 {
+    register_process_listener(event_bits, listener_bits, false, false)
 }
 
-/// process.addListener(event, handler) — alias for on().
+/// process.addListener(event, listener) — alias for on().
 #[no_mangle]
-pub extern "C" fn js_process_add_listener(
-    event_ptr: *const StringHeader,
-    handler: *const crate::closure::ClosureHeader,
-) -> f64 {
-    register_process_listener(event_ptr, handler, false, false)
+pub extern "C" fn js_process_add_listener(event_bits: i64, listener_bits: i64) -> f64 {
+    register_process_listener(event_bits, listener_bits, false, false)
 }
 
-/// process.once(event, handler) — one-shot listener (Node parity).
+/// process.once(event, listener) — one-shot listener (Node parity).
 #[no_mangle]
-pub extern "C" fn js_process_once(
-    event_ptr: *const StringHeader,
-    handler: *const crate::closure::ClosureHeader,
-) -> f64 {
-    register_process_listener(event_ptr, handler, true, false)
+pub extern "C" fn js_process_once(event_bits: i64, listener_bits: i64) -> f64 {
+    register_process_listener(event_bits, listener_bits, true, false)
 }
 
 #[no_mangle]
-pub extern "C" fn js_process_prepend_listener(
-    event_ptr: *const StringHeader,
-    handler: *const crate::closure::ClosureHeader,
-) -> f64 {
-    register_process_listener(event_ptr, handler, false, true)
+pub extern "C" fn js_process_prepend_listener(event_bits: i64, listener_bits: i64) -> f64 {
+    register_process_listener(event_bits, listener_bits, false, true)
 }
 
 #[no_mangle]
-pub extern "C" fn js_process_prepend_once_listener(
-    event_ptr: *const StringHeader,
-    handler: *const crate::closure::ClosureHeader,
-) -> f64 {
-    register_process_listener(event_ptr, handler, true, true)
+pub extern "C" fn js_process_prepend_once_listener(event_bits: i64, listener_bits: i64) -> f64 {
+    register_process_listener(event_bits, listener_bits, true, true)
 }
 
 /// Emit the synthetic `beforeExit` event with the would-be exit code as a
@@ -955,8 +1001,8 @@ pub extern "C" fn js_process_emit_before_exit(code: f64) {
 }
 
 #[no_mangle]
-pub extern "C" fn js_process_emit(event_ptr: *const StringHeader, args: *const ArrayHeader) -> f64 {
-    let Some(event) = read_event_name(event_ptr) else {
+pub extern "C" fn js_process_emit(event_bits: i64, args: *const ArrayHeader) -> f64 {
+    let Some(event) = coerce_event_name(event_bits) else {
         return boxed_bool(false);
     };
     let values = collect_emit_args(args);
@@ -964,11 +1010,9 @@ pub extern "C" fn js_process_emit(event_ptr: *const StringHeader, args: *const A
 }
 
 #[no_mangle]
-pub extern "C" fn js_process_remove_listener(
-    event_ptr: *const StringHeader,
-    handler: *const crate::closure::ClosureHeader,
-) -> f64 {
-    if let Some(event) = read_event_name(event_ptr) {
+pub extern "C" fn js_process_remove_listener(event_bits: i64, listener_bits: i64) -> f64 {
+    let handler = listener_lookup_ptr(listener_bits);
+    if let Some(event) = coerce_event_name(event_bits) {
         PROCESS_EMITTER.with(|emitter| {
             let mut emitter = emitter.borrow_mut();
             if let Some(listeners) = emitter.events.get_mut(&event) {
@@ -986,18 +1030,26 @@ pub extern "C" fn js_process_remove_listener(
 }
 
 #[no_mangle]
-pub extern "C" fn js_process_off(
-    event_ptr: *const StringHeader,
-    handler: *const crate::closure::ClosureHeader,
-) -> f64 {
-    js_process_remove_listener(event_ptr, handler)
+pub extern "C" fn js_process_off(event_bits: i64, listener_bits: i64) -> f64 {
+    js_process_remove_listener(event_bits, listener_bits)
 }
 
 #[no_mangle]
-pub extern "C" fn js_process_remove_all_listeners(event_ptr: *const StringHeader) -> f64 {
+pub extern "C" fn js_process_remove_all_listeners(event_bits: i64) -> f64 {
+    // `removeAllListeners()` / `removeAllListeners(undefined)` clears every
+    // event. Node treats a missing or `undefined`/`null` argument as
+    // "no specific event" rather than coercing it to the literal string
+    // `"undefined"`/`"null"`, so guard those tags before coercing.
+    let value = f64::from_bits(event_bits as u64);
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    let target = if jv.is_undefined() || jv.is_null() {
+        None
+    } else {
+        coerce_event_name(event_bits)
+    };
     PROCESS_EMITTER.with(|emitter| {
         let mut emitter = emitter.borrow_mut();
-        if let Some(event) = read_event_name(event_ptr) {
+        if let Some(event) = target {
             emitter.events.remove(&event);
             emitter.event_order.retain(|name| name != &event);
         } else {
@@ -1009,11 +1061,9 @@ pub extern "C" fn js_process_remove_all_listeners(event_ptr: *const StringHeader
 }
 
 #[no_mangle]
-pub extern "C" fn js_process_listener_count(
-    event_ptr: *const StringHeader,
-    handler: *const crate::closure::ClosureHeader,
-) -> f64 {
-    let Some(event) = read_event_name(event_ptr) else {
+pub extern "C" fn js_process_listener_count(event_bits: i64, listener_bits: i64) -> f64 {
+    let handler = listener_lookup_ptr(listener_bits);
+    let Some(event) = coerce_event_name(event_bits) else {
         return 0.0;
     };
     PROCESS_EMITTER.with(|emitter| {
@@ -1033,13 +1083,13 @@ pub extern "C" fn js_process_listener_count(
 }
 
 #[no_mangle]
-pub extern "C" fn js_process_listeners(event_ptr: *const StringHeader) -> *mut ArrayHeader {
-    listener_array(event_ptr, false)
+pub extern "C" fn js_process_listeners(event_bits: i64) -> *mut ArrayHeader {
+    listener_array(event_bits, false)
 }
 
 #[no_mangle]
-pub extern "C" fn js_process_raw_listeners(event_ptr: *const StringHeader) -> *mut ArrayHeader {
-    listener_array(event_ptr, true)
+pub extern "C" fn js_process_raw_listeners(event_bits: i64) -> *mut ArrayHeader {
+    listener_array(event_bits, true)
 }
 
 #[no_mangle]
@@ -1124,10 +1174,29 @@ pub fn emit_process_uncaught_exception(error: f64) {
     emit_process_event("uncaughtException", &[error]);
 }
 
-/// process.nextTick(callback) — schedule callback as a microtask.
+/// process.nextTick(callback, ...args) — schedule callback as a tick,
+/// forwarding trailing args (#3046). `callback_bits`/`args` are raw
+/// NaN-boxed values. A non-callable callback throws Node's
+/// `TypeError [ERR_INVALID_ARG_TYPE]` (`"callback"` message) synchronously.
+/// Used by the method-value dispatch path (`const nt = process.nextTick`)
+/// and the zero-arg `process.nextTick()` call form; the direct lowered form
+/// with trailing args goes through codegen's `js_queue_next_tick_args`.
+///
+/// # Safety
+/// `args` must be a valid NaN-boxed args array pointer, or null.
 #[no_mangle]
-pub extern "C" fn js_process_next_tick(callback: *const crate::closure::ClosureHeader) {
-    crate::builtins::js_queue_next_tick(callback as i64);
+pub unsafe extern "C" fn js_process_next_tick(callback_bits: i64, args: *const ArrayHeader) {
+    // Mirror codegen's setTimeout/queueMicrotask validation: the timer
+    // validator always reports the `"callback"` argument name, which is the
+    // wording Node uses for `process.nextTick`.
+    let callback =
+        crate::timer::js_timer_validate_callback(f64::from_bits(callback_bits as u64), 3);
+    let values = collect_emit_args(args);
+    if values.is_empty() {
+        crate::builtins::js_queue_next_tick(callback);
+    } else {
+        crate::builtins::js_queue_next_tick_args(callback, values.as_ptr(), values.len() as i32);
+    }
 }
 
 // `process.chdir()` + its Node-shaped error live in the `chdir` submodule

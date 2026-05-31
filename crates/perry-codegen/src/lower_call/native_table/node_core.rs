@@ -283,7 +283,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "on",
         class_filter: None,
         runtime: "js_process_on",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_JSV, NA_JSV],
         ret: NR_F64,
     },
     NativeModSig {
@@ -292,7 +292,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "addListener",
         class_filter: None,
         runtime: "js_process_add_listener",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_JSV, NA_JSV],
         ret: NR_F64,
     },
     NativeModSig {
@@ -301,7 +301,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "once",
         class_filter: None,
         runtime: "js_process_once",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_JSV, NA_JSV],
         ret: NR_F64,
     },
     NativeModSig {
@@ -310,7 +310,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "prependListener",
         class_filter: None,
         runtime: "js_process_prepend_listener",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_JSV, NA_JSV],
         ret: NR_F64,
     },
     NativeModSig {
@@ -319,7 +319,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "prependOnceListener",
         class_filter: None,
         runtime: "js_process_prepend_once_listener",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_JSV, NA_JSV],
         ret: NR_F64,
     },
     NativeModSig {
@@ -328,7 +328,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "emit",
         class_filter: None,
         runtime: "js_process_emit",
-        args: &[NA_STR, NA_VARARGS],
+        args: &[NA_JSV, NA_VARARGS],
         ret: NR_F64,
     },
     NativeModSig {
@@ -337,7 +337,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "removeListener",
         class_filter: None,
         runtime: "js_process_remove_listener",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_JSV, NA_JSV],
         ret: NR_F64,
     },
     NativeModSig {
@@ -346,7 +346,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "off",
         class_filter: None,
         runtime: "js_process_off",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_JSV, NA_JSV],
         ret: NR_F64,
     },
     NativeModSig {
@@ -355,7 +355,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "removeAllListeners",
         class_filter: None,
         runtime: "js_process_remove_all_listeners",
-        args: &[NA_STR],
+        args: &[NA_JSV],
         ret: NR_F64,
     },
     NativeModSig {
@@ -364,7 +364,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "listenerCount",
         class_filter: None,
         runtime: "js_process_listener_count",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_JSV, NA_JSV],
         ret: NR_F64,
     },
     NativeModSig {
@@ -373,7 +373,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "listeners",
         class_filter: None,
         runtime: "js_process_listeners",
-        args: &[NA_STR],
+        args: &[NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -382,7 +382,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "rawListeners",
         class_filter: None,
         runtime: "js_process_raw_listeners",
-        args: &[NA_STR],
+        args: &[NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
