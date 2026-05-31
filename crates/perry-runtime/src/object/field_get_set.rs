@@ -706,6 +706,23 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
             obj
         }
     };
+    if crate::closure::is_closure_ptr(stripped as usize) {
+        let props = crate::closure::closure_dynamic_props_snapshot(stripped as usize);
+        let out = crate::array::js_array_alloc(props.len() as u32);
+        for (name, _) in props {
+            if matches!(name.as_str(), "length" | "name" | "prototype") {
+                continue;
+            }
+            if let Some(attrs) = get_property_attrs(stripped as usize, &name) {
+                if !attrs.enumerable() {
+                    continue;
+                }
+            }
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            crate::array::js_array_push(out, JSValue::string_ptr(key));
+        }
+        return out;
+    }
     if !stripped.is_null() && (stripped as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
         unsafe {
             let gc_header = (stripped as *const u8).sub(crate::gc::GC_HEADER_SIZE)
