@@ -7,10 +7,10 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
 | Whole-module gaps (zero coverage) | 18 | 472 | n/a |
-| Partial-module gaps | 29 | 1643 | 374 |
+| Partial-module gaps | 29 | 1642 | 375 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2397** |  |
+| **Total true gaps** |  | **2396** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
@@ -1968,11 +1968,10 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:path
 
-**Gap APIs: 4** · Already covered: 12
+**Gap APIs: 3** · Already covered: 13
 
 #### Missing from Perry
 
-- `path.matchesGlob(path, pattern)`
 - `path.toNamespacedPath(path)`
 - `path.posix`
 - `path.win32`
@@ -1987,6 +1986,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `path.format(pathObject)` | `manifest:path.format` |
 | `path.isAbsolute(path)` | `manifest:path.isAbsolute` |
 | `path.join([...paths])` | `manifest:path.join` |
+| `path.matchesGlob(path, pattern)` | `manifest:path.matchesGlob`; `test-parity/node-suite/path/matchesGlob/extglob-globstar.ts`; `test-parity/node-suite/path/matchesGlob/win32-separators.ts` |
 | `path.normalize(path)` | `manifest:path.normalize` |
 | `path.parse(path)` | `manifest:path.parse` |
 | `path.relative(from, to)` | `manifest:path.relative` |
