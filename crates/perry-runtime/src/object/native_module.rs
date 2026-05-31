@@ -1339,27 +1339,15 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "path.default" => Some(PATH_DEFAULT_KEYS),
         "path.posix" | "path.win32" => Some(&[b"_makeLong"]),
         "fs" => Some(FS_NAMESPACE_KEYS),
-<<<<<<< HEAD
         "constants" => Some(deprecated_constants_namespace_keys()),
         "constants.default" => Some(deprecated_constants_keys()),
-=======
-<<<<<<< HEAD
-        "constants" => Some(deprecated_constants_namespace_keys()),
-        "constants.default" => Some(deprecated_constants_keys()),
-=======
-        "constants" => Some(deprecated_constants_keys()),
         "buffer" => Some(BUFFER_NAMESPACE_KEYS),
->>>>>>> origin/main
->>>>>>> origin/main
         "querystring" => Some(QUERYSTRING_NAMESPACE_KEYS),
         "querystring.default" => Some(QUERYSTRING_DEFAULT_KEYS),
-<<<<<<< HEAD
         "punycode" => Some(PUNYCODE_NAMESPACE_KEYS),
         "punycode.default" => Some(PUNYCODE_DEFAULT_KEYS),
         "punycode.ucs2" => Some(PUNYCODE_UCS2_KEYS),
-=======
         "timers" => Some(TIMERS_NAMESPACE_KEYS),
->>>>>>> origin/main
         "os" => Some(OS_NAMESPACE_KEYS),
         "os.default" => Some(OS_DEFAULT_KEYS),
         "url" => Some(URL_NAMESPACE_KEYS),
@@ -1402,6 +1390,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"promises",
         ]),
         "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
+        "readline/promises" => Some(&[b"Interface", b"Readline", b"createInterface"]),
         "zlib" => Some(&[b"codes"]),
         _ => None,
     }
@@ -1448,17 +1437,8 @@ fn create_cjs_default_namespace(module_name: &str) -> Option<f64> {
 fn cjs_default_export_value(module_name: &str) -> Option<f64> {
     match module_name {
         "events" => Some(bound_native_callable_export_value("events", "EventEmitter")),
-<<<<<<< HEAD
-        "async_hooks" | "constants" | "os" | "path" | "querystring" | "url" | "util" => {
-=======
-<<<<<<< HEAD
-        "async_hooks" | "constants" | "os" | "path" | "querystring" | "url" | "util" => {
-=======
-        "async_hooks" | "os" | "path" | "punycode" | "querystring" | "url" | "util" => {
->>>>>>> origin/main
->>>>>>> origin/main
-            create_cjs_default_namespace(module_name)
-        }
+        "async_hooks" | "constants" | "os" | "path" | "punycode" | "querystring" | "url"
+        | "util" => create_cjs_default_namespace(module_name),
         _ => None,
     }
 }
@@ -1501,6 +1481,7 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "util.types"
             | "path.posix"
             | "path.win32"
+            | "readline/promises"
             | "timers/promises"
             | "crypto.webcrypto"
             | "crypto.subtle"
@@ -4585,10 +4566,6 @@ pub(crate) unsafe fn get_native_module_constant(
             "default" if !is_cjs_default_object => cjs_default_export_value("querystring"),
             _ => None,
         },
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD
->>>>>>> origin/main
         "constants" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("constants"),
             _ => fs_const(property)
@@ -4606,23 +4583,6 @@ pub(crate) unsafe fn get_native_module_constant(
                     }
                 }),
         },
-<<<<<<< HEAD
-=======
-=======
-        "constants" => fs_const(property)
-            .or_else(|| fs_const_tail(property))
-            .or_else(|| os_signal_const(property))
-            .or_else(|| os_errno_const(property))
-            .or_else(|| os_priority_const(property))
-            .or_else(|| os_dlopen_const(property))
-            .or_else(|| crypto_const(property))
-            .or_else(|| {
-                if property == "defaultCoreCipherList" {
-                    Some(str_val(DEFAULT_CORE_CIPHER_LIST))
-                } else {
-                    None
-                }
-            }),
         "sqlite" => match property {
             "constants" => Some(create_sub_namespace("sqlite.constants")),
             "Session" => Some(sqlite_session_constructor_value()),
@@ -4630,8 +4590,6 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "sqlite.constants" => sqlite_const(property),
->>>>>>> origin/main
->>>>>>> origin/main
         "path" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("path"),
             "sep" => {

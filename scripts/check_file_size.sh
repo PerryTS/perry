@@ -60,6 +60,10 @@ crates/perry/src/commands/compile.rs
 # Native-module dispatch table; one big match by (module, method, class).
 # Splitting per-namespace is tracked under the API-manifest refactor in #793.
 crates/perry-codegen/src/lower_call/native/mod.rs
+# Node-core native method table split out of `native/mod.rs`; still a single
+# per-module dispatch table and already over the limit on current main.
+# Splitting per namespace is tracked under the codegen cleanup in #1435.
+crates/perry-codegen/src/lower_call/native_table/node_core.rs
 # HIR `Expr` enum + dependency-walker arms; splitting would need parallel
 # updates across every variant of the walker traits. Tracked alongside #793.
 crates/perry-hir/src/ir/expr.rs
