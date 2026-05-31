@@ -1953,6 +1953,24 @@ pub extern "C" fn js_object_get_field_by_name(
                         let v = crate::error::js_error_get_cause(err_ptr);
                         return JSValue::from_bits(v.to_bits());
                     }
+                    b"constructor" => {
+                        let (name, len) = match crate::error::js_error_get_kind(err_ptr) {
+                            crate::error::ERROR_KIND_TYPE_ERROR => (b"TypeError".as_ptr(), 9),
+                            crate::error::ERROR_KIND_RANGE_ERROR => (b"RangeError".as_ptr(), 10),
+                            crate::error::ERROR_KIND_REFERENCE_ERROR => {
+                                (b"ReferenceError".as_ptr(), 14)
+                            }
+                            crate::error::ERROR_KIND_SYNTAX_ERROR => (b"SyntaxError".as_ptr(), 11),
+                            crate::error::ERROR_KIND_AGGREGATE_ERROR => {
+                                (b"AggregateError".as_ptr(), 14)
+                            }
+                            crate::error::ERROR_KIND_EVAL_ERROR => (b"EvalError".as_ptr(), 9),
+                            crate::error::ERROR_KIND_URI_ERROR => (b"URIError".as_ptr(), 8),
+                            _ => (b"Error".as_ptr(), 5),
+                        };
+                        let v = js_get_global_this_builtin_value(name, len);
+                        return JSValue::from_bits(v.to_bits());
+                    }
                     b"code" => {
                         // Errors thrown by runtime validation paths (e.g.
                         // diagnostics_channel argument checks) register
@@ -2378,6 +2396,11 @@ pub extern "C" fn js_object_get_field_by_name(
                 if class_id != 0 && is_anon_shape_class_id(class_id) {
                     let v = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
                     return JSValue::from_bits(v.to_bits());
+                }
+                if let Some(func_value) =
+                    super::class_registry::function_value_for_class_id(class_id)
+                {
+                    return JSValue::from_bits(func_value.to_bits());
                 }
                 if class_id != 0 && is_class_id_registered(class_id) {
                     let bits = 0x7FFE_0000_0000_0000u64 | (class_id as u64);

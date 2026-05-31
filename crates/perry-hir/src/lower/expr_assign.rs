@@ -244,14 +244,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                 // side effects. Refs #420.
                 Ok(*value)
             } else {
-                // Variable not found in scope — likely a closure capture that wasn't
-                // properly tracked. Create an implicit local to avoid hard failure.
-                eprintln!(
-                    "  Warning: Assignment to undeclared variable '{}', creating implicit local",
-                    name
-                );
-                let id = ctx.define_local(name, Type::Any);
-                Ok(Expr::LocalSet(id, value))
+                Ok(super::strict_unresolvable_assignment(name, value))
             }
         }
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(member)) => {

@@ -206,6 +206,22 @@ pub extern "C" fn js_referenceerror_new(message: *mut StringHeader) -> *mut Erro
     unsafe { alloc_error(ERROR_KIND_REFERENCE_ERROR, b"ReferenceError", message) }
 }
 
+#[no_mangle]
+pub extern "C" fn js_throw_reference_error_unresolvable_assignment(
+    name: *const StringHeader,
+    _value: f64,
+) -> f64 {
+    let name = unsafe { read_string_header_owned(name) };
+    let message = if name.is_empty() {
+        "is not defined".to_string()
+    } else {
+        format!("{name} is not defined")
+    };
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = js_referenceerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 thread_local! {
     /// Interned `&'static str` for each distinct Node `ERR_*` code passed
     /// across the FFI boundary, so it can be stored in the
@@ -758,6 +774,11 @@ static KEEP_AGGREGATEERROR_NEW_FULL: extern "C" fn(
 ) -> *mut ErrorHeader = js_aggregateerror_new_full;
 #[used]
 static KEEP_ERROR_IS_ERROR: extern "C" fn(f64) -> f64 = js_error_is_error;
+#[used]
+static KEEP_THROW_REFERENCE_ERROR_UNRESOLVABLE_ASSIGNMENT: extern "C" fn(
+    *const StringHeader,
+    f64,
+) -> f64 = js_throw_reference_error_unresolvable_assignment;
 
 #[cfg(test)]
 mod tostring_tests {

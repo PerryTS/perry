@@ -42,12 +42,7 @@ pub(crate) fn lower_expr_assignment(
                 // the RHS for side effects. Refs #420.
                 Ok(*value)
             } else {
-                eprintln!(
-                    "  Warning: Assignment to undeclared variable '{}', creating implicit local",
-                    name
-                );
-                let id = ctx.define_local(name, Type::Any);
-                Ok(Expr::LocalSet(id, value))
+                Ok(strict_unresolvable_assignment(name, value))
             }
         }
         ast::Expr::Member(member) => {

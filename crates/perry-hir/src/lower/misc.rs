@@ -14,6 +14,20 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
+pub(crate) fn strict_unresolvable_assignment(name: String, value: Box<Expr>) -> Expr {
+    // Keep the RHS as a runtime-call argument so lowering evaluates it before
+    // throwing the strict-mode ReferenceError for the unresolvable binding.
+    Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: "js_throw_reference_error_unresolvable_assignment".to_string(),
+            param_types: vec![Type::String, Type::Any],
+            return_type: Type::Any,
+        }),
+        args: vec![Expr::String(name), *value],
+        type_args: vec![],
+    }
+}
+
 /// Map a function's declared return type to a native-instance class when it
 /// matches a known stdlib pattern. Lets a wrapper function like
 /// `function openSocket(host, port): Socket { ... }` advertise that calls
