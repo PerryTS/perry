@@ -2404,7 +2404,11 @@ pub extern "C" fn js_object_get_field_by_name(
             // `Object.create(P).m()` threw `TypeError: m is not a function`.
             let class_id = (*obj).class_id;
             if class_id != 0 {
-                if let Some(v) = resolve_proto_chain_field(class_id, key) {
+                let receiver =
+                    f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                if let Some(v) = super::class_registry::resolve_proto_chain_field_with_receiver(
+                    class_id, key, receiver,
+                ) {
                     return v;
                 }
                 let key_bytes = std::slice::from_raw_parts(
@@ -2721,7 +2725,9 @@ pub extern "C" fn js_object_get_field_by_name(
             // object — return its value directly. `pipe`, `[Equal.symbol]`,
             // etc. on Effect's EffectPrototype reach here.
             {
-                if let Some(v) = resolve_proto_chain_field(class_id, key) {
+                let receiver =
+                    f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                if let Some(v) = resolve_proto_chain_field_with_receiver(class_id, key, receiver) {
                     return v;
                 }
             }

@@ -9,10 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use crate::array::{js_array_get_f64, js_array_length, ArrayHeader};
-use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr,
-    js_register_closure_arity, ClosureHeader,
-};
+use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader};
 use crate::object::{
     js_object_alloc, js_object_create, AccessorDescriptor, ObjectHeader, PropertyAttrs,
 };
@@ -164,17 +161,6 @@ fn function_value(func: *const u8, arity: u32, name: &str) -> f64 {
     boxed_ptr(closure)
 }
 
-fn captured_getter(func: *const u8, id: i64) -> f64 {
-    let closure = js_closure_alloc(func, 1);
-    js_closure_set_capture_ptr(closure, 0, id);
-    js_register_closure_arity(func, 0);
-    boxed_ptr(closure)
-}
-
-fn getter_trace_id(closure: *const ClosureHeader) -> i64 {
-    js_closure_get_capture_ptr(closure, 0)
-}
-
 fn throw_invalid_this() -> ! {
     throw_type_error_no_code(b"Method called on incompatible receiver")
 }
@@ -252,13 +238,13 @@ extern "C" fn trace_tracing_disable(_closure: *const ClosureHeader) -> f64 {
     undefined()
 }
 
-extern "C" fn trace_categories_getter(closure: *const ClosureHeader) -> f64 {
-    let id = getter_trace_id(closure);
+extern "C" fn trace_categories_getter(_closure: *const ClosureHeader) -> f64 {
+    let id = this_trace_id();
     trace_state_value(id, |state| string_value(&state.categories_joined))
 }
 
-extern "C" fn trace_enabled_getter(closure: *const ClosureHeader) -> f64 {
-    let id = getter_trace_id(closure);
+extern "C" fn trace_enabled_getter(_closure: *const ClosureHeader) -> f64 {
+    let id = this_trace_id();
     trace_state_value(id, |state| bool_value(state.enabled))
 }
 
@@ -267,14 +253,18 @@ fn ensure_trace_prototype() -> *mut ObjectHeader {
         return proto;
     }
 
-    let proto = js_object_alloc(0, 3);
+    let proto = js_object_alloc(0, 5);
     let ctor = function_value(trace_tracing_constructor as *const u8, 0, "Tracing");
     let enable = function_value(trace_tracing_enable as *const u8, 0, "enable");
     let disable = function_value(trace_tracing_disable as *const u8, 0, "disable");
+    let categories = function_value(trace_categories_getter as *const u8, 0, "get categories");
+    let enabled = function_value(trace_enabled_getter as *const u8, 0, "get enabled");
 
     define_non_enum_data(proto, "constructor", ctor, true);
     define_non_enum_data(proto, "enable", enable, true);
     define_non_enum_data(proto, "disable", disable, true);
+    define_non_enum_accessor(proto, "categories", categories);
+    define_non_enum_accessor(proto, "enabled", enabled);
 
     let ctor_ptr = crate::value::js_nanbox_get_pointer(ctor) as usize;
     crate::closure::closure_set_dynamic_prop(ctor_ptr, "prototype", boxed_ptr(proto));
@@ -366,16 +356,6 @@ pub(crate) extern "C" fn thunk_trace_events_createTracing(
     let obj = crate::value::js_nanbox_get_pointer(obj_value) as *mut ObjectHeader;
     define_non_enum_data(obj, TRACE_ID_FIELD, id as f64, false);
     define_non_enum_data(obj, "constructor", trace_constructor_value(), true);
-    define_non_enum_accessor(
-        obj,
-        "categories",
-        captured_getter(trace_categories_getter as *const u8, id),
-    );
-    define_non_enum_accessor(
-        obj,
-        "enabled",
-        captured_getter(trace_enabled_getter as *const u8, id),
-    );
     TRACE_EVENTS_ALLOCATED.store(1, Ordering::Release);
     obj_value
 }

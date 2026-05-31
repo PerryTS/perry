@@ -263,12 +263,35 @@ pub(crate) unsafe fn resolve_proto_chain_field(
     class_id: u32,
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {
+    resolve_proto_chain_field_inner(class_id, key, None)
+}
+
+pub(crate) unsafe fn resolve_proto_chain_field_with_receiver(
+    class_id: u32,
+    key: *const crate::StringHeader,
+    receiver: f64,
+) -> Option<JSValue> {
+    resolve_proto_chain_field_inner(class_id, key, Some(receiver))
+}
+
+unsafe fn resolve_proto_chain_field_inner(
+    class_id: u32,
+    key: *const crate::StringHeader,
+    receiver: Option<f64>,
+) -> Option<JSValue> {
     let mut cid = class_id;
     let mut depth = 0usize;
     while depth < 32 {
         let proto_obj = class_prototype_object(cid);
         if !proto_obj.is_null() {
-            let field_val = js_object_get_field_by_name(proto_obj as *const _, key);
+            let field_val = if let Some(receiver) = receiver {
+                let previous_this = js_implicit_this_set(receiver);
+                let value = js_object_get_field_by_name(proto_obj as *const _, key);
+                js_implicit_this_set(previous_this);
+                value
+            } else {
+                js_object_get_field_by_name(proto_obj as *const _, key)
+            };
             if !field_val.is_undefined() && !field_val.is_null() {
                 return Some(field_val);
             }
