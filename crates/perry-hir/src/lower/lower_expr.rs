@@ -763,6 +763,37 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             {
                                 return Ok(Expr::String("function".to_string()));
                             }
+                            // `readline.Interface` is a native handle whose
+                            // value-read members lower as zero-arg native
+                            // calls. For shape probes, fold `typeof` at the
+                            // AST layer so we report Node's public surface
+                            // without invoking those methods.
+                            if matches!(
+                                ctx.lookup_native_instance(obj_name),
+                                Some(("readline", "Interface"))
+                            ) {
+                                if matches!(
+                                    prop_name,
+                                    "close"
+                                        | "pause"
+                                        | "resume"
+                                        | "prompt"
+                                        | "setPrompt"
+                                        | "getPrompt"
+                                        | "question"
+                                        | "write"
+                                        | "getCursorPos"
+                                        | "on"
+                                ) {
+                                    return Ok(Expr::String("function".to_string()));
+                                }
+                                if prop_name == "line" {
+                                    return Ok(Expr::String("string".to_string()));
+                                }
+                                if prop_name == "terminal" {
+                                    return Ok(Expr::String("boolean".to_string()));
+                                }
+                            }
                             // #1698: `typeof req.json` on a Web Fetch Request /
                             // Response instance. The body methods are real
                             // functions in Node, but a bare LITERAL member read

@@ -405,6 +405,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"aborted",
             b"callbackify",
             b"convertProcessSignalToExitCode",
+            b"debug",
             b"debuglog",
             b"deprecate",
             b"diff",
@@ -446,6 +447,40 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"getDefaultAutoSelectFamilyAttemptTimeout",
             b"setDefaultAutoSelectFamilyAttemptTimeout",
         ]),
+        "v8" => Some(&[
+            b"serialize",
+            b"deserialize",
+            b"cachedDataVersionTag",
+            b"getHeapStatistics",
+            b"getHeapCodeStatistics",
+            b"getHeapSpaceStatistics",
+            b"Serializer",
+            b"Deserializer",
+            b"DefaultSerializer",
+            b"DefaultDeserializer",
+        ]),
+        "v8.Serializer" | "v8.DefaultSerializer" => Some(&[
+            b"writeHeader",
+            b"writeValue",
+            b"releaseBuffer",
+            b"transferArrayBuffer",
+            b"writeUint32",
+            b"writeUint64",
+            b"writeDouble",
+            b"writeRawBytes",
+            b"_getDataCloneError",
+            b"_setTreatArrayBufferViewsAsHostObjects",
+        ]),
+        "v8.Deserializer" | "v8.DefaultDeserializer" => Some(&[
+            b"readHeader",
+            b"readValue",
+            b"transferArrayBuffer",
+            b"getWireFormatVersion",
+            b"readUint32",
+            b"readUint64",
+            b"readDouble",
+            b"readRawBytes",
+        ]),
         _ => None,
     }
 }
@@ -460,6 +495,7 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "util.types"
             | "path.posix"
             | "path.win32"
+            | "v8"
     )
 }
 
@@ -540,6 +576,10 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
                 "fs_promises".len() as u32,
             )
         };
+    }
+
+    if module_name == "util" && property_name == "debug" {
+        return bound_native_callable_export_value("util", "debuglog");
     }
 
     if let Some(val) = get_native_module_constant(module_name, property_name, 0.0) {
@@ -634,6 +674,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
         ("module", "enableCompileCache" | "findSourceMap" | "SourceMap") => Some(1),
         ("module", "flushCompileCache" | "getCompileCacheDir") => Some(0),
+        ("util", "debug" | "debuglog") => Some(2),
         ("net", "createServer" | "Server") => Some(2),
         ("net", "Socket") => Some(1),
         ("net", "_normalizeArgs") => Some(1),
@@ -894,21 +935,6 @@ fn util_inspect_colors() -> f64 {
     })
 }
 
-extern "C" fn util_debuglog_logger_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    _arg: f64,
-) -> f64 {
-    f64::from_bits(crate::value::TAG_UNDEFINED)
-}
-
-pub(crate) fn util_debuglog_logger_value() -> f64 {
-    let func_ptr = util_debuglog_logger_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 1);
-    let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
-    set_bound_native_closure_name(closure, "debuglog");
-    crate::value::js_nanbox_pointer(closure as i64)
-}
-
 fn attach_tty_stream_prototype(constructor_value: f64, name: &str) {
     crate::tty::attach_tty_constructor_prototype(constructor_value, name);
 }
@@ -1066,6 +1092,14 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
         // #1533: node:stream `promises` namespace exports.
         ("stream/promises", "pipeline")
             | ("stream/promises", "finished")
+            | (
+                "readline",
+                "clearLine"
+                    | "clearScreenDown"
+                    | "cursorTo"
+                    | "moveCursor"
+                    | "emitKeypressEvents",
+            )
             | ("module", "createRequire")
             | ("module", "findPackageJSON")
             | ("module", "findSourceMap")
@@ -1147,6 +1181,37 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("net", "Socket")
             | ("net", "_normalizeArgs")
             | ("net", "_createServerHandle")
+            | ("v8", "serialize")
+            | ("v8", "deserialize")
+            | ("v8", "cachedDataVersionTag")
+            | ("v8", "getHeapStatistics")
+            | ("v8", "getHeapCodeStatistics")
+            | ("v8", "getHeapSpaceStatistics")
+            | ("v8", "Serializer")
+            | ("v8", "Deserializer")
+            | ("v8", "DefaultSerializer")
+            | ("v8", "DefaultDeserializer")
+            | ("v8.Serializer" | "v8.DefaultSerializer", "writeHeader")
+            | ("v8.Serializer" | "v8.DefaultSerializer", "writeValue")
+            | ("v8.Serializer" | "v8.DefaultSerializer", "releaseBuffer")
+            | ("v8.Serializer" | "v8.DefaultSerializer", "transferArrayBuffer")
+            | ("v8.Serializer" | "v8.DefaultSerializer", "writeUint32")
+            | ("v8.Serializer" | "v8.DefaultSerializer", "writeUint64")
+            | ("v8.Serializer" | "v8.DefaultSerializer", "writeDouble")
+            | ("v8.Serializer" | "v8.DefaultSerializer", "writeRawBytes")
+            | ("v8.Serializer" | "v8.DefaultSerializer", "_getDataCloneError")
+            | (
+                "v8.Serializer" | "v8.DefaultSerializer",
+                "_setTreatArrayBufferViewsAsHostObjects",
+            )
+            | ("v8.Deserializer" | "v8.DefaultDeserializer", "readHeader")
+            | ("v8.Deserializer" | "v8.DefaultDeserializer", "readValue")
+            | ("v8.Deserializer" | "v8.DefaultDeserializer", "transferArrayBuffer")
+            | ("v8.Deserializer" | "v8.DefaultDeserializer", "getWireFormatVersion")
+            | ("v8.Deserializer" | "v8.DefaultDeserializer", "readUint32")
+            | ("v8.Deserializer" | "v8.DefaultDeserializer", "readUint64")
+            | ("v8.Deserializer" | "v8.DefaultDeserializer", "readDouble")
+            | ("v8.Deserializer" | "v8.DefaultDeserializer", "readRawBytes")
             // #1856: `child_process.ChildProcess` reads as `[Function: ChildProcess]`.
             | ("child_process", "ChildProcess")
             // #1857 / #2130: every exported function reads as a bound-method
@@ -1403,6 +1468,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "format")
             | ("util", "formatWithOptions")
             | ("util", "inspect")
+            | ("util", "debug")
             | ("util", "aborted")
             | ("util", "debuglog")
             | ("util", "getCallSites")
