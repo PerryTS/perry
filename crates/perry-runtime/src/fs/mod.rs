@@ -893,7 +893,7 @@ pub(crate) unsafe fn js_fs_chown_result(
 /// the Buffer/URL paths, which leaked memory on every fs call with those
 /// argument shapes. The extra allocation is negligible next to the syscall
 /// cost that follows.
-unsafe fn decode_path_value(path_value: f64) -> Option<String> {
+pub(crate) unsafe fn decode_path_value(path_value: f64) -> Option<String> {
     let jsval = crate::value::JSValue::from_bits(path_value.to_bits());
     // #1781: a path <= 5 bytes ("a.ts", "x", ".", "..", "/tmp") is an
     // inline SSO value that `is_string()` (STRING_TAG-only) misses,

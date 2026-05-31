@@ -196,9 +196,10 @@ pub(super) fn try_native_module_methods(
                             // Previously a no-op because `process.env.X = v`
                             // didn't persist; #1344 has since wired writes
                             // through `std::env::set_var`, so we lower to a
-                            // runtime call that actually reads the file. Keep
-                            // omitted / undefined / null as a raw optional
-                            // value so runtime validation can match Node.
+                            // runtime call that actually reads the file.
+                            // Keep the original JS value: the runtime handles
+                            // omitted/undefined/null defaulting plus Buffer
+                            // and file-URL path objects.
                             return Ok(Ok(Expr::NativeMethodCall {
                                 module: "process".to_string(),
                                 class_name: None,

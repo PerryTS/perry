@@ -2672,7 +2672,7 @@ declare module "process" {
   /** stdlib */
   export function listeners(...args: any[]): any;
   /** stdlib */
-  export function loadEnvFile(...args: any[]): any;
+  export function loadEnvFile(path?: any): void;
   /** stdlib */
   export function memoryUsage(...args: any[]): any;
   /** stdlib */

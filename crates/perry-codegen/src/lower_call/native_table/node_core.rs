@@ -434,8 +434,9 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
-    // #2135 / #3045: process.loadEnvFile(path?) accepts nullish default,
-    // strings, Buffer paths, and file URL paths, so pass the raw JS value.
+    // #2135 (Node process parity): process.loadEnvFile(path?) — pass the
+    // full JS value so runtime validation can accept strings, Buffers,
+    // file: URLs, and omitted/undefined/null defaults.
     NativeModSig {
         module: "process",
         has_receiver: false,
