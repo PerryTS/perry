@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1854 entries across 89 modules.
+Total: 1876 entries across 90 modules.
 
 ## Modules
 
@@ -27,6 +27,7 @@ Total: 1854 entries across 89 modules.
 - [`date-fns`](#date-fns)
 - [`dayjs`](#dayjs)
 - [`decimal.js`](#decimal-js)
+- [`dgram`](#dgram)
 - [`dotenv`](#dotenv)
 - [`ethers`](#ethers)
 - [`events`](#events)
@@ -747,6 +748,36 @@ Total: 1854 entries across 89 modules.
 - `toNumber` — instance
 - `toString` — instance
 - `valueOf` — instance
+
+## `dgram`
+
+### Classes
+
+- `Socket`
+
+### Methods
+
+- `Socket` — module
+- `addMembership` — instance *(class: `Socket`)*
+- `address` — instance *(class: `Socket`)*
+- `bind` — instance *(class: `Socket`)*
+- `close` — instance *(class: `Socket`)*
+- `connect` — instance *(class: `Socket`)*
+- `createSocket` — module
+- `disconnect` — instance *(class: `Socket`)*
+- `dropMembership` — instance *(class: `Socket`)*
+- `getRecvBufferSize` — instance *(class: `Socket`)*
+- `getSendBufferSize` — instance *(class: `Socket`)*
+- `ref` — instance *(class: `Socket`)*
+- `send` — instance *(class: `Socket`)*
+- `setBroadcast` — instance *(class: `Socket`)*
+- `setMulticastInterface` — instance *(class: `Socket`)*
+- `setMulticastLoopback` — instance *(class: `Socket`)*
+- `setMulticastTTL` — instance *(class: `Socket`)*
+- `setRecvBufferSize` — instance *(class: `Socket`)*
+- `setSendBufferSize` — instance *(class: `Socket`)*
+- `setTTL` — instance *(class: `Socket`)*
+- `unref` — instance *(class: `Socket`)*
 
 ## `dotenv`
 

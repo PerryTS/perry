@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1854 entries across 89 modules
+// Coverage: 1876 entries across 90 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -923,6 +923,15 @@ declare module "dayjs" {
 }
 
 declare module "decimal.js" {
+}
+
+declare module "dgram" {
+  /** stdlib */
+  export class Socket { [key: string]: any; }
+  /** stdlib */
+  export function Socket(...args: any[]): any;
+  /** stdlib */
+  export function createSocket(...args: any[]): any;
 }
 
 declare module "dotenv" {

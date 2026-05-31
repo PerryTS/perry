@@ -28,6 +28,14 @@ pub use dispatch::*;
 mod body_metadata;
 pub use body_metadata::*;
 
+// Web Fetch constructor validation helpers (#2640 / #2643) — split out to
+// keep this file under the 2,000-line lint gate.
+mod validation;
+use validation::{
+    canonical_reason, is_forbidden_method, is_null_body_status, is_valid_status_text,
+    normalize_method,
+};
+
 // Response handle storage
 lazy_static::lazy_static! {
     static ref FETCH_RESPONSES: Mutex<HashMap<usize, FetchResponse>> = Mutex::new(HashMap::new());
@@ -183,6 +191,12 @@ unsafe fn reject_fetch_type_error(promise: *mut perry_runtime::Promise, msg: &st
 
 unsafe fn throw_fetch_type_error(msg: &str) -> ! {
     perry_runtime::exception::js_throw(f64::from_bits(fetch_type_error_bits(msg)))
+}
+
+unsafe fn throw_fetch_range_error(msg: &str) -> ! {
+    let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = perry_runtime::error::js_rangeerror_new(msg_str);
+    perry_runtime::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
 }
 
 fn tagged_bool(value: bool) -> f64 {
@@ -1186,13 +1200,37 @@ pub unsafe extern "C" fn js_response_new(
     let body_present = body_opt.is_some();
     let body_str = body_opt.unwrap_or_default();
     let body = body_str.into_bytes();
+    // NaN / 0.0 are the codegen "no status field" sentinels. Node defaults
+    // missing status to 200; any explicit value is truncated toward zero
+    // then range-checked against 200..=599 (199.9 → RangeError, 599.9 →
+    // 599). Refs #2640.
     let status_u16 = if status.is_nan() || status == 0.0 {
         200
     } else {
-        status as u16
+        let truncated = status.trunc();
+        if !(200.0..=599.0).contains(&truncated) {
+            throw_fetch_range_error(
+                "init[\"status\"] must be in the range of 200 to 599, inclusive.",
+            );
+        }
+        truncated as u16
     };
-    let status_text = string_from_header(status_text_ptr)
-        .unwrap_or_else(|| canonical_reason(status_u16).to_string());
+    // Node defaults statusText to the empty string (NOT the canonical
+    // reason phrase) and validates the reason-phrase token. Refs #2640.
+    let status_text = match string_from_header(status_text_ptr) {
+        Some(s) => {
+            if !is_valid_status_text(&s) {
+                throw_fetch_type_error("Invalid statusText");
+            }
+            s
+        }
+        None => String::new(),
+    };
+    if body_present && is_null_body_status(status_u16) {
+        throw_fetch_type_error(&format!(
+            "Response constructor: Invalid response status code {status_u16}"
+        ));
+    }
     let headers_id = handle_id(headers_handle);
     let headers = if headers_id != 0 {
         HEADERS_REGISTRY
@@ -1211,23 +1249,6 @@ pub unsafe extern "C" fn js_response_new(
         body,
         body_present,
     ))
-}
-
-fn canonical_reason(status: u16) -> &'static str {
-    match status {
-        200 => "OK",
-        201 => "Created",
-        204 => "No Content",
-        301 => "Moved Permanently",
-        302 => "Found",
-        304 => "Not Modified",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        403 => "Forbidden",
-        404 => "Not Found",
-        500 => "Internal Server Error",
-        _ => "",
-    }
 }
 
 /// response.headers — returns a Headers handle (f64). Lazily allocates a Headers entry
@@ -1680,10 +1701,18 @@ pub unsafe extern "C" fn js_request_new(
     signal: f64,
 ) -> f64 {
     let url = string_from_header(url_ptr).unwrap_or_default();
-    let method = string_from_header(method_ptr)
-        .unwrap_or_else(|| "GET".to_string())
-        .to_ascii_uppercase();
+    let raw_method = string_from_header(method_ptr).unwrap_or_else(|| "GET".to_string());
+    // Forbidden methods are rejected case-insensitively; the error message
+    // preserves the caller's original casing (Node parity). Refs #2643.
+    if is_forbidden_method(&raw_method.to_ascii_uppercase()) {
+        throw_fetch_type_error(&format!("'{raw_method}' HTTP method is unsupported."));
+    }
+    let method = normalize_method(&raw_method);
     let body = string_from_header(body_ptr);
+    // GET/HEAD requests may not carry a body (WHATWG fetch). Refs #2643.
+    if body.is_some() && (method == "GET" || method == "HEAD") {
+        throw_fetch_type_error("Request with GET/HEAD method cannot have body.");
+    }
     let headers_id_in = handle_id(headers_handle);
     let headers = if headers_id_in != 0 {
         HEADERS_REGISTRY
