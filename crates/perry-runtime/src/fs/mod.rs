@@ -495,27 +495,34 @@ pub extern "C" fn js_fs_mkdir_sync(path_value: f64) -> i32 {
     js_fs_mkdir_sync_options(path_value, f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
+pub(crate) unsafe fn js_fs_mkdir_result(path_value: f64, options_value: f64) -> Result<(), f64> {
+    validate::validate_path("path", path_value);
+    let path_str = match decode_path_value(path_value) {
+        Some(s) => s,
+        None => validate::throw_invalid_path_arg("path", path_value),
+    };
+    let recursive = options_bool_field(options_value, b"recursive");
+    let mode = mkdir_mode_from_options(options_value);
+    let result = if recursive {
+        fs::create_dir_all(&path_str)
+    } else {
+        fs::create_dir(&path_str)
+    };
+    match result {
+        Ok(_) => {
+            apply_dir_mode(&path_str, mode);
+            Ok(())
+        }
+        Err(err) => Err(build_fs_error_value(&err, "mkdir", &path_str)),
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_fs_mkdir_sync_options(path_value: f64, options_value: f64) -> i32 {
-    validate::validate_path("path", path_value);
     unsafe {
-        let path_str = match decode_path_value(path_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-        let recursive = options_bool_field(options_value, b"recursive");
-        let mode = mkdir_mode_from_options(options_value);
-        let result = if recursive {
-            fs::create_dir_all(&path_str)
-        } else {
-            fs::create_dir(&path_str)
-        };
-        match result {
-            Ok(_) => {
-                apply_dir_mode(&path_str, mode);
-                1
-            }
-            Err(_) => 0,
+        match js_fs_mkdir_result(path_value, options_value) {
+            Ok(()) => 1,
+            Err(err) => crate::exception::js_throw(err),
         }
     }
 }
@@ -1244,24 +1251,20 @@ pub extern "C" fn js_fs_mkdtemp_sync(prefix_value: f64) -> i64 {
     js_fs_mkdtemp_sync_options(prefix_value, f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
-fn mkdtemp_bytes(prefix_value: f64) -> Vec<u8> {
+pub(crate) fn mkdtemp_bytes_result(prefix_value: f64) -> Result<Vec<u8>, f64> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     unsafe {
         let prefix_str = match decode_path_value(prefix_value) {
             Some(s) => s,
-            None => return Vec::new(),
+            None => validate::throw_invalid_path_arg("prefix", prefix_value),
         };
-        // Try a handful of candidate suffixes until one succeeds. We mix a
-        // nanosecond clock, a per-process pid component, and a monotonic
-        // counter so simultaneous calls don't collide. NOTE: we still
-        // return an empty `Vec` on exhaustion; callers convert that to an
-        // empty string which is observably wrong (the caller will then
-        // misuse it as a path). Node throws ENOSPC/EACCES here instead.
-        // Once Perry's fs surface can propagate typed errors through LLVM
-        // (#793 follow-up), promote this to a real error path.
+        // Try a handful of candidate suffixes until one succeeds. Only real
+        // EEXIST collisions are retried; permission/missing-parent errors are
+        // reported against the attempted candidate path.
         let pid = std::process::id() as u64;
+        let mut last_collision_path = None;
         for attempt in 0..64u64 {
             let n = COUNTER.fetch_add(1, Ordering::Relaxed);
             let ts = std::time::SystemTime::now()
@@ -1270,11 +1273,17 @@ fn mkdtemp_bytes(prefix_value: f64) -> Vec<u8> {
                 .unwrap_or(0);
             let candidate = format!("{}{:x}{:x}{:x}{:x}", prefix_str, ts, pid, n, attempt);
             match fs::create_dir(&candidate) {
-                Ok(_) => return candidate.into_bytes(),
-                Err(_) => continue,
+                Ok(_) => return Ok(candidate.into_bytes()),
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    last_collision_path = Some(candidate);
+                    continue;
+                }
+                Err(err) => return Err(build_fs_error_value(&err, "mkdtemp", &candidate)),
             }
         }
-        Vec::new()
+        let candidate = last_collision_path.unwrap_or_else(|| format!("{}XXXXXX", prefix_str));
+        let err = std::io::Error::new(std::io::ErrorKind::AlreadyExists, "file already exists");
+        Err(build_fs_error_value(&err, "mkdtemp", &candidate))
     }
 }
 
@@ -1282,7 +1291,10 @@ fn mkdtemp_bytes(prefix_value: f64) -> Vec<u8> {
 pub extern "C" fn js_fs_mkdtemp_sync_options(prefix_value: f64, options_value: f64) -> i64 {
     validate::validate_path("prefix", prefix_value);
     validate::validate_string_or_object_options("options", options_value);
-    let bytes = mkdtemp_bytes(prefix_value);
+    let bytes = match mkdtemp_bytes_result(prefix_value) {
+        Ok(bytes) => bytes,
+        Err(err) => crate::exception::js_throw(err),
+    };
     let enc = fs_encoding_option(options_value).unwrap_or_else(|| "utf8".to_string());
     encoded_string_ptr(&bytes, &enc) as i64
 }
@@ -1291,7 +1303,10 @@ pub extern "C" fn js_fs_mkdtemp_sync_options(prefix_value: f64, options_value: f
 pub extern "C" fn js_fs_mkdtemp_dispatch(prefix_value: f64, options_value: f64) -> f64 {
     validate::validate_path("prefix", prefix_value);
     validate::validate_string_or_object_options("options", options_value);
-    let bytes = mkdtemp_bytes(prefix_value);
+    let bytes = match mkdtemp_bytes_result(prefix_value) {
+        Ok(bytes) => bytes,
+        Err(err) => crate::exception::js_throw(err),
+    };
     if fs_encoding_option(options_value).as_deref() == Some("buffer") {
         return buffer_value_from_bytes(&bytes);
     }
@@ -1518,6 +1533,17 @@ pub extern "C" fn js_fs_fchmod_sync(fd_value: f64, mode: f64) -> i32 {
 /// `fs.fchownSync(fd, uid, gid)`.
 #[no_mangle]
 pub extern "C" fn js_fs_fchown_sync(fd_value: f64, uid_value: f64, gid_value: f64) -> i32 {
+    match js_fs_fchown_result(fd_value, uid_value, gid_value) {
+        Ok(()) => 1,
+        Err(err) => crate::exception::js_throw(err),
+    }
+}
+
+pub(crate) fn js_fs_fchown_result(
+    fd_value: f64,
+    uid_value: f64,
+    gid_value: f64,
+) -> Result<(), f64> {
     // #2013 order: validate fd type, uid type+range, gid type+range,
     // THEN bounce on EBADF. Node's `validateInteger(uid)` fires before
     // the syscall, so `fchownSync(1, "", 0)` throws ERR_INVALID_ARG_TYPE
@@ -1527,21 +1553,16 @@ pub extern "C" fn js_fs_fchown_sync(fd_value: f64, uid_value: f64, gid_value: f6
     crate::fs::validate::validate_int32(uid_value, "uid", -1, u32::MAX as i64);
     crate::fs::validate::validate_int32(gid_value, "gid", -1, u32::MAX as i64);
     if !crate::fs::fd_is_registered(fd_value as i32) {
-        crate::fs::validate::throw_ebadf_pub("fchown");
+        return Err(crate::fs::validate::build_ebadf_error_value("fchown"));
     }
-    unsafe {
-        match js_fs_fchown_result(fd_value as i32, uid_value, gid_value) {
-            Ok(()) => 1,
-            Err(err_val) => crate::exception::js_throw(err_val),
-        }
-    }
+    unsafe { fchown_sync_inner_result(fd_value as i32, uid_value, gid_value) }
 }
 
 /// Core fd-based `fchown` op. Surfaces the syscall failure (e.g. `EPERM` for a
 /// non-root chown) as a NaN-boxed Node-shaped fs error with `code`/`syscall:
 /// "fchown"` instead of collapsing to a silent status-0 (#2749). Assumes the
 /// fd has already been validated/registered; a missing fd returns `EBADF`.
-pub(crate) unsafe fn js_fs_fchown_result(
+pub(crate) unsafe fn fchown_sync_inner_result(
     fd: i32,
     uid_value: f64,
     gid_value: f64,
@@ -1577,7 +1598,7 @@ pub(crate) unsafe fn js_fs_fchown_result(
 
 pub(crate) fn fchown_sync_inner(fd: i32, uid_value: f64, gid_value: f64) -> i32 {
     unsafe {
-        match js_fs_fchown_result(fd, uid_value, gid_value) {
+        match fchown_sync_inner_result(fd, uid_value, gid_value) {
             Ok(()) => 1,
             Err(_) => 0,
         }

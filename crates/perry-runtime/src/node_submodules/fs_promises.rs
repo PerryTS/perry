@@ -382,7 +382,13 @@ pub(crate) extern "C" fn thunk_fs_promises_opendir(
     _closure: *const ClosureHeader,
     path: f64,
 ) -> f64 {
-    promise_from_sync_value(|| crate::fs::js_fs_opendir_sync(path))
+    match catch_fs_promises_throw(|| match crate::fs::js_fs_opendir_value_with_path(path) {
+        Ok(dir) => promise_value(dir),
+        Err(err_val) => promise_rejected(err_val),
+    }) {
+        Ok(promise) => promise,
+        Err(err) => promise_rejected(err),
+    }
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_glob(

@@ -2163,6 +2163,13 @@ pub extern "C" fn js_object_get_field_by_name(
                         }
                         return JSValue::undefined();
                     }
+                    b"errno" => {
+                        let msg = crate::error::js_error_get_message(err_ptr);
+                        if let Some(errno) = crate::node_submodules::error_errno_for_message(msg) {
+                            return JSValue::number(errno as f64);
+                        }
+                        return JSValue::undefined();
+                    }
                     b"path" => {
                         let msg = crate::error::js_error_get_message(err_ptr);
                         if let Some(path) = crate::node_submodules::error_path_for_message(msg) {

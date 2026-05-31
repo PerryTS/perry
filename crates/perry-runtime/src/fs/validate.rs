@@ -192,6 +192,10 @@ pub(crate) fn build_ebadf_error_value(syscall: &'static str) -> f64 {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "EBADF");
     crate::node_submodules::register_error_syscall(msg, syscall);
+    #[cfg(unix)]
+    crate::node_submodules::register_error_errno(msg, -libc::EBADF);
+    #[cfg(not(unix))]
+    crate::node_submodules::register_error_errno(msg, -9);
     let err = crate::error::js_error_new_with_message(msg);
     crate::value::js_nanbox_pointer(err as i64)
 }
