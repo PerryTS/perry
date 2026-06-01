@@ -2,6 +2,16 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1075 — fix(runtime): Buffer no longer misidentified as a Date cell in property reads (#4003)
+
+`gunzipSync(c).length` / `.byteLength` returned `undefined` for a bound-local Buffer input (Node: the decompressed byte length), while indexing, `.toString()`, `Buffer.isBuffer`, and `Buffer.byteLength(d)` all worked.
+
+Root cause: `Buffer`s are raw-`alloc`'d **without** a `GcHeader`, but `date::is_date_cell_addr(addr)` read the word at `addr - GC_HEADER_SIZE` and compared it to `GC_TYPE_DATE_CELL` — assuming every pointer has a valid GC header. For some buffer addresses (observed for the *first* `gunzipSync` result of a program) that adjacent word coincidentally held the `DATE_CELL` tag, so `js_object_get_field_by_name` took its Date branch and returned `undefined` for `.length`/`.byteLength`. It was call-ordinal/address-dependent (only the first result tripped it), which made it look like a GC stale-ref.
+
+Fix (`crates/perry-runtime/src/date.rs`): when the header byte matches `GC_TYPE_DATE_CELL`, `is_date_cell_addr` now also confirms the address is **not** a registered buffer (`!is_registered_buffer(addr)`) before reporting a Date cell. A registered buffer is never a `DateCell`. The extra lookup runs only in the rare tag-match case, so the common (non-Date) property-read hot path is unchanged, and this hardens every `is_date_cell_addr` caller (including `is_date_value`).
+
+Validated against `node --experimental-strip-types`: `gunzipSync(c).length`/`.byteLength` → 11 for all calls (was undefined on the first); `Date` reads (`getTime`/`constructor`/`getFullYear`/unknown-prop) unchanged; `perry-runtime` date (21) + buffer (41) unit tests green; buffer/zlib node-suite sweep clean except pre-existing, unrelated gaps (`new globalThis.File()` shape, zlib transform-stream output).
+
 ## v0.5.1074 — node:v8: startupSnapshot registrars throw plain Error + parity fixture (#3141)
 
 `v8.startupSnapshot` (added in #3679) was complete except its `addSerializeCallback` / `addDeserializeCallback` / `setDeserializeMainFunction` registrars threw a `TypeError [ERR_NOT_BUILDING_SNAPSHOT]` outside snapshot-building mode, whereas Node throws a plain **`Error`** (`name === "Error"`) with that code.
