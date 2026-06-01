@@ -299,7 +299,9 @@ pub(crate) fn lower_module_decl(
                             // folds to "object" and `local.member(...)` dispatches
                             // through the submodule namespace — exactly like the
                             // `import * as local` shape.
-                            specifiers.push(ImportSpecifier::Namespace { local: local.clone() });
+                            specifiers.push(ImportSpecifier::Namespace {
+                                local: local.clone(),
+                            });
                             continue;
                         } else {
                             // Default import from JS module — register so calls resolve to

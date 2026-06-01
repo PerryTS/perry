@@ -1093,7 +1093,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::JsonParse(text) => {
             let s_box = lower_expr(ctx, text)?;
             let blk = ctx.block();
-            let s_handle = unbox_to_i64(blk, &s_box);
+            // Materialize the operand to a real heap `*StringHeader`. A bare
+            // `unbox_to_i64` passes an SSO short-string's INLINE bytes as the
+            // pointer, and `js_json_parse` then dereferences them as a
+            // StringHeader → SIGSEGV (e.g. `JSON.parse('e' + 'n')`, or any
+            // short runtime/`.slice`-derived string). `js_get_string_pointer_
+            // unified` returns the heap pointer for heap strings and
+            // materializes SSO / number receivers to the heap. Refs #214.
+            let s_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &s_box)]);
             let result_i64 = blk.call(I64, "js_json_parse", &[(I64, &s_handle)]);
             Ok(blk.bitcast_i64_to_double(&result_i64))
         }
@@ -1124,7 +1131,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let packed = extract_array_of_object_shape(ty, ordered_keys.as_deref());
             let s_box = lower_expr(ctx, text)?;
             let blk = ctx.block();
-            let s_handle = unbox_to_i64(blk, &s_box);
+            // Same SSO-materialization fix as the generic JSON.parse arm above:
+            // a raw unbox would pass SSO inline bytes as a StringHeader pointer.
+            let s_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &s_box)]);
             let result_i64 = match packed {
                 Some((packed_bytes, field_count)) if field_count > 0 => {
                     // Emit a per-call-site rodata constant. The IR

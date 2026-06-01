@@ -515,6 +515,13 @@ pub enum Expr {
         event: Box<Expr>,
         handler: Box<Expr>,
     },
+    // process.stdin.removeListener/off(event, handler) -> stdin (#3962)
+    ProcessStdinRemoveListener {
+        event: Box<Expr>,
+        handler: Box<Expr>,
+    },
+    // process.stdin.pause/resume/unref/ref/destroy() -> stdin (#3962)
+    ProcessStdinLifecycle(ProcessStdinLifecycleMethod),
     // process.stdout.on('resize', handler) -> stdout (#347 Phase 3)
     // Registers a SIGWINCH handler that fires when the terminal is
     // resized. Other events fall through to the generic dispatch.
@@ -2247,6 +2254,15 @@ pub enum Expr {
         paths: Vec<String>,
         arg: Box<Expr>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessStdinLifecycleMethod {
+    Pause,
+    Resume,
+    Unref,
+    Ref,
+    Destroy,
 }
 
 /// Which primitive the `new X(...)` form is wrapping. Used by

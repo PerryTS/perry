@@ -460,6 +460,27 @@ pub(crate) fn is_url_object_shape(url: *mut ObjectHeader) -> bool {
     }
 }
 
+/// #3880: If `value` (a NaN-boxed JSValue) is a WHATWG `URL` instance,
+/// return its `href` string (NaN-boxed); otherwise return `undefined`.
+///
+/// `perry-ext-http` uses this to route a `URL`-*object* first argument of
+/// `http.request` / `http.get` to the string-URL path. Without it, the
+/// overload parser treats the URL object as the options bag and
+/// `parse_options_object` JSON-stringifies it — which throws
+/// `Converting circular structure to JSON` on the URL's
+/// `searchParams` ↔ owner back-reference.
+#[no_mangle]
+pub extern "C" fn js_url_href_if_url(value: f64) -> f64 {
+    // Undefined NaN-box (matches the canonical TAG_UNDEFINED).
+    const UNDEFINED: f64 = f64::from_bits(0x7FFC_0000_0000_0001);
+    match object_from_f64(value) {
+        Some(obj) if is_url_object_shape(obj) => {
+            crate::object::js_object_get_field_f64(obj, URL_HREF)
+        }
+        _ => UNDEFINED,
+    }
+}
+
 /// Issue #650: `url.hash = value` setter. Stores the leading `#` when
 /// the value is non-empty; clears entirely when empty (matches WHATWG).
 #[no_mangle]

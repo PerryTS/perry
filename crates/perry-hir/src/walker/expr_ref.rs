@@ -1190,6 +1190,11 @@ where
             f(event);
             f(handler);
         }
+        Expr::ProcessStdinRemoveListener { event, handler } => {
+            f(event);
+            f(handler);
+        }
+        Expr::ProcessStdinLifecycle(_) => {}
         Expr::ProcessStdoutOn { event, handler } => {
             f(event);
             f(handler);

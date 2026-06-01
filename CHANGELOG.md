@@ -2,6 +2,48 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1069 — timers/promises + stream/promises: abort rejects with AbortError code "ABORT_ERR"
+
+When a `timers/promises` (`setTimeout`/`setImmediate`/`scheduler.wait`/interval) or `stream/promises` (`finished`/`pipeline`) operation was aborted, Perry rejected with the signal's `.reason` — for a default `controller.abort()` that is a DOMException whose `.code` is the numeric `20`, so fixtures saw `code: 20` instead of Node's `"ABORT_ERR"`.
+
+Node always rejects these operations with a fresh internal `AbortError` (`name: "AbortError"`, `message: "The operation was aborted"`, `code: "ABORT_ERR"`) and ignores `signal.reason` entirely — verified against `node --experimental-strip-types` for a bare abort, a custom `abort(reason)`, and an `AbortSignal.timeout()` `TimeoutError` (all reject with `AbortError`/`"ABORT_ERR"`).
+
+Fix (`crates/perry-runtime/src/node_submodules/stream_promises.rs`): `signal_reason` now returns `abort_error_value()` (the string-coded `AbortError`) unconditionally instead of reading `signal.reason`. This is the single error source shared by every `timers/promises` and `stream/promises` abort-rejection path (immediate-abort checks and the deferred `abort` listener), so all of them now match Node.
+
+Validated: `node-suite/timers/promises` `abort-error-shape`, `abort-signal`, `scheduler-wait-abort`, and `set-immediate-signal` now match Node byte-for-byte; `stream/promises` `finished`/`pipeline` abort still report `"ABORT_ERR"`. The 2 remaining `timers`/`stream` promise failures (`timeout-value-and-ref` unsettled-top-level-await warning, `pipeline-with-transform-collect` transform-collect concat) are pre-existing and unrelated to abort errors. `perry-runtime` stream_promises unit tests green.
+
+## v0.5.1068 — timers: drain microtasks between timer callbacks (#3870)
+
+Perry ran the microtask checkpoint only once after a whole batch of expired timers, not after each callback. So when a `setTimeout` callback queued a microtask *and* scheduled another zero-delay timeout, Perry fired the next timer before draining the microtask:
+
+```
+node:  promise|timeout1|micro-in-timeout|timeout2
+perry: promise|timeout1|timeout2|micro-in-timeout   (before)
+```
+
+Fix (`crates/perry-runtime/src/timer.rs`, `js_callback_timer_tick`): drain the microtask queue (`js_promise_run_microtasks`) after *each* timer callback rather than only once after the expired batch in the outer pump. In Node every timer callback is its own macrotask followed by a microtask checkpoint, so a `queueMicrotask`/`Promise.then` scheduled inside a timer callback now runs before the next timer fires.
+
+Validated against `node --experimental-strip-types`: all five `node-suite/timers/ordering` fixtures pass (the previously-failing `nested-order-extra` now matches). A 77-fixture sweep across `timers`/`promises`/`async-hooks` shows no regressions — the pre-existing failures (negative-delay warnings, `AbortError.code` shape, unsettled-top-level-await warnings) fail identically with and without this change (confirmed by a stashed-baseline rebuild) and are orthogonal to microtask ordering. `perry-runtime` timer + microtask unit tests green.
+
+`https.get(new URL(...), options, callback)` (and the `http`/`request` variants) threw `TypeError: Converting circular structure to JSON` before the request could be built. Root cause: `parse_client_args` classified arguments by value type, and a `URL` *instance* — a heap object, not a string — fell into the "first non-string pointer → options bag" branch. `parse_options_object` then JSON-stringified the URL, which throws on its `searchParams` ↔ owner back-reference, and the real options object was dropped.
+
+Fixes:
+- **`crates/perry-runtime/src/url/url_class.rs`** — new `js_url_href_if_url(value) -> f64` FFI: returns a `URL` instance's `href` (NaN-boxed string) via the existing `is_url_object_shape` check, else `undefined`.
+- **`crates/perry-ext-http/src/client_overload.rs`** — `parse_client_args` now routes a `URL`-object argument to the string-URL slot (`out.url = href`) instead of the options slot, so the following options object is parsed normally and the URL is never JSON-stringified.
+- Same file — `method_for_overload` no longer force-returns `GET` for `get()`. `http.get`/`https.get` differ from `request()` only by auto-`end()`ing; Node derives the method from `options.method || 'GET'` for both, so `https.get(url, { method: "POST" }, cb)` now correctly issues a POST.
+
+Validated against `node --experimental-strip-types`: the `node-suite/https/surface/mirror-surface` fixture is byte-identical, and all overload shapes match — `get(string)`, `request(string, cb)`, `request(options-only)`, `get(URL)`, `request(URL, {method})`. `perry-ext-http` + `perry-runtime` url unit tests green.
+
+## v0.5.1066 — node:constants Linux-only constants gated out of the import surface on macOS (#3902)
+
+On macOS, Node's `node:constants` ESM namespace does not export six Linux-only constants (`O_DIRECT`, `O_NOATIME`, `RTLD_DEEPBIND`, `SIGPOLL`, `SIGPWR`, `SIGSTKFLT`), but Perry accepted all six as named imports and ran the program with each binding set to `undefined` — a false-positive surface: code that fails Node's ESM instantiation passed `perry check` and ran under Perry.
+
+Fix (`crates/perry-api-manifest/src/lib.rs`): a new `is_platform_unavailable_named_export` helper is consulted by `module_has_public_named_export` (the import gate behind the `U006` check). On a non-Linux host the six names are no longer valid named exports, so `perry check`/compile now rejects `import { O_DIRECT } from "node:constants"` with `error[U006] ... does not provide an export named 'O_DIRECT'`, matching Node. Valid constants (`O_RDONLY`, `O_DIRECTORY`, …) are unaffected.
+
+The entries deliberately stay in the static `API_MANIFEST` on every platform, so `--print-api-manifest` and the generated docs (`docs/api/perry.d.ts`, `docs/src/api/reference.md`) remain byte-identical regardless of the host OS the generator runs on — the existing `deprecated_constants_alias_has_manifest_entries` invariant (CI runs `api-docs-drift` on Linux). The gate touches only the import-validation path, not the docs/emit path. New test `platform_unavailable_constants_gate_the_import_surface` covers both halves.
+
+Also closed as already-fixed-on-main (stale mass-filed reports against an old baseline): **#3897** (node:buffer `Buffer.*` static methods misclassified as top-level exports — now `internal_method`, excluded) and **#3898** (node:perf_hooks `performance.*` singleton methods misclassified — now excluded). The current manifest's buffer/perf_hooks module exports already match Node.
+
 ## v0.5.1065 — node-builtin submodule default imports resolve to the module namespace (#3906, partial)
 
 Default-importing a non-native node-builtin submodule (e.g. `import tp from "node:timers/promises"`, `import sp from "node:stream/promises"`) previously lowered the binding down the generic JS-module-default path, producing a primitive (`typeof tp === "boolean"`) instead of an object — so `tp.setTimeout(...)` / `sp.finished(...)` were unreachable. In CommonJS terms the default export *is* `module.exports`, which for these modules is the module namespace itself.
