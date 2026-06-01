@@ -1437,6 +1437,10 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
             // #2900: a raw-JSON wrapper must emit its stored text verbatim, not
             // be templated as a `{"rawJSON":...}` object.
             && !(first_ptr as usize >= 0x1000 && super::ptr_is_raw_json_wrapper(first_ptr))
+            // #3857: a boxed primitive wrapper has no own enumerable keys, so an
+            // object-shape template would render it (and the whole array) as
+            // `{}`. Fall through to per-element handling, which unwraps it.
+            && crate::builtins::boxed_primitive_json_value(*elements).is_none()
         {
             build_shape_prefix_template(first_bits)
         } else {
@@ -1510,6 +1514,12 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
             } else {
                 elem_bits as *const u8
             };
+            // #3857: a boxed primitive wrapper element serializes as its
+            // underlying primitive, not the empty wrapper object.
+            if let Some(prim) = crate::builtins::boxed_primitive_json_value(elem) {
+                stringify_value_depth(prim, TYPE_UNKNOWN, buf, depth);
+                continue;
+            }
             // #2089: a Date element → its toJSON() ISO string (or null),
             // before any object/array deref of the small cell.
             if crate::date::is_date_cell_addr(elem_ptr as usize) {

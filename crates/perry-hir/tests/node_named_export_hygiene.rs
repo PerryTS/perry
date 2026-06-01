@@ -105,9 +105,45 @@ fn invalid_node_named_imports_are_rejected() {
 }
 
 #[test]
+fn unknown_node_builtin_modules_are_rejected() {
+    // #3925: a `node:`-prefixed specifier that isn't a real Node built-in must
+    // be rejected (Node throws ERR_UNKNOWN_BUILTIN_MODULE). `punycode.ucs2` is
+    // the representative phantom submodule — `ucs2` is a *property* of
+    // `node:punycode`, not its own module — but it stays a Perry-internal
+    // dispatch namespace, so this guards the import path specifically.
+    let cases = [
+        r#"import { decode, encode } from "node:punycode.ucs2"; console.log(decode, encode);"#,
+        r#"import { foo } from "node:bogusmod"; console.log(foo);"#,
+        r#"import "node:punycode.ucs2";"#,
+    ];
+
+    let mut failures = Vec::new();
+    for src in cases {
+        match lower_result(src) {
+            Ok(_) => failures.push(format!("unknown builtin compiled: {src}")),
+            Err(err) => {
+                if !err.contains("No such built-in module") {
+                    failures.push(format!("unexpected error for {src}: {err}"));
+                }
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "{} unknown-builtin case(s) failed:\n  {}",
+        failures.len(),
+        failures.join("\n  ")
+    );
+}
+
+#[test]
 fn valid_node_named_imports_keep_compiling() {
     let cases = [
         r#"import { Buffer, atob, isUtf8 } from "node:buffer"; console.log(Buffer, atob, isUtf8);"#,
+        // #3925: real slash submodules must keep resolving past the new guard.
+        r#"import { isMap, isDataView } from "node:util/types"; console.log(isMap, isDataView);"#,
+        r#"import { readFile } from "node:fs/promises"; console.log(readFile);"#,
         r#"import { performance, PerformanceObserver, timerify } from "node:perf_hooks"; console.log(performance, PerformanceObserver, timerify);"#,
         r#"import { StringDecoder } from "node:string_decoder"; console.log(StringDecoder);"#,
         r#"import { isatty, ReadStream, WriteStream } from "node:tty"; console.log(isatty, ReadStream, WriteStream);"#,

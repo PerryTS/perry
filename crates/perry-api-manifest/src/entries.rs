@@ -151,6 +151,13 @@ pub const NODE_SUBMODULES: &[&str] = &[
     "stream/consumers",
     "stream/web",
     "readline/promises",
+    // #3925: `punycode.ucs2` is a Perry-internal dispatch namespace backing
+    // `punycode.ucs2.decode/encode` member access — NOT a real Node builtin.
+    // Node has no `node:punycode.ucs2` module (`ucs2` is a property of
+    // `punycode`), so the import gate in `perry-hir` rejects the specifier even
+    // though it stays registered here for member dispatch + manifest
+    // consistency.
+    "punycode.ucs2",
     "sys",
     "test",
     "test/reporters",

@@ -58,18 +58,18 @@ pub(crate) fn lower_module_decl(
             // Check if this is a native module import
             let is_native = is_native_module(&source);
 
-            // #3925: `node:`-prefixed specifiers must name a real Node built-in.
-            // Node throws `ERR_UNKNOWN_BUILTIN_MODULE` for anything else (e.g.
-            // `node:punycode.ucs2`, where `ucs2` is a *property* of
-            // `node:punycode`, not a module). Reject only specifiers that are
-            // neither a Node built-in nor something Perry already resolves, so
-            // implemented submodules (`node:fs/promises`, `node:util/types`, …)
-            // keep working.
+            // #3925: a `node:`-prefixed specifier must name a real Node
+            // built-in module. Node throws `ERR_UNKNOWN_BUILTIN_MODULE` for
+            // anything else — e.g. `node:punycode.ucs2`, where `ucs2` is a
+            // *property* of `node:punycode`, not a module. (`punycode.ucs2`
+            // stays in `NODE_SUBMODULES` as a Perry-internal dispatch namespace,
+            // so the check keys off `NODE_BUILTIN_MODULES` — the real Node
+            // surface — not `is_known_module`.) `is_native` keeps any
+            // node:-prefixed NATIVE_MODULES entry resolvable.
             if raw_source.starts_with("node:")
                 && !import_decl.type_only
                 && !is_node_builtin_module(&source)
                 && !is_native
-                && !perry_api_manifest::is_known_module(&source)
             {
                 crate::lower_bail!(
                     import_decl.span,
