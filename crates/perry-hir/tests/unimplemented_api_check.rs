@@ -166,17 +166,31 @@ fn node_builtin_real_named_exports_still_compile() {
     );
 }
 
-/// Modules that have at least one manifest entry are strict — any
-/// unknown property errors. `crypto.foobar` is not implemented.
+/// #3896: a bare value read of an unknown member on a Node-core module
+/// namespace is an ordinary property miss → undefined (matching Node), but the
+/// *call* form must still reject as unimplemented.
 #[test]
 fn crypto_unknown_method_is_rejected() {
-    let result = lower_result(
+    let read = lower_result(
         r#"
         import * as crypto from "crypto";
         const x = crypto.foobar;
     "#,
     );
-    assert!(result.is_err(), "crypto.foobar should error");
+    assert!(
+        read.is_ok(),
+        "crypto.foobar value read should resolve to undefined (#3896), got {read:?}"
+    );
+    let call = lower_result(
+        r#"
+        import * as crypto from "crypto";
+        crypto.foobar();
+    "#,
+    );
+    assert!(
+        call.is_err(),
+        "crypto.foobar() call should still error as unimplemented"
+    );
 }
 
 /// `os.platform` is implemented; `os.totalmem` too. Both must continue
@@ -289,14 +303,27 @@ fn every_supported_module_rejects_bogus_member() {
             const x = m.__perry_known_bogus_member_513__;
         "#
         );
+        let is_core = perry_api_manifest::is_node_core_module(module);
         match lower_result(&src) {
             Ok(_) => {
-                failures.push(format!(
-                    "{module}: bogus member access did not error (strict mode not engaged)"
-                ));
+                // #3896: a bogus member *value read* on a Node-core module
+                // namespace is an ordinary property miss → undefined (matching
+                // Node). The call form `m.bogus()` still rejects — see
+                // `every_supported_module_rejects_bogus_call`. Only non-core
+                // (npm) modules keep the strict read-gate.
+                if !is_core {
+                    failures.push(format!(
+                        "{module}: bogus member access did not error (strict mode not engaged)"
+                    ));
+                }
             }
             Err(e) => {
-                if !(e.contains("not implemented") && e.contains("#463")) {
+                if is_core {
+                    failures.push(format!(
+                        "{module}: Node-core bogus member read should now resolve to undefined \
+                         (#3896), not error — got {e}"
+                    ));
+                } else if !(e.contains("not implemented") && e.contains("#463")) {
                     failures.push(format!(
                         "{module}: errored but not via the R005/#463 path — got {e}"
                     ));

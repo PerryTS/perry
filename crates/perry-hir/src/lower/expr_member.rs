@@ -78,6 +78,12 @@ pub(crate) fn lower_process_named_property(prop: &str) -> Option<Expr> {
 }
 
 fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Result<Expr> {
+    // #3896: capture-and-clear the call-callee marker so it applies only to THIS
+    // member (the immediate callee), not to nested member-object reads lowered
+    // below. The #463 read-gate below uses `member_is_call_callee` to keep
+    // rejecting `ns.foo()` while relaxing a bare `ns.foo` value read.
+    let member_is_call_callee = ctx.lowering_call_callee;
+    ctx.lowering_call_callee = false;
     // Issue #444: `import.meta.<prop>` folds directly to a literal at
     // lowering time. Routing through the bare-`import.meta` Object
     // synthesis hits a long-standing module-level NaN-boxing bug where
@@ -1826,6 +1832,17 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             // #2309: defer when tree-shaking (sink armed for this node_modules
             // module); re-raised only if the module survives pruning.
             if !crate::try_defer_refusal(msg.clone(), member.span.lo.0) {
+                // #3896: a bare *value read* of an absent member on a Node
+                // builtin module namespace/default object is an ordinary
+                // property miss → `undefined` (e.g. `dns/promises.ADDRCONFIG`,
+                // which Node also doesn't export but reads as undefined). Calls
+                // (`ns.foo()`) keep rejecting — `lower_call` set the callee
+                // marker, so `member_is_call_callee` is true there. Only Node
+                // core modules relax; unenumerated npm packages keep the strict
+                // gate (and the tree-shaking defer above).
+                if !member_is_call_callee && perry_api_manifest::is_node_core_module(module) {
+                    return Ok(Expr::Undefined);
+                }
                 crate::lower_bail!(member.span, "{}", msg);
             }
         }
