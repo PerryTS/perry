@@ -2,6 +2,16 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1083 — fix(process.getBuiltinModule): punycode methods dispatch (decode/encode/toASCII/toUnicode)
+
+`process.getBuiltinModule("punycode")` returned a module whose `decode`/`encode`/`toASCII`/`toUnicode` were callable but returned `undefined` — so `punycode.decode("maana-pta")` gave `undefined` instead of `"mañana"`. (Direct `import punycode from "node:punycode"` already worked.)
+
+Root cause: `getBuiltinModule` returns the CJS-default namespace (`punycode.default`). `dispatch_native_module_method` aliases `.default` namespaces back to their base module before matching (`os.default`→`os`, `util.default`→`util`, …) so the base method arms apply — but `punycode.default` was missing from that alias list, so calls dispatched as `("punycode.default", "decode")`, which has no arm, and fell through to `undefined`.
+
+Fix (`crates/perry-runtime/src/object/native_module_dispatch.rs`): add `"punycode.default" => "punycode"` to the alias map. The existing `("punycode", …)` arms (and `("punycode.ucs2", …)`) then handle the calls.
+
+Validated against `node --experimental-strip-types`: `getBuiltinModule("punycode").decode/encode/toASCII/toUnicode` match Node; `node-suite/punycode` passes 8/8 (was failing `decode-errors` and `to-unicode-prefix-case`); other `.default` modules (path/util/os) unaffected.
+
 ## v0.5.1082 — fix(String): charAt/at/codePointAt/charCodeAt ignore extra args instead of compile-failing (#3987, partial)
 
 `"hello".charAt(1, 2, 3, 4)` (and `.at`, `.codePointAt`, `.charCodeAt` with >1 arg) failed to **compile** — codegen `bail!`ed with `String.charAt expects at most 1 arg, got 4` even though `perry check` passed. JavaScript ignores extra arguments to these methods.

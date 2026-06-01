@@ -249,6 +249,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
         "querystring.default" => "querystring",
         "url.default" => "url",
         "util.default" => "util",
+        // #3987-adjacent: `process.getBuiltinModule("punycode")` returns the
+        // CJS-default namespace (`punycode.default`); without this alias its
+        // method calls dispatched as `("punycode.default", "decode")` — which
+        // has no arm — and returned `undefined`. The base `("punycode", …)`
+        // arms below already implement decode/encode/toASCII/toUnicode.
+        "punycode.default" => "punycode",
         _ => module_name,
     };
     // Helper: get arg N as f64
