@@ -12,6 +12,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicI32, Ordering};
 
 use crate::closure::ClosureHeader;
 use crate::string::{js_string_from_bytes, StringHeader};
@@ -45,21 +46,28 @@ pub(crate) const CLASS_ID_FS_READ_STREAM: u32 = 0xFFFF_0088;
 pub(crate) const CLASS_ID_FS_WRITE_STREAM: u32 = 0xFFFF_0089;
 pub(crate) const CLASS_ID_FS_STATS_EXPORT: u32 = 0xFFFF_008A;
 pub(crate) const CLASS_ID_FS_UTF8_STREAM: u32 = 0xFFFF_008B;
+pub(crate) const CLASS_ID_FS_FILEHANDLE: u32 = 0xFFFF_008C;
 
 thread_local! {
     static FD_REGISTRY: RefCell<StdHashMap<i32, fs::File>> = RefCell::new(StdHashMap::new());
     static FD_PATHS: RefCell<StdHashMap<i32, String>> = RefCell::new(StdHashMap::new());
     static FD_APPEND_MODE: RefCell<StdHashMap<i32, bool>> = RefCell::new(StdHashMap::new());
     static FILEHANDLE_OBJECT_FDS: RefCell<StdHashMap<usize, i32>> = RefCell::new(StdHashMap::new());
-    static NEXT_FD: RefCell<i32> = const { RefCell::new(100) };
     static DIR_REGISTRY: RefCell<StdHashMap<usize, DirState>> = RefCell::new(StdHashMap::new());
     static NEXT_DIR_ID: RefCell<usize> = const { RefCell::new(1) };
 }
 
+static NEXT_FD: AtomicI32 = AtomicI32::new(100);
+
+pub(crate) fn allocate_synthetic_fd() -> i32 {
+    NEXT_FD.fetch_add(1, Ordering::Relaxed)
+}
+
 /// True if `fd` is a Perry-tracked open file descriptor (one returned by
 /// `openSync`/`open` and not yet closed). Perry uses a synthetic fd registry
-/// — `NEXT_FD` starts at 100 — so a raw OS-level check (e.g. `fcntl`) is
-/// meaningless here; membership in `FD_REGISTRY` is the source of truth.
+/// — ids start at 100 and are process-unique — so a raw OS-level check (e.g.
+/// `fcntl`) is meaningless here; membership in the current thread's
+/// `FD_REGISTRY` is the source of truth.
 /// Used by `validate::validate_path_or_fd` to surface `EBADF` for an unknown
 /// numeric fd (#2013).
 pub(crate) fn fd_is_registered(fd: i32) -> bool {
@@ -128,6 +136,10 @@ pub(crate) fn is_fs_stream_instance_value(value: f64, constructor_name: &str) ->
         "Utf8Stream" => object_class_id(value) == Some(CLASS_ID_FS_UTF8_STREAM),
         _ => false,
     }
+}
+
+pub(crate) fn is_fs_filehandle_value(value: f64) -> bool {
+    object_class_id(value) == Some(CLASS_ID_FS_FILEHANDLE)
 }
 
 /// Extract a string pointer from a NaN-boxed f64 value

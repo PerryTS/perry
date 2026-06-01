@@ -151,6 +151,12 @@ pub const NODE_SUBMODULES: &[&str] = &[
     "stream/consumers",
     "stream/web",
     "readline/promises",
+    // #3925: `punycode.ucs2` is a Perry-internal dispatch namespace backing
+    // `punycode.ucs2.decode/encode` member access — NOT a real Node builtin.
+    // Node has no `node:punycode.ucs2` module (`ucs2` is a property of
+    // `punycode`), so the import gate in `perry-hir` rejects the specifier even
+    // though it stays registered here for member dispatch + manifest
+    // consistency.
     "punycode.ucs2",
     "sys",
     "test",
@@ -3710,7 +3716,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("dns", "LOADIPHLPAPI"),
     property("dns", "ADDRGETNETWORKPARAMS"),
     property("dns", "CANCELLED"),
+    property("dns", "default"),
     property("dns", "promises"),
+    property("dns/promises", "default"),
     property("dns/promises", "NODATA"),
     property("dns/promises", "FORMERR"),
     property("dns/promises", "SERVFAIL"),
@@ -3905,6 +3913,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("child_process", "spawn", false, None),
     method("child_process", "spawnSync", false, None),
     method("child_process", "fork", false, None),
+    property("child_process", "default"),
     // #1856: `ChildProcess` is the streaming-subprocess constructor; reading
     // it as a value yields `[Function: ChildProcess]`. `Stream` is not a real
     // `child_process` export (Node returns `undefined`) — registered so the

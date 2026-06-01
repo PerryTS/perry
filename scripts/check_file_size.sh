@@ -127,6 +127,10 @@ crates/perry-codegen/src/lower_call/native_table/node_core.rs
 # namespace-alias exposure work. Split tracked under #1435 with the other
 # runtime file-size cleanups.
 crates/perry-runtime/src/fs/dir_glob_watch.rs
+# node:fs module root — crossed the gate after the final fs parity
+# surface reconciliation (#3969) bumped its dispatch tower by a few lines.
+# Splitting tracked under #1435 with the other runtime file-size cleanups.
+crates/perry-runtime/src/fs/mod.rs
 # stdlib native dispatch table; current main crossed the threshold after
 # namespace-alias exposure work. Split tracked under #1435.
 crates/perry-stdlib/src/common/dispatch.rs
@@ -148,6 +152,11 @@ crates/perry-codegen/tests/native_proof_regressions.rs
 # `process_allowed_node_flags_literal`. Splitting the per-namespace literal
 # builders into a sibling module is tracked under #1435.
 crates/perry-hir/src/lower/expr_member.rs
+# Expression lowering entry point — crossed the 2000-line gate when the
+# CJS-default-import allow-list grew to cover all node-core namespaces with
+# `default` namespace shims (#3903). Splitting the per-namespace dispatch
+# helpers into a sibling module is tracked under #1435.
+crates/perry-hir/src/lower/lower_expr.rs
 # node:process surface (env/argv/hrtime/cpuUsage/resourceUsage + EventEmitter
 # wiring + warning/deprecation emit). Crossed the limit at 2047 LOC after the
 # argument-validation batch landed on main without a split (#3493 setuid/setgid/

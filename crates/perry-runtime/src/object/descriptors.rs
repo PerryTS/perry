@@ -220,10 +220,13 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                                     super::native_module::fs_namespace_descriptor_getter_value(
                                         key_name,
                                     );
-                                let set =
+                                let set = if key_name == "Utf8Stream" {
+                                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                                } else {
                                     super::native_module::fs_namespace_descriptor_setter_value(
                                         key_name,
-                                    );
+                                    )
+                                };
                                 return build_accessor_descriptor(get, set, true, true);
                             }
                             "promises" => {

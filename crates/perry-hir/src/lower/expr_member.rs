@@ -48,6 +48,35 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
     result
 }
 
+/// #3946: lower a value-read of a `node:process` core property imported by
+/// name (`import { pid, arch } from "node:process"`) or read off a namespace
+/// local. Mirrors the dedicated `process.<prop>` variants used by the global
+/// member-access path so named/namespace forms agree with `process.<prop>`
+/// instead of resolving to `undefined`. Methods (`cwd`, `exit`, …) return
+/// `None` so the caller keeps lowering them to a callable native-module ref.
+pub(crate) fn lower_process_named_property(prop: &str) -> Option<Expr> {
+    Some(match prop {
+        "argv" => Expr::ProcessArgv,
+        "platform" => Expr::OsPlatform,
+        "arch" => Expr::OsArch,
+        "pid" => Expr::ProcessPid,
+        "ppid" => Expr::ProcessPpid,
+        "version" => Expr::ProcessVersion,
+        "versions" => Expr::ProcessVersions,
+        "env" => Expr::ProcessEnv,
+        "stdin" => Expr::ProcessStdin,
+        "stdout" => Expr::ProcessStdout,
+        "stderr" => Expr::ProcessStderr,
+        "execArgv" | "moduleLoadList" => Expr::Array(Vec::new()),
+        "title" => Expr::ProcessTitle,
+        "argv0" | "execPath" => Expr::IndexGet {
+            object: Box::new(Expr::ProcessArgv),
+            index: Box::new(Expr::Number(0.0)),
+        },
+        _ => return None,
+    })
+}
+
 fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Result<Expr> {
     // Issue #444: `import.meta.<prop>` folds directly to a literal at
     // lowering time. Routing through the bare-`import.meta` Object
@@ -137,7 +166,18 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
 
     // Check if this is process.* property access
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
-        if obj_ident.sym.as_ref() == "process" {
+        // #3946: the global `process`, and also a namespace/default import
+        // local (`import * as p from "node:process"; p.pid` /
+        // `import p from "node:process"; p.pid`) both route through the same
+        // dedicated process-property lowering — otherwise the namespace form
+        // fell through to a generic native-module PropertyGet that resolved
+        // `pid`/`arch`/`platform`/… to `undefined`.
+        let is_process_obj = obj_ident.sym.as_ref() == "process"
+            || matches!(
+                ctx.lookup_native_module(obj_ident.sym.as_ref()),
+                Some(("process", None))
+            );
+        if is_process_obj {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 match prop_ident.sym.as_ref() {
                     "argv" => return Ok(Expr::ProcessArgv),
@@ -963,6 +1003,24 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // below handle the user-declared subclass field.
                 } else if matches!(module_name.as_str(), "util" | "sys")
                     && matches!(class_name.as_str(), "MIMEType" | "MIMEParams")
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "worker_threads"
+                    && matches!(class_name.as_str(), "MessagePort" | "BroadcastChannel")
+                    && matches!(
+                        property_name.as_str(),
+                        "postMessage"
+                            | "close"
+                            | "ref"
+                            | "unref"
+                            | "hasRef"
+                            | "addEventListener"
+                            | "removeEventListener"
+                    )
                 {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {

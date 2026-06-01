@@ -296,7 +296,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 } else {
                     ctx.lookup_native_module(obj_name)
                         .and_then(|(module_name, method)| {
-                            if method.is_none() && matches!(module_name, "dns" | "dns/promises") {
+                            if matches!(module_name, "dns" | "dns/promises")
+                                && (method.is_none() || method.as_deref() == Some("default"))
+                            {
                                 Some(module_name.to_string())
                             } else {
                                 None

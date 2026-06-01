@@ -525,7 +525,6 @@ mod tests {
             ("node:module", "wrap"),
             ("node:module", "wrapper"),
             ("node:url", "createObjectURL"),
-            ("node:worker_threads", "getWorkerData"),
             ("node:https", "ClientRequest"),
             ("node:http2", "Http2SecureServer"),
             ("node:child_process", "Stream"),
@@ -928,7 +927,6 @@ mod tests {
                 &["clearLine", "clearScreenDown", "cursorTo", "moveCursor"][..],
             ),
             ("url", &["createObjectURL", "revokeObjectURL"][..]),
-            ("worker_threads", &["getWorkerData"][..]),
             (
                 "https",
                 &["ClientRequest", "IncomingMessage", "ServerResponse"][..],

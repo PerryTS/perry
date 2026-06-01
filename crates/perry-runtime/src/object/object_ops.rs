@@ -559,6 +559,16 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             }
         }
 
+        if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+            let Some(key_name) = super::has_own_helpers::str_from_string_header(key_str) else {
+                return f64::from_bits(TAG_FALSE);
+            };
+            let present = read_native_module_name(obj)
+                .as_deref()
+                .is_some_and(|module_name| native_module_has_enumerable_key(module_name, key_name));
+            return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+        }
+
         if own_key_present(obj, key_str) {
             f64::from_bits(TAG_TRUE)
         } else {

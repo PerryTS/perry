@@ -110,8 +110,34 @@ unsafe fn receiver_obj_type(arr: *const ArrayHeader) -> u8 {
     (*gc_header).obj_type
 }
 
+unsafe fn fs_dir_entries_iter_obj(arr: *const ArrayHeader, kind: i32) -> Option<i64> {
+    if kind != KIND_ENTRIES || receiver_obj_type(arr) != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+    let obj = arr as *const crate::object::ObjectHeader;
+    if (*obj).class_id != crate::fs::CLASS_ID_FS_DIR {
+        return None;
+    }
+    let key = crate::string::js_string_from_bytes(b"entries".as_ptr(), b"entries".len() as u32);
+    let method = crate::object::js_object_get_field_by_name(obj, key);
+    if method.is_undefined() {
+        return None;
+    }
+    let method_f64 = f64::from_bits(method.bits());
+    let method_ptr = crate::value::js_nanbox_get_pointer(method_f64);
+    if method_ptr == 0 || !crate::closure::is_closure_ptr(method_ptr as usize) {
+        return None;
+    }
+    let result = crate::closure::js_closure_call0(method_ptr as *const _);
+    let result_ptr = crate::value::js_nanbox_get_pointer(result);
+    (result_ptr != 0).then_some(result_ptr)
+}
+
 unsafe fn array_iter_obj_raw(arr: *const ArrayHeader, kind: i32) -> i64 {
     let cleaned = clean_arr_ptr(arr);
+    if let Some(iter) = fs_dir_entries_iter_obj(cleaned, kind) {
+        return iter;
+    }
     // #2384's iterator OBJECT is Array-scoped. A Map or Set reaches the codegen
     // `.entries()`/`.keys()`/`.values()` catch-all when its static type is lost
     // (`any`-typed Map/Set — effect's `FiberRefs.diff`, #321). Those keep the

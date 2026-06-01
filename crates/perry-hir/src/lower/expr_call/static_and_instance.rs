@@ -114,7 +114,19 @@ pub(super) fn try_static_method_and_instance(
                     );
                     let is_util_mime_instance = matches!(module_name.as_str(), "util" | "sys")
                         && matches!(class_name.as_str(), "MIMEType" | "MIMEParams");
-                    if is_util_mime_instance {
+                    let is_worker_messaging_instance = module_name == "worker_threads"
+                        && matches!(class_name.as_str(), "BroadcastChannel" | "MessagePort")
+                        && matches!(
+                            method_name.as_str(),
+                            "postMessage"
+                                | "close"
+                                | "ref"
+                                | "unref"
+                                | "hasRef"
+                                | "addEventListener"
+                                | "removeEventListener"
+                        );
+                    if is_util_mime_instance || is_worker_messaging_instance {
                         // MIMEType/MIMEParams methods are ordinary object
                         // prototype methods registered in the runtime class
                         // vtable; let the generic property-call path bind

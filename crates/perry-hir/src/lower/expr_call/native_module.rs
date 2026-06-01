@@ -1291,6 +1291,9 @@ pub(super) fn try_native_module_methods(
                     // This is a call on a native module (e.g., mysql.createConnection)
                     if let ast::MemberProp::Ident(method_ident) = &member.prop {
                         let method_name = method_ident.sym.to_string();
+                        if module_name == "worker_threads" && method_name == "workerData" {
+                            return Ok(Err(args));
+                        }
                         // Unimplemented-API gate (#463 / #525) for the 2-deep
                         // `mod.method()` call form. Without this, perry/* and
                         // other native-module call sites short-circuited past

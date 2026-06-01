@@ -215,7 +215,12 @@ pub(crate) fn generate_param_destructuring_stmts(
 ) -> Result<Vec<Stmt>> {
     match pat {
         ast::Pat::Array(_) | ast::Pat::Object(_) => {
-            crate::destructuring::lower_pattern_binding(ctx, pat, Expr::LocalGet(param_id), false)
+            // Function parameters are mutable bindings (like `let`), so the
+            // destructured locals must be mutable too — JS lets you reassign a
+            // destructured param (`([a, b]) => { b -= 1 }`). Passing `false`
+            // here marked them `const` and made any such reassignment throw
+            // "Assignment to constant variable" (hit by Hono's RegExpRouter).
+            crate::destructuring::lower_pattern_binding(ctx, pat, Expr::LocalGet(param_id), true)
         }
         _ => Ok(Vec::new()),
     }

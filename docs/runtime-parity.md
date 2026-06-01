@@ -2,7 +2,7 @@
 
 A leaf-level inventory of the public API surface of Node.js and Bun. Every function, class, method, property, event, and constant is listed as a separate row so it can be used as a gap-analysis baseline against any TypeScript runtime.
 
-This document is **not Perry-specific** — it does not say which APIs Perry implements. It says which APIs Node and Bun ship, so a reader can compare against Perry (or any other implementation) externally.
+This document is **not Perry-specific** — it does not say which APIs Perry implements. It says which APIs Node and Bun ship, so a reader can compare against Perry (or any other implementation) externally. Perry-specific implementation status is reconciled in `docs/runtime-parity-gaps.md`.
 
 ## Versions referenced
 
@@ -158,6 +158,13 @@ Bun column reflects [bun.sh/docs/runtime/nodejs-apis](https://bun.sh/docs/runtim
 | `fs.writeSync(fd, buffer[, options])` | ✓ | ✓ |  |
 | `fs.writeSync(fd, string[, position[, encoding]])` | ✓ | ✓ |  |
 | `fs.writevSync(fd, buffers[, position])` | ✓ | ✓ |  |
+
+#### Exported Helpers And Aliases
+| API | Node.js | Bun | Notes |
+|-----|---------|-----|-------|
+| `fs.FileReadStream` | ✓ | ✓ | Alias of `fs.ReadStream` |
+| `fs.FileWriteStream` | ✓ | ✓ | Alias of `fs.WriteStream` |
+| `fs._toUnixTimestamp(value)` | ✓ | ⚠ | Exported helper; function name is `toUnixTimestamp` |
 
 #### Classes
 | Class / Method / Property | Node.js | Bun | Notes |

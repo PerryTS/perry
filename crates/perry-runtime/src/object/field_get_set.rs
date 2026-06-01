@@ -1189,6 +1189,25 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         return nanbox_false;
     }
 
+    if unsafe { (*obj_ptr).class_id == NATIVE_MODULE_CLASS_ID } {
+        if !key_val.is_any_string() {
+            return nanbox_false;
+        }
+        let key_str =
+            crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+        if key_str.is_null() {
+            return nanbox_false;
+        }
+        let key_name = match unsafe { super::has_own_helpers::str_from_string_header(key_str) } {
+            Some(name) => name,
+            None => return nanbox_false,
+        };
+        let present = unsafe { read_native_module_name(obj_ptr) }
+            .as_deref()
+            .is_some_and(|module_name| native_module_has_enumerable_key(module_name, key_name));
+        return if present { nanbox_true } else { nanbox_false };
+    }
+
     // Issue #323: array fast path. `n in arr` with a numeric key was always
     // returning false because the receiver was treated as ObjectHeader and
     // the key-is-string guard below rejected the numeric key. Detect an
