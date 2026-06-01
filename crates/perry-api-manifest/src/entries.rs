@@ -3117,6 +3117,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("test", "beforeEach", false, None),
     method("test", "afterEach", false, None),
     method("test", "run", false, None),
+    // #3719: Node's current `node:test` named exports — `expectFailure`
+    // (function) and `assert` (assertion namespace object with `register`).
+    method("test", "expectFailure", false, None),
+    property("test", "assert"),
     property("test", "mock"),
     method("test", "fn", false, Some("mock")),
     method("test", "method", false, Some("mock")),

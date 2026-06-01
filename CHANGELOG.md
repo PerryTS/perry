@@ -2,6 +2,16 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1073 — node:test: add `assert` and `expectFailure` named exports (#3719)
+
+Perry's `node:test` manifest claimed the registration helpers, `mock`, and `snapshot` but not Node's current `assert` (assertion-namespace object) or `expectFailure` (function) named exports, so `import { assert, expectFailure } from "node:test"` was rejected before codegen and the module-shape coverage could drift.
+
+- **`crates/perry-api-manifest/src/entries.rs`** — `method("test", "expectFailure")` + `property("test", "assert")`.
+- **`crates/perry-runtime/src/node_test.rs`** — `expectFailure` routes through the same submodule-function path as the other helpers (`typeof === "function"`); `assert` returns a `{ register }` object matching Node's shape (`assert.register` is a length-2 function stub).
+- **`test-parity/node-suite/test/imports/assert-expectfailure-shape.ts`** — new fixture; byte-identical to `node --experimental-strip-types` (`expectFailure`/`assert.register` → function, `assert` → object, `Object.keys(assert)` → `register`).
+
+This is the export-shape/manifest tail of #3719; deeper test-runner behavior is tracked separately.
+
 ## v0.5.1072 — node:http: populate STATUS_CODES map (#2519)
 
 `http.STATUS_CODES` was claimed in the API manifest but the runtime `native_module_property` "http" arm only materialized `METHODS`, so `http.STATUS_CODES` read back as `undefined` and `STATUS_CODES[200]` threw / returned undefined instead of Node's `"OK"`.

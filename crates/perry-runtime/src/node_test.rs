@@ -185,17 +185,34 @@ fn snapshot_object() -> *mut ObjectHeader {
 
 pub fn property(property: &str) -> Option<f64> {
     match property {
+        // #3719: `expectFailure` is a current Node `node:test` named export
+        // (a function); route it through the same submodule-function path as
+        // the other registration helpers.
         "default" | "test" | "skip" | "todo" | "only" | "suite" | "describe" | "it" | "before"
-        | "after" | "beforeEach" | "afterEach" | "run" | "mock" | "snapshot" => Some(unsafe {
-            crate::node_submodules::js_node_submodule_export_as_function(
-                b"test".as_ptr(),
-                4,
-                property.as_ptr(),
-                property.len() as u32,
-            )
-        }),
+        | "after" | "beforeEach" | "afterEach" | "run" | "mock" | "snapshot" | "expectFailure" => {
+            Some(unsafe {
+                crate::node_submodules::js_node_submodule_export_as_function(
+                    b"test".as_ptr(),
+                    4,
+                    property.as_ptr(),
+                    property.len() as u32,
+                )
+            })
+        }
+        // #3719: `test.assert` is an assertion-namespace object exposing
+        // `register` (a function). Match Node's `{ register }` shape.
+        "assert" => Some(test_assert_object()),
         _ => None,
     }
+}
+
+/// #3719: build the `node:test` `assert` namespace object — `{ register }`,
+/// mirroring Node's current shape.
+fn test_assert_object() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 0);
+    // `assert.register(name, fn)` — length 2 in Node; stubbed (shape parity).
+    set(obj, "register", fn_value(noop3 as *const u8, "register", 2));
+    object_value(obj)
 }
 
 pub fn dispatch_object_method(class_id: u32, method_name: &str) -> Option<f64> {

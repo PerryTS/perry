@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2512 entries across 106 modules
+// Coverage: 2514 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3250,6 +3250,8 @@ declare module "sys" {
 
 declare module "test" {
   /** stdlib */
+  export const assert: any;
+  /** stdlib */
   export const mock: any;
   /** stdlib */
   export const snapshot: any;
@@ -3265,6 +3267,8 @@ declare module "test" {
   export default function (...args: any[]): any;
   /** stdlib */
   export function describe(...args: any[]): any;
+  /** stdlib */
+  export function expectFailure(...args: any[]): any;
   /** stdlib */
   export function it(...args: any[]): any;
   /** stdlib */
