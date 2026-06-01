@@ -30,6 +30,16 @@ pub type HandlePropertySetDispatchFn = unsafe extern "C" fn(
     value: f64,
 );
 
+/// Function pointer type for reporting own property names on handle-backed
+/// values. Returns a NaN-boxed Array, or `undefined` when the handle has no
+/// custom shape.
+pub type HandleOwnPropertyNamesDispatchFn = unsafe extern "C" fn(handle: i64) -> f64;
+
+/// Function pointer type for resolving `Object.getPrototypeOf(handle)`.
+/// Returns a NaN-boxed object/null, or `undefined` when the handle has no
+/// custom prototype.
+pub type HandlePrototypeDispatchFn = unsafe extern "C" fn(handle: i64) -> f64;
+
 /// #1545: probe for whether a numeric receiver is a live Web Streams handle.
 /// Web Streams handles are returned as `id as f64` (a normal float), not the
 /// subnormal bit-cast other handle subsystems use, so `js_native_call_method`
@@ -70,6 +80,8 @@ pub type EventEmitterOnFn =
 static HANDLE_METHOD_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static HANDLE_PROPERTY_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static HANDLE_PROPERTY_SET_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static HANDLE_OWN_PROPERTY_NAMES_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static HANDLE_PROTOTYPE_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static STREAM_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static STREAM_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
@@ -105,6 +117,26 @@ pub fn handle_property_set_dispatch() -> Option<HandlePropertySetDispatchFn> {
         None
     } else {
         Some(unsafe { std::mem::transmute::<*mut (), HandlePropertySetDispatchFn>(p) })
+    }
+}
+
+#[inline]
+pub fn handle_own_property_names_dispatch() -> Option<HandleOwnPropertyNamesDispatchFn> {
+    let p = HANDLE_OWN_PROPERTY_NAMES_DISPATCH_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), HandleOwnPropertyNamesDispatchFn>(p) })
+    }
+}
+
+#[inline]
+pub fn handle_prototype_dispatch() -> Option<HandlePrototypeDispatchFn> {
+    let p = HANDLE_PROTOTYPE_DISPATCH_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), HandlePrototypeDispatchFn>(p) })
     }
 }
 
@@ -221,4 +253,18 @@ pub unsafe extern "C" fn js_register_handle_property_dispatch(f: HandlePropertyD
 #[no_mangle]
 pub unsafe extern "C" fn js_register_handle_property_set_dispatch(f: HandlePropertySetDispatchFn) {
     HANDLE_PROPERTY_SET_DISPATCH_PTR.store(f as *mut (), Ordering::Release);
+}
+
+/// Register a function to report own property names on handle-backed objects.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_handle_own_property_names_dispatch(
+    f: HandleOwnPropertyNamesDispatchFn,
+) {
+    HANDLE_OWN_PROPERTY_NAMES_DISPATCH_PTR.store(f as *mut (), Ordering::Release);
+}
+
+/// Register a function to resolve prototypes for handle-backed objects.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_handle_prototype_dispatch(f: HandlePrototypeDispatchFn) {
+    HANDLE_PROTOTYPE_DISPATCH_PTR.store(f as *mut (), Ordering::Release);
 }

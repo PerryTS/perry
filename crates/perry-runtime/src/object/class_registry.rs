@@ -12,16 +12,18 @@
 
 pub use super::class_handles::{
     event_emitter_async_resource_handle_probe, event_emitter_handle_probe, event_emitter_on,
-    handle_method_dispatch, handle_property_dispatch, handle_property_set_dispatch,
+    handle_method_dispatch, handle_own_property_names_dispatch, handle_property_dispatch,
+    handle_property_set_dispatch, handle_prototype_dispatch,
     js_register_event_emitter_async_resource_handle_probe, js_register_event_emitter_handle_probe,
     js_register_event_emitter_on, js_register_handle_method_dispatch,
-    js_register_handle_property_dispatch, js_register_handle_property_set_dispatch,
+    js_register_handle_own_property_names_dispatch, js_register_handle_property_dispatch,
+    js_register_handle_property_set_dispatch, js_register_handle_prototype_dispatch,
     js_register_net_socket_handle_probe, js_register_stream_handle_kind_probe,
     js_register_stream_handle_probe, net_socket_handle_probe, stream_handle_kind_probe,
     stream_handle_probe, EventEmitterAsyncResourceHandleProbeFn, EventEmitterHandleProbeFn,
-    EventEmitterOnFn, HandleMethodDispatchFn, HandlePropertyDispatchFn,
-    HandlePropertySetDispatchFn, NetSocketHandleProbeFn, StreamHandleKindProbeFn,
-    StreamHandleProbeFn,
+    EventEmitterOnFn, HandleMethodDispatchFn, HandleOwnPropertyNamesDispatchFn,
+    HandlePropertyDispatchFn, HandlePropertySetDispatchFn, HandlePrototypeDispatchFn,
+    NetSocketHandleProbeFn, StreamHandleKindProbeFn, StreamHandleProbeFn,
 };
 use super::*;
 
@@ -1010,6 +1012,21 @@ pub unsafe extern "C" fn js_new_function_construct(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    // #3656: `new p()` where `p` is a Proxy dispatches through its `construct`
+    // trap (or forwards to the target). Reached when the compiler can't prove
+    // the callee is a proxy statically (e.g. `new record.proxy()`). newTarget
+    // for a plain `new` is the constructor being invoked — the proxy itself.
+    if crate::proxy::js_proxy_is_proxy(func_value) == 1 {
+        let arr = crate::array::js_array_alloc(0);
+        let mut a = arr;
+        if !args_ptr.is_null() {
+            for i in 0..args_len {
+                a = crate::array::js_array_push_f64(a, *args_ptr.add(i));
+            }
+        }
+        let arr_box = f64::from_bits(0x7FFD_0000_0000_0000 | (a as u64 & 0x0000_FFFF_FFFF_FFFF));
+        return crate::proxy::js_proxy_construct(func_value, arr_box, func_value);
+    }
     if let Some((module, method)) = bound_native_callable_module_and_method(func_value) {
         if module == "sqlite"
             && matches!(
@@ -1265,6 +1282,9 @@ pub unsafe extern "C" fn js_new_function_construct(
             }
             "MessagePort" => {
                 return crate::messaging::js_message_port_constructor_error();
+            }
+            "Storage" => {
+                return crate::web_storage::storage_constructor_illegal(std::ptr::null());
             }
             "BroadcastChannel" => {
                 let name = args

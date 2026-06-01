@@ -1531,8 +1531,10 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         ast::MemberProp::Ident(p) if p.sym.as_ref() == "prototype"
                             || p.sym.as_ref() == "__proto__"
                     );
-                    let receiver_is_namespace_value =
-                        property == "crypto" || property == "WebAssembly";
+                    let receiver_is_namespace_value = matches!(
+                        property.as_str(),
+                        "crypto" | "WebAssembly" | "localStorage" | "sessionStorage"
+                    );
                     let outer_is_websocket_static = property == "WebSocket"
                         && match &member.prop {
                             ast::MemberProp::Ident(p) => matches!(
