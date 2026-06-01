@@ -10,7 +10,6 @@ pub(crate) fn is_builtin_function(name: &str) -> bool {
             | "clearTimeout"
             | "clearInterval"
             | "clearImmediate"
-            | "fetch"
             | "gc"
     )
 }
@@ -84,6 +83,9 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "Crypto"
             | "CryptoKey"
             | "SubtleCrypto"
+            | "Event"
+            | "CustomEvent"
+            | "DOMException"
             | "FormData"
             | "Blob"
             | "File"
@@ -106,6 +108,7 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "AsyncDisposableStack"
             | "SuppressedError"
             | "Buffer"
+            | "fetch"
             | "process"
             | "console"
             | "crypto"
@@ -144,8 +147,9 @@ pub(crate) fn builtin_constructor_length(name: &str) -> Option<u32> {
     let len = match name {
         "Array" | "Object" | "String" | "Number" | "Boolean" | "Function" | "Error"
         | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EvalError"
-        | "URIError" | "Promise" | "WeakRef" | "BigInt" => 1,
-        "Symbol" | "Map" | "Set" | "WeakMap" | "WeakSet" | "MessageChannel" | "MessagePort" => 0,
+        | "URIError" | "Promise" | "WeakRef" | "BigInt" | "Event" | "CustomEvent" => 1,
+        "Symbol" | "Map" | "Set" | "WeakMap" | "WeakSet" | "MessageChannel" | "MessagePort"
+        | "DOMException" => 0,
         "RegExp" | "Proxy" | "File" => 2,
         "BroadcastChannel" => 1,
         "Date" => 7,

@@ -124,6 +124,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
                 "WebSocket" | "WebSocketServer" => Some(("ws", type_name.as_str())),
                 "Redis" => Some(("ioredis", "Redis")),
                 "EventEmitter" => Some(("events", "EventEmitter")),
+                "EventEmitterAsyncResource" => Some(("events", "EventEmitterAsyncResource")),
                 // Web Fetch API: Request / Response / Headers passed as
                 // function parameters need the same native-instance
                 // registration the `new Request()`/`new Response()`/

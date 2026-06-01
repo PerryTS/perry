@@ -993,6 +993,34 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "events"
+                    && (matches!(
+                        class_name.as_str(),
+                        "EventEmitter" | "EventEmitterAsyncResource"
+                    ) && (matches!(
+                        property_name.as_str(),
+                        "on" | "addListener"
+                            | "once"
+                            | "prependListener"
+                            | "prependOnceListener"
+                            | "off"
+                            | "removeListener"
+                            | "removeAllListeners"
+                            | "emit"
+                            | "listenerCount"
+                            | "listeners"
+                            | "rawListeners"
+                            | "eventNames"
+                            | "setMaxListeners"
+                            | "getMaxListeners"
+                    ) || (class_name == "EventEmitterAsyncResource"
+                        && property_name == "emitDestroy")))
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "console"
                     && class_name == "Console"
                     && is_console_instance_method_name(&property_name)
@@ -1294,11 +1322,12 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     } else {
                         property_name
                     };
-                    let class_filter = if matches!(module_name.as_str(), "http" | "https") {
-                        Some(class_name.clone())
-                    } else {
-                        None
-                    };
+                    let class_filter =
+                        if matches!(module_name.as_str(), "http" | "https" | "events") {
+                            Some(class_name.clone())
+                        } else {
+                            None
+                        };
                     // For properties that map to FFI functions, generate a NativeMethodCall
                     // with no args (property getter)
                     let object_expr = lower_expr(ctx, &member.obj)?;
@@ -1444,6 +1473,19 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     }
 
     let mut object_expr = lower_expr(ctx, &member.obj)?;
+    let member_reads_global_fetch = matches!(
+        unwrap_transparent(member.obj.as_ref()),
+        ast::Expr::Ident(i) if i.sym.as_ref() == "globalThis"
+    ) && match &member.prop {
+        ast::MemberProp::Ident(p) => p.sym.as_ref() == "fetch",
+        ast::MemberProp::Computed(c) => {
+            matches!(c.expr.as_ref(), ast::Expr::Lit(ast::Lit::Str(s)) if s.value.as_str() == Some("fetch"))
+        }
+        ast::MemberProp::PrivateName(_) => false,
+    };
+    if member_reads_global_fetch {
+        ctx.uses_fetch = true;
+    }
 
     // #973 (5ddccbbc) rerouted bare built-in identifiers used as VALUES
     // (`Number`, `Object`, `Array`, ...) to `PropertyGet { GlobalGet(0),

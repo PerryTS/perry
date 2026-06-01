@@ -1170,6 +1170,29 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             }
         }
     }
+    // Generic small-handle `Symbol.asyncDispose` support. This must run before
+    // pointer-backed symbol property lookup so small native handles are not
+    // interpreted as heap pointers when the dispatcher owns the method.
+    if (bits >> 48) == 0x7FFD {
+        let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
+        if id > 0 && id < 0x100000 {
+            let async_dispose = well_known_symbol("asyncDispose");
+            if !async_dispose.is_null() {
+                let async_dispose_f64 = f64::from_bits(
+                    crate::value::JSValue::pointer(async_dispose as *const u8).bits(),
+                );
+                if sym_key_from_f64(sym_f64) == sym_key_from_f64(async_dispose_f64) {
+                    if let Some(dispatch) = crate::object::handle_property_dispatch() {
+                        let method = b"@@__perry_wk_asyncDispose";
+                        let v = dispatch(id, method.as_ptr(), method.len());
+                        if v.to_bits() != TAG_UNDEFINED {
+                            return v;
+                        }
+                    }
+                }
+            }
+        }
+    }
     // Web Fetch and other stdlib handle-backed values are small ids
     // NaN-boxed as POINTER. A computed `handle[Symbol.iterator]` reaches the
     // symbol resolver directly, bypassing the normal string-key handle
