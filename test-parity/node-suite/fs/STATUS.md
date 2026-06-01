@@ -4,9 +4,9 @@ This split suite replaces the legacy monolithic `test-files/test_parity_fs.ts` a
 
 ## Current coverage
 
-- `node:fs`: 127 TypeScript parity cases
-- `node:fs/promises`: 62 TypeScript parity cases
-- Total: 189 TypeScript parity cases
+- `node:fs`: 169 TypeScript parity cases
+- `node:fs/promises`: 79 TypeScript parity cases
+- Total: 248 TypeScript parity cases
 
 The suite was built from deterministic behavior in:
 
@@ -14,33 +14,27 @@ The suite was built from deterministic behavior in:
 - Deno's `tests/unit_node/_fs` compatibility tests
 - Bun's Node-compatible `test/js/node/fs` and vendored Node filesystem tests
 
-Covered areas include imports, constants, PathLike Buffer and file URL paths, read/write/readFile/writeFile/appendFile, fd APIs, FileHandle APIs, vector I/O, streams, recursive readdir/opendir, mkdir/rm/rmdir/cp/copyFile, links/symlinks/readlink/realpath, mkdtemp, truncate, chmod/chown/utimes, stats/statfs bigint fields, access modes, glob basics, and watch/watchFile object surface.
+Covered areas include imports, export-tail namespace coverage (`Dir`, `Dirent`, `Stats`, `ReadStream`, `WriteStream`, `FileReadStream`, `FileWriteStream`, `Utf8Stream`, `_toUnixTimestamp`, `openAsBlob`, `mkdtempDisposableSync`, `constants`, `promises`), constants, PathLike Buffer and file URL paths, read/write/readFile/writeFile/appendFile, fd APIs, FileHandle APIs, vector I/O, streams, recursive readdir/opendir, mkdir/rm/rmdir/cp/copyFile, links/symlinks/readlink/realpath, mkdtemp and disposable temp dirs, truncate, chmod/chown/utimes, stats/statfs bigint fields, access modes, advanced glob options and async iteration, deterministic watch/watchFile event delivery, and Node-shaped argument validation for the covered fs/fs-promises cases.
 
 ## Known follow-up areas
 
-These areas are intentionally left as follow-up work because they require larger runtime behavior or Node-perfect validation semantics:
+These areas are intentionally left as follow-up work because they are outside the deterministic fs parity slice or remain unsupported API tail:
 
-1. Real `fs.watch`, `fs.watchFile`, and `fs.promises.watch` event delivery, including recursive watching, abort signals, and async iterator behavior.
-2. Advanced `glob` semantics: async iterators, arrays of patterns, `exclude`, `withFileTypes`, brace/extglob edge cases, and broader cwd/pathlike validation.
-3. Full FileHandle coverage such as readline integration and more stream lifecycle/error cases.
-4. `writeFile` and FileHandle write inputs from streams, async iterables, iterables, and abort signals.
-5. Node-perfect `cp` behavior for async filters, exact validation/errors, symlink cycles, subdirectory guards, mode/reflink semantics, and conflict handling.
-6. Node-perfect errors across the remaining fs APIs: exact error type, `code`, `errno`, `path`, `dest`, and `syscall` fields. Path-pair mutators (`rename`, `copyFile`, `link`, `symlink`) plus `readlink` now propagate deterministic syscall errors across sync, callback, and `node:fs/promises` surfaces.
-7. Remaining Stats timestamp precision edge cases. Numeric, bigint, and Date-valued timestamp aliases are covered for the main stat/lstat/fstat paths.
-8. Stream edge cases: backpressure, `autoClose`, `emitClose`, destroy/error ordering, and fd lifecycle parity.
-9. URL/path edge cases, especially full compatibility with `pathToFileURL()`-generated objects.
-10. Additional platform- and permission-sensitive behavior once the parity runner can model those deterministically.
-11. Real streaming for `createReadStream`/`createWriteStream`. The current implementation eagerly loads the source file into memory and emits one `data` chunk; arbitrary `highWaterMark`, mid-stream `pause`/`resume`, and backpressure-driven `drain` events are not yet modeled.
-12. Callback-style fs APIs now invoke `cb(err, …)` with a real `Error` carrying `err.code` (`"ENOENT"`, `"EACCES"`, `"EEXIST"`, …), `err.syscall`, `err.path`, and `err.dest` for two-path operations. Values are registered in per-message side tables (`register_error_code_pub` / `register_error_syscall` / `register_error_path` / `register_error_dest`) and surfaced by the `OBJECT_TYPE_ERROR` getters in `object::field_get_set`. `fs/promises.open` now rejects failed direct opens, including read-only and create/write-style flags, instead of resolving with `fd === -1`.
-13. `FileHandle` and the numeric-fd registry are `thread_local` — handles cannot be shared across threads spawned with `perry/thread` or `parallelMap`. The same fd in another thread is treated as missing.
-14. On POSIX, `ctime` is now read from `MetadataExt::ctime` (plus `ctime_nsec`) and the bigint `atimeNs`/`mtimeNs`/`ctimeNs` fields use real `*time_nsec` counters — so sub-millisecond precision is preserved. Windows still falls back to the millisecond×1e6 approximation.
-15. `mkdtemp` returns an empty path on exhaustion (after 64 collision retries) instead of throwing — once typed error propagation lands, promote this to a real ENOSPC/EACCES rejection.
+1. Remaining `fs.promises.FileHandle` export-tail APIs: `pull`, `pullSync`, and `writer`.
+2. Platform-specific permissions and ownership behavior: Windows `chmod`/`chown` limitations, POSIX-only permission-denied branches, symlink behavior, reserved Windows path characters, and host filesystem differences remain documented rather than forced into the default deterministic run.
+3. `fs.watch`, `fs.watchFile`, and `fs.promises.watch` now have deterministic event-delivery, recursive, abort, and async-iterator coverage. Node's documented platform quirks remain out of scope for default parity: inode replacement on Linux/macOS, Windows rename/delete behavior, missing `filename`, network filesystem unreliability, and unsupported platforms.
+4. `copyFile` and `cp` now cover async filters, option validation, conflict handling, symlink/subdirectory guards, and reflink/mode acceptance in curated fixtures. Node still documents copy operations as non-atomic, and failed-copy destination cleanup cannot be made deterministic across all host filesystems.
+5. `writeFile` and FileHandle write inputs from streams, async iterables, iterables, typed arrays, DataViews, file descriptors, and abort-sensitive cases are covered for deterministic fixtures. Host fd position and partial-write behavior remains subject to Node's documented caveats when callers share descriptors.
+6. Callback-style fs APIs invoke `cb(err, …)` with a real `Error` carrying `err.code` (`"ENOENT"`, `"EACCES"`, `"EEXIST"`, …), `err.syscall`, and `err.path`; promise APIs reject with Node-shaped validation errors for the covered cases. Errors raised inside lower-level syscall paths that bypass the typed wrapper may still need broader typed-error propagation through LLVM.
+7. Verified `perry/thread` fd affinity: numeric fds and `fs.promises.FileHandle` objects do not transfer ownership and do not share a registry across `spawn` or `parallelMap`. Cross-thread numeric fd use fails with `EBADF`, including when the receiving thread has opened its own local fd, and cross-thread `FileHandle` values arrive detached with `fd === -1`. Covered by `threaded-fd-semantics-spawn-captured`, `threaded-fd-semantics-parallelmap-read`, `threaded-fd-semantics-worker-returned`, `threaded-fd-semantics-collision-captured`, `threaded-fd-semantics-collision-returned`, `filehandle-thread-detached-captured`, and `filehandle-thread-detached-returned`.
+8. On POSIX, `ctime` is read from `MetadataExt::ctime` (plus `ctime_nsec`) and the bigint `atimeNs`/`mtimeNs`/`ctimeNs` fields use real `*time_nsec` counters, so sub-millisecond precision is preserved. Windows still falls back to the millisecond x 1e6 approximation.
+9. `mkdtemp` returns an empty path on exhaustion after 64 collision retries instead of throwing. Once typed error propagation lands, promote this to a real ENOSPC/EACCES rejection.
 
 ## Validation snapshot
 
-Before opening this PR, the split suites passed locally with:
+Final reconciliation evidence:
 
-- `./run_parity_tests.sh --suite node-suite --module fs`
-- `./run_parity_tests.sh --suite node-suite --module fs-promises`
-- `cargo check -q -p perry-runtime -p perry-codegen`
-- `git diff --check`
+- `./run_parity_tests.sh --suite node-suite --module fs` -> 168 parity passes, 0 parity failures, 0 compile failures, 1 host Node `node_fail` (`node-suite/fs/rmdir/recursive-options`), report `test-parity/reports/parity_report_20260531_220253.json`.
+- `./run_parity_tests.sh --suite node-suite --module fs-promises` -> 78 parity passes, 0 parity failures, 0 compile failures, 1 host Node `node_fail` (`node-suite/fs-promises/rmdir/recursive-and-pathlike`), report `test-parity/reports/parity_report_20260531_220616.json`.
+- `target/release/perry --print-api-manifest=json` includes current `fs` and `fs/promises` rows and does not include unsupported `pull`, `pullSync`, or `writer` rows.
+- `test-parity/known_failures.json` has no fs or fs-promises entries.
