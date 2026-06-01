@@ -7,6 +7,7 @@ use super::*;
 
 // Keep in sync with perry-codegen/src/expr/instance_misc1.rs.
 const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
+const CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE: u32 = 0xFFFF0077;
 const CLASS_ID_PROMISE: u32 = 0xFFFF0027;
 
 fn small_native_handle_id(value: f64) -> Option<i64> {
@@ -62,6 +63,12 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
         if module == "events" && method == "EventEmitter" && is_event_emitter_instance_value(value)
+        {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
+        if module == "events"
+            && method == "EventEmitterAsyncResource"
+            && is_event_emitter_async_resource_instance_value(value)
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
@@ -267,6 +274,16 @@ fn is_event_emitter_instance_value(value: f64) -> bool {
     false
 }
 
+fn is_event_emitter_async_resource_instance_value(value: f64) -> bool {
+    let Some(handle) = small_native_handle_id(value) else {
+        return false;
+    };
+    if let Some(probe) = crate::object::event_emitter_async_resource_handle_probe() {
+        return unsafe { probe(handle) };
+    }
+    false
+}
+
 /// Check if a value is an instance of a class with the given class_id
 /// Walks the inheritance chain to check parent classes
 /// Returns NaN-boxed TAG_TRUE / TAG_FALSE so the result identifies as a boolean.
@@ -300,6 +317,13 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     }
     if class_id == CLASS_ID_EVENT_EMITTER {
         return if is_event_emitter_instance_value(value) {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE {
+        return if is_event_emitter_async_resource_instance_value(value) {
             true_val
         } else {
             false_val

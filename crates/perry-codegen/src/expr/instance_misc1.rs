@@ -210,6 +210,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let native_event_cid = match ty.as_str() {
                         // Keep in sync with perry-runtime/src/object/instanceof.rs.
                         "EventEmitter" => Some(0xFFFF0076u32),
+                        "EventEmitterAsyncResource" => Some(0xFFFF0077u32),
                         _ => None,
                     };
                     if let Some(cid) = native_event_cid {

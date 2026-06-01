@@ -1123,6 +1123,23 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     }
 
     let obj_addr = obj_val.bits() & 0x0000_FFFF_FFFF_FFFF;
+    if obj_addr >= 0x10000 {
+        let obj_ptr = obj_addr as *mut ObjectHeader;
+        unsafe {
+            if !obj_ptr.is_null() && (*obj_ptr).class_id == NATIVE_MODULE_CLASS_ID {
+                let key_ptr =
+                    crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+                let present = super::native_module::read_native_module_name(obj_ptr)
+                    .as_deref()
+                    .zip(super::has_own_helpers::str_from_string_header(key_ptr))
+                    .map(|(module, key)| {
+                        super::native_module::native_module_has_enumerable_key(module, key)
+                    })
+                    .unwrap_or(false);
+                return if present { nanbox_true } else { nanbox_false };
+            }
+        }
+    }
     // Small handle receiver (`"prop" in crypto.createDiffieHellman(...)`,
     // Fastify handles, etc.). The generic object path below would treat the
     // handle id as an ObjectHeader pointer and can crash while reading

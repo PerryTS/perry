@@ -11,15 +11,17 @@
 //! logic changes.
 
 pub use super::class_handles::{
-    event_emitter_handle_probe, event_emitter_on, handle_method_dispatch, handle_property_dispatch,
-    handle_property_set_dispatch, js_register_event_emitter_handle_probe,
+    event_emitter_async_resource_handle_probe, event_emitter_handle_probe, event_emitter_on,
+    handle_method_dispatch, handle_property_dispatch, handle_property_set_dispatch,
+    js_register_event_emitter_async_resource_handle_probe, js_register_event_emitter_handle_probe,
     js_register_event_emitter_on, js_register_handle_method_dispatch,
     js_register_handle_property_dispatch, js_register_handle_property_set_dispatch,
     js_register_net_socket_handle_probe, js_register_stream_handle_kind_probe,
     js_register_stream_handle_probe, net_socket_handle_probe, stream_handle_kind_probe,
-    stream_handle_probe, EventEmitterHandleProbeFn, EventEmitterOnFn, HandleMethodDispatchFn,
-    HandlePropertyDispatchFn, HandlePropertySetDispatchFn, NetSocketHandleProbeFn,
-    StreamHandleKindProbeFn, StreamHandleProbeFn,
+    stream_handle_probe, EventEmitterAsyncResourceHandleProbeFn, EventEmitterHandleProbeFn,
+    EventEmitterOnFn, HandleMethodDispatchFn, HandlePropertyDispatchFn,
+    HandlePropertySetDispatchFn, NetSocketHandleProbeFn, StreamHandleKindProbeFn,
+    StreamHandleProbeFn,
 };
 use super::*;
 

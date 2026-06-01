@@ -993,6 +993,34 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "events"
+                    && (matches!(
+                        class_name.as_str(),
+                        "EventEmitter" | "EventEmitterAsyncResource"
+                    ) && (matches!(
+                        property_name.as_str(),
+                        "on" | "addListener"
+                            | "once"
+                            | "prependListener"
+                            | "prependOnceListener"
+                            | "off"
+                            | "removeListener"
+                            | "removeAllListeners"
+                            | "emit"
+                            | "listenerCount"
+                            | "listeners"
+                            | "rawListeners"
+                            | "eventNames"
+                            | "setMaxListeners"
+                            | "getMaxListeners"
+                    ) || (class_name == "EventEmitterAsyncResource"
+                        && property_name == "emitDestroy")))
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "console"
                     && class_name == "Console"
                     && is_console_instance_method_name(&property_name)
@@ -1294,11 +1322,12 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     } else {
                         property_name
                     };
-                    let class_filter = if matches!(module_name.as_str(), "http" | "https") {
-                        Some(class_name.clone())
-                    } else {
-                        None
-                    };
+                    let class_filter =
+                        if matches!(module_name.as_str(), "http" | "https" | "events") {
+                            Some(class_name.clone())
+                        } else {
+                            None
+                        };
                     // For properties that map to FFI functions, generate a NativeMethodCall
                     // with no args (property getter)
                     let object_expr = lower_expr(ctx, &member.obj)?;

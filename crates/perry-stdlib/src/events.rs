@@ -22,11 +22,20 @@
 use perry_runtime::{
     js_array_alloc, js_array_length, js_array_push_f64, js_closure_call0, js_closure_call1,
     js_closure_call2, js_nanbox_get_pointer, js_nanbox_pointer, js_nanbox_string, js_object_alloc,
-    js_object_get_field_by_name, js_object_get_field_by_name_f64, js_promise_new,
-    js_promise_reject, js_promise_resolve, js_string_from_bytes, ArrayHeader, ClosureHeader,
-    JSValue, ObjectHeader, Promise, StringHeader,
+    js_object_get_field_by_name_f64, js_promise_new, js_promise_reject, js_promise_resolve,
+    js_string_from_bytes, ArrayHeader, ClosureHeader, JSValue, ObjectHeader, Promise, StringHeader,
 };
 use std::collections::{HashMap, HashSet};
+
+mod constructors;
+use constructors::event_emitter_async_resource_handle;
+pub use constructors::{
+    is_event_emitter_async_resource_handle, js_event_emitter_async_resource_async_id,
+    js_event_emitter_async_resource_async_resource, js_event_emitter_async_resource_call,
+    js_event_emitter_async_resource_emit_destroy, js_event_emitter_async_resource_new,
+    js_event_emitter_async_resource_trigger_async_id, js_event_emitter_new,
+    js_event_emitter_new_with_options,
+};
 
 mod warnings;
 use warnings::maybe_emit_max_listeners_warning;
@@ -221,7 +230,7 @@ fn validate_max_listeners(value: f64) -> f64 {
     n
 }
 
-use crate::common::{for_each_handle_mut_of, get_handle, get_handle_mut, register_handle, Handle};
+use crate::common::{for_each_handle_mut_of, get_handle, get_handle_mut, Handle};
 
 /// One registered listener: the user closure pointer (i64 to satisfy
 /// Send + Sync — the underlying ClosureHeader is GC-managed), a stable raw
@@ -263,6 +272,8 @@ pub struct EventEmitterHandle {
     /// Constructor-level `{ captureRejections: true }` flag. When enabled,
     /// rejected promises returned from listeners are routed to `"error"`.
     capture_rejections: bool,
+    /// Backing AsyncResource handle for EventEmitterAsyncResource instances.
+    async_resource_handle: i64,
     pub(crate) domain_handle: Option<Handle>,
 }
 
@@ -335,6 +346,7 @@ impl EventEmitterHandle {
             max_listeners: 10.0,
             warned_events: HashSet::new(),
             capture_rejections: false,
+            async_resource_handle: 0,
             domain_handle: None,
         }
     }
@@ -621,7 +633,8 @@ extern "C" fn event_emitter_once_wrapper(closure: *const ClosureHeader, rest: f6
         if callback == 0 {
             undefined_value()
         } else {
-            call_emitter_listener(handle, callback, &args)
+            let async_resource_handle = event_emitter_async_resource_handle(handle);
+            call_emitter_listener(handle, async_resource_handle, callback, &args)
         }
     }
 }
@@ -753,55 +766,6 @@ unsafe fn dispatch_error_monitor(emitter: &mut EventEmitterHandle, arg: Option<f
         }
     }
 }
-
-unsafe fn event_emitter_options_capture_rejections(options: f64) -> bool {
-    if !JSValue::from_bits(options.to_bits()).is_pointer() {
-        return false;
-    }
-    let options_obj = js_nanbox_get_pointer(options) as *const ObjectHeader;
-    if options_obj.is_null() || (options_obj as usize) < 0x100000 {
-        return false;
-    }
-    let gc_header = (options_obj as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
-        as *const perry_runtime::gc::GcHeader;
-    if (*gc_header).obj_type != perry_runtime::gc::GC_TYPE_OBJECT {
-        return false;
-    }
-    let key = b"captureRejections";
-    let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-    let value = js_object_get_field_by_name(options_obj, key_ptr);
-    perry_runtime::value::js_is_truthy(f64::from_bits(value.bits())) != 0
-}
-
-/// Create a new EventEmitter
-/// Returns a handle (i64) to the emitter
-#[no_mangle]
-pub extern "C" fn js_event_emitter_new() -> Handle {
-    ensure_gc_scanner_registered();
-    register_handle(EventEmitterHandle::new())
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_event_emitter_new_with_options(options: f64) -> Handle {
-    ensure_gc_scanner_registered();
-    let mut emitter = EventEmitterHandle::new();
-    emitter.capture_rejections = event_emitter_options_capture_rejections(options);
-    register_handle(emitter)
-}
-
-// `#[used]` keepalive anchors for the EventEmitter constructor entry points.
-// `new EventEmitter()` codegen calls `js_event_emitter_new_with_options`
-// (builtin.rs) which is reachable only from generated `.o`; the default
-// `perry file.ts -o out` auto-optimize whole-program-LLVM rebuild internalizes
-// + dead-strips unreferenced `#[no_mangle]` symbols, so without an anchor the
-// link fails with `Undefined symbols: _js_event_emitter_new_with_options`
-// (see project_auto_optimize_keepalive_3320). Anchoring both constructor
-// shapes keeps `new EventEmitter()` compiling under auto-optimize.
-#[used]
-static KEEP_JS_EVENT_EMITTER_NEW: extern "C" fn() -> Handle = js_event_emitter_new;
-#[used]
-static KEEP_JS_EVENT_EMITTER_NEW_WITH_OPTIONS: unsafe extern "C" fn(f64) -> Handle =
-    js_event_emitter_new_with_options;
 
 /// EventEmitter.on(eventName, listener) — also serves as `addListener`.
 /// Register a listener for the specified event.
@@ -958,9 +922,30 @@ unsafe fn collect_emit_args(args_ptr: *const ArrayHeader) -> Vec<f64> {
     args
 }
 
-unsafe fn call_emitter_listener(handle: Handle, callback: i64, args: &[f64]) -> f64 {
+unsafe fn call_emitter_listener(
+    handle: Handle,
+    async_resource_handle: i64,
+    callback: i64,
+    args: &[f64],
+) -> f64 {
     let receiver = js_nanbox_pointer(handle);
     let callback_value = js_nanbox_pointer(callback);
+    if async_resource_handle != 0 {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let arg_handles = scope.root_nanbox_f64_slice(args);
+        let arr = js_array_alloc(0);
+        let arr_handle = scope.root_raw_mut_ptr(arr);
+        for arg in &arg_handles {
+            let arr = js_array_push_f64(arr_handle.get_raw_mut_ptr(), arg.get_nanbox_f64());
+            arr_handle.set_raw_mut_ptr(arr);
+        }
+        return perry_runtime::async_hooks::js_async_resource_run_in_async_scope(
+            async_resource_handle,
+            callback_value,
+            receiver,
+            arr_handle.get_raw_mut_ptr::<ArrayHeader>() as i64,
+        );
+    }
     let previous_this = perry_runtime::object::js_implicit_this_set(receiver);
     let result =
         perry_runtime::closure::js_native_call_value(callback_value, args.as_ptr(), args.len());
@@ -1063,9 +1048,11 @@ pub unsafe extern "C" fn js_event_emitter_emit(
         drain_pending_once_promises(emitter, &event_name, args_ptr);
 
         let capture_rejections = emitter.capture_rejections && event_name != "error";
+        let async_resource_handle = emitter.async_resource_handle;
         for l in snapshot {
             if l.callback != 0 {
-                let result = call_emitter_listener(handle, l.callback, &emitted_args);
+                let result =
+                    call_emitter_listener(handle, async_resource_handle, l.callback, &emitted_args);
                 if capture_rejections {
                     capture_listener_rejection(handle, result);
                 }
@@ -1130,9 +1117,11 @@ pub unsafe extern "C" fn js_event_emitter_emit0(handle: Handle, event_bits: i64)
         drain_pending_once_promises(emitter, &event_name, empty_args);
 
         let capture_rejections = emitter.capture_rejections && event_name != "error";
+        let async_resource_handle = emitter.async_resource_handle;
         for l in snapshot {
             if l.callback != 0 {
-                let result = call_emitter_listener(handle, l.callback, emitted_args);
+                let result =
+                    call_emitter_listener(handle, async_resource_handle, l.callback, emitted_args);
                 if capture_rejections {
                     capture_listener_rejection(handle, result);
                 }
@@ -1985,7 +1974,7 @@ mod tests {
                 signal: undefined_value(),
                 abort_listener: 0,
             });
-        let handle = register_handle(emitter);
+        let handle = crate::common::register_handle(emitter);
 
         let mut emitted = Vec::new();
         scan_events_roots(&mut |value| emitted.push(value.to_bits()));

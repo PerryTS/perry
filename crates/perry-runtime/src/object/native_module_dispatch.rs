@@ -515,6 +515,13 @@ pub(crate) unsafe fn dispatch_native_module_method(
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("events", "init") => f64::from_bits(crate::value::TAG_UNDEFINED),
+        ("events", "EventEmitterAsyncResource") => {
+            let message =
+                b"Class constructor EventEmitterAsyncResource cannot be invoked without 'new'";
+            let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+            let err = crate::error::js_typeerror_new(msg);
+            crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+        }
         ("process", "getgroups") => crate::process::js_process_getgroups(),
         ("process", "setuid") => {
             crate::process::js_process_setuid(arg(0));

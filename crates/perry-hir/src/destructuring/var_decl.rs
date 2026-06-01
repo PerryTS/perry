@@ -239,7 +239,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 // "pg"` flow is caught by the general lookup
                                 // above. (Issue #536.)
                                 match class_name {
-                                    "EventEmitter" => Some("events".to_string()),
+                                    "EventEmitter" | "EventEmitterAsyncResource" => {
+                                        Some("events".to_string())
+                                    }
                                     "AsyncLocalStorage" => Some("async_hooks".to_string()),
                                     "AsyncResource" => Some("async_hooks".to_string()),
                                     // #2875: explicit-resource-management stacks.
@@ -381,7 +383,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     None
                                 } else {
                                     match class_name {
-                                        "EventEmitter" => Some("events".to_string()),
+                                        "EventEmitter" | "EventEmitterAsyncResource" => {
+                                            Some("events".to_string())
+                                        }
                                         "AsyncLocalStorage" => Some("async_hooks".to_string()),
                                         "AsyncResource" => Some("async_hooks".to_string()),
                                         "WebSocket" | "WebSocketServer" => Some("ws".to_string()),

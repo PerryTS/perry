@@ -1020,6 +1020,7 @@ const UTIL_NAMESPACE_KEYS: &[&[u8]] = &[
 
 const EVENTS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"EventEmitter",
+    b"EventEmitterAsyncResource",
     b"default",
     b"defaultMaxListeners",
     b"usingDomains",
@@ -1667,6 +1668,8 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     }
 
     if module_name == "events" && property_name == "EventEmitter" {
+        let async_resource_ctor =
+            bound_native_callable_export_value("events", "EventEmitterAsyncResource");
         for method in [
             "addAbortListener",
             "once",
@@ -1680,6 +1683,11 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
             crate::closure::closure_set_dynamic_prop(closure_addr, method, method_value);
         }
         crate::closure::closure_set_dynamic_prop(closure_addr, "EventEmitter", value);
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "EventEmitterAsyncResource",
+            async_resource_ctor,
+        );
         crate::closure::closure_set_dynamic_prop(closure_addr, "defaultMaxListeners", 10.0);
         crate::closure::closure_set_dynamic_prop(
             closure_addr,
@@ -1804,6 +1812,7 @@ pub(crate) fn fs_namespace_descriptor_setter_value(property_name: &str) -> f64 {
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
         ("events", "EventEmitter") => Some(1),
+        ("events", "EventEmitterAsyncResource") => Some(0),
         ("events", "addAbortListener") => Some(2),
         ("events", "once") => Some(2),
         ("events", "on") => Some(2),
@@ -2730,6 +2739,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("child_process", "spawnSync")
             | ("child_process", "fork")
             | ("events", "EventEmitter")
+            | ("events", "EventEmitterAsyncResource")
             | ("events", "on")
             | ("sqlite", "backup")
             | ("events", "once")
@@ -4840,6 +4850,10 @@ pub(crate) unsafe fn get_native_module_constant(
                 Some(crate::symbol::js_symbol_for(str_val("nodejs.rejection")))
             }
             "init" => Some(bound_native_callable_export_value("events", "init")),
+            "EventEmitterAsyncResource" => Some(bound_native_callable_export_value(
+                "events",
+                "EventEmitterAsyncResource",
+            )),
             _ => None,
         },
         // node:worker_threads value-shaped exports. Perry doesn't spawn JS

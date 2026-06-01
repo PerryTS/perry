@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2482 entries across 106 modules
+// Coverage: 2488 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1300,6 +1300,8 @@ declare module "events" {
   /** stdlib */
   export class EventEmitter { [key: string]: any; }
   /** stdlib */
+  export class EventEmitterAsyncResource { [key: string]: any; }
+  /** stdlib */
   export const captureRejectionSymbol: any;
   /** stdlib */
   export const captureRejections: any;
@@ -1314,6 +1316,8 @@ declare module "events" {
   export const usingDomains: any;
   /** stdlib */
   export function EventEmitter(...args: any[]): any;
+  /** stdlib */
+  export function EventEmitterAsyncResource(options: any): any;
   /** stdlib */
   export function addAbortListener(...args: any[]): any;
   /** stdlib */
