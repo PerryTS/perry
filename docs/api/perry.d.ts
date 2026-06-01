@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2491 entries across 106 modules
+// Coverage: 2494 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -266,6 +266,9 @@ declare module "cheerio" {
 declare module "child_process" {
   /** stdlib */
   export class ChildProcess { [key: string]: any; }
+  /** stdlib */
+  const _default: any;
+  export default _default;
   /** stdlib */
   export function exec(...args: any[]): any;
   /** stdlib */
@@ -1121,6 +1124,9 @@ declare module "dns" {
   /** stdlib */
   export const V4MAPPED: any;
   /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
   export const promises: any;
   /** stdlib */
   export function Resolver(...args: any[]): any;
@@ -1219,6 +1225,9 @@ declare module "dns/promises" {
   export const SERVFAIL: any;
   /** stdlib */
   export const TIMEOUT: any;
+  /** stdlib */
+  const _default: any;
+  export default _default;
   /** stdlib */
   export function Resolver(...args: any[]): any;
   /** stdlib */

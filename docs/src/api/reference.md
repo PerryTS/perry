@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2491 entries across 106 modules.
+Total: 2494 entries across 106 modules.
 
 ## Modules
 
@@ -342,6 +342,10 @@ Total: 2491 entries across 106 modules.
 - `fork` — module
 - `spawn` — module
 - `spawnSync` — module
+
+### Properties
+
+- `default`
 
 ## `cluster`
 
@@ -969,6 +973,7 @@ Total: 2491 entries across 106 modules.
 - `TIMEOUT`
 - `V4MAPPED`
 - `V4MAPPED`
+- `default`
 - `promises`
 
 ## `dns/promises`
@@ -1047,6 +1052,7 @@ Total: 2491 entries across 106 modules.
 - `REFUSED`
 - `SERVFAIL`
 - `TIMEOUT`
+- `default`
 
 ## `domain`
 
