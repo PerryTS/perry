@@ -94,6 +94,42 @@ pub(crate) extern "C" fn global_this_builtin_noop_thunk(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+extern "C" fn global_this_eval_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    source: f64,
+) -> f64 {
+    let source = crate::builtins::js_string_coerce(source);
+    let Some(body) = (unsafe { super::has_own_helpers::str_from_string_header(source) }) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    match normalize_eval_this_body(body).as_deref() {
+        Some("this" | "globalThis") => js_get_global_this(),
+        Some("typeof this") => {
+            let s = b"object";
+            let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            crate::value::js_nanbox_string(ptr as i64)
+        }
+        _ => f64::from_bits(crate::value::TAG_UNDEFINED),
+    }
+}
+
+fn normalize_eval_this_body(body: &str) -> Option<String> {
+    let mut src = body.trim().trim_end_matches(';').trim();
+    for directive in ["\"use strict\"", "'use strict'"] {
+        if let Some(rest) = src.strip_prefix(directive) {
+            let rest = rest.trim_start();
+            if let Some(after_semicolon) = rest.strip_prefix(';') {
+                src = after_semicolon.trim().trim_end_matches(';').trim();
+            }
+        }
+    }
+    if matches!(src, "this" | "globalThis" | "typeof this") {
+        Some(src.to_string())
+    } else {
+        None
+    }
+}
+
 pub(crate) extern "C" fn typed_array_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _arg: f64,
@@ -1188,6 +1224,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     // dispatch so direct property reads and rebound calls match bare calls.
     for name in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied() {
         let (func_ptr, arity, has_rest) = match name {
+            "eval" => (global_this_eval_thunk as *const u8, 1, false),
             "fetch" => (
                 super::global_fetch::global_this_fetch_thunk as *const u8,
                 1,

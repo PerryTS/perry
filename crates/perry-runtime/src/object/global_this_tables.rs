@@ -173,6 +173,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] = &[
 /// real direct-call runtime helpers so rebinding works:
 /// `const clone = globalThis.structuredClone; clone(value)`.
 pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &[
+    "eval",
     "fetch",
     "structuredClone",
     "atob",

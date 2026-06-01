@@ -118,6 +118,9 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "console"
             | "crypto"
             | "WebAssembly"
+            // #3579: `var myEval = eval; myEval(...)` needs the same callable
+            // globalThis function value as direct `globalThis.eval` reads.
+            | "eval"
             // #2905: standard global helper functions used as bare values
             // (`const p = parseInt`). Bare CALLS (`parseInt(x)`) are picked
             // off earlier by `try_global_builtins` → `Expr::ParseInt`/etc., so

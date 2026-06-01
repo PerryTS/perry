@@ -175,6 +175,62 @@ pub(crate) fn try_indirect_eval_globalthis(
     }
 }
 
+/// Fold the tiny direct-eval surface Perry can model without a runtime JS
+/// evaluator. Direct eval observes the caller's current `this` binding; in a
+/// strict function that binding can be `undefined`, while global direct eval
+/// still sees global `this`. The indirect/global case is handled separately by
+/// [`try_indirect_eval_globalthis`] and the callable global eval thunk.
+fn try_direct_eval_this_fold(ctx: &LoweringContext, call: &ast::CallExpr) -> Option<Expr> {
+    if call.args.len() != 1 || call.args[0].spread.is_some() {
+        return None;
+    }
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return None;
+    };
+    let mut c = callee.as_ref();
+    while let ast::Expr::Paren(p) = c {
+        c = p.expr.as_ref();
+    }
+    let ast::Expr::Ident(id) = c else {
+        return None;
+    };
+    if id.sym.as_ref() != "eval"
+        || ctx.lookup_local("eval").is_some()
+        || ctx.lookup_func("eval").is_some()
+        || ctx.lookup_imported_func("eval").is_some()
+    {
+        return None;
+    }
+    let body = const_string_of(&call.args[0].expr)?;
+    match normalize_eval_this_body(&body).as_deref()? {
+        "globalThis" => Some(Expr::GlobalThisExpr),
+        "this" if ctx.current_strict && ctx.scope_depth > 0 => Some(Expr::Undefined),
+        "this" => Some(Expr::This),
+        "typeof this" if ctx.current_strict && ctx.scope_depth > 0 => {
+            Some(Expr::String("undefined".to_string()))
+        }
+        "typeof this" => Some(Expr::TypeOf(Box::new(Expr::This))),
+        _ => None,
+    }
+}
+
+fn normalize_eval_this_body(body: &str) -> Option<String> {
+    let mut src = body.trim().trim_end_matches(';').trim();
+    for directive in ["\"use strict\"", "'use strict'"] {
+        if let Some(rest) = src.strip_prefix(directive) {
+            let rest = rest.trim_start();
+            if let Some(after_semicolon) = rest.strip_prefix(';') {
+                src = after_semicolon.trim().trim_end_matches(';').trim();
+            }
+        }
+    }
+    if matches!(src, "this" | "globalThis" | "typeof this") {
+        Some(src.to_string())
+    } else {
+        None
+    }
+}
+
 /// Combined fold entry for the call form, run from `lower_call_inner`
 /// before the Phase 0 refusal: the `(0, eval)('this')` idiom first, then a
 /// bare-ident `Function(...)` const-fold. `Ok(None)` → fall through to the
@@ -184,6 +240,9 @@ pub(crate) fn try_eval_function_call_fold(
     call: &ast::CallExpr,
 ) -> Result<Option<Expr>> {
     if let Some(expr) = try_indirect_eval_globalthis(ctx, call) {
+        return Ok(Some(expr));
+    }
+    if let Some(expr) = try_direct_eval_this_fold(ctx, call) {
         return Ok(Some(expr));
     }
     let ast::Callee::Expr(callee) = &call.callee else {

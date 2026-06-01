@@ -98,15 +98,6 @@ fn is_known_global_identifier_name(name: &str) -> bool {
             | "btoa"
             | "BigInt"
             | "WebAssembly"
-            // #3527: `eval` as a VALUE (not a call). Libraries build intrinsic
-            // tables that reference it bare — get-intrinsic's
-            // `'%eval%': eval` — and would otherwise throw `ReferenceError:
-            // identifier is not defined` at module init. `eval(...)` *calls*
-            // keep their dedicated eval-surface classification in
-            // `expr_call::intrinsics` (which matches the callee name before the
-            // callee is lowered through this arm), so this only affects the
-            // value read, which lowers to the `GlobalGet(0)` sentinel.
-            | "eval"
     ) || is_builtin_global_value_name(name)
 }
 
