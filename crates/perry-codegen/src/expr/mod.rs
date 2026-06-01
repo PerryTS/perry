@@ -1626,6 +1626,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ProcessOnce { .. }
         | Expr::ProcessStdinSetRawMode(..)
         | Expr::ProcessStdinOn { .. }
+        | Expr::ProcessStdinRemoveListener { .. }
+        | Expr::ProcessStdinLifecycle(..)
         | Expr::ProcessStdoutOn { .. }
         | Expr::TtyIsAtty(..)
         | Expr::ProcessStdinIsTTY

@@ -108,6 +108,17 @@ impl SH for Expr {
             Expr::ProcessStderr => tag(h, 72),
             Expr::ProcessStdinSetRawMode(e) => { tag(h, 73); e.as_ref().hash(h); }
             Expr::ProcessStdinOn { event, handler } => { tag(h, 74); event.as_ref().hash(h); handler.as_ref().hash(h); }
+            Expr::ProcessStdinRemoveListener { event, handler } => { tag(h, 11241); event.as_ref().hash(h); handler.as_ref().hash(h); }
+            Expr::ProcessStdinLifecycle(method) => {
+                tag(h, 11242);
+                tag(h, match method {
+                    ProcessStdinLifecycleMethod::Pause => 1,
+                    ProcessStdinLifecycleMethod::Resume => 2,
+                    ProcessStdinLifecycleMethod::Unref => 3,
+                    ProcessStdinLifecycleMethod::Ref => 4,
+                    ProcessStdinLifecycleMethod::Destroy => 5,
+                });
+            }
             Expr::ProcessStdoutOn { event, handler } => { tag(h, 75); event.as_ref().hash(h); handler.as_ref().hash(h); }
             Expr::ProcessStdinIsTTY => tag(h, 76),
             Expr::ProcessStdoutIsTTY => tag(h, 77),

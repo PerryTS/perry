@@ -109,6 +109,12 @@ static EOF_REACHED: AtomicBool = AtomicBool::new(false);
 /// (compare_exchange) so we don't accidentally spawn twice if two
 /// init paths race on first call.
 static READER_STARTED: AtomicBool = AtomicBool::new(false);
+/// `process.stdin.pause()` gates raw stdin event dispatch until resume.
+static STDIN_PAUSED: AtomicBool = AtomicBool::new(false);
+/// Ref/unref mirrors Node's event-loop liveness contract for stdin.
+static STDIN_REFED: AtomicBool = AtomicBool::new(true);
+/// Destroyed stdin clears listeners/queues and no longer keeps the loop alive.
+static STDIN_DESTROYED: AtomicBool = AtomicBool::new(false);
 
 // ---------------------------------------------------------------------------
 // Main-thread-only state — callbacks are dispatched from the main thread
@@ -125,10 +131,10 @@ thread_local! {
     static LINE_CALLBACK: RefCell<Option<i64>> = const { RefCell::new(None) };
     /// Persistent callback registered by `rl.on('close', cb)`.
     static CLOSE_CALLBACK: RefCell<Option<i64>> = const { RefCell::new(None) };
-    /// Persistent callback registered by `process.stdin.on('data', cb)`.
-    static DATA_CALLBACK: RefCell<Option<i64>> = const { RefCell::new(None) };
-    /// Persistent callback registered by `process.stdin.on('keypress', cb)`.
-    static KEYPRESS_CALLBACK: RefCell<Option<i64>> = const { RefCell::new(None) };
+    /// Persistent callbacks registered by `process.stdin.on('data', cb)`.
+    static DATA_CALLBACKS: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
+    /// Persistent callbacks registered by `process.stdin.on('keypress', cb)`.
+    static KEYPRESS_CALLBACKS: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
     /// Whether the close callback has already fired.
     static CLOSE_FIRED: RefCell<bool> = const { RefCell::new(false) };
 }
@@ -460,6 +466,9 @@ fn ensure_reader_started() {
             match reader.read(&mut byte) {
                 Ok(0) => break, // EOF
                 Ok(_) => {
+                    if STDIN_DESTROYED.load(Ordering::Acquire) {
+                        break;
+                    }
                     if RAW_MODE.load(Ordering::Acquire) {
                         // In raw mode, queue a single-byte chunk. Multi-byte
                         // escape sequences (e.g. arrow keys = "\x1b[A")
@@ -863,6 +872,9 @@ pub extern "C" fn js_readline_terminal(handle: i64) -> f64 {
 /// ReadStream itself for chaining).
 #[no_mangle]
 pub extern "C" fn js_readline_set_raw_mode(enabled: f64) -> f64 {
+    if STDIN_DESTROYED.load(Ordering::Acquire) {
+        throw_type_error("process.stdin.setRawMode cannot be used after process.stdin.destroy()");
+    }
     let truthy = perry_runtime::value::js_is_truthy(enabled) != 0;
     if truthy {
         let _ = termios_impl::enable();
@@ -871,6 +883,7 @@ pub extern "C" fn js_readline_set_raw_mode(enabled: f64) -> f64 {
         let _ = termios_impl::disable();
         RAW_MODE.store(false, Ordering::Release);
     }
+    perry_runtime::os::set_process_stdin_raw_state(truthy);
     try_register_pump();
     ensure_reader_started();
     // Return a pointer-tagged handle so the chain `process.stdin.setRawMode(true)`
@@ -888,20 +901,18 @@ pub extern "C" fn js_readline_stdin_on(event_ptr: *const StringHeader, callback:
     if event_ptr.is_null() {
         return undefined();
     }
-    let event = unsafe {
-        let len = (*event_ptr).byte_len as usize;
-        let data = (event_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        let slice = std::slice::from_raw_parts(data, len);
-        std::str::from_utf8(slice).unwrap_or("")
-    };
-    match event {
+    if STDIN_DESTROYED.load(Ordering::Acquire) {
+        throw_type_error("process.stdin.on cannot be used after process.stdin.destroy()");
+    }
+    let event = string_header_to_string(event_ptr);
+    match event.as_str() {
         "data" => {
-            DATA_CALLBACK.with(|cb| *cb.borrow_mut() = Some(callback));
+            DATA_CALLBACKS.with(|cb| cb.borrow_mut().push(callback));
             try_register_pump();
             ensure_reader_started();
         }
         "keypress" => {
-            KEYPRESS_CALLBACK.with(|cb| *cb.borrow_mut() = Some(callback));
+            KEYPRESS_CALLBACKS.with(|cb| cb.borrow_mut().push(callback));
             try_register_pump();
             ensure_reader_started();
         }
@@ -913,6 +924,91 @@ pub extern "C" fn js_readline_stdin_on(event_ptr: *const StringHeader, callback:
         _ => {}
     }
     undefined()
+}
+
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_remove_listener(
+    event_ptr: *const StringHeader,
+    callback: i64,
+) -> f64 {
+    if event_ptr.is_null() {
+        return js_nanbox_pointer(STDIN_READLINE_HANDLE);
+    }
+    let event = string_header_to_string(event_ptr);
+    match event.as_str() {
+        "data" => DATA_CALLBACKS.with(|callbacks| {
+            callbacks
+                .borrow_mut()
+                .retain(|registered| *registered != callback);
+        }),
+        "keypress" => KEYPRESS_CALLBACKS.with(|callbacks| {
+            callbacks
+                .borrow_mut()
+                .retain(|registered| *registered != callback);
+        }),
+        "end" | "close" => CLOSE_CALLBACK.with(|cb| {
+            let mut cb = cb.borrow_mut();
+            if *cb == Some(callback) {
+                *cb = None;
+            }
+        }),
+        _ => {}
+    }
+    js_nanbox_pointer(STDIN_READLINE_HANDLE)
+}
+
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_pause() -> f64 {
+    STDIN_PAUSED.store(true, Ordering::Release);
+    js_nanbox_pointer(STDIN_READLINE_HANDLE)
+}
+
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_resume() -> f64 {
+    if !STDIN_DESTROYED.load(Ordering::Acquire) {
+        STDIN_PAUSED.store(false, Ordering::Release);
+        try_register_pump();
+        ensure_reader_started();
+    }
+    js_nanbox_pointer(STDIN_READLINE_HANDLE)
+}
+
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_unref() -> f64 {
+    STDIN_REFED.store(false, Ordering::Release);
+    js_nanbox_pointer(STDIN_READLINE_HANDLE)
+}
+
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_ref() -> f64 {
+    if !STDIN_DESTROYED.load(Ordering::Acquire) {
+        STDIN_REFED.store(true, Ordering::Release);
+    }
+    js_nanbox_pointer(STDIN_READLINE_HANDLE)
+}
+
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_destroy() -> f64 {
+    STDIN_DESTROYED.store(true, Ordering::Release);
+    STDIN_REFED.store(false, Ordering::Release);
+    STDIN_PAUSED.store(true, Ordering::Release);
+    RAW_MODE.store(false, Ordering::Release);
+    EOF_REACHED.store(true, Ordering::Release);
+    let _ = termios_impl::disable();
+    if let Ok(mut q) = PENDING_DATA.lock() {
+        q.clear();
+    }
+    if let Ok(mut q) = PENDING_LINES.lock() {
+        q.clear();
+    }
+    DATA_CALLBACKS.with(|cb| cb.borrow_mut().clear());
+    KEYPRESS_CALLBACKS.with(|cb| cb.borrow_mut().clear());
+    QUESTION_CALLBACK.with(|cb| *cb.borrow_mut() = None);
+    LINE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
+    CLOSE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
+    CLOSE_FIRED.with(|f| *f.borrow_mut() = true);
+    perry_runtime::os::mark_process_stdin_destroyed();
+    js_nanbox_pointer(STDIN_READLINE_HANDLE)
 }
 
 // ---------------------------------------------------------------------------
@@ -1016,7 +1112,14 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
     let mut fired: i32 = 0;
 
     // Drain raw-mode byte chunks → 'data' / 'keypress' callbacks.
-    let chunks: Vec<Vec<u8>> = {
+    let chunks: Vec<Vec<u8>> = if STDIN_DESTROYED.load(Ordering::Acquire) {
+        if let Ok(mut q) = PENDING_DATA.lock() {
+            q.clear();
+        }
+        Vec::new()
+    } else if STDIN_PAUSED.load(Ordering::Acquire) {
+        Vec::new()
+    } else {
         let mut q = match PENDING_DATA.lock() {
             Ok(g) => g,
             Err(_) => return fired,
@@ -1025,8 +1128,8 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
     };
     for chunk in chunks {
         // 'data' callback receives the raw bytes as a string.
-        let data_cb = DATA_CALLBACK.with(|cb| *cb.borrow());
-        if let Some(cb_i64) = data_cb {
+        let data_callbacks = DATA_CALLBACKS.with(|cb| cb.borrow().clone());
+        for cb_i64 in data_callbacks {
             let s = js_string_from_bytes(chunk.as_ptr(), chunk.len() as u32);
             let arg = f64::from_bits(JSValue::string_ptr(s).bits());
             let closure = cb_i64 as *const ClosureHeader;
@@ -1034,8 +1137,8 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
             fired += 1;
         }
         // 'keypress' callback receives (sequence_string, key_object).
-        let kp_cb = KEYPRESS_CALLBACK.with(|cb| *cb.borrow());
-        if let Some(cb_i64) = kp_cb {
+        let keypress_callbacks = KEYPRESS_CALLBACKS.with(|cb| cb.borrow().clone());
+        for cb_i64 in keypress_callbacks {
             if let Some((name, ctrl, shift, meta, seq)) = parse_keypress(&chunk) {
                 let seq_str = js_string_from_bytes(seq.as_ptr(), seq.len() as u32);
                 let arg1 = f64::from_bits(JSValue::string_ptr(seq_str).bits());
@@ -1103,11 +1206,30 @@ pub extern "C" fn js_readline_has_active() -> i32 {
     }
     let started = READER_STARTED.load(Ordering::Acquire);
     let eof = EOF_REACHED.load(Ordering::Acquire);
+    let destroyed = STDIN_DESTROYED.load(Ordering::Acquire);
+    let paused = STDIN_PAUSED.load(Ordering::Acquire);
+    let refed = STDIN_REFED.load(Ordering::Acquire);
     let has_lines = PENDING_LINES.lock().map(|q| !q.is_empty()).unwrap_or(false);
     let has_data = PENDING_DATA.lock().map(|q| !q.is_empty()).unwrap_or(false);
+    let has_stdin_callbacks = DATA_CALLBACKS.with(|c| !c.borrow().is_empty())
+        || KEYPRESS_CALLBACKS.with(|c| !c.borrow().is_empty());
+    let has_line_callbacks = QUESTION_CALLBACK.with(|c| c.borrow().is_some())
+        || LINE_CALLBACK.with(|c| c.borrow().is_some());
     let has_close_cb =
         !CLOSE_FIRED.with(|f| *f.borrow()) && CLOSE_CALLBACK.with(|c| c.borrow().is_some());
-    if has_lines || has_data || has_close_cb || (started && !eof) {
+    let has_dispatchable_data = has_data && has_stdin_callbacks && !paused;
+    let reader_keeps_alive = started
+        && !eof
+        && !destroyed
+        && refed
+        && !paused
+        && ((RAW_MODE.load(Ordering::Acquire) && has_stdin_callbacks)
+            || has_line_callbacks
+            || has_close_cb);
+    if !destroyed
+        && refed
+        && (has_lines || has_dispatchable_data || has_close_cb || reader_keeps_alive)
+    {
         1
     } else {
         0
@@ -1148,17 +1270,37 @@ mod tests {
     /// function tests (`parse_keypress_*`) don't call `reset()` and
     /// continue running in parallel.
     static TEST_LOCK: Mutex<()> = Mutex::new(());
+    thread_local! {
+        static DATA_COUNT: RefCell<usize> = const { RefCell::new(0) };
+    }
+
+    extern "C" fn count_data_callback(_closure: *const ClosureHeader, _chunk: f64) -> f64 {
+        DATA_COUNT.with(|count| *count.borrow_mut() += 1);
+        undefined()
+    }
+
+    fn data_counter_callback() -> i64 {
+        js_closure_alloc(count_data_callback as *const u8, 0) as i64
+    }
+
+    fn event_name(name: &str) -> *mut StringHeader {
+        js_string_from_bytes(name.as_ptr(), name.len() as u32)
+    }
 
     fn reset() -> MutexGuard<'static, ()> {
         let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        DATA_COUNT.with(|count| *count.borrow_mut() = 0);
         QUESTION_CALLBACK.with(|c| *c.borrow_mut() = None);
         LINE_CALLBACK.with(|c| *c.borrow_mut() = None);
         CLOSE_CALLBACK.with(|c| *c.borrow_mut() = None);
-        DATA_CALLBACK.with(|c| *c.borrow_mut() = None);
-        KEYPRESS_CALLBACK.with(|c| *c.borrow_mut() = None);
+        DATA_CALLBACKS.with(|c| c.borrow_mut().clear());
+        KEYPRESS_CALLBACKS.with(|c| c.borrow_mut().clear());
         PENDING_LINES.lock().unwrap().clear();
         PENDING_DATA.lock().unwrap().clear();
         EOF_REACHED.store(false, Ordering::Release);
+        STDIN_PAUSED.store(false, Ordering::Release);
+        STDIN_REFED.store(true, Ordering::Release);
+        STDIN_DESTROYED.store(false, Ordering::Release);
         CLOSE_FIRED.with(|f| *f.borrow_mut() = false);
         RAW_MODE.store(false, Ordering::Release);
         READLINE_INTERFACES.with(|interfaces| interfaces.borrow_mut().clear());
@@ -1206,6 +1348,57 @@ mod tests {
         // No data callback registered → drain consumes silently.
         assert_eq!(js_readline_process_pending(), 0);
         assert_eq!(PENDING_DATA.lock().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn stdin_remove_listener_detaches_data_callback() {
+        let _g = reset();
+        let cb = data_counter_callback();
+        let event = event_name("data");
+        let _ = js_readline_stdin_on(event, cb);
+        let _ = js_readline_stdin_remove_listener(event, cb);
+        test_inject_chunk(b"x");
+        assert_eq!(js_readline_process_pending(), 0);
+        DATA_COUNT.with(|count| assert_eq!(*count.borrow(), 0));
+        assert_eq!(js_readline_has_active(), 0);
+    }
+
+    #[test]
+    fn stdin_pause_resume_gates_data_dispatch() {
+        let _g = reset();
+        let cb = data_counter_callback();
+        let _ = js_readline_stdin_on(event_name("data"), cb);
+        let _ = js_readline_stdin_pause();
+        test_inject_chunk(b"x");
+        assert_eq!(js_readline_process_pending(), 0);
+        assert_eq!(PENDING_DATA.lock().unwrap().len(), 1);
+        DATA_COUNT.with(|count| assert_eq!(*count.borrow(), 0));
+
+        let _ = js_readline_stdin_resume();
+        assert_eq!(js_readline_process_pending(), 1);
+        assert_eq!(PENDING_DATA.lock().unwrap().len(), 0);
+        DATA_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+    }
+
+    #[test]
+    fn stdin_unref_and_destroy_release_active_state() {
+        let _g = reset();
+        READER_STARTED.store(true, Ordering::Release);
+        RAW_MODE.store(true, Ordering::Release);
+        let _ = js_readline_stdin_on(event_name("data"), data_counter_callback());
+        assert_eq!(js_readline_has_active(), 1);
+
+        let _ = js_readline_stdin_unref();
+        assert_eq!(js_readline_has_active(), 0);
+
+        let _ = js_readline_stdin_ref();
+        test_inject_chunk(b"x");
+        assert_eq!(js_readline_has_active(), 1);
+        let _ = js_readline_stdin_destroy();
+        assert_eq!(js_readline_has_active(), 0);
+        assert_eq!(PENDING_DATA.lock().unwrap().len(), 0);
+        DATA_CALLBACKS.with(|callbacks| assert!(callbacks.borrow().is_empty()));
+        assert!(STDIN_DESTROYED.load(Ordering::Acquire));
     }
 
     #[test]

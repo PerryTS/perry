@@ -171,3 +171,30 @@ pub extern "C" fn js_readline_stdin_on(_event_ptr: i64, _callback: i64) -> f64 {
     perry_stub_warn("js_readline_stdin_on", READLINE_REASON, Some("#347"));
     f64::from_bits(0x7FFC_0000_0000_0001)
 }
+#[cfg(not(target_os = "android"))]
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_remove_listener(_event_ptr: i64, _callback: i64) -> f64 {
+    perry_stub_warn(
+        "js_readline_stdin_remove_listener",
+        READLINE_REASON,
+        Some("#3962"),
+    );
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
+macro_rules! readline_stdin_lifecycle_stub {
+    ($name:ident) => {
+        #[cfg(not(target_os = "android"))]
+        #[no_mangle]
+        pub extern "C" fn $name() -> f64 {
+            perry_stub_warn(stringify!($name), READLINE_REASON, Some("#3962"));
+            f64::from_bits(0x7FFC_0000_0000_0001)
+        }
+    };
+}
+
+readline_stdin_lifecycle_stub!(js_readline_stdin_pause);
+readline_stdin_lifecycle_stub!(js_readline_stdin_resume);
+readline_stdin_lifecycle_stub!(js_readline_stdin_unref);
+readline_stdin_lifecycle_stub!(js_readline_stdin_ref);
+readline_stdin_lifecycle_stub!(js_readline_stdin_destroy);

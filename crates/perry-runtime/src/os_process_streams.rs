@@ -98,6 +98,36 @@ thread_local! {
     static STDERR_STREAM_SINGLETON: RefCell<usize> = const { RefCell::new(0) };
 }
 
+fn string_key(key: &[u8]) -> *mut StringHeader {
+    crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32)
+}
+
+fn set_stdin_bool_field(name: &[u8], value: bool) {
+    STDIN_STREAM_SINGLETON.with(|slot| {
+        let obj = *slot.borrow() as *mut crate::object::ObjectHeader;
+        if obj.is_null() {
+            return;
+        }
+        crate::object::js_object_set_field_by_name(
+            obj,
+            string_key(name),
+            f64::from_bits(crate::value::JSValue::bool(value).bits()),
+        );
+    });
+}
+
+pub fn set_process_stdin_raw_state(enabled: bool) {
+    set_stdin_bool_field(b"isRaw", enabled);
+}
+
+pub fn mark_process_stdin_destroyed() {
+    set_stdin_bool_field(b"readable", false);
+    set_stdin_bool_field(b"readableEnded", true);
+    set_stdin_bool_field(b"destroyed", true);
+    set_stdin_bool_field(b"closed", true);
+    set_stdin_bool_field(b"isRaw", false);
+}
+
 pub fn scan_process_stream_singleton_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let mut visit_slot = |slot: &RefCell<usize>| {
         let mut value = slot.borrow_mut();
@@ -144,17 +174,27 @@ fn build_stream_object_with_write(
     }
 
     // #3962: EventEmitter listener-removal + lifecycle surface appended to the
-    // stdin shapes (the TTY read stream and the generic non-TTY stream, which
-    // also backs piped stdin/stdout/stderr). The TTY *write* stream keeps its
-    // existing shape. `teardown_start` is the field index where these begin, or
-    // `None` for the TTY write stream.
-    const TEARDOWN_KEYS: &[u8] =
+    // stdin shapes. The TTY *write* stream keeps its existing shape; generic
+    // non-TTY streams keep `main`'s no-op teardown surface.
+    const STDIN_TEARDOWN_KEYS: &[u8] =
+        b"addListener\0removeListener\0off\0removeAllListeners\0pause\0resume\0unref\0ref\0destroy\0";
+    const GENERIC_TEARDOWN_KEYS: &[u8] =
         b"addListener\0removeListener\0off\0removeAllListeners\0pause\0resume\0unref\0destroy\0";
+    let is_stdin = fd_i == 0;
     let (class_id, packed, field_count, teardown_start): (u32, Vec<u8>, u32, Option<u32>) =
-        if is_tty && fd_i == 0 {
-            let mut keys = b"write\0fd\0emit\0on\0once\0writable\0isRaw\0isTTY\0".to_vec();
-            keys.extend_from_slice(TEARDOWN_KEYS);
-            (crate::tty::CLASS_ID_TTY_READ_STREAM, keys, 16, Some(8))
+        if is_stdin {
+            let mut keys = b"write\0fd\0emit\0on\0once\0writable\0readable\0readableEnded\0destroyed\0closed\0isRaw\0isTTY\0".to_vec();
+            keys.extend_from_slice(STDIN_TEARDOWN_KEYS);
+            (
+                if is_tty {
+                    crate::tty::CLASS_ID_TTY_READ_STREAM
+                } else {
+                    0
+                },
+                keys,
+                21,
+                Some(12),
+            )
         } else if is_tty {
             (
                 crate::tty::CLASS_ID_TTY_WRITE_STREAM,
@@ -164,7 +204,7 @@ fn build_stream_object_with_write(
             )
         } else {
             let mut keys = b"write\0fd\0emit\0on\0once\0writable\0".to_vec();
-            keys.extend_from_slice(TEARDOWN_KEYS);
+            keys.extend_from_slice(GENERIC_TEARDOWN_KEYS);
             (0, keys, 14, Some(6))
         };
     let obj = if class_id == 0 {
@@ -207,9 +247,21 @@ fn build_stream_object_with_write(
         js_object_set_field(obj, 4, JSValue::pointer(once as *const u8));
     }
     js_object_set_field(obj, 5, JSValue::from_bits(writable.to_bits()));
-    if is_tty && fd_i == 0 {
-        js_object_set_field(obj, 6, JSValue::from_bits(crate::value::TAG_FALSE));
-        js_object_set_field(obj, 7, JSValue::from_bits(crate::value::TAG_TRUE));
+    if fd_i == 0 {
+        js_object_set_field(obj, 6, JSValue::from_bits(crate::value::TAG_TRUE));
+        js_object_set_field(obj, 7, JSValue::from_bits(crate::value::TAG_FALSE));
+        js_object_set_field(obj, 8, JSValue::from_bits(crate::value::TAG_FALSE));
+        js_object_set_field(obj, 9, JSValue::from_bits(crate::value::TAG_FALSE));
+        js_object_set_field(obj, 10, JSValue::from_bits(crate::value::TAG_FALSE));
+        js_object_set_field(
+            obj,
+            11,
+            JSValue::from_bits(if is_tty {
+                crate::value::TAG_TRUE
+            } else {
+                crate::value::TAG_FALSE
+            }),
+        );
     } else if is_tty {
         js_object_set_field(
             obj,
@@ -243,12 +295,12 @@ fn build_stream_object_with_write(
                 let c = js_closure_alloc(stub as *const u8, 0);
                 js_object_set_field(obj, idx, JSValue::pointer(c as *const u8));
             };
-        let lifecycle: extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64 =
-            if fd_i == 0 {
-                process_stdin_detach_stub
-            } else {
-                process_stream_on_once_stub
-            };
+        let lifecycle: extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64 = if is_stdin
+        {
+            process_stdin_detach_stub
+        } else {
+            process_stream_on_once_stub
+        };
         set_field_with_stub(start, process_stream_on_once_stub); // addListener
         set_field_with_stub(start + 1, process_stream_on_once_stub); // removeListener
         set_field_with_stub(start + 2, process_stream_on_once_stub); // off
@@ -256,7 +308,12 @@ fn build_stream_object_with_write(
         set_field_with_stub(start + 4, lifecycle); // pause
         set_field_with_stub(start + 5, process_stream_on_once_stub); // resume
         set_field_with_stub(start + 6, lifecycle); // unref
-        set_field_with_stub(start + 7, lifecycle); // destroy
+        if is_stdin {
+            set_field_with_stub(start + 7, process_stream_on_once_stub); // ref
+            set_field_with_stub(start + 8, lifecycle); // destroy
+        } else {
+            set_field_with_stub(start + 7, lifecycle); // destroy
+        }
     }
     obj
 }

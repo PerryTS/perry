@@ -234,6 +234,13 @@ pub struct LoweringContext {
     /// (clears) it on read so a dynamic key *inside the index* (`ns[fs[evil]]`)
     /// is still refused.
     pub(crate) suppress_stdlib_dispatch_guard_once: bool,
+    /// #3896: set while lowering the *callee* of a call expression. A namespace
+    /// read of an absent Node-core member (`ns.foo`) is an ordinary property
+    /// miss → `undefined` (matching Node), but `ns.foo()` must still reject via
+    /// the #463 gate. The expr_member read-gate consults this flag to relax only
+    /// value reads, not call callees. Captured-and-cleared at the top of
+    /// `lower_member_inner` so it scopes to the immediate callee member only.
+    pub(crate) lowering_call_callee: bool,
     /// Compatibility escape hatch for legacy member/global lowering. Bare
     /// unresolvable identifiers throw ReferenceError, but member receivers are
     /// still allowed to use the existing GlobalGet sentinel path.

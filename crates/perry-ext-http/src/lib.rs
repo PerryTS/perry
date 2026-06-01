@@ -1094,7 +1094,7 @@ pub unsafe extern "C" fn js_https_get(arg_f64: f64, callback_i64: i64) -> Handle
 unsafe fn request_overload(args_array: i64, default_protocol: &str, force_get: bool) -> Handle {
     ensure_gc_scanner_registered();
     let parsed = parse_client_args(args_array);
-    let method = method_for_overload(parsed.opts, force_get);
+    let method = method_for_overload(parsed.opts);
     let (url, headers, timeout, agent_handle) =
         merge_url_and_options(parsed.url, parsed.opts, default_protocol);
     let handle = make_request_handle(method, url, headers, timeout, parsed.callback, agent_handle);

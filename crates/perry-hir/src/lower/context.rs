@@ -81,6 +81,7 @@ impl LoweringContext {
             uses_fetch: false,
             uses_webassembly: false,
             suppress_stdlib_dispatch_guard_once: false,
+            lowering_call_callee: false,
             unresolved_ident_as_global: false,
             var_hoisted_ids: HashSet::new(),
             functions_index: HashMap::new(),
