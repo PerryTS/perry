@@ -421,6 +421,20 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
         if obj_jv.is_null() || obj_jv.is_undefined() {
             super::has_own_helpers::throw_to_object_nullish_type_error();
         }
+        if obj_jv.is_pointer() {
+            let raw = crate::value::js_nanbox_get_pointer(obj_value) as usize;
+            if raw > 0 && raw < 0x100000 {
+                if let Some(dispatch) = super::class_registry::handle_own_property_names_dispatch()
+                {
+                    let names = dispatch(raw as i64);
+                    if names.to_bits() != crate::value::TAG_UNDEFINED {
+                        return names;
+                    }
+                }
+                let empty = crate::array::js_array_alloc(0);
+                return f64::from_bits((empty as u64) | 0x7FFD_0000_0000_0000);
+            }
+        }
         if let Some(class_id) = class_ref_id(obj_value) {
             let mut names: Vec<String> = vec!["constructor".to_string()];
             if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {

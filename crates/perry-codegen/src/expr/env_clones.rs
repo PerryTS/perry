@@ -77,13 +77,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // type. The HIR variant is misnamed — it covers BOTH
             // `(12345).toLocaleString()` (number) and
             // `new Date(...).toLocaleString()` (date) — so the LLVM
-            // arm has to disambiguate. `refine_type_from_init` returns
-            // a HirType for a small set of literal / built-in shapes;
-            // `Number` / `Integer` route to `js_number_to_locale_string`
-            // (formats with thousands separators). Anything else falls
-            // through to `js_date_to_locale_string`.
+            // arm has to disambiguate.
+            //
+            // #3917: a `LocalGet` whose declared type is `number` was
+            // falling through to `js_date_to_locale_string` and printing
+            // a 1970-epoch date string. `refine_type_from_init` only
+            // inspects AST shapes (literals, arithmetic, `new T(...)`)
+            // and has no `LocalGet` arm, so it returned `None` for
+            // `const num: number = 20; num.toLocaleString(...)`. Fall
+            // back to `static_type_of`, which DOES read `local_types`,
+            // when the structural refinement comes up empty.
             let v = lower_expr(ctx, d)?;
-            let inferred = crate::type_analysis::refine_type_from_init(ctx, d);
+            let inferred = crate::type_analysis::refine_type_from_init(ctx, d)
+                .or_else(|| crate::type_analysis::static_type_of(ctx, d));
             let rt_fn = match inferred {
                 Some(perry_types::Type::Number) | Some(perry_types::Type::Int32) => {
                     "js_number_to_locale_string"

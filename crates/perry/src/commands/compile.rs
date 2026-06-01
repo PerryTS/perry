@@ -3023,7 +3023,7 @@ pub fn run_with_parse_cache(
                             // with CommonJS-style default objects route through
                             // the explicit "default" export below.
                             //
-                            if matches!(submod_key.as_str(), "timers" | "sys" | "trace_events") {
+                            if matches!(submod_key.as_str(), "timers" | "trace_events") {
                                 // Default imports of these modules are module
                                 // objects — route to the namespace so they work
                                 // like `import * as ...` (#1213, #2629).

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2489 entries across 106 modules
+// Coverage: 2492 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1686,6 +1686,8 @@ declare module "http2" {
   export class Http2ServerResponse { [key: string]: any; }
   /** stdlib */
   export const constants: any;
+  /** stdlib */
+  export const sensitiveHeaders: any;
   /** stdlib */
   export function createSecureServer(...args: any[]): any;
   /** stdlib */
@@ -3659,6 +3661,8 @@ declare module "worker_threads" {
   export function receiveMessageOnPort(p0: any): any;
   /** stdlib */
   export function setEnvironmentData(p0: any, p1: any): void;
+  /** stdlib */
+  export function workerData(...args: any[]): any;
 }
 
 declare module "ws" {
