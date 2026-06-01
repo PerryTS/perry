@@ -1249,6 +1249,7 @@ const UTIL_NAMESPACE_KEYS: &[&[u8]] = &[
 
 const EVENTS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"EventEmitter",
+    b"EventEmitterAsyncResource",
     b"default",
     b"defaultMaxListeners",
     b"usingDomains",
@@ -1561,8 +1562,8 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         // Deprecated path alias enumerable on the top-level and style
         // sub-namespaces, matching Node's `Object.keys(...).includes`.
         "path" => Some(PATH_NAMESPACE_KEYS),
-        "path.default" => Some(PATH_DEFAULT_KEYS),
-        "path.posix" | "path.win32" => Some(&[b"_makeLong"]),
+        "path.default" | "path.posix.default" | "path.win32.default" => Some(PATH_DEFAULT_KEYS),
+        "path.posix" | "path.win32" => Some(PATH_NAMESPACE_KEYS),
         "fs" => Some(FS_NAMESPACE_KEYS),
         "constants" => Some(deprecated_constants_namespace_keys()),
         "constants.default" => Some(deprecated_constants_keys()),
@@ -1640,6 +1641,8 @@ fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
         "dns/promises.default" => Some("dns/promises"),
         "os.default" => Some("os"),
         "path.default" => Some("path"),
+        "path.posix.default" => Some("path.posix"),
+        "path.win32.default" => Some("path.win32"),
         "punycode.default" => Some("punycode"),
         "querystring.default" => Some("querystring"),
         "url.default" => Some("url"),
@@ -1657,6 +1660,8 @@ fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
         "dns/promises" => Some("dns/promises.default"),
         "os" => Some("os.default"),
         "path" => Some("path.default"),
+        "path.posix" => Some("path.posix.default"),
+        "path.win32" => Some("path.win32.default"),
         "punycode" => Some("punycode.default"),
         "querystring" => Some("querystring.default"),
         "url" => Some("url.default"),
@@ -1674,7 +1679,9 @@ fn cjs_default_export_value(module_name: &str) -> Option<f64> {
     match module_name {
         "events" => Some(bound_native_callable_export_value("events", "EventEmitter")),
         "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "os" | "path"
-        | "punycode" | "querystring" | "url" | "util" => create_cjs_default_namespace(module_name),
+        | "path.posix" | "path.win32" | "punycode" | "querystring" | "url" | "util" => {
+            create_cjs_default_namespace(module_name)
+        }
         _ => None,
     }
 }
@@ -1713,6 +1720,8 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "os.default"
             | "path"
             | "path.default"
+            | "path.posix.default"
+            | "path.win32.default"
             | "punycode"
             | "punycode.default"
             | "punycode.ucs2"
@@ -1830,6 +1839,11 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
             "URLSearchParams".len(),
         );
     }
+    if module_name == "crypto.webcrypto" {
+        if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
+            return value;
+        }
+    }
 
     // #3679: node:v8 lifecycle namespaces. `v8.startupSnapshot` /
     // `v8.promiseHooks` are object-valued exports; resolve them to
@@ -1936,6 +1950,8 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     }
 
     if module_name == "events" && property_name == "EventEmitter" {
+        let async_resource_ctor =
+            bound_native_callable_export_value("events", "EventEmitterAsyncResource");
         for method in [
             "addAbortListener",
             "once",
@@ -1949,6 +1965,11 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
             crate::closure::closure_set_dynamic_prop(closure_addr, method, method_value);
         }
         crate::closure::closure_set_dynamic_prop(closure_addr, "EventEmitter", value);
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "EventEmitterAsyncResource",
+            async_resource_ctor,
+        );
         crate::closure::closure_set_dynamic_prop(closure_addr, "defaultMaxListeners", 10.0);
         crate::closure::closure_set_dynamic_prop(
             closure_addr,
@@ -2073,6 +2094,7 @@ pub(crate) fn fs_namespace_descriptor_setter_value(property_name: &str) -> f64 {
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
         ("events", "EventEmitter") => Some(1),
+        ("events", "EventEmitterAsyncResource") => Some(0),
         ("events", "addAbortListener") => Some(2),
         ("events", "once") => Some(2),
         ("events", "on") => Some(2),
@@ -2090,6 +2112,9 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         }
         ("tls", "checkServerIdentity") => Some(2),
         ("tls", "SecureContext") => Some(1),
+        // #3726: `crypto.Cipheriv` / `crypto.Decipheriv` constructor exports —
+        // `(cipher, key, iv, options)` arity matches Node's length 4.
+        ("crypto", "Cipheriv" | "Decipheriv") => Some(4),
         ("url", "Url") => Some(0),
         ("url", "resolveObject") => Some(2),
         ("process", "setSourceMapsEnabled") => Some(1),
@@ -2099,11 +2124,13 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ) => Some(1),
         ("process", "hasUncaughtExceptionCaptureCallback") => Some(0),
         ("fs", "_toUnixTimestamp") => Some(1),
-        ("util", "debug" | "debuglog") => Some(2),
+        ("util", "debug" | "debuglog" | "inherits") => Some(2),
         ("util", "MIMEParams") => Some(0),
         ("util", "MIMEType") => Some(1),
         ("net", "createServer" | "Server") => Some(2),
         ("net", "Socket") => Some(1),
+        // #3720: `http2.performServerHandshake(socket[, options])` — length 1.
+        ("http2", "performServerHandshake") => Some(1),
         ("net", "_normalizeArgs") => Some(1),
         ("net", "_createServerHandle") => Some(5),
         ("domain", "Domain" | "createDomain" | "create") => Some(0),
@@ -2999,6 +3026,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("child_process", "spawnSync")
             | ("child_process", "fork")
             | ("events", "EventEmitter")
+            | ("events", "EventEmitterAsyncResource")
             | ("events", "on")
             | ("sqlite", "backup")
             | ("events", "once")
@@ -3211,6 +3239,21 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             // for feature checks and rebound calls.
             | ("crypto.webcrypto", "getRandomValues")
             | ("crypto.webcrypto", "randomUUID")
+            | (
+                "crypto.subtle",
+                "digest"
+                    | "importKey"
+                    | "exportKey"
+                    | "sign"
+                    | "verify"
+                    | "deriveBits"
+                    | "deriveKey"
+                    | "encrypt"
+                    | "decrypt"
+                    | "generateKey"
+                    | "wrapKey"
+                    | "unwrapKey",
+            )
             | ("buffer.Buffer", "from")
             | ("buffer.Buffer", "alloc")
             | ("buffer.Buffer", "allocUnsafe")
@@ -3499,6 +3542,10 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("crypto", "getRandomValues")
             | ("crypto", "createCipheriv")
             | ("crypto", "createDecipheriv")
+            // #3726: the constructor exports behind the factories read as
+            // callable functions so `typeof crypto.Cipheriv === "function"`.
+            | ("crypto", "Cipheriv")
+            | ("crypto", "Decipheriv")
             | ("crypto", "createSecretKey")
             | ("crypto.Certificate", "verifySpkac")
             | ("crypto.Certificate", "exportPublicKey")
@@ -3564,6 +3611,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("http2", "createServer")
             | ("http2", "createSecureServer")
             | ("http2", "Server")
+            // #3720: module-level handshake helper reads as a function.
+            | ("http2", "performServerHandshake")
             // #3680/#3679: node:v8 class constructors + diagnostic-control
             // helpers read as callable values (`typeof v8.Serializer ===
             // "function"`). Construction routes through new_dynamic.rs; the
@@ -3610,6 +3659,12 @@ pub extern "C" fn js_native_module_bind_method(
 
     // Extract module name from the namespace object's first field
     let module_name = unsafe { get_module_name_from_namespace(_namespace_obj) };
+
+    if module_name == "crypto.webcrypto" {
+        if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
+            return value;
+        }
+    }
 
     // Check for known constant properties first
     if let Some(val) =
@@ -4859,30 +4914,32 @@ pub(crate) unsafe fn get_native_module_constant(
                 "path",
                 "toNamespacedPath",
             )),
-            "posix" => Some(create_sub_namespace("path.posix")),
-            "win32" => Some(create_sub_namespace("path.win32")),
+            "posix" => cjs_default_export_value("path.posix"),
+            "win32" => cjs_default_export_value("path.win32"),
             _ => None,
         },
         "path.posix" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("path.posix"),
             "sep" => Some(str_val("/")),
             "delimiter" => Some(str_val(":")),
             "toNamespacedPath" | "_makeLong" => Some(bound_native_callable_export_value(
                 "path.posix",
                 "toNamespacedPath",
             )),
-            "posix" => Some(native_namespace_or_create("path.posix", namespace_obj)),
-            "win32" => Some(create_sub_namespace("path.win32")),
+            "posix" => cjs_default_export_value("path.posix"),
+            "win32" => cjs_default_export_value("path.win32"),
             _ => None,
         },
         "path.win32" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("path.win32"),
             "sep" => Some(str_val("\\")),
             "delimiter" => Some(str_val(";")),
             "toNamespacedPath" | "_makeLong" => Some(bound_native_callable_export_value(
                 "path.win32",
                 "toNamespacedPath",
             )),
-            "posix" => Some(create_sub_namespace("path.posix")),
-            "win32" => Some(native_namespace_or_create("path.win32", namespace_obj)),
+            "posix" => cjs_default_export_value("path.posix"),
+            "win32" => cjs_default_export_value("path.win32"),
             _ => None,
         },
         "fs" => match property {
@@ -5115,6 +5172,10 @@ pub(crate) unsafe fn get_native_module_constant(
                 Some(crate::symbol::js_symbol_for(str_val("nodejs.rejection")))
             }
             "init" => Some(bound_native_callable_export_value("events", "init")),
+            "EventEmitterAsyncResource" => Some(bound_native_callable_export_value(
+                "events",
+                "EventEmitterAsyncResource",
+            )),
             _ => None,
         },
         // node:worker_threads value-shaped exports. Perry doesn't spawn JS

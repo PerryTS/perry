@@ -36,6 +36,25 @@ fn buffer_gc_total_size(capacity: usize) -> usize {
 /// we track buffer pointers separately to distinguish them from arrays.
 use crate::fast_hash::{new_ptr_hash_map, new_ptr_hash_set, PtrHashMap, PtrHashSet};
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, OnceLock};
+
+static EXTERNAL_BUFFER_REGISTRY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
+static EXTERNAL_UINT8ARRAY_REGISTRY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
+static EXTERNAL_CRYPTO_KEY_META_REGISTRY: OnceLock<Mutex<HashMap<usize, (u8, u8, u8)>>> =
+    OnceLock::new();
+
+fn external_buffers() -> &'static Mutex<HashSet<usize>> {
+    EXTERNAL_BUFFER_REGISTRY.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn external_uint8arrays() -> &'static Mutex<HashSet<usize>> {
+    EXTERNAL_UINT8ARRAY_REGISTRY.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn external_crypto_keys() -> &'static Mutex<HashMap<usize, (u8, u8, u8)>> {
+    EXTERNAL_CRYPTO_KEY_META_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 thread_local! {
     static BUFFER_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
@@ -228,7 +247,13 @@ pub fn is_registered_buffer(addr: usize) -> bool {
         return true;
     }
     // Slow path: large buffers tracked in the HashSet registry.
-    BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr))
+    if BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr)) {
+        return true;
+    }
+    external_buffers()
+        .lock()
+        .map(|r| r.contains(&addr))
+        .unwrap_or(false)
 }
 
 /// Mark this buffer as one that came from `new Uint8Array(...)` so it
@@ -237,6 +262,22 @@ pub fn mark_as_uint8array(addr: usize) {
     UINT8ARRAY_FROM_CTOR.with(|r| {
         r.borrow_mut().insert(addr);
     });
+}
+
+#[no_mangle]
+pub extern "C" fn js_buffer_register_external(addr: usize) {
+    register_buffer(addr as *const BufferHeader);
+    if let Ok(mut r) = external_buffers().lock() {
+        r.insert(addr);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_buffer_mark_as_uint8array_external(addr: usize) {
+    mark_as_uint8array(addr);
+    if let Ok(mut r) = external_uint8arrays().lock() {
+        r.insert(addr);
+    }
 }
 
 pub fn mark_as_secret_key(addr: usize) {
@@ -255,8 +296,31 @@ pub fn mark_as_crypto_key(addr: usize, algo: u8, hash: u8, kind: u8) {
     });
 }
 
+#[no_mangle]
+pub extern "C" fn js_buffer_mark_as_crypto_key_external(addr: usize, algo: u8, hash: u8, kind: u8) {
+    register_buffer(addr as *const BufferHeader);
+    mark_as_uint8array(addr);
+    mark_as_crypto_key(addr, algo, hash, kind);
+    if let Ok(mut r) = external_buffers().lock() {
+        r.insert(addr);
+    }
+    if let Ok(mut r) = external_uint8arrays().lock() {
+        r.insert(addr);
+    }
+    if let Ok(mut r) = external_crypto_keys().lock() {
+        r.insert(addr, (algo, hash, kind));
+    }
+}
+
 pub fn crypto_key_meta(addr: usize) -> Option<(u8, u8, u8)> {
-    CRYPTO_KEY_META_REGISTRY.with(|r| r.borrow().get(&addr).copied())
+    CRYPTO_KEY_META_REGISTRY
+        .with(|r| r.borrow().get(&addr).copied())
+        .or_else(|| {
+            external_crypto_keys()
+                .lock()
+                .ok()
+                .and_then(|r| r.get(&addr).copied())
+        })
 }
 
 /// `kind`: 1 public, 2 private. `asym_type`: 1 rsa, 2 ec, 3 ed25519, 4 x25519.
@@ -272,6 +336,10 @@ pub fn asymmetric_key_meta(addr: usize) -> Option<(u8, u8)> {
 
 pub fn is_uint8array_buffer(addr: usize) -> bool {
     UINT8ARRAY_FROM_CTOR.with(|r| r.borrow().contains(&addr))
+        || external_uint8arrays()
+            .lock()
+            .map(|r| r.contains(&addr))
+            .unwrap_or(false)
 }
 
 /// Record that `buf`'s `.buffer` property should resolve to `alias` instead of

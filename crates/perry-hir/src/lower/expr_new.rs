@@ -140,8 +140,16 @@ fn lower_url_encoding_constructor(
     }
 }
 
+fn is_url_encoding_constructor_name(name: &str) -> bool {
+    matches!(
+        name,
+        "URL" | "URLSearchParams" | "TextEncoder" | "TextDecoder"
+    )
+}
+
 fn module_constructor_name(module_name: &str, method_name: Option<&str>) -> Option<&'static str> {
     match (module_name, method_name) {
+        ("events", Some("EventEmitterAsyncResource")) => Some("EventEmitterAsyncResource"),
         ("url", Some("URL")) => Some("URL"),
         ("url", Some("URLSearchParams")) => Some("URLSearchParams"),
         ("util", Some("TextEncoder")) => Some("TextEncoder"),
@@ -429,7 +437,8 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 let class_name = prop_ident.sym.as_ref();
                 if matches!(
                     (module_name, class_name),
-                    ("async_hooks", "AsyncLocalStorage" | "AsyncResource")
+                    ("events", "EventEmitterAsyncResource")
+                        | ("async_hooks", "AsyncLocalStorage" | "AsyncResource")
                         | ("sqlite", "DatabaseSync" | "Session" | "StatementSync")
                 ) {
                     let args = new_expr
@@ -632,6 +641,16 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 if let Some(class_name) = module_constructor_name(module_name, method_name) {
                     if let Some(expr) =
                         lower_url_encoding_constructor(ctx, class_name, new_expr.args.as_deref())?
+                    {
+                        return Ok(expr);
+                    }
+                }
+            }
+
+            if let Some(resolved) = ctx.resolve_class_alias(&class_name) {
+                if is_url_encoding_constructor_name(&resolved) {
+                    if let Some(expr) =
+                        lower_url_encoding_constructor(ctx, &resolved, new_expr.args.as_deref())?
                     {
                         return Ok(expr);
                     }
@@ -1222,8 +1241,10 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .unwrap_or_default();
             if ctx.lookup_class(&class_name).is_none() {
                 if let Some(resolved) = ctx.resolve_class_alias(&class_name) {
-                    if matches!(resolved.as_str(), "Blob" | "File") {
-                        ctx.uses_fetch = true;
+                    if matches!(resolved.as_str(), "Blob" | "File" | "WebSocket") {
+                        if matches!(resolved.as_str(), "Blob" | "File") {
+                            ctx.uses_fetch = true;
+                        }
                         return Ok(Expr::New {
                             class_name: resolved,
                             args,
@@ -1364,9 +1385,11 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     return Ok(nonconstructable_builtin_throw_expr(property, args));
                 }
                 if matches!(object.as_ref(), Expr::GlobalGet(_))
-                    && matches!(property.as_str(), "Blob" | "File")
+                    && matches!(property.as_str(), "Blob" | "File" | "WebSocket")
                 {
-                    ctx.uses_fetch = true;
+                    if matches!(property.as_str(), "Blob" | "File") {
+                        ctx.uses_fetch = true;
+                    }
                     return Ok(Expr::New {
                         class_name: property.clone(),
                         args,

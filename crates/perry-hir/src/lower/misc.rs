@@ -77,6 +77,7 @@ pub(crate) fn native_instance_from_return_type(ty: &Type) -> Option<(&'static st
             "Socket" => Some(("net", "Socket")),
             "Redis" => Some(("ioredis", "Redis")),
             "EventEmitter" => Some(("events", "EventEmitter")),
+            "EventEmitterAsyncResource" => Some(("events", "EventEmitterAsyncResource")),
             "Pool" => Some(("mysql2/promise", "Pool")),
             "PoolConnection" => Some(("mysql2/promise", "PoolConnection")),
             "WebSocket" => Some(("ws", "WebSocket")),
