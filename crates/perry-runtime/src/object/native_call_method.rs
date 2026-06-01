@@ -536,6 +536,32 @@ unsafe fn dispatch_typed_array_method(
         "every" => crate::typedarray::js_typed_array_every(ta, arg_closure(0)),
         "find" => crate::typedarray::js_typed_array_find(ta, arg_closure(0)),
         "findIndex" => crate::typedarray::js_typed_array_find_index(ta, arg_closure(0)),
+        "values" | "Symbol.iterator" | "@@iterator" => {
+            let iter =
+                crate::array::js_array_values_iter_obj(ta as *const crate::array::ArrayHeader);
+            if iter == 0 {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            } else {
+                f64::from_bits(JSValue::pointer(iter as *mut u8).bits())
+            }
+        }
+        "keys" => {
+            let iter = crate::array::js_array_keys_iter_obj(ta as *const crate::array::ArrayHeader);
+            if iter == 0 {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            } else {
+                f64::from_bits(JSValue::pointer(iter as *mut u8).bits())
+            }
+        }
+        "entries" => {
+            let iter =
+                crate::array::js_array_entries_iter_obj(ta as *const crate::array::ArrayHeader);
+            if iter == 0 {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            } else {
+                f64::from_bits(JSValue::pointer(iter as *mut u8).bits())
+            }
+        }
         "reduce" | "reduceRight" => {
             let cb = arg_closure(0);
             // initial value present only when a 2nd arg was passed.

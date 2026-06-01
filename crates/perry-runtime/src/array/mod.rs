@@ -59,6 +59,7 @@ pub use self::iter_methods::{
 };
 pub use self::iter_object::{
     array_entries_iter, array_keys_iter, array_values_iter, dispatch_array_iterator_method,
+    js_array_entries_iter_obj, js_array_keys_iter_obj, js_array_values_iter_obj,
     ARRAY_ITERATOR_CLASS_ID,
 };
 pub use self::iterator::{js_for_of_to_array, js_iterator_to_array};

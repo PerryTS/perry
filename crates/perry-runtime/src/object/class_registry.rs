@@ -639,6 +639,7 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
         let func_ptr = (*ptr).func_ptr as usize;
         let is_global_builtin_func = func_ptr
             == global_this_builtin_noop_thunk as *const u8 as usize
+            || func_ptr == typed_array_constructor_call_thunk as *const u8 as usize
             || func_ptr == webcrypto_illegal_constructor_thunk as *const u8 as usize
             || func_ptr
                 == crate::messaging::js_message_channel_constructor_call_error as *const u8
