@@ -18,6 +18,43 @@ use super::super::{
 };
 use super::os::user_info_expr_for_call;
 
+fn peel_webassembly_receiver_expr(mut expr: &ast::Expr) -> &ast::Expr {
+    loop {
+        expr = match expr {
+            ast::Expr::TsAs(x) => x.expr.as_ref(),
+            ast::Expr::TsNonNull(x) => x.expr.as_ref(),
+            ast::Expr::TsSatisfies(x) => x.expr.as_ref(),
+            ast::Expr::TsTypeAssertion(x) => x.expr.as_ref(),
+            ast::Expr::TsConstAssertion(x) => x.expr.as_ref(),
+            ast::Expr::Paren(x) => x.expr.as_ref(),
+            _ => return expr,
+        };
+    }
+}
+
+fn is_webassembly_namespace_receiver(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    match peel_webassembly_receiver_expr(expr) {
+        ast::Expr::Ident(id) => {
+            id.sym.as_ref() == "WebAssembly" && ctx.lookup_local("WebAssembly").is_none()
+        }
+        ast::Expr::Member(member) => {
+            let ast::MemberProp::Ident(prop) = &member.prop else {
+                return false;
+            };
+            if prop.sym.as_ref() != "WebAssembly" {
+                return false;
+            }
+            matches!(
+                peel_webassembly_receiver_expr(member.obj.as_ref()),
+                ast::Expr::Ident(root)
+                    if root.sym.as_ref() == "globalThis"
+                        && ctx.lookup_local("globalThis").is_none()
+            )
+        }
+        _ => false,
+    }
+}
+
 pub(super) fn try_module_static_methods(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -32,10 +69,9 @@ pub(super) fn try_module_static_methods(
         if let (ast::Expr::Member(class_member), ast::MemberProp::Ident(method_ident)) =
             (member.obj.as_ref(), &member.prop)
         {
-            if let (ast::Expr::Ident(root_ident), ast::MemberProp::Ident(class_ident)) =
-                (class_member.obj.as_ref(), &class_member.prop)
-            {
-                if root_ident.sym.as_ref() == "WebAssembly" && class_ident.sym.as_ref() == "Module"
+            if let ast::MemberProp::Ident(class_ident) = &class_member.prop {
+                if class_ident.sym.as_ref() == "Module"
+                    && is_webassembly_namespace_receiver(ctx, class_member.obj.as_ref())
                 {
                     match method_ident.sym.as_ref() {
                         "exports" => {
@@ -68,6 +104,45 @@ pub(super) fn try_module_static_methods(
                         }
                         _ => {}
                     }
+                }
+            }
+        }
+
+        if is_webassembly_namespace_receiver(ctx, member.obj.as_ref()) {
+            if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                let method_name = method_ident.sym.as_ref();
+                match method_name {
+                    "validate" => {
+                        if !args.is_empty() {
+                            ctx.uses_webassembly = true;
+                            return Ok(Ok(Expr::WebAssemblyValidate(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    "instantiate" => {
+                        if !args.is_empty() {
+                            ctx.uses_webassembly = true;
+                            return Ok(Ok(Expr::WebAssemblyInstantiate(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    "callExport" => {
+                        if args.len() >= 2 {
+                            ctx.uses_webassembly = true;
+                            let mut it = args.into_iter();
+                            let instance = it.next().unwrap();
+                            let name = it.next().unwrap();
+                            let rest: Vec<Expr> = it.collect();
+                            return Ok(Ok(Expr::WebAssemblyCallExport {
+                                instance: Box::new(instance),
+                                name: Box::new(name),
+                                args: rest,
+                            }));
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -478,7 +553,8 @@ pub(super) fn try_module_static_methods(
             //   helper kept for compatibility with the first PoC pass)
             // The standard `inst.exports.<method>(...)` shape is
             // recognised separately below as a syntactic pattern.
-            if obj_ident.sym.as_ref() == "WebAssembly" {
+            if obj_ident.sym.as_ref() == "WebAssembly" && ctx.lookup_local("WebAssembly").is_none()
+            {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     match method_name {

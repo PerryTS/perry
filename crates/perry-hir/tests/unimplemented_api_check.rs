@@ -106,6 +106,8 @@ fn node_builtin_dispatch_only_named_imports_are_rejected() {
         ("node:tty", "clearLine", "clearLine"),
         ("node:process", "on", "processOn"),
         ("node:process", "setMaxListeners", "setMaxListeners"),
+        ("node:module", "wrap", "moduleWrap"),
+        ("module", "wrapper", "moduleWrapper"),
         ("node:url", "createObjectURL", "createObjectURL"),
         ("node:worker_threads", "getWorkerData", "getWorkerData"),
         ("node:https", "ClientRequest", "HttpsClientRequest"),
@@ -146,6 +148,7 @@ fn node_builtin_real_named_exports_still_compile() {
         import { StringDecoder } from "node:string_decoder";
         import { isatty, ReadStream, WriteStream } from "node:tty";
         import { cwd, env } from "node:process";
+        import { builtinModules, createRequire } from "node:module";
         import { URL, fileURLToPath } from "node:url";
         import { Worker, workerData, parentPort } from "node:worker_threads";
         import { Agent, Server as HttpsServer } from "node:https";

@@ -840,7 +840,7 @@ extern "C" fn pipe_finish_destination_callback(closure: *const ClosureHeader) ->
         return f64::from_bits(TAG_UNDEFINED);
     }
     let dest = js_closure_get_capture_f64(closure, 0);
-    if stream_destroyed(dest) || has_truthy_hidden(dest, hidden_end_emitted_key()) {
+    if stream_destroyed(dest) || has_truthy_hidden(dest, hidden_finish_emitted_key()) {
         return f64::from_bits(TAG_UNDEFINED);
     }
     if writable_length(dest) > 0.0 {
@@ -1701,6 +1701,10 @@ pub use pipeline::*;
 #[path = "node_stream_readwrite.rs"]
 mod readwrite;
 pub use readwrite::*;
+
+#[path = "node_stream_duplex_methods.rs"]
+mod duplex_method_table;
+pub use duplex_method_table::*;
 
 #[path = "node_stream_compose_live.rs"]
 mod compose_live;

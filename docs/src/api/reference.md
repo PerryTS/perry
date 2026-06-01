@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2408 entries across 104 modules.
+Total: 2491 entries across 106 modules.
 
 ## Modules
 
@@ -97,6 +97,8 @@ Total: 2408 entries across 104 modules.
 - [`sys`](#sys)
 - [`test`](#test)
 - [`test/reporters`](#test-reporters)
+- [`timers`](#timers)
+- [`timers/promises`](#timers-promises)
 - [`tls`](#tls)
 - [`tty`](#tty)
 - [`tursodb`](#tursodb)
@@ -525,6 +527,7 @@ Total: 2408 entries across 104 modules.
 - `O_NONBLOCK`
 - `O_RDONLY`
 - `O_RDWR`
+- `O_SYMLINK`
 - `O_SYNC`
 - `O_TRUNC`
 - `O_WRONLY`
@@ -559,6 +562,7 @@ Total: 2408 entries across 104 modules.
 - `SIGFPE`
 - `SIGHUP`
 - `SIGILL`
+- `SIGINFO`
 - `SIGINT`
 - `SIGIO`
 - `SIGIOT`
@@ -666,6 +670,8 @@ Total: 2408 entries across 104 modules.
 
 ### Classes
 
+- `Cipheriv`
+- `Decipheriv`
 - `ECDH`
 - `X509Certificate`
 
@@ -717,6 +723,7 @@ Total: 2408 entries across 104 modules.
 - `Certificate`
 - `constants`
 - `subtle`
+- `webcrypto`
 
 ## `date-fns`
 
@@ -840,10 +847,12 @@ Total: 2408 entries across 104 modules.
 
 ### Classes
 
+- `BoundedChannel`
 - `Channel`
 
 ### Methods
 
+- `boundedChannel` — module
 - `channel` — module
 - `hasSubscribers` — module
 - `subscribe` — module
@@ -1089,14 +1098,19 @@ Total: 2408 entries across 104 modules.
 ### Classes
 
 - `EventEmitter`
+- `EventEmitterAsyncResource`
 
 ### Methods
 
 - `EventEmitter` — module
+- `EventEmitterAsyncResource` — module
 - `addAbortListener` — module
 - `addListener` — instance
+- `asyncId` — instance *(class: `EventEmitterAsyncResource`)*
+- `asyncResource` — instance *(class: `EventEmitterAsyncResource`)*
 - `domain` — instance
 - `emit` — instance
+- `emitDestroy` — instance *(class: `EventEmitterAsyncResource`)*
 - `eventNames` — instance
 - `getEventListeners` — module
 - `getMaxListeners` — instance
@@ -1117,6 +1131,7 @@ Total: 2408 entries across 104 modules.
 - `removeListener` — instance
 - `setMaxListeners` — instance
 - `setMaxListeners` — module
+- `triggerAsyncId` — instance *(class: `EventEmitterAsyncResource`)*
 
 ### Properties
 
@@ -1253,6 +1268,7 @@ Total: 2408 entries across 104 modules.
 - `mkdtempDisposableSync` — module
 - `mkdtempSync` — module
 - `open` — module
+- `openAsBlob` — module
 - `openSync` — module
 - `opendir` — module
 - `opendirSync` — module
@@ -1501,6 +1517,7 @@ Total: 2408 entries across 104 modules.
 - `getUnpackedSettings` — module
 - `listen` — instance *(class: `Http2SecureServer`)*
 - `on` — instance *(class: `Http2SecureServer`)*
+- `performServerHandshake` — module
 
 ### Properties
 
@@ -1671,8 +1688,6 @@ Total: 2408 entries across 104 modules.
 
 - `builtinModules`
 - `constants`
-- `wrap`
-- `wrapper`
 
 ## `moment`
 
@@ -1760,11 +1775,13 @@ Total: 2408 entries across 104 modules.
 
 - `Server`
 - `Socket`
+- `Stream`
 
 ### Methods
 
 - `Server` — module
 - `Socket` — module
+- `Stream` — module
 - `_createServerHandle` — module
 - `_normalizeArgs` — module
 - `addListener` — instance *(class: `Socket`)*
@@ -2456,6 +2473,7 @@ Total: 2408 entries across 104 modules.
 
 ### Properties
 
+- `default`
 - `ucs2`
 - `version`
 
@@ -2565,17 +2583,63 @@ Total: 2408 entries across 104 modules.
 
 ## `sqlite`
 
+### Classes
+
+- `DatabaseSync`
+- `SQLTagStore`
+- `Session`
+- `StatementSync`
+
 ### Methods
 
+- `@@__perry_wk_dispose` — instance
 - `DatabaseSync` — module
+- `Session` — module
+- `StatementSync` — module
+- `__perry_dispose__` — instance
+- `aggregate` — instance *(class: `DatabaseSync`)*
+- `all` — instance *(class: `SQLTagStore`)*
 - `all` — instance
+- `applyChangeset` — instance
+- `backup` — module
+- `capacity` — instance *(class: `SQLTagStore`)*
+- `changeset` — instance
+- `clear` — instance *(class: `SQLTagStore`)*
 - `close` — instance
 - `columns` — instance
+- `createSession` — instance
+- `createTagStore` — instance *(class: `DatabaseSync`)*
+- `db` — instance *(class: `SQLTagStore`)*
+- `enableDefensive` — instance *(class: `DatabaseSync`)*
+- `enableLoadExtension` — instance
 - `exec` — instance
+- `expandedSQL` — instance
+- `function` — instance *(class: `DatabaseSync`)*
+- `get` — instance *(class: `SQLTagStore`)*
 - `get` — instance
+- `isOpen` — instance
+- `isTransaction` — instance
+- `iterate` — instance *(class: `SQLTagStore`)*
 - `iterate` — instance
+- `limits` — instance
+- `loadExtension` — instance
+- `location` — instance
+- `open` — instance
+- `patchset` — instance
 - `prepare` — instance
+- `run` — instance *(class: `SQLTagStore`)*
 - `run` — instance
+- `setAllowBareNamedParameters` — instance
+- `setAllowUnknownNamedParameters` — instance
+- `setAuthorizer` — instance *(class: `DatabaseSync`)*
+- `setReadBigInts` — instance
+- `setReturnArrays` — instance
+- `size` — instance *(class: `SQLTagStore`)*
+- `sourceSQL` — instance
+
+### Properties
+
+- `constants`
 
 ## `stream`
 
@@ -2788,14 +2852,27 @@ Total: 2408 entries across 104 modules.
 - `afterEach` — module
 - `before` — module
 - `beforeEach` — module
+- `default` — module
 - `describe` — module
+- `enable` — module *(class: `timers`)*
 - `fn` — module *(class: `mock`)*
+- `getter` — module *(class: `mock`)*
 - `it` — module
+- `method` — module *(class: `mock`)*
 - `only` — module
 - `property` — module *(class: `mock`)*
+- `reset` — module *(class: `mock`)*
+- `restoreAll` — module *(class: `mock`)*
 - `run` — module
+- `runAll` — module *(class: `timers`)*
+- `setDefaultSnapshotSerializers` — module *(class: `snapshot`)*
+- `setResolveSnapshotPath` — module *(class: `snapshot`)*
+- `setTime` — module *(class: `timers`)*
+- `setter` — module *(class: `mock`)*
 - `skip` — module
 - `suite` — module
+- `test` — module
+- `tick` — module *(class: `timers`)*
 - `todo` — module
 
 ### Properties
@@ -2816,6 +2893,33 @@ Total: 2408 entries across 104 modules.
 ### Properties
 
 - `default`
+
+## `timers`
+
+### Methods
+
+- `clearImmediate` — module
+- `clearInterval` — module
+- `clearTimeout` — module
+- `setImmediate` — module
+- `setInterval` — module
+- `setTimeout` — module
+
+### Properties
+
+- `promises`
+
+## `timers/promises`
+
+### Methods
+
+- `setImmediate` — module
+- `setInterval` — module
+- `setTimeout` — module
+
+### Properties
+
+- `scheduler`
 
 ## `tls`
 
@@ -3215,4 +3319,5 @@ Total: 2408 entries across 104 modules.
 
 ### Properties
 
+- `codes`
 - `constants`

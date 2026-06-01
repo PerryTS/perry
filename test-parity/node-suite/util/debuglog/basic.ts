@@ -27,6 +27,14 @@ const wildcard = util.debug("foobar");
 console.log("logger typeof:", typeof logger);
 console.log("logger enabled:", logger.enabled);
 console.log("logger keys:", Object.keys(logger).join(","));
+const loggerNameDescriptor = Object.getOwnPropertyDescriptor(logger, "name");
+console.log(
+  "logger name descriptor:",
+  loggerNameDescriptor?.value,
+  loggerNameDescriptor?.writable,
+  loggerNameDescriptor?.enumerable,
+  loggerNameDescriptor?.configurable,
+);
 console.log("wildcard enabled:", wildcard.enabled);
 
 const writes = [];

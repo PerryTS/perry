@@ -536,6 +536,17 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             return f64::from_bits(TAG_FALSE);
         }
 
+        if (*obj).class_id == super::native_module::NATIVE_MODULE_CLASS_ID {
+            let present = super::native_module::read_native_module_name(obj)
+                .as_deref()
+                .zip(super::has_own_helpers::str_from_string_header(key_str))
+                .map(|(module, key)| {
+                    super::native_module::native_module_has_enumerable_key(module, key)
+                })
+                .unwrap_or(false);
+            return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+        }
+
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;

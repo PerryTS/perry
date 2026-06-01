@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2408 entries across 104 modules
+// Coverage: 2491 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -587,6 +587,8 @@ declare module "constants" {
   /** stdlib */
   export const O_RDWR: any;
   /** stdlib */
+  export const O_SYMLINK: any;
+  /** stdlib */
   export const O_SYNC: any;
   /** stdlib */
   export const O_TRUNC: any;
@@ -654,6 +656,8 @@ declare module "constants" {
   export const SIGHUP: any;
   /** stdlib */
   export const SIGILL: any;
+  /** stdlib */
+  export const SIGINFO: any;
   /** stdlib */
   export const SIGINT: any;
   /** stdlib */
@@ -848,6 +852,10 @@ declare module "cron" {
 
 declare module "crypto" {
   /** stdlib */
+  export class Cipheriv { [key: string]: any; }
+  /** stdlib */
+  export class Decipheriv { [key: string]: any; }
+  /** stdlib */
   export class ECDH { [key: string]: any; }
   /** stdlib */
   export class X509Certificate { [key: string]: any; }
@@ -857,6 +865,8 @@ declare module "crypto" {
   export const constants: any;
   /** stdlib */
   export const subtle: any;
+  /** stdlib */
+  export const webcrypto: any;
   /** stdlib */
   export function createCipheriv(...args: any[]): any;
   /** stdlib */
@@ -979,10 +989,14 @@ declare module "dgram" {
 
 declare module "diagnostics_channel" {
   /** stdlib */
+  export class BoundedChannel { [key: string]: any; }
+  /** stdlib */
   export class Channel { [key: string]: any; }
   /** stdlib */
   const _default: any;
   export default _default;
+  /** stdlib */
+  export function boundedChannel(...args: any[]): any;
   /** stdlib */
   export function channel(...args: any[]): any;
   /** stdlib */
@@ -1290,6 +1304,8 @@ declare module "events" {
   /** stdlib */
   export class EventEmitter { [key: string]: any; }
   /** stdlib */
+  export class EventEmitterAsyncResource { [key: string]: any; }
+  /** stdlib */
   export const captureRejectionSymbol: any;
   /** stdlib */
   export const captureRejections: any;
@@ -1304,6 +1320,8 @@ declare module "events" {
   export const usingDomains: any;
   /** stdlib */
   export function EventEmitter(...args: any[]): any;
+  /** stdlib */
+  export function EventEmitterAsyncResource(options: any): any;
   /** stdlib */
   export function addAbortListener(...args: any[]): any;
   /** stdlib */
@@ -1468,6 +1486,8 @@ declare module "fs" {
   export function mkdtempSync(...args: any[]): any;
   /** stdlib */
   export function open(...args: any[]): any;
+  /** stdlib */
+  export function openAsBlob(...args: any[]): any;
   /** stdlib */
   export function openSync(...args: any[]): any;
   /** stdlib */
@@ -1674,6 +1694,8 @@ declare module "http2" {
   export function getPackedSettings(...args: any[]): any;
   /** stdlib */
   export function getUnpackedSettings(...args: any[]): any;
+  /** stdlib */
+  export function performServerHandshake(...args: any[]): any;
 }
 
 declare module "https" {
@@ -1790,10 +1812,6 @@ declare module "module" {
   /** stdlib */
   export const constants: any;
   /** stdlib */
-  export const wrap: any;
-  /** stdlib */
-  export const wrapper: any;
-  /** stdlib */
   export function SourceMap(...args: any[]): any;
   /** stdlib */
   export function createRequire(...args: any[]): any;
@@ -1866,9 +1884,13 @@ declare module "net" {
   /** stdlib */
   export class Socket { [key: string]: any; }
   /** stdlib */
+  export class Stream { [key: string]: any; }
+  /** stdlib */
   export function Server(p0: any, p1: any): any;
   /** stdlib */
   export function Socket(...args: any[]): any;
+  /** stdlib */
+  export function Stream(...args: any[]): any;
   /** stdlib */
   export function _createServerHandle(p0: any, p1: any, p2: any, p3: any, p4: any): any;
   /** stdlib */
@@ -2863,6 +2885,9 @@ declare module "process" {
 
 declare module "punycode" {
   /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
   export const ucs2: any;
   /** stdlib */
   export const version: any;
@@ -2957,7 +2982,23 @@ declare module "slugify" {
 
 declare module "sqlite" {
   /** stdlib */
-  export function DatabaseSync(p0: string): any;
+  export class DatabaseSync { [key: string]: any; }
+  /** stdlib */
+  export class SQLTagStore { [key: string]: any; }
+  /** stdlib */
+  export class Session { [key: string]: any; }
+  /** stdlib */
+  export class StatementSync { [key: string]: any; }
+  /** stdlib */
+  export const constants: any;
+  /** stdlib */
+  export function DatabaseSync(...args: any[]): any;
+  /** stdlib */
+  export function Session(...args: any[]): any;
+  /** stdlib */
+  export function StatementSync(...args: any[]): any;
+  /** stdlib */
+  export function backup(...args: any[]): any;
 }
 
 declare module "stream" {
@@ -3184,6 +3225,8 @@ declare module "test" {
   /** stdlib */
   export function beforeEach(...args: any[]): any;
   /** stdlib */
+  export default function (...args: any[]): any;
+  /** stdlib */
   export function describe(...args: any[]): any;
   /** stdlib */
   export function it(...args: any[]): any;
@@ -3195,6 +3238,8 @@ declare module "test" {
   export function skip(...args: any[]): any;
   /** stdlib */
   export function suite(...args: any[]): any;
+  /** stdlib */
+  export function test(...args: any[]): any;
   /** stdlib */
   export function todo(...args: any[]): any;
 }
@@ -3213,6 +3258,34 @@ declare module "test/reporters" {
   export function spec(...args: any[]): any;
   /** stdlib */
   export function tap(...args: any[]): any;
+}
+
+declare module "timers" {
+  /** stdlib */
+  export const promises: any;
+  /** stdlib */
+  export function clearImmediate(...args: any[]): any;
+  /** stdlib */
+  export function clearInterval(...args: any[]): any;
+  /** stdlib */
+  export function clearTimeout(...args: any[]): any;
+  /** stdlib */
+  export function setImmediate(...args: any[]): any;
+  /** stdlib */
+  export function setInterval(...args: any[]): any;
+  /** stdlib */
+  export function setTimeout(...args: any[]): any;
+}
+
+declare module "timers/promises" {
+  /** stdlib */
+  export const scheduler: any;
+  /** stdlib */
+  export function setImmediate(...args: any[]): any;
+  /** stdlib */
+  export function setInterval(...args: any[]): any;
+  /** stdlib */
+  export function setTimeout(...args: any[]): any;
 }
 
 declare module "tls" {
@@ -3648,6 +3721,8 @@ declare module "zlib" {
   export class ZstdCompress { [key: string]: any; }
   /** stdlib */
   export class ZstdDecompress { [key: string]: any; }
+  /** stdlib */
+  export const codes: any;
   /** stdlib */
   export const constants: any;
   /** stdlib */

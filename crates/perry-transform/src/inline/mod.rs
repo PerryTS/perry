@@ -63,7 +63,7 @@ pub(crate) use substitute::{
 use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
 use perry_hir::{BinaryOp, Class, Expr, Function, Module, Param, Stmt};
 use perry_types::{FuncId, LocalId, Type};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Maximum number of statements for a function to be considered for inlining
 pub(crate) const MAX_INLINE_STMTS: usize = 10;
@@ -254,11 +254,13 @@ pub fn inline_functions(
         // way they can't intersect with whatever boxed_vars are
         // computed later for this module.
         let mut next_fresh_id = find_max_local_id_in_module(module) + 1;
-        for name in &needed {
-            if already_present.contains(name) {
+        let mut needed_names: Vec<String> = needed.into_iter().collect();
+        needed_names.sort();
+        for name in needed_names {
+            if already_present.contains(&name) {
                 continue;
             }
-            if let Some(src_cls) = extra_anon_classes.get(name) {
+            if let Some(src_cls) = extra_anon_classes.get(&name) {
                 let mut cloned = src_cls.clone();
                 if let Some(ctor) = &mut cloned.constructor {
                     let mut remap: HashMap<LocalId, Expr> = HashMap::new();
@@ -426,7 +428,7 @@ pub fn inline_functions(
     // other native-only patterns; `module_kind = NativeCompiled` because
     // that's the only category the codegen consults for
     // `import_function_prefixes`.
-    let mut needed_imports: HashMap<String, Vec<String>> = HashMap::new();
+    let mut needed_imports: BTreeMap<String, Vec<String>> = BTreeMap::new();
     method_candidates.extend(extra_methods.iter().filter_map(|(k, v)| {
         // If any required (name, path) is missing from dest, queue an import.
         // We always admit when the path is reachable from the destination —
@@ -641,5 +643,162 @@ pub fn inline_functions(
             );
             next_module_id = local_id;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use perry_hir::{ImportSpecifier, ModuleKind};
+
+    fn function(id: FuncId, body: Vec<Stmt>) -> Function {
+        Function {
+            id,
+            name: format!("f{}", id),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Void,
+            body,
+            is_async: false,
+            is_generator: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+            is_strict: false,
+        }
+    }
+
+    fn candidate(
+        id: FuncId,
+        body: Vec<Stmt>,
+        required_extern_imports: Vec<(String, String)>,
+    ) -> MethodCandidate {
+        MethodCandidate {
+            func: function(id, body),
+            this_param_id: None,
+            method_lookup_safe: true,
+            required_extern_imports,
+        }
+    }
+
+    fn anon_class(id: u32, name: &str) -> Class {
+        Class {
+            id,
+            name: name.to_string(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: None,
+            native_extends: None,
+            extends_expr: None,
+            fields: Vec::new(),
+            constructor: None,
+            methods: Vec::new(),
+            getters: Vec::new(),
+            setters: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: false,
+            aliases: Vec::new(),
+        }
+    }
+
+    fn anon_new(name: &str) -> Stmt {
+        Stmt::Expr(Expr::New {
+            class_name: name.to_string(),
+            args: Vec::new(),
+            type_args: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn cross_module_synthetic_imports_are_sorted() {
+        let mut module = Module::new("dest");
+        let mut extra_methods = HashMap::new();
+        extra_methods.insert(
+            ("B".to_string(), "m".to_string()),
+            candidate(
+                1,
+                Vec::new(),
+                vec![
+                    ("z".to_string(), "/z.ts".to_string()),
+                    ("a".to_string(), "/a.ts".to_string()),
+                ],
+            ),
+        );
+        extra_methods.insert(
+            ("A".to_string(), "m".to_string()),
+            candidate(
+                2,
+                Vec::new(),
+                vec![
+                    ("b".to_string(), "/b.ts".to_string()),
+                    ("a2".to_string(), "/a.ts".to_string()),
+                ],
+            ),
+        );
+
+        inline_functions(
+            &mut module,
+            &extra_methods,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        let sources: Vec<&str> = module.imports.iter().map(|i| i.source.as_str()).collect();
+        assert_eq!(sources, vec!["/a.ts", "/b.ts", "/z.ts"]);
+        assert!(module.imports.iter().all(|i| {
+            !i.is_native
+                && i.module_kind == ModuleKind::NativeCompiled
+                && i.resolved_path.as_deref() == Some(i.source.as_str())
+                && !i.type_only
+                && !i.is_dynamic
+                && !i.is_dynamic_target
+        }));
+
+        let first_specifiers: Vec<(&str, &str)> = module.imports[0]
+            .specifiers
+            .iter()
+            .map(|s| match s {
+                ImportSpecifier::Named { imported, local } => (imported.as_str(), local.as_str()),
+                _ => panic!("expected named import"),
+            })
+            .collect();
+        assert_eq!(first_specifiers, vec![("a", "a"), ("a2", "a2")]);
+    }
+
+    #[test]
+    fn cross_module_anon_classes_are_appended_in_name_order() {
+        let mut module = Module::new("dest");
+        let mut extra_methods = HashMap::new();
+        extra_methods.insert(
+            ("B".to_string(), "m".to_string()),
+            candidate(1, vec![anon_new("__AnonShape_bbb")], Vec::new()),
+        );
+        extra_methods.insert(
+            ("A".to_string(), "m".to_string()),
+            candidate(2, vec![anon_new("__AnonShape_aaa")], Vec::new()),
+        );
+        let mut extra_anon_classes = HashMap::new();
+        extra_anon_classes.insert(
+            "__AnonShape_bbb".to_string(),
+            anon_class(2, "__AnonShape_bbb"),
+        );
+        extra_anon_classes.insert(
+            "__AnonShape_aaa".to_string(),
+            anon_class(1, "__AnonShape_aaa"),
+        );
+
+        inline_functions(
+            &mut module,
+            &extra_methods,
+            &HashMap::new(),
+            &extra_anon_classes,
+        );
+
+        let class_names: Vec<&str> = module.classes.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(class_names, vec!["__AnonShape_aaa", "__AnonShape_bbb"]);
     }
 }
