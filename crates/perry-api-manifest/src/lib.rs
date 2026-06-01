@@ -226,9 +226,36 @@ pub fn module_has_public_named_export(module: &str, name: &str) -> bool {
     if name == "default" && is_node_core_module(module) {
         return true;
     }
+    if is_platform_unavailable_named_export(module, name) {
+        return false;
+    }
     API_MANIFEST.iter().any(|entry| {
         entry.module == module && entry.name == name && entry_is_public_named_export(entry)
     })
+}
+
+/// #3902: a handful of `node:constants` values are Linux-only — `O_DIRECT` /
+/// `O_NOATIME` (open(2) flags), `SIGPOLL` / `SIGPWR` / `SIGSTKFLT` (signals),
+/// and `RTLD_DEEPBIND` (a glibc-only dlopen(3) flag). Node's `node:constants`
+/// ESM namespace omits them on other platforms, so importing them there fails
+/// Node's module instantiation.
+///
+/// These entries stay in the static `API_MANIFEST` unconditionally so the
+/// generated docs (`docs/api/perry.d.ts`, `docs/src/api/reference.md`) and
+/// `--print-api-manifest` are byte-identical regardless of the host OS the
+/// generator runs on — otherwise `api-docs-drift` would fail on every PR (CI
+/// runs on Linux; the invariant is asserted by
+/// `deprecated_constants_alias_has_manifest_entries`). But the *import gate*
+/// must still match the host: on a non-Linux host these names are not valid
+/// named exports, so `perry check`/compile rejects them with `U006` instead of
+/// silently binding `undefined` and diverging from Node.
+fn is_platform_unavailable_named_export(module: &str, name: &str) -> bool {
+    let linux_only = module == "constants"
+        && matches!(
+            name,
+            "O_DIRECT" | "O_NOATIME" | "RTLD_DEEPBIND" | "SIGPOLL" | "SIGPWR" | "SIGSTKFLT"
+        );
+    linux_only && !cfg!(target_os = "linux")
 }
 
 /// True for Node.js built-in module specifiers that should use Node's public
@@ -702,6 +729,41 @@ mod tests {
             "RTLD_DEEPBIND should be in the manifest on every platform"
         );
         assert!(matches!(rtld_deepbind.unwrap().kind, ApiKind::Property));
+    }
+
+    #[test]
+    fn platform_unavailable_constants_gate_the_import_surface() {
+        // #3902: Linux-only `node:constants` values stay in the manifest
+        // (for portable docs) but the import gate must follow the host
+        // platform so `perry check` matches Node's ESM instantiation.
+        let linux_only = [
+            "O_DIRECT",
+            "O_NOATIME",
+            "RTLD_DEEPBIND",
+            "SIGPOLL",
+            "SIGPWR",
+            "SIGSTKFLT",
+        ];
+        for name in linux_only {
+            // Always present in the raw manifest (docs portability).
+            assert!(
+                module_has_symbol("node:constants", name).is_some(),
+                "{name} must remain in the manifest on every platform"
+            );
+            // Import gate tracks the host platform.
+            assert_eq!(
+                module_has_public_named_export("node:constants", name),
+                cfg!(target_os = "linux"),
+                "{name} import availability must match the host platform"
+            );
+        }
+        // Cross-platform constants are always importable.
+        for name in ["O_RDONLY", "O_DIRECTORY", "SIGINT"] {
+            assert!(
+                module_has_public_named_export("node:constants", name),
+                "{name} must be importable on every platform"
+            );
+        }
     }
 
     #[test]
