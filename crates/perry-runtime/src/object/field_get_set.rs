@@ -11,6 +11,8 @@ use super::*;
 const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_0060;
 const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_0061;
 const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_0062;
+const CLASS_ID_BOXED_BIGINT: u32 = 0xFFFF_0063;
+const CLASS_ID_BOXED_SYMBOL: u32 = 0xFFFF_0064;
 
 /// Get a field from an object by index
 ///
@@ -2640,12 +2642,18 @@ pub extern "C" fn js_object_get_field_by_name(
                 let class_id = (*obj).class_id;
                 if matches!(
                     class_id,
-                    CLASS_ID_BOXED_NUMBER | CLASS_ID_BOXED_STRING | CLASS_ID_BOXED_BOOLEAN
+                    CLASS_ID_BOXED_NUMBER
+                        | CLASS_ID_BOXED_STRING
+                        | CLASS_ID_BOXED_BOOLEAN
+                        | CLASS_ID_BOXED_BIGINT
+                        | CLASS_ID_BOXED_SYMBOL
                 ) {
                     let name = match class_id {
                         CLASS_ID_BOXED_NUMBER => b"Number".as_slice(),
                         CLASS_ID_BOXED_STRING => b"String".as_slice(),
                         CLASS_ID_BOXED_BOOLEAN => b"Boolean".as_slice(),
+                        CLASS_ID_BOXED_BIGINT => b"BigInt".as_slice(),
+                        CLASS_ID_BOXED_SYMBOL => b"Symbol".as_slice(),
                         _ => unreachable!(),
                     };
                     let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());

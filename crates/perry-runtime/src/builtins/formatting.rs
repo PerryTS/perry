@@ -12,7 +12,9 @@ use super::*;
 mod array_buffer;
 mod boxed_primitives;
 mod collection_equality;
-pub(crate) use boxed_primitives::{boxed_primitive_json_value, boxed_primitive_payload};
+pub(crate) use boxed_primitives::{
+    boxed_primitive_json_value, boxed_primitive_payload, boxed_primitive_to_string_tag,
+};
 pub use boxed_primitives::{
     js_boxed_bigint_new, js_boxed_boolean_new, js_boxed_number_new, js_boxed_string_new,
     js_boxed_symbol_new, scan_boxed_primitive_payload_roots_mut,

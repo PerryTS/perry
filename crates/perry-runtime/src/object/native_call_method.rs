@@ -269,6 +269,9 @@ pub(crate) unsafe fn js_object_default_value_of(receiver: f64) -> f64 {
     if jsval.is_undefined() || jsval.is_null() {
         throw_object_value_of_nullish_receiver();
     }
+    if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(receiver) {
+        return payload;
+    }
     receiver
 }
 
@@ -662,6 +665,61 @@ pub unsafe extern "C" fn js_native_call_method(
     }
 
     let jsval = JSValue::from_bits(object.to_bits());
+
+    if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(object) {
+        match method_name {
+            "valueOf" => return payload,
+            "toString" | "toLocaleString" => {
+                let payload_jsv = JSValue::from_bits(payload.to_bits());
+                match crate::builtins::boxed_primitive_to_string_tag(object) {
+                    Some("String") => return payload,
+                    Some("Number") => {
+                        let n = if payload_jsv.is_number() {
+                            payload_jsv.as_number()
+                        } else {
+                            payload
+                        };
+                        let s = if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
+                            (n as i64).to_string()
+                        } else {
+                            n.to_string()
+                        };
+                        let str_ptr =
+                            crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                        return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
+                    }
+                    Some("Boolean") => {
+                        let s = if payload_jsv.is_bool() && payload_jsv.as_bool() {
+                            b"true".as_slice()
+                        } else {
+                            b"false".as_slice()
+                        };
+                        let str_ptr =
+                            crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                        return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
+                    }
+                    Some("BigInt") => {
+                        let big = crate::value::JSValue::from_bits(payload.to_bits());
+                        if big.is_bigint() {
+                            let ptr = crate::bigint::clean_bigint_ptr(
+                                (payload.to_bits() & 0x0000_FFFF_FFFF_FFFF)
+                                    as *const crate::bigint::BigIntHeader,
+                            );
+                            let str_ptr = crate::bigint::js_bigint_to_string(ptr);
+                            return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
+                        }
+                    }
+                    Some("Symbol") => {
+                        let str_ptr =
+                            crate::symbol::js_symbol_to_string(payload) as *mut crate::StringHeader;
+                        return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
 
     if crate::web_storage::is_storage_value(object_handle.get_nanbox_f64()) {
         let args = refreshed_args();
@@ -2848,6 +2906,47 @@ pub unsafe extern "C" fn js_native_call_method(
 
         // Common string methods on string values
         "toString" => {
+            if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(object) {
+                let payload_jsv = JSValue::from_bits(payload.to_bits());
+                match crate::builtins::boxed_primitive_to_string_tag(object) {
+                    Some("String") => return payload,
+                    Some("Number") => {
+                        let n = if payload_jsv.is_number() {
+                            payload_jsv.as_number()
+                        } else {
+                            payload
+                        };
+                        let s = if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
+                            (n as i64).to_string()
+                        } else {
+                            n.to_string()
+                        };
+                        let str_ptr =
+                            crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                        return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
+                    }
+                    Some("Boolean") => {
+                        let s = if payload_jsv.is_bool() && payload_jsv.as_bool() {
+                            "true"
+                        } else {
+                            "false"
+                        };
+                        let str_ptr =
+                            crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                        return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
+                    }
+                    Some("BigInt") if payload_jsv.is_bigint() => {
+                        let ptr = payload_jsv.as_bigint_ptr();
+                        let str_ptr = crate::bigint::js_bigint_to_string(ptr);
+                        return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
+                    }
+                    Some("Symbol") => {
+                        let str_ptr = crate::symbol::js_symbol_to_string(payload);
+                        return f64::from_bits(JSValue::string_ptr(str_ptr as *mut _).bits());
+                    }
+                    _ => {}
+                }
+            }
             if jsval.is_string() {
                 return object;
             } else if jsval.is_bigint() {

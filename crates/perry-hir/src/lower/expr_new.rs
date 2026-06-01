@@ -714,6 +714,24 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             }
 
             // Handle built-in types
+            if class_name == "Object"
+                && ctx.lookup_local("Object").is_none()
+                && ctx.lookup_func("Object").is_none()
+                && ctx.lookup_class("Object").is_none()
+            {
+                let mut args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                let arg = args.drain(..).next().unwrap_or(Expr::Undefined);
+                return Ok(Expr::ObjectCoerce(Box::new(arg)));
+            }
             if class_name == "Map" {
                 // new Map() or new Map(entries)
                 let args = new_expr

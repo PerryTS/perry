@@ -206,20 +206,7 @@ extern "C" fn global_this_object_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
 ) -> f64 {
-    let js_value = crate::value::JSValue::from_bits(value.to_bits());
-    if js_value.is_undefined() || js_value.is_null() {
-        return crate::value::js_nanbox_pointer(js_object_alloc(0, 0) as i64);
-    }
-    if js_value.is_bigint() {
-        return crate::builtins::js_boxed_bigint_new(value);
-    }
-    if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
-        return crate::builtins::js_boxed_symbol_new(value);
-    }
-    if crate::value::js_nanbox_get_pointer(value) != 0 {
-        return value;
-    }
-    crate::value::js_nanbox_pointer(js_object_alloc(0, 0) as i64)
+    crate::object::js_object_coerce(value)
 }
 
 extern "C" fn global_this_structured_clone_thunk(
@@ -510,6 +497,12 @@ extern "C" fn object_prototype_to_string_thunk(
     use crate::value::JSValue;
     let this_bits = IMPLICIT_THIS.with(|c| c.get());
     if let Some(tag) = crate::object::web_stream_to_string_tag(f64::from_bits(this_bits)) {
+        let formatted = format!("[object {}]", tag);
+        let bytes = formatted.as_bytes();
+        let s = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(crate::js_nanbox_string(s as i64).to_bits());
+    }
+    if let Some(tag) = crate::builtins::boxed_primitive_to_string_tag(f64::from_bits(this_bits)) {
         let formatted = format!("[object {}]", tag);
         let bytes = formatted.as_bytes();
         let s = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
@@ -981,11 +974,17 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                 "prototype".to_string(),
                 super::PropertyAttrs::new(false, false, false),
             );
+            let ctor_key = crate::string::js_string_from_bytes(
+                b"constructor".as_ptr(),
+                "constructor".len() as u32,
+            );
+            js_object_set_field_by_name(proto_obj, ctor_key, ctor_value);
+            super::set_builtin_property_attrs(
+                proto_obj as usize,
+                "constructor".to_string(),
+                super::PropertyAttrs::new(true, false, true),
+            );
             if is_web_fetch_constructor(name) {
-                let ctor_key = crate::string::js_string_from_bytes(
-                    b"constructor".as_ptr(),
-                    "constructor".len() as u32,
-                );
                 js_object_set_field_by_name(proto_obj, ctor_key, ctor_value);
                 super::set_builtin_property_attrs(
                     proto_obj as usize,

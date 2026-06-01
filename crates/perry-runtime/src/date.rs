@@ -1218,6 +1218,9 @@ pub extern "C" fn js_date_get_utc_milliseconds(timestamp: f64) -> f64 {
 /// date.valueOf() — same as getTime(), returns ms timestamp.
 #[no_mangle]
 pub extern "C" fn js_date_value_of(timestamp: f64) -> f64 {
+    if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(timestamp) {
+        return payload;
+    }
     let timestamp = date_cell_timestamp(timestamp);
     timestamp
 }
