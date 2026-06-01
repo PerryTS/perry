@@ -194,6 +194,33 @@ pub(crate) fn webcrypto_method_value(property_name: &str) -> Option<f64> {
     Some(crate::value::js_nanbox_pointer(closure as i64))
 }
 
+extern "C" fn global_this_array_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let rest_value = crate::value::JSValue::from_bits(rest.to_bits());
+    let args_arr = if rest_value.is_pointer() {
+        rest_value.as_pointer::<crate::array::ArrayHeader>()
+    } else {
+        std::ptr::null()
+    };
+    let argc = crate::array::js_array_length(args_arr);
+    if argc == 1 {
+        let first = crate::array::js_array_get_f64(args_arr, 0);
+        let arr = crate::array::js_array_constructor_single(first);
+        return crate::value::js_nanbox_pointer(arr as i64);
+    }
+    let arr = crate::array::js_array_alloc(argc);
+    unsafe {
+        (*arr).length = argc;
+        for i in 0..argc {
+            let value = crate::array::js_array_get_f64(args_arr, i);
+            crate::array::js_array_set_f64(arr, i, value);
+        }
+    }
+    crate::value::js_nanbox_pointer(arr as i64)
+}
+
 extern "C" fn global_this_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
@@ -903,6 +930,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             continue;
         }
         let func_ptr = match name {
+            "Array" => global_this_array_thunk as *const u8,
             "Object" => global_this_object_thunk as *const u8,
             "String" => global_this_string_thunk as *const u8,
             // #2889: call-form `Number(x)` / `Boolean(x)` through a rebound
@@ -927,6 +955,9 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             continue;
         }
         match name {
+            "Array" => {
+                crate::closure::js_register_closure_rest(func_ptr, 0);
+            }
             "Object" | "String" | "Number" | "Boolean" | "BroadcastChannel" => {
                 crate::closure::js_register_closure_arity(func_ptr, 1);
             }
@@ -972,7 +1003,11 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         // `js_object_set_field_by_name` detects the CLOSURE_MAGIC tag
         // at offset 12 and dispatches into `closure_set_dynamic_prop`
         // for us; both reads and writes share that side table.
-        let proto_obj = js_object_alloc(0, 0);
+        let proto_obj = if name == "Array" {
+            crate::array::js_array_alloc(0) as *mut ObjectHeader
+        } else {
+            js_object_alloc(0, 0)
+        };
         if !proto_obj.is_null() {
             let proto_value = crate::value::js_nanbox_pointer(proto_obj as i64);
             js_object_set_field_by_name(closure_ptr as *mut ObjectHeader, proto_key, proto_value);
@@ -987,6 +1022,16 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                     "constructor".len() as u32,
                 );
                 js_object_set_field_by_name(proto_obj, ctor_key, ctor_value);
+                super::set_builtin_property_attrs(
+                    proto_obj as usize,
+                    "constructor".to_string(),
+                    super::PropertyAttrs::new(true, false, true),
+                );
+            }
+            if name == "Array" {
+                let constructor_key =
+                    crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+                js_object_set_field_by_name(proto_obj, constructor_key, ctor_value);
                 super::set_builtin_property_attrs(
                     proto_obj as usize,
                     "constructor".to_string(),

@@ -207,6 +207,43 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
         };
 
+        if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+            let gc_header =
+                (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+                let arr = obj as *const crate::array::ArrayHeader;
+                let Some(ref name) = key_rust else {
+                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                };
+                if name == "length" {
+                    return build_data_descriptor(
+                        crate::array::js_array_length(arr) as f64,
+                        true,
+                        false,
+                        false,
+                    );
+                }
+                if let Some(index) = super::canonical_array_index(name) {
+                    if super::has_own_helpers::array_own_key_present(arr, key_str) {
+                        let value = crate::array::js_array_get_f64(arr, index);
+                        return build_data_descriptor(value, true, true, true);
+                    }
+                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                }
+                if let Some(value) = crate::array::array_named_property_get(arr, key_str) {
+                    let attrs = get_property_attrs(obj as usize, name)
+                        .unwrap_or(PropertyAttrs::new(true, true, true));
+                    return build_data_descriptor(
+                        value,
+                        attrs.writable(),
+                        attrs.enumerable(),
+                        attrs.configurable(),
+                    );
+                }
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
+        }
+
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
             if let (Some(module_name), Some(key_name)) =
                 (read_native_module_name(obj), key_rust.as_deref())
@@ -479,13 +516,34 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
             };
             if let Some(n) = n {
                 let result = crate::array::js_array_alloc(n + 1);
-                for i in 0..n {
-                    let s = i.to_string();
-                    let k = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                    crate::array::js_array_push(result, JSValue::string_ptr(k));
+                if crate::array::js_array_is_array(obj_value).to_bits() == TAG_TRUE_BITS {
+                    let ap = extract_obj_ptr(obj_value) as *const crate::array::ArrayHeader;
+                    for i in 0..n {
+                        if super::has_own_helpers::array_own_key_present(ap, {
+                            let s = i.to_string();
+                            crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
+                        }) {
+                            let s = i.to_string();
+                            let k = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                            crate::array::js_array_push(result, JSValue::string_ptr(k));
+                        }
+                    }
+                    let lk = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+                    crate::array::js_array_push(result, JSValue::string_ptr(lk));
+                    for name in crate::array::array_named_property_names(ap, false) {
+                        let k =
+                            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                        crate::array::js_array_push(result, JSValue::string_ptr(k));
+                    }
+                } else {
+                    for i in 0..n {
+                        let s = i.to_string();
+                        let k = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                        crate::array::js_array_push(result, JSValue::string_ptr(k));
+                    }
+                    let lk = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+                    crate::array::js_array_push(result, JSValue::string_ptr(lk));
                 }
-                let lk = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
-                crate::array::js_array_push(result, JSValue::string_ptr(lk));
                 return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
             }
         }

@@ -149,6 +149,37 @@ unsafe fn primitive_object_prototype_accessor(name: &str, receiver: f64) -> Opti
     Some(invoke_accessor_getter(acc.get, receiver))
 }
 
+unsafe fn array_prototype_property_value(name: &str, receiver_addr: usize) -> Option<JSValue> {
+    let ctor = super::js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
+    let ctor_value = JSValue::from_bits(ctor.to_bits());
+    if !ctor_value.is_pointer() {
+        return None;
+    }
+    let ctor_ptr = ctor_value.as_pointer::<u8>() as usize;
+    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto_value = JSValue::from_bits(proto.to_bits());
+    if !proto_value.is_pointer() {
+        return None;
+    }
+    let proto_ptr = proto_value.as_pointer::<u8>() as usize;
+    if proto_ptr == receiver_addr {
+        return None;
+    }
+    if let Some(v) = crate::array::array_named_property_get_by_name(
+        proto_ptr as *const crate::array::ArrayHeader,
+        name,
+    ) {
+        return Some(JSValue::from_bits(v.to_bits()));
+    }
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let v = js_object_get_field_by_name(proto_ptr as *const ObjectHeader, key);
+    if v.is_undefined() {
+        None
+    } else {
+        Some(v)
+    }
+}
+
 // Issue #922: Rate-limit and bound the [WARN_NULL_PTR] message stream
 // + abort the process when a runaway loop is detected.
 //
@@ -859,6 +890,10 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
                     let key_box = crate::string::js_string_new_sso(s.as_ptr(), s.len() as u32);
                     crate::array::js_array_push_f64(result, key_box);
                 }
+                for name in crate::array::array_named_property_names(arr, true) {
+                    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                    crate::array::js_array_push(result, JSValue::string_ptr(key));
+                }
                 return result;
             }
         }
@@ -1256,9 +1291,39 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                     }
                     return nanbox_true;
                 }
-                // Non-numeric key on an array: only `length` and inherited
-                // prototype methods would return true. Conservatively return
-                // false for now — out of scope for #323.
+                if key_val.is_any_string() {
+                    let key_str = crate::value::js_get_string_pointer_unified(key)
+                        as *const crate::StringHeader;
+                    if !key_str.is_null() {
+                        if let Some(key_name) =
+                            super::has_own_helpers::str_from_string_header(key_str)
+                        {
+                            if key_name == "length" {
+                                return nanbox_true;
+                            }
+                            if let Some(index) = super::canonical_array_index(key_name) {
+                                if index < length {
+                                    let elements = (arr as *const u8)
+                                        .add(std::mem::size_of::<crate::array::ArrayHeader>())
+                                        as *const u64;
+                                    if std::ptr::read(elements.add(index as usize))
+                                        != crate::value::TAG_HOLE
+                                    {
+                                        return nanbox_true;
+                                    }
+                                }
+                                return nanbox_false;
+                            }
+                            if crate::array::array_named_property_has(arr, key_str) {
+                                return nanbox_true;
+                            }
+                            if array_prototype_property_value(key_name, obj_ptr as usize).is_some()
+                            {
+                                return nanbox_true;
+                            }
+                        }
+                    }
+                }
                 return nanbox_false;
             }
             // #1758: a CLOSURE receiver (functions ARE objects in JS, so
@@ -2303,8 +2368,8 @@ pub extern "C" fn js_object_get_field_by_name(
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let key_len = (*key).byte_len as usize;
                 let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                let arr = obj as *const crate::array::ArrayHeader;
                 if key_bytes == b"length" {
-                    let arr = obj as *const crate::array::ArrayHeader;
                     return JSValue::number(crate::array::js_array_length(arr) as f64);
                 }
                 // date-fns / drizzle / lodash duck-typing path:
@@ -2317,18 +2382,25 @@ pub extern "C" fn js_object_get_field_by_name(
                     let v = js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
                     return JSValue::from_bits(v.to_bits());
                 }
+                if let Ok(name) = std::str::from_utf8(key_bytes) {
+                    if let Some(index) = super::canonical_array_index(name) {
+                        return JSValue::from_bits(
+                            crate::array::js_array_get_f64(arr, index).to_bits(),
+                        );
+                    }
+                    if let Some(v) = crate::array::array_named_property_get(arr, key) {
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                    if let Some(v) = array_prototype_property_value(name, obj as usize) {
+                        return v;
+                    }
+                }
                 if is_array_method_value_name(key_bytes) {
-                    let heap_name = {
-                        let layout =
-                            std::alloc::Layout::from_size_align(key_bytes.len().max(1), 1).unwrap();
-                        let ptr = std::alloc::alloc(layout);
-                        std::ptr::copy_nonoverlapping(key_bytes.as_ptr(), ptr, key_bytes.len());
-                        ptr
-                    };
-                    let this_f64 =
-                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                    let result = js_class_method_bind(this_f64, heap_name, key_bytes.len());
-                    return JSValue::from_bits(result.to_bits());
+                    if let Ok(name) = std::str::from_utf8(key_bytes) {
+                        if let Some(v) = array_prototype_property_value(name, obj as usize) {
+                            return v;
+                        }
+                    }
                 }
             }
             return JSValue::undefined();

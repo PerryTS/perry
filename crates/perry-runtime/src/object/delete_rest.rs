@@ -16,6 +16,30 @@ pub extern "C" fn js_object_delete_field(
         return 1;
     }
     unsafe {
+        if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+            let gc_header =
+                (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+                if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+                    if let Some(attrs) = get_property_attrs(obj as usize, name) {
+                        if !attrs.configurable() {
+                            return 0;
+                        }
+                    }
+                    if let Some(index) = super::canonical_array_index(name) {
+                        return crate::array::js_array_delete(
+                            obj as *mut crate::array::ArrayHeader,
+                            index,
+                        );
+                    }
+                }
+                crate::array::array_named_property_delete(
+                    obj as *const crate::array::ArrayHeader,
+                    key,
+                );
+                return 1;
+            }
+        }
         // #3655: `delete fn.name` / `delete fn.userProp`. Functions/closures
         // aren't `ObjectHeader`s — reading `keys_array` off one is out of
         // bounds. The built-in `name`/`length` slots are `configurable:true`,

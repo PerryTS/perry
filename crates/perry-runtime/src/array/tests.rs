@@ -42,6 +42,29 @@ unsafe fn raw_slot_bits(arr: *mut ArrayHeader, index: usize) -> u64 {
     *elements.add(index)
 }
 
+fn string_key(name: &[u8]) -> *mut crate::StringHeader {
+    crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
+}
+
+fn boxed_pointer(ptr: *mut u8) -> f64 {
+    crate::value::js_nanbox_pointer(ptr as i64)
+}
+
+fn string_value(ptr: *mut crate::StringHeader) -> f64 {
+    f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
+}
+
+fn array_keys_contain(keys: *mut ArrayHeader, name: &[u8]) -> bool {
+    let key = string_key(name);
+    for i in 0..js_array_length(keys) {
+        let stored = js_array_get(keys, i);
+        if unsafe { crate::string::js_string_key_matches(stored, key) } {
+            return true;
+        }
+    }
+    false
+}
+
 #[test]
 fn test_array_alloc_and_access() {
     let arr = js_array_alloc(5);
@@ -61,6 +84,117 @@ fn test_array_alloc_and_access() {
 
     // Out of bounds returns TAG_UNDEFINED (JS spec: arr[OOB] === undefined)
     assert_eq!(js_array_get_f64(arr, 5).to_bits(), 0x7FFC_0000_0000_0001u64);
+}
+
+#[test]
+fn test_array_exotic_named_indices_and_boundary_props() {
+    let mut arr = js_array_alloc(0);
+    let arr_obj = arr as *mut crate::object::ObjectHeader;
+
+    let idx2 = string_key(b"2");
+    arr = js_array_set_string_key(arr, idx2, 42.0);
+    assert_eq!(js_array_length(arr), 3);
+    assert_eq!(js_array_get_f64(arr, 2), 42.0);
+
+    let key0 = string_key(b"0");
+    let key2 = string_key(b"2");
+    assert_eq!(
+        crate::object::js_object_has_own(boxed_pointer(arr as *mut u8), string_value(key0))
+            .to_bits(),
+        crate::value::TAG_FALSE
+    );
+    assert_eq!(
+        crate::object::js_object_has_own(boxed_pointer(arr as *mut u8), string_value(key2))
+            .to_bits(),
+        crate::value::TAG_TRUE
+    );
+
+    let max_key = string_key(b"4294967295");
+    arr = js_array_set_string_key(arr, max_key, 99.0);
+    assert_eq!(js_array_length(arr), 3, "2^32-1 is not an array index");
+    assert_eq!(
+        crate::object::js_object_get_field_by_name(arr_obj, max_key).bits(),
+        99.0f64.to_bits()
+    );
+
+    let foo = string_key(b"foo");
+    crate::object::js_object_set_field_by_name(arr_obj, foo, 7.0);
+    assert_eq!(
+        crate::object::js_object_get_field_by_name(arr_obj, foo).bits(),
+        7.0f64.to_bits()
+    );
+
+    let keys = crate::object::js_object_keys(arr_obj);
+    assert!(array_keys_contain(keys, b"2"));
+    assert!(array_keys_contain(keys, b"foo"));
+    assert!(array_keys_contain(keys, b"4294967295"));
+    assert!(!array_keys_contain(keys, b"0"));
+}
+
+#[test]
+fn test_array_exotic_descriptors_and_global_prototype_identity() {
+    let arr = js_array_alloc(0);
+    let arr_box = boxed_pointer(arr as *mut u8);
+    let length_desc = crate::object::js_object_get_own_property_descriptor(
+        arr_box,
+        string_value(string_key(b"length")),
+    );
+    let value_key = string_key(b"value");
+    let writable_key = string_key(b"writable");
+    let enumerable_key = string_key(b"enumerable");
+    let length_desc_obj =
+        crate::value::js_nanbox_get_pointer(length_desc) as *const crate::object::ObjectHeader;
+    assert_eq!(
+        crate::object::js_object_get_field_by_name(length_desc_obj, value_key).bits(),
+        0.0f64.to_bits()
+    );
+    assert_eq!(
+        crate::object::js_object_get_field_by_name(length_desc_obj, writable_key).bits(),
+        crate::value::TAG_TRUE
+    );
+    assert_eq!(
+        crate::object::js_object_get_field_by_name(length_desc_obj, enumerable_key).bits(),
+        crate::value::TAG_FALSE
+    );
+
+    let global = crate::object::js_get_global_this();
+    let global_ptr =
+        crate::value::js_nanbox_get_pointer(global) as *const crate::object::ObjectHeader;
+    let array_ctor = crate::object::js_object_get_field_by_name(global_ptr, string_key(b"Array"));
+    let ctor_ptr = crate::value::js_nanbox_get_pointer(f64::from_bits(array_ctor.bits())) as usize;
+    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    assert_eq!(js_array_is_array(proto).to_bits(), crate::value::TAG_TRUE);
+    let constructor_desc = crate::object::js_object_get_own_property_descriptor(
+        proto,
+        string_value(string_key(b"constructor")),
+    );
+    let constructor_desc_obj =
+        crate::value::js_nanbox_get_pointer(constructor_desc) as *const crate::object::ObjectHeader;
+    assert_eq!(
+        crate::object::js_object_get_field_by_name(constructor_desc_obj, value_key).bits(),
+        array_ctor.bits()
+    );
+
+    let literal_to_string = crate::object::js_object_get_field_by_name(
+        arr as *const crate::object::ObjectHeader,
+        string_key(b"toString"),
+    );
+    let proto_to_string = crate::object::js_object_get_field_by_name(
+        crate::value::js_nanbox_get_pointer(proto) as *const crate::object::ObjectHeader,
+        string_key(b"toString"),
+    );
+    assert_eq!(literal_to_string.bits(), proto_to_string.bits());
+
+    let array_from_call = unsafe {
+        let args = [0.0, 1.0, 0.0, 1.0];
+        crate::closure::js_native_call_value(
+            f64::from_bits(array_ctor.bits()),
+            args.as_ptr(),
+            args.len(),
+        )
+    };
+    let called_arr = crate::value::js_nanbox_get_pointer(array_from_call) as *const ArrayHeader;
+    assert_eq!(js_array_length(called_arr), 4);
 }
 
 #[test]
