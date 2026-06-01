@@ -2,6 +2,47 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1058 — fix(node): API-surface hygiene batch (#3925, #3946, #3857, #3962, #3938)
+
+Five Node-parity fixes for the `node:*` builtin surface:
+
+- **#3925 — `node:punycode.ucs2` phantom submodule.** Perry advertised
+  `node:punycode.ucs2` as an importable builtin; Node throws
+  `ERR_UNKNOWN_BUILTIN_MODULE` (`ucs2` is a *property* of `node:punycode`, not a
+  module). The HIR import gate (`lower/module_decl.rs`) now rejects any
+  `node:`-prefixed specifier that isn't a real Node builtin
+  (`NODE_BUILTIN_MODULES`) or a resolvable native module — also closing the
+  more general "`node:bogusmod` checks clean" gap. `punycode.ucs2` stays in
+  `NODE_SUBMODULES` as a Perry-internal dispatch namespace so
+  `punycode.ucs2.decode/encode` member access keeps working.
+- **#3946 — `node:process` core properties via named/namespace import.**
+  `import { pid, arch, platform, … } from "node:process"` and
+  `import * as p from "node:process"; p.pid` resolved to `undefined` (only the
+  default import and global `process` worked). Named imports now route process
+  *properties* through the dedicated `ProcessPid`/`OsArch`/… lowerings, and the
+  `process.<prop>` member path also fires for namespace/default import locals.
+- **#3857 — `JSON.stringify` of boxed primitive wrappers.**
+  `JSON.stringify(new String("hi"))` returned `{}` instead of `"hi"`; the same
+  applied to `new Number`/`new Boolean` and to wrappers nested in objects and
+  arrays, and the 3-arg pretty form crashed. Stringify now unwraps boxed
+  String/Number/Boolean/BigInt wrappers to their primitive across the compact,
+  array (fast + slow), and pretty paths.
+- **#3962 — `process.stdin` listener-removal + lifecycle for TUI teardown.**
+  `process.stdin` lacked `removeListener`/`off`/`addListener`/
+  `removeAllListeners`/`pause`/`resume`/`unref`/`destroy`. They're now present;
+  on stdin, `pause`/`unref`/`destroy` detach the readline reader so the event
+  loop can quiesce after teardown (readline `has_active` consults the new
+  `stdin_is_detached()` flag) without an explicit `process.exit()`.
+- **#3938 — literal dynamic import of slash submodules.**
+  `await import("node:util/types")` / `"node:path/posix"` /
+  `"node:stream/promises"` emitted invalid LLVM (a `@__perry_ns_…/…` global with
+  a slash). The dead extern-global/init declarations for `__native_mod__` /
+  `__node_submod__` sentinel prefixes (resolved at the dispatch site via runtime
+  namespace builders) are no longer emitted.
+
+Regression coverage: `node-suite` fixtures for #3857/#3946/#3938/#3925 and a
+`perry-hir` unknown-builtin-module rejection test.
+
 ## v0.5.1057 — fix(#2169): perry-ui-windows LNK4006 / LNK4088 + windows-rs 0.58 drift
 
 The user-reported repro (Windows 10, perry 0.5.1025) failed silently with
