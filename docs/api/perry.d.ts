@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2514 entries across 106 modules
+// Coverage: 2520 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3612,11 +3612,19 @@ declare module "v8" {
   /** stdlib */
   export function deserialize(...args: any[]): any;
   /** stdlib */
+  export function getCppHeapStatistics(...args: any[]): any;
+  /** stdlib */
   export function getHeapCodeStatistics(...args: any[]): any;
+  /** stdlib */
+  export function getHeapSnapshot(...args: any[]): any;
   /** stdlib */
   export function getHeapSpaceStatistics(...args: any[]): any;
   /** stdlib */
   export function getHeapStatistics(...args: any[]): any;
+  /** stdlib */
+  export function isStringOneByteRepresentation(...args: any[]): any;
+  /** stdlib */
+  export function queryObjects(...args: any[]): any;
   /** stdlib */
   export function serialize(...args: any[]): any;
   /** stdlib */
@@ -3624,9 +3632,13 @@ declare module "v8" {
   /** stdlib */
   export function setHeapSnapshotNearHeapLimit(...args: any[]): any;
   /** stdlib */
+  export function startCpuProfile(...args: any[]): any;
+  /** stdlib */
   export function stopCoverage(...args: any[]): any;
   /** stdlib */
   export function takeCoverage(...args: any[]): any;
+  /** stdlib */
+  export function writeHeapSnapshot(...args: any[]): any;
 }
 
 declare module "validator" {

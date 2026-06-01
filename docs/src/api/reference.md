@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2514 entries across 106 modules.
+Total: 2520 entries across 106 modules.
 
 ## Modules
 
@@ -3154,14 +3154,18 @@ Total: 2514 entries across 106 modules.
 - `cachedDataVersionTag` — module
 - `createHook` — instance *(class: `promiseHooks`)*
 - `deserialize` — module
+- `getCppHeapStatistics` — module
 - `getHeapCodeStatistics` — module
+- `getHeapSnapshot` — module
 - `getHeapSpaceStatistics` — module
 - `getHeapStatistics` — module
 - `isBuildingSnapshot` — instance *(class: `startupSnapshot`)*
+- `isStringOneByteRepresentation` — module
 - `onAfter` — instance *(class: `promiseHooks`)*
 - `onBefore` — instance *(class: `promiseHooks`)*
 - `onInit` — instance *(class: `promiseHooks`)*
 - `onSettled` — instance *(class: `promiseHooks`)*
+- `queryObjects` — module
 - `readDouble` — instance *(class: `Deserializer`)*
 - `readHeader` — instance *(class: `Deserializer`)*
 - `readRawBytes` — instance *(class: `Deserializer`)*
@@ -3174,11 +3178,13 @@ Total: 2514 entries across 106 modules.
 - `setFlagsFromString` — module
 - `setHeapSnapshotNearHeapLimit` — module
 - `start` — instance *(class: `GCProfiler`)*
+- `startCpuProfile` — module
 - `stop` — instance *(class: `GCProfiler`)*
 - `stopCoverage` — module
 - `takeCoverage` — module
 - `writeDouble` — instance *(class: `Serializer`)*
 - `writeHeader` — instance *(class: `Serializer`)*
+- `writeHeapSnapshot` — module
 - `writeRawBytes` — instance *(class: `Serializer`)*
 - `writeUint32` — instance *(class: `Serializer`)*
 - `writeUint64` — instance *(class: `Serializer`)*

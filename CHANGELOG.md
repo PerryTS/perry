@@ -2,6 +2,16 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1077 — node:v8: expose modern diagnostics/profiler named exports (#3904)
+
+Perry's `node:v8` manifest omitted several function-valued exports Node ships in the ESM namespace, so `import { queryObjects, getCppHeapStatistics, ... } from "node:v8"` failed `perry check` before runtime. Added `getCppHeapStatistics`, `getHeapSnapshot`, `isStringOneByteRepresentation`, `queryObjects`, `startCpuProfile`, and `writeHeapSnapshot` as function-valued exports (Node `.length` values preserved).
+
+- **`crates/perry-api-manifest/src/entries.rs`** — six `method("v8", …)` rows.
+- **`crates/perry-runtime/src/object/native_module.rs`** — the six added to `is_native_module_callable_export` (so the named/namespace reads are function-valued) and `native_callable_export_arity` (Node `.length`).
+- **`test-parity/node-suite/v8/exports/diagnostics-surface.ts`** — new fixture (typeof + `.length` + namespace identity); byte-identical to `node --experimental-strip-types`.
+
+Export-surface/manifest parity only; deeper behavior of `getHeapSnapshot`/`writeHeapSnapshot` remains tracked by #3140.
+
 ## v0.5.1076 — fix(fs): opendirSync compiles (add missing #[no_mangle])
 
 Any program using `fs.opendirSync(...)` failed to link with `Undefined symbols: _js_fs_opendir_sync`. The runtime `js_fs_opendir_sync` (`crates/perry-runtime/src/fs/dir_glob_watch.rs`) was declared in codegen (`runtime_decls/strings.rs`) and called by the unmangled symbol name, but the Rust function was missing `#[no_mangle]` — so its symbol was Rust-mangled and the linker couldn't resolve the codegen call. (Its sibling `js_fs_glob_sync`/`js_fs_glob_sync_options` both have `#[no_mangle]` and linked fine; the async/`fs.promises` Dir paths reach the shared `js_fs_opendir_value` helper directly, so only the sync entry point was broken.)

@@ -4073,6 +4073,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("v8", "takeCoverage", false, None),
     method("v8", "stopCoverage", false, None),
     method("v8", "setHeapSnapshotNearHeapLimit", false, None),
+    // #3904: modern V8 diagnostics/profiler named exports (function-valued in
+    // Node's ESM namespace). `getHeapSnapshot`/`writeHeapSnapshot` deeper
+    // behavior is tracked by #3140; here they're added to the export surface.
+    method("v8", "getCppHeapStatistics", false, None),
+    method("v8", "getHeapSnapshot", false, None),
+    method("v8", "isStringOneByteRepresentation", false, None),
+    method("v8", "queryObjects", false, None),
+    method("v8", "startCpuProfile", false, None),
+    method("v8", "writeHeapSnapshot", false, None),
     method("v8", "isBuildingSnapshot", true, Some("startupSnapshot")),
     method("v8", "addSerializeCallback", true, Some("startupSnapshot")),
     method(

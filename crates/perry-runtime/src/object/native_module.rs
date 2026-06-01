@@ -2181,6 +2181,10 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         // #3712: node:http module-level helper exports.
         ("http", "validateHeaderName" | "validateHeaderValue") => Some(2),
         ("http", "setMaxIdleHTTPParsers" | "setGlobalProxyFromEnv") => Some(1),
+        // #3904: modern V8 diagnostics/profiler exports (Node .length values).
+        ("v8", "getCppHeapStatistics" | "startCpuProfile") => Some(0),
+        ("v8", "getHeapSnapshot" | "isStringOneByteRepresentation" | "queryObjects") => Some(1),
+        ("v8", "writeHeapSnapshot") => Some(2),
         ("net", "_normalizeArgs") => Some(1),
         ("net", "_createServerHandle") => Some(5),
         ("domain", "Domain" | "createDomain" | "create") => Some(0),
@@ -3683,6 +3687,13 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("v8", "takeCoverage")
             | ("v8", "stopCoverage")
             | ("v8", "setHeapSnapshotNearHeapLimit")
+            // #3904: modern V8 diagnostics/profiler named exports (function-valued).
+            | ("v8", "getCppHeapStatistics")
+            | ("v8", "getHeapSnapshot")
+            | ("v8", "isStringOneByteRepresentation")
+            | ("v8", "queryObjects")
+            | ("v8", "startCpuProfile")
+            | ("v8", "writeHeapSnapshot")
             // #3679: v8.startupSnapshot / v8.promiseHooks namespace methods read
             // as callable values (`typeof v8.startupSnapshot.isBuildingSnapshot
             // === "function"`). Invocation routes through
