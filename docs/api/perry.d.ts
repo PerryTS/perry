@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2492 entries across 106 modules
+// Coverage: 2491 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3653,8 +3653,6 @@ declare module "worker_threads" {
   export function markAsUntransferable(p0: any): void;
   /** stdlib */
   export function moveMessagePortToContext(p0: any, p1: any): any;
-  /** stdlib */
-  export function parentPort(...args: any[]): any;
   /** stdlib */
   export function postMessageToThread(p0: any, p1: any, p2: any, p3: any): any;
   /** stdlib */
