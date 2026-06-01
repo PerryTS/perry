@@ -181,6 +181,23 @@ fn process_listener_matches(
     !handler.is_null() && (listener.callback == handler || listener.raw_wrapper == handler)
 }
 
+fn process_listener_count(event: &str) -> usize {
+    PROCESS_EMITTER.with(|emitter| {
+        emitter
+            .borrow()
+            .events
+            .get(event)
+            .map(|listeners| listeners.len())
+            .unwrap_or(0)
+    })
+}
+
+fn sync_process_signal_listener(event: &str) {
+    if super::signal::is_process_signal_name(event) {
+        super::signal::set_process_signal_listener_count(event, process_listener_count(event));
+    }
+}
+
 fn register_process_listener(
     event_bits: i64,
     listener_bits: i64,
@@ -207,13 +224,14 @@ fn register_process_listener(
             raw_wrapper,
             once,
         };
-        let listeners = emitter.events.entry(event).or_default();
+        let listeners = emitter.events.entry(event.clone()).or_default();
         if prepend {
             listeners.insert(0, listener);
         } else {
             listeners.push(listener);
         }
     });
+    sync_process_signal_listener(&event);
     process_namespace_value()
 }
 
@@ -383,6 +401,25 @@ pub extern "C" fn js_process_emit_before_exit(code: f64) {
     let _ = emit_process_event("beforeExit", &[code]);
 }
 
+pub extern "C" fn js_process_signal_drain() -> i32 {
+    let mut count = 0i32;
+    for event in super::signal::take_pending_process_signals() {
+        if emit_process_event(event, &[]) {
+            count += 1;
+        }
+        sync_process_signal_listener(event);
+    }
+    count
+}
+
+pub extern "C" fn js_process_signal_has_active() -> i32 {
+    if super::signal::has_active_process_signal_listeners() {
+        1
+    } else {
+        0
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_process_emit(event_bits: i64, args: *const ArrayHeader) -> f64 {
     let Some(event) = coerce_event_name(event_bits) else {
@@ -408,6 +445,7 @@ pub extern "C" fn js_process_remove_listener(event_bits: i64, listener_bits: i64
             }
             emitter.prune_event_if_empty(&event);
         });
+        sync_process_signal_listener(&event);
     }
     process_namespace_value()
 }
@@ -430,16 +468,32 @@ pub extern "C" fn js_process_remove_all_listeners(event_bits: i64) -> f64 {
     } else {
         coerce_event_name(event_bits)
     };
+    let signal_events = PROCESS_EMITTER.with(|emitter| {
+        let emitter = emitter.borrow();
+        match target.as_ref() {
+            Some(event) if super::signal::is_process_signal_name(event) => vec![event.clone()],
+            Some(_) => Vec::new(),
+            None => emitter
+                .event_order
+                .iter()
+                .filter(|event| super::signal::is_process_signal_name(event))
+                .cloned()
+                .collect::<Vec<_>>(),
+        }
+    });
     PROCESS_EMITTER.with(|emitter| {
         let mut emitter = emitter.borrow_mut();
-        if let Some(event) = target {
-            emitter.events.remove(&event);
-            emitter.event_order.retain(|name| name != &event);
+        if let Some(event) = target.as_ref() {
+            emitter.events.remove(event);
+            emitter.event_order.retain(|name| name != event);
         } else {
             emitter.events.clear();
             emitter.event_order.clear();
         }
     });
+    for event in signal_events {
+        sync_process_signal_listener(&event);
+    }
     process_namespace_value()
 }
 

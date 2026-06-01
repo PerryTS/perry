@@ -351,6 +351,7 @@ mod stdlib_pump {
     #[no_mangle]
     pub extern "C" fn js_run_stdlib_pump() {
         crate::promise::js_native_async_process_pending();
+        crate::os::js_process_signal_drain();
         // Drain the tty resize-pending flag (#347 Phase 3). Lives in
         // perry-runtime, not stdlib, so it runs even when stdlib isn't
         // linked — a TUI program that uses process.stdout.on('resize')
@@ -395,6 +396,9 @@ mod stdlib_pump {
         // #1934: a live spawn-reactor child keeps the event loop alive even when
         // perry-stdlib isn't linked (or reports no handles).
         if crate::child_process::reactor::cp_reactor_has_live() {
+            return 1;
+        }
+        if crate::os::js_process_signal_has_active() != 0 {
             return 1;
         }
         // #2532 — a live `perry-ext-*` handle (e.g. a listening HTTP
