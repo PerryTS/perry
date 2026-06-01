@@ -358,7 +358,6 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     if class_id == 0 {
         return false_val;
     }
-
     // Keep in sync with perry-codegen/src/expr/instance_misc1.rs.
     let classic_stream_name = match class_id {
         0xFFFF0070 => Some("Stream"),

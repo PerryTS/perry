@@ -160,12 +160,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "TransformStream" => 0xFFFF0062u32,
                 // node:perf_hooks entry classes. Runtime classifies the
                 // shaped entry objects returned by performance.mark/measure.
-                "Performance" => 0xFFFF0087u32,
+                // #3871: Performance / PerformanceObserverEntryList /
+                // PerformanceResourceTiming moved off 0x87/0x88/0x86 (which
+                // collided with fs Dirent/ReadStream/Dir) to 0x8E/0x8F/0x8D.
+                // Keep in sync with perry-runtime/src/perf_hooks.rs.
+                "Performance" => 0xFFFF008Eu32,
                 "PerformanceEntry" => 0xFFFF0080u32,
                 "PerformanceMark" => 0xFFFF0081u32,
                 "PerformanceMeasure" => 0xFFFF0082u32,
-                "PerformanceObserverEntryList" => 0xFFFF0088u32,
-                "PerformanceResourceTiming" => 0xFFFF0086u32,
+                "PerformanceObserverEntryList" => 0xFFFF008Fu32,
+                "PerformanceResourceTiming" => 0xFFFF008Du32,
                 "Console" => 0xFFFF0083u32,
                 "Event" | "globalThis.Event" => 0xFFFF2403u32,
                 "CustomEvent" | "globalThis.CustomEvent" => 0xFFFF2404u32,
