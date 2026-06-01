@@ -290,6 +290,106 @@ pub(crate) extern "C" fn global_this_builtin_noop_thunk(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+pub(crate) extern "C" fn webcrypto_illegal_constructor_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    crate::fs::validate::throw_type_error_with_code(
+        "Illegal constructor",
+        "ERR_ILLEGAL_CONSTRUCTOR",
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_webcrypto_illegal_constructor() -> f64 {
+    crate::fs::validate::throw_type_error_with_code(
+        "Illegal constructor",
+        "ERR_ILLEGAL_CONSTRUCTOR",
+    )
+}
+
+extern "C" fn global_this_crypto_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    super::native_module::webcrypto_namespace()
+}
+
+fn require_webcrypto_this() -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let jv = crate::value::JSValue::from_bits(this_value.to_bits());
+    if jv.is_pointer() {
+        let obj = jv.as_pointer::<ObjectHeader>();
+        if !obj.is_null()
+            && unsafe { (*obj).class_id } == super::native_module::NATIVE_MODULE_CLASS_ID
+            && unsafe { super::native_module::read_native_module_name(obj) }
+                .is_some_and(|name| name == "crypto.webcrypto")
+        {
+            return this_value;
+        }
+    }
+    crate::fs::validate::throw_type_error_with_code(
+        "Value of \"this\" must be of type Crypto",
+        "ERR_INVALID_THIS",
+    )
+}
+
+pub(crate) extern "C" fn webcrypto_get_random_values_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    array: f64,
+) -> f64 {
+    let this_value = require_webcrypto_this();
+    unsafe {
+        js_native_call_method(
+            this_value,
+            b"getRandomValues".as_ptr() as *const i8,
+            "getRandomValues".len(),
+            &array,
+            1,
+        )
+    }
+}
+
+pub(crate) extern "C" fn webcrypto_random_uuid_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this_value = require_webcrypto_this();
+    unsafe {
+        js_native_call_method(
+            this_value,
+            b"randomUUID".as_ptr() as *const i8,
+            "randomUUID".len(),
+            std::ptr::null(),
+            0,
+        )
+    }
+}
+
+extern "C" fn webcrypto_subtle_getter_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    require_webcrypto_this();
+    super::native_module::subtle_crypto_namespace()
+}
+
+extern "C" fn cryptokey_property_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+pub(crate) fn webcrypto_method_value(property_name: &str) -> Option<f64> {
+    let (func_ptr, arity) = match property_name {
+        "getRandomValues" => (webcrypto_get_random_values_thunk as *const u8, 1),
+        "randomUUID" => (webcrypto_random_uuid_thunk as *const u8, 0),
+        _ => return None,
+    };
+    crate::closure::js_register_closure_arity(func_ptr, arity);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+    }
+    super::native_module::set_bound_native_closure_name(closure, property_name);
+    super::native_module::set_builtin_closure_length(closure as usize, arity);
+    Some(crate::value::js_nanbox_pointer(closure as i64))
+}
+
 extern "C" fn global_this_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
@@ -1012,6 +1112,9 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             "BroadcastChannel" => {
                 crate::messaging::js_broadcast_channel_constructor_call_error as *const u8
             }
+            "Crypto" | "CryptoKey" | "SubtleCrypto" => {
+                webcrypto_illegal_constructor_thunk as *const u8
+            }
             _ => global_this_builtin_noop_thunk as *const u8,
         };
         let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
@@ -1056,7 +1159,6 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             "length".to_string(),
             super::PropertyAttrs::new(false, false, true),
         );
-        let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
         if name == "Error" {
             install_error_static_methods(closure_ptr);
         }
@@ -1125,6 +1227,13 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let name_key =
             crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
         js_object_set_field_by_name(singleton, name_key, ctor_value);
+        if matches!(name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
+            super::set_builtin_property_attrs(
+                singleton as usize,
+                name.to_string(),
+                super::PropertyAttrs::new(true, false, true),
+            );
+        }
     }
     // Callable global functions: ClosureHeader-backed values with real
     // dispatch so direct property reads and rebound calls match bare calls.
@@ -1220,6 +1329,23 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         js_object_set_field_by_name(singleton, key, value);
     }
     super::native_module::install_global_webcrypto(singleton);
+    let func_ptr = global_this_crypto_getter_thunk as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 0);
+    let getter = crate::closure::js_closure_alloc(func_ptr, 0);
+    let getter_bits = if getter.is_null() {
+        0
+    } else {
+        crate::value::js_nanbox_pointer(getter as i64).to_bits()
+    };
+    super::set_builtin_accessor_descriptor(
+        singleton as usize,
+        "crypto".to_string(),
+        super::AccessorDescriptor {
+            get: getter_bits,
+            set: 0,
+        },
+        super::PropertyAttrs::new(true, true, true),
+    );
     // #2923: `globalThis.navigator` — Node's browser-compatible runtime
     // metadata object. typeof is "object". Built once per process.
     {
@@ -1928,6 +2054,36 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             install_noop_proto_methods(proto_obj, &[("decode", 1)]);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
+        "Crypto" => {
+            install_webcrypto_proto_getter(
+                proto_obj,
+                "subtle",
+                webcrypto_subtle_getter_thunk as *const u8,
+            );
+            install_webcrypto_proto_method(
+                proto_obj,
+                "getRandomValues",
+                webcrypto_get_random_values_thunk as *const u8,
+                1,
+            );
+            install_webcrypto_proto_method(
+                proto_obj,
+                "randomUUID",
+                webcrypto_random_uuid_thunk as *const u8,
+                0,
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "CryptoKey" => {
+            for name in ["algorithm", "extractable", "type", "usages"] {
+                install_webcrypto_proto_getter(
+                    proto_obj,
+                    name,
+                    cryptokey_property_getter_thunk as *const u8,
+                );
+            }
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
         "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EvalError"
         | "URIError" => {
             install_noop_proto_methods(proto_obj, &[("toString", 0)]);
@@ -1990,4 +2146,43 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
         }
         _ => {}
     }
+}
+
+fn install_webcrypto_proto_method(
+    proto_obj: *mut ObjectHeader,
+    method_name: &str,
+    func_ptr: *const u8,
+    arity: u32,
+) {
+    install_proto_method(proto_obj, method_name, func_ptr, arity);
+    super::set_builtin_property_attrs(
+        proto_obj as usize,
+        method_name.to_string(),
+        super::PropertyAttrs::new(true, true, true),
+    );
+}
+
+fn install_webcrypto_proto_getter(proto_obj: *mut ObjectHeader, name: &str, func_ptr: *const u8) {
+    if proto_obj.is_null() {
+        return;
+    }
+    crate::closure::js_register_closure_arity(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let value = if closure.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        super::native_module::set_bound_native_closure_name(closure, &format!("get {name}"));
+        crate::value::js_nanbox_pointer(closure as i64)
+    };
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_object_set_field_by_name(proto_obj, key, f64::from_bits(crate::value::TAG_UNDEFINED));
+    super::set_builtin_accessor_descriptor(
+        proto_obj as usize,
+        name.to_string(),
+        super::AccessorDescriptor {
+            get: value.to_bits(),
+            set: 0,
+        },
+        super::PropertyAttrs::new(true, true, true),
+    );
 }

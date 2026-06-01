@@ -1561,6 +1561,11 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
             "URLSearchParams".len(),
         );
     }
+    if module_name == "crypto.webcrypto" {
+        if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
+            return value;
+        }
+    }
 
     // #3679: node:v8 lifecycle namespaces. `v8.startupSnapshot` /
     // `v8.promiseHooks` are object-valued exports; resolve them to
@@ -2942,6 +2947,21 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             // for feature checks and rebound calls.
             | ("crypto.webcrypto", "getRandomValues")
             | ("crypto.webcrypto", "randomUUID")
+            | (
+                "crypto.subtle",
+                "digest"
+                    | "importKey"
+                    | "exportKey"
+                    | "sign"
+                    | "verify"
+                    | "deriveBits"
+                    | "deriveKey"
+                    | "encrypt"
+                    | "decrypt"
+                    | "generateKey"
+                    | "wrapKey"
+                    | "unwrapKey",
+            )
             | ("buffer.Buffer", "from")
             | ("buffer.Buffer", "alloc")
             | ("buffer.Buffer", "allocUnsafe")
@@ -3341,6 +3361,12 @@ pub extern "C" fn js_native_module_bind_method(
 
     // Extract module name from the namespace object's first field
     let module_name = unsafe { get_module_name_from_namespace(_namespace_obj) };
+
+    if module_name == "crypto.webcrypto" {
+        if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
+            return value;
+        }
+    }
 
     // Check for known constant properties first
     if let Some(val) =
