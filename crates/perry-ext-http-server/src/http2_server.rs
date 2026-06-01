@@ -40,7 +40,8 @@ use crate::request::{
 use crate::response::{alloc_server_response, HyperResponseShape, ResponseBody};
 use crate::server::{synthesize_default_response_if_needed, HttpPendingRequest, HttpServer};
 use crate::tls::{
-    build_server_config, json_value_to_pem_bytes, parse_cert_chain, parse_private_key,
+    build_server_config, has_pem_material, json_value_to_pem_bytes, parse_cert_chain,
+    parse_private_key,
 };
 
 /// Decode `{ key, cert }` from a NaN-boxed JsValue object. Mirrors
@@ -87,6 +88,7 @@ pub unsafe extern "C" fn js_node_http2_create_secure_server(opts_f64: f64, handl
 
     let (key_pem, cert_pem) = parse_h2_opts(opts_f64);
     let cert_chain = parse_cert_chain(&cert_pem);
+    let has_tls_material = has_pem_material(&key_pem, &cert_pem);
     let private_key = parse_private_key(&key_pem);
 
     let tls_config = match private_key {
@@ -98,7 +100,9 @@ pub unsafe extern "C" fn js_node_http2_create_secure_server(opts_f64: f64, handl
             }
         },
         None => {
-            eprintln!("[node:http2] no recognized PEM private key");
+            if has_tls_material {
+                eprintln!("[node:http2] no recognized PEM private key");
+            }
             None
         }
     };

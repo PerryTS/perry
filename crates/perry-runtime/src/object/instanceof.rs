@@ -7,7 +7,11 @@ use super::*;
 
 // Keep in sync with perry-codegen/src/expr/instance_misc1.rs.
 const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
+const CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE: u32 = 0xFFFF0077;
 const CLASS_ID_PROMISE: u32 = 0xFFFF0027;
+const CLASS_ID_CRYPTO: u32 = 0xFFFF00C0;
+const CLASS_ID_SUBTLE_CRYPTO: u32 = 0xFFFF00C1;
+const CLASS_ID_CRYPTO_KEY: u32 = 0xFFFF00C2;
 
 fn small_native_handle_id(value: f64) -> Option<i64> {
     let bits = value.to_bits();
@@ -21,6 +25,33 @@ fn small_native_handle_id(value: f64) -> Option<i64> {
         return Some(value as i64);
     }
     None
+}
+
+fn value_addr(value: f64) -> usize {
+    let bits = value.to_bits();
+    if (bits >> 48) >= 0x7FF8 {
+        (bits & crate::value::POINTER_MASK) as usize
+    } else if (bits >> 48) == 0 && bits >= 0x1000 {
+        bits as usize
+    } else {
+        0
+    }
+}
+
+fn is_native_module_namespace_value(value: f64, expected: &str) -> bool {
+    let jv = crate::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let obj = jv.as_pointer::<ObjectHeader>();
+    if obj.is_null() {
+        return false;
+    }
+    unsafe {
+        (*obj).class_id == crate::object::native_module::NATIVE_MODULE_CLASS_ID
+            && crate::object::native_module::read_native_module_name(obj)
+                .is_some_and(|name| name == expected)
+    }
 }
 
 /// v0.5.749: dynamic instanceof — `value instanceof type` where the
@@ -62,6 +93,12 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
         if module == "events" && method == "EventEmitter" && is_event_emitter_instance_value(value)
+        {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
+        if module == "events"
+            && method == "EventEmitterAsyncResource"
+            && is_event_emitter_async_resource_instance_value(value)
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
@@ -134,6 +171,31 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         return js_instanceof(value, crate::buffer::BUFFER_TYPE_ID);
     }
     if let Some(name) = identify_global_builtin_constructor(type_ref) {
+        match name {
+            "Crypto" => {
+                return if is_native_module_namespace_value(value, "crypto.webcrypto") {
+                    f64::from_bits(crate::value::TAG_TRUE)
+                } else {
+                    f64::from_bits(TAG_FALSE)
+                };
+            }
+            "SubtleCrypto" => {
+                return if is_native_module_namespace_value(value, "crypto.subtle") {
+                    f64::from_bits(crate::value::TAG_TRUE)
+                } else {
+                    f64::from_bits(TAG_FALSE)
+                };
+            }
+            "CryptoKey" => {
+                let addr = value_addr(value);
+                return if addr != 0 && crate::buffer::crypto_key_meta(addr).is_some() {
+                    f64::from_bits(crate::value::TAG_TRUE)
+                } else {
+                    f64::from_bits(TAG_FALSE)
+                };
+            }
+            _ => {}
+        }
         let class_id = match name {
             "Error" => crate::error::CLASS_ID_ERROR,
             "TypeError" => crate::error::CLASS_ID_TYPE_ERROR,
@@ -144,6 +206,9 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             "URIError" => crate::error::CLASS_ID_URI_ERROR,
             "AggregateError" => crate::error::CLASS_ID_AGGREGATE_ERROR,
             "Promise" => CLASS_ID_PROMISE,
+            "Event" => crate::event_target::CLASS_ID_EVENT,
+            "CustomEvent" => crate::event_target::CLASS_ID_CUSTOM_EVENT,
+            "DOMException" => crate::event_target::CLASS_ID_DOM_EXCEPTION,
             _ => 0,
         };
         if class_id != 0 {
@@ -267,6 +332,16 @@ fn is_event_emitter_instance_value(value: f64) -> bool {
     false
 }
 
+fn is_event_emitter_async_resource_instance_value(value: f64) -> bool {
+    let Some(handle) = small_native_handle_id(value) else {
+        return false;
+    };
+    if let Some(probe) = crate::object::event_emitter_async_resource_handle_probe() {
+        return unsafe { probe(handle) };
+    }
+    false
+}
+
 /// Check if a value is an instance of a class with the given class_id
 /// Walks the inheritance chain to check parent classes
 /// Returns NaN-boxed TAG_TRUE / TAG_FALSE so the result identifies as a boolean.
@@ -300,6 +375,13 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     }
     if class_id == CLASS_ID_EVENT_EMITTER {
         return if is_event_emitter_instance_value(value) {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE {
+        return if is_event_emitter_async_resource_instance_value(value) {
             true_val
         } else {
             false_val
@@ -342,6 +424,28 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     }
     if class_id == crate::fs::CLASS_ID_FS_UTF8_STREAM {
         return if crate::fs::is_fs_stream_instance_value(value, "Utf8Stream") {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == CLASS_ID_CRYPTO {
+        return if is_native_module_namespace_value(value, "crypto.webcrypto") {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == CLASS_ID_SUBTLE_CRYPTO {
+        return if is_native_module_namespace_value(value, "crypto.subtle") {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == CLASS_ID_CRYPTO_KEY {
+        let addr = value_addr(value);
+        return if addr != 0 && crate::buffer::crypto_key_meta(addr).is_some() {
             true_val
         } else {
             false_val
@@ -615,6 +719,13 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         if gc_type == crate::gc::GC_TYPE_ERROR {
             let err_ptr = obj_ptr as *const crate::error::ErrorHeader;
             let kind = (*err_ptr).error_kind;
+            if class_id == crate::event_target::CLASS_ID_DOM_EXCEPTION {
+                return if crate::event_target::is_dom_exception_error(err_ptr) {
+                    true_val
+                } else {
+                    false_val
+                };
+            }
             return match class_id {
                 crate::error::CLASS_ID_ERROR => true_val,
                 crate::error::CLASS_ID_TYPE_ERROR => {
@@ -693,6 +804,11 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
 
         // Check if the object's class_id matches directly
         let obj_class_id = (*obj_ptr).class_id;
+        if class_id == crate::event_target::CLASS_ID_EVENT
+            && obj_class_id == crate::event_target::CLASS_ID_CUSTOM_EVENT
+        {
+            return true_val;
+        }
         if obj_class_id == class_id {
             return true_val;
         }

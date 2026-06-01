@@ -9,6 +9,175 @@ use super::handle::*;
 
 type EventEmitterOn = unsafe extern "C" fn(i64, i64, i64) -> i64;
 
+const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001);
+const TAG_UNDEFINED_BITS: i64 = 0x7FFC_0000_0000_0001u64 as i64;
+const POINTER_TAG_BITS: u64 = 0x7FFD_0000_0000_0000;
+const POINTER_MASK_BITS: u64 = 0x0000_FFFF_FFFF_FFFF;
+
+fn nanbox_handle_value(handle: i64) -> f64 {
+    f64::from_bits(POINTER_TAG_BITS | (handle as u64 & POINTER_MASK_BITS))
+}
+
+unsafe fn pack_args_array(args: &[f64]) -> *mut perry_runtime::ArrayHeader {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let arg_handles = scope.root_nanbox_f64_slice(args);
+    let arr = perry_runtime::js_array_alloc(0);
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    for arg in &arg_handles {
+        let arr =
+            perry_runtime::js_array_push_f64(arr_handle.get_raw_mut_ptr(), arg.get_nanbox_f64());
+        arr_handle.set_raw_mut_ptr(arr);
+    }
+    arr_handle.get_raw_mut_ptr::<perry_runtime::ArrayHeader>()
+}
+
+#[cfg(feature = "bundled-events")]
+unsafe fn dispatch_event_emitter_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> {
+    if !crate::events::is_event_emitter_handle(handle) {
+        return None;
+    }
+
+    let event_bits = |index: usize| {
+        args.get(index)
+            .copied()
+            .unwrap_or(TAG_UNDEFINED_F64)
+            .to_bits() as i64
+    };
+    let nanbox_array = |ptr: *mut perry_runtime::ArrayHeader| {
+        f64::from_bits(POINTER_TAG_BITS | (ptr as u64 & POINTER_MASK_BITS))
+    };
+
+    let value = match method {
+        "on" | "addListener" if args.len() >= 2 => {
+            crate::events::js_event_emitter_on(handle, event_bits(0), event_bits(1));
+            nanbox_handle_value(handle)
+        }
+        "once" if args.len() >= 2 => {
+            crate::events::js_event_emitter_once(handle, event_bits(0), event_bits(1));
+            nanbox_handle_value(handle)
+        }
+        "prependListener" if args.len() >= 2 => {
+            crate::events::js_event_emitter_prepend_listener(handle, event_bits(0), event_bits(1));
+            nanbox_handle_value(handle)
+        }
+        "prependOnceListener" if args.len() >= 2 => {
+            crate::events::js_event_emitter_prepend_once_listener(
+                handle,
+                event_bits(0),
+                event_bits(1),
+            );
+            nanbox_handle_value(handle)
+        }
+        "off" | "removeListener" if args.len() >= 2 => {
+            crate::events::js_event_emitter_remove_listener(handle, event_bits(0), event_bits(1));
+            nanbox_handle_value(handle)
+        }
+        "removeAllListeners" => {
+            crate::events::js_event_emitter_remove_all_listeners(handle, pack_args_array(args));
+            nanbox_handle_value(handle)
+        }
+        "emit" => {
+            let rest = if args.len() > 1 { &args[1..] } else { &[] };
+            crate::events::js_event_emitter_emit(handle, event_bits(0), pack_args_array(rest))
+        }
+        "listenerCount" if !args.is_empty() => crate::events::js_event_emitter_listener_count(
+            handle,
+            event_bits(0),
+            args.get(1)
+                .copied()
+                .map(|value| value.to_bits() as i64)
+                .unwrap_or(TAG_UNDEFINED_BITS),
+        ),
+        "listeners" if !args.is_empty() => nanbox_array(crate::events::js_event_emitter_listeners(
+            handle,
+            event_bits(0),
+        )),
+        "rawListeners" if !args.is_empty() => nanbox_array(
+            crate::events::js_event_emitter_raw_listeners(handle, event_bits(0)),
+        ),
+        "eventNames" => nanbox_array(crate::events::js_event_emitter_event_names(handle)),
+        "setMaxListeners" if !args.is_empty() => {
+            crate::events::js_event_emitter_set_max_listeners(handle, args[0]);
+            nanbox_handle_value(handle)
+        }
+        "getMaxListeners" => crate::events::js_event_emitter_get_max_listeners(handle),
+        "domain" => crate::events::js_event_emitter_domain_value(handle),
+        "asyncId" if crate::events::is_event_emitter_async_resource_handle(handle) => {
+            crate::events::js_event_emitter_async_resource_async_id(handle)
+        }
+        "triggerAsyncId" if crate::events::is_event_emitter_async_resource_handle(handle) => {
+            crate::events::js_event_emitter_async_resource_trigger_async_id(handle)
+        }
+        "asyncResource" if crate::events::is_event_emitter_async_resource_handle(handle) => {
+            crate::events::js_event_emitter_async_resource_async_resource(handle)
+        }
+        "emitDestroy" if crate::events::is_event_emitter_async_resource_handle(handle) => {
+            crate::events::js_event_emitter_async_resource_emit_destroy(handle)
+        }
+        _ => return None,
+    };
+    Some(value)
+}
+
+#[cfg(feature = "bundled-events")]
+unsafe fn dispatch_event_emitter_property(handle: i64, property: &str) -> Option<f64> {
+    if !crate::events::is_event_emitter_handle(handle) {
+        return None;
+    }
+
+    let bind_method = |method: &[u8]| -> f64 {
+        extern "C" {
+            fn js_class_method_bind(
+                instance: f64,
+                method_name_ptr: *const u8,
+                method_name_len: usize,
+            ) -> f64;
+        }
+        js_class_method_bind(nanbox_handle_value(handle), method.as_ptr(), method.len())
+    };
+
+    if crate::events::is_event_emitter_async_resource_handle(handle) {
+        match property {
+            "asyncId" => {
+                return Some(crate::events::js_event_emitter_async_resource_async_id(
+                    handle,
+                ));
+            }
+            "triggerAsyncId" => {
+                return Some(
+                    crate::events::js_event_emitter_async_resource_trigger_async_id(handle),
+                );
+            }
+            "asyncResource" => {
+                return Some(crate::events::js_event_emitter_async_resource_async_resource(handle));
+            }
+            "emitDestroy" => return Some(bind_method(b"emitDestroy")),
+            _ => {}
+        }
+    }
+
+    let method = match property {
+        "on"
+        | "addListener"
+        | "once"
+        | "prependListener"
+        | "prependOnceListener"
+        | "off"
+        | "removeListener"
+        | "removeAllListeners"
+        | "emit"
+        | "listenerCount"
+        | "listeners"
+        | "rawListeners"
+        | "eventNames"
+        | "setMaxListeners"
+        | "getMaxListeners" => Some(property.as_bytes()),
+        _ => None,
+    }?;
+
+    Some(bind_method(method))
+}
+
 /// Dispatch a method call on a handle-based object.
 #[no_mangle]
 pub unsafe extern "C" fn js_handle_method_dispatch(
@@ -53,6 +222,11 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
 
     // Dispatchers below gate on registry membership plus method vocabulary
     // because native handle id spaces are not unified (#91).
+
+    #[cfg(feature = "bundled-events")]
+    if let Some(value) = dispatch_event_emitter_method(handle, method_name, &args) {
+        return value;
+    }
 
     // node:sqlite DatabaseSync handle. Keep this before the better-sqlite3
     // SQLite fallbacks because method names like prepare/exec/close overlap
@@ -1213,6 +1387,11 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         return v;
     }
 
+    #[cfg(feature = "bundled-events")]
+    if let Some(value) = dispatch_event_emitter_property(handle, property_name) {
+        return value;
+    }
+
     // #1670: Web Streams handle property reads. A numeric stream id reaches
     // here via `js_object_get_field_by_name`'s stream probe (inline
     // `res.body.locked`). Route getter properties to their accessors, return
@@ -2001,11 +2180,25 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
             f: unsafe extern "C" fn(i64, *const u8, usize, f64),
         );
         fn js_register_event_emitter_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
+        fn js_register_event_emitter_async_resource_handle_probe(
+            f: unsafe extern "C" fn(i64) -> bool,
+        );
         fn js_register_event_emitter_on(f: EventEmitterOn);
+        #[cfg(feature = "http-client")]
+        fn js_register_global_fetch_with_options(
+            f: unsafe extern "C" fn(
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+            ) -> *mut perry_runtime::Promise,
+        );
     }
     js_register_handle_method_dispatch(js_handle_method_dispatch);
     js_register_handle_property_dispatch(js_handle_property_dispatch);
     js_register_handle_property_set_dispatch(js_handle_property_set_dispatch);
+    #[cfg(feature = "http-client")]
+    js_register_global_fetch_with_options(crate::fetch::js_fetch_with_options);
     #[cfg(feature = "bundled-events")]
     unsafe extern "C" fn event_emitter_probe(handle: i64) -> bool {
         crate::events::is_event_emitter_handle(handle)
@@ -2013,12 +2206,20 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     #[cfg(feature = "bundled-events")]
     js_register_event_emitter_handle_probe(event_emitter_probe);
     #[cfg(feature = "bundled-events")]
+    unsafe extern "C" fn event_emitter_async_resource_probe(handle: i64) -> bool {
+        crate::events::is_event_emitter_async_resource_handle(handle)
+    }
+    #[cfg(feature = "bundled-events")]
+    js_register_event_emitter_async_resource_handle_probe(event_emitter_async_resource_probe);
+    #[cfg(feature = "bundled-events")]
     js_register_event_emitter_on(crate::events::js_event_emitter_on);
     super::net_socket_bridge::register_net_socket_handle_probe();
     // #1577: route captured-then-called `crypto.*` methods (which reach the
     // runtime's native-module dispatch) back to the stdlib crypto impls.
     #[cfg(feature = "crypto")]
     perry_runtime::js_set_native_crypto_dispatch(crate::crypto::js_crypto_native_dispatch);
+    #[cfg(feature = "crypto")]
+    perry_runtime::js_set_native_webcrypto_dispatch(crate::webcrypto::js_webcrypto_native_dispatch);
     #[cfg(feature = "compression")]
     perry_runtime::js_set_native_zlib_dispatch(crate::zlib::js_zlib_native_dispatch);
     perry_runtime::js_set_native_querystring_dispatch(
