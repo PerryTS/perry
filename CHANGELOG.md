@@ -2,6 +2,21 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1059 — fix(buffer): materialize Buffer iterators via spread + Array.from (#3909)
+
+`buf.keys()`, `buf.values()`, and `buf.entries()` already returned working
+iterator objects — `.next()` and `for...of` produced the right byte
+indices/values — but `[...buf.keys()]` and `Array.from(buf.values())` returned
+an empty array. `js_array_clone_for_spread` (the runtime helper behind array
+spread and `Array.from`) recognizes iterator objects by class id, but its
+`is_array_iterator` check listed only the array/map/set/iterator-helper class
+ids, not `BUFFER_ITERATOR_CLASS_ID`. A Buffer iterator therefore fell through to
+the array-like `.length`/`[i]` path (a Buffer iterator has neither), yielding
+nothing. Added the buffer iterator class id alongside the others, so spread and
+`Array.from` now drive its `.next()` protocol like every other iterator. Added a
+`node-suite/buffer/iterator-spread` regression fixture covering spread,
+`Array.from`, `.next()`, and `for...of`.
+
 ## v0.5.1058 — fix(node): API-surface hygiene batch (#3925, #3946, #3857, #3962, #3938)
 
 Five Node-parity fixes for the `node:*` builtin surface:
