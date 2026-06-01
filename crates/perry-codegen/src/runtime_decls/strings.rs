@@ -737,6 +737,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // readline (#347) — Phase 2 raw-mode toggle + stdin event handlers.
     module.declare_function("js_readline_set_raw_mode", DOUBLE, &[DOUBLE]);
     module.declare_function("js_readline_stdin_on", VOID, &[I64, I64]);
+    module.declare_function("js_readline_stdin_remove_listener", DOUBLE, &[I64, I64]);
+    module.declare_function("js_readline_stdin_pause", DOUBLE, &[]);
+    module.declare_function("js_readline_stdin_resume", DOUBLE, &[]);
+    module.declare_function("js_readline_stdin_unref", DOUBLE, &[]);
+    module.declare_function("js_readline_stdin_ref", DOUBLE, &[]);
+    module.declare_function("js_readline_stdin_destroy", DOUBLE, &[]);
     // tty (#347 Phase 3) — isatty + stdout dimensions + resize handler.
     module.declare_function("js_tty_isatty", DOUBLE, &[DOUBLE]);
     module.declare_function("js_tty_read_stream_new", DOUBLE, &[DOUBLE]);

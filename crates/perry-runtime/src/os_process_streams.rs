@@ -76,6 +76,36 @@ thread_local! {
     static STDERR_STREAM_SINGLETON: RefCell<usize> = const { RefCell::new(0) };
 }
 
+fn string_key(key: &[u8]) -> *mut StringHeader {
+    crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32)
+}
+
+fn set_stdin_bool_field(name: &[u8], value: bool) {
+    STDIN_STREAM_SINGLETON.with(|slot| {
+        let obj = *slot.borrow() as *mut crate::object::ObjectHeader;
+        if obj.is_null() {
+            return;
+        }
+        crate::object::js_object_set_field_by_name(
+            obj,
+            string_key(name),
+            f64::from_bits(crate::value::JSValue::bool(value).bits()),
+        );
+    });
+}
+
+pub fn set_process_stdin_raw_state(enabled: bool) {
+    set_stdin_bool_field(b"isRaw", enabled);
+}
+
+pub fn mark_process_stdin_destroyed() {
+    set_stdin_bool_field(b"readable", false);
+    set_stdin_bool_field(b"readableEnded", true);
+    set_stdin_bool_field(b"destroyed", true);
+    set_stdin_bool_field(b"closed", true);
+    set_stdin_bool_field(b"isRaw", false);
+}
+
 pub fn scan_process_stream_singleton_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let mut visit_slot = |slot: &RefCell<usize>| {
         let mut value = slot.borrow_mut();
@@ -121,11 +151,15 @@ fn build_stream_object_with_write(
         );
     }
 
-    let (class_id, packed, field_count) = if is_tty && fd_i == 0 {
+    let (class_id, packed, field_count) = if fd_i == 0 {
         (
-            crate::tty::CLASS_ID_TTY_READ_STREAM,
-            b"write\0fd\0emit\0on\0once\0writable\0isRaw\0isTTY\0".as_slice(),
-            8,
+            if is_tty {
+                crate::tty::CLASS_ID_TTY_READ_STREAM
+            } else {
+                0
+            },
+            b"write\0fd\0emit\0on\0once\0writable\0readable\0readableEnded\0destroyed\0closed\0isRaw\0isTTY\0addListener\0removeListener\0off\0removeAllListeners\0pause\0resume\0unref\0ref\0destroy\0".as_slice(),
+            21,
         )
     } else if is_tty {
         (
@@ -176,9 +210,25 @@ fn build_stream_object_with_write(
         js_object_set_field(obj, 4, JSValue::pointer(once as *const u8));
     }
     js_object_set_field(obj, 5, JSValue::from_bits(writable.to_bits()));
-    if is_tty && fd_i == 0 {
-        js_object_set_field(obj, 6, JSValue::from_bits(crate::value::TAG_FALSE));
-        js_object_set_field(obj, 7, JSValue::from_bits(crate::value::TAG_TRUE));
+    if fd_i == 0 {
+        js_object_set_field(obj, 6, JSValue::from_bits(crate::value::TAG_TRUE));
+        js_object_set_field(obj, 7, JSValue::from_bits(crate::value::TAG_FALSE));
+        js_object_set_field(obj, 8, JSValue::from_bits(crate::value::TAG_FALSE));
+        js_object_set_field(obj, 9, JSValue::from_bits(crate::value::TAG_FALSE));
+        js_object_set_field(obj, 10, JSValue::from_bits(crate::value::TAG_FALSE));
+        js_object_set_field(
+            obj,
+            11,
+            JSValue::from_bits(if is_tty {
+                crate::value::TAG_TRUE
+            } else {
+                crate::value::TAG_FALSE
+            }),
+        );
+        for index in 12..=20 {
+            let method = js_closure_alloc(process_stream_on_once_stub as *const u8, 0);
+            js_object_set_field(obj, index, JSValue::pointer(method as *const u8));
+        }
     } else if is_tty {
         js_object_set_field(
             obj,
