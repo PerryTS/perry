@@ -398,12 +398,12 @@ pub extern "C" fn js_aggregateerror_new_full(
     // #2838: reuse the spec-shaped iterable→array converter that backs the
     // Promise combinators (`Promise.any`/`all`/…). It accepts arrays, strings,
     // Set/Map, buffers, generators, and any object exposing `[Symbol.iterator]`
-    // or a bare `.next` field, and returns `Err(())` for non-iterables
+    // or a bare `.next` field, and returns `Err(_)` for non-iterables
     // (`undefined`, numbers, plain objects) — exactly the AggregateError
     // contract.
     let arr = match crate::promise::combinators::combinator_iterable_to_array(errors) {
         Ok(arr) => arr,
-        Err(()) => throw_not_iterable_type_error(),
+        Err(_) => throw_not_iterable_type_error(),
     };
     unsafe {
         let ptr = alloc_error(ERROR_KIND_AGGREGATE_ERROR, b"AggregateError", message);
