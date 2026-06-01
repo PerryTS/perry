@@ -292,7 +292,7 @@ pub fn is_node_core_module(module: &str) -> bool {
 }
 
 /// Public named-export filter shared by the import gate and docs emitters.
-pub(crate) fn entry_is_public_named_export(entry: &ApiEntry) -> bool {
+pub fn entry_is_public_named_export(entry: &ApiEntry) -> bool {
     if is_node_core_private_named_export(entry.module, entry.name) {
         return false;
     }
@@ -367,6 +367,7 @@ fn is_node_core_private_named_export(module: &str, name: &str) -> bool {
                 | "setMaxListeners"
         ),
         "url" => matches!(name, "createObjectURL" | "revokeObjectURL"),
+        "module" => matches!(name, "wrap" | "wrapper"),
         "worker_threads" => name == "getWorkerData",
         "https" => matches!(name, "ClientRequest" | "IncomingMessage" | "ServerResponse"),
         "http2" => name == "Http2SecureServer",
@@ -518,6 +519,8 @@ mod tests {
             ("node:tty", "clearLine"),
             ("node:process", "on"),
             ("node:process", "emit"),
+            ("node:module", "wrap"),
+            ("node:module", "wrapper"),
             ("node:url", "createObjectURL"),
             ("node:worker_threads", "getWorkerData"),
             ("node:https", "ClientRequest"),
@@ -549,6 +552,8 @@ mod tests {
             ("node:tty", "ReadStream"),
             ("node:process", "cwd"),
             ("node:process", "env"),
+            ("node:module", "builtinModules"),
+            ("node:module", "createRequire"),
             ("node:url", "URL"),
             ("node:url", "fileURLToPath"),
             ("node:worker_threads", "workerData"),
@@ -885,6 +890,7 @@ mod tests {
                 "string_decoder",
                 &["encoding", "lastChar", "lastNeed", "lastTotal"][..],
             ),
+            ("module", &["wrap", "wrapper"][..]),
             (
                 "tty",
                 &["clearLine", "clearScreenDown", "cursorTo", "moveCursor"][..],
@@ -934,6 +940,10 @@ mod tests {
                 ][..],
             ),
             ("process", &["cwd", "env", "pid", "version"][..]),
+            (
+                "module",
+                &["builtinModules", "constants", "createRequire"][..],
+            ),
             ("string_decoder", &["StringDecoder"][..]),
             ("tty", &["ReadStream", "WriteStream", "isatty"][..]),
             ("url", &["URL", "URLSearchParams", "fileURLToPath"][..]),
