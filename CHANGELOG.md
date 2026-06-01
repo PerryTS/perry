@@ -2,6 +2,24 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1061 — fix(worker_threads): workerData is value-only, not callable (#3899)
+
+`worker_threads.workerData` read as a function and `workerData()` returned a
+value, whereas Node exposes `workerData` as a value (the worker's data, or `null`
+on the main thread) and `workerData()` throws. Root cause: a leftover
+`internal_method_sig` row made `module_has_symbol("worker_threads", "workerData")`
+return a `Method`, so codegen's `typeof <module>.<member>` fold reported
+`"function"` (parentPort, which only had a property row, already read `"object"`),
+and the `native_table/extras.rs` row routed `workerData()` to a runtime getter.
+Dropping the method row + call routing lets workerData resolve through
+`property("worker_threads", "workerData")` (typeof `"object"`, value `null`) and
+makes `workerData()` throw a normal `TypeError`. Fixes the
+`worker_threads/main-thread/worker-data-surface` fixture; adds
+`worker_threads/workerdata-value-boundary`. `getWorkerData` is left in place: it
+is not a public named export, but fully removing it makes
+`worker_threads.getWorkerData()` trip the compile-time #463 gate instead of Node's
+runtime TypeError — that absent-member-read boundary is tracked by #3896.
+
 ## v0.5.1060 — fix(crypto): expose Hash/Hmac/Sign/Verify constructor exports (#3955)
 
 `import { Hash } from "node:crypto"` (and `Hmac`/`Sign`/`Verify`) failed `check`
