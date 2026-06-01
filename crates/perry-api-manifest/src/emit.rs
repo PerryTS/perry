@@ -7,7 +7,8 @@
 //! so regenerated docs produce stable diffs in CI.
 
 use crate::{
-    entry_is_public_named_export, ApiEntry, ApiKind, ApiSource, ParamSpec, TypeSpec, API_MANIFEST,
+    entry_is_public_named_export, is_node_core_private_named_export, ApiEntry, ApiKind, ApiSource,
+    ParamSpec, TypeSpec, API_MANIFEST,
 };
 use std::collections::BTreeMap;
 use std::fmt::Write;
@@ -61,11 +62,11 @@ pub fn emit_markdown(_perry_version: &str) -> String {
             .filter(|e| match e.kind {
                 ApiKind::Method {
                     has_receiver: true, ..
-                } => true,
+                } => !is_node_core_private_named_export(e.module, e.name),
                 ApiKind::Method {
                     class_filter: Some(_),
                     ..
-                } => true,
+                } => !is_node_core_private_named_export(e.module, e.name),
                 ApiKind::Method { .. } => entry_is_public_named_export(e),
                 _ => false,
             })
@@ -655,6 +656,20 @@ mod tests {
         assert!(
             crypto_block.contains("export function randomUUID"),
             "crypto.randomUUID missing from .d.ts"
+        );
+    }
+
+    #[test]
+    fn worker_threads_internal_receiver_methods_stay_out_of_docs() {
+        let md = emit_markdown("test");
+        let dts = emit_dts("test");
+        assert!(
+            !md.contains("`postMessage` — instance"),
+            "worker_threads.postMessage should stay receiver-dispatch-only"
+        );
+        assert!(
+            !dts.contains("export function postMessage("),
+            "worker_threads.postMessage should not be emitted as a module function"
         );
     }
 
