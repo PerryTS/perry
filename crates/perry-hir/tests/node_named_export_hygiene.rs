@@ -156,3 +156,26 @@ fn worker_threads_parent_port_call_keeps_property_call_shape() {
         "parentPort() should remain a normal call of worker_threads.parentPort: {debug}"
     );
 }
+
+#[test]
+fn worker_threads_post_message_call_keeps_property_call_shape() {
+    let module = lower_result(
+        r#"
+        import * as workerThreads from "node:worker_threads";
+        workerThreads.postMessage("hello");
+    "#,
+    )
+    .expect("postMessage() should lower as a normal call on the module property value");
+
+    let debug = format!("{module:#?}");
+    assert!(
+        !debug.contains("method: \"postMessage\""),
+        "module postMessage() must not lower to the worker_threads receiver method: {debug}"
+    );
+    assert!(
+        debug.contains("Call")
+            && debug.contains("\"worker_threads\"")
+            && debug.contains("property: \"postMessage\""),
+        "postMessage() should remain a normal call of worker_threads.postMessage: {debug}"
+    );
+}
