@@ -253,6 +253,11 @@ pub(crate) enum SerializedValue {
     /// deep-copy semantics, since the source cell's pointer is meaningless in
     /// another thread's arena.
     Date(f64),
+
+    /// An `fs.promises.FileHandle` crossing a `perry/thread` boundary.
+    /// Perry's fd registry is thread-local, so handles are not transferable;
+    /// deserialize as a FileHandle-shaped object with `fd === -1`.
+    DetachedFileHandle,
 }
 
 // Safety: SerializedValue contains no raw pointers to arena memory.
@@ -327,6 +332,12 @@ pub(crate) unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
                 return serialize_array(raw_ptr as *const crate::array::ArrayHeader);
             }
             gc::GC_TYPE_OBJECT => {
+                let value = f64::from_bits(bits);
+                if crate::fs::is_fs_filehandle_value(value)
+                    || crate::fs::filehandle_object_fd(value).is_some()
+                {
+                    return SerializedValue::DetachedFileHandle;
+                }
                 return serialize_object(raw_ptr as *const crate::object::ObjectHeader);
             }
             gc::GC_TYPE_CLOSURE => {
@@ -601,6 +612,10 @@ pub(crate) unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) 
         SerializedValue::Date(ts) => {
             // #2089: allocate a fresh DateCell in THIS thread's arena.
             crate::date::alloc_date_cell(*ts).to_bits()
+        }
+
+        SerializedValue::DetachedFileHandle => {
+            crate::fs::build_detached_filehandle_object().to_bits()
         }
     }
 }

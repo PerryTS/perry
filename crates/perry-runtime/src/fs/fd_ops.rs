@@ -140,12 +140,7 @@ pub(crate) unsafe fn fs_open_sync_result(
     let (opts, append_mode) = open_options_from_flags(flags_value);
     match opts.open(&path_str) {
         Ok(file) => {
-            let fd = NEXT_FD.with(|n| {
-                let mut n = n.borrow_mut();
-                let fd = *n;
-                *n += 1;
-                fd
-            });
+            let fd = allocate_synthetic_fd();
             FD_REGISTRY.with(|r| {
                 r.borrow_mut().insert(fd, file);
             });

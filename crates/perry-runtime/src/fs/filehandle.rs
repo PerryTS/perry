@@ -830,7 +830,7 @@ fn build_filehandle_object(fd: i32) -> f64 {
     crate::closure::js_register_closure_arity(read_lines_return_impl as *const u8, 1);
     crate::closure::js_register_closure_arity(read_lines_close_impl as *const u8, 0);
     crate::closure::js_register_closure_arity(read_lines_iterator_impl as *const u8, 0);
-    let obj = crate::object::js_object_alloc(0, 20);
+    let obj = crate::object::js_object_alloc(CLASS_ID_FS_FILEHANDLE, 20);
     let handle = f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits());
     let set = |name: &str, v: f64| {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -929,6 +929,10 @@ fn build_filehandle_object(fd: i32) -> f64 {
         fds.borrow_mut().insert(obj as usize, fd);
     });
     handle
+}
+
+pub(crate) fn build_detached_filehandle_object() -> f64 {
+    build_filehandle_object(-1)
 }
 
 /// Build a minimal `fs.promises.FileHandle` object for deterministic parity.
