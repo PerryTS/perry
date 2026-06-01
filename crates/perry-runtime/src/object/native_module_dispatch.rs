@@ -141,6 +141,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
         "async_hooks.default" => "async_hooks",
         "os.default" => "os",
         "path.default" => "path",
+        "path.posix.default" => "path.posix",
+        "path.win32.default" => "path.win32",
         "querystring.default" => "querystring",
         "url.default" => "url",
         "util.default" => "util",
@@ -515,6 +517,13 @@ pub(crate) unsafe fn dispatch_native_module_method(
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("events", "init") => f64::from_bits(crate::value::TAG_UNDEFINED),
+        ("events", "EventEmitterAsyncResource") => {
+            let message =
+                b"Class constructor EventEmitterAsyncResource cannot be invoked without 'new'";
+            let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+            let err = crate::error::js_typeerror_new(msg);
+            crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+        }
         ("process", "getgroups") => crate::process::js_process_getgroups(),
         ("process", "setuid") => {
             crate::process::js_process_setuid(arg(0));
@@ -1127,6 +1136,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util", "debuglog") | ("util", "debug") => {
             crate::util_debuglog::js_util_debuglog(arg(0), arg(1))
         }
+        ("util", "inherits") => crate::util_inherits::js_util_inherits(arg(0), arg(1)),
         ("util", "_extend") => crate::util_mime::js_util_extend(arg(0), arg(1)),
         ("util", "_errnoException") => {
             crate::util_mime::js_util_errno_exception(arg(0), arg(1), arg(2))

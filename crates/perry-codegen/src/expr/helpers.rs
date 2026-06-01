@@ -305,6 +305,9 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "Crypto"
             | "CryptoKey"
             | "SubtleCrypto"
+            | "Event"
+            | "CustomEvent"
+            | "DOMException"
             | "FormData"
             | "Blob"
             | "File"
@@ -328,6 +331,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "SuppressedError"
             | "Buffer"
             // Global functions (typeof === "function" in spec).
+            | "fetch"
             | "structuredClone"
             | "atob"
             | "btoa"

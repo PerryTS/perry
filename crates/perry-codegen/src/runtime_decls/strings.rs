@@ -563,6 +563,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_inspect", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_debuglog", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_diff", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_util_inherits", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_is_deep_strict_equal", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_strip_vt_control_characters", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_style_text", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);

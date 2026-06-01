@@ -25,6 +25,9 @@ use super::*;
 pub extern "C" fn js_get_global_this() -> f64 {
     let cached = GLOBAL_THIS_PTR.load(Ordering::Acquire);
     let ptr = if cached != 0 {
+        while !GLOBAL_THIS_READY.load(Ordering::Acquire) {
+            std::hint::spin_loop();
+        }
         cached
     } else {
         // First access — allocate. Race-tolerant: if two threads race the
@@ -55,9 +58,15 @@ pub extern "C" fn js_get_global_this() -> f64 {
                 // constructors off `globalThis` as values. Refs lodash
                 // `runInContext` blocker after PR #963.
                 populate_global_this_builtins(new_ptr as *mut ObjectHeader);
+                GLOBAL_THIS_READY.store(true, Ordering::Release);
                 new_ptr
             }
-            Err(other) => other,
+            Err(other) => {
+                while !GLOBAL_THIS_READY.load(Ordering::Acquire) {
+                    std::hint::spin_loop();
+                }
+                other
+            }
         }
     };
     crate::value::js_nanbox_pointer(ptr)
@@ -91,14 +100,7 @@ pub unsafe extern "C" fn js_global_or_console_property_by_name(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-/// JS built-in constructor names exposed on `globalThis`. Pre-populated by
-/// the singleton init in `js_get_global_this` so libraries that read these
-/// off the global (lodash's `var Array = context.Array; var arrayProto =
-/// Array.prototype`, the same `(globalThis as any).X` read shape) see a
-/// non-undefined backing object. Codegen mirrors this list in
-/// `perry-codegen/src/expr.rs::is_global_this_builtin_name` to decide when
-/// `globalThis.<Name>` should route through the singleton instead of the
-/// legacy `0.0` no-value placeholder.
+/// JS built-in constructor names exposed on `globalThis`; mirrored by codegen.
 pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "Array",
     "Object",
@@ -152,6 +154,9 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "Crypto",
     "CryptoKey",
     "SubtleCrypto",
+    "Event",
+    "CustomEvent",
+    "DOMException",
     "FormData",
     "Blob",
     "File",
@@ -194,6 +199,7 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "URLSearchParams"
         | "AbortController"
         | "AbortSignal"
+        | "DOMException"
         | "FormData"
         | "Blob"
         | "Headers"
@@ -221,6 +227,8 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "SharedArrayBuffer"
         | "DataView"
         | "URL"
+        | "Event"
+        | "CustomEvent"
         | "Request"
         | "BroadcastChannel"
         | "FinalizationRegistry"
@@ -250,6 +258,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] =
 /// real direct-call runtime helpers so rebinding works:
 /// `const clone = globalThis.structuredClone; clone(value)`.
 pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &[
+    "fetch",
     "structuredClone",
     "atob",
     "btoa",
@@ -578,7 +587,7 @@ extern "C" fn global_this_error_prepare_stack_trace_thunk(
     crate::value::js_nanbox_string(empty as i64)
 }
 
-fn global_this_rest_array_values(rest: f64) -> Vec<f64> {
+pub(super) fn global_this_rest_array_values(rest: f64) -> Vec<f64> {
     let value = crate::value::JSValue::from_bits(rest.to_bits());
     if !value.is_pointer() {
         return Vec::new();
@@ -1065,7 +1074,7 @@ pub(crate) fn typed_array_intrinsic_proto_ptr() -> *mut ObjectHeader {
 /// pointer instead of undefined, which is what unblocks lodash's
 /// `var arrayProto = Array.prototype` chained read inside
 /// `runInContext`.
-fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
+pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     if singleton.is_null() {
         return;
     }
@@ -1227,18 +1236,21 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let name_key =
             crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
         js_object_set_field_by_name(singleton, name_key, ctor_value);
-        if matches!(name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
-            super::set_builtin_property_attrs(
-                singleton as usize,
-                name.to_string(),
-                super::PropertyAttrs::new(true, false, true),
-            );
-        }
+        super::set_builtin_property_attrs(
+            singleton as usize,
+            name.to_string(),
+            super::PropertyAttrs::new(true, false, true),
+        );
     }
     // Callable global functions: ClosureHeader-backed values with real
     // dispatch so direct property reads and rebound calls match bare calls.
     for name in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied() {
         let (func_ptr, arity, has_rest) = match name {
+            "fetch" => (
+                super::global_fetch::global_this_fetch_thunk as *const u8,
+                1,
+                true,
+            ),
             "structuredClone" => (global_this_structured_clone_thunk as *const u8, 2, false),
             "atob" => (global_this_atob_thunk as *const u8, 1, false),
             "btoa" => (global_this_btoa_thunk as *const u8, 1, false),
@@ -1549,6 +1561,40 @@ extern "C" fn array_of_thunk(_closure: *const crate::closure::ClosureHeader, res
     crate::value::js_nanbox_pointer(arr as i64)
 }
 
+extern "C" fn url_can_parse_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    input: f64,
+    base: f64,
+) -> f64 {
+    let input_ptr = crate::url::js_url_coerce_string(input);
+    let ok = if base.to_bits() == crate::value::TAG_UNDEFINED {
+        crate::url::js_url_can_parse(input_ptr)
+    } else {
+        let base_ptr = crate::url::js_url_coerce_string(base);
+        crate::url::js_url_can_parse_with_base(input_ptr, base_ptr)
+    };
+    f64::from_bits(crate::value::JSValue::bool(ok != 0).bits())
+}
+
+extern "C" fn url_parse_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    input: f64,
+    base: f64,
+) -> f64 {
+    let input_ptr = crate::url::js_url_coerce_string(input);
+    let url = if base.to_bits() == crate::value::TAG_UNDEFINED {
+        crate::url::js_url_parse(input_ptr)
+    } else {
+        let base_ptr = crate::url::js_url_coerce_string(base);
+        crate::url::js_url_parse_with_base(input_ptr, base_ptr)
+    };
+    if url.is_null() {
+        f64::from_bits(crate::value::TAG_NULL)
+    } else {
+        crate::value::js_nanbox_pointer(url as i64)
+    }
+}
+
 /// Install a single callable static method on a constructor closure as a
 /// `{ writable: true, enumerable: false, configurable: true }` data property
 /// (matching Node's descriptors for built-in statics). `has_rest` registers
@@ -1662,6 +1708,16 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
             );
             install_constructor_static(ctor, "from", array_from_thunk as *const u8, 1, false);
             install_constructor_static(ctor, "of", array_of_thunk as *const u8, 0, true);
+        }
+        "URL" => {
+            install_constructor_static(
+                ctor,
+                "canParse",
+                url_can_parse_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(ctor, "parse", url_parse_thunk as *const u8, 1, false);
         }
         _ => {}
     }

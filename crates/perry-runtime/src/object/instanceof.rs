@@ -7,6 +7,7 @@ use super::*;
 
 // Keep in sync with perry-codegen/src/expr/instance_misc1.rs.
 const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
+const CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE: u32 = 0xFFFF0077;
 const CLASS_ID_PROMISE: u32 = 0xFFFF0027;
 const CLASS_ID_CRYPTO: u32 = 0xFFFF00C0;
 const CLASS_ID_SUBTLE_CRYPTO: u32 = 0xFFFF00C1;
@@ -92,6 +93,12 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
         if module == "events" && method == "EventEmitter" && is_event_emitter_instance_value(value)
+        {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
+        if module == "events"
+            && method == "EventEmitterAsyncResource"
+            && is_event_emitter_async_resource_instance_value(value)
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
@@ -199,6 +206,9 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             "URIError" => crate::error::CLASS_ID_URI_ERROR,
             "AggregateError" => crate::error::CLASS_ID_AGGREGATE_ERROR,
             "Promise" => CLASS_ID_PROMISE,
+            "Event" => crate::event_target::CLASS_ID_EVENT,
+            "CustomEvent" => crate::event_target::CLASS_ID_CUSTOM_EVENT,
+            "DOMException" => crate::event_target::CLASS_ID_DOM_EXCEPTION,
             _ => 0,
         };
         if class_id != 0 {
@@ -322,6 +332,16 @@ fn is_event_emitter_instance_value(value: f64) -> bool {
     false
 }
 
+fn is_event_emitter_async_resource_instance_value(value: f64) -> bool {
+    let Some(handle) = small_native_handle_id(value) else {
+        return false;
+    };
+    if let Some(probe) = crate::object::event_emitter_async_resource_handle_probe() {
+        return unsafe { probe(handle) };
+    }
+    false
+}
+
 /// Check if a value is an instance of a class with the given class_id
 /// Walks the inheritance chain to check parent classes
 /// Returns NaN-boxed TAG_TRUE / TAG_FALSE so the result identifies as a boolean.
@@ -355,6 +375,13 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     }
     if class_id == CLASS_ID_EVENT_EMITTER {
         return if is_event_emitter_instance_value(value) {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE {
+        return if is_event_emitter_async_resource_instance_value(value) {
             true_val
         } else {
             false_val
@@ -692,6 +719,13 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         if gc_type == crate::gc::GC_TYPE_ERROR {
             let err_ptr = obj_ptr as *const crate::error::ErrorHeader;
             let kind = (*err_ptr).error_kind;
+            if class_id == crate::event_target::CLASS_ID_DOM_EXCEPTION {
+                return if crate::event_target::is_dom_exception_error(err_ptr) {
+                    true_val
+                } else {
+                    false_val
+                };
+            }
             return match class_id {
                 crate::error::CLASS_ID_ERROR => true_val,
                 crate::error::CLASS_ID_TYPE_ERROR => {
@@ -770,6 +804,11 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
 
         // Check if the object's class_id matches directly
         let obj_class_id = (*obj_ptr).class_id;
+        if class_id == crate::event_target::CLASS_ID_EVENT
+            && obj_class_id == crate::event_target::CLASS_ID_CUSTOM_EVENT
+        {
+            return true_val;
+        }
         if obj_class_id == class_id {
             return true_val;
         }
