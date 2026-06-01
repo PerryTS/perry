@@ -2182,6 +2182,10 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         // createServer(options,handler)=2.
         ("http2", "connect") => Some(3),
         ("http2", "createServer") => Some(2),
+        // #3697: node:https module-level exports (Node `.length`).
+        ("https", "request") => Some(0),
+        ("https", "get") => Some(3),
+        ("https", "Agent") => Some(1),
         // #3712: node:http module-level helper exports.
         ("http", "validateHeaderName" | "validateHeaderValue") => Some(2),
         ("http", "setMaxIdleHTTPParsers" | "setGlobalProxyFromEnv") => Some(1),
@@ -3674,6 +3678,13 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("http", "Server")
             | ("https", "createServer")
             | ("https", "Server")
+            // #3697: `https.request` / `https.get` / `https.Agent` value reads
+            // (named/namespace imports) must be function-valued. The call form
+            // already lowers through the codegen NATIVE_MODULE_TABLE; without
+            // these the bound-value read returned `undefined`.
+            | ("https", "request")
+            | ("https", "get")
+            | ("https", "Agent")
             | ("http2", "createServer")
             | ("http2", "createSecureServer")
             | ("http2", "Server")

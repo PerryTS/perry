@@ -2,6 +2,15 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1080 — node:https: request/get/Agent value-reads resolve to functions (#3697)
+
+`node:https` advertised `request`, `get`, and `Agent` in the API manifest, but reading them as values — `import { request } from "node:https"` or `https.request` — returned `undefined` (only the direct call form `https.request(...)` worked, via the codegen dispatch table). They were missing from `is_native_module_callable_export`, so the bound-value read fell through to `undefined`.
+
+- **`crates/perry-runtime/src/object/native_module.rs`** — `("https","request")`, `("https","get")`, `("https","Agent")` added to `is_native_module_callable_export` (so value reads return the bound function) + `native_callable_export_arity` (Node `.length`: `request` 0, `get` 3, `Agent` 1).
+- **`test-parity/node-suite/https/exports/module-surface.ts`** — new fixture (typeof/`.length`, named-import identity `=== https.X`); byte-identical to `node --experimental-strip-types`.
+
+Import/module-surface parity (closes #3697/#3695). Deeper `Agent` instance behavior, client overloads, and server controls stay tracked separately. (The sibling `node:http` request/get/Agent value reads have the same shape and remain available via the dispatch table for calls.)
+
 ## v0.5.1079 — node:http2: expose server/client/default export surface (#3905)
 
 Perry's `node:http2` manifest claimed `createSecureServer`, the settings helpers, `performServerHandshake`, `sensitiveHeaders`, `constants`, and the request/response classes, but omitted the non-secure server factory, the client-session factory, and the module default — so `import { connect, createServer } from "node:http2"` (and `import http2 from "node:http2"`) failed `perry check` before runtime.
