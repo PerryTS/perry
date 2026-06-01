@@ -2,6 +2,14 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1078 — fix(Array): multi-arg Array(...) / new Array(...) build the element list (#3985, partial)
+
+`Array(0, 1, 0, 1)` and `new Array(1, 2, 3)` returned a **length-0** array instead of `[0,1,0,1]` / `[1,2,3]`. `lower_builtin_new`'s `"Array"` arm handled the empty (`Array()`), single-number (`Array(5)` → sparse length), and single-value (`Array("x")` → one element) cases, but **returned `Ok(None)` for ≥2 args**, falling back to a generic path that produced an empty array.
+
+Fix (`crates/perry-codegen/src/lower_call/builtin.rs`): a multi-arg `Array(a, b, c, …)` is the element-list form — semantically identical to the `[a, b, c, …]` literal — so it now delegates to `lower_array_literal(ctx, args)`. Both the call form `Array(...)` and `new Array(...)` route through here, so both are fixed.
+
+Validated against `node --experimental-strip-types`: `Array(0,1,0,1)` → `[0,1,0,1]` (length 4), `new Array(1,2,3)` → `[1,2,3]`, `new Array("x","y")` → `["x","y"]`; `Array(5)` (sparse length 5), `Array()`, and `Array("only")` unchanged; `perry-codegen` array tests + object/array node-suite sweep green. This is a focused sub-fix of #3985 — the deeper Array-exotic prototype-identity cases (`[].toString === Array.prototype.toString`, `Array.isArray(Array.prototype)`) remain open there.
+
 ## v0.5.1077 — node:v8: expose modern diagnostics/profiler named exports (#3904)
 
 Perry's `node:v8` manifest omitted several function-valued exports Node ships in the ESM namespace, so `import { queryObjects, getCppHeapStatistics, ... } from "node:v8"` failed `perry check` before runtime. Added `getCppHeapStatistics`, `getHeapSnapshot`, `isStringOneByteRepresentation`, `queryObjects`, `startCpuProfile`, and `writeHeapSnapshot` as function-valued exports (Node `.length` values preserved).

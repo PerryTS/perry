@@ -16,7 +16,7 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
+use crate::expr::{lower_array_literal, lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
 use crate::types::{DOUBLE, I32, I64};
 
@@ -760,20 +760,27 @@ pub(super) fn lower_builtin_new(
         "Array" => {
             // `new Array()` → empty array, `new Array(n)` → length-n sparse
             // array after runtime validation, and `new Array(value)` with a
-            // non-number argument → one-element array. Multi-arg calls fall
-            // back to the generic Expr::New path.
-            let blk = ctx.block();
-            let handle = if args.is_empty() {
-                blk.call(I64, "js_array_create", &[])
-            } else if args.len() == 1 {
+            // non-number argument → one-element array.
+            if args.is_empty() {
+                let blk = ctx.block();
+                let handle = blk.call(I64, "js_array_create", &[]);
+                let blk = ctx.block();
+                return Ok(Some(nanbox_pointer_inline(blk, &handle)));
+            }
+            if args.len() == 1 {
                 let value = lower_expr(ctx, &args[0])?;
                 let blk = ctx.block();
-                blk.call(I64, "js_array_constructor_single", &[(DOUBLE, &value)])
-            } else {
-                return Ok(None);
-            };
-            let blk = ctx.block();
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+                let handle = blk.call(I64, "js_array_constructor_single", &[(DOUBLE, &value)]);
+                let blk = ctx.block();
+                return Ok(Some(nanbox_pointer_inline(blk, &handle)));
+            }
+            // #3985: `Array(a, b, c, ...)` / `new Array(a, b, ...)` with ≥2 args
+            // is the element-list form — semantically identical to the
+            // `[a, b, c, ...]` literal (only the single-number form means
+            // "length"). Previously this returned `Ok(None)` and fell back to a
+            // generic path that produced a length-0 array.
+            let arr = lower_array_literal(ctx, args)?;
+            Ok(Some(arr))
         }
         "Response" => {
             // new Response(body?, init?) — init = { status?, statusText?, headers? }
