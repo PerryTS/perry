@@ -969,6 +969,24 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "worker_threads"
+                    && matches!(class_name.as_str(), "MessagePort" | "BroadcastChannel")
+                    && matches!(
+                        property_name.as_str(),
+                        "postMessage"
+                            | "close"
+                            | "ref"
+                            | "unref"
+                            | "hasRef"
+                            | "addEventListener"
+                            | "removeEventListener"
+                    )
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "stream" && is_classic_stream_method_name(&property_name) {
                     // Classic Node streams materialize core stream and
                     // EventEmitter methods as closure-valued fields on the
