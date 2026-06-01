@@ -2,6 +2,16 @@
 
 use super::*;
 
+fn is_global_this_value(expr: &Expr) -> bool {
+    matches!(expr, Expr::GlobalGet(_))
+        || matches!(
+            expr,
+            Expr::PropertyGet { object, property }
+                if matches!(object.as_ref(), Expr::GlobalGet(_))
+                    && property == "globalThis"
+        )
+}
+
 /// Recursively lower a binding pattern against a source expression, producing
 /// `Let` statements that declare each bound variable.
 ///
@@ -121,6 +131,7 @@ pub(crate) fn lower_pattern_binding_into(
         }
         ast::Pat::Object(obj_pat) => {
             // Materialize source into a temp
+            let source_is_global_this = is_global_this_value(&source);
             let obj_ty = obj_pat
                 .type_ann
                 .as_ref()
@@ -147,6 +158,19 @@ pub(crate) fn lower_pattern_binding_into(
                             ast::PropName::Ident(ident) => {
                                 let key = ident.sym.to_string();
                                 static_keys.push(key.clone());
+                                if source_is_global_this
+                                    && matches!(
+                                        key.as_str(),
+                                        "URL" | "URLSearchParams" | "TextEncoder" | "TextDecoder"
+                                    )
+                                {
+                                    if let ast::Pat::Ident(alias) = kv.value.as_ref() {
+                                        ctx.register_let_class_alias(
+                                            alias.id.sym.to_string(),
+                                            key.clone(),
+                                        );
+                                    }
+                                }
                                 Expr::PropertyGet {
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     property: key,
@@ -155,6 +179,19 @@ pub(crate) fn lower_pattern_binding_into(
                             ast::PropName::Str(s) => {
                                 let key = s.value.as_str().unwrap_or("").to_string();
                                 static_keys.push(key.clone());
+                                if source_is_global_this
+                                    && matches!(
+                                        key.as_str(),
+                                        "URL" | "URLSearchParams" | "TextEncoder" | "TextDecoder"
+                                    )
+                                {
+                                    if let ast::Pat::Ident(alias) = kv.value.as_ref() {
+                                        ctx.register_let_class_alias(
+                                            alias.id.sym.to_string(),
+                                            key.clone(),
+                                        );
+                                    }
+                                }
                                 Expr::PropertyGet {
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     property: key,
@@ -185,6 +222,14 @@ pub(crate) fn lower_pattern_binding_into(
                         // Shorthand { key } or { key = default }
                         let name = assign.key.sym.to_string();
                         static_keys.push(name.clone());
+                        if source_is_global_this
+                            && matches!(
+                                name.as_str(),
+                                "URL" | "URLSearchParams" | "TextEncoder" | "TextDecoder"
+                            )
+                        {
+                            ctx.register_let_class_alias(name.clone(), name.clone());
+                        }
                         let ty = assign
                             .key
                             .type_ann

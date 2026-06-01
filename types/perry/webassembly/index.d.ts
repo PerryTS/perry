@@ -26,6 +26,8 @@
 
 declare global {
   namespace WebAssembly {
+    interface Module {}
+
     /**
      * Opaque handle to an instantiated WebAssembly module. Standard
      * `instance.exports.<name>(...)` calls are recognised at compile
@@ -34,9 +36,57 @@ declare global {
     interface Instance {
       readonly exports: Record<string, (...args: number[]) => number>;
     }
+
+    interface Memory {
+      readonly buffer: ArrayBuffer;
+      grow(delta: number): number;
+    }
+
+    interface Table {
+      readonly length: number;
+      get(index: number): any;
+      grow(delta: number, value?: any): number;
+      set(index: number, value: any): void;
+    }
+
+    interface Global {
+      value: any;
+      valueOf(): any;
+    }
+
+    interface WebAssemblyErrorConstructor extends ErrorConstructor {}
   }
 
   const WebAssembly: {
+    Module: {
+      new (bytes: Uint8Array | ArrayBuffer): WebAssembly.Module;
+      exports(module: WebAssembly.Module): any[];
+      imports(module: WebAssembly.Module): any[];
+      customSections(module: WebAssembly.Module, sectionName: string): ArrayBuffer[];
+    };
+    Instance: {
+      new (
+        module: WebAssembly.Module,
+        importObject?: Record<string, any>,
+      ): WebAssembly.Instance;
+    };
+    Memory: { new (descriptor: any): WebAssembly.Memory };
+    Table: { new (descriptor: any): WebAssembly.Table };
+    Global: { new (descriptor: any, value?: any): WebAssembly.Global };
+    CompileError: WebAssembly.WebAssemblyErrorConstructor;
+    LinkError: WebAssembly.WebAssemblyErrorConstructor;
+    RuntimeError: WebAssembly.WebAssemblyErrorConstructor;
+    Exception: { new (...args: any[]): any };
+    Tag: { new (...args: any[]): any };
+    readonly JSTag: object;
+
+    /**
+     * Present for Node feature-detection parity. Perry currently returns
+     * `undefined` from this runtime stub; use `instantiate` for the supported
+     * MVP execution path.
+     */
+    compile(bytes: Uint8Array | ArrayBuffer): Promise<WebAssembly.Module> | undefined;
+
     /** Quick magic + structural validation via wasmi's decoder. */
     validate(bytes: Uint8Array | ArrayBuffer): boolean;
 
@@ -50,6 +100,13 @@ declare global {
      * async API surface.
      */
     instantiate(bytes: Uint8Array | ArrayBuffer): WebAssembly.Instance;
+
+    /**
+     * Present for Node feature-detection parity. Perry currently returns
+     * `undefined` from streaming runtime stubs.
+     */
+    compileStreaming(source: any): Promise<WebAssembly.Module> | undefined;
+    instantiateStreaming(source: any): Promise<any> | undefined;
 
     /**
      * Invoke a numeric export by name. Equivalent to

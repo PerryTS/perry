@@ -18,3 +18,19 @@ console.log(
   win32Ns.win32 === win32Default,
 );
 console.log("default methods:", posixDefault.normalize("/a//b"), win32Default.join("C:\\a", "b"));
+console.log(
+  "namespace default identity:",
+  posixNs.default === posixDefault,
+  win32Ns.default === win32Default,
+);
+console.log("namespace default methods:", posixNs.default.join("a", "b"), win32Ns.default.join("a", "b"));
+console.log(
+  "namespace keys:",
+  Object.keys(posixNs).slice(0, 4).join(","),
+  Object.keys(win32Ns).slice(0, 4).join(","),
+);
+console.log(
+  "default keys:",
+  Object.keys(posixDefault).slice(0, 4).join(","),
+  Object.keys(win32Default).slice(0, 4).join(","),
+);

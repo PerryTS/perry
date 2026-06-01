@@ -167,6 +167,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "PerformanceObserverEntryList" => 0xFFFF0088u32,
                 "PerformanceResourceTiming" => 0xFFFF0086u32,
                 "Console" => 0xFFFF0083u32,
+                "Event" | "globalThis.Event" => 0xFFFF2403u32,
+                "CustomEvent" | "globalThis.CustomEvent" => 0xFFFF2404u32,
+                "DOMException" | "globalThis.DOMException" => 0xFFFF2405u32,
                 // node:fs constructor exports. Keep these ids in sync with
                 // perry-runtime/src/fs/mod.rs and instanceof.rs.
                 "fs.Dir" => 0xFFFF0086u32,
@@ -185,6 +188,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "WriteStream" | "tty.WriteStream" => 0xFFFF0085u32,
                 "SecureContext" | "tls.SecureContext" => 0xFFFF00B5u32,
                 "WASI" | "wasi.WASI" => 0xFFFF00B2u32,
+                "Crypto" => 0xFFFF00C0u32,
+                "SubtleCrypto" => 0xFFFF00C1u32,
+                "CryptoKey" => 0xFFFF00C2u32,
                 // `Object` — every non-primitive matches per ECMAScript;
                 // reserved id mapped in the runtime. Pre-#585 this fell
                 // into the `cid = 0` fallback and matched accidentally
@@ -210,6 +216,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let native_event_cid = match ty.as_str() {
                         // Keep in sync with perry-runtime/src/object/instanceof.rs.
                         "EventEmitter" => Some(0xFFFF0076u32),
+                        "EventEmitterAsyncResource" => Some(0xFFFF0077u32),
                         _ => None,
                     };
                     if let Some(cid) = native_event_cid {

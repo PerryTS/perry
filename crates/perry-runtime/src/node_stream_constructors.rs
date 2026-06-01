@@ -500,6 +500,7 @@ pub extern "C" fn js_node_stream_writable_subclass_init(this: f64, opts: f64) ->
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
+    register_iter_helper_arities();
     let methods = duplex_methods();
     let obj = build_object(&methods, DUPLEX_SHAPE_ID + methods.len() as u32);
     let duplex = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
