@@ -2,6 +2,14 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1072 — node:http: populate STATUS_CODES map (#2519)
+
+`http.STATUS_CODES` was claimed in the API manifest but the runtime `native_module_property` "http" arm only materialized `METHODS`, so `http.STATUS_CODES` read back as `undefined` and `STATUS_CODES[200]` threw / returned undefined instead of Node's `"OK"`.
+
+Added `http_status_codes_object()` (`crates/perry-runtime/src/object/native_module.rs`): a cached object mapping the 63 standard status codes (numeric-string keys `"100".."511"`) to their reason phrases, mirroring the `http_global_agent_object` pattern (built once, cached as a scanned root in `NATIVE_MODULE_NAMESPACES`). `STATUS_CODES[200]` → `"OK"`, `[404]` → `"Not Found"`, `[418]` → `"I'm a Teapot"`, etc.; unknown codes read `undefined`. New fixture `test-parity/node-suite/http/exports/status-codes.ts` is byte-identical to `node --experimental-strip-types`.
+
+This completes #2519 (the module-level http validation helpers / properties — `validateHeaderName`/`validateHeaderValue`/`setMaxIdleHTTPParsers`/`setGlobalProxyFromEnv`/`globalAgent`/`maxHeaderSize` shipped in v0.5.1071 / #3712; `STATUS_CODES` is the last item).
+
 ## v0.5.1071 — node:http: module-level header-validation / agent export tail (#3712)
 
 `node:http`'s manifest covered the server/client classes and request helpers but omitted a current Node export tail used for header validation and agent/feature detection. Compiling code that imported these names failed at module-collection (`<name> is not implemented in Perry`). Added:

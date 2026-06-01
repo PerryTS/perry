@@ -5232,6 +5232,8 @@ pub(crate) unsafe fn get_native_module_constant(
             // #3712: `http.globalAgent` is an http.Agent with protocol "http:"
             // and defaultPort 80 (distinct from https.globalAgent above).
             "globalAgent" => Some(unsafe { http_global_agent_object() }),
+            // #2519: `http.STATUS_CODES` maps status codes to reason phrases.
+            "STATUS_CODES" => Some(unsafe { http_status_codes_object() }),
             _ => None,
         },
         "https" => match property {
@@ -5457,6 +5459,109 @@ unsafe fn http_global_agent_object() -> f64 {
         cache
             .borrow_mut()
             .insert("http.globalAgent".to_string(), result.to_bits());
+    });
+    result
+}
+
+/// #2519: `http.STATUS_CODES` — the standard HTTP status-code → reason-phrase
+/// map. Keys are the numeric codes as strings (so `STATUS_CODES[200]` resolves
+/// via the usual number→string index coercion). Cached as a scanned root in
+/// `NATIVE_MODULE_NAMESPACES` (mirrors `http_global_agent_object`).
+unsafe fn http_status_codes_object() -> f64 {
+    if let Some(bits) =
+        NATIVE_MODULE_NAMESPACES.with(|cache| cache.borrow().get("http.STATUS_CODES").copied())
+    {
+        return f64::from_bits(bits);
+    }
+
+    // Node 22 `require('node:http').STATUS_CODES` snapshot (63 entries).
+    const STATUS_CODES: &[(u32, &str)] = &[
+        (100, "Continue"),
+        (101, "Switching Protocols"),
+        (102, "Processing"),
+        (103, "Early Hints"),
+        (200, "OK"),
+        (201, "Created"),
+        (202, "Accepted"),
+        (203, "Non-Authoritative Information"),
+        (204, "No Content"),
+        (205, "Reset Content"),
+        (206, "Partial Content"),
+        (207, "Multi-Status"),
+        (208, "Already Reported"),
+        (226, "IM Used"),
+        (300, "Multiple Choices"),
+        (301, "Moved Permanently"),
+        (302, "Found"),
+        (303, "See Other"),
+        (304, "Not Modified"),
+        (305, "Use Proxy"),
+        (307, "Temporary Redirect"),
+        (308, "Permanent Redirect"),
+        (400, "Bad Request"),
+        (401, "Unauthorized"),
+        (402, "Payment Required"),
+        (403, "Forbidden"),
+        (404, "Not Found"),
+        (405, "Method Not Allowed"),
+        (406, "Not Acceptable"),
+        (407, "Proxy Authentication Required"),
+        (408, "Request Timeout"),
+        (409, "Conflict"),
+        (410, "Gone"),
+        (411, "Length Required"),
+        (412, "Precondition Failed"),
+        (413, "Payload Too Large"),
+        (414, "URI Too Long"),
+        (415, "Unsupported Media Type"),
+        (416, "Range Not Satisfiable"),
+        (417, "Expectation Failed"),
+        (418, "I'm a Teapot"),
+        (421, "Misdirected Request"),
+        (422, "Unprocessable Entity"),
+        (423, "Locked"),
+        (424, "Failed Dependency"),
+        (425, "Too Early"),
+        (426, "Upgrade Required"),
+        (428, "Precondition Required"),
+        (429, "Too Many Requests"),
+        (431, "Request Header Fields Too Large"),
+        (451, "Unavailable For Legal Reasons"),
+        (500, "Internal Server Error"),
+        (501, "Not Implemented"),
+        (502, "Bad Gateway"),
+        (503, "Service Unavailable"),
+        (504, "Gateway Timeout"),
+        (505, "HTTP Version Not Supported"),
+        (506, "Variant Also Negotiates"),
+        (507, "Insufficient Storage"),
+        (508, "Loop Detected"),
+        (509, "Bandwidth Limit Exceeded"),
+        (510, "Not Extended"),
+        (511, "Network Authentication Required"),
+    ];
+
+    let keys: Vec<String> = STATUS_CODES.iter().map(|(c, _)| c.to_string()).collect();
+    let packed = keys.join("\0");
+    let obj = js_object_alloc_with_shape(
+        0x7FFF_FF13,
+        keys.len() as u32,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+    if obj.is_null() {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    for (i, (_, msg)) in STATUS_CODES.iter().enumerate() {
+        let str_ptr = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        js_object_set_field(obj, i as u32, JSValue::string_ptr(str_ptr));
+    }
+
+    let result = crate::value::js_nanbox_pointer(obj as i64);
+    NATIVE_MODULE_NAMESPACES.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert("http.STATUS_CODES".to_string(), result.to_bits());
     });
     result
 }
