@@ -326,7 +326,20 @@ fn main_inner() -> Result<()> {
         let version = env!("CARGO_PKG_VERSION");
         match format {
             ApiManifestFormat::Json => {
-                let entries: Vec<_> = perry_api_manifest::iter_entries().collect();
+                let entries: Vec<serde_json::Value> = perry_api_manifest::iter_entries()
+                    .map(|entry| {
+                        let mut value = serde_json::to_value(entry)?;
+                        if let Some(object) = value.as_object_mut() {
+                            object.insert(
+                                "module_export".to_string(),
+                                serde_json::json!(
+                                    perry_api_manifest::entry_is_public_named_export(entry)
+                                ),
+                            );
+                        }
+                        Ok::<_, serde_json::Error>(value)
+                    })
+                    .collect::<Result<_, _>>()?;
                 let payload = serde_json::json!({
                     "version": version,
                     "entries": entries,

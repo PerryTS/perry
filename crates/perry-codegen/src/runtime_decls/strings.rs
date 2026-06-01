@@ -563,6 +563,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_inspect", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_debuglog", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_diff", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_util_inherits", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_is_deep_strict_equal", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_strip_vt_control_characters", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_style_text", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
@@ -1051,6 +1052,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_throw_symbol_constructor_type_error", DOUBLE, &[]);
     module.declare_function("js_throw_bigint_constructor_type_error", DOUBLE, &[]);
     module.declare_function("js_throw_math_constructor_type_error", DOUBLE, &[]);
+    module.declare_function("js_webcrypto_illegal_constructor", DOUBLE, &[]);
     module.declare_function("js_throw_type_error_const_assignment", DOUBLE, &[DOUBLE]);
     module.declare_function(
         "js_throw_reference_error_unresolvable_assignment",
