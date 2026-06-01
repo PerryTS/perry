@@ -2620,6 +2620,17 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "createHash", false, None),
     method("crypto", "createSign", false, None),
     method("crypto", "createVerify", false, None),
+    // #3955: the Hash/Hmac/Sign/Verify constructor classes are public
+    // `node:crypto` named exports in Node. The HIR call-lowering in
+    // `lower/expr_call/crypto.rs` already routes `Hash(...)`/`Hmac(...)`/
+    // `Sign(...)`/`Verify(...)` through the same path as their `create*`
+    // factories, so these entries just expose them on the ESM/named-import
+    // surface — `import { Hash } from "node:crypto"` previously failed `check`
+    // with "does not provide an export named 'Hash'".
+    method("crypto", "Hash", false, None),
+    method("crypto", "Hmac", false, None),
+    method("crypto", "Sign", false, None),
+    method("crypto", "Verify", false, None),
     class("crypto", "ECDH"),
     // #1367: X509Certificate — `new X509Certificate(pem|der)` + read-only
     // subject/issuer/validFrom/validTo/serialNumber/fingerprint/ca props.
