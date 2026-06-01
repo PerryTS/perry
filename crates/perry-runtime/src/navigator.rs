@@ -66,7 +66,7 @@ pub extern "C" fn js_navigator_object() -> f64 {
     navigator_object_with_constructor(ctor)
 }
 
-fn navigator_object_with_constructor(constructor: f64) -> f64 {
+pub(crate) fn navigator_object_with_constructor(constructor: f64) -> f64 {
     // Packed null-separated keys; slot order must match the set_field calls.
     let packed = b"userAgent\0language\0languages\0hardwareConcurrency\0platform\0locks\0";
     let field_count: u32 = 6;
