@@ -1617,6 +1617,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     | "TextDecoder"
                                     | "Blob"
                                     | "File"
+                                    | "WebSocket"
                             ) =>
                     {
                         ctx.register_let_class_alias(name.clone(), property.clone());

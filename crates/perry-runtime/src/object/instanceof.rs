@@ -9,6 +9,9 @@ use super::*;
 const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
 const CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE: u32 = 0xFFFF0077;
 const CLASS_ID_PROMISE: u32 = 0xFFFF0027;
+const CLASS_ID_CRYPTO: u32 = 0xFFFF00C0;
+const CLASS_ID_SUBTLE_CRYPTO: u32 = 0xFFFF00C1;
+const CLASS_ID_CRYPTO_KEY: u32 = 0xFFFF00C2;
 
 fn small_native_handle_id(value: f64) -> Option<i64> {
     let bits = value.to_bits();
@@ -22,6 +25,33 @@ fn small_native_handle_id(value: f64) -> Option<i64> {
         return Some(value as i64);
     }
     None
+}
+
+fn value_addr(value: f64) -> usize {
+    let bits = value.to_bits();
+    if (bits >> 48) >= 0x7FF8 {
+        (bits & crate::value::POINTER_MASK) as usize
+    } else if (bits >> 48) == 0 && bits >= 0x1000 {
+        bits as usize
+    } else {
+        0
+    }
+}
+
+fn is_native_module_namespace_value(value: f64, expected: &str) -> bool {
+    let jv = crate::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let obj = jv.as_pointer::<ObjectHeader>();
+    if obj.is_null() {
+        return false;
+    }
+    unsafe {
+        (*obj).class_id == crate::object::native_module::NATIVE_MODULE_CLASS_ID
+            && crate::object::native_module::read_native_module_name(obj)
+                .is_some_and(|name| name == expected)
+    }
 }
 
 /// v0.5.749: dynamic instanceof — `value instanceof type` where the
@@ -141,6 +171,31 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         return js_instanceof(value, crate::buffer::BUFFER_TYPE_ID);
     }
     if let Some(name) = identify_global_builtin_constructor(type_ref) {
+        match name {
+            "Crypto" => {
+                return if is_native_module_namespace_value(value, "crypto.webcrypto") {
+                    f64::from_bits(crate::value::TAG_TRUE)
+                } else {
+                    f64::from_bits(TAG_FALSE)
+                };
+            }
+            "SubtleCrypto" => {
+                return if is_native_module_namespace_value(value, "crypto.subtle") {
+                    f64::from_bits(crate::value::TAG_TRUE)
+                } else {
+                    f64::from_bits(TAG_FALSE)
+                };
+            }
+            "CryptoKey" => {
+                let addr = value_addr(value);
+                return if addr != 0 && crate::buffer::crypto_key_meta(addr).is_some() {
+                    f64::from_bits(crate::value::TAG_TRUE)
+                } else {
+                    f64::from_bits(TAG_FALSE)
+                };
+            }
+            _ => {}
+        }
         let class_id = match name {
             "Error" => crate::error::CLASS_ID_ERROR,
             "TypeError" => crate::error::CLASS_ID_TYPE_ERROR,
@@ -369,6 +424,28 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     }
     if class_id == crate::fs::CLASS_ID_FS_UTF8_STREAM {
         return if crate::fs::is_fs_stream_instance_value(value, "Utf8Stream") {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == CLASS_ID_CRYPTO {
+        return if is_native_module_namespace_value(value, "crypto.webcrypto") {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == CLASS_ID_SUBTLE_CRYPTO {
+        return if is_native_module_namespace_value(value, "crypto.subtle") {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == CLASS_ID_CRYPTO_KEY {
+        let addr = value_addr(value);
+        return if addr != 0 && crate::buffer::crypto_key_meta(addr).is_some() {
             true_val
         } else {
             false_val

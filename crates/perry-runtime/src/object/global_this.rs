@@ -1,26 +1,11 @@
-//! `globalThis` singleton plus the built-in constructor / prototype-method
-//! population that backs `globalThis.Array`, `globalThis.Object`,
-//! `globalThis.console`, etc. Also home for
-//! `js_global_or_console_property_by_name`, the codegen-emitted
-//! property-read shortcut.
-//!
-//! Split out of `object/mod.rs` (issue #1103). Pure relocation — no
-//! logic changes.
+//! `globalThis` singleton plus built-in constructor/namespace population.
 
 use super::*;
 
-/// Issue #611 (Effect): `globalThis[<computed>] = value` and the
-/// `(globalThis as any)[id] ??= new Map()` pattern (used by hono / Effect /
-/// most ESM libraries that ship a CJS-compat global side-store) wrote to
-/// a 0-pointer sentinel and read back undefined — `globalStore` was always
-/// undefined, callers SIGSEGV'd at the next `.has()` / `.get()` call. This
-/// function lazily allocates a single shared ObjectHeader (one per process,
-/// initialised on first access) and returns a NaN-boxed POINTER to it. The
-/// codegen-side IndexGet / IndexSet on `Expr::GlobalGet` routes through
-/// this helper instead of through the 0.0 sentinel so reads / writes
-/// actually persist. Existing AST-shape patterns like
-/// `PropertyGet { GlobalGet, "log" }` (console.log dispatch) match on the
-/// HIR node, not the SSA value, so they continue to fire even though the
+#[path = "global_this_webassembly.rs"]
+mod global_this_webassembly;
+
+/// Issue #611: lazily allocate shared `globalThis` for computed global access.
 #[no_mangle]
 pub extern "C" fn js_get_global_this() -> f64 {
     let cached = GLOBAL_THIS_PTR.load(Ordering::Acquire);
@@ -43,20 +28,8 @@ pub extern "C" fn js_get_global_this() -> f64 {
             Ordering::Acquire,
         ) {
             Ok(_) => {
-                // Winner: populate built-in constructor properties on the
-                // singleton so `globalThis.Array` / `context.Array` (lodash's
-                // `runInContext` pattern) return non-undefined values. Each
-                // value is a tiny ObjectHeader carrying a `prototype` field
-                // pointing at another empty object — enough that
-                // `var arrayProto = Array.prototype` doesn't throw and the
-                // chained `.toString` reads return undefined rather than
-                // tripping the "Cannot read properties of undefined" gate at
-                // module-init time. Full constructor dispatch on these
-                // sentinels still falls through to existing code paths (bare
-                // `new Array(n)` continues to work through `lower_new`); the
-                // goal here is just to unblock libraries that read the
-                // constructors off `globalThis` as values. Refs lodash
-                // `runInContext` blocker after PR #963.
+                // Populate constructor values for `globalThis.Array` /
+                // `context.Array` style reads without changing bare `new Array`.
                 populate_global_this_builtins(new_ptr as *mut ObjectHeader);
                 GLOBAL_THIS_READY.store(true, Ordering::Release);
                 new_ptr
@@ -167,25 +140,16 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "MessagePort",
     "BroadcastChannel",
     "Storage",
+    "WebSocket",
     "FinalizationRegistry",
-    // #2875: TC39 explicit-resource-management globals. Backed by the
-    // no-op constructor thunk so `typeof DisposableStack === "function"`;
-    // real `new DisposableStack()` / `new SuppressedError(...)` flow through
-    // codegen's `lower_builtin_new` to the dedicated runtime ctors.
+    // #2875: TC39 explicit-resource-management globals.
     "DisposableStack",
     "AsyncDisposableStack",
     "SuppressedError",
     "Buffer",
 ];
 
-/// #3655: spec `length` (declared-parameter count) for each built-in
-/// constructor, so `Ctor.length` reads the right arity through the runtime
-/// value path (`const C = DataView; C.length === 1`) and
-/// `Object.getOwnPropertyDescriptor(Ctor, 'length').value` matches Node. The
-/// HIR also folds bare `Ctor.length` constants (`analysis::builtin_constructor_length`);
-/// these are the runtime fallback for rebound / passed-as-value constructors.
-/// Values verified against `node --experimental-strip-types`. Unlisted names
-/// fall through to the closure arity registry (0).
+/// #3655: spec declared-parameter count for built-in constructor values.
 pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
     let len = match name {
         "Symbol"
@@ -232,6 +196,7 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "Event"
         | "CustomEvent"
         | "Request"
+        | "WebSocket"
         | "BroadcastChannel"
         | "FinalizationRegistry"
         | "Promise" => 1,
@@ -245,20 +210,19 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
     Some(len)
 }
 
-/// JS built-in namespaces (typeof === "object", not "function"). Same
-/// shape on the singleton — a backing object with `prototype` so chained
-/// reads degrade gracefully — but typeof reports "object".
-pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] =
-    &["console", "process", "Math", "JSON", "Reflect"];
+/// Built-in namespaces exposed on `globalThis` as objects.
+pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] = &[
+    "console",
+    "process",
+    "Math",
+    "JSON",
+    "Reflect",
+    "WebAssembly",
+];
 
-// Note: `navigator` (#2923) is installed on the singleton directly (see
-// `populate_global_this_builtins`) rather than via this generic namespace
-// loop because it needs its own field-populated object, not an empty stub.
+// `navigator` (#2923) is installed directly because it needs populated fields.
 
-/// JS global built-in functions exposed as function-valued properties on
-/// `globalThis`. Unlike constructor sentinels, these call through to Perry's
-/// real direct-call runtime helpers so rebinding works:
-/// `const clone = globalThis.structuredClone; clone(value)`.
+/// Global built-in functions exposed as function-valued properties.
 pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &[
     "fetch",
     "structuredClone",
@@ -271,9 +235,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &[
     "setImmediate",
     "clearImmediate",
     "queueMicrotask",
-    // #2905: standard global helper functions. These route through Perry's
-    // real direct-call runtime helpers, so `const p = parseInt; p("42px")`
-    // and `globalThis.encodeURIComponent("a b")` match Node.
+    // #2905: standard global helper functions route through runtime helpers.
     "parseInt",
     "parseFloat",
     "isNaN",
@@ -284,21 +246,112 @@ pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &[
     "decodeURIComponent",
 ];
 
-/// No-op thunk used as the function body for most singleton globalThis
-/// built-in constructor values. Lets `globalThis.Array` carry a real
-/// ClosureHeader (so `typeof globalThis.Array === "function"`) without
-/// implementing actual constructor dispatch through this path — bare
-/// `new Array(n)` continues to flow through codegen's `lower_new` arm and
-/// the runtime `js_array_alloc` machinery, so callers that follow the
-/// usual `new <Ident>(...)` pattern are unaffected. Calling these
-/// sentinels directly (e.g. `globalThis.Array(3)`) returns undefined —
-/// best-effort no-op rather than throwing — and remains a known gap for
-/// non-String call-form constructors after re-binding the global to a local.
+/// No-op thunk for singleton constructor values.
 pub(crate) extern "C" fn global_this_builtin_noop_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _arg: f64,
 ) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+pub(crate) extern "C" fn webcrypto_illegal_constructor_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    crate::fs::validate::throw_type_error_with_code(
+        "Illegal constructor",
+        "ERR_ILLEGAL_CONSTRUCTOR",
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_webcrypto_illegal_constructor() -> f64 {
+    crate::fs::validate::throw_type_error_with_code(
+        "Illegal constructor",
+        "ERR_ILLEGAL_CONSTRUCTOR",
+    )
+}
+
+extern "C" fn global_this_crypto_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    super::native_module::webcrypto_namespace()
+}
+
+fn require_webcrypto_this() -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let jv = crate::value::JSValue::from_bits(this_value.to_bits());
+    if jv.is_pointer() {
+        let obj = jv.as_pointer::<ObjectHeader>();
+        if !obj.is_null()
+            && unsafe { (*obj).class_id } == super::native_module::NATIVE_MODULE_CLASS_ID
+            && unsafe { super::native_module::read_native_module_name(obj) }
+                .is_some_and(|name| name == "crypto.webcrypto")
+        {
+            return this_value;
+        }
+    }
+    crate::fs::validate::throw_type_error_with_code(
+        "Value of \"this\" must be of type Crypto",
+        "ERR_INVALID_THIS",
+    )
+}
+
+pub(crate) extern "C" fn webcrypto_get_random_values_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    array: f64,
+) -> f64 {
+    let this_value = require_webcrypto_this();
+    unsafe {
+        js_native_call_method(
+            this_value,
+            b"getRandomValues".as_ptr() as *const i8,
+            "getRandomValues".len(),
+            &array,
+            1,
+        )
+    }
+}
+
+pub(crate) extern "C" fn webcrypto_random_uuid_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this_value = require_webcrypto_this();
+    unsafe {
+        js_native_call_method(
+            this_value,
+            b"randomUUID".as_ptr() as *const i8,
+            "randomUUID".len(),
+            std::ptr::null(),
+            0,
+        )
+    }
+}
+
+extern "C" fn webcrypto_subtle_getter_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    require_webcrypto_this();
+    super::native_module::subtle_crypto_namespace()
+}
+
+extern "C" fn cryptokey_property_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+pub(crate) fn webcrypto_method_value(property_name: &str) -> Option<f64> {
+    let (func_ptr, arity) = match property_name {
+        "getRandomValues" => (webcrypto_get_random_values_thunk as *const u8, 1),
+        "randomUUID" => (webcrypto_random_uuid_thunk as *const u8, 0),
+        _ => return None,
+    };
+    crate::closure::js_register_closure_arity(func_ptr, arity);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+    }
+    super::native_module::set_bound_native_closure_name(closure, property_name);
+    super::native_module::set_builtin_closure_length(closure as usize, arity);
+    Some(crate::value::js_nanbox_pointer(closure as i64))
 }
 
 extern "C" fn global_this_string_thunk(
@@ -1024,6 +1077,9 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                 crate::messaging::js_broadcast_channel_constructor_call_error as *const u8
             }
             "Storage" => crate::web_storage::storage_constructor_illegal as *const u8,
+            "Crypto" | "CryptoKey" | "SubtleCrypto" => {
+                webcrypto_illegal_constructor_thunk as *const u8
+            }
             _ => global_this_builtin_noop_thunk as *const u8,
         };
         let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
@@ -1105,6 +1161,9 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             }
             if matches!(name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
                 super::native_module::install_webcrypto_constructor_proto(proto_obj, ctor_value);
+            }
+            if name == "WebSocket" {
+                websocket_global::install_constructor_shape(closure_ptr, proto_obj);
             }
             // #2145: link per-kind typed-array constructors into the
             // `%TypedArray%` chain. `Int8Array.__proto__ === %TypedArray%`
@@ -1213,6 +1272,8 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
         let ns_value = if matches!(name, "console" | "process") {
             js_create_native_module_namespace(name_bytes.as_ptr(), name_bytes.len())
+        } else if name == "WebAssembly" {
+            global_this_webassembly::create_webassembly_namespace()
         } else {
             let ns_obj = js_object_alloc(0, 0);
             if ns_obj.is_null() {
@@ -1224,6 +1285,13 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             crate::value::js_nanbox_pointer(ns_obj as i64)
         };
         js_object_set_field_by_name(singleton, name_key, ns_value);
+        if name == "WebAssembly" {
+            super::set_builtin_property_attrs(
+                singleton as usize,
+                name.to_string(),
+                super::PropertyAttrs::new(true, false, true),
+            );
+        }
     }
     // node:perf_hooks `performance` global — bind it to the same singleton the
     // named import resolves to, so `globalThis.performance ===
@@ -1249,6 +1317,23 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         js_object_set_field_by_name(singleton, key, value);
     }
     super::native_module::install_global_webcrypto(singleton);
+    let func_ptr = global_this_crypto_getter_thunk as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 0);
+    let getter = crate::closure::js_closure_alloc(func_ptr, 0);
+    let getter_bits = if getter.is_null() {
+        0
+    } else {
+        crate::value::js_nanbox_pointer(getter as i64).to_bits()
+    };
+    super::set_builtin_accessor_descriptor(
+        singleton as usize,
+        "crypto".to_string(),
+        super::AccessorDescriptor {
+            get: getter_bits,
+            set: 0,
+        },
+        super::PropertyAttrs::new(true, true, true),
+    );
     // #2923: `globalThis.navigator` — Node's browser-compatible runtime
     // metadata object. typeof is "object". Built once per process.
     {
@@ -2001,6 +2086,40 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             install_noop_proto_methods(proto_obj, &[("decode", 1)]);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
+        "WebSocket" => {
+            websocket_global::install_proto_methods(proto_obj);
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "Crypto" => {
+            install_webcrypto_proto_getter(
+                proto_obj,
+                "subtle",
+                webcrypto_subtle_getter_thunk as *const u8,
+            );
+            install_webcrypto_proto_method(
+                proto_obj,
+                "getRandomValues",
+                webcrypto_get_random_values_thunk as *const u8,
+                1,
+            );
+            install_webcrypto_proto_method(
+                proto_obj,
+                "randomUUID",
+                webcrypto_random_uuid_thunk as *const u8,
+                0,
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "CryptoKey" => {
+            for name in ["algorithm", "extractable", "type", "usages"] {
+                install_webcrypto_proto_getter(
+                    proto_obj,
+                    name,
+                    cryptokey_property_getter_thunk as *const u8,
+                );
+            }
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
         "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EvalError"
         | "URIError" => {
             install_noop_proto_methods(proto_obj, &[("toString", 0)]);
@@ -2063,4 +2182,43 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
         }
         _ => {}
     }
+}
+
+fn install_webcrypto_proto_method(
+    proto_obj: *mut ObjectHeader,
+    method_name: &str,
+    func_ptr: *const u8,
+    arity: u32,
+) {
+    install_proto_method(proto_obj, method_name, func_ptr, arity);
+    super::set_builtin_property_attrs(
+        proto_obj as usize,
+        method_name.to_string(),
+        super::PropertyAttrs::new(true, true, true),
+    );
+}
+
+fn install_webcrypto_proto_getter(proto_obj: *mut ObjectHeader, name: &str, func_ptr: *const u8) {
+    if proto_obj.is_null() {
+        return;
+    }
+    crate::closure::js_register_closure_arity(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let value = if closure.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        super::native_module::set_bound_native_closure_name(closure, &format!("get {name}"));
+        crate::value::js_nanbox_pointer(closure as i64)
+    };
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_object_set_field_by_name(proto_obj, key, f64::from_bits(crate::value::TAG_UNDEFINED));
+    super::set_builtin_accessor_descriptor(
+        proto_obj as usize,
+        name.to_string(),
+        super::AccessorDescriptor {
+            get: value.to_bits(),
+            set: 0,
+        },
+        super::PropertyAttrs::new(true, true, true),
+    );
 }

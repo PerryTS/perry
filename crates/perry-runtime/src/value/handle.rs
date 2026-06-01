@@ -48,6 +48,14 @@ pub extern "C" fn js_set_native_crypto_dispatch(func: JsNativeCryptoDispatchFn) 
     JS_NATIVE_CRYPTO_DISPATCH.store(func as *mut (), Ordering::SeqCst);
 }
 
+/// Set the WebCrypto `crypto.subtle` module-method dispatcher. This mirrors
+/// `js_set_native_crypto_dispatch`, but avoids top-level crypto name
+/// collisions such as `crypto.generateKey` versus `crypto.subtle.generateKey`.
+#[no_mangle]
+pub extern "C" fn js_set_native_webcrypto_dispatch(func: JsNativeWebCryptoDispatchFn) {
+    JS_NATIVE_WEBCRYPTO_DISPATCH.store(func as *mut (), Ordering::SeqCst);
+}
+
 /// Set the node:zlib module-method dispatcher. Same contract as
 /// `js_set_native_crypto_dispatch` above — registered by perry-stdlib at
 /// program start so a bound-then-called `zlib.gzip` reaches the stdlib FFI.

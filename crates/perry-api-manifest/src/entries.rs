@@ -2644,6 +2644,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // (no NATIVE_MODULE_TABLE entry — direct dispatch like createHash).
     method("crypto", "createCipheriv", false, None),
     method("crypto", "createDecipheriv", false, None),
+    // `crypto.Cipheriv` / `crypto.Decipheriv` — the constructor exports
+    // behind the `createCipheriv()` / `createDecipheriv()` factories
+    // (#3726). Node exposes them as enumerable constructor functions
+    // (length 4). Perry reads them as callable handles via
+    // `is_native_module_callable_export` / `native_callable_export_arity`;
+    // the actual cipher behavior continues to flow through the
+    // factory-helper codegen path.
+    class("crypto", "Cipheriv"),
+    class("crypto", "Decipheriv"),
     // `crypto.createSign(alg)` / `createVerify(alg)` — RSA PKCS#1 v1.5 sign /
     // verify over the SHA family (#1364). SignHandle dispatched like createHash
     // (no NATIVE_MODULE_TABLE entry — direct codegen dispatch in expr/calls.rs).
@@ -4711,6 +4720,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http2", "getDefaultSettings", false, None),
     method("http2", "getPackedSettings", false, None),
     method("http2", "getUnpackedSettings", false, None),
+    // `http2.performServerHandshake(socket[, options])` — Node's module-level
+    // helper for adopting an already-connected socket as an HTTP/2 server
+    // session (#3720). Exposed as a callable export (length 1) so the value
+    // read matches Node's `typeof` / `name` / `length` shape; wired through
+    // `is_native_module_callable_export` / `native_callable_export_arity`.
+    method("http2", "performServerHandshake", false, None),
     internal_class("http2", "Http2SecureServer"),
     class("http2", "Http2ServerRequest"),
     class("http2", "Http2ServerResponse"),

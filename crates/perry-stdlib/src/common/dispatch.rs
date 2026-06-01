@@ -2218,6 +2218,8 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     // runtime's native-module dispatch) back to the stdlib crypto impls.
     #[cfg(feature = "crypto")]
     perry_runtime::js_set_native_crypto_dispatch(crate::crypto::js_crypto_native_dispatch);
+    #[cfg(feature = "crypto")]
+    perry_runtime::js_set_native_webcrypto_dispatch(crate::webcrypto::js_webcrypto_native_dispatch);
     #[cfg(feature = "compression")]
     perry_runtime::js_set_native_zlib_dispatch(crate::zlib::js_zlib_native_dispatch);
     perry_runtime::js_set_native_querystring_dispatch(

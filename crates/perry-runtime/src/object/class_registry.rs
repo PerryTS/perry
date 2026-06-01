@@ -637,6 +637,7 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
         let func_ptr = (*ptr).func_ptr as usize;
         let is_global_builtin_func = func_ptr
             == global_this_builtin_noop_thunk as *const u8 as usize
+            || func_ptr == webcrypto_illegal_constructor_thunk as *const u8 as usize
             || func_ptr
                 == crate::messaging::js_message_channel_constructor_call_error as *const u8
                     as usize
@@ -1098,6 +1099,9 @@ pub unsafe extern "C" fn js_new_function_construct(
             std::slice::from_raw_parts(args_ptr, args_len)
         };
         match name {
+            "Crypto" | "CryptoKey" | "SubtleCrypto" => {
+                return crate::object::js_webcrypto_illegal_constructor();
+            }
             "Symbol" => {
                 return crate::error::js_throw_symbol_constructor_type_error();
             }

@@ -1239,8 +1239,10 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .unwrap_or_default();
             if ctx.lookup_class(&class_name).is_none() {
                 if let Some(resolved) = ctx.resolve_class_alias(&class_name) {
-                    if matches!(resolved.as_str(), "Blob" | "File") {
-                        ctx.uses_fetch = true;
+                    if matches!(resolved.as_str(), "Blob" | "File" | "WebSocket") {
+                        if matches!(resolved.as_str(), "Blob" | "File") {
+                            ctx.uses_fetch = true;
+                        }
                         return Ok(Expr::New {
                             class_name: resolved,
                             args,
@@ -1381,9 +1383,11 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     return Ok(nonconstructable_builtin_throw_expr(property, args));
                 }
                 if matches!(object.as_ref(), Expr::GlobalGet(_))
-                    && matches!(property.as_str(), "Blob" | "File")
+                    && matches!(property.as_str(), "Blob" | "File" | "WebSocket")
                 {
-                    ctx.uses_fetch = true;
+                    if matches!(property.as_str(), "Blob" | "File") {
+                        ctx.uses_fetch = true;
+                    }
                     return Ok(Expr::New {
                         class_name: property.clone(),
                         args,

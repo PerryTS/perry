@@ -67,6 +67,14 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     // code may shadow the name — if they do, the class lookup below
     // wins.
     if !ctx.classes.contains_key(class_name) {
+        if matches!(class_name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            return Ok(ctx
+                .block()
+                .call(DOUBLE, "js_webcrypto_illegal_constructor", &[]));
+        }
         if let Some(val) = lower_builtin_new(ctx, class_name, args)? {
             return Ok(val);
         }
