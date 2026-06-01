@@ -16,7 +16,7 @@ use crate::object::{js_object_alloc_with_shape, js_object_set_field};
 use crate::string::js_string_from_bytes;
 use crate::value::{js_nanbox_pointer, js_nanbox_string, JSValue};
 
-const NAVIGATOR_CLASS_ID: u32 = 0x7FFF_FF22;
+pub const NAVIGATOR_CLASS_ID: u32 = 0x7FFF_FF22;
 
 /// Major Node version Perry advertises (mirrors `process.version` = v22.x).
 const NODE_MAJOR: &str = "22";
@@ -62,6 +62,11 @@ fn navigator_platform() -> &'static str {
 /// `platform`, `locks`.
 #[no_mangle]
 pub extern "C" fn js_navigator_object() -> f64 {
+    let ctor = crate::object::js_get_global_this_builtin_value(b"Navigator".as_ptr(), 9);
+    navigator_object_with_constructor(ctor)
+}
+
+pub(crate) fn navigator_object_with_constructor(constructor: f64) -> f64 {
     // Packed null-separated keys; slot order must match the set_field calls.
     let packed = b"userAgent\0language\0languages\0hardwareConcurrency\0platform\0locks\0";
     let field_count: u32 = 6;
@@ -71,6 +76,9 @@ pub extern "C" fn js_navigator_object() -> f64 {
         packed.as_ptr(),
         packed.len() as u32,
     );
+    unsafe {
+        (*obj).class_id = NAVIGATOR_CLASS_ID;
+    }
 
     // userAgent: "Node.js/<major>"
     let ua = format!("Node.js/{NODE_MAJOR}");
@@ -104,5 +112,15 @@ pub extern "C" fn js_navigator_object() -> f64 {
         JSValue::from_bits(js_nanbox_pointer(locks as i64).to_bits()),
     );
 
+    // constructor: the singleton should identify as an instance of the
+    // global `Navigator` constructor.
+    let ctor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+    crate::object::js_object_set_field_by_name(obj, ctor_key, constructor);
+
     js_nanbox_pointer(obj as i64)
+}
+
+#[cfg(test)]
+pub(crate) fn test_navigator_object_with_constructor(constructor: f64) -> f64 {
+    navigator_object_with_constructor(constructor)
 }

@@ -1102,6 +1102,7 @@ Runtime-created fs SystemError metadata is covered by parity fixtures: sync, cal
 - `textEncoderStream.encoding`
 - `textEncoderStream.readable`
 - `textEncoderStream.writable`
+- `URLPattern` remains intentionally absent while Perry advertises a Node 22 runtime target; Node 22 latest-jod globals document `URL` and `URLSearchParams` but not `URLPattern`, which was added as a global in Node 24.
 - … and 6 more (see `runtime-parity.md` for the full list)
 
 #### Covered (sampled)

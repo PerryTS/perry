@@ -709,9 +709,11 @@ fn text_decoder_bool_option(options: f64, name: &str) -> f64 {
     f64::from_bits(crate::value::JSValue::bool(crate::value::js_is_truthy(value_f64) != 0).bits())
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn js_text_encoding_stream_new() -> f64 {
-    let stream = js_object_alloc(0, 0);
+pub(crate) const CLASS_ID_TEXT_ENCODER_STREAM: u32 = 0x7FFF_FF30;
+pub(crate) const CLASS_ID_TEXT_DECODER_STREAM: u32 = 0x7FFF_FF31;
+
+unsafe fn text_encoding_stream_new_with_constructor(constructor: f64, class_id: u32) -> f64 {
+    let stream = js_object_alloc(class_id, 0);
     if stream.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -727,7 +729,38 @@ pub unsafe extern "C" fn js_text_encoding_stream_new() -> f64 {
         js_object_set_field_by_name(stream, key, value);
     }
 
+    let ctor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+    js_object_set_field_by_name(stream, ctor_key, constructor);
+
     crate::value::js_nanbox_pointer(stream as i64)
+}
+
+unsafe fn text_encoding_stream_new(constructor_name: &[u8], class_id: u32) -> f64 {
+    let ctor = js_get_global_this_builtin_value(constructor_name.as_ptr(), constructor_name.len());
+    text_encoding_stream_new_with_constructor(ctor, class_id)
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn test_text_encoding_stream_new_with_constructor(
+    constructor: f64,
+    class_id: u32,
+) -> f64 {
+    text_encoding_stream_new_with_constructor(constructor, class_id)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_text_encoder_stream_new() -> f64 {
+    text_encoding_stream_new(b"TextEncoderStream", CLASS_ID_TEXT_ENCODER_STREAM)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_text_decoder_stream_new() -> f64 {
+    text_encoding_stream_new(b"TextDecoderStream", CLASS_ID_TEXT_DECODER_STREAM)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_text_encoding_stream_new() -> f64 {
+    js_text_encoder_stream_new()
 }
 
 /// Synthetic-anonymous-shape class IDs: classes the HIR generates for
@@ -1125,6 +1158,9 @@ pub unsafe extern "C" fn js_new_function_construct(
             "BigInt" => {
                 return crate::error::js_throw_bigint_constructor_type_error();
             }
+            "Navigator" => {
+                return crate::error::js_throw_illegal_constructor_type_error();
+            }
             "Date" => {
                 if args.is_empty() {
                     return crate::date::js_date_new();
@@ -1274,8 +1310,17 @@ pub unsafe extern "C" fn js_new_function_construct(
                 let ta = crate::typedarray::js_typed_array_new(kind, arg0);
                 return crate::value::js_nanbox_pointer(ta as i64);
             }
-            "TextEncoderStream" | "TextDecoderStream" => {
-                return js_text_encoding_stream_new();
+            "TextEncoderStream" => {
+                return text_encoding_stream_new_with_constructor(
+                    func_value,
+                    CLASS_ID_TEXT_ENCODER_STREAM,
+                );
+            }
+            "TextDecoderStream" => {
+                return text_encoding_stream_new_with_constructor(
+                    func_value,
+                    CLASS_ID_TEXT_DECODER_STREAM,
+                );
             }
             "MessageChannel" => {
                 return crate::messaging::js_message_channel_new();

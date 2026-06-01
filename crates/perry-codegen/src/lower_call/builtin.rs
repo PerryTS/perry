@@ -1290,7 +1290,12 @@ pub(super) fn lower_builtin_new(
             for a in args {
                 let _ = lower_expr(ctx, a)?;
             }
-            let h = ctx.block().call(DOUBLE, "js_text_encoding_stream_new", &[]);
+            let runtime = if class_name == "TextEncoderStream" {
+                "js_text_encoder_stream_new"
+            } else {
+                "js_text_decoder_stream_new"
+            };
+            let h = ctx.block().call(DOUBLE, runtime, &[]);
             Ok(Some(h))
         }
 

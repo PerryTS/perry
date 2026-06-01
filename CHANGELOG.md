@@ -2,6 +2,54 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1061 — fix(worker_threads): workerData is value-only, not callable (#3899)
+
+`worker_threads.workerData` read as a function and `workerData()` returned a
+value, whereas Node exposes `workerData` as a value (the worker's data, or `null`
+on the main thread) and `workerData()` throws. Root cause: a leftover
+`internal_method_sig` row made `module_has_symbol("worker_threads", "workerData")`
+return a `Method`, so codegen's `typeof <module>.<member>` fold reported
+`"function"` (parentPort, which only had a property row, already read `"object"`),
+and the `native_table/extras.rs` row routed `workerData()` to a runtime getter.
+Dropping the method row + call routing lets workerData resolve through
+`property("worker_threads", "workerData")` (typeof `"object"`, value `null`) and
+makes `workerData()` throw a normal `TypeError`. Fixes the
+`worker_threads/main-thread/worker-data-surface` fixture; adds
+`worker_threads/workerdata-value-boundary`. `getWorkerData` is left in place: it
+is not a public named export, but fully removing it makes
+`worker_threads.getWorkerData()` trip the compile-time #463 gate instead of Node's
+runtime TypeError — that absent-member-read boundary is tracked by #3896.
+
+## v0.5.1060 — fix(crypto): expose Hash/Hmac/Sign/Verify constructor exports (#3955)
+
+`import { Hash } from "node:crypto"` (and `Hmac`/`Sign`/`Verify`) failed `check`
+with "does not provide an export named 'Hash'" even though the HIR call-lowering
+in `lower/expr_call/crypto.rs` already routed `Hash(...)`/`Hmac(...)`/`Sign(...)`/
+`Verify(...)` through the same path as their `create*` factories. The four
+constructor classes are public `node:crypto` named exports in Node; added the
+manifest entries so they resolve on the ESM/named-import surface. Flips the
+`crypto/hash/constructor-export`, `crypto/hmac/constructor-export`, and
+`crypto/asymmetric/sign-verify-constructor-export` node-suite fixtures to green.
+
+Also closed (verified via `run_parity_tests.sh --suite node-suite --module <m>`,
+zero failures) the #2013 argument-validation tails for `node:buffer` (#3953),
+`node:process` (#3956), and `node:url` (#3957).
+
+## v0.5.1059 — fix(buffer): materialize Buffer iterators via spread + Array.from (#3909)
+
+`buf.keys()`, `buf.values()`, and `buf.entries()` already returned working
+iterator objects — `.next()` and `for...of` produced the right byte
+indices/values — but `[...buf.keys()]` and `Array.from(buf.values())` returned
+an empty array. `js_array_clone_for_spread` (the runtime helper behind array
+spread and `Array.from`) recognizes iterator objects by class id, but its
+`is_array_iterator` check listed only the array/map/set/iterator-helper class
+ids, not `BUFFER_ITERATOR_CLASS_ID`. A Buffer iterator therefore fell through to
+the array-like `.length`/`[i]` path (a Buffer iterator has neither), yielding
+nothing. Added the buffer iterator class id alongside the others, so spread and
+`Array.from` now drive its `.next()` protocol like every other iterator. Added a
+`node-suite/buffer/iterator-spread` regression fixture covering spread,
+`Array.from`, `.next()`, and `for...of`.
+
 ## v0.5.1058 — fix(node): API-surface hygiene batch (#3925, #3946, #3857, #3962, #3938)
 
 Five Node-parity fixes for the `node:*` builtin surface:

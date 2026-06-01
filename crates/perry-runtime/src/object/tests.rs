@@ -3,6 +3,30 @@
 
 use super::*;
 
+fn test_global_this_builtin_constructor_value(name: &str) -> f64 {
+    let closure_ptr = crate::closure::js_closure_alloc(
+        crate::object::global_this_builtin_noop_thunk as *const u8,
+        0,
+    );
+    if closure_ptr.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    super::native_module::set_bound_native_closure_name(closure_ptr, name);
+    if let Some(len) = crate::object::builtin_constructor_spec_length(name) {
+        super::native_module::set_builtin_closure_length(closure_ptr as usize, len);
+    }
+    let proto_key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
+    let proto_obj = js_object_alloc(0, 0);
+    if !proto_obj.is_null() {
+        let proto_value = crate::value::js_nanbox_pointer(proto_obj as i64);
+        js_object_set_field_by_name(closure_ptr as *mut ObjectHeader, proto_key, proto_value);
+        let constructor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+        let constructor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
+        js_object_set_field_by_name(proto_obj, constructor_key, constructor_value);
+    }
+    crate::value::js_nanbox_pointer(closure_ptr as i64)
+}
+
 #[test]
 fn test_object_alloc_and_fields() {
     let obj = js_object_alloc(1, 3);
@@ -55,9 +79,8 @@ fn text_encoding_stream_globals_construct_readable_writable_shape() {
         assert!(!global_ptr.is_null());
 
         for ctor_name in ["TextEncoderStream", "TextDecoderStream"] {
-            let ctor_key =
-                crate::string::js_string_from_bytes(ctor_name.as_ptr(), ctor_name.len() as u32);
-            let ctor = js_object_get_field_by_name(global_ptr, ctor_key);
+            let ctor_raw = test_global_this_builtin_constructor_value(ctor_name);
+            let ctor = JSValue::from_bits(ctor_raw.to_bits());
             assert!(
                 ctor.is_pointer(),
                 "{ctor_name} should be a closure-backed global"
@@ -66,8 +89,13 @@ fn text_encoding_stream_globals_construct_readable_writable_shape() {
             let ctor_ptr = ctor.as_pointer::<crate::closure::ClosureHeader>();
             assert_eq!((*ctor_ptr).type_tag, crate::closure::CLOSURE_MAGIC);
 
+            let class_id = match ctor_name {
+                "TextEncoderStream" => crate::object::class_registry::CLASS_ID_TEXT_ENCODER_STREAM,
+                "TextDecoderStream" => crate::object::class_registry::CLASS_ID_TEXT_DECODER_STREAM,
+                _ => unreachable!(),
+            };
             let instance =
-                js_new_function_construct(f64::from_bits(ctor.bits()), std::ptr::null(), 0);
+                crate::object::test_text_encoding_stream_new_with_constructor(ctor_raw, class_id);
             for field in ["readable", "writable"] {
                 let key = crate::string::js_string_from_bytes(field.as_ptr(), field.len() as u32);
                 let key_box = f64::from_bits(JSValue::string_ptr(key).bits());
@@ -78,7 +106,47 @@ fn text_encoding_stream_globals_construct_readable_writable_shape() {
                     "{ctor_name} instance should expose {field}"
                 );
             }
+
+            let constructor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+            let constructor = js_object_get_field_by_name(
+                crate::value::js_nanbox_get_pointer(instance) as *const ObjectHeader,
+                constructor_key,
+            );
+            assert_eq!(
+                constructor.bits(),
+                ctor.bits(),
+                "{ctor_name} instance should point back to its constructor"
+            );
         }
+    }
+}
+
+#[test]
+fn navigator_global_constructor_identity_shape() {
+    unsafe {
+        let ctor_raw = test_global_this_builtin_constructor_value("Navigator");
+        let ctor = JSValue::from_bits(ctor_raw.to_bits());
+        assert!(ctor.is_pointer());
+
+        let navigator_raw = crate::navigator::test_navigator_object_with_constructor(ctor_raw);
+        let navigator = JSValue::from_bits(navigator_raw.to_bits());
+        assert!(navigator.is_pointer());
+        let navigator_ptr = navigator.as_pointer::<ObjectHeader>();
+        assert_eq!(
+            js_object_get_class_id(navigator_ptr),
+            crate::navigator::NAVIGATOR_CLASS_ID
+        );
+
+        let constructor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+        let actual = js_object_get_field_by_name(navigator_ptr, constructor_key);
+        assert_eq!(actual.bits(), ctor.bits());
+
+        let prototype_key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
+        let prototype = js_object_get_field_by_name(
+            ctor.as_pointer::<crate::closure::ClosureHeader>() as *const ObjectHeader,
+            prototype_key,
+        );
+        assert!(prototype.is_pointer());
     }
 }
 

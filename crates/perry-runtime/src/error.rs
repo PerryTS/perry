@@ -491,6 +491,14 @@ pub extern "C" fn js_throw_math_constructor_type_error() -> f64 {
     throw_builtin_not_constructor("Math")
 }
 
+#[no_mangle]
+pub extern "C" fn js_throw_illegal_constructor_type_error() -> f64 {
+    let message = b"Illegal constructor";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 fn value_to_lossy_string(value: f64) -> String {
     let string = crate::builtins::js_string_coerce(value);
     if string.is_null() {

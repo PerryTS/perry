@@ -90,6 +90,9 @@ crates/perry-runtime/src/object/native_call_method.rs
 # loop). Extracting that pass is high-risk surgery deferred to the codegen
 # split tracked under #1435.
 crates/perry-codegen/src/codegen/mod.rs
+# Global object bootstrap crossed the gate on current main; split constructor
+# tables/population helpers alongside the runtime object cleanup tracked in #1435.
+crates/perry-runtime/src/object/global_this.rs
 # Central class registry — class IDs, prototypes, parent-closure
 # scanning, and field-init replay. Crossed the limit after the
 # #1787 instance-field init replay (#2074) + web-stream class

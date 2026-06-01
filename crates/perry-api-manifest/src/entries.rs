@@ -2515,17 +2515,21 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_any("p0")],
         TypeSpec::Any,
     ),
+    // #3899: `workerData` is a value-only export (resolved to the worker's data,
+    // or `null` on the main thread, by the value-shaped property arm in
+    // `native_module.rs`). The old `internal_method_sig` row made
+    // `module_has_symbol("worker_threads", "workerData")` return a `Method`, so
+    // codegen's `typeof <module>.<member>` fold reported `"function"` (parentPort,
+    // which has only a property row, correctly read `"object"`). Dropping the
+    // method row lets workerData read through `property("worker_threads",
+    // "workerData")` below, and `workerData()` throws a normal TypeError —
+    // matching Node. (`getWorkerData` is kept for now: it is not a public named
+    // export, but removing it entirely makes `worker_threads.getWorkerData()`
+    // trip the #463 compile gate instead of Node's runtime TypeError — that
+    // absent-member-read boundary is tracked by #3896.)
     internal_method_sig(
         "worker_threads",
         "getWorkerData",
-        false,
-        None,
-        &[],
-        TypeSpec::Any,
-    ),
-    internal_method_sig(
-        "worker_threads",
-        "workerData",
         false,
         None,
         &[],
@@ -2620,6 +2624,17 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "createHash", false, None),
     method("crypto", "createSign", false, None),
     method("crypto", "createVerify", false, None),
+    // #3955: the Hash/Hmac/Sign/Verify constructor classes are public
+    // `node:crypto` named exports in Node. The HIR call-lowering in
+    // `lower/expr_call/crypto.rs` already routes `Hash(...)`/`Hmac(...)`/
+    // `Sign(...)`/`Verify(...)` through the same path as their `create*`
+    // factories, so these entries just expose them on the ESM/named-import
+    // surface — `import { Hash } from "node:crypto"` previously failed `check`
+    // with "does not provide an export named 'Hash'".
+    method("crypto", "Hash", false, None),
+    method("crypto", "Hmac", false, None),
+    method("crypto", "Sign", false, None),
+    method("crypto", "Verify", false, None),
     class("crypto", "ECDH"),
     // #1367: X509Certificate — `new X509Certificate(pem|der)` + read-only
     // subject/issuer/validFrom/validTo/serialNumber/fingerprint/ca props.

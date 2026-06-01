@@ -986,13 +986,17 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                     b"constructor".as_ptr(),
                     "constructor".len() as u32,
                 );
-                let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
                 js_object_set_field_by_name(proto_obj, ctor_key, ctor_value);
                 super::set_builtin_property_attrs(
                     proto_obj as usize,
                     "constructor".to_string(),
                     super::PropertyAttrs::new(true, false, true),
                 );
+            }
+            if name == "Navigator" || name == "TextEncoderStream" || name == "TextDecoderStream" {
+                let constructor_key =
+                    crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+                js_object_set_field_by_name(proto_obj, constructor_key, ctor_value);
             }
             // Populate well-known method properties on the prototype
             // (currently just `Array.prototype.slice`). Methods are
@@ -1192,7 +1196,16 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     {
         let nname = b"navigator";
         let nkey = crate::string::js_string_from_bytes(nname.as_ptr(), nname.len() as u32);
-        let nval = crate::navigator::js_navigator_object();
+        // Read the `Navigator` constructor we installed on the singleton above
+        // and hand it to the navigator builder directly. We must NOT call
+        // `js_navigator_object()` here: it re-fetches the constructor via
+        // `js_get_global_this_builtin_value` → `js_get_global_this`, which would
+        // re-enter this very lazy-init (GLOBAL_THIS_READY is still false until we
+        // return) and recurse/spin forever.
+        let nav_ctor_key = crate::string::js_string_from_bytes(b"Navigator".as_ptr(), 9);
+        let nav_ctor = js_object_get_field_by_name(singleton, nav_ctor_key);
+        let nval =
+            crate::navigator::navigator_object_with_constructor(f64::from_bits(nav_ctor.bits()));
         js_object_set_field_by_name(singleton, nkey, nval);
     }
 }
