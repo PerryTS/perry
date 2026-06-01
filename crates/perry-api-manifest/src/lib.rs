@@ -596,6 +596,17 @@ mod tests {
     }
 
     #[test]
+    fn zlib_codes_is_manifest_named_export_property() {
+        let entry =
+            module_has_symbol("node:zlib", "codes").expect("zlib.codes should be in the manifest");
+        assert!(matches!(entry.kind, ApiKind::Property));
+        assert!(
+            module_has_public_named_export("node:zlib", "codes"),
+            "zlib.codes should be available to named imports"
+        );
+    }
+
+    #[test]
     fn fs_promises_manifest_matches_runtime_backed_exports() {
         assert!(is_known_module("fs/promises"));
         assert!(is_known_module("node:fs/promises"));
