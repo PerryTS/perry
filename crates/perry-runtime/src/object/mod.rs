@@ -23,6 +23,7 @@ use std::sync::RwLock;
 // surface (all `#[no_mangle]` FFI entry points keep their exact symbol).
 // ---------------------------------------------------------------------------
 mod alloc;
+mod array_object_ops;
 mod assert;
 mod bigint_dispatch;
 mod buffer_dispatch;
@@ -53,6 +54,7 @@ mod reflect_support;
 mod util_types;
 mod websocket_global;
 pub use alloc::*;
+pub(crate) use array_object_ops::*;
 pub use assert::*;
 pub(crate) use bigint_dispatch::*;
 pub use buffer_dispatch::*;
