@@ -1007,9 +1007,9 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | API | Coverage source |
 |-----|-----------------|
 | `worker_threads.parentPort` | `ffi:js_worker_threads_parent_port` |
-| `worker.postMessage(value[, transferList])` | `manifest:worker_threads.postMessage` |
-| `port.postMessage(value[, transferList])` | `manifest:worker_threads.postMessage` |
-| `bc.postMessage(message)` | `manifest:worker_threads.postMessage` |
+| `worker.postMessage(value[, transferList])` | `stdlib worker_threads receiver methods` |
+| `port.postMessage(value[, transferList])` | `stdlib worker_threads receiver methods` |
+| `bc.postMessage(message)` | `stdlib worker_threads receiver methods` |
 
 ### node:net
 

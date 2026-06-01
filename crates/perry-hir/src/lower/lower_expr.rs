@@ -281,16 +281,6 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                 args: Vec::new(),
                             });
                         }
-                        if method == "parentPort" {
-                            // parentPort is a singleton handle - call getter function
-                            return Ok(Expr::NativeMethodCall {
-                                module: "worker_threads".to_string(),
-                                class_name: None,
-                                object: None,
-                                method: "parentPort".to_string(),
-                                args: Vec::new(),
-                            });
-                        }
                     }
                 }
                 if let Some(method) = method_name {

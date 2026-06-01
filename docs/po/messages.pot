@@ -21545,14 +21545,6 @@ msgstr ""
 msgid "`getWorkerData` — module"
 msgstr ""
 
-#: src/api/reference.md:1126
-msgid "`parentPort` — module"
-msgstr ""
-
-#: src/api/reference.md:1127
-msgid "`postMessage` — instance"
-msgstr ""
-
 #: src/api/reference.md:1128
 msgid "`workerData` — module"
 msgstr ""

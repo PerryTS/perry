@@ -21587,14 +21587,6 @@ msgstr "`isUUID` — 모듈"
 msgid "`getWorkerData` — module"
 msgstr "`getWorkerData` — 모듈"
 
-#: src/api/reference.md:1126
-msgid "`parentPort` — module"
-msgstr "`parentPort` — 모듈"
-
-#: src/api/reference.md:1127
-msgid "`postMessage` — instance"
-msgstr "`postMessage` — 인스턴스"
-
 #: src/api/reference.md:1128
 msgid "`workerData` — module"
 msgstr "`workerData` — 모듈"

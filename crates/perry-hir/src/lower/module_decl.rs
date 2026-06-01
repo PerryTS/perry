@@ -197,15 +197,6 @@ pub(crate) fn lower_module_decl(
                                     });
                                 }
                             }
-                            // Auto-register parentPort from worker_threads as a native instance
-                            // (it's a singleton, not created via `new`)
-                            if source == "worker_threads" && imported == "parentPort" {
-                                ctx.register_native_instance(
-                                    local.clone(),
-                                    "worker_threads".to_string(),
-                                    "MessagePort".to_string(),
-                                );
-                            }
                         } else {
                             // Register as imported function. Issue #35 (#321):
                             // use the LOCAL name as the original-name marker

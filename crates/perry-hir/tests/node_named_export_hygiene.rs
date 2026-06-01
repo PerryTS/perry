@@ -51,6 +51,10 @@ fn invalid_node_named_imports_are_rejected() {
             r#"import { getWorkerData } from "node:worker_threads"; console.log(getWorkerData);"#,
         ),
         (
+            "worker_threads",
+            r#"import { postMessage } from "node:worker_threads"; console.log(postMessage);"#,
+        ),
+        (
             "https",
             r#"import { ClientRequest } from "node:https"; console.log(ClientRequest);"#,
         ),
@@ -131,5 +135,51 @@ fn valid_node_named_imports_keep_compiling() {
         "{} valid import-shape case(s) failed:\n  {}",
         failures.len(),
         failures.join("\n  ")
+    );
+}
+
+#[test]
+fn worker_threads_parent_port_call_keeps_property_call_shape() {
+    let module = lower_result(
+        r#"
+        import * as workerThreads from "node:worker_threads";
+        workerThreads.parentPort();
+    "#,
+    )
+    .expect("parentPort() should lower as a normal call on the null property value");
+
+    let debug = format!("{module:#?}");
+    assert!(
+        !debug.contains("method: \"parentPort\""),
+        "parentPort() must not lower to the worker_threads native getter: {debug}"
+    );
+    assert!(
+        debug.contains("Call")
+            && debug.contains("\"worker_threads\"")
+            && debug.contains("property: \"parentPort\""),
+        "parentPort() should remain a normal call of worker_threads.parentPort: {debug}"
+    );
+}
+
+#[test]
+fn worker_threads_post_message_call_keeps_property_call_shape() {
+    let module = lower_result(
+        r#"
+        import * as workerThreads from "node:worker_threads";
+        workerThreads.postMessage("hello");
+    "#,
+    )
+    .expect("postMessage() should lower as a normal call on the module property value");
+
+    let debug = format!("{module:#?}");
+    assert!(
+        !debug.contains("method: \"postMessage\""),
+        "module postMessage() must not lower to the worker_threads receiver method: {debug}"
+    );
+    assert!(
+        debug.contains("Call")
+            && debug.contains("\"worker_threads\"")
+            && debug.contains("property: \"postMessage\""),
+        "postMessage() should remain a normal call of worker_threads.postMessage: {debug}"
     );
 }

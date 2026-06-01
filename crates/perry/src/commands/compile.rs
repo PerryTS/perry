@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::OutputFormat;
 
@@ -96,6 +97,8 @@ use targets::{
     compile_for_watchos_widget, compile_for_wearos_tile, find_visionos_swift_runtime,
     find_watchos_swift_runtime, generate_embedded_js_object, generate_js_bundle,
 };
+
+use super::progress::{ProgressSnapshot, VerboseProgress};
 
 mod types;
 pub use types::*;
@@ -242,6 +245,7 @@ pub fn run_with_parse_cache(
     let mut visited = HashSet::new();
     let mut next_class_id: perry_hir::ClassId = 1; // Start at 1, 0 is reserved for "no parent"
     let skip_transforms = matches!(args.target.as_deref(), Some("web") | Some("wasm"));
+    let progress = VerboseProgress::new(format, verbose);
 
     // Issue #444: canonicalize the user's entry path once so collect_modules
     // can compare every module's canonical path against it and set
@@ -262,6 +266,7 @@ pub fn run_with_parse_cache(
         args.target.as_deref(),
         &mut next_class_id,
         skip_transforms,
+        &progress,
         parse_cache.as_deref_mut(),
     )?;
 
@@ -275,6 +280,7 @@ pub fn run_with_parse_cache(
                 &mut visited,
                 &mut next_class_id,
                 skip_transforms,
+                &progress,
                 parse_cache.as_deref_mut(),
                 format,
             )?
@@ -288,6 +294,7 @@ pub fn run_with_parse_cache(
         &mut visited,
         &mut next_class_id,
         skip_transforms,
+        &progress,
         parse_cache.as_deref_mut(),
         format,
     )?;
@@ -1789,12 +1796,24 @@ pub fn run_with_parse_cache(
         }
     }
 
+    let total_codegen_modules = ctx.native_modules.len();
+    let codegen_modules_started = AtomicUsize::new(0);
     let compile_results: Vec<Result<(PathBuf, Vec<u8>), String>> = ctx
         .native_modules
         .par_iter()
         .map(|(path, hir_module)| {
             // Compile this module to LLVM IR (or .ll text in bitcode-link mode)
             // and return the object bytes for the linker to consume.
+            let codegen_index = codegen_modules_started.fetch_add(1, Ordering::Relaxed) + 1;
+            progress.record(ProgressSnapshot {
+                stage: "codegen",
+                module_path: Some(path),
+                module_name: Some(&hir_module.name),
+                visited: Some(codegen_index),
+                total: Some(total_codegen_modules),
+                collected: Some(total_codegen_modules),
+                ..Default::default()
+            });
             let is_entry = path == &entry_path;
             // Compute the prefix list of non-entry modules so the
             // entry main can call each `<prefix>__init` in order.
@@ -2044,7 +2063,7 @@ pub fn run_with_parse_cache(
                 }
                 for spec in &import.specifiers {
                     if let perry_hir::ImportSpecifier::Namespace { local } = spec {
-                        if !namespace_imports.contains(local) {
+                        if !namespace_imports.contains(&local) {
                             namespace_imports.push(local.clone());
                         }
                     }
@@ -3029,7 +3048,7 @@ pub fn run_with_parse_cache(
                                 // like `import * as ...` (#1213, #2629).
                                 namespace_node_submodules
                                     .insert(local.clone(), submod_key.clone());
-                                if !namespace_imports.contains(local) {
+                                if !namespace_imports.contains(&local) {
                                     namespace_imports.push(local.clone());
                                 }
                             } else {
@@ -3711,6 +3730,15 @@ pub fn run_with_parse_cache(
                             }
                         }
                     }
+                    progress.heartbeat(ProgressSnapshot {
+                        stage: "codegen",
+                        module_path: Some(path),
+                        module_name: Some(&hir_module.name),
+                        visited: Some(codegen_index),
+                        total: Some(total_codegen_modules),
+                        collected: Some(total_codegen_modules),
+                        ..Default::default()
+                    });
                     let bytes = perry_codegen::compile_module(hir_module, opts).map_err(|e| {
                         format!(
                             "Error compiling module '{}' ({}) with --backend llvm: {:#}",
