@@ -2,6 +2,16 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1065 — node-builtin submodule default imports resolve to the module namespace (#3906, partial)
+
+Default-importing a non-native node-builtin submodule (e.g. `import tp from "node:timers/promises"`, `import sp from "node:stream/promises"`) previously lowered the binding down the generic JS-module-default path, producing a primitive (`typeof tp === "boolean"`) instead of an object — so `tp.setTimeout(...)` / `sp.finished(...)` were unreachable. In CommonJS terms the default export *is* `module.exports`, which for these modules is the module namespace itself.
+
+Fix (`crates/perry-hir/src/lower/module_decl.rs`): a default import whose source `is_node_builtin_module` but is not a `NATIVE_MODULES` entry now registers as a namespace binding and pushes an `ImportSpecifier::Namespace { local }` (with `continue`) instead of a `Default` specifier. That places the local into the codegen driver's `namespace_imports`, so `typeof local` folds to `"object"` and `local.member(...)` dispatches through the submodule namespace — identical to the `import * as local` shape. Native-module default imports (os/path/fs) and `import * as` namespaces are untouched (verified byte-identical to Node).
+
+Validated: `typeof tp` → `"object"`, `tp.setTimeout`/`sp.finished`/`sp.pipeline` → `"function"` (matches `node --experimental-strip-types`); native + namespace import smoke clean; `perry-hir` test suite green.
+
+Remaining #3906 work (left open): the `__module__`-only `Object.keys` enumeration for native modules (v8/tty/http2/perf_hooks/util.types) — a broader runtime↔manifest key-order reconciliation — is deferred.
+
 ## v0.5.1064 — fix(node): namespace reads of absent builtin members → undefined (#3896)
 
 A bare value read of an absent member on a Node-core module namespace/default

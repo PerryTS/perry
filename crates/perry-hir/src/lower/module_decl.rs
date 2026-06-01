@@ -277,6 +277,30 @@ pub(crate) fn lower_module_decl(
                                 source.clone(),
                                 native_method,
                             );
+                        } else if is_node_builtin_module(&source) {
+                            // #3906: a CJS-backed Node builtin *submodule* that
+                            // isn't in NATIVE_MODULES (e.g. `node:timers/promises`,
+                            // `node:stream/promises`). Its default export is the
+                            // module object — CJS `default === module.exports`,
+                            // the same value as the `import * as` namespace shape.
+                            // Without this it fell to the JS-module default path
+                            // below and resolved to an `ExternFuncRef` boolean
+                            // stub (`typeof === "boolean"`). Mirror the namespace
+                            // handling so the default binding is the module object.
+                            ctx.register_imported_func(local.clone(), local.clone());
+                            ctx.namespace_import_locals.insert(local.clone());
+                            if source == "fs/promises" {
+                                ctx.register_builtin_module_alias(local.clone(), source.clone());
+                            }
+                            // Treat the default binding as the module-namespace
+                            // object (CJS default === module.exports). Pushing a
+                            // Namespace specifier (not Default) puts `local` into
+                            // the driver's `namespace_imports`, so `typeof local`
+                            // folds to "object" and `local.member(...)` dispatches
+                            // through the submodule namespace — exactly like the
+                            // `import * as local` shape.
+                            specifiers.push(ImportSpecifier::Namespace { local: local.clone() });
+                            continue;
                         } else {
                             // Default import from JS module — register so calls resolve to
                             // ExternFuncRef. Use the LOCAL name as the original-name marker
