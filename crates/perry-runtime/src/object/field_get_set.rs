@@ -1840,6 +1840,11 @@ pub extern "C" fn js_object_get_field_by_name(
                     return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
                 }
                 if key_bytes == b"constructor" {
+                    if crate::buffer::crypto_key_meta(obj as usize).is_some() {
+                        let ctor =
+                            super::js_get_global_this_builtin_value(b"CryptoKey".as_ptr(), 9);
+                        return JSValue::from_bits(ctor.to_bits());
+                    }
                     // #3657: a DataView's `.constructor` is the global
                     // `DataView`, not `Buffer` — checked before the
                     // Uint8Array/Buffer arms since a DataView slice is also a
@@ -2538,6 +2543,11 @@ pub extern "C" fn js_object_get_field_by_name(
                 }
                 if let Some(val) = get_native_module_constant(module_name, property_name, nb_ptr) {
                     return JSValue::from_bits(val.to_bits());
+                }
+                if module_name == "crypto.webcrypto" {
+                    if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
+                        return JSValue::from_bits(value.to_bits());
+                    }
                 }
                 // Issue #894: parity with the direct-NativeModuleRef
                 // fast path (`js_native_module_property_by_name`). For

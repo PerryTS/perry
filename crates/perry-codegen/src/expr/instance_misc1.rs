@@ -188,6 +188,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "WriteStream" | "tty.WriteStream" => 0xFFFF0085u32,
                 "SecureContext" | "tls.SecureContext" => 0xFFFF00B5u32,
                 "WASI" | "wasi.WASI" => 0xFFFF00B2u32,
+                "Crypto" => 0xFFFF00C0u32,
+                "SubtleCrypto" => 0xFFFF00C1u32,
+                "CryptoKey" => 0xFFFF00C2u32,
                 // `Object` — every non-primitive matches per ECMAScript;
                 // reserved id mapped in the runtime. Pre-#585 this fell
                 // into the `cid = 0` fallback and matched accidentally

@@ -1052,6 +1052,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_throw_symbol_constructor_type_error", DOUBLE, &[]);
     module.declare_function("js_throw_bigint_constructor_type_error", DOUBLE, &[]);
     module.declare_function("js_throw_math_constructor_type_error", DOUBLE, &[]);
+    module.declare_function("js_webcrypto_illegal_constructor", DOUBLE, &[]);
     module.declare_function("js_throw_type_error_const_assignment", DOUBLE, &[DOUBLE]);
     module.declare_function(
         "js_throw_reference_error_unresolvable_assignment",

@@ -1531,6 +1531,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         ast::MemberProp::Ident(p) if p.sym.as_ref() == "prototype"
                             || p.sym.as_ref() == "__proto__"
                     );
+                    let receiver_is_namespace_value =
+                        property == "crypto" || property == "WebAssembly";
                     let outer_is_websocket_static = property == "WebSocket"
                         && match &member.prop {
                             ast::MemberProp::Ident(p) => matches!(
@@ -1541,7 +1543,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             _ => false,
                         };
                     if !outer_is_prototype_or_proto
-                        && property != "crypto"
+                        && !receiver_is_namespace_value
                         && !outer_is_websocket_static
                     {
                         object_expr = Expr::GlobalGet(0);

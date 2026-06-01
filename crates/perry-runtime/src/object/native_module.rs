@@ -1567,6 +1567,11 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
             "URLSearchParams".len(),
         );
     }
+    if module_name == "crypto.webcrypto" {
+        if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
+            return value;
+        }
+    }
 
     // #3679: node:v8 lifecycle namespaces. `v8.startupSnapshot` /
     // `v8.promiseHooks` are object-valued exports; resolve them to
@@ -1835,6 +1840,9 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         }
         ("tls", "checkServerIdentity") => Some(2),
         ("tls", "SecureContext") => Some(1),
+        // #3726: `crypto.Cipheriv` / `crypto.Decipheriv` constructor exports —
+        // `(cipher, key, iv, options)` arity matches Node's length 4.
+        ("crypto", "Cipheriv" | "Decipheriv") => Some(4),
         ("url", "Url") => Some(0),
         ("url", "resolveObject") => Some(2),
         ("process", "setSourceMapsEnabled") => Some(1),
@@ -2957,6 +2965,21 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             // for feature checks and rebound calls.
             | ("crypto.webcrypto", "getRandomValues")
             | ("crypto.webcrypto", "randomUUID")
+            | (
+                "crypto.subtle",
+                "digest"
+                    | "importKey"
+                    | "exportKey"
+                    | "sign"
+                    | "verify"
+                    | "deriveBits"
+                    | "deriveKey"
+                    | "encrypt"
+                    | "decrypt"
+                    | "generateKey"
+                    | "wrapKey"
+                    | "unwrapKey",
+            )
             | ("buffer.Buffer", "from")
             | ("buffer.Buffer", "alloc")
             | ("buffer.Buffer", "allocUnsafe")
@@ -3245,6 +3268,10 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("crypto", "getRandomValues")
             | ("crypto", "createCipheriv")
             | ("crypto", "createDecipheriv")
+            // #3726: the constructor exports behind the factories read as
+            // callable functions so `typeof crypto.Cipheriv === "function"`.
+            | ("crypto", "Cipheriv")
+            | ("crypto", "Decipheriv")
             | ("crypto", "createSecretKey")
             | ("crypto.Certificate", "verifySpkac")
             | ("crypto.Certificate", "exportPublicKey")
@@ -3356,6 +3383,12 @@ pub extern "C" fn js_native_module_bind_method(
 
     // Extract module name from the namespace object's first field
     let module_name = unsafe { get_module_name_from_namespace(_namespace_obj) };
+
+    if module_name == "crypto.webcrypto" {
+        if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
+            return value;
+        }
+    }
 
     // Check for known constant properties first
     if let Some(val) =

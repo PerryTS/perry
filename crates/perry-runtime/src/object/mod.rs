@@ -1656,7 +1656,9 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         0
     };
     if raw_addr >= 0x1000 && crate::buffer::is_registered_buffer(raw_addr) {
-        let tag = if crate::buffer::is_array_buffer(raw_addr) {
+        let tag = if crate::buffer::crypto_key_meta(raw_addr).is_some() {
+            "CryptoKey"
+        } else if crate::buffer::is_array_buffer(raw_addr) {
             "ArrayBuffer"
         } else if crate::buffer::is_shared_array_buffer(raw_addr) {
             "SharedArrayBuffer"
