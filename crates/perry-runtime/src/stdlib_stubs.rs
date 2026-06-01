@@ -26,6 +26,9 @@ const READLINE_REASON: &str =
     "readline symbol from perry-stdlib not linked into this binary (runtime-only build)";
 const STDLIB_DISPATCH_REASON: &str =
     "stdlib dispatch symbol from perry-stdlib not linked into this binary (runtime-only build)";
+#[cfg(not(feature = "external-fetch-symbols"))]
+const FETCH_REASON: &str =
+    "fetch symbol from perry-stdlib not linked into this binary (runtime-only build)";
 
 // === WebSocket stubs ===
 // On iOS, perry-stdlib provides the real WebSocket implementation (using
@@ -134,6 +137,18 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
 #[no_mangle]
 pub extern "C" fn js_stdlib_init_dispatch() {
     perry_stub_warn("js_stdlib_init_dispatch", STDLIB_DISPATCH_REASON, None);
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
+#[no_mangle]
+pub extern "C" fn js_fetch_with_options(
+    _url_ptr: *const crate::string::StringHeader,
+    _method_ptr: *const crate::string::StringHeader,
+    _body_ptr: *const crate::string::StringHeader,
+    _headers_json_ptr: *const crate::string::StringHeader,
+) -> *mut crate::promise::Promise {
+    perry_stub_warn("js_fetch_with_options", FETCH_REASON, None);
+    std::ptr::null_mut()
 }
 
 // === readline (#347) stubs ===

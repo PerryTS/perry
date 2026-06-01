@@ -2,6 +2,16 @@
 
 use super::*;
 
+fn is_global_this_value(expr: &Expr) -> bool {
+    matches!(expr, Expr::GlobalGet(_))
+        || matches!(
+            expr,
+            Expr::PropertyGet { object, property }
+                if matches!(object.as_ref(), Expr::GlobalGet(_))
+                    && property == "globalThis"
+        )
+}
+
 /// Lower a variable declaration, handling array destructuring patterns.
 /// Returns a vector of statements (multiple for destructuring, single for simple bindings).
 pub(crate) fn lower_var_decl_with_destructuring(
@@ -102,6 +112,11 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 ty = Type::Named("TextEncoder".to_string());
                             } else if class_name == "TextDecoder" {
                                 ty = Type::Named("TextDecoder".to_string());
+                            } else if matches!(
+                                class_name,
+                                "EventTarget" | "Event" | "CustomEvent" | "DOMException"
+                            ) {
+                                ty = Type::Named(class_name.to_string());
                             } else if matches!(
                                 class_name,
                                 "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
@@ -239,7 +254,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 // "pg"` flow is caught by the general lookup
                                 // above. (Issue #536.)
                                 match class_name {
-                                    "EventEmitter" => Some("events".to_string()),
+                                    "EventEmitter" | "EventEmitterAsyncResource" => {
+                                        Some("events".to_string())
+                                    }
                                     "AsyncLocalStorage" => Some("async_hooks".to_string()),
                                     "AsyncResource" => Some("async_hooks".to_string()),
                                     // #2875: explicit-resource-management stacks.
@@ -381,7 +398,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     None
                                 } else {
                                     match class_name {
-                                        "EventEmitter" => Some("events".to_string()),
+                                        "EventEmitter" | "EventEmitterAsyncResource" => {
+                                            Some("events".to_string())
+                                        }
                                         "AsyncLocalStorage" => Some("async_hooks".to_string()),
                                         "AsyncResource" => Some("async_hooks".to_string()),
                                         "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
@@ -1598,11 +1617,21 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         }
                     }
                     Expr::PropertyGet { object, property }
-                        if matches!(object.as_ref(), Expr::GlobalGet(_))
-                            && matches!(property.as_str(), "Blob" | "File") =>
+                        if is_global_this_value(object.as_ref())
+                            && matches!(
+                                property.as_str(),
+                                "URL"
+                                    | "URLSearchParams"
+                                    | "TextEncoder"
+                                    | "TextDecoder"
+                                    | "Blob"
+                                    | "File"
+                            ) =>
                     {
                         ctx.register_let_class_alias(name.clone(), property.clone());
-                        ctx.uses_fetch = true;
+                        if matches!(property.as_str(), "Blob" | "File") {
+                            ctx.uses_fetch = true;
+                        }
                     }
                     Expr::PropertyGet { object, property }
                         if matches!(object.as_ref(), Expr::NativeModuleRef(module)

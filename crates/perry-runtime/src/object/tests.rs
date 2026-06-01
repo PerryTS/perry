@@ -50,8 +50,8 @@ fn test_object_to_value_roundtrip() {
 #[test]
 fn text_encoding_stream_globals_construct_readable_writable_shape() {
     unsafe {
-        let global = js_get_global_this();
-        let global_ptr = crate::value::js_nanbox_get_pointer(global) as *const ObjectHeader;
+        let global_ptr = js_object_alloc(0, 0);
+        super::global_this::populate_global_this_builtins(global_ptr);
         assert!(!global_ptr.is_null());
 
         for ctor_name in ["TextEncoderStream", "TextDecoderStream"] {

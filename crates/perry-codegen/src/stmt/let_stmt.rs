@@ -10,6 +10,16 @@ use crate::native_value::{
 };
 use crate::types::{I32, I64, I8, PTR};
 
+fn is_global_this_value(expr: &perry_hir::Expr) -> bool {
+    matches!(expr, perry_hir::Expr::GlobalGet(_))
+        || matches!(
+            expr,
+            perry_hir::Expr::PropertyGet { object, property }
+                if matches!(object.as_ref(), perry_hir::Expr::GlobalGet(_))
+                    && property == "globalThis"
+        )
+}
+
 pub(crate) fn lower_let(
     ctx: &mut FnCtx<'_>,
     id: u32,
@@ -99,10 +109,16 @@ pub(crate) fn lower_let(
         // X to a class alias so `new X(args)` dispatches to the
         // real class instead of the empty-object placeholder.
         Some(perry_hir::Expr::PropertyGet { object, property }) => {
-            if matches!(object.as_ref(), perry_hir::Expr::GlobalGet(_))
+            if is_global_this_value(object.as_ref())
                 && matches!(
                     property.as_str(),
-                    "TextEncoderStream" | "TextDecoderStream" | "File"
+                    "URL"
+                        | "URLSearchParams"
+                        | "TextEncoder"
+                        | "TextDecoder"
+                        | "TextEncoderStream"
+                        | "TextDecoderStream"
+                        | "File"
                 )
             {
                 ctx.local_class_aliases

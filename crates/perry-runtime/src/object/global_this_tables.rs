@@ -57,9 +57,13 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "URLSearchParams",
     "AbortController",
     "AbortSignal",
+    "EventTarget",
     "Crypto",
     "CryptoKey",
     "SubtleCrypto",
+    "Event",
+    "CustomEvent",
+    "DOMException",
     "FormData",
     "Blob",
     "File",
@@ -102,6 +106,7 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "URLSearchParams"
         | "AbortController"
         | "AbortSignal"
+        | "DOMException"
         | "FormData"
         | "Blob"
         | "Headers"
@@ -129,6 +134,8 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "SharedArrayBuffer"
         | "DataView"
         | "URL"
+        | "Event"
+        | "CustomEvent"
         | "Request"
         | "BroadcastChannel"
         | "FinalizationRegistry"
@@ -154,6 +161,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] =
 /// real direct-call runtime helpers so rebinding works:
 /// `const clone = globalThis.structuredClone; clone(value)`.
 pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &[
+    "fetch",
     "structuredClone",
     "atob",
     "btoa",

@@ -154,6 +154,11 @@ fn url_encoding_constructor_type(ctx: &LoweringContext, callee: &ast::Expr) -> O
             if let Some(ty) = class_type(name) {
                 return Some(ty);
             }
+            if let Some(resolved) = ctx.resolve_class_alias(name) {
+                if let Some(ty) = class_type(&resolved) {
+                    return Some(ty);
+                }
+            }
             ctx.lookup_native_module(name)
                 .and_then(|(module_name, method_name)| {
                     module_constructor_type(module_name, method_name)

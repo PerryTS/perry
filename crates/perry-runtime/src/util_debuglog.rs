@@ -268,6 +268,11 @@ pub extern "C" fn js_util_debuglog(section: f64, callback: f64) -> f64 {
     );
 
     crate::object::set_bound_native_closure_name(closure_handle.get_raw_mut_ptr(), "logger");
+    crate::object::set_property_attrs(
+        closure_handle.get_raw_const_ptr::<ClosureHeader>() as usize,
+        "name".to_string(),
+        crate::object::PropertyAttrs::new(false, false, true),
+    );
     crate::closure::closure_set_dynamic_prop(
         closure_handle.get_raw_const_ptr::<ClosureHeader>() as usize,
         "enabled",

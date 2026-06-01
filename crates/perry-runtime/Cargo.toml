@@ -23,6 +23,10 @@ stdlib = []
 # need runtime-link for perry-ffi helpers, but must not also export runtime-only
 # js_ws_* stubs.
 external-ws-symbols = []
+# Extension-crate test binaries that link the real perry-ext-fetch symbols need
+# runtime-link for perry-ffi helpers, but must not also export runtime-only
+# js_fetch_* stubs.
+external-fetch-symbols = []
 # Enable geisterhand in-process fuzzer (callback registry + dispatch queue)
 geisterhand = []
 # iOS/tvOS game loop: provides main() that spawns user code on game thread + UIApplicationMain
