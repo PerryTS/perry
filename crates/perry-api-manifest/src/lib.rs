@@ -369,7 +369,10 @@ fn is_node_core_private_named_export(module: &str, name: &str) -> bool {
         "url" => matches!(name, "createObjectURL" | "revokeObjectURL"),
         "worker_threads" => name == "getWorkerData",
         "https" => matches!(name, "ClientRequest" | "IncomingMessage" | "ServerResponse"),
-        "http2" => name == "Http2SecureServer",
+        "http2" => matches!(
+            name,
+            "Http2SecureServer" | "listen" | "close" | "on" | "address"
+        ),
         "child_process" => name == "Stream",
         "cluster" => matches!(name, "addListener" | "on" | "worker"),
         "stream" => matches!(name, "from" | "fromWeb" | "prototype" | "toWeb"),
@@ -895,7 +898,10 @@ mod tests {
                 "https",
                 &["ClientRequest", "IncomingMessage", "ServerResponse"][..],
             ),
-            ("http2", &["Http2SecureServer"][..]),
+            (
+                "http2",
+                &["Http2SecureServer", "listen", "close", "on", "address"][..],
+            ),
             ("child_process", &["Stream"][..]),
             ("cluster", &["addListener", "on", "worker"][..]),
             ("stream", &["from", "fromWeb", "prototype", "toWeb"][..]),
