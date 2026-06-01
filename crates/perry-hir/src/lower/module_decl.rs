@@ -1360,6 +1360,15 @@ pub(crate) fn lower_module_decl(
                                             // pick it up via `imported_vars` (and route through the
                                             // getter, not as a closure pointer).
                                             | Expr::SymbolFor(_)
+                                            // Plain `const X = Symbol(); export { X }` — same as
+                                            // SymbolFor above, but for unregistered symbols. Without
+                                            // this the local isn't promoted to a shared module global,
+                                            // so an importer gets a DIFFERENT symbol than the defining
+                                            // module's binding and `imported === X` is false. Hono's
+                                            // RegExpRouter does exactly this with `PATH_ERROR`, so its
+                                            // `e === PATH_ERROR` route-fallback check failed and a bare
+                                            // Symbol escaped `app.fetch`.
+                                            | Expr::SymbolNew(_)
                                             // Issue #923: `const pool = mysql.createPool(...)`
                                             // followed by `export { pool }` lowers the init to
                                             // `Expr::NativeMethodCall` (not `Expr::Call`) because
