@@ -2,6 +2,22 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1063 — fix(crypto): wire crypto.generateKeySync (#3927)
+
+`crypto.generateKeySync("aes"|"hmac", { length })` was rejected by the #463
+unimplemented-API gate even though the runtime (`js_crypto_generate_key_sync`),
+the codegen dispatch (`expr/calls.rs`), and the AES-192/256 KeyObject metadata
+(fixed by #3930) were all already in place — `generateKeySync` was simply missing
+from the API manifest. Added the `method("crypto", "generateKeySync", …)` row so
+the dotted-form `crypto.generateKeySync(...)` reaches its dispatch, plus a
+named-import lowering arm in `expr_call/globals.rs` (mirroring `createSecretKey`)
+so the bare `import { generateKeySync } from "node:crypto"; generateKeySync(...)`
+shape rewrites to the dotted form too. Flips
+`node-suite/crypto/secret-key/generate-key-sync` to green (AES-128/192/256 + hmac
+all match `node --experimental-strip-types`). Remaining `node:crypto` node-suite
+failures (cipher invalid-state #3873, fips-api, prime) are unrelated and
+pre-existing.
+
 ## v0.5.1062 — fix(perf_hooks): Performance/observer-list instanceof class-id collision (#3871)
 
 `performance instanceof Performance` and `list instanceof PerformanceObserverEntryList`

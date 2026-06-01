@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2499 entries across 106 modules
+// Coverage: 2500 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -904,6 +904,8 @@ declare module "crypto" {
   export function createVerify(...args: any[]): any;
   /** stdlib */
   export function generateKeyPairSync(...args: any[]): any;
+  /** stdlib */
+  export function generateKeySync(...args: any[]): any;
   /** stdlib */
   export function getCiphers(...args: any[]): any;
   /** stdlib */
