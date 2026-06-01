@@ -1694,9 +1694,14 @@ pub extern "C" fn js_worker_threads_get_worker_data() -> f64 {
     }) {
         return f64::from_bits(bits);
     }
+    // Node defaults `workerData` to `null` (typeof === "object") on the main
+    // thread and in workers spawned without a workerData option — not
+    // `undefined`. CURRENT_WORKER_DATA above carries the in-worker payload;
+    // this fallback must stay `null` to match the value-only main-thread
+    // surface (#3899) that the namespace getter now routes through here.
     let data = std::env::var("PERRY_WORKER_DATA").unwrap_or_else(|_| "undefined".to_string());
     if data == "undefined" || data.is_empty() {
-        return f64::from_bits(JSValue::undefined().bits());
+        return f64::from_bits(JSValue::null().bits());
     }
     // JSON-parse the data
     let ptr = js_string_from_bytes(data.as_ptr(), data.len() as u32);
