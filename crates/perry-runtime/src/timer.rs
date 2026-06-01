@@ -1080,6 +1080,13 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
             crate::async_hooks::destroy(timer.async_id);
             crate::async_context::refresh_snapshot_from_roots(&mut previous, &previous_roots);
             crate::async_context::restore_context(previous);
+            // #3870: Node runs a microtask checkpoint after *each* timer
+            // callback (every callback is its own macrotask). Drain here —
+            // rather than only once after the whole expired batch in the outer
+            // pump — so a microtask queued inside a timer callback (e.g.
+            // `queueMicrotask`/`Promise.then`) runs before the next timer fires,
+            // matching Node's `setTimeout1 → micro → setTimeout2` ordering.
+            crate::promise::microtasks::js_promise_run_microtasks();
             fired += 1;
         }
     }
