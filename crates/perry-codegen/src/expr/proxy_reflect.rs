@@ -46,6 +46,55 @@ use super::{
     I18nLowerCtx,
 };
 
+/// `p.call(thisArg, ...rest)` / `p.apply(thisArg, argsArray)` where `p` is a
+/// Proxy (#3656). The HIR lowers the callee to `ProxyGet(p, "call"|"apply")`,
+/// which would otherwise read `.call`/`.apply` off the *target* and invoke the
+/// target directly. Per `Function.prototype.{call,apply}` semantics the `this`
+/// of the invocation is the proxy, so the call must route through the proxy's
+/// `[[Call]]` (the `apply` trap) with `thisArg` bound. Returns `None` when the
+/// callee isn't a proxy `.call`/`.apply` so the normal dispatch proceeds.
+pub(crate) fn try_lower_proxy_fn_call_apply(
+    ctx: &mut FnCtx<'_>,
+    callee: &Expr,
+    args: &[Expr],
+) -> Result<Option<String>> {
+    let Expr::ProxyGet { proxy, key } = callee else {
+        return Ok(None);
+    };
+    let is_apply = match key.as_ref() {
+        Expr::String(s) if s == "apply" => true,
+        Expr::String(s) if s == "call" => false,
+        _ => return Ok(None),
+    };
+    let p = lower_expr(ctx, proxy)?;
+    let this_arg = match args.first() {
+        Some(a) => lower_expr(ctx, a)?,
+        None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+    };
+    let arr_box = if is_apply {
+        // 2nd arg is the already-built argument array (a JSValue). When absent,
+        // synthesize an empty array so the trap receives a real argArray.
+        match args.get(1) {
+            Some(a) => lower_expr(ctx, a)?,
+            None => {
+                let arr_handle = proxy_build_args_array(ctx, &[])?;
+                let blk = ctx.block();
+                nanbox_pointer_inline(blk, &arr_handle)
+            }
+        }
+    } else {
+        let rest: Vec<Expr> = args.iter().skip(1).cloned().collect();
+        let arr_handle = proxy_build_args_array(ctx, &rest)?;
+        let blk = ctx.block();
+        nanbox_pointer_inline(blk, &arr_handle)
+    };
+    Ok(Some(ctx.block().call(
+        DOUBLE,
+        "js_proxy_apply",
+        &[(DOUBLE, &p), (DOUBLE, &this_arg), (DOUBLE, &arr_box)],
+    )))
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::ProxyNew { target, handler } => {
@@ -187,14 +236,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &[(DOUBLE, &f), (DOUBLE, &ta), (DOUBLE, &a)],
             ))
         }
-        Expr::ReflectConstruct { target, args } => {
+        Expr::ReflectConstruct {
+            target,
+            args,
+            new_target,
+        } => {
             let t = lower_expr(ctx, target)?;
             let a = lower_expr(ctx, args)?;
-            let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let nt = lower_expr(ctx, new_target)?;
             Ok(ctx.block().call(
                 DOUBLE,
                 "js_proxy_construct",
-                &[(DOUBLE, &t), (DOUBLE, &a), (DOUBLE, &undef)],
+                &[(DOUBLE, &t), (DOUBLE, &a), (DOUBLE, &nt)],
             ))
         }
         Expr::ReflectDefineProperty {

@@ -60,8 +60,9 @@ crates/perry/src/commands/compile.rs
 # Native-module dispatch table; one big match by (module, method, class).
 # Splitting per-namespace is tracked under the API-manifest refactor in #793.
 crates/perry-codegen/src/lower_call/native/mod.rs
-# Generated-style Node core native-call table crossed the gate on current main;
-# split per module family alongside the native table cleanup tracked in #1435.
+# Node-core native method table split out of `native/mod.rs`; still a single
+# per-module dispatch table and already over the limit on current main.
+# Splitting per namespace is tracked under the codegen cleanup in #1435.
 crates/perry-codegen/src/lower_call/native_table/node_core.rs
 # HIR `Expr` enum + dependency-walker arms; splitting would need parallel
 # updates across every variant of the walker traits. Tracked alongside #793.
@@ -97,6 +98,10 @@ crates/perry-runtime/src/object/global_this.rs
 # #1787 instance-field init replay (#2074) + web-stream class
 # wiring (#1641/#2110). Split tracked under #1435.
 crates/perry-runtime/src/object/class_registry.rs
+# Global object/bootstrap native singleton table crossed the current-main
+# threshold after recent builtin surface additions. Splitting constructor and
+# singleton installers into sibling modules is tracked under #1435.
+crates/perry-runtime/src/object/global_this.rs
 # Native-module namespace property/method dispatcher
 # (`get_native_module_constant` is one big match — one arm per
 # stdlib namespace, every property literal inline). Splitting per

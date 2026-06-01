@@ -1612,9 +1612,14 @@ where
             f(this_arg);
             f(args);
         }
-        Expr::ReflectConstruct { target, args } => {
+        Expr::ReflectConstruct {
+            target,
+            args,
+            new_target,
+        } => {
             f(target);
             f(args);
+            f(new_target);
         }
         Expr::ReflectDefineProperty {
             target,

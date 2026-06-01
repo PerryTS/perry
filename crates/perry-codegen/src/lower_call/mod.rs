@@ -110,6 +110,13 @@ pub(crate) use native_table::iter_native_module_table;
 /// 2. `console.log(expr)` where `expr` lowers to a double — emits a
 ///    `js_console_log_number` call and returns `0.0` as the statement value.
 pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
+    // #3656: `p.call(thisArg, …)` / `p.apply(thisArg, argsArray)` on a Proxy
+    // routes through the proxy's `[[Call]]` (apply trap) rather than reading
+    // `.call`/`.apply` off the forwarded target.
+    if let Some(v) = crate::expr::proxy_reflect::try_lower_proxy_fn_call_apply(ctx, callee, args)? {
+        return Ok(v);
+    }
+
     // Early-firing branches (#1113 chained native method call, computed
     // `obj[str](...)`, CurrentStepClosure, closure-typed local).
     if let Some(v) = early_branches::try_lower_native_chain_method_call(ctx, callee, args)? {

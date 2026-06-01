@@ -4729,9 +4729,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     internal_class("http2", "Http2SecureServer"),
     class("http2", "Http2ServerRequest"),
     class("http2", "Http2ServerResponse"),
-    // `http2.constants` — the frozen object of HTTP2_HEADER_* / NGHTTP2_* /
+    // `http2.constants` — the object of HTTP2_HEADER_* / NGHTTP2_* /
     // HTTP_STATUS_* values. `@hono/node-server` imports it by name (#1651).
     property("http2", "constants"),
+    property("http2", "sensitiveHeaders"),
     // `@perryts/google-auth` no longer ships in the bundled manifest —
     // since v0.5.1015 it lives at https://github.com/PerryTS/google-auth
     // and is installed via `npm install @perryts/google-auth`. The
