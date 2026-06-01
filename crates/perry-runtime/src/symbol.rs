@@ -1094,6 +1094,67 @@ pub(crate) unsafe fn own_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f
     None
 }
 
+unsafe fn object_header_ptr_from_value_bits(bits: u64) -> Option<usize> {
+    let top16 = bits >> 48;
+    let raw = if top16 == 0x7FFD {
+        (bits & POINTER_MASK) as usize
+    } else if top16 == 0 {
+        bits as usize
+    } else {
+        return None;
+    };
+    if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let header_addr = raw - crate::gc::GC_HEADER_SIZE;
+    let gc_header = header_addr as *const crate::gc::GcHeader;
+    let tracked_malloc = crate::gc::gc_malloc_header_is_tracked(gc_header);
+    let arena_payload = !matches!(
+        crate::arena::classify_heap_space(raw),
+        crate::arena::HeapSpace::Unknown
+    );
+    let arena_header = !matches!(
+        crate::arena::classify_heap_space(header_addr),
+        crate::arena::HeapSpace::Unknown
+    );
+    if !tracked_malloc && !(arena_payload && arena_header) {
+        return None;
+    }
+    if (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT {
+        Some(raw)
+    } else {
+        None
+    }
+}
+
+unsafe fn resolve_explicit_object_prototype_symbol(obj_f64: f64, sym_f64: f64) -> Option<f64> {
+    const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+    let mut owner = object_header_ptr_from_value_bits(obj_f64.to_bits())?;
+    for _ in 0..8 {
+        let proto_bits = crate::object::prototype_chain::object_static_prototype(owner)?;
+        if proto_bits == TAG_NULL {
+            return None;
+        }
+        let proto_f64 = f64::from_bits(proto_bits);
+        if let Some(v) = own_symbol_property(proto_f64, sym_f64) {
+            return Some(v);
+        }
+        let proto_ptr = object_header_ptr_from_value_bits(proto_bits)?;
+        if proto_ptr == owner {
+            return None;
+        }
+        let proto_obj = proto_ptr as *const crate::object::ObjectHeader;
+        let cid = crate::object::js_object_get_class_id(proto_obj);
+        if cid != 0 {
+            if let Some(v) = crate::object::resolve_proto_chain_symbol(cid, sym_f64) {
+                return Some(v);
+            }
+        }
+        owner = proto_ptr;
+    }
+    None
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f64) -> f64 {
     // Check CLASS_STATIC_SYMBOLS first when receiver is a class ref
@@ -1218,6 +1279,9 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         }
     }
     if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
+        return v;
+    }
+    if let Some(v) = resolve_explicit_object_prototype_symbol(obj_f64, sym_f64) {
         return v;
     }
     // Buffer extends Uint8Array in Node, so Buffer values must expose

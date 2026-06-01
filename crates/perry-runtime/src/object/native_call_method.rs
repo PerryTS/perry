@@ -3081,6 +3081,20 @@ pub unsafe extern "C" fn js_native_call_method(
             }
         }
 
+        let method_key =
+            crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+        if !method_key.is_null() {
+            if let Some(method_value) =
+                super::prototype_chain::resolve_inherited_field(obj as usize, method_key)
+            {
+                return crate::closure::js_native_call_value(
+                    f64::from_bits(method_value.bits()),
+                    args_ptr,
+                    args_len,
+                );
+            }
+        }
+
         // Vtable lookup: check if this class has a registered method in the vtable
         let class_id = (*obj).class_id;
         if class_id != 0 {
