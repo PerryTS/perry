@@ -278,6 +278,49 @@ fn fs_promises_constants_reuses_fs_constants_namespace() {
 }
 
 #[test]
+fn zlib_codes_export_resolves_to_return_code_map() {
+    let codes = unsafe {
+        crate::object::js_native_module_property_by_name(
+            b"zlib".as_ptr(),
+            "zlib".len(),
+            b"codes".as_ptr(),
+            "codes".len(),
+        )
+    };
+    let namespace =
+        crate::object::js_create_native_module_namespace(b"zlib".as_ptr(), "zlib".len());
+    let namespace_codes =
+        get_object_property(namespace, b"codes").expect("zlib namespace should expose codes");
+
+    assert_eq!(
+        namespace_codes.to_bits(),
+        codes.to_bits(),
+        "direct and namespace zlib.codes reads should share the same object"
+    );
+    assert_eq!(
+        JSValue::from_bits(get_object_property(codes, b"Z_OK").unwrap().to_bits()).as_number(),
+        0.0
+    );
+    assert_eq!(
+        JSValue::from_bits(
+            get_object_property(codes, b"Z_DATA_ERROR")
+                .unwrap()
+                .to_bits()
+        )
+        .as_number(),
+        -3.0
+    );
+    assert_eq!(
+        string_from_value(get_object_property(codes, b"0").unwrap()).as_deref(),
+        Some("Z_OK")
+    );
+    assert_eq!(
+        string_from_value(get_object_property(codes, b"-6").unwrap()).as_deref(),
+        Some("Z_VERSION_ERROR")
+    );
+}
+
+#[test]
 fn stream_promises_default_export_exposes_namespace() {
     let value = unsafe {
         js_node_submodule_export_as_function(

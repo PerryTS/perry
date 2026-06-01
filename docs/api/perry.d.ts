@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2482 entries across 106 modules
+// Coverage: 2491 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -852,6 +852,10 @@ declare module "cron" {
 
 declare module "crypto" {
   /** stdlib */
+  export class Cipheriv { [key: string]: any; }
+  /** stdlib */
+  export class Decipheriv { [key: string]: any; }
+  /** stdlib */
   export class ECDH { [key: string]: any; }
   /** stdlib */
   export class X509Certificate { [key: string]: any; }
@@ -1300,6 +1304,8 @@ declare module "events" {
   /** stdlib */
   export class EventEmitter { [key: string]: any; }
   /** stdlib */
+  export class EventEmitterAsyncResource { [key: string]: any; }
+  /** stdlib */
   export const captureRejectionSymbol: any;
   /** stdlib */
   export const captureRejections: any;
@@ -1314,6 +1320,8 @@ declare module "events" {
   export const usingDomains: any;
   /** stdlib */
   export function EventEmitter(...args: any[]): any;
+  /** stdlib */
+  export function EventEmitterAsyncResource(options: any): any;
   /** stdlib */
   export function addAbortListener(...args: any[]): any;
   /** stdlib */
@@ -1688,6 +1696,8 @@ declare module "http2" {
   export function getPackedSettings(...args: any[]): any;
   /** stdlib */
   export function getUnpackedSettings(...args: any[]): any;
+  /** stdlib */
+  export function performServerHandshake(...args: any[]): any;
 }
 
 declare module "https" {
@@ -1803,10 +1813,6 @@ declare module "module" {
   export const builtinModules: any;
   /** stdlib */
   export const constants: any;
-  /** stdlib */
-  export const wrap: any;
-  /** stdlib */
-  export const wrapper: any;
   /** stdlib */
   export function SourceMap(...args: any[]): any;
   /** stdlib */
