@@ -108,9 +108,9 @@ impl SH for Expr {
             Expr::ProcessStderr => tag(h, 72),
             Expr::ProcessStdinSetRawMode(e) => { tag(h, 73); e.as_ref().hash(h); }
             Expr::ProcessStdinOn { event, handler } => { tag(h, 74); event.as_ref().hash(h); handler.as_ref().hash(h); }
-            Expr::ProcessStdinRemoveListener { event, handler } => { tag(h, 11237); event.as_ref().hash(h); handler.as_ref().hash(h); }
+            Expr::ProcessStdinRemoveListener { event, handler } => { tag(h, 11241); event.as_ref().hash(h); handler.as_ref().hash(h); }
             Expr::ProcessStdinLifecycle(method) => {
-                tag(h, 11238);
+                tag(h, 11242);
                 tag(h, match method {
                     ProcessStdinLifecycleMethod::Pause => 1,
                     ProcessStdinLifecycleMethod::Resume => 2,
