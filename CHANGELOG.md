@@ -2,6 +2,14 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1082 — fix(String): charAt/at/codePointAt/charCodeAt ignore extra args instead of compile-failing (#3987, partial)
+
+`"hello".charAt(1, 2, 3, 4)` (and `.at`, `.codePointAt`, `.charCodeAt` with >1 arg) failed to **compile** — codegen `bail!`ed with `String.charAt expects at most 1 arg, got 4` even though `perry check` passed. JavaScript ignores extra arguments to these methods.
+
+Fix (`crates/perry-codegen/src/lower_string_method.rs`): the four index-taking string methods now use `args[0]` as the index and lower any remaining args for their **side effects** (evaluated left-to-right, results discarded), per JS call semantics — instead of erroring. `charAt(1, (c = 5))` now returns `"e"` and still assigns `c`.
+
+Validated against `node --experimental-strip-types`: `charAt(1,2,3,4)`→`e`, `at(1,9,9)`→`e`, `codePointAt(0,9)`→`104`, `charCodeAt(0,9,9)`→`104`, extra-arg side effects run; normal usage (no-arg, OOB, negative index, emoji surrogate pairs) byte-identical. Focused sub-fix of #3987 — its indexed-read (`s[NaN]`), `new String(...)` wrapper, and array-ToString cases remain open there.
+
 ## v0.5.1081 — fix(number→string): scientific notation in String()/concat/template coercion (#3987, partial)
 
 `String(1e21)`, `"" + 1e21`, and `` `${1e21}` `` printed `1000000000000000000000` instead of `1e+21`, and `String(0.0000001)` printed `0.0000001` instead of `1e-7`. Only `n.toString()` was correct — it routed through `js_number_to_string`, which already applies the ECMAScript NumberToString exponent rule (scientific notation for `|n| >= 1e21` or `|n| < 1e-6`). The three *coercion* paths each had their own number formatter using Rust's full-decimal `format!("{}")`:
