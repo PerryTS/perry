@@ -36,6 +36,7 @@ mod builtin;
 mod closure_analysis;
 mod console_promise;
 mod early_branches;
+mod event_target;
 mod extern_func;
 mod func_ref;
 mod jsx;
@@ -53,6 +54,7 @@ mod web_storage;
 
 use buffer_intrinsic::try_emit_buffer_read_intrinsic;
 use builtin::lower_builtin_new;
+use event_target::lower_event_target_call;
 use jsx::try_rewrite_perry_tui_jsx_intrinsic;
 use method_override::{emit_guarded_direct_method_call, emit_own_method_override_check};
 // `options/` (#1099): the options-object-literal lowering family,

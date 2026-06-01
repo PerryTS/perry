@@ -17,3 +17,4 @@ lazy_static = "1.5"
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }
+perry-runtime = { workspace = true, features = ["external-fetch-symbols"] }

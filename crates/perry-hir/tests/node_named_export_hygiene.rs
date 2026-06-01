@@ -59,6 +59,10 @@ fn invalid_node_named_imports_are_rejected() {
             r#"import { Http2SecureServer } from "node:http2"; console.log(Http2SecureServer);"#,
         ),
         (
+            "http2 receiver methods",
+            r#"import { listen, close, on, address } from "node:http2"; console.log("should-not-run", listen, close, on, address);"#,
+        ),
+        (
             "child_process",
             r#"import { Stream } from "node:child_process"; console.log(Stream);"#,
         ),

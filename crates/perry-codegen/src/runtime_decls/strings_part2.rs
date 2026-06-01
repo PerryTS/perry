@@ -1017,12 +1017,26 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_abort_signal_any", I64, &[I64]);
     module.declare_function("js_abort_signal_throw_if_aborted", DOUBLE, &[I64]);
     module.declare_function("js_event_target_new", I64, &[]);
+    module.declare_function("js_event_new", I64, &[DOUBLE, DOUBLE, I32]);
+    module.declare_function("js_custom_event_new", I64, &[DOUBLE, DOUBLE, I32]);
+    module.declare_function("js_dom_exception_new", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_event_target_add_event_listener", VOID, &[I64, I64, I64]);
+    module.declare_function(
+        "js_event_target_add_event_listener_with_options",
+        VOID,
+        &[I64, I64, I64, DOUBLE],
+    );
     module.declare_function(
         "js_event_target_remove_event_listener",
         VOID,
         &[I64, I64, I64],
     );
+    module.declare_function(
+        "js_event_target_remove_event_listener_with_options",
+        VOID,
+        &[I64, I64, I64, DOUBLE],
+    );
+    module.declare_function("js_event_target_dispatch_event", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_event_target_is_event_target", I32, &[I64]);
     module.declare_function("js_event_target_get_event_listeners", I64, &[I64, I64]);
     module.declare_function("js_event_target_get_max_listeners", DOUBLE, &[I64]);

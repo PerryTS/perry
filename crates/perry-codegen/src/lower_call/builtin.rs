@@ -241,6 +241,23 @@ pub(super) fn lower_builtin_new(
             let handle = blk.call(I64, "js_event_emitter_new_with_options", &[(DOUBLE, &opts)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        "EventEmitterAsyncResource" => {
+            let opts = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_event_emitter_async_resource_new",
+                &[(DOUBLE, &opts)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
         "EventTarget" => {
             for a in args {
                 let _ = lower_expr(ctx, a)?;
@@ -282,6 +299,74 @@ pub(super) fn lower_builtin_new(
                 "js_broadcast_channel_new",
                 &[(DOUBLE, &name)],
             )))
+        }
+        "Event" => {
+            let event_type = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let options = if let Some(a) = args.get(1) {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(2) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let argc = args.len().to_string();
+            let handle = blk.call(
+                I64,
+                "js_event_new",
+                &[(DOUBLE, &event_type), (DOUBLE, &options), (I32, &argc)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "CustomEvent" => {
+            let event_type = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let options = if let Some(a) = args.get(1) {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(2) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let argc = args.len().to_string();
+            let handle = blk.call(
+                I64,
+                "js_custom_event_new",
+                &[(DOUBLE, &event_type), (DOUBLE, &options), (I32, &argc)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "DOMException" => {
+            let message = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let name = if let Some(a) = args.get(1) {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(2) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_dom_exception_new",
+                &[(DOUBLE, &message), (DOUBLE, &name)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         "Console" => {
             let opts = if let Some(a) = args.first() {

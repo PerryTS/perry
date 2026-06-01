@@ -552,7 +552,7 @@ pub(super) fn end_pipe_destinations(stream: f64) {
         dests.push(crate::array::js_array_get_f64(arr, i));
     }
     for dest in dests {
-        if stream_destroyed(dest) || has_truthy_hidden(dest, hidden_end_emitted_key()) {
+        if stream_destroyed(dest) || has_truthy_hidden(dest, hidden_finish_emitted_key()) {
             continue;
         }
         if pipe_no_end_destination_contains(stream, dest) {
@@ -1949,45 +1949,5 @@ pub(super) fn writable_methods() -> [(&'static str, StubFn); 22] {
         ("destroy", cast1(ns_destroy1)),
         ("setDefaultEncoding", cast1(ns_chain1)),
         ("_write", cast3(ns_chain3)),
-    ]
-}
-
-pub(super) fn duplex_methods() -> [(&'static str, StubFn); 32] {
-    // Union of readable + writable, deduped (`on/once/off/addListener/
-    // removeListener/removeAllListeners/emit/listenerCount/listeners/
-    // destroy` appear once each).
-    [
-        ("on", cast2(ns_on2)),
-        ("once", cast2(ns_once2)),
-        ("prependListener", cast2(ns_prepend_listener2)),
-        ("prependOnceListener", cast2(ns_prepend_once_listener2)),
-        ("off", cast2(ns_off2)),
-        ("addListener", cast2(ns_on2)),
-        ("removeListener", cast2(ns_remove_listener2)),
-        ("removeAllListeners", cast1(ns_remove_all_listeners1)),
-        ("emit", cast2(ns_emit_rest)),
-        ("setMaxListeners", cast1(ns_set_max_listeners)),
-        ("getMaxListeners", cast0(ns_get_max_listeners)),
-        ("eventNames", cast0(ns_event_names)),
-        ("listenerCount", cast1(ns_listener_count)),
-        ("listeners", cast1(ns_listeners)),
-        ("rawListeners", cast1(ns_raw_listeners)),
-        ("read", cast1(ns_read1)),
-        ("pipe", cast2(ns_pipe2)),
-        ("unpipe", cast1(ns_unpipe1)),
-        ("wrap", cast1(ns_wrap1)),
-        ("pause", cast0(ns_pause0)),
-        ("resume", cast0(ns_resume0)),
-        ("setEncoding", cast1(ns_set_encoding1)),
-        ("isPaused", cast0(ns_is_paused0)),
-        ("push", cast1(ns_push1)),
-        ("unshift", cast1(ns_unshift1)),
-        ("compose", cast1(ns_compose1)),
-        ("write", cast3(ns_write3)),
-        ("end", cast3(ns_end3)),
-        ("cork", cast0(ns_cork0)),
-        ("uncork", cast0(ns_uncork0)),
-        ("destroy", cast1(ns_destroy1)),
-        ("setDefaultEncoding", cast1(ns_chain1)),
     ]
 }
