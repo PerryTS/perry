@@ -2,6 +2,23 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1062 — fix(perf_hooks): Performance/observer-list instanceof class-id collision (#3871)
+
+`performance instanceof Performance` and `list instanceof PerformanceObserverEntryList`
+returned `false` (mark/measure instanceof already worked). Root cause: the runtime
+class ids `CLASS_ID_PERFORMANCE` (0xFFFF0087), `CLASS_ID_PERFORMANCE_RESOURCE_TIMING`
+(0x86), and `CLASS_ID_PERFORMANCE_OBSERVER_ENTRY_LIST` (0x88) **collided** with
+`node:fs`'s `CLASS_ID_FS_DIRENT` / `CLASS_ID_FS_DIR` / `CLASS_ID_FS_READ_STREAM`. In
+`object/instanceof.rs`, the fs `Dir`/`Dirent`/`ReadStream` arms run *before* the
+perf-hooks shape check, so `js_instanceof(performance, 0x87)` hit
+`is_fs_dirent_instance_value` (→ false) and never reached `is_performance_object_value`.
+Moved the three perf ids to free slots (0x8D/0x8E/0x8F, past fs's 0x8C) in both
+`perf_hooks.rs` and the codegen `instanceof` map, and made `is_performance_object_value`
+recognize the `perf_hooks` namespace object by its stored module name (robust against
+the `PERFORMANCE_NS` pointer cache). Flips the `perf_hooks/global/class-constructors`
+and `perf_hooks/observer/list-instanceof` fixtures to green; `mark`/`measure` instanceof
+and `fs` `Dir`/`Dirent` instanceof are unregressed.
+
 ## v0.5.1061 — fix(worker_threads): workerData is value-only, not callable (#3899)
 
 `worker_threads.workerData` read as a function and `workerData()` returned a
