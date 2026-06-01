@@ -2,6 +2,52 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1057 — fix(#2169): perry-ui-windows LNK4006 / LNK4088 + windows-rs 0.58 drift
+
+The user-reported repro (Windows 10, perry 0.5.1025) failed silently with
+`LNK4088: image may not run` after `/FORCE`-resolved `LNK4006: js_*` duplicates
+inside `perry_ui_windows.lib`. Three independent issues:
+
+1. **Duplicate FFI stubs inside `perry_ui_windows.lib`.**
+   `crates/perry-ui-windows/src/ffi/js_interop.rs` defined `js_create_callback`,
+   `js_call_function`, `js_await_js_promise`, `js_load_module`,
+   `js_new_from_handle`, `js_new_instance`, `js_runtime_init`,
+   `js_set_property`, `js_get_export` as `#[no_mangle]` AOT stubs back when
+   `perry-runtime` had stripped them. `perry-runtime` re-added them as V8
+   stubs in `closure/v8_stubs.rs`, but both copies kept getting baked into the
+   archive: the V8 stubs came in via the Rust `perry-runtime` dep
+   (`perry_runtime-…rcgu.o`) and the AOT stubs came in via this crate's own
+   object (`perry_ui_windows-…rcgu.o`). MSVC LINK fell back to `/FORCE` and
+   warned the image may not run (#2169 reproducer log).
+
+   Worse, the local copies had **wrong arities** relative to codegen's
+   declarations in `crates/perry-codegen/src/runtime_decls/stdlib_ffi.rs`:
+   `js_call_function` had 4 args vs. codegen's 5; `js_load_module` had 1 vs. 2;
+   `js_set_property` had 3 vs. 4; `js_new_instance` had 4 vs. 5. Any callsite
+   the linker resolved against the local def would have corrupted the stack.
+
+   Fixed by deleting `crates/perry-ui-windows/src/ffi/js_interop.rs` and the
+   corresponding `pub mod js_interop;` declaration in `ffi/mod.rs`. The
+   `perry-runtime` V8 stubs (now the only definitions) match the
+   codegen-declared signatures exactly. Verified with `llvm-nm` on the
+   resulting `target/release/perry_ui_windows.lib`: each of the nine symbols
+   appears exactly once (pre-fix: twice).
+
+2. **`windows-rs 0.58` constant relocation.** `WM_MOUSELEAVE` lives in
+   `Win32::UI::Controls` in 0.58, not `Win32::UI::WindowsAndMessaging`.
+   `crates/perry-ui-windows/src/pointer.rs` was importing from the latter,
+   so `cargo build --release -p perry-ui-windows` had been failing locally
+   for anyone trying to refresh the shipped `.lib`. Moved the import.
+
+3. **`windows-rs 0.58` GDI+ signature drift.** `GdipDrawImageRectRectI`'s
+   `callback` parameter is `isize` (not `Option<_>`); the canvas widget at
+   `crates/perry-ui-windows/src/widgets/canvas.rs:314` was passing `None`,
+   producing `E0308`. Passing `0_isize` (null callback) restores compilation.
+
+The first item is what the user actually hit. (2) and (3) are pre-existing
+build failures that blocked anyone trying to rebuild the prebuilt `.lib`
+to ship the fix to users.
+
 ## v0.5.1056 — fix(#3917): `(num: number).toLocaleString()` printed a 1970 date string
 
 `const num: number = 20; console.log(num.toLocaleString('en-US'))` printed

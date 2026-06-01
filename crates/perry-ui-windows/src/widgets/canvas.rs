@@ -311,7 +311,7 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                                             src_h as i32,
                                             Unit(2),
                                             std::ptr::null_mut(),
-                                            None,
+                                            0_isize,
                                             std::ptr::null_mut(),
                                         );
                                     }
