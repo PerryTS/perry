@@ -1075,6 +1075,17 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             }
         }
         for prefix in foreign_prefixes {
+            // #3938: `__native_mod__<name>` / `__node_submod__<key>` sentinel
+            // prefixes are resolved at the `Expr::DynamicImport` dispatch site
+            // via runtime namespace builders (`js_create_native_module_namespace`
+            // / `js_node_submodule_namespace`); they have no compiled-module
+            // `@__perry_ns_<prefix>` global or `<prefix>__init` function, so the
+            // extern decls below are dead. Worse, for slash-bearing submodule
+            // names (`node:path/posix`, `node:util/types`) the `/` is illegal in
+            // an LLVM global identifier and broke the whole module. Skip them.
+            if prefix.starts_with("__native_mod__") || prefix.starts_with("__node_submod__") {
+                continue;
+            }
             let ns_name = format!("__perry_ns_{}", prefix);
             llmod.add_external_global(&ns_name, DOUBLE);
             // Issue #753: declare each dynamic-import target's `__init`

@@ -505,6 +505,13 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
             buf.push_str("null");
             return;
         }
+        // #3857: a boxed primitive wrapper (`new String`/`Number`/`Boolean`,
+        // `Object(1n)`) serializes as its underlying primitive, not the empty
+        // wrapper object (which produced `{}`). Recurse on the unwrapped value.
+        if let Some(prim) = crate::builtins::boxed_primitive_json_value(value) {
+            stringify_value(prim, TYPE_UNKNOWN, buf);
+            return;
+        }
         // #2089: a Date is a NaN-boxed `DateCell` pointer — emit `toJSON()`
         // (ISO string, or `null` for an Invalid Date) per ECMA-262 25.5.2,
         // before any object/array deref of the small cell.
@@ -714,6 +721,12 @@ pub(crate) unsafe fn stringify_value_depth(
         // objects live far above this low-memory guard (matches gc_obj_type).
         if (ptr as usize) < 0x1000 {
             buf.push_str("null");
+            return;
+        }
+        // #3857: a boxed primitive wrapper serializes as its underlying
+        // primitive (see the matching branch in `stringify_value`).
+        if let Some(prim) = crate::builtins::boxed_primitive_json_value(value) {
+            stringify_value_depth(prim, TYPE_UNKNOWN, buf, depth);
             return;
         }
         // #2089: a Date is a NaN-boxed `DateCell` pointer. JSON.stringify must

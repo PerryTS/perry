@@ -286,6 +286,16 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     }
                 }
                 if let Some(method) = method_name {
+                    // #3946: a `node:process` *property* imported by name
+                    // (`import { pid, arch } from "node:process"`) must read
+                    // the live process value, not a generic native-module
+                    // PropertyGet (which resolved to `undefined`). Methods
+                    // fall through to the callable native-module ref below.
+                    if module_name == "process" {
+                        if let Some(e) = expr_member::lower_process_named_property(method) {
+                            return Ok(e);
+                        }
+                    }
                     return Ok(Expr::PropertyGet {
                         object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
                         property: method.to_string(),

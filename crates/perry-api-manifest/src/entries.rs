@@ -151,7 +151,6 @@ pub const NODE_SUBMODULES: &[&str] = &[
     "stream/consumers",
     "stream/web",
     "readline/promises",
-    "punycode.ucs2",
     "sys",
     "test",
     "test/reporters",

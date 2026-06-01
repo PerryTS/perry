@@ -818,6 +818,7 @@ pub use signal::{js_process_kill, js_util_convert_process_signal_to_exit_code};
 mod process_streams;
 pub use process_streams::{
     js_process_stderr, js_process_stdin, js_process_stdout, scan_process_stream_singleton_roots_mut,
+    stdin_is_detached,
 };
 
 /// Get the operating system name
