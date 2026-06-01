@@ -769,6 +769,9 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // ──────────────────────────────────────────────────────────────────
     // new Response(body_ptr, status, status_text_ptr, headers_handle) -> f64
     module.declare_function("js_response_new", DOUBLE, &[I64, DOUBLE, I64, DOUBLE]);
+    // js_response_body_init_ptr(body_value_f64) -> string_ptr (i64): drains a
+    // ReadableStream body to bytes, else falls back to string coercion.
+    module.declare_function("js_response_body_init_ptr", I64, &[DOUBLE]);
     // new Headers() -> f64
     module.declare_function("js_headers_new", DOUBLE, &[]);
     // headers.set(handle_f64, key_ptr, val_ptr) -> f64 (undefined-tag)
