@@ -95,11 +95,59 @@ fn throw_invalid_legacy_url_arg(value: f64) -> ! {
 }
 
 fn resolve_path_to_file_url_posix(path: &str) -> String {
+    let preserve_trailing_slash = !path.is_empty() && path.ends_with('/');
     let mut resolved = crate::path::resolve_posix_str(path);
-    if !path.is_empty() && path.ends_with('/') && !resolved.ends_with('/') {
+    if preserve_trailing_slash && !resolved.ends_with('/') {
         resolved.push('/');
     }
     resolved
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_path_to_file_url_posix;
+
+    fn cwd() -> String {
+        std::env::current_dir()
+            .expect("current dir")
+            .to_string_lossy()
+            .trim_end_matches('/')
+            .to_string()
+    }
+
+    #[test]
+    fn path_to_file_url_posix_preserves_relative_trailing_slash() {
+        let cwd = cwd();
+        let parent = std::env::current_dir()
+            .expect("current dir")
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("/"))
+            .to_string_lossy()
+            .trim_end_matches('/')
+            .to_string();
+
+        assert_eq!(
+            resolve_path_to_file_url_posix("relative/"),
+            format!("{cwd}/relative/")
+        );
+        assert_eq!(
+            resolve_path_to_file_url_posix("relative//"),
+            format!("{cwd}/relative/")
+        );
+        assert_eq!(resolve_path_to_file_url_posix("./"), format!("{cwd}/"));
+        assert_eq!(resolve_path_to_file_url_posix("../"), format!("{parent}/"));
+    }
+
+    #[test]
+    fn path_to_file_url_posix_does_not_add_slash_without_input_slash() {
+        let cwd = cwd();
+
+        assert_eq!(
+            resolve_path_to_file_url_posix("relative/."),
+            format!("{cwd}/relative")
+        );
+        assert_eq!(resolve_path_to_file_url_posix(""), cwd);
+    }
 }
 
 /// Read the `windows` option from a `{ windows }` options argument (#2975).

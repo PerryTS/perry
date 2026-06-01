@@ -16,15 +16,21 @@ use super::super::{
     resolve_typed_parse_ty, LoweringContext,
 };
 
-fn new_callee_name<'a>(ctx: &LoweringContext, new_expr: &'a ast::NewExpr) -> Option<&'a str> {
+fn new_callee_name(ctx: &LoweringContext, new_expr: &ast::NewExpr) -> Option<String> {
     match new_expr.callee.as_ref() {
-        ast::Expr::Ident(class_ident) => Some(class_ident.sym.as_ref()),
+        ast::Expr::Ident(class_ident) => {
+            let raw = class_ident.sym.as_ref();
+            Some(
+                ctx.resolve_class_alias(raw)
+                    .unwrap_or_else(|| raw.to_string()),
+            )
+        }
         ast::Expr::Member(member)
             if matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if obj.sym.as_ref() == "globalThis")
                 && ctx.lookup_local("globalThis").is_none() =>
         {
             match &member.prop {
-                ast::MemberProp::Ident(prop_ident) => Some(prop_ident.sym.as_ref()),
+                ast::MemberProp::Ident(prop_ident) => Some(prop_ident.sym.to_string()),
                 _ => None,
             }
         }

@@ -43,6 +43,13 @@ pub fn json_value_to_pem_bytes(v: Option<&serde_json::Value>) -> Vec<u8> {
     Vec::new()
 }
 
+/// True when a secure-server options object supplied key/cert material worth
+/// parsing. Empty options, omitted fields, and explicitly empty strings all
+/// construct quietly in Node; errors surface later when the server is used.
+pub fn has_pem_material(key_pem: &[u8], cert_pem: &[u8]) -> bool {
+    !key_pem.is_empty() || !cert_pem.is_empty()
+}
+
 /// Parse PEM-encoded certificate chain bytes into rustls
 /// `CertificateDer`s. Returns an empty vec on parse failure (caller
 /// must check for emptiness before building a ServerConfig — empty
@@ -124,6 +131,13 @@ mod tests {
         assert!(json_value_to_pem_bytes(None).is_empty());
         assert!(json_value_to_pem_bytes(Some(&json!(42))).is_empty());
         assert!(json_value_to_pem_bytes(Some(&json!({"foo": "bar"}))).is_empty());
+    }
+
+    #[test]
+    fn pem_material_detection_matches_empty_options_behavior() {
+        assert!(!super::has_pem_material(b"", b""));
+        assert!(super::has_pem_material(b"not pem", b""));
+        assert!(super::has_pem_material(b"", b"not cert"));
     }
 }
 

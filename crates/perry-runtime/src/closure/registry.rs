@@ -625,16 +625,6 @@ pub const BOUND_METHOD_FUNC_PTR: *const u8 = 0xBADD_DEAD_u64 as *const u8;
 ///   [2] = bound-args JS Array pointer (i64; 0 when no partial args)
 pub const BOUND_FUNCTION_FUNC_PTR: *const u8 = 0xBADD_B12D_u64 as *const u8;
 
-/// Sentinel stored in capture slot 0 of a `BOUND_METHOD_FUNC_PTR` closure to mark
-/// it as an *unbound* built-in prototype method — `Function.prototype.call` /
-/// `Object.prototype.hasOwnProperty` and friends reified as callable values
-/// (#3828). Unlike an ordinary bound method (whose slot 0 is a fixed receiver),
-/// these resolve their receiver from the live `IMPLICIT_THIS` at call time, so
-/// `Object.prototype.hasOwnProperty.call(o, k)` dispatches `hasOwnProperty` on
-/// `o`. The value is a reserved NaN payload in the undefined/null tag space, so
-/// it can never collide with a real (pointer/string/number) receiver.
-pub const PROTO_METHOD_THIS_MARKER: u64 = 0x7FFC_0000_0000_0F0F;
-
 /// Flag stored in the high bit of capture_count to indicate that capture slot 0
 /// holds `this` (i.e., this closure is an object literal method that captures `this`).
 /// When the closure is detached from the object (assigned to a variable via PropertyGet),
