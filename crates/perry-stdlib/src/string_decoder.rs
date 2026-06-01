@@ -17,6 +17,8 @@
 //!   * `dispatch_string_decoder_property` (`lastNeed` / `lastTotal` /
 //!     `lastChar`) — wired into `js_handle_property_dispatch` so the
 //!     state fields read as Node returns them.
+//!   * `StringDecoder.prototype` shape — attached to the exported constructor
+//!     and returned by `Object.getPrototypeOf(dec)` for handle-backed instances.
 //!
 //! Each non-UTF-8 mode has its own incremental state: `utf16le` buffers
 //! the odd trailing byte so a 2-byte code unit split across writes
@@ -123,6 +125,220 @@ fn canonical_encoding_name(mode: DecodingMode) -> &'static str {
         DecodingMode::Latin1 => "latin1",
         DecodingMode::Ascii => "ascii",
     }
+}
+
+fn boxed_ptr(ptr: *const u8) -> f64 {
+    f64::from_bits(perry_runtime::value::JSValue::pointer(ptr).bits())
+}
+
+fn string_value(s: &str) -> f64 {
+    let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+fn bool_value(value: bool) -> f64 {
+    f64::from_bits(JSValue::bool(value).bits())
+}
+
+unsafe fn set_field_value(obj: *mut perry_runtime::object::ObjectHeader, name: &str, value: f64) {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    perry_runtime::object::js_object_set_field_by_name(obj, key, value);
+}
+
+unsafe fn define_data_property(
+    obj: *mut perry_runtime::object::ObjectHeader,
+    name: &str,
+    value: f64,
+    writable: bool,
+    enumerable: bool,
+) {
+    let descriptor = perry_runtime::object::js_object_alloc(0, 4);
+    set_field_value(descriptor, "value", value);
+    set_field_value(descriptor, "writable", bool_value(writable));
+    set_field_value(descriptor, "enumerable", bool_value(enumerable));
+    set_field_value(descriptor, "configurable", bool_value(true));
+    perry_runtime::object::js_object_define_property(
+        boxed_ptr(obj as *const u8),
+        string_value(name),
+        boxed_ptr(descriptor as *const u8),
+    );
+}
+
+unsafe fn define_accessor_property(
+    obj: *mut perry_runtime::object::ObjectHeader,
+    name: &str,
+    getter: f64,
+    enumerable: bool,
+) {
+    let descriptor = perry_runtime::object::js_object_alloc(0, 3);
+    set_field_value(descriptor, "get", getter);
+    set_field_value(descriptor, "enumerable", bool_value(enumerable));
+    set_field_value(descriptor, "configurable", bool_value(true));
+    perry_runtime::object::js_object_define_property(
+        boxed_ptr(obj as *const u8),
+        string_value(name),
+        boxed_ptr(descriptor as *const u8),
+    );
+}
+
+unsafe fn function_value(func: *const u8, arity: u32, name: &str) -> f64 {
+    let closure = perry_runtime::closure::js_closure_alloc(func, 0);
+    perry_runtime::closure::js_register_closure_arity(func, arity);
+    perry_runtime::closure::closure_set_dynamic_prop(closure as usize, "name", string_value(name));
+    boxed_ptr(closure as *const u8)
+}
+
+unsafe fn string_decoder_constructor_value() -> f64 {
+    let module = b"string_decoder";
+    let ns =
+        perry_runtime::object::js_create_native_module_namespace(module.as_ptr(), module.len());
+    let key = js_string_from_bytes(b"StringDecoder".as_ptr(), b"StringDecoder".len() as u32);
+    perry_runtime::object::js_object_get_field_by_name_f64(
+        perry_runtime::value::js_nanbox_get_pointer(ns)
+            as *const perry_runtime::object::ObjectHeader,
+        key,
+    )
+}
+
+unsafe fn this_string_decoder_handle() -> i64 {
+    let this_value = perry_runtime::object::js_implicit_this_get();
+    let bits = this_value.to_bits();
+    let handle = if bits >> 48 == 0x7FFD {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as i64
+    } else if this_value.is_finite() && this_value > 0.0 && this_value.fract() == 0.0 {
+        this_value as i64
+    } else {
+        0
+    };
+    if handle > 0 && is_string_decoder_handle(handle) {
+        return handle;
+    }
+    perry_runtime::fs::validate::throw_type_error_with_code(
+        "StringDecoder method called on incompatible receiver",
+        "ERR_INVALID_THIS",
+    )
+}
+
+extern "C" fn string_decoder_proto_write(
+    _closure: *const perry_runtime::closure::ClosureHeader,
+    buf: f64,
+) -> f64 {
+    unsafe { dispatch_string_decoder(this_string_decoder_handle(), "write", &[buf]) }
+}
+
+extern "C" fn string_decoder_proto_end(
+    _closure: *const perry_runtime::closure::ClosureHeader,
+    buf: f64,
+) -> f64 {
+    unsafe { dispatch_string_decoder(this_string_decoder_handle(), "end", &[buf]) }
+}
+
+extern "C" fn string_decoder_proto_text(
+    _closure: *const perry_runtime::closure::ClosureHeader,
+    buf: f64,
+    _offset: f64,
+) -> f64 {
+    unsafe { dispatch_string_decoder(this_string_decoder_handle(), "write", &[buf]) }
+}
+
+extern "C" fn string_decoder_last_char_getter(
+    _closure: *const perry_runtime::closure::ClosureHeader,
+) -> f64 {
+    unsafe { dispatch_string_decoder_property(this_string_decoder_handle(), "lastChar") }
+}
+
+extern "C" fn string_decoder_last_need_getter(
+    _closure: *const perry_runtime::closure::ClosureHeader,
+) -> f64 {
+    unsafe { dispatch_string_decoder_property(this_string_decoder_handle(), "lastNeed") }
+}
+
+extern "C" fn string_decoder_last_total_getter(
+    _closure: *const perry_runtime::closure::ClosureHeader,
+) -> f64 {
+    unsafe { dispatch_string_decoder_property(this_string_decoder_handle(), "lastTotal") }
+}
+
+pub unsafe fn string_decoder_prototype_value() -> f64 {
+    let constructor = string_decoder_constructor_value();
+    let constructor_ptr = perry_runtime::value::js_nanbox_get_pointer(constructor) as usize;
+    if constructor_ptr != 0 {
+        let existing =
+            perry_runtime::closure::closure_get_dynamic_prop(constructor_ptr, "prototype");
+        if existing.to_bits() != JSValue::undefined().bits() {
+            return existing;
+        }
+    }
+
+    let proto = perry_runtime::object::js_object_alloc(0, 7);
+    define_data_property(proto, "constructor", constructor, true, false);
+    define_data_property(
+        proto,
+        "write",
+        function_value(string_decoder_proto_write as *const u8, 1, "write"),
+        true,
+        true,
+    );
+    define_data_property(
+        proto,
+        "end",
+        function_value(string_decoder_proto_end as *const u8, 1, "end"),
+        true,
+        true,
+    );
+    define_data_property(
+        proto,
+        "text",
+        function_value(string_decoder_proto_text as *const u8, 2, "text"),
+        true,
+        true,
+    );
+    define_accessor_property(
+        proto,
+        "lastChar",
+        function_value(
+            string_decoder_last_char_getter as *const u8,
+            0,
+            "get lastChar",
+        ),
+        true,
+    );
+    define_accessor_property(
+        proto,
+        "lastNeed",
+        function_value(
+            string_decoder_last_need_getter as *const u8,
+            0,
+            "get lastNeed",
+        ),
+        true,
+    );
+    define_accessor_property(
+        proto,
+        "lastTotal",
+        function_value(
+            string_decoder_last_total_getter as *const u8,
+            0,
+            "get lastTotal",
+        ),
+        true,
+    );
+
+    let proto_value = boxed_ptr(proto as *const u8);
+    if constructor_ptr != 0 {
+        perry_runtime::closure::closure_set_dynamic_prop(constructor_ptr, "prototype", proto_value);
+    }
+    proto_value
+}
+
+pub unsafe fn string_decoder_own_property_names(handle: i64) -> f64 {
+    if !is_string_decoder_handle(handle) {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    let result = perry_runtime::array::js_array_alloc(1);
+    let key = js_string_from_bytes(b"encoding".as_ptr(), b"encoding".len() as u32);
+    perry_runtime::array::js_array_push(result, JSValue::string_ptr(key));
+    boxed_ptr(result as *const u8)
 }
 
 /// Extract the encoding name from the NaN-boxed argument passed by
@@ -736,7 +952,7 @@ pub unsafe fn dispatch_string_decoder(handle: i64, method: &str, args: &[f64]) -
     };
 
     match method {
-        "write" => {
+        "write" | "text" => {
             let bytes = if args.is_empty() {
                 throw_invalid_buf_arg(f64::from_bits(JSValue::undefined().bits()))
             } else {
@@ -851,17 +1067,18 @@ pub unsafe fn dispatch_string_decoder_property(handle: i64, property: &str) -> f
             let sh = js_string_from_bytes(s.as_ptr(), s.len() as u32);
             f64::from_bits(0x7FFF_0000_0000_0000u64 | ((sh as u64) & 0x0000_FFFF_FFFF_FFFF))
         }
-        "write" | "end" => {
+        "constructor" => string_decoder_constructor_value(),
+        "write" | "end" | "text" => {
             // Build a bound-method closure whose `this` is the
             // POINTER_TAG-NaN-boxed handle. The closure captures the
             // method-name byte pointer + length verbatim — we leak a
             // small static so the pointer stays valid for the closure's
-            // lifetime. Two names total (`write`, `end`) so the leak
-            // is bounded.
-            let name_bytes: &'static [u8] = if property == "write" {
-                b"write"
-            } else {
-                b"end"
+            // lifetime. Three names total (`write`, `end`, `text`) so the
+            // leak is bounded.
+            let name_bytes: &'static [u8] = match property {
+                "write" => b"write",
+                "end" => b"end",
+                _ => b"text",
             };
             let this_f64 = f64::from_bits(
                 0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF),
