@@ -30,7 +30,8 @@ use crate::request::{
 use crate::response::{alloc_server_response, HyperResponseShape, ResponseBody};
 use crate::server::{HttpPendingRequest, HttpServer};
 use crate::tls::{
-    build_server_config, json_value_to_pem_bytes, parse_cert_chain, parse_private_key,
+    build_server_config, has_pem_material, json_value_to_pem_bytes, parse_cert_chain,
+    parse_private_key,
 };
 
 /// Decode `{ key, cert, alpnProtocols? }` from a NaN-boxed JsValue
@@ -91,10 +92,13 @@ pub unsafe extern "C" fn js_node_https_create_server(opts_f64: f64, handler: i64
     crate::server::apply_server_options(&mut base, opts_f64);
 
     let cert_chain = parse_cert_chain(&cert_pem);
+    let has_tls_material = has_pem_material(&key_pem, &cert_pem);
     let private_key = match parse_private_key(&key_pem) {
         Some(k) => k,
         None => {
-            eprintln!("[node:https] no recognized PEM private key");
+            if has_tls_material {
+                eprintln!("[node:https] no recognized PEM private key");
+            }
             // Still register the handle so the user gets a `.listen`
             // call that fails with a clear bind error rather than a
             // silent zero-handle.

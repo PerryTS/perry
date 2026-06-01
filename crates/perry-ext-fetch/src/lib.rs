@@ -8,17 +8,6 @@
 //! (closes #236), per-handle Response / Headers / Blob / Request /
 //! Stream pools.
 //!
-//! `js_*` exports cover the Fetch API surface Perry lowers directly:
-//!   - fetch core: get / get_with_auth / post / post_with_auth /
-//!     with_options / text + response_count debug counter
-//!   - response: status / statusText / ok / text / json /
-//!     array_buffer / blob / get_headers / clone / body /
-//!     static_json / static_redirect / static_error / metadata
-//!   - headers: new / set / append / get / has / delete / for_each
-//!   - stream: start / poll / status / close
-//!   - blob: size / type / text / array_buffer / bytes / slice / stream
-//!   - request: new / metadata / body helpers
-
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, get_handle, register_handle, spawn_blocking, JsClosure, JsPromise, JsString,
@@ -32,8 +21,11 @@ use std::sync::Mutex;
 mod validation;
 use validation::{
     is_forbidden_method, is_null_body_status, is_valid_status_text, normalize_method,
-    throw_range_error, throw_type_error,
 };
+use validation::{throw_range_error, throw_type_error};
+
+#[cfg(test)]
+mod test_async_shims;
 
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;

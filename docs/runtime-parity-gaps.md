@@ -2128,7 +2128,7 @@ The counts above are the last generated parity-gap counts on this branch. They w
 | `new TextDecoder(label?, options?)` | `expr:TextDecoderNew` |
 | `new MessageChannel()` | `rt:js_message_channel_new` |
 | `new BroadcastChannel(name)` | `rt:js_broadcast_channel_new` |
-| `new WebSocket(url, protocols?)` | `ffi:js_ws_connect` |
+| `globalThis.WebSocket` / `new WebSocket(url, protocols?)` | `ffi:js_ws_connect` + global constructor shape |
 | `crypto.getRandomValues(typedArray)` | `manifest:crypto.getRandomValues` |
 | `crypto.randomUUID()` | `expr:CryptoRandomUUID` |
 | `performance.now()` | `expr:PerformanceNow` |

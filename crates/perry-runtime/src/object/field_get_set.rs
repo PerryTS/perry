@@ -1123,6 +1123,23 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     }
 
     let obj_addr = obj_val.bits() & 0x0000_FFFF_FFFF_FFFF;
+    if obj_addr >= 0x10000 {
+        let obj_ptr = obj_addr as *mut ObjectHeader;
+        unsafe {
+            if !obj_ptr.is_null() && (*obj_ptr).class_id == NATIVE_MODULE_CLASS_ID {
+                let key_ptr =
+                    crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+                let present = super::native_module::read_native_module_name(obj_ptr)
+                    .as_deref()
+                    .zip(super::has_own_helpers::str_from_string_header(key_ptr))
+                    .map(|(module, key)| {
+                        super::native_module::native_module_has_enumerable_key(module, key)
+                    })
+                    .unwrap_or(false);
+                return if present { nanbox_true } else { nanbox_false };
+            }
+        }
+    }
     // Small handle receiver (`"prop" in crypto.createDiffieHellman(...)`,
     // Fastify handles, etc.). The generic object path below would treat the
     // handle id as an ObjectHeader pointer and can crash while reading
@@ -1823,6 +1840,11 @@ pub extern "C" fn js_object_get_field_by_name(
                     return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
                 }
                 if key_bytes == b"constructor" {
+                    if crate::buffer::crypto_key_meta(obj as usize).is_some() {
+                        let ctor =
+                            super::js_get_global_this_builtin_value(b"CryptoKey".as_ptr(), 9);
+                        return JSValue::from_bits(ctor.to_bits());
+                    }
                     // #3657: a DataView's `.constructor` is the global
                     // `DataView`, not `Buffer` — checked before the
                     // Uint8Array/Buffer arms since a DataView slice is also a
@@ -2522,6 +2544,11 @@ pub extern "C" fn js_object_get_field_by_name(
                 if let Some(val) = get_native_module_constant(module_name, property_name, nb_ptr) {
                     return JSValue::from_bits(val.to_bits());
                 }
+                if module_name == "crypto.webcrypto" {
+                    if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
+                        return JSValue::from_bits(value.to_bits());
+                    }
+                }
                 // Issue #894: parity with the direct-NativeModuleRef
                 // fast path (`js_native_module_property_by_name`). For
                 // (module, prop) pairs whose property-read should
@@ -3121,6 +3148,13 @@ pub extern "C" fn js_object_get_field_ic_miss(
         if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
             return val;
         }
+        // Buffers have no GcHeader. The generic IC-miss object path below may
+        // inspect GC/object metadata, so mirror js_object_get_field_by_name's
+        // buffer-first dispatch here.
+        if crate::buffer::is_registered_buffer(obj as usize) {
+            let value = js_object_get_field_by_name(obj, key);
+            return f64::from_bits(value.bits());
+        }
     }
     // Issue #340: small-handle receivers (axios, fastify, ioredis,
     // ...) are passed here from the codegen IC miss path with the
@@ -3315,6 +3349,60 @@ mod sso_tests_1781 {
                 0,
                 "absent SSO key 'zz' should not be found"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod buffer_ic_miss_tests {
+    use super::*;
+
+    unsafe fn key(bytes: &[u8]) -> *const crate::StringHeader {
+        crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+    }
+
+    unsafe fn string_value_bytes(value: f64) -> Vec<u8> {
+        let bits = value.to_bits();
+        assert_eq!((bits >> 48) as u16, 0x7fff);
+        let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
+        let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        std::slice::from_raw_parts(data, (*ptr).byte_len as usize).to_vec()
+    }
+
+    unsafe fn secret_buffer(len: usize) -> *mut crate::buffer::BufferHeader {
+        let buf = crate::buffer::buffer_alloc(len as u32);
+        (*buf).length = len as u32;
+        crate::buffer::mark_as_uint8array(buf as usize);
+        crate::buffer::mark_as_secret_key(buf as usize);
+        buf
+    }
+
+    #[test]
+    fn secret_key_buffer_metadata_survives_ic_miss_for_aes_sizes() {
+        unsafe {
+            for len in [16usize, 24, 32] {
+                let buf = secret_buffer(len);
+                let mut cache = [0i64; 2];
+
+                let ty = js_object_get_field_ic_miss(
+                    buf as *const ObjectHeader,
+                    key(b"type"),
+                    &mut cache,
+                );
+                assert_eq!(string_value_bytes(ty), b"secret");
+
+                let size = js_object_get_field_ic_miss(
+                    buf as *const ObjectHeader,
+                    key(b"symmetricKeySize"),
+                    &mut cache,
+                );
+                assert_eq!(size, len as f64);
+
+                let raw = dispatch_buffer_method(buf as usize, "export", std::ptr::null(), 0);
+                let raw_addr = (raw.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const ObjectHeader;
+                let raw_len = js_object_get_field_ic_miss(raw_addr, key(b"length"), &mut cache);
+                assert_eq!(raw_len, len as f64);
+            }
         }
     }
 }

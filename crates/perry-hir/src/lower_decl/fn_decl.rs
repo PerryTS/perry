@@ -138,6 +138,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
                 "WebSocket" | "WebSocketServer" => Some(("ws", type_name.as_str())),
                 "Redis" => Some(("ioredis", "Redis")),
                 "EventEmitter" => Some(("events", "EventEmitter")),
+                "EventEmitterAsyncResource" => Some(("events", "EventEmitterAsyncResource")),
                 // Web Fetch API: Request / Response / Headers as function
                 // params — same registration the local-init paths get
                 // (destructuring.rs:1457+ for `const r = new Request(…)`).
@@ -218,6 +219,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
             let module_info = match type_name.as_str() {
                 "Redis" => Some(("ioredis", "Redis")),
                 "EventEmitter" => Some(("events", "EventEmitter")),
+                "EventEmitterAsyncResource" => Some(("events", "EventEmitterAsyncResource")),
                 "Pool" => Some(("mysql2/promise", "Pool")),
                 "PoolConnection" => Some(("mysql2/promise", "PoolConnection")),
                 "WebSocket" | "WebSocketServer" => Some(("ws", type_name.as_str())),

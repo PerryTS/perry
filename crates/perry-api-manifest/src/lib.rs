@@ -292,7 +292,7 @@ pub fn is_node_core_module(module: &str) -> bool {
 }
 
 /// Public named-export filter shared by the import gate and docs emitters.
-pub(crate) fn entry_is_public_named_export(entry: &ApiEntry) -> bool {
+pub fn entry_is_public_named_export(entry: &ApiEntry) -> bool {
     if is_node_core_private_named_export(entry.module, entry.name) {
         return false;
     }
@@ -367,9 +367,13 @@ fn is_node_core_private_named_export(module: &str, name: &str) -> bool {
                 | "setMaxListeners"
         ),
         "url" => matches!(name, "createObjectURL" | "revokeObjectURL"),
+        "module" => matches!(name, "wrap" | "wrapper"),
         "worker_threads" => matches!(name, "getWorkerData" | "postMessage"),
         "https" => matches!(name, "ClientRequest" | "IncomingMessage" | "ServerResponse"),
-        "http2" => name == "Http2SecureServer",
+        "http2" => matches!(
+            name,
+            "Http2SecureServer" | "listen" | "close" | "on" | "address"
+        ),
         "child_process" => name == "Stream",
         "cluster" => matches!(name, "addListener" | "on" | "worker"),
         "stream" => matches!(name, "from" | "fromWeb" | "prototype" | "toWeb"),
@@ -518,6 +522,8 @@ mod tests {
             ("node:tty", "clearLine"),
             ("node:process", "on"),
             ("node:process", "emit"),
+            ("node:module", "wrap"),
+            ("node:module", "wrapper"),
             ("node:url", "createObjectURL"),
             ("node:worker_threads", "getWorkerData"),
             ("node:https", "ClientRequest"),
@@ -549,6 +555,8 @@ mod tests {
             ("node:tty", "ReadStream"),
             ("node:process", "cwd"),
             ("node:process", "env"),
+            ("node:module", "builtinModules"),
+            ("node:module", "createRequire"),
             ("node:url", "URL"),
             ("node:url", "fileURLToPath"),
             ("node:worker_threads", "parentPort"),
@@ -611,6 +619,17 @@ mod tests {
                 class_filter: None
             }
         ));
+    }
+
+    #[test]
+    fn zlib_codes_is_manifest_named_export_property() {
+        let entry =
+            module_has_symbol("node:zlib", "codes").expect("zlib.codes should be in the manifest");
+        assert!(matches!(entry.kind, ApiKind::Property));
+        assert!(
+            module_has_public_named_export("node:zlib", "codes"),
+            "zlib.codes should be available to named imports"
+        );
     }
 
     #[test]
@@ -903,6 +922,7 @@ mod tests {
                 "string_decoder",
                 &["encoding", "lastChar", "lastNeed", "lastTotal"][..],
             ),
+            ("module", &["wrap", "wrapper"][..]),
             (
                 "tty",
                 &["clearLine", "clearScreenDown", "cursorTo", "moveCursor"][..],
@@ -913,7 +933,10 @@ mod tests {
                 "https",
                 &["ClientRequest", "IncomingMessage", "ServerResponse"][..],
             ),
-            ("http2", &["Http2SecureServer"][..]),
+            (
+                "http2",
+                &["Http2SecureServer", "listen", "close", "on", "address"][..],
+            ),
             ("child_process", &["Stream"][..]),
             ("cluster", &["addListener", "on", "worker"][..]),
             ("stream", &["from", "fromWeb", "prototype", "toWeb"][..]),
@@ -952,6 +975,10 @@ mod tests {
                 ][..],
             ),
             ("process", &["cwd", "env", "pid", "version"][..]),
+            (
+                "module",
+                &["builtinModules", "constants", "createRequire"][..],
+            ),
             ("string_decoder", &["StringDecoder"][..]),
             ("tty", &["ReadStream", "WriteStream", "isatty"][..]),
             ("url", &["URL", "URLSearchParams", "fileURLToPath"][..]),

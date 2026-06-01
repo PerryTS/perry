@@ -21,6 +21,8 @@ fn is_cjs_style_native_default_import(module_name: &str) -> bool {
             | "events"
             | "os"
             | "path"
+            | "path/posix"
+            | "path/win32"
             | "punycode"
             | "querystring"
             | "sys"
@@ -428,7 +430,9 @@ pub(crate) fn lower_module_decl(
                                         None
                                     } else {
                                         match class_name {
-                                            "EventEmitter" => Some("events".to_string()),
+                                            "EventEmitter" | "EventEmitterAsyncResource" => {
+                                                Some("events".to_string())
+                                            }
                                             "AsyncLocalStorage" => Some("async_hooks".to_string()),
                                             "AsyncResource" => Some("async_hooks".to_string()),
                                             "WebSocket" | "WebSocketServer" => {
@@ -494,7 +498,9 @@ pub(crate) fn lower_module_decl(
                                             None
                                         } else {
                                             match class_name {
-                                                "EventEmitter" => Some("events".to_string()),
+                                                "EventEmitter" | "EventEmitterAsyncResource" => {
+                                                    Some("events".to_string())
+                                                }
                                                 "AsyncLocalStorage" => {
                                                     Some("async_hooks".to_string())
                                                 }
@@ -911,6 +917,9 @@ pub(crate) fn lower_module_decl(
                                         let module_info = match type_name.as_str() {
                                             "Redis" => Some(("ioredis", "Redis")),
                                             "EventEmitter" => Some(("events", "EventEmitter")),
+                                            "EventEmitterAsyncResource" => {
+                                                Some(("events", "EventEmitterAsyncResource"))
+                                            }
                                             "Pool" => Some(("mysql2/promise", "Pool")),
                                             "PoolConnection" => {
                                                 Some(("mysql2/promise", "PoolConnection"))

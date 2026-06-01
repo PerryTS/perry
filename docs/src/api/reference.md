@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2481 entries across 106 modules.
+Total: 2491 entries across 106 modules.
 
 ## Modules
 
@@ -670,6 +670,8 @@ Total: 2481 entries across 106 modules.
 
 ### Classes
 
+- `Cipheriv`
+- `Decipheriv`
 - `ECDH`
 - `X509Certificate`
 
@@ -1096,14 +1098,19 @@ Total: 2481 entries across 106 modules.
 ### Classes
 
 - `EventEmitter`
+- `EventEmitterAsyncResource`
 
 ### Methods
 
 - `EventEmitter` — module
+- `EventEmitterAsyncResource` — module
 - `addAbortListener` — module
 - `addListener` — instance
+- `asyncId` — instance *(class: `EventEmitterAsyncResource`)*
+- `asyncResource` — instance *(class: `EventEmitterAsyncResource`)*
 - `domain` — instance
 - `emit` — instance
+- `emitDestroy` — instance *(class: `EventEmitterAsyncResource`)*
 - `eventNames` — instance
 - `getEventListeners` — module
 - `getMaxListeners` — instance
@@ -1124,6 +1131,7 @@ Total: 2481 entries across 106 modules.
 - `removeListener` — instance
 - `setMaxListeners` — instance
 - `setMaxListeners` — module
+- `triggerAsyncId` — instance *(class: `EventEmitterAsyncResource`)*
 
 ### Properties
 
@@ -1509,6 +1517,7 @@ Total: 2481 entries across 106 modules.
 - `getUnpackedSettings` — module
 - `listen` — instance *(class: `Http2SecureServer`)*
 - `on` — instance *(class: `Http2SecureServer`)*
+- `performServerHandshake` — module
 
 ### Properties
 
@@ -1679,8 +1688,6 @@ Total: 2481 entries across 106 modules.
 
 - `builtinModules`
 - `constants`
-- `wrap`
-- `wrapper`
 
 ## `moment`
 
@@ -3210,6 +3217,8 @@ Total: 2481 entries across 106 modules.
 - `markAsUncloneable` — module
 - `markAsUntransferable` — module
 - `moveMessagePortToContext` — module
+- `parentPort` — module
+- `postMessage` — instance
 - `postMessageToThread` — module
 - `receiveMessageOnPort` — module
 - `setEnvironmentData` — module
