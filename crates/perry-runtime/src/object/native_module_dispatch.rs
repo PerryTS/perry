@@ -854,7 +854,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             arg(2),
         )),
         ("fs", "cpSync") => bool_to_f64(crate::fs::js_fs_cp_sync_options(arg(0), arg(1), arg(2))),
-        ("fs", "accessSync") => bool_to_f64(crate::fs::js_fs_access_sync_mode(arg(0), arg(1))),
+        ("fs", "accessSync") => crate::fs::js_fs_access_sync_throw_mode(arg(0), arg(1)),
         ("fs", "realpathSync") => crate::fs::js_fs_realpath_dispatch(arg(0), arg(1)),
         ("fs", "mkdtempSync") => crate::fs::js_fs_mkdtemp_dispatch(arg(0), arg(1)),
         ("fs", "mkdtempDisposableSync") => crate::fs::js_fs_mkdtemp_disposable_sync(arg(0), arg(1)),
