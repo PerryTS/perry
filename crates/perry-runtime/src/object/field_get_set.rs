@@ -77,7 +77,7 @@ pub extern "C" fn js_object_get_field(obj: *const ObjectHeader, field_index: u32
     }
 }
 
-unsafe fn own_data_field_by_name(
+pub(crate) unsafe fn own_data_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {

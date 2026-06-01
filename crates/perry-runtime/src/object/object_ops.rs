@@ -1401,6 +1401,21 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
             return f64::from_bits(TAG_NULL);
         }
     }
+    let collection_prototype = |addr: usize| -> Option<f64> {
+        if crate::map::is_registered_map(addr) {
+            let proto = crate::object::builtin_prototype_value("Map");
+            if proto.to_bits() != crate::value::TAG_UNDEFINED {
+                return Some(proto);
+            }
+        }
+        if crate::set::is_registered_set(addr) {
+            let proto = crate::object::builtin_prototype_value("Set");
+            if proto.to_bits() != crate::value::TAG_UNDEFINED {
+                return Some(proto);
+            }
+        }
+        None
+    };
     if top16 == 0x7FFE {
         let class_id = (bits & 0xFFFF_FFFF) as u32;
         if let Some(parent_id) = get_parent_class_id(class_id) {
@@ -1431,6 +1446,9 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     if top16 == 0x7FFD {
         let raw_addr = bits & 0x0000_FFFF_FFFF_FFFF;
         if raw_addr != 0 && raw_addr >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
+            if let Some(proto) = collection_prototype(raw_addr as usize) {
+                return proto;
+            }
             // #2820: an explicit `Object.setPrototypeOf(obj, proto)` recorded
             // in the side-table takes precedence — return exactly what was set
             // (including `null`).
@@ -1508,6 +1526,9 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     }
     if top16 == 0 {
         if bits >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
+            if let Some(proto) = collection_prototype(bits as usize) {
+                return proto;
+            }
             // #2820: explicit setPrototypeOf side-table takes precedence.
             if let Some(proto_bits) = super::prototype_chain::object_static_prototype(bits as usize)
             {

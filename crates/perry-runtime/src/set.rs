@@ -824,40 +824,73 @@ pub extern "C" fn js_set_from_array(arr: *const crate::array::ArrayHeader) -> *m
 /// #2771 (arbitrary iterables + TypeError on non-iterables).
 #[no_mangle]
 pub extern "C" fn js_set_from_iterable(value: f64) -> *mut SetHeader {
-    use crate::collection_iter::{classify_init, InitIter};
+    use crate::collection_iter::{constructor_iter, ConstructorIter};
 
     let scope = crate::gc::RuntimeHandleScope::new();
-    // `classify_init` returns the materialized array of yielded values for any
-    // iterable (Array/String/Map/Set/custom iterator), an Empty marker for
-    // null/undefined, or throws the Node "not iterable" TypeError otherwise.
-    // For a Map it yields `[k, v]` pair arrays; for a String it yields
-    // single-codepoint strings — both match `[...new Set(x)]` in Node.
-    let arr_ptr = match classify_init(value) {
-        InitIter::Empty => return js_set_alloc(4),
-        InitIter::Values(p) => p,
-    };
-    let arr_handle = if arr_ptr.is_null() {
-        None
-    } else {
-        Some(scope.root_raw_mut_ptr(arr_ptr))
-    };
+    let value_handle = scope.root_nanbox_f64(value);
+    let adder = crate::collection_iter::require_callable(
+        crate::collection_iter::builtin_prototype_method("Set", "add"),
+        "Set.prototype.add",
+    );
+    let adder = crate::collection_iter::normalize_callable_value(adder);
+    let adder_handle = scope.root_nanbox_f64(adder);
+
     let set = js_set_alloc(4);
     let set_handle = scope.root_raw_mut_ptr(set);
-    let Some(arr_handle) = arr_handle.as_ref() else {
-        return set_handle.get_raw_mut_ptr::<SetHeader>();
-    };
-    maybe_force_helper_gc_for_test();
-    let len = {
-        let arr = arr_handle.get_raw_const_ptr::<crate::array::ArrayHeader>();
-        crate::array::js_array_length(arr)
-    };
-    for i in 0..len {
-        let element = {
-            let arr = arr_handle.get_raw_const_ptr::<crate::array::ArrayHeader>();
-            crate::array::js_array_get_f64(arr, i)
-        };
+
+    let add_value = |element: f64, iter_to_close: Option<f64>| {
+        let args = [element];
+        let adder = adder_handle.get_nanbox_f64();
         let set = set_handle.get_raw_mut_ptr::<SetHeader>();
-        js_set_add(set, element);
+        let result = if crate::object::is_builtin_set_add_value(adder) {
+            crate::set::js_set_add(set, element);
+            Ok(f64::from_bits(crate::value::TAG_UNDEFINED))
+        } else {
+            let set_value = crate::value::js_nanbox_pointer(set as i64);
+            crate::collection_iter::call_with_this_capturing_throw(adder, set_value, &args)
+        };
+        if let Err(exc) = result {
+            if let Some(iter) = iter_to_close {
+                crate::collection_iter::iterator_close(iter);
+            }
+            crate::exception::js_throw(exc);
+        }
+    };
+
+    match constructor_iter(value_handle.get_nanbox_f64()) {
+        ConstructorIter::Empty => {}
+        ConstructorIter::Array(arr_value) => {
+            let arr_handle = scope.root_nanbox_f64(arr_value);
+            let arr_ptr = crate::value::js_nanbox_get_pointer(arr_handle.get_nanbox_f64())
+                as *mut crate::array::ArrayHeader;
+            if !arr_ptr.is_null() {
+                maybe_force_helper_gc_for_test();
+                let len = {
+                    let arr = crate::value::js_nanbox_get_pointer(arr_handle.get_nanbox_f64())
+                        as *const crate::array::ArrayHeader;
+                    crate::array::js_array_length(arr)
+                };
+                for i in 0..len {
+                    let element = {
+                        let arr = crate::value::js_nanbox_get_pointer(arr_handle.get_nanbox_f64())
+                            as *const crate::array::ArrayHeader;
+                        crate::array::js_array_get_f64(arr, i)
+                    };
+                    add_value(element, None);
+                }
+            }
+        }
+        ConstructorIter::Iterator(iter) => {
+            let iter_handle = scope.root_nanbox_f64(iter);
+            loop {
+                let iter = iter_handle.get_nanbox_f64();
+                let next = crate::collection_iter::iterator_next_value(iter);
+                let Some(element) = next else {
+                    break;
+                };
+                add_value(element, Some(iter));
+            }
+        }
     }
     set_handle.get_raw_mut_ptr::<SetHeader>()
 }
