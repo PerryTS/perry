@@ -2,6 +2,26 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1064 — fix(node): namespace reads of absent builtin members → undefined (#3896)
+
+A bare value read of an absent member on a Node-core module namespace/default
+object — e.g. `import * as dnsp from "node:dns/promises"; dnsp.ADDRCONFIG` (Node
+exposes `ADDRCONFIG` on `dns` but not `dns/promises`) — tripped the #463
+unimplemented-API read gate and errored at compile time, whereas Node treats it
+as an ordinary property miss returning `undefined`. The call form (`ns.foo()`)
+must still reject as unimplemented. Fixed by threading a transient
+`lowering_call_callee` flag through `LoweringContext`: `lower_call` sets it around
+the callee-lowering, and `lower_member_inner` captures-and-clears it at entry, so
+the read gate keeps rejecting call callees while relaxing pure value reads to
+`undefined` — scoped to Node core modules only (npm packages keep the strict
+gate, and the tree-shaking-deferral path is unchanged). Updated the
+`unimplemented_api_check` member/crypto unit tests to the new behavior (the
+bogus-*call* rejection sweep stays green); added a
+`node-core/namespace-absent-member-read` fixture and flipped
+`dns/constants/error-aliases`. Baseline-compared across fs/dns/events/crypto/os/
+path/process node-suite — no regressions (the pre-existing fs arg-validation
+message-detail and crypto cipher/fips/prime fails are unrelated).
+
 ## v0.5.1063 — fix(crypto): wire crypto.generateKeySync (#3927)
 
 `crypto.generateKeySync("aes"|"hmac", { length })` was rejected by the #463
