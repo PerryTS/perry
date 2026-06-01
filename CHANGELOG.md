@@ -2,6 +2,16 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1069 — timers/promises + stream/promises: abort rejects with AbortError code "ABORT_ERR"
+
+When a `timers/promises` (`setTimeout`/`setImmediate`/`scheduler.wait`/interval) or `stream/promises` (`finished`/`pipeline`) operation was aborted, Perry rejected with the signal's `.reason` — for a default `controller.abort()` that is a DOMException whose `.code` is the numeric `20`, so fixtures saw `code: 20` instead of Node's `"ABORT_ERR"`.
+
+Node always rejects these operations with a fresh internal `AbortError` (`name: "AbortError"`, `message: "The operation was aborted"`, `code: "ABORT_ERR"`) and ignores `signal.reason` entirely — verified against `node --experimental-strip-types` for a bare abort, a custom `abort(reason)`, and an `AbortSignal.timeout()` `TimeoutError` (all reject with `AbortError`/`"ABORT_ERR"`).
+
+Fix (`crates/perry-runtime/src/node_submodules/stream_promises.rs`): `signal_reason` now returns `abort_error_value()` (the string-coded `AbortError`) unconditionally instead of reading `signal.reason`. This is the single error source shared by every `timers/promises` and `stream/promises` abort-rejection path (immediate-abort checks and the deferred `abort` listener), so all of them now match Node.
+
+Validated: `node-suite/timers/promises` `abort-error-shape`, `abort-signal`, `scheduler-wait-abort`, and `set-immediate-signal` now match Node byte-for-byte; `stream/promises` `finished`/`pipeline` abort still report `"ABORT_ERR"`. The 2 remaining `timers`/`stream` promise failures (`timeout-value-and-ref` unsettled-top-level-await warning, `pipeline-with-transform-collect` transform-collect concat) are pre-existing and unrelated to abort errors. `perry-runtime` stream_promises unit tests green.
+
 ## v0.5.1068 — timers: drain microtasks between timer callbacks (#3870)
 
 Perry ran the microtask checkpoint only once after a whole batch of expired timers, not after each callback. So when a `setTimeout` callback queued a microtask *and* scheduled another zero-delay timeout, Perry fired the next timer before draining the microtask:
