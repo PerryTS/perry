@@ -4720,6 +4720,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http2", "getDefaultSettings", false, None),
     method("http2", "getPackedSettings", false, None),
     method("http2", "getUnpackedSettings", false, None),
+    // `http2.performServerHandshake(socket[, options])` — Node's module-level
+    // helper for adopting an already-connected socket as an HTTP/2 server
+    // session (#3720). Exposed as a callable export (length 1) so the value
+    // read matches Node's `typeof` / `name` / `length` shape; wired through
+    // `is_native_module_callable_export` / `native_callable_export_arity`.
+    method("http2", "performServerHandshake", false, None),
     internal_class("http2", "Http2SecureServer"),
     class("http2", "Http2ServerRequest"),
     class("http2", "Http2ServerResponse"),

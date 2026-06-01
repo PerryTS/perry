@@ -1852,6 +1852,8 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("util", "MIMEType") => Some(1),
         ("net", "createServer" | "Server") => Some(2),
         ("net", "Socket") => Some(1),
+        // #3720: `http2.performServerHandshake(socket[, options])` — length 1.
+        ("http2", "performServerHandshake") => Some(1),
         ("net", "_normalizeArgs") => Some(1),
         ("net", "_createServerHandle") => Some(5),
         ("domain", "Domain" | "createDomain" | "create") => Some(0),
@@ -3317,6 +3319,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("http2", "createServer")
             | ("http2", "createSecureServer")
             | ("http2", "Server")
+            // #3720: module-level handshake helper reads as a function.
+            | ("http2", "performServerHandshake")
             // #3680/#3679: node:v8 class constructors + diagnostic-control
             // helpers read as callable values (`typeof v8.Serializer ===
             // "function"`). Construction routes through new_dynamic.rs; the
