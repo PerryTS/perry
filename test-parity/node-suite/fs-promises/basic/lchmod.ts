@@ -16,6 +16,15 @@ if (process.platform === "darwin") {
   await (fsp as any).lchmod(link, 0o600);
   console.log("link mode suffix:", (fs.lstatSync(link).mode & 0o777).toString(8));
   console.log("target mode suffix:", (fs.statSync(p).mode & 0o777).toString(8));
+
+  try {
+    await (fsp as any).lchmod(ROOT + "/missing-link.txt", 0o600);
+    console.log("lchmod reject code:", "resolved");
+    console.log("lchmod reject syscall:", "resolved");
+  } catch (err: any) {
+    console.log("lchmod reject code:", err.code);
+    console.log("lchmod reject syscall:", err.syscall);
+  }
 } else {
   if (process.platform === "linux") {
     try {

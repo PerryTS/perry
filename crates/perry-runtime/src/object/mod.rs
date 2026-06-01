@@ -51,6 +51,7 @@ mod polymorphic_index;
 pub(crate) mod prototype_chain;
 mod reflect_support;
 mod util_types;
+mod websocket_global;
 pub use alloc::*;
 pub use assert::*;
 pub(crate) use bigint_dispatch::*;
@@ -100,6 +101,8 @@ static GLOBAL_THIS_READY: AtomicBool = AtomicBool::new(false);
 // Both are mutable roots scanned by `scan_object_cache_roots_mut`.
 pub(crate) static TYPED_ARRAY_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
 pub(crate) static TYPED_ARRAY_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static LOCAL_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static SESSION_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
 
 // Overflow field storage for objects that exceed their pre-allocated inline slot count.
 // Keyed by (obj_ptr as usize) -> Vec<JSValue bits> indexed by absolute field_index
@@ -1292,6 +1295,8 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         Ordering::Acquire,
         Ordering::Release,
     );
+    visitor.visit_atomic_i64_slot(&LOCAL_STORAGE_PTR, Ordering::Acquire, Ordering::Release);
+    visitor.visit_atomic_i64_slot(&SESSION_STORAGE_PTR, Ordering::Acquire, Ordering::Release);
 }
 
 #[cfg(test)]
@@ -1657,7 +1662,9 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         0
     };
     if raw_addr >= 0x1000 && crate::buffer::is_registered_buffer(raw_addr) {
-        let tag = if crate::buffer::is_array_buffer(raw_addr) {
+        let tag = if crate::buffer::crypto_key_meta(raw_addr).is_some() {
+            "CryptoKey"
+        } else if crate::buffer::is_array_buffer(raw_addr) {
             "ArrayBuffer"
         } else if crate::buffer::is_shared_array_buffer(raw_addr) {
             "SharedArrayBuffer"

@@ -777,8 +777,15 @@ pub(super) fn lower_builtin_new(
         }
         "Response" => {
             // new Response(body?, init?) — init = { status?, statusText?, headers? }
+            // Route the body through js_response_body_init_ptr (not the plain
+            // string coercion) so a ReadableStream body — e.g. Hono's
+            // `new Response(res.body, res)` header re-wrap — is drained to its
+            // bytes instead of stringified to its numeric stream handle.
+            // Non-stream bodies coerce exactly as get_raw_string_ptr did.
             let body_ptr = if !args.is_empty() {
-                get_raw_string_ptr(ctx, &args[0])?
+                let v = lower_expr(ctx, &args[0])?;
+                let blk = ctx.block();
+                blk.call(I64, "js_response_body_init_ptr", &[(DOUBLE, &v)])
             } else {
                 "0".to_string()
             };

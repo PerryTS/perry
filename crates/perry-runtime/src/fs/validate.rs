@@ -34,15 +34,110 @@ pub(crate) fn is_path_like(value: f64) -> bool {
     if jv.is_pointer() {
         let obj = jv.as_pointer::<crate::object::ObjectHeader>();
         if !obj.is_null() {
-            let protocol = crate::url::get_string_content(unsafe {
-                crate::object::js_object_get_field_f64(obj, crate::url::parse::URL_PROTOCOL)
-            });
-            if protocol == "file:" {
-                return true;
-            }
+            let protocol = crate::url::get_string_content(crate::object::js_object_get_field_f64(
+                obj,
+                crate::url::parse::URL_PROTOCOL,
+            ));
+            return protocol == "file:" && unsafe { is_valid_file_url_path_object(obj) };
         }
     }
     false
+}
+
+fn encoded_path_separator(pathname: &str) -> bool {
+    let bytes = pathname.as_bytes();
+    if bytes.len() < 3 {
+        return false;
+    }
+    for i in 0..=(bytes.len() - 3) {
+        if bytes[i] != b'%' {
+            continue;
+        }
+        let hex_hi = bytes[i + 1];
+        let hex_lo = bytes[i + 2] | 0x20;
+        if hex_hi == b'2' && hex_lo == b'f' {
+            return true;
+        }
+        #[cfg(windows)]
+        if hex_hi == b'5' && hex_lo == b'c' {
+            return true;
+        }
+    }
+    false
+}
+
+unsafe fn file_url_host(obj: *const crate::object::ObjectHeader) -> String {
+    let hostname = crate::url::get_string_content(crate::object::js_object_get_field_f64(
+        obj,
+        crate::url::parse::URL_HOSTNAME,
+    ));
+    if !hostname.is_empty() {
+        return hostname;
+    }
+    crate::url::get_string_content(crate::object::js_object_get_field_f64(
+        obj,
+        crate::url::parse::URL_HOST,
+    ))
+}
+
+unsafe fn file_url_pathname(obj: *const crate::object::ObjectHeader) -> String {
+    crate::url::get_string_content(crate::object::js_object_get_field_f64(
+        obj,
+        crate::url::parse::URL_PATHNAME,
+    ))
+}
+
+unsafe fn is_valid_file_url_path_object(obj: *const crate::object::ObjectHeader) -> bool {
+    let host = file_url_host(obj);
+    if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
+        return false;
+    }
+    !encoded_path_separator(&file_url_pathname(obj))
+}
+
+pub(crate) unsafe fn validate_file_url_path_object(obj: *const crate::object::ObjectHeader) {
+    let host = file_url_host(obj);
+    if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
+        throw_type_error_with_code(
+            "File URL host must be \"localhost\" or empty on this platform",
+            "ERR_INVALID_FILE_URL_HOST",
+        );
+    }
+    if encoded_path_separator(&file_url_pathname(obj)) {
+        throw_type_error_with_code(
+            "File URL path must not include encoded / characters",
+            "ERR_INVALID_FILE_URL_PATH",
+        );
+    }
+}
+
+fn validate_path_like_value(_arg_name: &str, value: f64) -> bool {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_any_string() {
+        return true;
+    }
+    if crate::buffer::js_buffer_is_buffer(value.to_bits() as i64) == 1 {
+        return true;
+    }
+    if !jv.is_pointer() {
+        return false;
+    }
+    let obj = jv.as_pointer::<crate::object::ObjectHeader>();
+    if obj.is_null() {
+        return false;
+    }
+    let protocol = crate::url::get_string_content(crate::object::js_object_get_field_f64(
+        obj,
+        crate::url::parse::URL_PROTOCOL,
+    ));
+    if protocol.is_empty() {
+        return false;
+    }
+    if protocol != "file:" {
+        throw_type_error_with_code("The URL must be of scheme file", "ERR_INVALID_URL_SCHEME");
+    }
+    unsafe { validate_file_url_path_object(obj) };
+    true
 }
 
 /// True if `value` is a JS number (a plain IEEE double *or* an INT32-tagged
@@ -281,7 +376,7 @@ static KEEP_JS_VALIDATE_EVENT_LISTENER: unsafe extern "C" fn(i64, *const u8, u32
 /// `readdirSync`, `unlinkSync`, …). Throws `ERR_INVALID_ARG_TYPE` on any
 /// non path-like value (including numbers). No-op when the value is valid.
 pub(crate) fn validate_path(arg_name: &str, value: f64) {
-    if !is_path_like(value) {
+    if !validate_path_like_value(arg_name, value) {
         throw_invalid_path_arg(arg_name, value);
     }
 }
@@ -292,7 +387,7 @@ pub(crate) fn validate_path(arg_name: &str, value: f64) {
 /// throws `EBADF` (matching `fs.readFileSync(123)`); anything else throws
 /// `ERR_INVALID_ARG_TYPE`. `syscall` names the operation for the EBADF error.
 pub(crate) fn validate_path_or_fd(arg_name: &str, value: f64, syscall: &'static str) {
-    if is_path_like(value) {
+    if validate_path_like_value(arg_name, value) {
         return;
     }
     if let Some(fd) = crate::fs::filehandle_object_fd(value) {

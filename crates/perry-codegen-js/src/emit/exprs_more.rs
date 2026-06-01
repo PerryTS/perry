@@ -1614,11 +1614,19 @@ impl JsEmitter {
                 self.emit_expr(args);
                 self.output.push(')');
             }
-            Expr::ReflectConstruct { target, args } => {
+            Expr::ReflectConstruct {
+                target,
+                args,
+                new_target,
+            } => {
                 self.output.push_str("Reflect.construct(");
                 self.emit_expr(target);
                 self.output.push_str(", ");
                 self.emit_expr(args);
+                if !matches!(new_target.as_ref(), Expr::Undefined) {
+                    self.output.push_str(", ");
+                    self.emit_expr(new_target);
+                }
                 self.output.push(')');
             }
             Expr::ReflectDefineProperty {

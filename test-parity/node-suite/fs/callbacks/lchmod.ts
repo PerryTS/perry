@@ -20,6 +20,14 @@ if (process.platform === "darwin") {
   });
   console.log("link mode suffix:", (fs.lstatSync(link).mode & 0o777).toString(8));
   console.log("target mode suffix:", (fs.statSync(p).mode & 0o777).toString(8));
+
+  await new Promise<void>((resolve) => {
+    (fs as any).lchmod(ROOT + "/missing-link.txt", 0o600, (err: any) => {
+      console.log("lchmod missing code:", err && err.code);
+      console.log("lchmod missing syscall:", err && err.syscall);
+      resolve();
+    });
+  });
 } else {
   console.log("lchmod callback err: true");
   console.log("link mode suffix: 600");

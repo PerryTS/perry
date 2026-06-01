@@ -119,6 +119,7 @@ pub(crate) fn lower_let(
                         | "TextEncoderStream"
                         | "TextDecoderStream"
                         | "File"
+                        | "WebSocket"
                 )
             {
                 ctx.local_class_aliases

@@ -130,6 +130,12 @@ fn message_port_object() -> *mut ObjectHeader {
     let proto = constructor_prototype("MessagePort");
     set_object_prototype(obj, proto);
     set_field(obj, "constructor", get_global_constructor("MessagePort"));
+    install_method(obj, "postMessage", noop2 as *const u8, 2);
+    install_method(obj, "start", noop0 as *const u8, 0);
+    install_method(obj, "ref", noop0 as *const u8, 0);
+    install_method(obj, "unref", noop0 as *const u8, 0);
+    install_method(obj, "hasRef", has_ref as *const u8, 0);
+    install_method(obj, "close", noop0 as *const u8, 0);
     set_field(obj, "onmessage", js_null());
     set_field(obj, "onmessageerror", js_null());
     obj
@@ -163,6 +169,10 @@ pub extern "C" fn js_broadcast_channel_new(name: f64) -> f64 {
     let name_ptr = crate::builtins::js_string_coerce(name);
     let name_value = f64::from_bits(JSValue::string_ptr(name_ptr).bits());
     set_field(obj, "name", name_value);
+    install_method(obj, "close", noop0 as *const u8, 0);
+    install_method(obj, "postMessage", noop1 as *const u8, 1);
+    install_method(obj, "ref", noop0 as *const u8, 0);
+    install_method(obj, "unref", noop0 as *const u8, 0);
     set_field(obj, "onmessage", js_null());
     set_field(obj, "onmessageerror", js_null());
     boxed_object(obj)

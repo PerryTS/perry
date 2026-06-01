@@ -2,6 +2,115 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1058 — fix(node): API-surface hygiene batch (#3925, #3946, #3857, #3962, #3938)
+
+Five Node-parity fixes for the `node:*` builtin surface:
+
+- **#3925 — `node:punycode.ucs2` phantom submodule.** Perry advertised
+  `node:punycode.ucs2` as an importable builtin; Node throws
+  `ERR_UNKNOWN_BUILTIN_MODULE` (`ucs2` is a *property* of `node:punycode`, not a
+  module). The HIR import gate (`lower/module_decl.rs`) now rejects any
+  `node:`-prefixed specifier that isn't a real Node builtin
+  (`NODE_BUILTIN_MODULES`) or a resolvable native module — also closing the
+  more general "`node:bogusmod` checks clean" gap. `punycode.ucs2` stays in
+  `NODE_SUBMODULES` as a Perry-internal dispatch namespace so
+  `punycode.ucs2.decode/encode` member access keeps working.
+- **#3946 — `node:process` core properties via named/namespace import.**
+  `import { pid, arch, platform, … } from "node:process"` and
+  `import * as p from "node:process"; p.pid` resolved to `undefined` (only the
+  default import and global `process` worked). Named imports now route process
+  *properties* through the dedicated `ProcessPid`/`OsArch`/… lowerings, and the
+  `process.<prop>` member path also fires for namespace/default import locals.
+- **#3857 — `JSON.stringify` of boxed primitive wrappers.**
+  `JSON.stringify(new String("hi"))` returned `{}` instead of `"hi"`; the same
+  applied to `new Number`/`new Boolean` and to wrappers nested in objects and
+  arrays, and the 3-arg pretty form crashed. Stringify now unwraps boxed
+  String/Number/Boolean/BigInt wrappers to their primitive across the compact,
+  array (fast + slow), and pretty paths.
+- **#3962 — `process.stdin` listener-removal + lifecycle for TUI teardown.**
+  `process.stdin` lacked `removeListener`/`off`/`addListener`/
+  `removeAllListeners`/`pause`/`resume`/`unref`/`destroy`. They're now present;
+  on stdin, `pause`/`unref`/`destroy` detach the readline reader so the event
+  loop can quiesce after teardown (readline `has_active` consults the new
+  `stdin_is_detached()` flag) without an explicit `process.exit()`.
+- **#3938 — literal dynamic import of slash submodules.**
+  `await import("node:util/types")` / `"node:path/posix"` /
+  `"node:stream/promises"` emitted invalid LLVM (a `@__perry_ns_…/…` global with
+  a slash). The dead extern-global/init declarations for `__native_mod__` /
+  `__node_submod__` sentinel prefixes (resolved at the dispatch site via runtime
+  namespace builders) are no longer emitted.
+
+Regression coverage: `node-suite` fixtures for #3857/#3946/#3938/#3925 and a
+`perry-hir` unknown-builtin-module rejection test.
+
+## v0.5.1057 — fix(#2169): perry-ui-windows LNK4006 / LNK4088 + windows-rs 0.58 drift
+
+The user-reported repro (Windows 10, perry 0.5.1025) failed silently with
+`LNK4088: image may not run` after `/FORCE`-resolved `LNK4006: js_*` duplicates
+inside `perry_ui_windows.lib`. Three independent issues:
+
+1. **Duplicate FFI stubs inside `perry_ui_windows.lib`.**
+   `crates/perry-ui-windows/src/ffi/js_interop.rs` defined `js_create_callback`,
+   `js_call_function`, `js_await_js_promise`, `js_load_module`,
+   `js_new_from_handle`, `js_new_instance`, `js_runtime_init`,
+   `js_set_property`, `js_get_export` as `#[no_mangle]` AOT stubs back when
+   `perry-runtime` had stripped them. `perry-runtime` re-added them as V8
+   stubs in `closure/v8_stubs.rs`, but both copies kept getting baked into the
+   archive: the V8 stubs came in via the Rust `perry-runtime` dep
+   (`perry_runtime-…rcgu.o`) and the AOT stubs came in via this crate's own
+   object (`perry_ui_windows-…rcgu.o`). MSVC LINK fell back to `/FORCE` and
+   warned the image may not run (#2169 reproducer log).
+
+   Worse, the local copies had **wrong arities** relative to codegen's
+   declarations in `crates/perry-codegen/src/runtime_decls/stdlib_ffi.rs`:
+   `js_call_function` had 4 args vs. codegen's 5; `js_load_module` had 1 vs. 2;
+   `js_set_property` had 3 vs. 4; `js_new_instance` had 4 vs. 5. Any callsite
+   the linker resolved against the local def would have corrupted the stack.
+
+   Fixed by deleting `crates/perry-ui-windows/src/ffi/js_interop.rs` and the
+   corresponding `pub mod js_interop;` declaration in `ffi/mod.rs`. The
+   `perry-runtime` V8 stubs (now the only definitions) match the
+   codegen-declared signatures exactly. Verified with `llvm-nm` on the
+   resulting `target/release/perry_ui_windows.lib`: each of the nine symbols
+   appears exactly once (pre-fix: twice).
+
+2. **`windows-rs 0.58` constant relocation.** `WM_MOUSELEAVE` lives in
+   `Win32::UI::Controls` in 0.58, not `Win32::UI::WindowsAndMessaging`.
+   `crates/perry-ui-windows/src/pointer.rs` was importing from the latter,
+   so `cargo build --release -p perry-ui-windows` had been failing locally
+   for anyone trying to refresh the shipped `.lib`. Moved the import.
+
+3. **`windows-rs 0.58` GDI+ signature drift.** `GdipDrawImageRectRectI`'s
+   `callback` parameter is `isize` (not `Option<_>`); the canvas widget at
+   `crates/perry-ui-windows/src/widgets/canvas.rs:314` was passing `None`,
+   producing `E0308`. Passing `0_isize` (null callback) restores compilation.
+
+The first item is what the user actually hit. (2) and (3) are pre-existing
+build failures that blocked anyone trying to rebuild the prebuilt `.lib`
+to ship the fix to users.
+
+## v0.5.1056 — fix(#3917): `(num: number).toLocaleString()` printed a 1970 date string
+
+`const num: number = 20; console.log(num.toLocaleString('en-US'))` printed
+`"12/31/1969, 4:00:00 PM"` (or the local-time equivalent) instead of `"20"`.
+The HIR lowers every `x.toLocaleString()` to the (misnamed) `Expr::DateToLocaleString`
+variant; the LLVM arm in `crates/perry-codegen/src/expr/env_clones.rs` is supposed
+to disambiguate Number-receivers vs Date-receivers by inspecting the receiver's
+static type. The disambiguator only called `refine_type_from_init`, which inspects
+AST shape (literals, arithmetic, `new T(...)`) and has no `LocalGet` arm — so for
+the common `let n: number = …; n.toLocaleString()` shape it returned `None` and
+the call fell through to `js_date_to_locale_string`, treating the number as a
+millisecond epoch.
+
+Fixed by falling back to `static_type_of` (which already reads `local_types`)
+when the structural refinement comes up empty. `static_type_of` resolves
+`LocalGet(id) → ctx.local_types[id]`, so a `number`-typed local now routes to
+`js_number_to_locale_string` and formats with thousands separators
+(`"1,234,567"`, etc.). Verified with literal, integer-local, and decimal-local
+receivers, plus `new Date(0).toLocaleString('en-US')` still emits the date
+string. The user-reported repro (Windows 11, perry 0.5.1025) was platform-agnostic
+— a HIR/codegen routing bug, not a runtime issue.
+
 ## v0.5.1055 — hotfix: actually remove native_module.rs conflict marker
 
 The v0.5.1054 hotfix bumped the version but its source edit failed to apply,

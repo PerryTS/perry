@@ -5,8 +5,13 @@ import fsDefault, {
   FileWriteStream,
   ReadStream,
   Stats,
+  Utf8Stream,
   WriteStream,
   _toUnixTimestamp,
+  constants,
+  mkdtempDisposableSync,
+  openAsBlob,
+  promises,
 } from "node:fs";
 import * as fs from "node:fs";
 
@@ -27,7 +32,12 @@ for (const name of [
   "WriteStream",
   "FileReadStream",
   "FileWriteStream",
+  "Utf8Stream",
   "_toUnixTimestamp",
+  "mkdtempDisposableSync",
+  "openAsBlob",
+  "constants",
+  "promises",
 ]) {
   const descriptor = Object.getOwnPropertyDescriptor(fs, name);
   console.log(
@@ -50,6 +60,10 @@ const existingDescriptor = Object.getOwnPropertyDescriptor(fs, "readFileSync");
 const existingDefaultDescriptor = Object.getOwnPropertyDescriptor(
   fsDefault,
   "readFileSync",
+);
+const mkdtempDisposableSyncDescriptor = Object.getOwnPropertyDescriptor(
+  fs,
+  "mkdtempDisposableSync",
 );
 const openAsBlobDescriptor = Object.getOwnPropertyDescriptor(fs, "openAsBlob");
 console.log(
@@ -78,6 +92,37 @@ console.log(
   typeof openAsBlobDescriptor?.value,
   fs.openAsBlob.length,
 );
+console.log(
+  "mkdtempDisposableSync export:",
+  Object.keys(fs).includes("mkdtempDisposableSync"),
+  Object.prototype.propertyIsEnumerable.call(fs, "mkdtempDisposableSync"),
+  !!mkdtempDisposableSyncDescriptor,
+  mkdtempDisposableSyncDescriptor?.enumerable,
+  typeof mkdtempDisposableSyncDescriptor?.value,
+  fs.mkdtempDisposableSync.length,
+);
+
+console.log(
+  "absent StatFs:",
+  Object.keys(fs).includes("StatFs"),
+  Object.prototype.propertyIsEnumerable.call(fs, "StatFs"),
+  Object.getOwnPropertyDescriptor(fs, "StatFs") === undefined,
+  typeof (fs as any).StatFs,
+);
+console.log(
+  "absent FSWatcher:",
+  Object.keys(fs).includes("FSWatcher"),
+  Object.prototype.propertyIsEnumerable.call(fs, "FSWatcher"),
+  Object.getOwnPropertyDescriptor(fs, "FSWatcher") === undefined,
+  typeof (fs as any).FSWatcher,
+);
+console.log(
+  "absent StatWatcher:",
+  Object.keys(fs).includes("StatWatcher"),
+  Object.prototype.propertyIsEnumerable.call(fs, "StatWatcher"),
+  Object.getOwnPropertyDescriptor(fs, "StatWatcher") === undefined,
+  typeof (fs as any).StatWatcher,
+);
 
 function descriptorKind(name: string) {
   const descriptor = Object.getOwnPropertyDescriptor(fsDefault, name);
@@ -100,6 +145,10 @@ for (const name of [
   "WriteStream",
   "FileReadStream",
   "FileWriteStream",
+  "Utf8Stream",
+  "_toUnixTimestamp",
+  "mkdtempDisposableSync",
+  "openAsBlob",
   "promises",
   "constants",
 ]) {
@@ -116,13 +165,25 @@ console.log(
     WriteStream,
     FileReadStream,
     FileWriteStream,
+    Utf8Stream,
     _toUnixTimestamp,
+    mkdtempDisposableSync,
+    openAsBlob,
   ].every((value) => typeof value === "function"),
 );
 console.log(
   "default identity:",
   fsDefault.ReadStream === ReadStream,
+  fsDefault.FileReadStream === FileReadStream,
+  fsDefault.FileWriteStream === FileWriteStream,
+  fsDefault.Utf8Stream === Utf8Stream,
   fsDefault._toUnixTimestamp === _toUnixTimestamp,
+  fsDefault.mkdtempDisposableSync === mkdtempDisposableSync,
+  fsDefault.openAsBlob === openAsBlob,
+  fsDefault.constants === constants,
+  fsDefault.promises === promises,
+  fs.promises === promises,
+  fs.constants === constants,
 );
 console.log(
   "aliases:",
@@ -138,6 +199,9 @@ console.log(
   Stats.length,
   ReadStream.length,
   WriteStream.length,
+  Utf8Stream.length,
+  mkdtempDisposableSync.length,
+  openAsBlob.length,
   _toUnixTimestamp.length,
 );
 console.log(
@@ -146,6 +210,9 @@ console.log(
   Dirent.name,
   ReadStream.name,
   WriteStream.name,
+  Utf8Stream.name,
+  mkdtempDisposableSync.name,
+  openAsBlob.name,
   _toUnixTimestamp.name,
 );
 
@@ -193,3 +260,12 @@ console.log(
   ws instanceof WriteStream,
 );
 ws.destroy();
+
+const utf8Stream = new Utf8Stream({ dest: ROOT + "/utf8.txt", sync: true });
+console.log(
+  "instance utf8stream:",
+  utf8Stream instanceof fs.Utf8Stream,
+  utf8Stream instanceof Utf8Stream,
+);
+utf8Stream.write("ok");
+utf8Stream.end();

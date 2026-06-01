@@ -545,6 +545,21 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
     }
     if jv.is_pointer() {
         let ptr = jv.as_pointer::<u8>() as usize;
+        if ptr > 0 && ptr < 0x100000 {
+            if let Some(dispatch) = super::class_registry::handle_own_property_names_dispatch() {
+                let names = unsafe { dispatch(ptr as i64) };
+                if names.to_bits() != crate::value::TAG_UNDEFINED {
+                    let bits = names.to_bits();
+                    if bits >> 48 == 0x7FFD {
+                        let arr = (bits & crate::value::POINTER_MASK) as *mut ArrayHeader;
+                        if !arr.is_null() {
+                            return arr;
+                        }
+                    }
+                }
+            }
+            return crate::array::js_array_alloc(0);
+        }
         if crate::closure::is_closure_ptr(ptr) {
             return js_closure_dynamic_keys(ptr);
         }
@@ -1172,6 +1187,25 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     let obj_ptr = obj_val.as_pointer::<ObjectHeader>();
     if obj_ptr.is_null() {
         return nanbox_false;
+    }
+
+    if unsafe { (*obj_ptr).class_id == NATIVE_MODULE_CLASS_ID } {
+        if !key_val.is_any_string() {
+            return nanbox_false;
+        }
+        let key_str =
+            crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+        if key_str.is_null() {
+            return nanbox_false;
+        }
+        let key_name = match unsafe { super::has_own_helpers::str_from_string_header(key_str) } {
+            Some(name) => name,
+            None => return nanbox_false,
+        };
+        let present = unsafe { read_native_module_name(obj_ptr) }
+            .as_deref()
+            .is_some_and(|module_name| native_module_has_enumerable_key(module_name, key_name));
+        return if present { nanbox_true } else { nanbox_false };
     }
 
     // Issue #323: array fast path. `n in arr` with a numeric key was always
@@ -1840,6 +1874,11 @@ pub extern "C" fn js_object_get_field_by_name(
                     return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
                 }
                 if key_bytes == b"constructor" {
+                    if crate::buffer::crypto_key_meta(obj as usize).is_some() {
+                        let ctor =
+                            super::js_get_global_this_builtin_value(b"CryptoKey".as_ptr(), 9);
+                        return JSValue::from_bits(ctor.to_bits());
+                    }
                     // #3657: a DataView's `.constructor` is the global
                     // `DataView`, not `Buffer` — checked before the
                     // Uint8Array/Buffer arms since a DataView slice is also a
@@ -2538,6 +2577,11 @@ pub extern "C" fn js_object_get_field_by_name(
                 }
                 if let Some(val) = get_native_module_constant(module_name, property_name, nb_ptr) {
                     return JSValue::from_bits(val.to_bits());
+                }
+                if module_name == "crypto.webcrypto" {
+                    if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
+                        return JSValue::from_bits(value.to_bits());
+                    }
                 }
                 // Issue #894: parity with the direct-NativeModuleRef
                 // fast path (`js_native_module_property_by_name`). For

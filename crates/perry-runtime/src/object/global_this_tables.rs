@@ -73,6 +73,8 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "MessageChannel",
     "MessagePort",
     "BroadcastChannel",
+    "Storage",
+    "WebSocket",
     "FinalizationRegistry",
     // #2875: TC39 explicit-resource-management globals. Backed by the
     // no-op constructor thunk so `typeof DisposableStack === "function"`;
@@ -113,6 +115,7 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "Response"
         | "MessageChannel"
         | "MessagePort"
+        | "Storage"
         | "DisposableStack"
         | "AsyncDisposableStack" => 0,
         "Array"
@@ -137,6 +140,7 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "Event"
         | "CustomEvent"
         | "Request"
+        | "WebSocket"
         | "BroadcastChannel"
         | "FinalizationRegistry"
         | "Promise" => 1,
@@ -153,8 +157,14 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
 /// JS built-in namespaces (typeof === "object", not "function"). Same
 /// shape on the singleton — a backing object with `prototype` so chained
 /// reads degrade gracefully — but typeof reports "object".
-pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] =
-    &["console", "process", "Math", "JSON", "Reflect"];
+pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] = &[
+    "console",
+    "process",
+    "Math",
+    "JSON",
+    "Reflect",
+    "WebAssembly",
+];
 
 /// JS global built-in functions exposed as function-valued properties on
 /// `globalThis`. Unlike constructor sentinels, these call through to Perry's

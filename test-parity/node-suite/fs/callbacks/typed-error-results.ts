@@ -69,15 +69,38 @@ await capture("cp missing source", { code: "ENOENT", syscall: "lstat", path: mis
 
 await capture("opendir missing path", { code: "ENOENT", syscall: "opendir", path: ROOT + "/missing-dir", noDest: true }, (cb) => (fs as any).opendir(ROOT + "/missing-dir", cb));
 
+const missingAccess = ROOT + "/missing-access.txt";
+await capture("access missing", { code: "ENOENT", syscall: "access", path: missingAccess, noDest: true }, (cb) => (fs as any).access(missingAccess, cb));
+
+const missingChmod = ROOT + "/missing-chmod.txt";
+await capture("chmod missing", { code: "ENOENT", syscall: "chmod", path: missingChmod, noDest: true }, (cb) => (fs as any).chmod(missingChmod, 0o600, cb));
+
+const missingChown = ROOT + "/missing-chown.txt";
+await capture("chown missing", { code: "ENOENT", syscall: "chown", path: missingChown, noDest: true }, (cb) => (fs as any).chown(missingChown, 0, 0, cb));
+
+const missingLchown = ROOT + "/missing-lchown.txt";
+await capture("lchown missing", { code: "ENOENT", syscall: "lchown", path: missingLchown, noDest: true }, (cb) => (fs as any).lchown(missingLchown, 0, 0, cb));
+
+const missingRm = ROOT + "/missing-rm.txt";
+await capture("rm missing", { code: "ENOENT", syscall: "lstat", path: missingRm, noDest: true }, (cb) => (fs as any).rm(missingRm, cb));
+
+const missingTruncate = ROOT + "/missing-truncate.txt";
+await capture("truncate missing", { code: "ENOENT", syscall: "open", path: missingTruncate, noDest: true }, (cb) => (fs as any).truncate(missingTruncate, 0, cb));
+
 await capture("ftruncate EBADF", { code: "EBADF", syscall: "ftruncate", noPath: true, noDest: true }, (cb) => (fs as any).ftruncate(BAD_FD, 0, cb));
 await capture("futimes EBADF", { code: "EBADF", syscall: "futime", noPath: true, noDest: true }, (cb) => (fs as any).futimes(BAD_FD, 1, 1, cb));
 
 if (typeof process.getuid === "function" && process.getuid() !== 0) {
+  const pathChownPath = ROOT + "/chown-eperm.txt";
+  fs.writeFileSync(pathChownPath, "owner");
+  await capture("chown EPERM", { code: "EPERM", syscall: "chown", path: pathChownPath, noDest: true }, (cb) => (fs as any).chown(pathChownPath, 0, 0, cb));
+
   const chownPath = ROOT + "/fchown-eperm.txt";
   fs.writeFileSync(chownPath, "owner");
   const fd = fs.openSync(chownPath, "r+");
   await capture("fchown EPERM", { code: "EPERM", syscall: "fchown", noPath: true, noDest: true }, (cb) => (fs as any).fchown(fd, 0, 0, cb));
   fs.closeSync(fd);
 } else {
+  console.log("chown EPERM skipped");
   console.log("fchown EPERM skipped");
 }

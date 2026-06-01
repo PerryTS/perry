@@ -1096,6 +1096,11 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
 /// keep running.
 #[no_mangle]
 pub extern "C" fn js_readline_has_active() -> i32 {
+    // #3962: a TUI that tore down stdin (`process.stdin.destroy()/.pause()/
+    // .unref()`) no longer pins the event loop, so the process can quiesce.
+    if perry_runtime::os::stdin_is_detached() {
+        return 0;
+    }
     let started = READER_STARTED.load(Ordering::Acquire);
     let eof = EOF_REACHED.load(Ordering::Acquire);
     let has_lines = PENDING_LINES.lock().map(|q| !q.is_empty()).unwrap_or(false);

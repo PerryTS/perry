@@ -317,6 +317,8 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "MessageChannel"
             | "MessagePort"
             | "BroadcastChannel"
+            | "Storage"
+            | "WebSocket"
             | "FinalizationRegistry"
             | "Performance"
             | "PerformanceEntry"
@@ -357,10 +359,13 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "Math"
             | "JSON"
             | "Reflect"
+            | "WebAssembly"
             | "performance"
             | "process"
             | "navigator"
             | "crypto"
+            | "localStorage"
+            | "sessionStorage"
     )
 }
 
@@ -378,10 +383,13 @@ pub(crate) fn is_global_this_builtin_function_name(name: &str) -> bool {
                 | "Math"
                 | "JSON"
                 | "Reflect"
+                | "WebAssembly"
                 | "performance"
                 | "process"
                 | "navigator"
                 | "crypto"
+                | "localStorage"
+                | "sessionStorage"
         )
 }
 

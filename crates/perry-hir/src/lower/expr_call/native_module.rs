@@ -1030,9 +1030,13 @@ pub(super) fn try_native_module_methods(
                             let mut it = args.into_iter();
                             let target = it.next().unwrap_or(Expr::Undefined);
                             let args_arr = it.next().unwrap_or(Expr::Array(vec![]));
+                            // 3rd arg = newTarget; defaults to `undefined` so the
+                            // runtime falls back to the target/proxy itself.
+                            let new_target = it.next().unwrap_or(Expr::Undefined);
                             return Ok(Ok(Expr::ReflectConstruct {
                                 target: Box::new(target),
                                 args: Box::new(args_arr),
+                                new_target: Box::new(new_target),
                             }));
                         }
                         "defineProperty" => {
@@ -1287,6 +1291,9 @@ pub(super) fn try_native_module_methods(
                     // This is a call on a native module (e.g., mysql.createConnection)
                     if let ast::MemberProp::Ident(method_ident) = &member.prop {
                         let method_name = method_ident.sym.to_string();
+                        if module_name == "worker_threads" && method_name == "workerData" {
+                            return Ok(Err(args));
+                        }
                         // Unimplemented-API gate (#463 / #525) for the 2-deep
                         // `mod.method()` call form. Without this, perry/* and
                         // other native-module call sites short-circuited past
@@ -1298,10 +1305,11 @@ pub(super) fn try_native_module_methods(
                         // 3-deep gate above for `mod.X.Y()`.
                         let allow_unimplemented =
                             std::env::var_os("PERRY_ALLOW_UNIMPLEMENTED").is_some();
+                        let manifest_entry =
+                            perry_api_manifest::module_has_symbol(module_name, &method_name);
                         if !allow_unimplemented
                             && perry_api_manifest::module_has_any_entries(module_name)
-                            && perry_api_manifest::module_has_symbol(module_name, &method_name)
-                                .is_none()
+                            && manifest_entry.is_none()
                         {
                             // #925: this is the gate that fires
                             // for `crypto.hmacSha256(data, key)`.
@@ -1320,6 +1328,17 @@ pub(super) fn try_native_module_methods(
                             // if the module survives pruning.
                             if !crate::try_defer_refusal(msg.clone(), member.span.lo.0) {
                                 crate::lower_bail!(member.span, "{}", msg);
+                            }
+                        }
+                        if let Some(entry) = manifest_entry {
+                            if !matches!(
+                                entry.kind,
+                                perry_api_manifest::ApiKind::Method {
+                                    has_receiver: false,
+                                    class_filter: None
+                                }
+                            ) {
+                                return Ok(Err(args));
                             }
                         }
                         let class_name = if module_name == "stream"

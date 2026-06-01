@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2492 entries across 106 modules
+// Coverage: 2496 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -266,6 +266,9 @@ declare module "cheerio" {
 declare module "child_process" {
   /** stdlib */
   export class ChildProcess { [key: string]: any; }
+  /** stdlib */
+  const _default: any;
+  export default _default;
   /** stdlib */
   export function exec(...args: any[]): any;
   /** stdlib */
@@ -1121,6 +1124,9 @@ declare module "dns" {
   /** stdlib */
   export const V4MAPPED: any;
   /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
   export const promises: any;
   /** stdlib */
   export function Resolver(...args: any[]): any;
@@ -1219,6 +1225,9 @@ declare module "dns/promises" {
   export const SERVFAIL: any;
   /** stdlib */
   export const TIMEOUT: any;
+  /** stdlib */
+  const _default: any;
+  export default _default;
   /** stdlib */
   export function Resolver(...args: any[]): any;
   /** stdlib */
@@ -1689,6 +1698,8 @@ declare module "http2" {
   /** stdlib */
   export const constants: any;
   /** stdlib */
+  export const sensitiveHeaders: any;
+  /** stdlib */
   export function createSecureServer(...args: any[]): any;
   /** stdlib */
   export function getDefaultSettings(...args: any[]): any;
@@ -1696,6 +1707,8 @@ declare module "http2" {
   export function getPackedSettings(...args: any[]): any;
   /** stdlib */
   export function getUnpackedSettings(...args: any[]): any;
+  /** stdlib */
+  export function performServerHandshake(...args: any[]): any;
 }
 
 declare module "https" {
@@ -3653,8 +3666,6 @@ declare module "worker_threads" {
   export function markAsUntransferable(p0: any): void;
   /** stdlib */
   export function moveMessagePortToContext(p0: any, p1: any): any;
-  /** stdlib */
-  export function parentPort(...args: any[]): any;
   /** stdlib */
   export function postMessageToThread(p0: any, p1: any, p2: any, p3: any): any;
   /** stdlib */

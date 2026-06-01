@@ -39,13 +39,16 @@ pub(super) use sha1::Sha1;
 pub(super) use sha2::{Digest as Sha2Digest, Sha256, Sha384, Sha512};
 
 pub(super) use perry_runtime::{
-    buffer::{
-        buffer_alloc, buffer_data_mut, is_registered_buffer, mark_as_crypto_key,
-        mark_as_uint8array, BufferHeader,
-    },
+    buffer::{buffer_alloc, buffer_data_mut, is_registered_buffer, BufferHeader},
     js_object_alloc, js_object_set_field_by_name, js_promise_resolved, JSValue, Promise,
     StringHeader,
 };
+
+extern "C" {
+    fn js_buffer_register_external(addr: usize);
+    fn js_buffer_mark_as_uint8array_external(addr: usize);
+    fn js_buffer_mark_as_crypto_key_external(addr: usize, algo: u8, hash: u8, kind: u8);
+}
 
 /// `buffer_data` is private to perry-runtime — open-code the same offset.
 #[inline]
@@ -117,12 +120,14 @@ pub(super) static CRYPTO_KEY_REGISTRY: Lazy<Mutex<HashMap<usize, CryptoKeyMateri
 
 pub(super) fn register_crypto_key(buf_addr: usize, mat: CryptoKeyMaterial) {
     CRYPTO_KEY_REGISTRY.lock().unwrap().insert(buf_addr, mat);
-    mark_as_crypto_key(
-        buf_addr,
-        runtime_algo_id(mat.algo),
-        runtime_hash_id(mat.hash),
-        runtime_key_kind_id(mat.kind),
-    );
+    unsafe {
+        js_buffer_mark_as_crypto_key_external(
+            buf_addr,
+            runtime_algo_id(mat.algo),
+            runtime_hash_id(mat.hash),
+            runtime_key_kind_id(mat.kind),
+        );
+    }
 }
 
 fn runtime_algo_id(algo: KeyAlgo) -> u8 {
@@ -333,7 +338,8 @@ pub(super) unsafe fn alloc_uint8array_from_slice(bytes: &[u8]) -> *mut BufferHea
         let dst = buffer_data_mut(buf);
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len());
     }
-    mark_as_uint8array(buf as usize);
+    js_buffer_register_external(buf as usize);
+    js_buffer_mark_as_uint8array_external(buf as usize);
     buf
 }
 

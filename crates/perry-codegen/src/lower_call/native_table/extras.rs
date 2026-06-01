@@ -112,15 +112,6 @@ pub(super) const EXTRAS_ROWS: &[NativeModSig] = &[
     },
     NativeModSig {
         module: "worker_threads",
-        has_receiver: false,
-        method: "parentPort",
-        class_filter: None,
-        runtime: "js_worker_threads_parent_port",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "worker_threads",
         has_receiver: true,
         method: "postMessage",
         class_filter: None,

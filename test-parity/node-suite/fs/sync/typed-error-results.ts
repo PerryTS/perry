@@ -69,15 +69,38 @@ capture("cpSync missing source", { code: "ENOENT", syscall: "lstat", path: missi
 
 capture("opendirSync missing path", { code: "ENOENT", syscall: "opendir", noPath: true, noDest: true }, () => fs.opendirSync(ROOT + "/missing-dir"));
 
+const missingAccess = ROOT + "/missing-access.txt";
+capture("accessSync missing", { code: "ENOENT", syscall: "access", path: missingAccess, noDest: true }, () => fs.accessSync(missingAccess));
+
+const missingChmod = ROOT + "/missing-chmod.txt";
+capture("chmodSync missing", { code: "ENOENT", syscall: "chmod", path: missingChmod, noDest: true }, () => fs.chmodSync(missingChmod, 0o600));
+
+const missingChown = ROOT + "/missing-chown.txt";
+capture("chownSync missing", { code: "ENOENT", syscall: "chown", path: missingChown, noDest: true }, () => fs.chownSync(missingChown, 0, 0));
+
+const missingLchown = ROOT + "/missing-lchown.txt";
+capture("lchownSync missing", { code: "ENOENT", syscall: "lchown", path: missingLchown, noDest: true }, () => fs.lchownSync(missingLchown, 0, 0));
+
+const missingRm = ROOT + "/missing-rm.txt";
+capture("rmSync missing", { code: "ENOENT", syscall: "lstat", path: missingRm, noDest: true }, () => fs.rmSync(missingRm));
+
+const missingTruncate = ROOT + "/missing-truncate.txt";
+capture("truncateSync missing", { code: "ENOENT", syscall: "open", path: missingTruncate, noDest: true }, () => fs.truncateSync(missingTruncate, 0));
+
 capture("ftruncateSync EBADF", { code: "EBADF", syscall: "ftruncate", noPath: true, noDest: true }, () => fs.ftruncateSync(BAD_FD, 0));
 capture("futimesSync EBADF", { code: "EBADF", syscall: "futime", noPath: true, noDest: true }, () => fs.futimesSync(BAD_FD, 1, 1));
 
 if (typeof process.getuid === "function" && process.getuid() !== 0) {
+  const pathChownPath = ROOT + "/chown-eperm.txt";
+  fs.writeFileSync(pathChownPath, "owner");
+  capture("chownSync EPERM", { code: "EPERM", syscall: "chown", path: pathChownPath, noDest: true }, () => fs.chownSync(pathChownPath, 0, 0));
+
   const chownPath = ROOT + "/fchown-eperm.txt";
   fs.writeFileSync(chownPath, "owner");
   const fd = fs.openSync(chownPath, "r+");
   capture("fchownSync EPERM", { code: "EPERM", syscall: "fchown", noPath: true, noDest: true }, () => fs.fchownSync(fd, 0, 0));
   fs.closeSync(fd);
 } else {
+  console.log("chownSync EPERM skipped");
   console.log("fchownSync EPERM skipped");
 }

@@ -854,7 +854,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             arg(2),
         )),
         ("fs", "cpSync") => bool_to_f64(crate::fs::js_fs_cp_sync_options(arg(0), arg(1), arg(2))),
-        ("fs", "accessSync") => bool_to_f64(crate::fs::js_fs_access_sync_mode(arg(0), arg(1))),
+        ("fs", "accessSync") => crate::fs::js_fs_access_sync_throw_mode(arg(0), arg(1)),
         ("fs", "realpathSync") => crate::fs::js_fs_realpath_dispatch(arg(0), arg(1)),
         ("fs", "mkdtempSync") => crate::fs::js_fs_mkdtemp_dispatch(arg(0), arg(1)),
         ("fs", "mkdtempDisposableSync") => crate::fs::js_fs_mkdtemp_disposable_sync(arg(0), arg(1)),
@@ -1561,6 +1561,17 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("crypto" | "crypto.webcrypto", _) => {
             let ptr =
                 crate::value::JS_NATIVE_CRYPTO_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+            if ptr.is_null() {
+                f64::from_bits(JSValue::undefined().bits())
+            } else {
+                let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                    std::mem::transmute(ptr);
+                dispatch(method_name.as_ptr(), method_name.len(), args_ptr, args_len)
+            }
+        }
+        ("crypto.subtle", _) => {
+            let ptr = crate::value::JS_NATIVE_WEBCRYPTO_DISPATCH
+                .load(std::sync::atomic::Ordering::SeqCst);
             if ptr.is_null() {
                 f64::from_bits(JSValue::undefined().bits())
             } else {
