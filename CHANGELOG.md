@@ -2,6 +2,17 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1067 — node:https/http: URL-object request/get overload no longer throws circular-JSON (#3880)
+
+`https.get(new URL(...), options, callback)` (and the `http`/`request` variants) threw `TypeError: Converting circular structure to JSON` before the request could be built. Root cause: `parse_client_args` classified arguments by value type, and a `URL` *instance* — a heap object, not a string — fell into the "first non-string pointer → options bag" branch. `parse_options_object` then JSON-stringified the URL, which throws on its `searchParams` ↔ owner back-reference, and the real options object was dropped.
+
+Fixes:
+- **`crates/perry-runtime/src/url/url_class.rs`** — new `js_url_href_if_url(value) -> f64` FFI: returns a `URL` instance's `href` (NaN-boxed string) via the existing `is_url_object_shape` check, else `undefined`.
+- **`crates/perry-ext-http/src/client_overload.rs`** — `parse_client_args` now routes a `URL`-object argument to the string-URL slot (`out.url = href`) instead of the options slot, so the following options object is parsed normally and the URL is never JSON-stringified.
+- Same file — `method_for_overload` no longer force-returns `GET` for `get()`. `http.get`/`https.get` differ from `request()` only by auto-`end()`ing; Node derives the method from `options.method || 'GET'` for both, so `https.get(url, { method: "POST" }, cb)` now correctly issues a POST.
+
+Validated against `node --experimental-strip-types`: the `node-suite/https/surface/mirror-surface` fixture is byte-identical, and all overload shapes match — `get(string)`, `request(string, cb)`, `request(options-only)`, `get(URL)`, `request(URL, {method})`. `perry-ext-http` + `perry-runtime` url unit tests green.
+
 ## v0.5.1066 — node:constants Linux-only constants gated out of the import surface on macOS (#3902)
 
 On macOS, Node's `node:constants` ESM namespace does not export six Linux-only constants (`O_DIRECT`, `O_NOATIME`, `RTLD_DEEPBIND`, `SIGPOLL`, `SIGPWR`, `SIGSTKFLT`), but Perry accepted all six as named imports and ran the program with each binding set to `undefined` — a false-positive surface: code that fails Node's ESM instantiation passed `perry check` and ran under Perry.

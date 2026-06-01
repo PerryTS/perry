@@ -80,10 +80,18 @@ pub(crate) unsafe fn parse_client_args(args_array: i64) -> ClientArgs {
                 out.url = f;
             }
         } else if !v.is_undefined() && !v.is_null() && v.is_pointer() {
-            // First non-string, non-callback pointer → options object.
-            // (A bare `URL` instance also lands here; `url_from_options`
-            // reads its `protocol`/`host`/`pathname` via JSON-stringify.)
-            if out.opts.to_bits() == TAG_UNDEFINED {
+            // #3880: a `URL` *instance* is the URL argument, not the options
+            // bag. Route it to the string-URL path via its href. Otherwise it
+            // falls through to `parse_options_object`, which JSON-stringifies
+            // the URL and throws `Converting circular structure to JSON` on the
+            // URL's `searchParams` ↔ owner back-reference.
+            let href = js_url_href_if_url(f);
+            if is_string_value(href) {
+                if out.url.to_bits() == TAG_UNDEFINED {
+                    out.url = href;
+                }
+            } else if out.opts.to_bits() == TAG_UNDEFINED {
+                // First non-string, non-callback, non-URL pointer → options.
                 out.opts = f;
             }
         }
@@ -94,6 +102,11 @@ pub(crate) unsafe fn parse_client_args(args_array: i64) -> ClientArgs {
 extern "C" {
     /// `crates/perry-runtime/src/closure/dynamic_props.rs::js_value_is_closure`.
     fn js_value_is_closure(value_bits: i64) -> i32;
+    /// `crates/perry-runtime/src/url/url_class.rs::js_url_href_if_url` —
+    /// returns the URL's `href` (NaN-boxed string) for a `URL` instance,
+    /// else `undefined`. Used to route a `URL`-object request argument to
+    /// the string-URL path instead of mis-parsing it as options (#3880).
+    fn js_url_href_if_url(value: f64) -> f64;
 }
 
 /// Merge a URL string with an options object into the request fields.
@@ -220,10 +233,14 @@ fn merge_options_onto_url(
 /// Resolve the request method for the merged overload: `force_get`
 /// (the `get()` factories) always yields `GET`; otherwise the options
 /// `method` field, defaulting to `GET`.
-pub(crate) unsafe fn method_for_overload(opts_f64: f64, force_get: bool) -> String {
-    if force_get {
-        return "GET".to_string();
-    }
+/// Resolve the request method for an overload-normalized client call.
+///
+/// `get()` differs from `request()` only by auto-`end()`ing — it does **not**
+/// force the method to GET. Node derives the method from `options.method ||
+/// 'GET'` for both, so `https.get(url, { method: "POST" }, cb)` issues a POST
+/// (#3880). The method therefore comes purely from the options bag here,
+/// defaulting to GET when absent.
+pub(crate) unsafe fn method_for_overload(opts_f64: f64) -> String {
     match parse_options_object(opts_f64) {
         Some(opts) => method_from_options(&opts),
         None => "GET".to_string(),
