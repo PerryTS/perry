@@ -64,6 +64,7 @@ pub use concat::{
     js_value_concat_string,
 };
 pub(crate) use format::fix_exponent_format;
+pub(crate) use format::js_format_f64;
 pub use format::{
     js_number_to_exponential, js_number_to_fixed, js_number_to_precision, js_number_to_string,
     scan_small_int_cache_roots, scan_small_int_cache_roots_mut,

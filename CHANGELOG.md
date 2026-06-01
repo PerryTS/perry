@@ -2,6 +2,17 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1081 — fix(number→string): scientific notation in String()/concat/template coercion (#3987, partial)
+
+`String(1e21)`, `"" + 1e21`, and `` `${1e21}` `` printed `1000000000000000000000` instead of `1e+21`, and `String(0.0000001)` printed `0.0000001` instead of `1e-7`. Only `n.toString()` was correct — it routed through `js_number_to_string`, which already applies the ECMAScript NumberToString exponent rule (scientific notation for `|n| >= 1e21` or `|n| < 1e-6`). The three *coercion* paths each had their own number formatter using Rust's full-decimal `format!("{}")`:
+
+- `js_string_coerce` (`String(x)` / `Expr::StringCoerce`) — `builtins/numbers.rs`
+- the 2-arg concat fast path (`"" + n`) and `format_number_into` (`js_string_concat_chain`, template literals) — `string/concat.rs`
+
+Fix: extracted the canonical formatting into `string::js_format_f64`, refactored `js_number_to_string` onto it, and routed all three coercion sites through it. Rust's `format!("{}")` also risked truncating `Number.MAX_VALUE`'s ~309-digit decimal into the fixed 32-byte concat buffers — scientific notation avoids that too.
+
+Validated against `node --experimental-strip-types`: 26 representative numbers (incl. `1e21`, `1e-7`, `1.5e30`, `-2.5e-10`, `NaN`, `±Infinity`, `±0`, integers, fractions) across all four paths (`String`/`+`/template/`.toString`) are byte-identical; `perry-runtime` string (97) + numbers (18) unit tests green; string/console node-suite sweep clean (the one diff is the pre-existing stack-trace-fidelity gap). Focused sub-fix of #3987 — its `new String(...)` wrapper `.length`, indexed-read, and array-ToString cases remain open there.
+
 ## v0.5.1080 — node:https: request/get/Agent value-reads resolve to functions (#3697)
 
 `node:https` advertised `request`, `get`, and `Agent` in the API manifest, but reading them as values — `import { request } from "node:https"` or `https.request` — returned `undefined` (only the direct call form `https.request(...)` worked, via the codegen dispatch table). They were missing from `is_native_module_callable_export`, so the bound-value read fell through to `undefined`.
