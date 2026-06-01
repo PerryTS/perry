@@ -57,6 +57,14 @@ pub type StreamHandleProbeFn = unsafe extern "C" fn(id: usize) -> bool;
 /// `Object.prototype.toString.call(handle)` recover Web stream tags.
 pub type StreamHandleKindProbeFn = unsafe extern "C" fn(id: usize) -> u8;
 
+/// Probe for WHATWG fetch handles (`Response`/`Request`/`Headers`/`Blob`),
+/// which are pointer-tagged small-integer ids, not heap objects with a class
+/// chain. Returns 0 = none, 1 = Response, 2 = Request, 3 = Headers, 4 = Blob.
+/// Lets `x instanceof Response` (etc.) resolve for fetch handles — Hono guards
+/// route fallbacks with `res instanceof Response`, so without this the bare
+/// handle fails the `instanceof` and the guard is skipped.
+pub type FetchHandleKindProbeFn = unsafe extern "C" fn(id: usize) -> u8;
+
 /// Probe for stdlib `events.EventEmitter` handles. The handles are returned as
 /// pointer-tagged small integers, so runtime `instanceof` cannot inspect them
 /// as heap objects.
@@ -84,6 +92,7 @@ static HANDLE_OWN_PROPERTY_NAMES_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(pt
 static HANDLE_PROTOTYPE_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static STREAM_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static STREAM_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static FETCH_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_ASYNC_RESOURCE_HANDLE_PROBE_PTR: AtomicPtr<()> =
     AtomicPtr::new(ptr::null_mut());
@@ -178,6 +187,23 @@ pub fn stream_handle_kind_probe() -> Option<StreamHandleKindProbeFn> {
 #[no_mangle]
 pub unsafe extern "C" fn js_register_stream_handle_kind_probe(f: StreamHandleKindProbeFn) {
     STREAM_HANDLE_KIND_PROBE_PTR.store(f as *mut (), Ordering::Release);
+}
+
+/// Fetch-handle kind-probe getter — see `FetchHandleKindProbeFn`.
+#[inline]
+pub fn fetch_handle_kind_probe() -> Option<FetchHandleKindProbeFn> {
+    let p = FETCH_HANDLE_KIND_PROBE_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), FetchHandleKindProbeFn>(p) })
+    }
+}
+
+/// Register the fetch-handle kind probe (called by the stdlib at init).
+#[no_mangle]
+pub unsafe extern "C" fn js_register_fetch_handle_kind_probe(f: FetchHandleKindProbeFn) {
+    FETCH_HANDLE_KIND_PROBE_PTR.store(f as *mut (), Ordering::Release);
 }
 
 #[inline]

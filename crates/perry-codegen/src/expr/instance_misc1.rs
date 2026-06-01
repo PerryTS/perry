@@ -151,6 +151,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // Promise values are raw promise allocations, not ObjectHeader
                 // instances with a class_id field.
                 "Promise" => 0xFFFF0027u32,
+                // WHATWG fetch types. Like Blob/streams these are pointer-tagged
+                // small-int handles; the runtime resolves them via the stdlib
+                // fetch kind-probe (`res instanceof Response`, etc.).
+                "Response" => 0xFFFF0028u32,
+                "Request" => 0xFFFF0029u32,
+                "Headers" => 0xFFFF002Au32,
                 // #1545: Web Streams. Handles are numeric ids; the runtime
                 // resolves these via the stdlib stream-kind probe rather than
                 // the class chain (`ts.readable instanceof ReadableStream`,

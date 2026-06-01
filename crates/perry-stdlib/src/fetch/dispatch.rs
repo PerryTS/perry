@@ -76,6 +76,29 @@ fn form_data_bound_method_value(form_id: usize, method_name: &'static str) -> f6
     value
 }
 
+/// `instanceof` kind-probe for fetch handles (registered with the runtime at
+/// init via `js_register_fetch_handle_kind_probe`). Returns 0 = none,
+/// 1 = Response, 2 = Request, 3 = Headers, 4 = Blob. Lets `x instanceof
+/// Response` (etc.) resolve for the pointer-tagged small-integer handles these
+/// types use instead of heap objects. Lives here (not `mod.rs`) to keep that
+/// file under the 2,000-line lint gate.
+#[no_mangle]
+pub extern "C" fn js_fetch_handle_kind(id: usize) -> u8 {
+    if FETCH_RESPONSES.lock().unwrap().contains_key(&id) {
+        return 1;
+    }
+    if REQUEST_REGISTRY.lock().unwrap().contains_key(&id) {
+        return 2;
+    }
+    if HEADERS_REGISTRY.lock().unwrap().contains_key(&id) {
+        return 3;
+    }
+    if BLOB_REGISTRY.lock().unwrap().contains_key(&id) {
+        return 4;
+    }
+    0
+}
+
 // ----------------- Untyped property dispatch (refs #421) -----------------
 //
 // When user code accesses a property on a Web Fetch handle whose static type

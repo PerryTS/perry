@@ -557,6 +557,36 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         return false_val;
     }
 
+    // WHATWG fetch: `instanceof Response` / `Request` / `Headers` / `Blob`.
+    // These are pointer-tagged small-integer handles (stdlib fetch registries),
+    // not heap objects, so consult the stdlib fetch kind-probe rather than the
+    // class chain. Without this, Hono's `res instanceof Response` route-fallback
+    // guard sees `false` and skips the fallback, escaping a bare sentinel.
+    const CLASS_ID_RESPONSE: u32 = 0xFFFF0028;
+    const CLASS_ID_REQUEST: u32 = 0xFFFF0029;
+    const CLASS_ID_HEADERS: u32 = 0xFFFF002A;
+    const CLASS_ID_BLOB: u32 = 0xFFFF0026;
+    if class_id == CLASS_ID_RESPONSE
+        || class_id == CLASS_ID_REQUEST
+        || class_id == CLASS_ID_HEADERS
+        || class_id == CLASS_ID_BLOB
+    {
+        if let Some(handle) = small_native_handle_id(value) {
+            if let Some(probe) = crate::object::fetch_handle_kind_probe() {
+                let want = match class_id {
+                    CLASS_ID_RESPONSE => 1u8,
+                    CLASS_ID_REQUEST => 2,
+                    CLASS_ID_HEADERS => 3,
+                    _ => 4, // CLASS_ID_BLOB
+                };
+                if unsafe { probe(handle as usize) } == want {
+                    return true_val;
+                }
+            }
+        }
+        return false_val;
+    }
+
     // Built-in JS types Map / Set / RegExp / Date — Perry doesn't define
     // user classes for these, so we use reserved class IDs and detect via
     // the per-type registries (MAP_REGISTRY / SET_REGISTRY / REGEX_POINTERS)

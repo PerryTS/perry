@@ -2298,4 +2298,18 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
             crate::streams::js_readable_stream_deferred_byte_source,
         );
     }
+
+    // `instanceof` for WHATWG fetch handles (Response/Request/Headers/Blob).
+    // They are pointer-tagged small-integer ids, not heap objects, so the
+    // runtime can't walk a prototype chain — register a kind-probe so
+    // `x instanceof Response` (Hono's route-fallback guard) resolves. Gated on
+    // the same feature as the fetch module itself.
+    #[cfg(feature = "http-client")]
+    {
+        extern "C" {
+            fn js_register_fetch_handle_kind_probe(f: unsafe extern "C" fn(usize) -> u8);
+            fn js_fetch_handle_kind(id: usize) -> u8;
+        }
+        js_register_fetch_handle_kind_probe(js_fetch_handle_kind);
+    }
 }
