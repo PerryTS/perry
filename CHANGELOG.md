@@ -2,6 +2,14 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1070 — util.styleText rejects non-Node format aliases (ERR_INVALID_ARG_VALUE)
+
+`util.styleText(format, text)` validates `format` against `Object.keys(util.inspect.colors)` — exactly 44 names. Perry additionally accepted 12 British/camelCase aliases (`grey`, `bgGrey`, `blackBright`, `bgBlackBright`, `faint`, `crossedout`, `crossedOut`, `strikeThrough`, `conceal`, `swapColors`, `swapcolors`, `doubleUnderline`) that Node does not, applying ANSI codes where Node throws `TypeError [ERR_INVALID_ARG_VALUE]`.
+
+Fix (`crates/perry-runtime/src/util_style_text.rs`): `style_for` now resolves only the 44 `INSPECT_COLOR_STYLES` (dropped the `STYLE_ALIASES` table from the lookup) and `VALID_FORMATS_MESSAGE` lists exactly Node's 44, so `styleText("grey", …)` etc. now throw `ERR_INVALID_ARG_VALUE` with Node's exact "must be one of: …" message. The canonical names (`gray`, `strikethrough`, `doubleunderline`, `framed`, `overlined`, `bgGray`, …) still produce identical ANSI output, and `util.inspect.colors` (built from the same 44) is unchanged.
+
+Validated against `node --experimental-strip-types`: every format in `node-suite/util/style-text/basic` matches (valid → same ANSI bytes; alias → `ERR_INVALID_ARG_VALUE`); a 12-format accept/throw matrix matches byte-for-byte.
+
 ## v0.5.1069 — timers/promises + stream/promises: abort rejects with AbortError code "ABORT_ERR"
 
 When a `timers/promises` (`setTimeout`/`setImmediate`/`scheduler.wait`/interval) or `stream/promises` (`finished`/`pipeline`) operation was aborted, Perry rejected with the signal's `.reason` — for a default `controller.abort()` that is a DOMException whose `.code` is the numeric `20`, so fixtures saw `code: 20` instead of Node's `"ABORT_ERR"`.
