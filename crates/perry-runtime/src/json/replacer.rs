@@ -488,6 +488,15 @@ pub(crate) unsafe fn stringify_value_pretty(
     }
 
     if let Some(ptr) = extract_pointer(bits) {
+        // #3857: a boxed primitive wrapper (`new String`/`Number`/`Boolean`,
+        // `Object(1n)`) serializes as its underlying primitive. Must run before
+        // the `is_object_pointer` probes below, which would deref the wrapper
+        // as a plain object (emitting `{}`) — and, in the 3-arg pretty form,
+        // crash on its empty key layout.
+        if let Some(prim) = crate::builtins::boxed_primitive_json_value(value) {
+            stringify_value_pretty(prim, TYPE_UNKNOWN, buf, indent, depth);
+            return;
+        }
         // Buffer / Map / Set / Error have non-ObjectHeader layouts; detect them
         // before the `is_object_pointer` probes below, which would deref their
         // internals as a `keys_array` and segfault. Buffers (no GcHeader, so

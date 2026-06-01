@@ -252,12 +252,7 @@ fn utf8_call_custom_method(custom_fs: f64, method: &[u8], args: &[f64]) -> Optio
 }
 
 fn utf8_register_native_fd(file: std::fs::File, path: &str, append_mode: bool) -> i32 {
-    let fd = NEXT_FD.with(|n| {
-        let mut n = n.borrow_mut();
-        let fd = *n;
-        *n += 1;
-        fd
-    });
+    let fd = allocate_synthetic_fd();
     FD_REGISTRY.with(|r| {
         r.borrow_mut().insert(fd, file);
     });

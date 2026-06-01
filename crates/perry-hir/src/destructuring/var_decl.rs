@@ -897,7 +897,8 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     }
                 }
 
-                // Web Fetch API: new Response(...) / new Headers(...) / new Request(...)
+                // Web Fetch API: new Response(...) / new Headers(...) /
+                // new Request(...) / new FormData(...)
                 // Also handle Response.json(...) and Response.redirect(...) static factories.
                 if let ast::Expr::New(new_expr) = init_expr.as_ref() {
                     if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
@@ -923,6 +924,14 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     name.clone(),
                                     "Request".to_string(),
                                     "Request".to_string(),
+                                );
+                                ctx.uses_fetch = true;
+                            }
+                            "FormData" => {
+                                ctx.register_native_instance(
+                                    name.clone(),
+                                    "FormData".to_string(),
+                                    "FormData".to_string(),
                                 );
                                 ctx.uses_fetch = true;
                             }

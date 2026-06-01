@@ -60,6 +60,7 @@ pub mod native_arena;
 pub mod native_handle;
 pub mod navigator;
 pub mod net_validate;
+pub mod node_http2_constants;
 pub mod node_stream;
 pub mod node_submodules;
 pub mod node_test;
@@ -90,6 +91,7 @@ pub mod typedarray_half;
 pub mod url;
 pub mod value;
 pub mod wasi;
+pub mod web_storage;
 /// WebAssembly host shims (issue #76). Forward-declares the
 /// `perry_wasm_host_*` C ABI; the wasmi-backed implementation lives in
 /// the separate `perry-wasm-host` crate and is linked in only when the

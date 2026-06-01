@@ -92,6 +92,24 @@ pub fn scan_boxed_primitive_payload_roots_mut(visitor: &mut crate::gc::RuntimeRo
     });
 }
 
+/// #3857: `JSON.stringify` of a boxed primitive wrapper (`new String("hi")`,
+/// `new Number(5)`, `new Boolean(true)`, `Object(1n)`) serializes the
+/// *underlying primitive*, not the wrapper object's (empty) own-property set —
+/// otherwise it produced `{}`. Returns the NaN-boxed primitive payload for
+/// String/Number/Boolean/BigInt wrappers; `None` for Symbol wrappers (JSON
+/// omits symbols) and for any non-wrapper value.
+#[inline]
+pub(crate) fn boxed_primitive_json_value(value: f64) -> Option<f64> {
+    let (class_id, payload) = boxed_primitive_payload(value)?;
+    match class_id {
+        CLASS_ID_BOXED_STRING
+        | CLASS_ID_BOXED_NUMBER
+        | CLASS_ID_BOXED_BOOLEAN
+        | CLASS_ID_BOXED_BIGINT => Some(payload),
+        _ => None,
+    }
+}
+
 #[inline]
 pub(crate) fn boxed_primitive_payload(value: f64) -> Option<(u32, f64)> {
     let jv = crate::value::JSValue::from_bits(value.to_bits());

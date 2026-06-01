@@ -663,6 +663,17 @@ pub unsafe extern "C" fn js_native_call_method(
 
     let jsval = JSValue::from_bits(object.to_bits());
 
+    if crate::web_storage::is_storage_value(object_handle.get_nanbox_f64()) {
+        let args = refreshed_args();
+        if let Some(result) = crate::web_storage::dispatch_storage_method(
+            object_handle.get_nanbox_f64(),
+            method_name,
+            &args,
+        ) {
+            return result;
+        }
+    }
+
     // #1758 / epic #1785: a class-object VALUE reaching the *dynamic*
     // dispatcher is a STATIC method call. This happens when the static
     // analyzer couldn't prove the receiver is a class object — e.g.
@@ -2727,6 +2738,24 @@ pub unsafe extern "C" fn js_native_call_method(
         // `fn.apply(this, arguments)` / `fn.call(this, x)`, so without these
         // arms ramda fails immediately on the first curried export.
         "call" if jsval.is_pointer() => {
+            // Proxy receiver (#3656): `p.call(thisArg, ...args)` routes through
+            // the proxy `apply` trap (or, absent a trap, forwards to the target).
+            if crate::proxy::js_proxy_is_proxy(object) == 1 {
+                let this_arg = if args_len >= 1 && !args_ptr.is_null() {
+                    *args_ptr
+                } else {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                };
+                let mut arr = crate::array::js_array_alloc(0);
+                if args_len > 1 && !args_ptr.is_null() {
+                    for i in 1..args_len {
+                        arr = crate::array::js_array_push_f64(arr, *args_ptr.add(i));
+                    }
+                }
+                let arr_box =
+                    f64::from_bits(0x7FFD_0000_0000_0000 | (arr as u64 & 0x0000_FFFF_FFFF_FFFF));
+                return crate::proxy::js_proxy_apply(object, this_arg, arr_box);
+            }
             let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
             if crate::closure::is_closure_ptr(raw_ptr) {
                 let this_arg = if args_len >= 1 && !args_ptr.is_null() {
@@ -2754,6 +2783,29 @@ pub unsafe extern "C" fn js_native_call_method(
         // but for the `Function.prototype.apply` path rather than the
         // dynamic-spread method-call codegen path.
         "apply" if jsval.is_pointer() => {
+            // Proxy receiver (#3656): `p.apply(thisArg, argsArray)` routes
+            // through the proxy `apply` trap (or forwards to the target).
+            if crate::proxy::js_proxy_is_proxy(object) == 1 {
+                let this_arg = if args_len >= 1 && !args_ptr.is_null() {
+                    *args_ptr
+                } else {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                };
+                let supplied = if args_len >= 2 && !args_ptr.is_null() {
+                    *args_ptr.add(1)
+                } else {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                };
+                // Pass a real (possibly empty) array as the argArray — a
+                // null/undefined argsArray means "no arguments".
+                let args_box = if JSValue::from_bits(supplied.to_bits()).is_pointer() {
+                    supplied
+                } else {
+                    let arr = crate::array::js_array_alloc(0);
+                    f64::from_bits(0x7FFD_0000_0000_0000 | (arr as u64 & 0x0000_FFFF_FFFF_FFFF))
+                };
+                return crate::proxy::js_proxy_apply(object, this_arg, args_box);
+            }
             let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
             if crate::closure::is_closure_ptr(raw_ptr) {
                 let this_arg = if args_len >= 1 && !args_ptr.is_null() {
@@ -3026,6 +3078,20 @@ pub unsafe extern "C" fn js_native_call_method(
                         );
                     }
                 }
+            }
+        }
+
+        let method_key =
+            crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+        if !method_key.is_null() {
+            if let Some(method_value) =
+                super::prototype_chain::resolve_inherited_field(obj as usize, method_key)
+            {
+                return crate::closure::js_native_call_value(
+                    f64::from_bits(method_value.bits()),
+                    args_ptr,
+                    args_len,
+                );
             }
         }
 

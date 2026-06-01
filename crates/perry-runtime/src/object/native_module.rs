@@ -103,6 +103,7 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
             visitor.visit_nanbox_u64_slot(value_bits);
         }
     });
+    crate::node_http2_constants::scan_roots_mut(visitor);
     scan_stream_event_emitter_prototype_roots_mut(visitor);
 }
 
@@ -658,6 +659,235 @@ const ASYNC_HOOKS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"triggerAsyncId",
 ];
 
+const DNS_DEFAULT_KEYS: &[&[u8]] = &[
+    b"lookup",
+    b"lookupService",
+    b"Resolver",
+    b"getDefaultResultOrder",
+    b"setDefaultResultOrder",
+    b"setServers",
+    b"ADDRCONFIG",
+    b"ALL",
+    b"V4MAPPED",
+    b"NODATA",
+    b"FORMERR",
+    b"SERVFAIL",
+    b"NOTFOUND",
+    b"NOTIMP",
+    b"REFUSED",
+    b"BADQUERY",
+    b"BADNAME",
+    b"BADFAMILY",
+    b"BADRESP",
+    b"CONNREFUSED",
+    b"TIMEOUT",
+    b"EOF",
+    b"FILE",
+    b"NOMEM",
+    b"DESTRUCTION",
+    b"BADSTR",
+    b"BADFLAGS",
+    b"NONAME",
+    b"BADHINTS",
+    b"NOTINITIALIZED",
+    b"LOADIPHLPAPI",
+    b"ADDRGETNETWORKPARAMS",
+    b"CANCELLED",
+    b"getServers",
+    b"resolve",
+    b"resolve4",
+    b"resolve6",
+    b"resolveAny",
+    b"resolveCaa",
+    b"resolveCname",
+    b"resolveMx",
+    b"resolveNaptr",
+    b"resolveNs",
+    b"resolvePtr",
+    b"resolveSoa",
+    b"resolveSrv",
+    b"resolveTlsa",
+    b"resolveTxt",
+    b"reverse",
+    b"promises",
+];
+
+const DNS_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"ADDRCONFIG",
+    b"ADDRGETNETWORKPARAMS",
+    b"ALL",
+    b"BADFAMILY",
+    b"BADFLAGS",
+    b"BADHINTS",
+    b"BADNAME",
+    b"BADQUERY",
+    b"BADRESP",
+    b"BADSTR",
+    b"CANCELLED",
+    b"CONNREFUSED",
+    b"DESTRUCTION",
+    b"EOF",
+    b"FILE",
+    b"FORMERR",
+    b"LOADIPHLPAPI",
+    b"NODATA",
+    b"NOMEM",
+    b"NONAME",
+    b"NOTFOUND",
+    b"NOTIMP",
+    b"NOTINITIALIZED",
+    b"REFUSED",
+    b"Resolver",
+    b"SERVFAIL",
+    b"TIMEOUT",
+    b"V4MAPPED",
+    b"default",
+    b"getDefaultResultOrder",
+    b"getServers",
+    b"lookup",
+    b"lookupService",
+    b"promises",
+    b"resolve",
+    b"resolve4",
+    b"resolve6",
+    b"resolveAny",
+    b"resolveCaa",
+    b"resolveCname",
+    b"resolveMx",
+    b"resolveNaptr",
+    b"resolveNs",
+    b"resolvePtr",
+    b"resolveSoa",
+    b"resolveSrv",
+    b"resolveTlsa",
+    b"resolveTxt",
+    b"reverse",
+    b"setDefaultResultOrder",
+    b"setServers",
+];
+
+const DNS_PROMISES_DEFAULT_KEYS: &[&[u8]] = &[
+    b"lookup",
+    b"lookupService",
+    b"Resolver",
+    b"getDefaultResultOrder",
+    b"setDefaultResultOrder",
+    b"setServers",
+    b"NODATA",
+    b"FORMERR",
+    b"SERVFAIL",
+    b"NOTFOUND",
+    b"NOTIMP",
+    b"REFUSED",
+    b"BADQUERY",
+    b"BADNAME",
+    b"BADFAMILY",
+    b"BADRESP",
+    b"CONNREFUSED",
+    b"TIMEOUT",
+    b"EOF",
+    b"FILE",
+    b"NOMEM",
+    b"DESTRUCTION",
+    b"BADSTR",
+    b"BADFLAGS",
+    b"NONAME",
+    b"BADHINTS",
+    b"NOTINITIALIZED",
+    b"LOADIPHLPAPI",
+    b"ADDRGETNETWORKPARAMS",
+    b"CANCELLED",
+    b"getServers",
+    b"resolve",
+    b"resolve4",
+    b"resolve6",
+    b"resolveAny",
+    b"resolveCaa",
+    b"resolveCname",
+    b"resolveMx",
+    b"resolveNaptr",
+    b"resolveNs",
+    b"resolvePtr",
+    b"resolveSoa",
+    b"resolveSrv",
+    b"resolveTlsa",
+    b"resolveTxt",
+    b"reverse",
+];
+
+const DNS_PROMISES_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"ADDRGETNETWORKPARAMS",
+    b"BADFAMILY",
+    b"BADFLAGS",
+    b"BADHINTS",
+    b"BADNAME",
+    b"BADQUERY",
+    b"BADRESP",
+    b"BADSTR",
+    b"CANCELLED",
+    b"CONNREFUSED",
+    b"DESTRUCTION",
+    b"EOF",
+    b"FILE",
+    b"FORMERR",
+    b"LOADIPHLPAPI",
+    b"NODATA",
+    b"NOMEM",
+    b"NONAME",
+    b"NOTFOUND",
+    b"NOTIMP",
+    b"NOTINITIALIZED",
+    b"REFUSED",
+    b"Resolver",
+    b"SERVFAIL",
+    b"TIMEOUT",
+    b"default",
+    b"getDefaultResultOrder",
+    b"getServers",
+    b"lookup",
+    b"lookupService",
+    b"resolve",
+    b"resolve4",
+    b"resolve6",
+    b"resolveAny",
+    b"resolveCaa",
+    b"resolveCname",
+    b"resolveMx",
+    b"resolveNaptr",
+    b"resolveNs",
+    b"resolvePtr",
+    b"resolveSoa",
+    b"resolveSrv",
+    b"resolveTlsa",
+    b"resolveTxt",
+    b"reverse",
+    b"setDefaultResultOrder",
+    b"setServers",
+];
+
+const CHILD_PROCESS_DEFAULT_KEYS: &[&[u8]] = &[
+    b"ChildProcess",
+    b"exec",
+    b"execFile",
+    b"execFileSync",
+    b"execSync",
+    b"fork",
+    b"spawn",
+    b"spawnSync",
+];
+
+const CHILD_PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"ChildProcess",
+    b"default",
+    b"exec",
+    b"execFile",
+    b"execFileSync",
+    b"execSync",
+    b"fork",
+    b"spawn",
+    b"spawnSync",
+];
+
 const BUFFER_NAMESPACE_KEYS: &[&[u8]] = &[
     b"Buffer",
     b"transcode",
@@ -1037,6 +1267,30 @@ const EVENTS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"setMaxListeners",
 ];
 
+const WORKER_THREADS_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"BroadcastChannel",
+    b"MessageChannel",
+    b"MessagePort",
+    b"SHARE_ENV",
+    b"Worker",
+    b"getEnvironmentData",
+    b"isInternalThread",
+    b"isMainThread",
+    b"isMarkedAsUntransferable",
+    b"locks",
+    b"markAsUncloneable",
+    b"markAsUntransferable",
+    b"moveMessagePortToContext",
+    b"parentPort",
+    b"postMessageToThread",
+    b"receiveMessageOnPort",
+    b"resourceLimits",
+    b"setEnvironmentData",
+    b"threadId",
+    b"threadName",
+    b"workerData",
+];
+
 // Linux-only open() flags: Node only enumerates these on platforms whose libc
 // defines them (e.g. `O_DIRECT`/`O_NOATIME` are absent on macOS), so gate the
 // enumerable-key tail by target so `Object.keys(constants)` matches Node here.
@@ -1102,6 +1356,20 @@ fn deprecated_constants_keys() -> &'static [&'static [u8]] {
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn deprecated_constants_keys() -> &'static [&'static [u8]] {
     DEPRECATED_CONSTANTS_KEYS
+}
+
+fn deprecated_constants_namespace_keys() -> &'static [&'static [u8]] {
+    use std::sync::OnceLock;
+    static MERGED: OnceLock<Vec<&'static [u8]>> = OnceLock::new();
+    MERGED
+        .get_or_init(|| {
+            let keys = deprecated_constants_keys();
+            let mut v: Vec<&'static [u8]> = Vec::with_capacity(keys.len() + 1);
+            v.extend_from_slice(keys);
+            v.push(b"default");
+            v
+        })
+        .as_slice()
 }
 
 #[cfg(test)]
@@ -1322,7 +1590,14 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "path.default" | "path.posix.default" | "path.win32.default" => Some(PATH_DEFAULT_KEYS),
         "path.posix" | "path.win32" => Some(PATH_NAMESPACE_KEYS),
         "fs" => Some(FS_NAMESPACE_KEYS),
-        "constants" => Some(deprecated_constants_keys()),
+        "constants" => Some(deprecated_constants_namespace_keys()),
+        "constants.default" => Some(deprecated_constants_keys()),
+        "dns" => Some(DNS_NAMESPACE_KEYS),
+        "dns.default" => Some(DNS_DEFAULT_KEYS),
+        "dns/promises" => Some(DNS_PROMISES_NAMESPACE_KEYS),
+        "dns/promises.default" => Some(DNS_PROMISES_DEFAULT_KEYS),
+        "child_process" => Some(CHILD_PROCESS_NAMESPACE_KEYS),
+        "child_process.default" => Some(CHILD_PROCESS_DEFAULT_KEYS),
         "buffer" => Some(BUFFER_NAMESPACE_KEYS),
         "querystring" => Some(QUERYSTRING_NAMESPACE_KEYS),
         "querystring.default" => Some(QUERYSTRING_DEFAULT_KEYS),
@@ -1361,16 +1636,10 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"request",
             b"globalAgent",
         ]),
+        "http2" => Some(crate::node_http2_constants::HTTP2_NAMESPACE_KEYS),
+        "http2.constants" => Some(crate::node_http2_constants::HTTP2_CONSTANTS_KEYS),
         "events" => Some(EVENTS_NAMESPACE_KEYS),
-        "timers" => Some(&[
-            b"setTimeout",
-            b"clearTimeout",
-            b"setImmediate",
-            b"clearImmediate",
-            b"setInterval",
-            b"clearInterval",
-            b"promises",
-        ]),
+        "worker_threads" => Some(WORKER_THREADS_NAMESPACE_KEYS),
         "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
         "zlib" => Some(&[b"codes"]),
         _ => None,
@@ -1385,6 +1654,10 @@ pub(crate) fn native_module_has_enumerable_key(module_name: &str, key: &str) -> 
 fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
     match module_name {
         "async_hooks.default" => Some("async_hooks"),
+        "child_process.default" => Some("child_process"),
+        "constants.default" => Some("constants"),
+        "dns.default" => Some("dns"),
+        "dns/promises.default" => Some("dns/promises"),
         "os.default" => Some("os"),
         "path.default" => Some("path"),
         "path.posix.default" => Some("path.posix"),
@@ -1400,6 +1673,10 @@ fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
 fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
     match module_name {
         "async_hooks" => Some("async_hooks.default"),
+        "child_process" => Some("child_process.default"),
+        "constants" => Some("constants.default"),
+        "dns" => Some("dns.default"),
+        "dns/promises" => Some("dns/promises.default"),
         "os" => Some("os.default"),
         "path" => Some("path.default"),
         "path.posix" => Some("path.posix.default"),
@@ -1420,10 +1697,18 @@ fn create_cjs_default_namespace(module_name: &str) -> Option<f64> {
 fn cjs_default_export_value(module_name: &str) -> Option<f64> {
     match module_name {
         "events" => Some(bound_native_callable_export_value("events", "EventEmitter")),
-        "async_hooks" | "os" | "path" | "path.posix" | "path.win32" | "punycode"
-        | "querystring" | "url" | "util" => create_cjs_default_namespace(module_name),
+        "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "os" | "path"
+        | "path.posix" | "path.win32" | "punycode" | "querystring" | "url" | "util" => {
+            create_cjs_default_namespace(module_name)
+        }
         _ => None,
     }
+}
+
+pub(crate) fn native_module_get_builtin_module_value(module_name: &str) -> f64 {
+    cjs_default_export_value(module_name).unwrap_or_else(|| {
+        js_create_native_module_namespace(module_name.as_ptr(), module_name.len())
+    })
 }
 
 fn canonical_native_callable_property<'a>(module_name: &str, property_name: &'a str) -> &'a str {
@@ -1444,6 +1729,10 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "async_hooks"
             | "async_hooks.default"
             | "constants"
+            | "constants.default"
+            | "dns.default"
+            | "dns/promises.default"
+            | "child_process.default"
             | "events"
             | "fs.constants"
             | "os"
@@ -1551,8 +1840,10 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     }
     if module_name == "dns" && property_name == "promises" {
         crate::dns::dns_promises_init_servers_from_callback_if_unset();
-        let submodule = "dns/promises";
-        return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
+        return cjs_default_export_value("dns/promises").unwrap_or_else(|| {
+            let submodule = "dns/promises";
+            js_create_native_module_namespace(submodule.as_ptr(), submodule.len())
+        });
     }
 
     if module_name == "util" && property_name == "debug" {
@@ -3702,6 +3993,12 @@ pub(crate) unsafe fn get_native_module_constant(
     let is_cjs_default_object = cjs_default_base.is_some();
     let module_name = cjs_default_base.unwrap_or(module_name);
 
+    if property == "default" && !is_cjs_default_object {
+        if let Some(value) = cjs_default_export_value(module_name) {
+            return Some(value);
+        }
+    }
+
     let o_nofollow: f64 = {
         #[cfg(target_os = "macos")]
         {
@@ -4379,83 +4676,6 @@ pub(crate) unsafe fn get_native_module_constant(
         Some(v as f64)
     };
 
-    // `http2.constants` — the subset of Node's `require('node:http2').constants`
-    // that real code reads: the `:`-prefixed pseudo-header names, the common
-    // header-name string constants, the NGHTTP2 error/session codes, and the
-    // HTTP_STATUS_* numbers. `@hono/node-server` reaches for these by name
-    // (#1651). Mixed string/number values, so this closure returns the f64
-    // directly rather than going through the `i64 as f64` shape used above.
-    let http2_const = |prop: &str| -> Option<f64> {
-        Some(match prop {
-            // Pseudo-headers (HTTP/2 request/response framing).
-            "HTTP2_HEADER_STATUS" => str_val(":status"),
-            "HTTP2_HEADER_METHOD" => str_val(":method"),
-            "HTTP2_HEADER_AUTHORITY" => str_val(":authority"),
-            "HTTP2_HEADER_SCHEME" => str_val(":scheme"),
-            "HTTP2_HEADER_PATH" => str_val(":path"),
-            "HTTP2_HEADER_PROTOCOL" => str_val(":protocol"),
-            // Common header-name constants.
-            "HTTP2_HEADER_ACCEPT" => str_val("accept"),
-            "HTTP2_HEADER_ACCEPT_ENCODING" => str_val("accept-encoding"),
-            "HTTP2_HEADER_AUTHORIZATION" => str_val("authorization"),
-            "HTTP2_HEADER_CACHE_CONTROL" => str_val("cache-control"),
-            "HTTP2_HEADER_CONNECTION" => str_val("connection"),
-            "HTTP2_HEADER_CONTENT_ENCODING" => str_val("content-encoding"),
-            "HTTP2_HEADER_CONTENT_LENGTH" => str_val("content-length"),
-            "HTTP2_HEADER_CONTENT_TYPE" => str_val("content-type"),
-            "HTTP2_HEADER_COOKIE" => str_val("cookie"),
-            "HTTP2_HEADER_DATE" => str_val("date"),
-            "HTTP2_HEADER_ETAG" => str_val("etag"),
-            "HTTP2_HEADER_HOST" => str_val("host"),
-            "HTTP2_HEADER_LOCATION" => str_val("location"),
-            "HTTP2_HEADER_SET_COOKIE" => str_val("set-cookie"),
-            "HTTP2_HEADER_USER_AGENT" => str_val("user-agent"),
-            // Default HPACK dynamic-table / frame sizes.
-            "DEFAULT_SETTINGS_HEADER_TABLE_SIZE" => 4096.0,
-            "DEFAULT_SETTINGS_ENABLE_PUSH" => 1.0,
-            "DEFAULT_SETTINGS_INITIAL_WINDOW_SIZE" => 65535.0,
-            "DEFAULT_SETTINGS_MAX_FRAME_SIZE" => 16384.0,
-            // NGHTTP2 error codes (RST_STREAM / GOAWAY).
-            "NGHTTP2_NO_ERROR" => 0.0,
-            "NGHTTP2_PROTOCOL_ERROR" => 1.0,
-            "NGHTTP2_INTERNAL_ERROR" => 2.0,
-            "NGHTTP2_FLOW_CONTROL_ERROR" => 3.0,
-            "NGHTTP2_SETTINGS_TIMEOUT" => 4.0,
-            "NGHTTP2_STREAM_CLOSED" => 5.0,
-            "NGHTTP2_FRAME_SIZE_ERROR" => 6.0,
-            "NGHTTP2_REFUSED_STREAM" => 7.0,
-            "NGHTTP2_CANCEL" => 8.0,
-            "NGHTTP2_COMPRESSION_ERROR" => 9.0,
-            "NGHTTP2_CONNECT_ERROR" => 10.0,
-            "NGHTTP2_ENHANCE_YOUR_CALM" => 11.0,
-            "NGHTTP2_INADEQUATE_SECURITY" => 12.0,
-            "NGHTTP2_HTTP_1_1_REQUIRED" => 13.0,
-            // Session/flag constants.
-            "NGHTTP2_SESSION_SERVER" => 0.0,
-            "NGHTTP2_SESSION_CLIENT" => 1.0,
-            "NGHTTP2_FLAG_NONE" => 0.0,
-            "NGHTTP2_FLAG_END_STREAM" => 1.0,
-            "NGHTTP2_FLAG_END_HEADERS" => 4.0,
-            "NGHTTP2_FLAG_ACK" => 1.0,
-            // The HTTP_STATUS_* numbers code commonly branches on.
-            "HTTP_STATUS_OK" => 200.0,
-            "HTTP_STATUS_CREATED" => 201.0,
-            "HTTP_STATUS_ACCEPTED" => 202.0,
-            "HTTP_STATUS_NO_CONTENT" => 204.0,
-            "HTTP_STATUS_NOT_MODIFIED" => 304.0,
-            "HTTP_STATUS_BAD_REQUEST" => 400.0,
-            "HTTP_STATUS_UNAUTHORIZED" => 401.0,
-            "HTTP_STATUS_FORBIDDEN" => 403.0,
-            "HTTP_STATUS_NOT_FOUND" => 404.0,
-            "HTTP_STATUS_METHOD_NOT_ALLOWED" => 405.0,
-            "HTTP_STATUS_INTERNAL_SERVER_ERROR" => 500.0,
-            "HTTP_STATUS_NOT_IMPLEMENTED" => 501.0,
-            "HTTP_STATUS_BAD_GATEWAY" => 502.0,
-            "HTTP_STATUS_SERVICE_UNAVAILABLE" => 503.0,
-            _ => return None,
-        })
-    };
-
     let dns_const = |prop: &str| -> Option<f64> {
         Some(match prop {
             "ADDRCONFIG" => 1024.0,
@@ -4581,7 +4801,7 @@ pub(crate) unsafe fn get_native_module_constant(
         "dns" => match property {
             "promises" => {
                 crate::dns::dns_promises_init_servers_from_callback_if_unset();
-                Some(create_sub_namespace("dns/promises"))
+                cjs_default_export_value("dns/promises")
             }
             _ => dns_lookup_flag_constant(property)
                 .or_else(|| dns_error_alias(property).map(|alias| str_val(alias))),
@@ -4964,17 +5184,18 @@ pub(crate) unsafe fn get_native_module_constant(
             "globalAgent" => Some(unsafe { https_global_agent_object() }),
             _ => None,
         },
-        // node:http2 — `constants` is a sub-namespace object (the spec exposes
-        // it as a single frozen object, not loose top-level constants), so
+        // node:http2 — `constants` is a sub-namespace object (Node exposes it
+        // as a single object, not loose top-level constants), so
         // `import { constants } from 'node:http2'` binds to a real object and
         // `constants.HTTP2_HEADER_PATH` resolves through `http2.constants`
         // below. The `Http2ServerRequest` / `Http2ServerResponse` /
         // `createSecureServer` exports are handled elsewhere (#1651).
         "http2" => match property {
             "constants" => Some(create_sub_namespace("http2.constants")),
+            "sensitiveHeaders" => Some(crate::node_http2_constants::sensitive_headers_symbol()),
             _ => None,
         },
-        "http2.constants" => http2_const(property),
+        "http2.constants" => crate::node_http2_constants::constant(property),
         "dns" => dns_const(property),
         // node:cluster — primary-side settings and Worker handles are backed
         // by `crate::cluster`; scheduling/identity constants remain static.

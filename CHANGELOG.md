@@ -2,6 +2,226 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1065 — node-builtin submodule default imports resolve to the module namespace (#3906, partial)
+
+Default-importing a non-native node-builtin submodule (e.g. `import tp from "node:timers/promises"`, `import sp from "node:stream/promises"`) previously lowered the binding down the generic JS-module-default path, producing a primitive (`typeof tp === "boolean"`) instead of an object — so `tp.setTimeout(...)` / `sp.finished(...)` were unreachable. In CommonJS terms the default export *is* `module.exports`, which for these modules is the module namespace itself.
+
+Fix (`crates/perry-hir/src/lower/module_decl.rs`): a default import whose source `is_node_builtin_module` but is not a `NATIVE_MODULES` entry now registers as a namespace binding and pushes an `ImportSpecifier::Namespace { local }` (with `continue`) instead of a `Default` specifier. That places the local into the codegen driver's `namespace_imports`, so `typeof local` folds to `"object"` and `local.member(...)` dispatches through the submodule namespace — identical to the `import * as local` shape. Native-module default imports (os/path/fs) and `import * as` namespaces are untouched (verified byte-identical to Node).
+
+Validated: `typeof tp` → `"object"`, `tp.setTimeout`/`sp.finished`/`sp.pipeline` → `"function"` (matches `node --experimental-strip-types`); native + namespace import smoke clean; `perry-hir` test suite green.
+
+Remaining #3906 work (left open): the `__module__`-only `Object.keys` enumeration for native modules (v8/tty/http2/perf_hooks/util.types) — a broader runtime↔manifest key-order reconciliation — is deferred.
+
+## v0.5.1064 — fix(node): namespace reads of absent builtin members → undefined (#3896)
+
+A bare value read of an absent member on a Node-core module namespace/default
+object — e.g. `import * as dnsp from "node:dns/promises"; dnsp.ADDRCONFIG` (Node
+exposes `ADDRCONFIG` on `dns` but not `dns/promises`) — tripped the #463
+unimplemented-API read gate and errored at compile time, whereas Node treats it
+as an ordinary property miss returning `undefined`. The call form (`ns.foo()`)
+must still reject as unimplemented. Fixed by threading a transient
+`lowering_call_callee` flag through `LoweringContext`: `lower_call` sets it around
+the callee-lowering, and `lower_member_inner` captures-and-clears it at entry, so
+the read gate keeps rejecting call callees while relaxing pure value reads to
+`undefined` — scoped to Node core modules only (npm packages keep the strict
+gate, and the tree-shaking-deferral path is unchanged). Updated the
+`unimplemented_api_check` member/crypto unit tests to the new behavior (the
+bogus-*call* rejection sweep stays green); added a
+`node-core/namespace-absent-member-read` fixture and flipped
+`dns/constants/error-aliases`. Baseline-compared across fs/dns/events/crypto/os/
+path/process node-suite — no regressions (the pre-existing fs arg-validation
+message-detail and crypto cipher/fips/prime fails are unrelated).
+
+## v0.5.1063 — fix(crypto): wire crypto.generateKeySync (#3927)
+
+`crypto.generateKeySync("aes"|"hmac", { length })` was rejected by the #463
+unimplemented-API gate even though the runtime (`js_crypto_generate_key_sync`),
+the codegen dispatch (`expr/calls.rs`), and the AES-192/256 KeyObject metadata
+(fixed by #3930) were all already in place — `generateKeySync` was simply missing
+from the API manifest. Added the `method("crypto", "generateKeySync", …)` row so
+the dotted-form `crypto.generateKeySync(...)` reaches its dispatch, plus a
+named-import lowering arm in `expr_call/globals.rs` (mirroring `createSecretKey`)
+so the bare `import { generateKeySync } from "node:crypto"; generateKeySync(...)`
+shape rewrites to the dotted form too. Flips
+`node-suite/crypto/secret-key/generate-key-sync` to green (AES-128/192/256 + hmac
+all match `node --experimental-strip-types`). Remaining `node:crypto` node-suite
+failures (cipher invalid-state #3873, fips-api, prime) are unrelated and
+pre-existing.
+
+## v0.5.1062 — fix(perf_hooks): Performance/observer-list instanceof class-id collision (#3871)
+
+`performance instanceof Performance` and `list instanceof PerformanceObserverEntryList`
+returned `false` (mark/measure instanceof already worked). Root cause: the runtime
+class ids `CLASS_ID_PERFORMANCE` (0xFFFF0087), `CLASS_ID_PERFORMANCE_RESOURCE_TIMING`
+(0x86), and `CLASS_ID_PERFORMANCE_OBSERVER_ENTRY_LIST` (0x88) **collided** with
+`node:fs`'s `CLASS_ID_FS_DIRENT` / `CLASS_ID_FS_DIR` / `CLASS_ID_FS_READ_STREAM`. In
+`object/instanceof.rs`, the fs `Dir`/`Dirent`/`ReadStream` arms run *before* the
+perf-hooks shape check, so `js_instanceof(performance, 0x87)` hit
+`is_fs_dirent_instance_value` (→ false) and never reached `is_performance_object_value`.
+Moved the three perf ids to free slots (0x8D/0x8E/0x8F, past fs's 0x8C) in both
+`perf_hooks.rs` and the codegen `instanceof` map, and made `is_performance_object_value`
+recognize the `perf_hooks` namespace object by its stored module name (robust against
+the `PERFORMANCE_NS` pointer cache). Flips the `perf_hooks/global/class-constructors`
+and `perf_hooks/observer/list-instanceof` fixtures to green; `mark`/`measure` instanceof
+and `fs` `Dir`/`Dirent` instanceof are unregressed.
+
+## v0.5.1061 — fix(worker_threads): workerData is value-only, not callable (#3899)
+
+`worker_threads.workerData` read as a function and `workerData()` returned a
+value, whereas Node exposes `workerData` as a value (the worker's data, or `null`
+on the main thread) and `workerData()` throws. Root cause: a leftover
+`internal_method_sig` row made `module_has_symbol("worker_threads", "workerData")`
+return a `Method`, so codegen's `typeof <module>.<member>` fold reported
+`"function"` (parentPort, which only had a property row, already read `"object"`),
+and the `native_table/extras.rs` row routed `workerData()` to a runtime getter.
+Dropping the method row + call routing lets workerData resolve through
+`property("worker_threads", "workerData")` (typeof `"object"`, value `null`) and
+makes `workerData()` throw a normal `TypeError`. Fixes the
+`worker_threads/main-thread/worker-data-surface` fixture; adds
+`worker_threads/workerdata-value-boundary`. `getWorkerData` is left in place: it
+is not a public named export, but fully removing it makes
+`worker_threads.getWorkerData()` trip the compile-time #463 gate instead of Node's
+runtime TypeError — that absent-member-read boundary is tracked by #3896.
+
+## v0.5.1060 — fix(crypto): expose Hash/Hmac/Sign/Verify constructor exports (#3955)
+
+`import { Hash } from "node:crypto"` (and `Hmac`/`Sign`/`Verify`) failed `check`
+with "does not provide an export named 'Hash'" even though the HIR call-lowering
+in `lower/expr_call/crypto.rs` already routed `Hash(...)`/`Hmac(...)`/`Sign(...)`/
+`Verify(...)` through the same path as their `create*` factories. The four
+constructor classes are public `node:crypto` named exports in Node; added the
+manifest entries so they resolve on the ESM/named-import surface. Flips the
+`crypto/hash/constructor-export`, `crypto/hmac/constructor-export`, and
+`crypto/asymmetric/sign-verify-constructor-export` node-suite fixtures to green.
+
+Also closed (verified via `run_parity_tests.sh --suite node-suite --module <m>`,
+zero failures) the #2013 argument-validation tails for `node:buffer` (#3953),
+`node:process` (#3956), and `node:url` (#3957).
+
+## v0.5.1059 — fix(buffer): materialize Buffer iterators via spread + Array.from (#3909)
+
+`buf.keys()`, `buf.values()`, and `buf.entries()` already returned working
+iterator objects — `.next()` and `for...of` produced the right byte
+indices/values — but `[...buf.keys()]` and `Array.from(buf.values())` returned
+an empty array. `js_array_clone_for_spread` (the runtime helper behind array
+spread and `Array.from`) recognizes iterator objects by class id, but its
+`is_array_iterator` check listed only the array/map/set/iterator-helper class
+ids, not `BUFFER_ITERATOR_CLASS_ID`. A Buffer iterator therefore fell through to
+the array-like `.length`/`[i]` path (a Buffer iterator has neither), yielding
+nothing. Added the buffer iterator class id alongside the others, so spread and
+`Array.from` now drive its `.next()` protocol like every other iterator. Added a
+`node-suite/buffer/iterator-spread` regression fixture covering spread,
+`Array.from`, `.next()`, and `for...of`.
+
+## v0.5.1058 — fix(node): API-surface hygiene batch (#3925, #3946, #3857, #3962, #3938)
+
+Five Node-parity fixes for the `node:*` builtin surface:
+
+- **#3925 — `node:punycode.ucs2` phantom submodule.** Perry advertised
+  `node:punycode.ucs2` as an importable builtin; Node throws
+  `ERR_UNKNOWN_BUILTIN_MODULE` (`ucs2` is a *property* of `node:punycode`, not a
+  module). The HIR import gate (`lower/module_decl.rs`) now rejects any
+  `node:`-prefixed specifier that isn't a real Node builtin
+  (`NODE_BUILTIN_MODULES`) or a resolvable native module — also closing the
+  more general "`node:bogusmod` checks clean" gap. `punycode.ucs2` stays in
+  `NODE_SUBMODULES` as a Perry-internal dispatch namespace so
+  `punycode.ucs2.decode/encode` member access keeps working.
+- **#3946 — `node:process` core properties via named/namespace import.**
+  `import { pid, arch, platform, … } from "node:process"` and
+  `import * as p from "node:process"; p.pid` resolved to `undefined` (only the
+  default import and global `process` worked). Named imports now route process
+  *properties* through the dedicated `ProcessPid`/`OsArch`/… lowerings, and the
+  `process.<prop>` member path also fires for namespace/default import locals.
+- **#3857 — `JSON.stringify` of boxed primitive wrappers.**
+  `JSON.stringify(new String("hi"))` returned `{}` instead of `"hi"`; the same
+  applied to `new Number`/`new Boolean` and to wrappers nested in objects and
+  arrays, and the 3-arg pretty form crashed. Stringify now unwraps boxed
+  String/Number/Boolean/BigInt wrappers to their primitive across the compact,
+  array (fast + slow), and pretty paths.
+- **#3962 — `process.stdin` listener-removal + lifecycle for TUI teardown.**
+  `process.stdin` lacked `removeListener`/`off`/`addListener`/
+  `removeAllListeners`/`pause`/`resume`/`unref`/`destroy`. They're now present;
+  on stdin, `pause`/`unref`/`destroy` detach the readline reader so the event
+  loop can quiesce after teardown (readline `has_active` consults the new
+  `stdin_is_detached()` flag) without an explicit `process.exit()`.
+- **#3938 — literal dynamic import of slash submodules.**
+  `await import("node:util/types")` / `"node:path/posix"` /
+  `"node:stream/promises"` emitted invalid LLVM (a `@__perry_ns_…/…` global with
+  a slash). The dead extern-global/init declarations for `__native_mod__` /
+  `__node_submod__` sentinel prefixes (resolved at the dispatch site via runtime
+  namespace builders) are no longer emitted.
+
+Regression coverage: `node-suite` fixtures for #3857/#3946/#3938/#3925 and a
+`perry-hir` unknown-builtin-module rejection test.
+
+## v0.5.1057 — fix(#2169): perry-ui-windows LNK4006 / LNK4088 + windows-rs 0.58 drift
+
+The user-reported repro (Windows 10, perry 0.5.1025) failed silently with
+`LNK4088: image may not run` after `/FORCE`-resolved `LNK4006: js_*` duplicates
+inside `perry_ui_windows.lib`. Three independent issues:
+
+1. **Duplicate FFI stubs inside `perry_ui_windows.lib`.**
+   `crates/perry-ui-windows/src/ffi/js_interop.rs` defined `js_create_callback`,
+   `js_call_function`, `js_await_js_promise`, `js_load_module`,
+   `js_new_from_handle`, `js_new_instance`, `js_runtime_init`,
+   `js_set_property`, `js_get_export` as `#[no_mangle]` AOT stubs back when
+   `perry-runtime` had stripped them. `perry-runtime` re-added them as V8
+   stubs in `closure/v8_stubs.rs`, but both copies kept getting baked into the
+   archive: the V8 stubs came in via the Rust `perry-runtime` dep
+   (`perry_runtime-…rcgu.o`) and the AOT stubs came in via this crate's own
+   object (`perry_ui_windows-…rcgu.o`). MSVC LINK fell back to `/FORCE` and
+   warned the image may not run (#2169 reproducer log).
+
+   Worse, the local copies had **wrong arities** relative to codegen's
+   declarations in `crates/perry-codegen/src/runtime_decls/stdlib_ffi.rs`:
+   `js_call_function` had 4 args vs. codegen's 5; `js_load_module` had 1 vs. 2;
+   `js_set_property` had 3 vs. 4; `js_new_instance` had 4 vs. 5. Any callsite
+   the linker resolved against the local def would have corrupted the stack.
+
+   Fixed by deleting `crates/perry-ui-windows/src/ffi/js_interop.rs` and the
+   corresponding `pub mod js_interop;` declaration in `ffi/mod.rs`. The
+   `perry-runtime` V8 stubs (now the only definitions) match the
+   codegen-declared signatures exactly. Verified with `llvm-nm` on the
+   resulting `target/release/perry_ui_windows.lib`: each of the nine symbols
+   appears exactly once (pre-fix: twice).
+
+2. **`windows-rs 0.58` constant relocation.** `WM_MOUSELEAVE` lives in
+   `Win32::UI::Controls` in 0.58, not `Win32::UI::WindowsAndMessaging`.
+   `crates/perry-ui-windows/src/pointer.rs` was importing from the latter,
+   so `cargo build --release -p perry-ui-windows` had been failing locally
+   for anyone trying to refresh the shipped `.lib`. Moved the import.
+
+3. **`windows-rs 0.58` GDI+ signature drift.** `GdipDrawImageRectRectI`'s
+   `callback` parameter is `isize` (not `Option<_>`); the canvas widget at
+   `crates/perry-ui-windows/src/widgets/canvas.rs:314` was passing `None`,
+   producing `E0308`. Passing `0_isize` (null callback) restores compilation.
+
+The first item is what the user actually hit. (2) and (3) are pre-existing
+build failures that blocked anyone trying to rebuild the prebuilt `.lib`
+to ship the fix to users.
+
+## v0.5.1056 — fix(#3917): `(num: number).toLocaleString()` printed a 1970 date string
+
+`const num: number = 20; console.log(num.toLocaleString('en-US'))` printed
+`"12/31/1969, 4:00:00 PM"` (or the local-time equivalent) instead of `"20"`.
+The HIR lowers every `x.toLocaleString()` to the (misnamed) `Expr::DateToLocaleString`
+variant; the LLVM arm in `crates/perry-codegen/src/expr/env_clones.rs` is supposed
+to disambiguate Number-receivers vs Date-receivers by inspecting the receiver's
+static type. The disambiguator only called `refine_type_from_init`, which inspects
+AST shape (literals, arithmetic, `new T(...)`) and has no `LocalGet` arm — so for
+the common `let n: number = …; n.toLocaleString()` shape it returned `None` and
+the call fell through to `js_date_to_locale_string`, treating the number as a
+millisecond epoch.
+
+Fixed by falling back to `static_type_of` (which already reads `local_types`)
+when the structural refinement comes up empty. `static_type_of` resolves
+`LocalGet(id) → ctx.local_types[id]`, so a `number`-typed local now routes to
+`js_number_to_locale_string` and formats with thousands separators
+(`"1,234,567"`, etc.). Verified with literal, integer-local, and decimal-local
+receivers, plus `new Date(0).toLocaleString('en-US')` still emits the date
+string. The user-reported repro (Windows 11, perry 0.5.1025) was platform-agnostic
+— a HIR/codegen routing bug, not a runtime issue.
+
 ## v0.5.1055 — hotfix: actually remove native_module.rs conflict marker
 
 The v0.5.1054 hotfix bumped the version but its source edit failed to apply,

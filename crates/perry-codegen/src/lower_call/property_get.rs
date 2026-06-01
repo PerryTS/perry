@@ -42,11 +42,7 @@ fn is_array_only_method_name(name: &str) -> bool {
 }
 
 /// Try to lower a `Call { callee: PropertyGet { .. } }` via the
-/// string/array/class/Map/Set/Promise/fetch/static/instance method
-/// dispatch tower. Returns `Ok(None)` when the callee shape doesn't
-/// match a PropertyGet at all, OR when the PropertyGet matches but no
-/// inner branch fires (caller falls through to subsequent
-/// lower_call branches).
+/// string/array/class/Map/Set/Promise/fetch/static/instance dispatch tower.
 pub fn try_lower_property_get_method_call(
     ctx: &mut FnCtx<'_>,
     callee: &Expr,
@@ -58,6 +54,11 @@ pub fn try_lower_property_get_method_call(
     let Expr::PropertyGet { object, property } = callee else {
         return Ok(None);
     };
+    if let Some(value) =
+        super::web_storage::try_lower_web_storage_method_call(ctx, object, property, args)?
+    {
+        return Ok(Some(value));
+    }
     // Number.prototype.toFixed(decimals) — call js_number_to_fixed.
     // Receiver is any number-typed value; we don't gate on
     // is_numeric_expr because tests often call it on Any locals.

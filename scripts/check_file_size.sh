@@ -60,6 +60,10 @@ crates/perry/src/commands/compile.rs
 # Native-module dispatch table; one big match by (module, method, class).
 # Splitting per-namespace is tracked under the API-manifest refactor in #793.
 crates/perry-codegen/src/lower_call/native/mod.rs
+# Node-core native method table split out of `native/mod.rs`; still a single
+# per-module dispatch table and already over the limit on current main.
+# Splitting per namespace is tracked under the codegen cleanup in #1435.
+crates/perry-codegen/src/lower_call/native_table/node_core.rs
 # HIR `Expr` enum + dependency-walker arms; splitting would need parallel
 # updates across every variant of the walker traits. Tracked alongside #793.
 crates/perry-hir/src/ir/expr.rs
@@ -86,11 +90,18 @@ crates/perry-runtime/src/object/native_call_method.rs
 # loop). Extracting that pass is high-risk surgery deferred to the codegen
 # split tracked under #1435.
 crates/perry-codegen/src/codegen/mod.rs
+# Global object bootstrap crossed the gate on current main; split constructor
+# tables/population helpers alongside the runtime object cleanup tracked in #1435.
+crates/perry-runtime/src/object/global_this.rs
 # Central class registry — class IDs, prototypes, parent-closure
 # scanning, and field-init replay. Crossed the limit after the
 # #1787 instance-field init replay (#2074) + web-stream class
 # wiring (#1641/#2110). Split tracked under #1435.
 crates/perry-runtime/src/object/class_registry.rs
+# Global object/bootstrap native singleton table crossed the current-main
+# threshold after recent builtin surface additions. Splitting constructor and
+# singleton installers into sibling modules is tracked under #1435.
+crates/perry-runtime/src/object/global_this.rs
 # Native-module namespace property/method dispatcher
 # (`get_native_module_constant` is one big match — one arm per
 # stdlib namespace, every property literal inline). Splitting per
@@ -116,6 +127,10 @@ crates/perry-codegen/src/lower_call/native_table/node_core.rs
 # namespace-alias exposure work. Split tracked under #1435 with the other
 # runtime file-size cleanups.
 crates/perry-runtime/src/fs/dir_glob_watch.rs
+# node:fs module root — crossed the gate after the final fs parity
+# surface reconciliation (#3969) bumped its dispatch tower by a few lines.
+# Splitting tracked under #1435 with the other runtime file-size cleanups.
+crates/perry-runtime/src/fs/mod.rs
 # stdlib native dispatch table; current main crossed the threshold after
 # namespace-alias exposure work. Split tracked under #1435.
 crates/perry-stdlib/src/common/dispatch.rs
@@ -137,6 +152,11 @@ crates/perry-codegen/tests/native_proof_regressions.rs
 # `process_allowed_node_flags_literal`. Splitting the per-namespace literal
 # builders into a sibling module is tracked under #1435.
 crates/perry-hir/src/lower/expr_member.rs
+# Expression lowering entry point — crossed the 2000-line gate when the
+# CJS-default-import allow-list grew to cover all node-core namespaces with
+# `default` namespace shims (#3903). Splitting the per-namespace dispatch
+# helpers into a sibling module is tracked under #1435.
+crates/perry-hir/src/lower/lower_expr.rs
 # node:process surface (env/argv/hrtime/cpuUsage/resourceUsage + EventEmitter
 # wiring + warning/deprecation emit). Crossed the limit at 2047 LOC after the
 # argument-validation batch landed on main without a split (#3493 setuid/setgid/

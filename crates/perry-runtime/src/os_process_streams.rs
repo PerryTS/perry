@@ -70,6 +70,28 @@ extern "C" fn process_stream_on_once_stub(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+/// #3962: set when a TUI tears down stdin via `process.stdin.destroy()`,
+/// `.pause()`, or `.unref()`. `perry-stdlib`'s readline `has_active` consults
+/// `stdin_is_detached()` so the runtime stops holding the event loop open for
+/// the stdin reader, letting the process quiesce after teardown without an
+/// explicit `process.exit()`.
+static STDIN_DETACHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// True once `process.stdin` has been detached (`destroy`/`pause`/`unref`).
+pub fn stdin_is_detached() -> bool {
+    STDIN_DETACHED.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// `destroy`/`pause`/`unref` impl for `process.stdin` — releases the stdin
+/// reader's hold on the event loop. No-op return (`undefined`).
+extern "C" fn process_stdin_detach_stub(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    STDIN_DETACHED.store(true, std::sync::atomic::Ordering::Release);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 thread_local! {
     static STDIN_STREAM_SINGLETON: RefCell<usize> = const { RefCell::new(0) };
     static STDOUT_STREAM_SINGLETON: RefCell<usize> = const { RefCell::new(0) };
@@ -151,25 +173,40 @@ fn build_stream_object_with_write(
         );
     }
 
-    let (class_id, packed, field_count) = if fd_i == 0 {
-        (
-            if is_tty {
-                crate::tty::CLASS_ID_TTY_READ_STREAM
-            } else {
-                0
-            },
-            b"write\0fd\0emit\0on\0once\0writable\0readable\0readableEnded\0destroyed\0closed\0isRaw\0isTTY\0addListener\0removeListener\0off\0removeAllListeners\0pause\0resume\0unref\0ref\0destroy\0".as_slice(),
-            21,
-        )
-    } else if is_tty {
-        (
-            crate::tty::CLASS_ID_TTY_WRITE_STREAM,
-            b"write\0fd\0emit\0on\0once\0writable\0addListener\0removeListener\0off\0removeAllListeners\0".as_slice(),
-            10,
-        )
-    } else {
-        (0, b"write\0fd\0emit\0on\0once\0writable\0".as_slice(), 6)
-    };
+    // #3962: EventEmitter listener-removal + lifecycle surface appended to the
+    // stdin shapes. The TTY *write* stream keeps its existing shape; generic
+    // non-TTY streams keep `main`'s no-op teardown surface.
+    const STDIN_TEARDOWN_KEYS: &[u8] =
+        b"addListener\0removeListener\0off\0removeAllListeners\0pause\0resume\0unref\0ref\0destroy\0";
+    const GENERIC_TEARDOWN_KEYS: &[u8] =
+        b"addListener\0removeListener\0off\0removeAllListeners\0pause\0resume\0unref\0destroy\0";
+    let is_stdin = fd_i == 0;
+    let (class_id, packed, field_count, teardown_start): (u32, Vec<u8>, u32, Option<u32>) =
+        if is_stdin {
+            let mut keys = b"write\0fd\0emit\0on\0once\0writable\0readable\0readableEnded\0destroyed\0closed\0isRaw\0isTTY\0".to_vec();
+            keys.extend_from_slice(STDIN_TEARDOWN_KEYS);
+            (
+                if is_tty {
+                    crate::tty::CLASS_ID_TTY_READ_STREAM
+                } else {
+                    0
+                },
+                keys,
+                21,
+                Some(12),
+            )
+        } else if is_tty {
+            (
+                crate::tty::CLASS_ID_TTY_WRITE_STREAM,
+                b"write\0fd\0emit\0on\0once\0writable\0addListener\0removeListener\0off\0removeAllListeners\0".to_vec(),
+                10,
+                None,
+            )
+        } else {
+            let mut keys = b"write\0fd\0emit\0on\0once\0writable\0".to_vec();
+            keys.extend_from_slice(GENERIC_TEARDOWN_KEYS);
+            (0, keys, 14, Some(6))
+        };
     let obj = if class_id == 0 {
         js_object_alloc_with_shape(
             0x7FFF_FF22,
@@ -225,10 +262,6 @@ fn build_stream_object_with_write(
                 crate::value::TAG_FALSE
             }),
         );
-        for index in 12..=20 {
-            let method = js_closure_alloc(process_stream_on_once_stub as *const u8, 0);
-            js_object_set_field(obj, index, JSValue::pointer(method as *const u8));
-        }
     } else if is_tty {
         js_object_set_field(
             obj,
@@ -250,6 +283,37 @@ fn build_stream_object_with_write(
             9,
             JSValue::from_bits(crate::tty::tty_listener_remove_all_value().to_bits()),
         );
+    }
+    // #3962: install the appended listener-removal + lifecycle methods.
+    // `on`/`once` above are no-ops here, so `addListener`/`removeListener`/
+    // `off`/`removeAllListeners`/`resume` are no-ops too. On *stdin* (fd 0),
+    // `pause`/`unref`/`destroy` additionally detach the reader so the loop can
+    // quiesce after TUI teardown; on stdout/stderr they stay no-ops.
+    if let Some(start) = teardown_start {
+        let set_field_with_stub =
+            |idx: u32, stub: extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64| {
+                let c = js_closure_alloc(stub as *const u8, 0);
+                js_object_set_field(obj, idx, JSValue::pointer(c as *const u8));
+            };
+        let lifecycle: extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64 = if is_stdin
+        {
+            process_stdin_detach_stub
+        } else {
+            process_stream_on_once_stub
+        };
+        set_field_with_stub(start, process_stream_on_once_stub); // addListener
+        set_field_with_stub(start + 1, process_stream_on_once_stub); // removeListener
+        set_field_with_stub(start + 2, process_stream_on_once_stub); // off
+        set_field_with_stub(start + 3, process_stream_on_once_stub); // removeAllListeners
+        set_field_with_stub(start + 4, lifecycle); // pause
+        set_field_with_stub(start + 5, process_stream_on_once_stub); // resume
+        set_field_with_stub(start + 6, lifecycle); // unref
+        if is_stdin {
+            set_field_with_stub(start + 7, process_stream_on_once_stub); // ref
+            set_field_with_stub(start + 8, lifecycle); // destroy
+        } else {
+            set_field_with_stub(start + 7, lifecycle); // destroy
+        }
     }
     obj
 }

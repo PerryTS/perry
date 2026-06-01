@@ -20,6 +20,7 @@ pub mod lock;
 pub mod login;
 pub mod native;
 pub mod perry_lock;
+pub(crate) mod progress;
 pub mod publish;
 pub mod run;
 pub mod sandbox_profile;

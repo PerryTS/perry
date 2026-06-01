@@ -12,16 +12,18 @@
 
 pub use super::class_handles::{
     event_emitter_async_resource_handle_probe, event_emitter_handle_probe, event_emitter_on,
-    handle_method_dispatch, handle_property_dispatch, handle_property_set_dispatch,
+    handle_method_dispatch, handle_own_property_names_dispatch, handle_property_dispatch,
+    handle_property_set_dispatch, handle_prototype_dispatch,
     js_register_event_emitter_async_resource_handle_probe, js_register_event_emitter_handle_probe,
     js_register_event_emitter_on, js_register_handle_method_dispatch,
-    js_register_handle_property_dispatch, js_register_handle_property_set_dispatch,
+    js_register_handle_own_property_names_dispatch, js_register_handle_property_dispatch,
+    js_register_handle_property_set_dispatch, js_register_handle_prototype_dispatch,
     js_register_net_socket_handle_probe, js_register_stream_handle_kind_probe,
     js_register_stream_handle_probe, net_socket_handle_probe, stream_handle_kind_probe,
     stream_handle_probe, EventEmitterAsyncResourceHandleProbeFn, EventEmitterHandleProbeFn,
-    EventEmitterOnFn, HandleMethodDispatchFn, HandlePropertyDispatchFn,
-    HandlePropertySetDispatchFn, NetSocketHandleProbeFn, StreamHandleKindProbeFn,
-    StreamHandleProbeFn,
+    EventEmitterOnFn, HandleMethodDispatchFn, HandleOwnPropertyNamesDispatchFn,
+    HandlePropertyDispatchFn, HandlePropertySetDispatchFn, HandlePrototypeDispatchFn,
+    NetSocketHandleProbeFn, StreamHandleKindProbeFn, StreamHandleProbeFn,
 };
 use super::*;
 
@@ -707,9 +709,11 @@ fn text_decoder_bool_option(options: f64, name: &str) -> f64 {
     f64::from_bits(crate::value::JSValue::bool(crate::value::js_is_truthy(value_f64) != 0).bits())
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn js_text_encoding_stream_new() -> f64 {
-    let stream = js_object_alloc(0, 0);
+pub(crate) const CLASS_ID_TEXT_ENCODER_STREAM: u32 = 0x7FFF_FF30;
+pub(crate) const CLASS_ID_TEXT_DECODER_STREAM: u32 = 0x7FFF_FF31;
+
+unsafe fn text_encoding_stream_new_with_constructor(constructor: f64, class_id: u32) -> f64 {
+    let stream = js_object_alloc(class_id, 0);
     if stream.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -725,7 +729,38 @@ pub unsafe extern "C" fn js_text_encoding_stream_new() -> f64 {
         js_object_set_field_by_name(stream, key, value);
     }
 
+    let ctor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+    js_object_set_field_by_name(stream, ctor_key, constructor);
+
     crate::value::js_nanbox_pointer(stream as i64)
+}
+
+unsafe fn text_encoding_stream_new(constructor_name: &[u8], class_id: u32) -> f64 {
+    let ctor = js_get_global_this_builtin_value(constructor_name.as_ptr(), constructor_name.len());
+    text_encoding_stream_new_with_constructor(ctor, class_id)
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn test_text_encoding_stream_new_with_constructor(
+    constructor: f64,
+    class_id: u32,
+) -> f64 {
+    text_encoding_stream_new_with_constructor(constructor, class_id)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_text_encoder_stream_new() -> f64 {
+    text_encoding_stream_new(b"TextEncoderStream", CLASS_ID_TEXT_ENCODER_STREAM)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_text_decoder_stream_new() -> f64 {
+    text_encoding_stream_new(b"TextDecoderStream", CLASS_ID_TEXT_DECODER_STREAM)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_text_encoding_stream_new() -> f64 {
+    js_text_encoder_stream_new()
 }
 
 /// Synthetic-anonymous-shape class IDs: classes the HIR generates for
@@ -1010,6 +1045,21 @@ pub unsafe extern "C" fn js_new_function_construct(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    // #3656: `new p()` where `p` is a Proxy dispatches through its `construct`
+    // trap (or forwards to the target). Reached when the compiler can't prove
+    // the callee is a proxy statically (e.g. `new record.proxy()`). newTarget
+    // for a plain `new` is the constructor being invoked — the proxy itself.
+    if crate::proxy::js_proxy_is_proxy(func_value) == 1 {
+        let arr = crate::array::js_array_alloc(0);
+        let mut a = arr;
+        if !args_ptr.is_null() {
+            for i in 0..args_len {
+                a = crate::array::js_array_push_f64(a, *args_ptr.add(i));
+            }
+        }
+        let arr_box = f64::from_bits(0x7FFD_0000_0000_0000 | (a as u64 & 0x0000_FFFF_FFFF_FFFF));
+        return crate::proxy::js_proxy_construct(func_value, arr_box, func_value);
+    }
     if let Some((module, method)) = bound_native_callable_module_and_method(func_value) {
         if module == "sqlite"
             && matches!(
@@ -1107,6 +1157,9 @@ pub unsafe extern "C" fn js_new_function_construct(
             }
             "BigInt" => {
                 return crate::error::js_throw_bigint_constructor_type_error();
+            }
+            "Navigator" => {
+                return crate::error::js_throw_illegal_constructor_type_error();
             }
             "Date" => {
                 if args.is_empty() {
@@ -1257,14 +1310,26 @@ pub unsafe extern "C" fn js_new_function_construct(
                 let ta = crate::typedarray::js_typed_array_new(kind, arg0);
                 return crate::value::js_nanbox_pointer(ta as i64);
             }
-            "TextEncoderStream" | "TextDecoderStream" => {
-                return js_text_encoding_stream_new();
+            "TextEncoderStream" => {
+                return text_encoding_stream_new_with_constructor(
+                    func_value,
+                    CLASS_ID_TEXT_ENCODER_STREAM,
+                );
+            }
+            "TextDecoderStream" => {
+                return text_encoding_stream_new_with_constructor(
+                    func_value,
+                    CLASS_ID_TEXT_DECODER_STREAM,
+                );
             }
             "MessageChannel" => {
                 return crate::messaging::js_message_channel_new();
             }
             "MessagePort" => {
                 return crate::messaging::js_message_port_constructor_error();
+            }
+            "Storage" => {
+                return crate::web_storage::storage_constructor_illegal(std::ptr::null());
             }
             "BroadcastChannel" => {
                 let name = args

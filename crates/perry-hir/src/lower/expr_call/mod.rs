@@ -449,7 +449,14 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
             // for known callees, fold namespace-function calls into
             // StaticMethodCall, and emit Call / CallSpread.
             // ---------------------------------------------------------------
-            let callee_expr = lower_expr(ctx, expr)?;
+            // #3896: mark the callee position so the expr_member read-gate
+            // keeps rejecting `ns.foo()` (absent member call) while relaxing a
+            // bare value read `ns.foo` to undefined for Node-core namespaces.
+            let prev_callee = ctx.lowering_call_callee;
+            ctx.lowering_call_callee = true;
+            let callee_expr = lower_expr(ctx, expr);
+            ctx.lowering_call_callee = prev_callee;
+            let callee_expr = callee_expr?;
 
             // Fill in default arguments if callee is a known function
             let mut args = args;

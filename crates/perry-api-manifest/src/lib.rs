@@ -368,7 +368,7 @@ fn is_node_core_private_named_export(module: &str, name: &str) -> bool {
         ),
         "url" => matches!(name, "createObjectURL" | "revokeObjectURL"),
         "module" => matches!(name, "wrap" | "wrapper"),
-        "worker_threads" => name == "getWorkerData",
+        "worker_threads" => matches!(name, "getWorkerData" | "postMessage"),
         "https" => matches!(name, "ClientRequest" | "IncomingMessage" | "ServerResponse"),
         "http2" => matches!(
             name,
@@ -525,7 +525,6 @@ mod tests {
             ("node:module", "wrap"),
             ("node:module", "wrapper"),
             ("node:url", "createObjectURL"),
-            ("node:worker_threads", "getWorkerData"),
             ("node:https", "ClientRequest"),
             ("node:http2", "Http2SecureServer"),
             ("node:child_process", "Stream"),
@@ -559,6 +558,7 @@ mod tests {
             ("node:module", "createRequire"),
             ("node:url", "URL"),
             ("node:url", "fileURLToPath"),
+            ("node:worker_threads", "parentPort"),
             ("node:worker_threads", "workerData"),
             ("node:path", "default"),
             ("node:https", "Agent"),
@@ -575,6 +575,23 @@ mod tests {
                 "{module} should expose real named export {name}"
             );
         }
+    }
+
+    #[test]
+    fn worker_threads_post_message_is_receiver_only() {
+        let entry = module_has_symbol("node:worker_threads", "postMessage")
+            .expect("worker_threads.postMessage stays registered for receiver dispatch");
+        assert!(matches!(
+            entry.kind,
+            ApiKind::Method {
+                has_receiver: true,
+                class_filter: None
+            }
+        ));
+        assert!(
+            !module_has_public_named_export("node:worker_threads", "postMessage"),
+            "worker_threads.postMessage must not be accepted as a named export"
+        );
     }
 
     #[test]
@@ -910,7 +927,6 @@ mod tests {
                 &["clearLine", "clearScreenDown", "cursorTo", "moveCursor"][..],
             ),
             ("url", &["createObjectURL", "revokeObjectURL"][..]),
-            ("worker_threads", &["getWorkerData"][..]),
             (
                 "https",
                 &["ClientRequest", "IncomingMessage", "ServerResponse"][..],

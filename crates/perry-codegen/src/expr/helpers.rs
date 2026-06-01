@@ -297,6 +297,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "TextDecoder"
             | "TextEncoderStream"
             | "TextDecoderStream"
+            | "Navigator"
             | "URL"
             | "URLSearchParams"
             | "AbortController"
@@ -317,6 +318,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "MessageChannel"
             | "MessagePort"
             | "BroadcastChannel"
+            | "Storage"
             | "WebSocket"
             | "FinalizationRegistry"
             | "Performance"
@@ -363,6 +365,8 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "process"
             | "navigator"
             | "crypto"
+            | "localStorage"
+            | "sessionStorage"
     )
 }
 
@@ -385,6 +389,8 @@ pub(crate) fn is_global_this_builtin_function_name(name: &str) -> bool {
                 | "process"
                 | "navigator"
                 | "crypto"
+                | "localStorage"
+                | "sessionStorage"
         )
 }
 

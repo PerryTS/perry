@@ -777,8 +777,15 @@ pub(super) fn lower_builtin_new(
         }
         "Response" => {
             // new Response(body?, init?) — init = { status?, statusText?, headers? }
+            // Route the body through js_response_body_init_ptr (not the plain
+            // string coercion) so a ReadableStream body — e.g. Hono's
+            // `new Response(res.body, res)` header re-wrap — is drained to its
+            // bytes instead of stringified to its numeric stream handle.
+            // Non-stream bodies coerce exactly as get_raw_string_ptr did.
             let body_ptr = if !args.is_empty() {
-                get_raw_string_ptr(ctx, &args[0])?
+                let v = lower_expr(ctx, &args[0])?;
+                let blk = ctx.block();
+                blk.call(I64, "js_response_body_init_ptr", &[(DOUBLE, &v)])
             } else {
                 "0".to_string()
             };
@@ -990,6 +997,14 @@ pub(super) fn lower_builtin_new(
                     );
                 }
             }
+            Ok(Some(h))
+        }
+
+        "FormData" => {
+            // new FormData() — Perry's current native registry stores string
+            // values, which covers deterministic constructor/mutator parity
+            // for append/set/delete/get/getAll/has/iteration.
+            let h = ctx.block().call(DOUBLE, "js_form_data_new", &[]);
             Ok(Some(h))
         }
 
@@ -1275,7 +1290,12 @@ pub(super) fn lower_builtin_new(
             for a in args {
                 let _ = lower_expr(ctx, a)?;
             }
-            let h = ctx.block().call(DOUBLE, "js_text_encoding_stream_new", &[]);
+            let runtime = if class_name == "TextEncoderStream" {
+                "js_text_encoder_stream_new"
+            } else {
+                "js_text_decoder_stream_new"
+            };
+            let h = ctx.block().call(DOUBLE, runtime, &[]);
             Ok(Some(h))
         }
 

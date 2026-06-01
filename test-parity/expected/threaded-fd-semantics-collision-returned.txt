@@ -1,0 +1,2 @@
+collision returned fd read: EBADF:read
+main local fd still reads: MAIN

@@ -48,7 +48,42 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
     result
 }
 
+/// #3946: lower a value-read of a `node:process` core property imported by
+/// name (`import { pid, arch } from "node:process"`) or read off a namespace
+/// local. Mirrors the dedicated `process.<prop>` variants used by the global
+/// member-access path so named/namespace forms agree with `process.<prop>`
+/// instead of resolving to `undefined`. Methods (`cwd`, `exit`, …) return
+/// `None` so the caller keeps lowering them to a callable native-module ref.
+pub(crate) fn lower_process_named_property(prop: &str) -> Option<Expr> {
+    Some(match prop {
+        "argv" => Expr::ProcessArgv,
+        "platform" => Expr::OsPlatform,
+        "arch" => Expr::OsArch,
+        "pid" => Expr::ProcessPid,
+        "ppid" => Expr::ProcessPpid,
+        "version" => Expr::ProcessVersion,
+        "versions" => Expr::ProcessVersions,
+        "env" => Expr::ProcessEnv,
+        "stdin" => Expr::ProcessStdin,
+        "stdout" => Expr::ProcessStdout,
+        "stderr" => Expr::ProcessStderr,
+        "execArgv" | "moduleLoadList" => Expr::Array(Vec::new()),
+        "title" => Expr::ProcessTitle,
+        "argv0" | "execPath" => Expr::IndexGet {
+            object: Box::new(Expr::ProcessArgv),
+            index: Box::new(Expr::Number(0.0)),
+        },
+        _ => return None,
+    })
+}
+
 fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Result<Expr> {
+    // #3896: capture-and-clear the call-callee marker so it applies only to THIS
+    // member (the immediate callee), not to nested member-object reads lowered
+    // below. The #463 read-gate below uses `member_is_call_callee` to keep
+    // rejecting `ns.foo()` while relaxing a bare `ns.foo` value read.
+    let member_is_call_callee = ctx.lowering_call_callee;
+    ctx.lowering_call_callee = false;
     // Issue #444: `import.meta.<prop>` folds directly to a literal at
     // lowering time. Routing through the bare-`import.meta` Object
     // synthesis hits a long-standing module-level NaN-boxing bug where
@@ -137,7 +172,18 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
 
     // Check if this is process.* property access
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
-        if obj_ident.sym.as_ref() == "process" {
+        // #3946: the global `process`, and also a namespace/default import
+        // local (`import * as p from "node:process"; p.pid` /
+        // `import p from "node:process"; p.pid`) both route through the same
+        // dedicated process-property lowering — otherwise the namespace form
+        // fell through to a generic native-module PropertyGet that resolved
+        // `pid`/`arch`/`platform`/… to `undefined`.
+        let is_process_obj = obj_ident.sym.as_ref() == "process"
+            || matches!(
+                ctx.lookup_native_module(obj_ident.sym.as_ref()),
+                Some(("process", None))
+            );
+        if is_process_obj {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 match prop_ident.sym.as_ref() {
                     "argv" => return Ok(Expr::ProcessArgv),
@@ -969,6 +1015,24 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "worker_threads"
+                    && matches!(class_name.as_str(), "MessagePort" | "BroadcastChannel")
+                    && matches!(
+                        property_name.as_str(),
+                        "postMessage"
+                            | "close"
+                            | "ref"
+                            | "unref"
+                            | "hasRef"
+                            | "addEventListener"
+                            | "removeEventListener"
+                    )
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "stream" && is_classic_stream_method_name(&property_name) {
                     // Classic Node streams materialize core stream and
                     // EventEmitter methods as closure-valued fields on the
@@ -1531,8 +1595,10 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         ast::MemberProp::Ident(p) if p.sym.as_ref() == "prototype"
                             || p.sym.as_ref() == "__proto__"
                     );
-                    let receiver_is_namespace_value =
-                        property == "crypto" || property == "WebAssembly";
+                    let receiver_is_namespace_value = matches!(
+                        property.as_str(),
+                        "crypto" | "WebAssembly" | "localStorage" | "sessionStorage"
+                    );
                     let outer_is_websocket_static = property == "WebSocket"
                         && match &member.prop {
                             ast::MemberProp::Ident(p) => matches!(
@@ -1766,6 +1832,17 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             // #2309: defer when tree-shaking (sink armed for this node_modules
             // module); re-raised only if the module survives pruning.
             if !crate::try_defer_refusal(msg.clone(), member.span.lo.0) {
+                // #3896: a bare *value read* of an absent member on a Node
+                // builtin module namespace/default object is an ordinary
+                // property miss → `undefined` (e.g. `dns/promises.ADDRCONFIG`,
+                // which Node also doesn't export but reads as undefined). Calls
+                // (`ns.foo()`) keep rejecting — `lower_call` set the callee
+                // marker, so `member_is_call_callee` is true there. Only Node
+                // core modules relax; unenumerated npm packages keep the strict
+                // gate (and the tree-shaking defer above).
+                if !member_is_call_callee && perry_api_manifest::is_node_core_module(module) {
+                    return Ok(Expr::Undefined);
+                }
                 crate::lower_bail!(member.span, "{}", msg);
             }
         }

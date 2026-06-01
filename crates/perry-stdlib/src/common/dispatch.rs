@@ -779,6 +779,11 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         {
             return v;
         }
+        if let Some(v) =
+            crate::fetch::dispatch_form_data_method(handle as usize, method_name, &args)
+        {
+            return v;
+        }
         if let Some(v) = crate::fetch::dispatch_blob_method(handle as usize, method_name, &args) {
             return v;
         }
@@ -1750,6 +1755,9 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         if let Some(v) = crate::fetch::dispatch_headers_property(handle as usize, property_name) {
             return v;
         }
+        if let Some(v) = crate::fetch::dispatch_form_data_property(handle as usize, property_name) {
+            return v;
+        }
         if let Some(v) = crate::fetch::dispatch_blob_property(handle as usize, property_name) {
             return v;
         }
@@ -1764,7 +1772,14 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     // property gate as the method-dispatch arm above.
     if matches!(
         property_name,
-        "lastNeed" | "lastTotal" | "lastChar" | "encoding" | "write" | "end"
+        "lastNeed"
+            | "lastTotal"
+            | "lastChar"
+            | "encoding"
+            | "constructor"
+            | "write"
+            | "end"
+            | "text"
     ) && crate::string_decoder::is_string_decoder_handle(handle)
     {
         return crate::string_decoder::dispatch_string_decoder_property(handle, property_name);
@@ -2094,6 +2109,22 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
     }
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn js_handle_own_property_names_dispatch(handle: i64) -> f64 {
+    if crate::string_decoder::is_string_decoder_handle(handle) {
+        return crate::string_decoder::string_decoder_own_property_names(handle);
+    }
+    f64::from_bits(perry_runtime::JSValue::undefined().bits())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_handle_prototype_dispatch(handle: i64) -> f64 {
+    if crate::string_decoder::is_string_decoder_handle(handle) {
+        return crate::string_decoder::string_decoder_prototype_value();
+    }
+    f64::from_bits(perry_runtime::JSValue::undefined().bits())
+}
+
 /// #2533: route a captured / aliased `http`/`https`/`http2` `createServer`
 /// (or the `Server` / `createSecureServer` aliases) back to the
 /// perry-ext-http-server factories. Registered with the runtime via
@@ -2179,6 +2210,8 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         fn js_register_handle_property_set_dispatch(
             f: unsafe extern "C" fn(i64, *const u8, usize, f64),
         );
+        fn js_register_handle_own_property_names_dispatch(f: unsafe extern "C" fn(i64) -> f64);
+        fn js_register_handle_prototype_dispatch(f: unsafe extern "C" fn(i64) -> f64);
         fn js_register_event_emitter_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
         fn js_register_event_emitter_async_resource_handle_probe(
             f: unsafe extern "C" fn(i64) -> bool,
@@ -2197,6 +2230,9 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     js_register_handle_method_dispatch(js_handle_method_dispatch);
     js_register_handle_property_dispatch(js_handle_property_dispatch);
     js_register_handle_property_set_dispatch(js_handle_property_set_dispatch);
+    js_register_handle_own_property_names_dispatch(js_handle_own_property_names_dispatch);
+    js_register_handle_prototype_dispatch(js_handle_prototype_dispatch);
+    crate::string_decoder::string_decoder_prototype_value();
     #[cfg(feature = "http-client")]
     js_register_global_fetch_with_options(crate::fetch::js_fetch_with_options);
     #[cfg(feature = "bundled-events")]

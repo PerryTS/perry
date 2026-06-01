@@ -114,6 +114,10 @@ fn is_cjs_style_native_default_import(module_name: &str) -> bool {
     matches!(
         module_name,
         "async_hooks"
+            | "child_process"
+            | "constants"
+            | "dns"
+            | "dns/promises"
             | "events"
             | "os"
             | "path"
@@ -272,28 +276,26 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 if module_name == "worker_threads" {
                     if let Some(method) = method_name {
                         if method == "workerData" {
-                            // workerData is a property-like import that calls a getter function
-                            return Ok(Expr::NativeMethodCall {
-                                module: "worker_threads".to_string(),
-                                class_name: None,
-                                object: None,
-                                method: "workerData".to_string(),
-                                args: Vec::new(),
-                            });
-                        }
-                        if method == "parentPort" {
-                            // parentPort is a singleton handle - call getter function
-                            return Ok(Expr::NativeMethodCall {
-                                module: "worker_threads".to_string(),
-                                class_name: None,
-                                object: None,
-                                method: "parentPort".to_string(),
-                                args: Vec::new(),
+                            return Ok(Expr::PropertyGet {
+                                object: Box::new(Expr::NativeModuleRef(
+                                    "worker_threads".to_string(),
+                                )),
+                                property: "workerData".to_string(),
                             });
                         }
                     }
                 }
                 if let Some(method) = method_name {
+                    // #3946: a `node:process` *property* imported by name
+                    // (`import { pid, arch } from "node:process"`) must read
+                    // the live process value, not a generic native-module
+                    // PropertyGet (which resolved to `undefined`). Methods
+                    // fall through to the callable native-module ref below.
+                    if module_name == "process" {
+                        if let Some(e) = expr_member::lower_process_named_property(method) {
+                            return Ok(e);
+                        }
+                    }
                     return Ok(Expr::PropertyGet {
                         object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
                         property: method.to_string(),

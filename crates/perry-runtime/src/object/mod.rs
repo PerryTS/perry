@@ -37,6 +37,7 @@ mod field_get_set;
 mod field_set_by_name;
 mod global_fetch;
 mod global_this;
+mod global_this_tables;
 mod groupby;
 pub(crate) mod has_own_helpers;
 mod instanceof;
@@ -69,6 +70,7 @@ pub use descriptors::*;
 pub use field_get_set::*;
 pub use field_set_by_name::*;
 pub use global_this::*;
+pub(crate) use global_this_tables::*;
 pub use groupby::*;
 pub use instanceof::*;
 pub use native_call_method::*;
@@ -99,6 +101,8 @@ static GLOBAL_THIS_READY: AtomicBool = AtomicBool::new(false);
 // Both are mutable roots scanned by `scan_object_cache_roots_mut`.
 pub(crate) static TYPED_ARRAY_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
 pub(crate) static TYPED_ARRAY_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static LOCAL_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static SESSION_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
 
 // Overflow field storage for objects that exceed their pre-allocated inline slot count.
 // Keyed by (obj_ptr as usize) -> Vec<JSValue bits> indexed by absolute field_index
@@ -1291,6 +1295,8 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         Ordering::Acquire,
         Ordering::Release,
     );
+    visitor.visit_atomic_i64_slot(&LOCAL_STORAGE_PTR, Ordering::Acquire, Ordering::Release);
+    visitor.visit_atomic_i64_slot(&SESSION_STORAGE_PTR, Ordering::Acquire, Ordering::Release);
 }
 
 #[cfg(test)]

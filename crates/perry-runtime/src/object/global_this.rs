@@ -73,178 +73,20 @@ pub unsafe extern "C" fn js_global_or_console_property_by_name(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-/// JS built-in constructor names exposed on `globalThis`; mirrored by codegen.
-pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
-    "Array",
-    "Object",
-    "String",
-    "Number",
-    "Boolean",
-    "Function",
-    "RegExp",
-    "Date",
-    "Error",
-    "TypeError",
-    "RangeError",
-    "SyntaxError",
-    "ReferenceError",
-    "EvalError",
-    "URIError",
-    "AggregateError",
-    "Symbol",
-    "Promise",
-    "Map",
-    "Set",
-    "WeakMap",
-    "WeakSet",
-    "WeakRef",
-    "Proxy",
-    "BigInt",
-    "Uint8Array",
-    "Int8Array",
-    "Uint16Array",
-    "Int16Array",
-    "Uint32Array",
-    "Int32Array",
-    "Float16Array",
-    "Float32Array",
-    "Float64Array",
-    "Uint8ClampedArray",
-    "BigInt64Array",
-    "BigUint64Array",
-    "ArrayBuffer",
-    "SharedArrayBuffer",
-    "DataView",
-    "TextEncoder",
-    "TextDecoder",
-    "TextEncoderStream",
-    "TextDecoderStream",
-    "URL",
-    "URLSearchParams",
-    "AbortController",
-    "AbortSignal",
-    "EventTarget",
-    "Crypto",
-    "CryptoKey",
-    "SubtleCrypto",
-    "Event",
-    "CustomEvent",
-    "DOMException",
-    "FormData",
-    "Blob",
-    "File",
-    "Headers",
-    "Request",
-    "Response",
-    "MessageChannel",
-    "MessagePort",
-    "BroadcastChannel",
-    "WebSocket",
-    "FinalizationRegistry",
-    // #2875: TC39 explicit-resource-management globals.
-    "DisposableStack",
-    "AsyncDisposableStack",
-    "SuppressedError",
-    "Buffer",
-];
+// Note: `navigator` (#2923) is installed on the singleton directly (see
+// `populate_global_this_builtins`) rather than via this generic namespace
+// loop because it needs its own field-populated object, not an empty stub.
 
-/// #3655: spec declared-parameter count for built-in constructor values.
-pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
-    let len = match name {
-        "Symbol"
-        | "Map"
-        | "Set"
-        | "WeakMap"
-        | "WeakSet"
-        | "TextEncoder"
-        | "TextDecoder"
-        | "TextEncoderStream"
-        | "TextDecoderStream"
-        | "URLSearchParams"
-        | "AbortController"
-        | "AbortSignal"
-        | "DOMException"
-        | "FormData"
-        | "Blob"
-        | "Headers"
-        | "Response"
-        | "MessageChannel"
-        | "MessagePort"
-        | "DisposableStack"
-        | "AsyncDisposableStack" => 0,
-        "Array"
-        | "Object"
-        | "String"
-        | "Number"
-        | "Boolean"
-        | "Function"
-        | "Error"
-        | "TypeError"
-        | "RangeError"
-        | "SyntaxError"
-        | "ReferenceError"
-        | "EvalError"
-        | "URIError"
-        | "WeakRef"
-        | "BigInt"
-        | "ArrayBuffer"
-        | "SharedArrayBuffer"
-        | "DataView"
-        | "URL"
-        | "Event"
-        | "CustomEvent"
-        | "Request"
-        | "WebSocket"
-        | "BroadcastChannel"
-        | "FinalizationRegistry"
-        | "Promise" => 1,
-        "RegExp" | "Proxy" | "AggregateError" | "File" => 2,
-        "Date" => 7,
-        "SuppressedError" | "Buffer" | "Uint8Array" | "Int8Array" | "Uint16Array"
-        | "Int16Array" | "Uint32Array" | "Int32Array" | "Float16Array" | "Float32Array"
-        | "Float64Array" | "Uint8ClampedArray" | "BigInt64Array" | "BigUint64Array" => 3,
-        _ => return None,
-    };
-    Some(len)
-}
-
-/// Built-in namespaces exposed on `globalThis` as objects.
-pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] = &[
-    "console",
-    "process",
-    "Math",
-    "JSON",
-    "Reflect",
-    "WebAssembly",
-];
-
-// `navigator` (#2923) is installed directly because it needs populated fields.
-
-/// Global built-in functions exposed as function-valued properties.
-pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &[
-    "fetch",
-    "structuredClone",
-    "atob",
-    "btoa",
-    "setTimeout",
-    "clearTimeout",
-    "setInterval",
-    "clearInterval",
-    "setImmediate",
-    "clearImmediate",
-    "queueMicrotask",
-    // #2905: standard global helper functions route through runtime helpers.
-    "parseInt",
-    "parseFloat",
-    "isNaN",
-    "isFinite",
-    "encodeURI",
-    "decodeURI",
-    "encodeURIComponent",
-    "decodeURIComponent",
-];
-
-/// No-op thunk for singleton constructor values.
+/// No-op thunk used as the function body for most singleton globalThis
+/// built-in constructor values. Lets `globalThis.Array` carry a real
+/// ClosureHeader (so `typeof globalThis.Array === "function"`) without
+/// implementing actual constructor dispatch through this path — bare
+/// `new Array(n)` continues to flow through codegen's `lower_new` arm and
+/// the runtime `js_array_alloc` machinery, so callers that follow the
+/// usual `new <Ident>(...)` pattern are unaffected. Calling these
+/// sentinels directly (e.g. `globalThis.Array(3)`) returns undefined —
+/// best-effort no-op rather than throwing — and remains a known gap for
+/// non-String call-form constructors after re-binding the global to a local.
 pub(crate) extern "C" fn global_this_builtin_noop_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _arg: f64,
@@ -1074,6 +916,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             "BroadcastChannel" => {
                 crate::messaging::js_broadcast_channel_constructor_call_error as *const u8
             }
+            "Storage" => crate::web_storage::storage_constructor_illegal as *const u8,
             "Crypto" | "CryptoKey" | "SubtleCrypto" => {
                 webcrypto_illegal_constructor_thunk as *const u8
             }
@@ -1087,7 +930,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             "Object" | "String" | "Number" | "Boolean" | "BroadcastChannel" => {
                 crate::closure::js_register_closure_arity(func_ptr, 1);
             }
-            "MessageChannel" | "MessagePort" => {
+            "MessageChannel" | "MessagePort" | "Storage" => {
                 crate::closure::js_register_closure_arity(func_ptr, 0);
             }
             _ => {}
@@ -1138,6 +981,23 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                 "prototype".to_string(),
                 super::PropertyAttrs::new(false, false, false),
             );
+            if is_web_fetch_constructor(name) {
+                let ctor_key = crate::string::js_string_from_bytes(
+                    b"constructor".as_ptr(),
+                    "constructor".len() as u32,
+                );
+                js_object_set_field_by_name(proto_obj, ctor_key, ctor_value);
+                super::set_builtin_property_attrs(
+                    proto_obj as usize,
+                    "constructor".to_string(),
+                    super::PropertyAttrs::new(true, false, true),
+                );
+            }
+            if name == "Navigator" || name == "TextEncoderStream" || name == "TextDecoderStream" {
+                let constructor_key =
+                    crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+                js_object_set_field_by_name(proto_obj, constructor_key, ctor_value);
+            }
             // Populate well-known method properties on the prototype
             // (currently just `Array.prototype.slice`). Methods are
             // ClosureHeader-backed thunks that read their receiver from
@@ -1147,6 +1007,14 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             populate_builtin_prototype_methods(name, proto_obj);
             if matches!(name, "MessageChannel" | "MessagePort" | "BroadcastChannel") {
                 crate::messaging::populate_messaging_prototype(name, proto_obj, ctor_value);
+            }
+            if name == "Storage" {
+                crate::web_storage::install_storage_globals(
+                    singleton,
+                    closure_ptr,
+                    proto_obj,
+                    ctor_value,
+                );
             }
             if matches!(name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
                 super::native_module::install_webcrypto_constructor_proto(proto_obj, ctor_value);
@@ -1328,7 +1196,16 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     {
         let nname = b"navigator";
         let nkey = crate::string::js_string_from_bytes(nname.as_ptr(), nname.len() as u32);
-        let nval = crate::navigator::js_navigator_object();
+        // Read the `Navigator` constructor we installed on the singleton above
+        // and hand it to the navigator builder directly. We must NOT call
+        // `js_navigator_object()` here: it re-fetches the constructor via
+        // `js_get_global_this_builtin_value` → `js_get_global_this`, which would
+        // re-enter this very lazy-init (GLOBAL_THIS_READY is still false until we
+        // return) and recurse/spin forever.
+        let nav_ctor_key = crate::string::js_string_from_bytes(b"Navigator".as_ptr(), 9);
+        let nav_ctor = js_object_get_field_by_name(singleton, nav_ctor_key);
+        let nval =
+            crate::navigator::navigator_object_with_constructor(f64::from_bits(nav_ctor.bits()));
         js_object_set_field_by_name(singleton, nkey, nval);
     }
 }
@@ -1581,6 +1458,7 @@ fn install_constructor_static(
         crate::closure::js_register_closure_arity(func_ptr, arity);
     }
     super::native_module::set_bound_native_closure_name(closure, name);
+    super::native_module::set_builtin_closure_length(closure as usize, arity);
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
     js_object_set_field_by_name(ctor as *mut ObjectHeader, key, value);
@@ -1673,6 +1551,29 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
             );
             install_constructor_static(ctor, "from", array_from_thunk as *const u8, 1, false);
             install_constructor_static(ctor, "of", array_of_thunk as *const u8, 0, true);
+        }
+        "Response" => {
+            install_constructor_static(
+                ctor,
+                "error",
+                global_this_builtin_noop_thunk as *const u8,
+                0,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "json",
+                global_this_builtin_noop_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "redirect",
+                global_this_builtin_noop_thunk as *const u8,
+                1,
+                false,
+            );
         }
         "URL" => {
             install_constructor_static(
@@ -2073,6 +1974,70 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
         }
         "TextDecoder" => {
             install_noop_proto_methods(proto_obj, &[("decode", 1)]);
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "Headers" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("append", 2),
+                    ("delete", 1),
+                    ("entries", 0),
+                    ("forEach", 1),
+                    ("get", 1),
+                    ("getSetCookie", 0),
+                    ("has", 1),
+                    ("keys", 0),
+                    ("set", 2),
+                    ("values", 0),
+                ],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "Request" | "Response" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("arrayBuffer", 0),
+                    ("blob", 0),
+                    ("bytes", 0),
+                    ("clone", 0),
+                    ("formData", 0),
+                    ("json", 0),
+                    ("text", 0),
+                ],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "Blob" | "File" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("arrayBuffer", 0),
+                    ("bytes", 0),
+                    ("slice", 0),
+                    ("stream", 0),
+                    ("text", 0),
+                ],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "FormData" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("append", 2),
+                    ("delete", 1),
+                    ("entries", 0),
+                    ("forEach", 1),
+                    ("get", 1),
+                    ("getAll", 1),
+                    ("has", 1),
+                    ("keys", 0),
+                    ("set", 2),
+                    ("values", 0),
+                ],
+            );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "WebSocket" => {

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2491 entries across 106 modules
+// Coverage: 2500 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -266,6 +266,9 @@ declare module "cheerio" {
 declare module "child_process" {
   /** stdlib */
   export class ChildProcess { [key: string]: any; }
+  /** stdlib */
+  const _default: any;
+  export default _default;
   /** stdlib */
   export function exec(...args: any[]): any;
   /** stdlib */
@@ -868,6 +871,14 @@ declare module "crypto" {
   /** stdlib */
   export const webcrypto: any;
   /** stdlib */
+  export function Hash(...args: any[]): any;
+  /** stdlib */
+  export function Hmac(...args: any[]): any;
+  /** stdlib */
+  export function Sign(...args: any[]): any;
+  /** stdlib */
+  export function Verify(...args: any[]): any;
+  /** stdlib */
   export function createCipheriv(...args: any[]): any;
   /** stdlib */
   export function createDecipheriv(...args: any[]): any;
@@ -893,6 +904,8 @@ declare module "crypto" {
   export function createVerify(...args: any[]): any;
   /** stdlib */
   export function generateKeyPairSync(...args: any[]): any;
+  /** stdlib */
+  export function generateKeySync(...args: any[]): any;
   /** stdlib */
   export function getCiphers(...args: any[]): any;
   /** stdlib */
@@ -1121,6 +1134,9 @@ declare module "dns" {
   /** stdlib */
   export const V4MAPPED: any;
   /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
   export const promises: any;
   /** stdlib */
   export function Resolver(...args: any[]): any;
@@ -1219,6 +1235,9 @@ declare module "dns/promises" {
   export const SERVFAIL: any;
   /** stdlib */
   export const TIMEOUT: any;
+  /** stdlib */
+  const _default: any;
+  export default _default;
   /** stdlib */
   export function Resolver(...args: any[]): any;
   /** stdlib */
@@ -1353,6 +1372,8 @@ declare module "fastify" {
 declare module "fetch" {
   /** stdlib */
   export class Blob { [key: string]: any; }
+  /** stdlib */
+  export class FormData { [key: string]: any; }
   /** stdlib */
   export class Headers { [key: string]: any; }
   /** stdlib */
@@ -1687,6 +1708,8 @@ declare module "http2" {
   /** stdlib */
   export const constants: any;
   /** stdlib */
+  export const sensitiveHeaders: any;
+  /** stdlib */
   export function createSecureServer(...args: any[]): any;
   /** stdlib */
   export function getDefaultSettings(...args: any[]): any;
@@ -1927,6 +1950,8 @@ declare module "node-cron" {
 declare module "node-fetch" {
   /** stdlib */
   export class Blob { [key: string]: any; }
+  /** stdlib */
+  export class FormData { [key: string]: any; }
   /** stdlib */
   export class Headers { [key: string]: any; }
   /** stdlib */
@@ -3652,15 +3677,11 @@ declare module "worker_threads" {
   /** stdlib */
   export function moveMessagePortToContext(p0: any, p1: any): any;
   /** stdlib */
-  export function parentPort(...args: any[]): any;
-  /** stdlib */
   export function postMessageToThread(p0: any, p1: any, p2: any, p3: any): any;
   /** stdlib */
   export function receiveMessageOnPort(p0: any): any;
   /** stdlib */
   export function setEnvironmentData(p0: any, p1: any): void;
-  /** stdlib */
-  export function workerData(...args: any[]): any;
 }
 
 declare module "ws" {

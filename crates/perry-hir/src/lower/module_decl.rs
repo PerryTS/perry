@@ -18,6 +18,10 @@ fn is_cjs_style_native_default_import(module_name: &str) -> bool {
     matches!(
         module_name,
         "async_hooks"
+            | "child_process"
+            | "constants"
+            | "dns"
+            | "dns/promises"
             | "events"
             | "os"
             | "path"
@@ -53,6 +57,27 @@ pub(crate) fn lower_module_decl(
 
             // Check if this is a native module import
             let is_native = is_native_module(&source);
+
+            // #3925: a `node:`-prefixed specifier must name a real Node
+            // built-in module. Node throws `ERR_UNKNOWN_BUILTIN_MODULE` for
+            // anything else — e.g. `node:punycode.ucs2`, where `ucs2` is a
+            // *property* of `node:punycode`, not a module. (`punycode.ucs2`
+            // stays in `NODE_SUBMODULES` as a Perry-internal dispatch namespace,
+            // so the check keys off `NODE_BUILTIN_MODULES` — the real Node
+            // surface — not `is_known_module`.) `is_native` keeps any
+            // node:-prefixed NATIVE_MODULES entry resolvable.
+            if raw_source.starts_with("node:")
+                && !import_decl.type_only
+                && !is_node_builtin_module(&source)
+                && !is_native
+            {
+                crate::lower_bail!(
+                    import_decl.span,
+                    "Cannot find module '{}'. No such built-in module: {}",
+                    raw_source,
+                    raw_source
+                );
+            }
 
             // Native modules have no class metadata to extract — `node:fs`,
             // `node:path`, etc. produce no `ImportedClass` entries and the
@@ -197,15 +222,6 @@ pub(crate) fn lower_module_decl(
                                     });
                                 }
                             }
-                            // Auto-register parentPort from worker_threads as a native instance
-                            // (it's a singleton, not created via `new`)
-                            if source == "worker_threads" && imported == "parentPort" {
-                                ctx.register_native_instance(
-                                    local.clone(),
-                                    "worker_threads".to_string(),
-                                    "MessagePort".to_string(),
-                                );
-                            }
                         } else {
                             // Register as imported function. Issue #35 (#321):
                             // use the LOCAL name as the original-name marker
@@ -261,6 +277,32 @@ pub(crate) fn lower_module_decl(
                                 source.clone(),
                                 native_method,
                             );
+                        } else if is_node_builtin_module(&source) {
+                            // #3906: a CJS-backed Node builtin *submodule* that
+                            // isn't in NATIVE_MODULES (e.g. `node:timers/promises`,
+                            // `node:stream/promises`). Its default export is the
+                            // module object — CJS `default === module.exports`,
+                            // the same value as the `import * as` namespace shape.
+                            // Without this it fell to the JS-module default path
+                            // below and resolved to an `ExternFuncRef` boolean
+                            // stub (`typeof === "boolean"`). Mirror the namespace
+                            // handling so the default binding is the module object.
+                            ctx.register_imported_func(local.clone(), local.clone());
+                            ctx.namespace_import_locals.insert(local.clone());
+                            if source == "fs/promises" {
+                                ctx.register_builtin_module_alias(local.clone(), source.clone());
+                            }
+                            // Treat the default binding as the module-namespace
+                            // object (CJS default === module.exports). Pushing a
+                            // Namespace specifier (not Default) puts `local` into
+                            // the driver's `namespace_imports`, so `typeof local`
+                            // folds to "object" and `local.member(...)` dispatches
+                            // through the submodule namespace — exactly like the
+                            // `import * as local` shape.
+                            specifiers.push(ImportSpecifier::Namespace {
+                                local: local.clone(),
+                            });
+                            continue;
                         } else {
                             // Default import from JS module — register so calls resolve to
                             // ExternFuncRef. Use the LOCAL name as the original-name marker
