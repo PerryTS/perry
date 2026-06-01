@@ -263,7 +263,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // not constructors.
                         match property.as_str() {
                             "process" | "console" | "globalThis" | "performance" | "navigator"
-                            | "crypto" => Some("object"),
+                            | "crypto" | "localStorage" | "sessionStorage" => Some("object"),
                             "Math" | "JSON" | "Reflect" => Some("object"),
                             n if is_global_this_builtin_function_name(n) => Some("function"),
                             _ => None,

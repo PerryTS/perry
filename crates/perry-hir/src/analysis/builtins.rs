@@ -96,6 +96,9 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "MessageChannel"
             | "MessagePort"
             | "BroadcastChannel"
+            | "Storage"
+            | "localStorage"
+            | "sessionStorage"
             | "WebSocket"
             | "FinalizationRegistry"
             | "Performance"
@@ -153,7 +156,7 @@ pub(crate) fn builtin_constructor_length(name: &str) -> Option<u32> {
             1
         }
         "Symbol" | "Map" | "Set" | "WeakMap" | "WeakSet" | "MessageChannel" | "MessagePort"
-        | "Navigator" | "TextEncoderStream" | "TextDecoderStream" | "DOMException" => 0,
+        | "Navigator" | "TextEncoderStream" | "TextDecoderStream" | "DOMException" | "Storage" => 0,
         "RegExp" | "Proxy" | "File" => 2,
         "BroadcastChannel" => 1,
         "Date" => 7,

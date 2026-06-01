@@ -50,6 +50,7 @@ mod options;
 mod property_get;
 mod ui_styling;
 mod ui_tables;
+mod web_storage;
 
 use buffer_intrinsic::try_emit_buffer_read_intrinsic;
 use builtin::lower_builtin_new;

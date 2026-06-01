@@ -2,6 +2,28 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1056 — fix(#3917): `(num: number).toLocaleString()` printed a 1970 date string
+
+`const num: number = 20; console.log(num.toLocaleString('en-US'))` printed
+`"12/31/1969, 4:00:00 PM"` (or the local-time equivalent) instead of `"20"`.
+The HIR lowers every `x.toLocaleString()` to the (misnamed) `Expr::DateToLocaleString`
+variant; the LLVM arm in `crates/perry-codegen/src/expr/env_clones.rs` is supposed
+to disambiguate Number-receivers vs Date-receivers by inspecting the receiver's
+static type. The disambiguator only called `refine_type_from_init`, which inspects
+AST shape (literals, arithmetic, `new T(...)`) and has no `LocalGet` arm — so for
+the common `let n: number = …; n.toLocaleString()` shape it returned `None` and
+the call fell through to `js_date_to_locale_string`, treating the number as a
+millisecond epoch.
+
+Fixed by falling back to `static_type_of` (which already reads `local_types`)
+when the structural refinement comes up empty. `static_type_of` resolves
+`LocalGet(id) → ctx.local_types[id]`, so a `number`-typed local now routes to
+`js_number_to_locale_string` and formats with thousands separators
+(`"1,234,567"`, etc.). Verified with literal, integer-local, and decimal-local
+receivers, plus `new Date(0).toLocaleString('en-US')` still emits the date
+string. The user-reported repro (Windows 11, perry 0.5.1025) was platform-agnostic
+— a HIR/codegen routing bug, not a runtime issue.
+
 ## v0.5.1055 — hotfix: actually remove native_module.rs conflict marker
 
 The v0.5.1054 hotfix bumped the version but its source edit failed to apply,

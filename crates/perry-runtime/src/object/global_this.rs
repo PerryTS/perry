@@ -140,6 +140,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "MessageChannel",
     "MessagePort",
     "BroadcastChannel",
+    "Storage",
     "WebSocket",
     "FinalizationRegistry",
     // #2875: TC39 explicit-resource-management globals.
@@ -171,6 +172,7 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "Response"
         | "MessageChannel"
         | "MessagePort"
+        | "Storage"
         | "DisposableStack"
         | "AsyncDisposableStack" => 0,
         "Array"
@@ -1075,6 +1077,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             "BroadcastChannel" => {
                 crate::messaging::js_broadcast_channel_constructor_call_error as *const u8
             }
+            "Storage" => crate::web_storage::storage_constructor_illegal as *const u8,
             "Crypto" | "CryptoKey" | "SubtleCrypto" => {
                 webcrypto_illegal_constructor_thunk as *const u8
             }
@@ -1088,7 +1091,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             "Object" | "String" | "Number" | "Boolean" | "BroadcastChannel" => {
                 crate::closure::js_register_closure_arity(func_ptr, 1);
             }
-            "MessageChannel" | "MessagePort" => {
+            "MessageChannel" | "MessagePort" | "Storage" => {
                 crate::closure::js_register_closure_arity(func_ptr, 0);
             }
             _ => {}
@@ -1153,6 +1156,14 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             populate_builtin_prototype_methods(name, proto_obj);
             if matches!(name, "MessageChannel" | "MessagePort" | "BroadcastChannel") {
                 crate::messaging::populate_messaging_prototype(name, proto_obj, ctor_value);
+            }
+            if name == "Storage" {
+                crate::web_storage::install_storage_globals(
+                    singleton,
+                    closure_ptr,
+                    proto_obj,
+                    ctor_value,
+                );
             }
             if matches!(name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
                 super::native_module::install_webcrypto_constructor_proto(proto_obj, ctor_value);
