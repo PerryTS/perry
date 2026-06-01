@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2498 entries across 106 modules
+// Coverage: 2497 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3676,8 +3676,6 @@ declare module "worker_threads" {
   export function receiveMessageOnPort(p0: any): any;
   /** stdlib */
   export function setEnvironmentData(p0: any, p1: any): void;
-  /** stdlib */
-  export function workerData(...args: any[]): any;
 }
 
 declare module "ws" {

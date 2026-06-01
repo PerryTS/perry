@@ -92,19 +92,15 @@ pub(super) const EXTRAS_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // #3899: `workerData` is value-only (not a callable method) — dropping the
+    // call routing makes `workerData()` throw a normal TypeError (the value is
+    // not a function), matching Node. The value-shaped property arm in
+    // `native_module.rs` resolves `workerData` to `null` on the main thread.
+    // (`getWorkerData` keeps its routing; see the entries.rs note re: #3896.)
     NativeModSig {
         module: "worker_threads",
         has_receiver: false,
         method: "getWorkerData",
-        class_filter: None,
-        runtime: "js_worker_threads_get_worker_data",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "worker_threads",
-        has_receiver: false,
-        method: "workerData",
         class_filter: None,
         runtime: "js_worker_threads_get_worker_data",
         args: &[],
