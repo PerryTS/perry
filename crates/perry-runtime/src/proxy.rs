@@ -60,14 +60,12 @@ const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
 /// Tag bits high enough to live inside a 48-bit pointer slot but low enough
-/// that real heap pointers never collide. We offset the index so the returned
-/// "pointer" is always > 0x40000 (well above the handle-dispatch threshold
-/// `0x100000` used by some runtime paths? — actually handle dispatch fires
-/// under 0x100000). We intentionally pick < 0x100000 so the proxy cannot be
-/// mistaken for a real heap allocation and a conservative GC scan treats the
-/// value as a non-pointer. Any operation on a proxy MUST go through the
-/// Proxy* dispatch helpers in this module.
-const PROXY_TAG_BASE: u64 = 0x0005_0000;
+/// that real heap pointers never collide. Keep proxies near the top of the
+/// runtime's `< 0x100000` small-handle band so Web Fetch handles can occupy a
+/// broad disjoint range below this without sharing visible `POINTER_TAG | id`
+/// bits with a proxy. Any operation on a proxy MUST go through the Proxy*
+/// dispatch helpers in this module.
+const PROXY_TAG_BASE: u64 = 0x000F_0000;
 
 fn encode_proxy_id(id: u64) -> i64 {
     (PROXY_TAG_BASE + id) as i64

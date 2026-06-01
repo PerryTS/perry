@@ -22,17 +22,22 @@ use perry_runtime::js_get_string_pointer_unified;
 /// i64, mirroring `js_get_string_pointer_unified`).
 ///
 /// A `ReadableStream` handle — e.g. another Response's `.body` — is a plain
-/// numeric f64 id allocated from `0x40000` with no NaN-box tag, so the generic
-/// string coercion would stringify the handle to its number (`"262144"`) and
-/// discard the real bytes. Hono re-wraps responses to mutate headers via
-/// `new Response(res.body, res)`, so the body must be DRAINED from the stream's
-/// buffered chunks instead. Any non-stream value falls back to the normal
-/// coercion, so plain string bodies (`c.json`/`c.text`) are unaffected.
+/// numeric f64 id with no NaN-box tag, so the generic string coercion would
+/// stringify the handle to its number and discard the real bytes. Hono re-wraps
+/// responses to mutate headers via `new Response(res.body, res)`, so the body
+/// must be DRAINED from the stream's buffered chunks instead. Any non-stream
+/// value falls back to the normal coercion, so plain string bodies
+/// (`c.json`/`c.text`) are unaffected.
 #[no_mangle]
 pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
-    // Stream ids live in [0x40000, 0x100000); a non-integral or out-of-range
-    // value can't be one, so we skip the registry probe for the common cases.
-    if value.is_finite() && value.fract() == 0.0 && (262144.0..1048576.0).contains(&value) {
+    // A non-integral or out-of-range value can't be a stream, so skip the
+    // registry probe for the common cases.
+    if value.is_finite()
+        && value.fract() == 0.0
+        && ((crate::streams::STREAM_HANDLE_ID_START as f64)
+            ..(crate::streams::STREAM_HANDLE_ID_END as f64))
+            .contains(&value)
+    {
         let id = value as usize;
         // kind == 1 ⇒ live ReadableStream.
         if crate::streams::js_stream_handle_kind(id) == 1 {

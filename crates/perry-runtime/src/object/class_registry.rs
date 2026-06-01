@@ -2502,7 +2502,7 @@ pub fn is_class_object_ptr(ptr: *const u8) -> bool {
     // timers, …) bit-OR'd with POINTER_TAG, not real heap pointers — real
     // objects always live well above 0x100000. The previous 0x1008 floor only
     // caught the tiny net/fastify id space; a mid-range handle (e.g. zlib's
-    // 0x60000 stream base, #1843) sailed past it and this function then
+    // zlib stream base, #1843) sailed past it and this function then
     // segfaulted dereferencing `[handle - 8]` as a GcHeader. 0x100000 is the
     // same handle/real-pointer threshold `js_native_call_method` already uses.
     if ptr.is_null() || (ptr as usize) < 0x100000 {

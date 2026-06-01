@@ -39,7 +39,7 @@ pub(super) unsafe fn boxed_primitive_base_for_object(
 unsafe fn boxed_primitive_payload_for_object(
     obj_ptr: *const crate::object::ObjectHeader,
 ) -> Option<(u32, f64)> {
-    if obj_ptr.is_null() {
+    if obj_ptr.is_null() || (obj_ptr as usize) < 0x100000 {
         return None;
     }
     let class_id = (*obj_ptr).class_id;
@@ -164,12 +164,12 @@ pub(crate) fn boxed_primitive_payload(value: f64) -> Option<(u32, f64)> {
     let bits = value.to_bits();
     let ptr = if jv.is_pointer() {
         jv.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader
-    } else if (bits >> 48) == 0 && bits >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
+    } else if (bits >> 48) == 0 && bits >= 0x100000 {
         bits as *mut crate::object::ObjectHeader
     } else {
         return None;
     };
-    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+    if ptr.is_null() || (ptr as usize) < 0x100000 {
         return None;
     }
     unsafe { boxed_primitive_payload_for_object(ptr) }
@@ -242,4 +242,15 @@ pub extern "C" fn js_boxed_symbol_new(value: f64) -> f64 {
     register_boxed_primitive_payload(obj, value);
     attach_boxed_primitive_prototype(obj, CLASS_ID_BOXED_SYMBOL);
     crate::value::js_nanbox_pointer(obj as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boxed_primitive_probe_rejects_pointer_tagged_native_handles() {
+        let fetch_family_handle = crate::value::js_nanbox_pointer(0x40001);
+        assert!(boxed_primitive_payload(fetch_family_handle).is_none());
+    }
 }

@@ -18,7 +18,9 @@
 //! Each `i64` is allocated atomically from a counter starting at 1
 //! — `0` is reserved as `INVALID_HANDLE` so `register_handle` can
 //! never produce a falsy value (matches JS truthiness semantics
-//! for type checks like `if (handle)`).
+//! for type checks like `if (handle)`). Visible ids stop before
+//! `0x40000`; the pointer-tagged small-handle band above that is
+//! reserved for Web Fetch and proxy handles.
 //!
 //! perry-stdlib has its own copy of this same registry (in
 //! `crates/perry-stdlib/src/common/handle.rs`). They are separate
@@ -26,7 +28,10 @@
 //! up via perry-stdlib's `get_handle`, and vice versa. Programs
 //! that link both registries (e.g. via the well-known flip) just
 //! end up with two `DashMap` statics; each wrapper consults the
-//! registry it was compiled against, so handles never collide.
+//! registry it was compiled against. Values returned to JS can still collide
+//! at the runtime dispatch layer if two subsystems expose the same
+//! `POINTER_TAG | id` bits, so handle families that participate in generic
+//! property/method dispatch reserve disjoint visible id ranges.
 //!
 //! # Safety
 //!
@@ -58,7 +63,10 @@ pub type Handle = i64;
 pub const INVALID_HANDLE: Handle = 0;
 
 static HANDLES: Lazy<DashMap<Handle, Box<dyn Any + Send + Sync>>> = Lazy::new(DashMap::new);
-static NEXT_HANDLE: AtomicI64 = AtomicI64::new(1);
+const FFI_HANDLE_ID_START: Handle = 1;
+const FFI_HANDLE_ID_END: Handle = 0x40000;
+
+static NEXT_HANDLE: AtomicI64 = AtomicI64::new(FFI_HANDLE_ID_START);
 static ROOT_SCANNERS: Lazy<Mutex<Vec<fn(&mut dyn FnMut(f64))>>> =
     Lazy::new(|| Mutex::new(Vec::new()));
 static MUTABLE_ROOT_SCANNERS: Lazy<Mutex<Vec<NamedGcMutableRootScanner>>> =
@@ -185,8 +193,16 @@ impl<'a> GcRootVisitor<'a> {
 /// across threads (tokio workers may resolve promises that touch
 /// handle data while the main thread is also touching it).
 pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
-    let handle = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
+    let handle = next_handle_id();
     HANDLES.insert(handle, Box::new(value));
+    handle
+}
+
+fn next_handle_id() -> Handle {
+    let handle = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
+    if handle >= FFI_HANDLE_ID_END {
+        panic!("perry-ffi handle id range exhausted before reserved Web handle bands");
+    }
     handle
 }
 
@@ -496,6 +512,7 @@ mod tests {
     fn round_trip_simple_value() {
         let h = register_handle(42_i64);
         assert_ne!(h, INVALID_HANDLE);
+        assert!(h < FFI_HANDLE_ID_END);
         let v = with_handle::<i64, _, _>(h, |v| *v).expect("present");
         assert_eq!(v, 42);
         assert!(drop_handle(h));

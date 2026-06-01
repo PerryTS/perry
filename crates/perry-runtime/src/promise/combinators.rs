@@ -198,7 +198,10 @@ pub extern "C" fn js_value_is_promise(value: f64) -> i32 {
         return 0;
     }
     let ptr_usize = (bits & crate::value::POINTER_MASK) as usize;
-    if ptr_usize < 0x10000 {
+    // Pointer-tagged native handles (Fetch/Headers/Timers/etc.) also carry
+    // small payloads. They are not GC allocations and must not be probed as
+    // Promise headers before the handle dispatch tables see them.
+    if ptr_usize < 0x100000 {
         return 0;
     }
     unsafe {
@@ -1511,6 +1514,12 @@ mod tests {
         let key = crate::string::js_string_from_bytes(b"then".as_ptr(), 4);
         js_object_set_field_by_name(obj, key, js_nanbox_pointer(then as i64));
         js_nanbox_pointer(obj as i64)
+    }
+
+    #[test]
+    fn promise_probe_rejects_pointer_tagged_native_handles() {
+        let fetch_family_handle = js_nanbox_pointer(0x40001);
+        assert_eq!(js_value_is_promise(fetch_family_handle), 0);
     }
 
     extern "C" fn test_thenable_resolve_twice(

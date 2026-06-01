@@ -62,10 +62,7 @@ lazy_static::lazy_static! {
 }
 
 fn alloc_form_data(store: FormDataStore) -> usize {
-    let mut id_guard = NEXT_FETCH_HANDLE_ID.lock().unwrap();
-    let id = *id_guard;
-    *id_guard += 1;
-    drop(id_guard);
+    let id = alloc_fetch_handle_id();
     FORM_DATA_REGISTRY.lock().unwrap().insert(id, store);
     id
 }
@@ -190,10 +187,7 @@ pub extern "C" fn js_fetch_response_redirected(handle: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_response_static_error() -> f64 {
-    let mut id_guard = NEXT_FETCH_HANDLE_ID.lock().unwrap();
-    let id = *id_guard;
-    *id_guard += 1;
-    drop(id_guard);
+    let id = alloc_fetch_handle_id();
     FETCH_RESPONSES.lock().unwrap().insert(
         id,
         FetchResponse {
