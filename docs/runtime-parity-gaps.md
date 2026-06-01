@@ -7,16 +7,15 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
 | Whole-module gaps (zero coverage) | 16 | 427 | n/a |
-| Partial-module gaps | 31 | 1656 | 406 |
+| Partial-module gaps | 31 | 1485 | 578 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2365** |  |
+| **Total true gaps** |  | **2194** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
 - `Web / Global APIs` — 282
 - `node:os` — 195
-- `node:fs` — 133
 - `node:crypto` — 128
 - `node:process (and global `process`)` — 99
 - `node:util` — 92
@@ -363,57 +362,11 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:fs
 
-**Gap APIs: 133** · Already covered: 46
+**Gap APIs: 0** · Already covered: 180
 
-#### Missing from Perry
+`node:fs` has no remaining public API surface gaps in the manifest-based reconciliation. The current runtime manifest includes the callback and sync functions, constructor/export tail (`Dir`, `Dirent`, `Stats`, `ReadStream`, `WriteStream`, `FileReadStream`, `FileWriteStream`, `Utf8Stream`), `_toUnixTimestamp`, `openAsBlob`, `mkdtempDisposableSync`, `constants`, and `promises`.
 
-- `fs.chown(path, uid, gid, callback)`
-- `fs.close(fd[, callback])`
-- `fs.cp(src, dest[, options], callback)`
-- `fs.fchmod(fd, mode, callback)`
-- `fs.fchown(fd, uid, gid, callback)`
-- `fs.fdatasync(fd, callback)`
-- `fs.fstat(fd[, options], callback)`
-- `fs.fsync(fd, callback)`
-- `fs.ftruncate(fd[, len], callback)`
-- `fs.futimes(fd, atime, mtime, callback)`
-- `fs.glob(pattern[, options], callback)`
-- `fs.lchmod(path, mode, callback)`
-- `fs.lchown(path, uid, gid, callback)`
-- `fs.lstat(path[, options], callback)`
-- `fs.lutimes(path, atime, mtime, callback)`
-- `fs.open(path[, flags[, mode]], callback)`
-- `fs.openAsBlob(path[, options])`
-- `fs.opendir(path[, options], callback)`
-- `fs.read(fd, buffer, offset, length, position, callback)`
-- `fs.read(fd[, options], callback)`
-- `fs.read(fd, buffer[, options], callback)`
-- `fs.readv(fd, buffers[, position], callback)`
-- `fs.realpath.native(path[, options], callback)`
-- `fs.statfs(path[, options], callback)`
-- `fs.truncate(path[, len], callback)`
-- `fs.utimes(path, atime, mtime, callback)`
-- `fs.watch(filename[, options][, listener])`
-- `fs.write(fd, buffer, offset[, length[, position]], callback)`
-- `fs.write(fd, buffer[, options], callback)`
-- `fs.write(fd, string[, position[, encoding]], callback)`
-- `fs.writev(fd, buffers[, position], callback)`
-- `fs.chownSync(path, uid, gid)`
-- `fs.closeSync(fd)`
-- `fs.cpSync(src, dest[, options])`
-- `fs.fchmodSync(fd, mode)`
-- `fs.fchownSync(fd, uid, gid)`
-- `fs.fdatasyncSync(fd)`
-- `fs.fstatSync(fd[, options])`
-- `fs.fsyncSync(fd)`
-- `fs.ftruncateSync(fd[, len])`
-- `fs.futimesSync(fd, atime, mtime)`
-- `fs.globSync(pattern[, options])`
-- `fs.lchmodSync(path, mode)`
-- `fs.lchownSync(path, uid, gid)`
-- `fs.lutimesSync(path, atime, mtime)`
-- `fs.mkdtempDisposableSync(prefix[, options])`
-- … and 87 more (see `runtime-parity.md` for the full list)
+Runtime-created fs SystemError metadata is covered by parity fixtures: sync, callback, and promise errors expose negative numeric `err.errno` plus `err.code`, `err.syscall`, `err.path`, and `err.dest` where Node exposes them. Behavior caveats are tracked in `test-parity/node-suite/fs/STATUS.md` rather than as missing API rows. The remaining fs-family public API tail is only under `node:fs/promises` FileHandle: `pull`, `pullSync`, and `writer` (#3952).
 
 #### Covered (sampled)
 
@@ -440,7 +393,9 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `fs.rmdir(path[, options], callback)` | `ffi:js_fs_rmdir_sync` |
 | `fs.symlink(target, path[, type], callback)` | `ffi:js_fs_symlink_sync` |
 | `fs.symlinkSync(target, path[, type])` | `ffi:js_fs_symlink_sync` |
-| … | 25 more covered APIs |
+| `fs.Utf8Stream` | `manifest:fs.Utf8Stream` |
+| `fs._toUnixTimestamp(value)` | `ffi:js_fs_to_unix_timestamp` |
+| … | remaining fs APIs covered by manifest, FFI, or lowering entries |
 
 ### node:crypto
 
@@ -1297,58 +1252,53 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:fs/promises
 
-**Gap APIs: 41** · Already covered: 20
+**Gap APIs: 3** · Already covered: 58
 
 #### Missing from Perry
 
-- `fsPromises.access(path[, mode])`
-- `fsPromises.chmod(path, mode)`
-- `fsPromises.chown(path, uid, gid)`
-- `fsPromises.cp(src, dest[, options])`
-- `fsPromises.glob(pattern[, options])`
-- `fsPromises.lchmod(path, mode)`
-- `fsPromises.lchown(path, uid, gid)`
-- `fsPromises.lstat(path[, options])`
-- `fsPromises.lutimes(path, atime, mtime)`
-- `fsPromises.mkdtemp(prefix[, options])`
-- `fsPromises.mkdtempDisposable(prefix[, options])`
-- `fsPromises.open(path, flags[, mode])`
-- `fsPromises.opendir(path[, options])`
-- `fsPromises.realpath(path[, options])`
-- `fsPromises.rmdir(path[, options])`
-- `fsPromises.statfs(path[, options])`
-- `fsPromises.truncate(path[, len])`
-- `fsPromises.utimes(path, atime, mtime)`
-- `fsPromises.watch(filename[, options])`
-- `fsPromises.constants`
-- `filehandle.fd`
-- `filehandle.chmod(mode)`
-- `filehandle.chown(uid, gid)`
-- `filehandle.close()`
-- `filehandle.datasync()`
 - `filehandle.pull([...transforms][, options])`
 - `filehandle.pullSync([...transforms][, options])`
-- `filehandle.readableWebStream([options])`
 - `filehandle.writer([options])`
-- `filehandle[Symbol.asyncDispose]()`
+
+The runtime manifest intentionally has no rows for these unsupported FileHandle APIs. The direct `fs/promises` submodule rows are present and generated API docs/DTS include the submodule.
 
 #### Covered (sampled)
 
 | API | Coverage source |
 |-----|-----------------|
-| `fsPromises.appendFile(path, data[, options])` | `manifest:fs.appendFile` |
-| `fsPromises.copyFile(src, dest[, mode])` | `manifest:fs.copyFile` |
-| `fsPromises.link(existingPath, newPath)` | `manifest:fs.link` |
-| `fsPromises.mkdir(path[, options])` | `manifest:fs.mkdir` |
-| `fsPromises.readdir(path[, options])` | `manifest:fs.readdir` |
-| `fsPromises.readFile(path[, options])` | `manifest:fs.readFile` |
-| `fsPromises.readlink(path[, options])` | `manifest:fs.readlink` |
-| `fsPromises.rename(oldPath, newPath)` | `manifest:fs.rename` |
-| `fsPromises.rm(path[, options])` | `manifest:fs.rm` |
-| `fsPromises.stat(path[, options])` | `manifest:fs.stat` |
-| `fsPromises.symlink(target, path[, type])` | `manifest:fs.symlink` |
-| `fsPromises.unlink(path)` | `manifest:fs.unlink` |
-| `fsPromises.writeFile(file, data[, options])` | `manifest:fs.writeFile` |
+| `fsPromises.access(path[, mode])` | `manifest:fs/promises.access` |
+| `fsPromises.appendFile(path, data[, options])` | `manifest:fs/promises.appendFile` |
+| `fsPromises.chmod(path, mode)` | `manifest:fs/promises.chmod` |
+| `fsPromises.chown(path, uid, gid)` | `manifest:fs/promises.chown` |
+| `fsPromises.copyFile(src, dest[, mode])` | `manifest:fs/promises.copyFile` |
+| `fsPromises.cp(src, dest[, options])` | `manifest:fs/promises.cp` |
+| `fsPromises.glob(pattern[, options])` | `manifest:fs/promises.glob` |
+| `fsPromises.lchmod(path, mode)` | `manifest:fs/promises.lchmod` |
+| `fsPromises.lchown(path, uid, gid)` | `manifest:fs/promises.lchown` |
+| `fsPromises.link(existingPath, newPath)` | `manifest:fs/promises.link` |
+| `fsPromises.lstat(path[, options])` | `manifest:fs/promises.lstat` |
+| `fsPromises.lutimes(path, atime, mtime)` | `manifest:fs/promises.lutimes` |
+| `fsPromises.mkdir(path[, options])` | `manifest:fs/promises.mkdir` |
+| `fsPromises.mkdtemp(prefix[, options])` | `manifest:fs/promises.mkdtemp` |
+| `fsPromises.mkdtempDisposable(prefix[, options])` | `manifest:fs/promises.mkdtempDisposable` |
+| `fsPromises.open(path, flags[, mode])` | `manifest:fs/promises.open` |
+| `fsPromises.opendir(path[, options])` | `manifest:fs/promises.opendir` |
+| `fsPromises.readdir(path[, options])` | `manifest:fs/promises.readdir` |
+| `fsPromises.readFile(path[, options])` | `manifest:fs/promises.readFile` |
+| `fsPromises.readlink(path[, options])` | `manifest:fs/promises.readlink` |
+| `fsPromises.realpath(path[, options])` | `manifest:fs/promises.realpath` |
+| `fsPromises.rename(oldPath, newPath)` | `manifest:fs/promises.rename` |
+| `fsPromises.rm(path[, options])` | `manifest:fs/promises.rm` |
+| `fsPromises.rmdir(path[, options])` | `manifest:fs/promises.rmdir` |
+| `fsPromises.stat(path[, options])` | `manifest:fs/promises.stat` |
+| `fsPromises.statfs(path[, options])` | `manifest:fs/promises.statfs` |
+| `fsPromises.symlink(target, path[, type])` | `manifest:fs/promises.symlink` |
+| `fsPromises.truncate(path[, len])` | `manifest:fs/promises.truncate` |
+| `fsPromises.unlink(path)` | `manifest:fs/promises.unlink` |
+| `fsPromises.utimes(path, atime, mtime)` | `manifest:fs/promises.utimes` |
+| `fsPromises.watch(filename[, options])` | `manifest:fs/promises.watch` |
+| `fsPromises.writeFile(file, data[, options])` | `manifest:fs/promises.writeFile` |
+| `fsPromises.constants` | `manifest:fs/promises.constants` |
 | `filehandle.appendFile(data[, options])` | `manifest:fs.appendFile` |
 | `filehandle.fd` | `ffi:js_fs_filehandle_open` |
 | `filehandle.chmod(mode)` | `ffi:js_fs_filehandle_open` |
