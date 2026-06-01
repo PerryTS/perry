@@ -23,13 +23,18 @@ MARKER="$TMPDIR/executed"
 cat >"$TMPDIR/invalid-http2-imports.ts" <<TS
 import { Http2SecureServer, listen, close, on, address } from "node:http2";
 import { writeFileSync } from "node:fs";
+import { env } from "node:process";
 
-writeFileSync(${MARKER@Q}, "executed");
+const marker = env.ISSUE_3922_MARKER;
+if (marker === undefined) {
+    throw new Error("missing ISSUE_3922_MARKER");
+}
+writeFileSync(marker, "executed");
 console.log(Http2SecureServer, listen, close, on, address);
 TS
 
 set +e
-env PERRY_NO_AUTO_OPTIMIZE=1 "$PERRY" compile --no-cache \
+env PERRY_NO_AUTO_OPTIMIZE=1 ISSUE_3922_MARKER="$MARKER" "$PERRY" compile --no-cache \
     "$TMPDIR/invalid-http2-imports.ts" -o "$TMPDIR/invalid-http2-imports" \
     >"$TMPDIR/compile.log" 2>&1
 compile_rc=$?
