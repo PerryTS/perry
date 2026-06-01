@@ -2178,6 +2178,10 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("net", "Socket") => Some(1),
         // #3720: `http2.performServerHandshake(socket[, options])` — length 1.
         ("http2", "performServerHandshake") => Some(1),
+        // #3905: Node `.length` — connect(authority,options,listener)=3,
+        // createServer(options,handler)=2.
+        ("http2", "connect") => Some(3),
+        ("http2", "createServer") => Some(2),
         // #3712: node:http module-level helper exports.
         ("http", "validateHeaderName" | "validateHeaderValue") => Some(2),
         ("http", "setMaxIdleHTTPParsers" | "setGlobalProxyFromEnv") => Some(1),
@@ -3673,6 +3677,9 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("http2", "createServer")
             | ("http2", "createSecureServer")
             | ("http2", "Server")
+            // #3905: `http2.connect(authority[, options][, listener])` client
+            // session factory reads as a function.
+            | ("http2", "connect")
             // #3720: module-level handshake helper reads as a function.
             | ("http2", "performServerHandshake")
             // #3680/#3679: node:v8 class constructors + diagnostic-control
@@ -5260,6 +5267,9 @@ pub(crate) unsafe fn get_native_module_constant(
         "http2" => match property {
             "constants" => Some(create_sub_namespace("http2.constants")),
             "sensitiveHeaders" => Some(crate::node_http2_constants::sensitive_headers_symbol()),
+            // #3905: `import http2 from "node:http2"` — default is the module
+            // namespace object.
+            "default" => Some(native_namespace_or_create("http2", namespace_obj)),
             _ => None,
         },
         "http2.constants" => crate::node_http2_constants::constant(property),

@@ -2,6 +2,16 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1079 — node:http2: expose server/client/default export surface (#3905)
+
+Perry's `node:http2` manifest claimed `createSecureServer`, the settings helpers, `performServerHandshake`, `sensitiveHeaders`, `constants`, and the request/response classes, but omitted the non-secure server factory, the client-session factory, and the module default — so `import { connect, createServer } from "node:http2"` (and `import http2 from "node:http2"`) failed `perry check` before runtime.
+
+- **`crates/perry-api-manifest/src/entries.rs`** — `method("http2","createServer")`, `method("http2","connect")`, `property("http2","default")`.
+- **`crates/perry-runtime/src/object/native_module.rs`** — `connect` added to `is_native_module_callable_export` (function-valued; `createServer` was already callable) + `native_callable_export_arity` (Node `.length`: `connect` 3, `createServer` 2); the `"http2"` property arm returns the module namespace for `default`.
+- **`test-parity/node-suite/http2/exports/server-client-surface.ts`** — new fixture (typeof/`.length`, namespace identity, default-import object + its `connect`/`createServer`); byte-identical to `node --experimental-strip-types`.
+
+Export-surface/manifest parity only; deeper server/client session behavior (and `createSecureServer({})` construction, #3884) stays tracked separately.
+
 ## v0.5.1078 — fix(Array): multi-arg Array(...) / new Array(...) build the element list (#3985, partial)
 
 `Array(0, 1, 0, 1)` and `new Array(1, 2, 3)` returned a **length-0** array instead of `[0,1,0,1]` / `[1,2,3]`. `lower_builtin_new`'s `"Array"` arm handled the empty (`Array()`), single-number (`Array(5)` → sparse length), and single-value (`Array("x")` → one element) cases, but **returned `Ok(None)` for ≥2 args**, falling back to a generic path that produced an empty array.

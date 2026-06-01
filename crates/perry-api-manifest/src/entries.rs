@@ -4778,6 +4778,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // read matches Node's `typeof` / `name` / `length` shape; wired through
     // `is_native_module_callable_export` / `native_callable_export_arity`.
     method("http2", "performServerHandshake", false, None),
+    // #3905: remaining public ESM export surface — the non-secure server
+    // factory, the client-session factory, and the module default (namespace
+    // object). `createServer` is already runtime-callable; these unblock the
+    // named/default imports that Node accepts.
+    method("http2", "createServer", false, None),
+    method("http2", "connect", false, None),
+    property("http2", "default"),
     internal_class("http2", "Http2SecureServer"),
     class("http2", "Http2ServerRequest"),
     class("http2", "Http2ServerResponse"),

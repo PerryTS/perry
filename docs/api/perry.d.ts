@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2520 entries across 106 modules
+// Coverage: 2523 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1720,9 +1720,16 @@ declare module "http2" {
   /** stdlib */
   export const constants: any;
   /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
   export const sensitiveHeaders: any;
   /** stdlib */
+  export function connect(...args: any[]): any;
+  /** stdlib */
   export function createSecureServer(...args: any[]): any;
+  /** stdlib */
+  export function createServer(...args: any[]): any;
   /** stdlib */
   export function getDefaultSettings(...args: any[]): any;
   /** stdlib */
