@@ -2,6 +2,21 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1060 — fix(crypto): expose Hash/Hmac/Sign/Verify constructor exports (#3955)
+
+`import { Hash } from "node:crypto"` (and `Hmac`/`Sign`/`Verify`) failed `check`
+with "does not provide an export named 'Hash'" even though the HIR call-lowering
+in `lower/expr_call/crypto.rs` already routed `Hash(...)`/`Hmac(...)`/`Sign(...)`/
+`Verify(...)` through the same path as their `create*` factories. The four
+constructor classes are public `node:crypto` named exports in Node; added the
+manifest entries so they resolve on the ESM/named-import surface. Flips the
+`crypto/hash/constructor-export`, `crypto/hmac/constructor-export`, and
+`crypto/asymmetric/sign-verify-constructor-export` node-suite fixtures to green.
+
+Also closed (verified via `run_parity_tests.sh --suite node-suite --module <m>`,
+zero failures) the #2013 argument-validation tails for `node:buffer` (#3953),
+`node:process` (#3956), and `node:url` (#3957).
+
 ## v0.5.1059 — fix(buffer): materialize Buffer iterators via spread + Array.from (#3909)
 
 `buf.keys()`, `buf.values()`, and `buf.entries()` already returned working
