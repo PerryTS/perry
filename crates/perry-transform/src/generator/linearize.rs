@@ -17,6 +17,14 @@ pub enum StateExit {
     Done,
 }
 
+#[derive(Clone)]
+pub struct CatchRoute {
+    pub param_id: Option<LocalId>,
+    pub body: Vec<Stmt>,
+    pub protected_start_state: u32,
+    pub post_catch_state: u32,
+}
+
 /// Linearize the generator body into a sequence of states.
 /// Splits at yield points and handles for-loops with yields.
 pub fn linearize_body(
@@ -27,7 +35,7 @@ pub fn linearize_body(
     state_id: LocalId,
     #[allow(unused_variables)] next_local_id: &mut u32,
     sent_id: LocalId,
-    catches: &mut Vec<(Option<LocalId>, Vec<Stmt>, u32)>,
+    catches: &mut Vec<CatchRoute>,
 ) {
     for stmt in stmts {
         match stmt {
@@ -566,6 +574,8 @@ pub fn linearize_body(
             } if body_contains_yield(body)
                 || finally.as_ref().is_some_and(|f| body_contains_yield(f)) =>
             {
+                let protected_start_state = *state_num;
+
                 // Issue #256: widen the guard to also fire when yields live ONLY
                 // in the finally block. `await using` desugars to
                 // `try { body } finally { await dispose() }` — the body may have
@@ -619,7 +629,12 @@ pub fn linearize_body(
                 // into the .throw() closure later.
                 if let Some(catch_clause) = catch {
                     let param_id = catch_clause.param.as_ref().map(|(id, _)| *id);
-                    catches.push((param_id, catch_clause.body.clone(), post_catch_state));
+                    catches.push(CatchRoute {
+                        param_id,
+                        body: catch_clause.body.clone(),
+                        protected_start_state,
+                        post_catch_state,
+                    });
                 }
 
                 // Finally block: linearize if it has yields (await-using path),

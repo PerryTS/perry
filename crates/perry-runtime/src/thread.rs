@@ -139,6 +139,7 @@
 //! ```
 
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::bigint::{self, BigIntHeader, BIGINT_LIMBS};
 use crate::closure::{self, real_capture_count, ClosureHeader};
@@ -1072,6 +1073,8 @@ unsafe fn single_thread_filter(
 // spawn — background thread execution
 // ============================================================================
 
+static ACTIVE_THREAD_JOBS: AtomicUsize = AtomicUsize::new(0);
+
 /// The compiled closure function signature for zero-argument closures.
 /// Takes only the closure header pointer, returns f64 result.
 type ClosureCall0Fn = unsafe extern "C" fn(*const ClosureHeader) -> f64;
@@ -1127,6 +1130,7 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
     };
 
     // ── 3. Spawn background thread ───────────────────────────────────
+    ACTIVE_THREAD_JOBS.fetch_add(1, Ordering::SeqCst);
     std::thread::spawn(move || {
         // Reconstruct closure in this thread's arena
         let local_closure: *const ClosureHeader = if let Some((cc, ref cap_vals)) =
@@ -1190,6 +1194,7 @@ fn queue_thread_result(promise_usize: usize, result: SerializedValue) {
             result,
         });
     }
+    ACTIVE_THREAD_JOBS.fetch_sub(1, Ordering::SeqCst);
     // Issue #84: wake the main thread so spawn()-returned promises
     // resolve as soon as the OS thread finishes, not at the next
     // event-loop quantum.
@@ -1248,6 +1253,9 @@ pub extern "C" fn js_thread_process_pending() -> i32 {
 /// Used by the event loop to know whether to keep spinning.
 #[no_mangle]
 pub extern "C" fn js_thread_has_pending() -> i32 {
+    if ACTIVE_THREAD_JOBS.load(Ordering::SeqCst) != 0 {
+        return 1;
+    }
     let pending = PENDING_THREAD_RESULTS.lock().unwrap();
     if pending.is_empty() {
         0

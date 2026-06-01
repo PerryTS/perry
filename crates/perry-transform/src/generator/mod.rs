@@ -40,7 +40,7 @@ pub(crate) use id_scan::{
     scan_stmts_for_max_local,
 };
 pub(crate) use iter_result_rewrite::{rewrite_expr, rewrite_expr_children, rewrite_stmt};
-pub(crate) use linearize::{linearize_body, State, StateExit};
+pub(crate) use linearize::{linearize_body, CatchRoute, State, StateExit};
 pub(crate) use lower::{
     build_async_step_driver_direct, transform_generator_function,
     transform_generator_function_with_extra_captures,
@@ -48,10 +48,10 @@ pub(crate) use lower::{
 pub(crate) use rewrite_returns::{
     body_contains_return, is_iter_result, prepend_done_before_returns,
     rewrite_catch_returns_to_iter_result, rewrite_catch_returns_to_iter_result_in_stmt,
-    rewrite_iter_results_in_stmts, rewrite_iter_results_to_scratch, rewrite_returns_as_done,
-    rewrite_returns_to_labeled_break, rewrite_returns_to_labeled_break_in_stmt,
-    rewrite_yield_to_await_in_expr, rewrite_yield_to_await_in_expr_children,
-    rewrite_yield_to_await_in_stmt, rewrite_yield_to_await_in_stmts,
+    rewrite_iter_results_in_stmts, rewrite_returns_as_done, rewrite_returns_to_labeled_break,
+    rewrite_returns_to_labeled_break_in_stmt, rewrite_yield_to_await_in_expr,
+    rewrite_yield_to_await_in_expr_children, rewrite_yield_to_await_in_stmt,
+    rewrite_yield_to_await_in_stmts,
 };
 
 /// Transform all generator functions in a module into state machine form.
