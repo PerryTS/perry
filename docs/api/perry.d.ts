@@ -1802,10 +1802,6 @@ declare module "module" {
   /** stdlib */
   export const constants: any;
   /** stdlib */
-  export const wrap: any;
-  /** stdlib */
-  export const wrapper: any;
-  /** stdlib */
   export function SourceMap(...args: any[]): any;
   /** stdlib */
   export function createRequire(...args: any[]): any;
