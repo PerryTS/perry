@@ -1492,7 +1492,9 @@ Total: 2506 entries across 106 modules.
 - `resume` — instance *(class: `IncomingMessage`)*
 - `reuseSocket` — instance *(class: `Agent`)*
 - `setEncoding` — instance *(class: `IncomingMessage`)*
+- `setGlobalProxyFromEnv` — module
 - `setHeader` — instance *(class: `ServerResponse`)*
+- `setMaxIdleHTTPParsers` — module
 - `setStatus` — instance *(class: `ServerResponse`)*
 - `setTimeout` — instance *(class: `HttpServer`)*
 - `setTimeout` — instance *(class: `ClientRequest`)*
@@ -1502,6 +1504,8 @@ Total: 2506 entries across 106 modules.
 - `timeout` — instance *(class: `HttpServer`)*
 - `trailers` — instance *(class: `IncomingMessage`)*
 - `url` — instance *(class: `IncomingMessage`)*
+- `validateHeaderName` — module
+- `validateHeaderValue` — module
 - `write` — instance *(class: `ServerResponse`)*
 - `writeContinue` — instance *(class: `ServerResponse`)*
 - `writeHead` — instance *(class: `ServerResponse`)*
@@ -1511,6 +1515,8 @@ Total: 2506 entries across 106 modules.
 
 - `METHODS`
 - `STATUS_CODES`
+- `globalAgent`
+- `maxHeaderSize`
 
 ## `http2`
 

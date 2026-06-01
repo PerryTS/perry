@@ -2178,6 +2178,9 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("net", "Socket") => Some(1),
         // #3720: `http2.performServerHandshake(socket[, options])` — length 1.
         ("http2", "performServerHandshake") => Some(1),
+        // #3712: node:http module-level helper exports.
+        ("http", "validateHeaderName" | "validateHeaderValue") => Some(2),
+        ("http", "setMaxIdleHTTPParsers" | "setGlobalProxyFromEnv") => Some(1),
         ("net", "_normalizeArgs") => Some(1),
         ("net", "_createServerHandle") => Some(5),
         ("domain", "Domain" | "createDomain" | "create") => Some(0),
@@ -2958,6 +2961,14 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             // (#3196-#3200); only `connect` is in the api-manifest today, so
             // it's the only tls symbol exposed here.
             | ("tls", "connect")
+            // #3712: node:http module-level helper exports. `validateHeaderName`
+            // / `validateHeaderValue` perform Node's HTTP-token / header-value
+            // validation (throwing the matching error codes); the parser/proxy
+            // setters are deterministic no-ops in Perry's runtime.
+            | ("http", "validateHeaderName")
+            | ("http", "validateHeaderValue")
+            | ("http", "setMaxIdleHTTPParsers")
+            | ("http", "setGlobalProxyFromEnv")
             | ("module", "createRequire")
             | ("module", "findPackageJSON")
             | ("module", "findSourceMap")
@@ -5216,6 +5227,11 @@ pub(crate) unsafe fn get_native_module_constant(
         // pointer) and hand it back for every read.
         "http" => match property {
             "METHODS" => Some(unsafe { http_methods_array() }),
+            // #3712: Node's `http.maxHeaderSize` default is 16 KiB (16384).
+            "maxHeaderSize" => Some(16384.0),
+            // #3712: `http.globalAgent` is an http.Agent with protocol "http:"
+            // and defaultPort 80 (distinct from https.globalAgent above).
+            "globalAgent" => Some(unsafe { http_global_agent_object() }),
             _ => None,
         },
         "https" => match property {
@@ -5397,6 +5413,50 @@ unsafe fn https_global_agent_object() -> f64 {
         cache
             .borrow_mut()
             .insert("https.globalAgent".to_string(), result.to_bits());
+    });
+    result
+}
+
+/// #3712: `http.globalAgent` shape. Mirrors `https_global_agent_object` but
+/// with the http defaults (protocol "http:", defaultPort 80). Node 19+ ships
+/// the global agent with keep-alive enabled, so basic field reads match Node.
+unsafe fn http_global_agent_object() -> f64 {
+    if let Some(bits) =
+        NATIVE_MODULE_NAMESPACES.with(|cache| cache.borrow().get("http.globalAgent").copied())
+    {
+        return f64::from_bits(bits);
+    }
+
+    let field_names = [
+        "defaultPort",
+        "protocol",
+        "keepAlive",
+        "maxSockets",
+        "maxFreeSockets",
+    ];
+    let packed = field_names.join("\0");
+    let obj = js_object_alloc_with_shape(
+        0x7FFF_FF12,
+        field_names.len() as u32,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+    if obj.is_null() {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    js_object_set_field(obj, 0, JSValue::number(80.0));
+    let protocol = crate::string::js_string_from_bytes(b"http:".as_ptr(), 5);
+    js_object_set_field(obj, 1, JSValue::string_ptr(protocol));
+    // Node 19+ enables HTTP keep-alive on the global agent by default.
+    js_object_set_field(obj, 2, JSValue::bool(true));
+    js_object_set_field(obj, 3, JSValue::number(f64::INFINITY));
+    js_object_set_field(obj, 4, JSValue::number(256.0));
+
+    let result = crate::value::js_nanbox_pointer(obj as i64);
+    NATIVE_MODULE_NAMESPACES.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert("http.globalAgent".to_string(), result.to_bits());
     });
     result
 }

@@ -4165,6 +4165,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "get", false, None),
     property("http", "METHODS"),
     property("http", "STATUS_CODES"),
+    // #3712 — module-level helper/export tail. `maxHeaderSize` is the 16 KiB
+    // default constant; `globalAgent` is the shared http.Agent; the four
+    // helpers validate header tokens/values or are deterministic no-ops.
+    property("http", "maxHeaderSize"),
+    property("http", "globalAgent"),
+    method("http", "validateHeaderName", false, None),
+    method("http", "validateHeaderValue", false, None),
+    method("http", "setMaxIdleHTTPParsers", false, None),
+    method("http", "setGlobalProxyFromEnv", false, None),
     class("http", "Server"),
     class("http", "ClientRequest"),
     class("http", "IncomingMessage"),

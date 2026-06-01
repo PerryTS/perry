@@ -2,6 +2,25 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1071 — node:http: module-level header-validation / agent export tail (#3712)
+
+`node:http`'s manifest covered the server/client classes and request helpers but omitted a current Node export tail used for header validation and agent/feature detection. Compiling code that imported these names failed at module-collection (`<name> is not implemented in Perry`). Added:
+
+- **`http.maxHeaderSize`** — the 16 KiB (`16384`) default constant.
+- **`http.globalAgent`** — the shared `http.Agent` shape (`protocol: "http:"`, `defaultPort: 80`, keep-alive enabled to match Node 19+), distinct from the existing `https.globalAgent`.
+- **`http.validateHeaderName(name[, label])`** — throws `TypeError [ERR_INVALID_HTTP_TOKEN]` for a non-string / empty / non-token name (Node's `tokenRegExp` char set), else returns undefined.
+- **`http.validateHeaderValue(name, value)`** — throws `TypeError [ERR_HTTP_INVALID_HEADER_VALUE]` for an undefined value and `TypeError [ERR_INVALID_CHAR]` for control chars outside `\t` / `\x20-\x7e` / `\x80-\xff`, else returns undefined.
+- **`http.setMaxIdleHTTPParsers(max)`** / **`http.setGlobalProxyFromEnv([proxyEnv])`** — deterministic no-ops returning `undefined` (no shared parser pool / env-proxy state in Perry's runtime).
+
+Implementation:
+- **`crates/perry-api-manifest/src/entries.rs`** — six new `http` rows (two `property`, four `method`).
+- **`crates/perry-runtime/src/object/native_module.rs`** — `maxHeaderSize`/`globalAgent` property dispatch + `http_global_agent_object()`; the four helpers added to `is_native_module_callable_export` and `native_callable_export_arity`.
+- **`crates/perry-runtime/src/object/native_module_dispatch.rs`** — `js_http_validate_header_name` / `js_http_validate_header_value` / `js_http_setter_noop` FFI (Node-shaped error codes/messages) + dispatch arms.
+- **`crates/perry-codegen/src/lower_call/native_table/http.rs`** — static dispatch-table rows so the direct `http.validateHeaderName(...)` / named-import call forms dispatch (not just the value form).
+- **`test-parity/node-suite/http/exports/module-helper-tail.ts`** — new fixture covering export shape, `globalAgent` fields, `maxHeaderSize`, and the header-validation error cases; byte-identical to `node --experimental-strip-types`.
+
+Out of scope (tracked for follow-up): the class tail `http.OutgoingMessage`, `http.WebSocket`, `http.CloseEvent`, `http.MessageEvent`, and `http._connectionListener` are intentionally not yet claimed in the manifest pending an alias/implementation decision.
+
 ## v0.5.1070 — util.styleText rejects non-Node format aliases (ERR_INVALID_ARG_VALUE)
 
 `util.styleText(format, text)` validates `format` against `Object.keys(util.inspect.colors)` — exactly 44 names. Perry additionally accepted 12 British/camelCase aliases (`grey`, `bgGrey`, `blackBright`, `bgBlackBright`, `faint`, `crossedout`, `crossedOut`, `strikeThrough`, `conceal`, `swapColors`, `swapcolors`, `doubleUnderline`) that Node does not, applying ANSI codes where Node throws `TypeError [ERR_INVALID_ARG_VALUE]`.
@@ -32,6 +51,8 @@ perry: promise|timeout1|timeout2|micro-in-timeout   (before)
 Fix (`crates/perry-runtime/src/timer.rs`, `js_callback_timer_tick`): drain the microtask queue (`js_promise_run_microtasks`) after *each* timer callback rather than only once after the expired batch in the outer pump. In Node every timer callback is its own macrotask followed by a microtask checkpoint, so a `queueMicrotask`/`Promise.then` scheduled inside a timer callback now runs before the next timer fires.
 
 Validated against `node --experimental-strip-types`: all five `node-suite/timers/ordering` fixtures pass (the previously-failing `nested-order-extra` now matches). A 77-fixture sweep across `timers`/`promises`/`async-hooks` shows no regressions — the pre-existing failures (negative-delay warnings, `AbortError.code` shape, unsettled-top-level-await warnings) fail identically with and without this change (confirmed by a stashed-baseline rebuild) and are orthogonal to microtask ordering. `perry-runtime` timer + microtask unit tests green.
+
+## v0.5.1067 — node:https/http: URL-object request/get overload no longer throws circular-JSON (#3880)
 
 `https.get(new URL(...), options, callback)` (and the `http`/`request` variants) threw `TypeError: Converting circular structure to JSON` before the request could be built. Root cause: `parse_client_args` classified arguments by value type, and a `URL` *instance* — a heap object, not a string — fell into the "first non-string pointer → options bag" branch. `parse_options_object` then JSON-stringified the URL, which throws on its `searchParams` ↔ owner back-reference, and the real options object was dropped.
 

@@ -1689,6 +1689,10 @@ declare module "http" {
   /** stdlib */
   export const STATUS_CODES: any;
   /** stdlib */
+  export const globalAgent: any;
+  /** stdlib */
+  export const maxHeaderSize: any;
+  /** stdlib */
   export function Agent(...args: any[]): any;
   /** stdlib */
   export function Server(...args: any[]): any;
@@ -1698,6 +1702,14 @@ declare module "http" {
   export function get(...args: any[]): any;
   /** stdlib */
   export function request(...args: any[]): any;
+  /** stdlib */
+  export function setGlobalProxyFromEnv(...args: any[]): any;
+  /** stdlib */
+  export function setMaxIdleHTTPParsers(...args: any[]): any;
+  /** stdlib */
+  export function validateHeaderName(...args: any[]): any;
+  /** stdlib */
+  export function validateHeaderValue(...args: any[]): any;
 }
 
 declare module "http2" {

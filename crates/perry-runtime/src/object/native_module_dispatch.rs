@@ -116,6 +116,109 @@ unsafe fn crypto_random_fill_sync_dispatch(target: f64, offset_bits: f64, size_b
     crypto_random_fill_invalid_buf(target);
 }
 
+/// #3712: coerce a NaN-boxed value to an owned UTF-8 `String`, matching the
+/// `${val}` coercion Node applies before building HTTP error messages.
+unsafe fn http_value_to_owned_string(v: f64) -> String {
+    let ptr = crate::value::js_jsvalue_to_string(v);
+    if ptr.is_null() {
+        return String::new();
+    }
+    let len = (*ptr).byte_len as usize;
+    let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+}
+
+/// #3712: read the raw bytes of a string value, or `None` if it is not a
+/// string. `js_string_materialize_to_heap` returns null for non-strings (no
+/// coercion) and handles SSO short strings, so a genuine empty string yields
+/// `Some([])` while a number/object/undefined yields `None`.
+unsafe fn http_string_bytes(v: f64) -> Option<Vec<u8>> {
+    let ptr = crate::string::js_string_materialize_to_heap(v);
+    if ptr.is_null() {
+        return None;
+    }
+    let len = (*ptr).byte_len as usize;
+    let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    Some(std::slice::from_raw_parts(data, len).to_vec())
+}
+
+/// Node's HTTP token char set (lib/_http_common `tokenRegExp`):
+/// `^[\^_`a-zA-Z\-0-9!#$%&'*+.|~]+$`.
+fn http_is_token_byte(b: u8) -> bool {
+    matches!(b,
+        b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9'
+        | b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*'
+        | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~')
+}
+
+/// #3712: `http.validateHeaderName(name[, label])`. Throws
+/// `TypeError [ERR_INVALID_HTTP_TOKEN]` for a non-string / empty / non-token
+/// name; otherwise returns undefined.
+///
+/// Exposed as a `#[no_mangle]` extern so codegen's static dispatch table can
+/// emit a direct call for `http.validateHeaderName(...)`; the bound-closure
+/// value form routes here too via `dispatch_native_module_method`.
+///
+/// # Safety
+/// `name`/`label` are NaN-boxed `JSValue` bits.
+#[no_mangle]
+pub unsafe extern "C" fn js_http_validate_header_name(name: f64, label: f64) -> f64 {
+    let valid = match http_string_bytes(name) {
+        Some(bytes) => !bytes.is_empty() && bytes.iter().all(|&b| http_is_token_byte(b)),
+        None => false,
+    };
+    if valid {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    // `label || 'Header name'` — fall back to the default for any falsy /
+    // non-string label.
+    let label_str = match http_string_bytes(label) {
+        Some(bytes) if !bytes.is_empty() => String::from_utf8_lossy(&bytes).into_owned(),
+        _ => "Header name".to_string(),
+    };
+    let display = http_value_to_owned_string(name);
+    let message = format!("{label_str} must be a valid HTTP token [\"{display}\"]");
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_HTTP_TOKEN")
+}
+
+/// #3712: `http.validateHeaderValue(name, value)`. Throws
+/// `TypeError [ERR_HTTP_INVALID_HEADER_VALUE]` for an undefined value and
+/// `TypeError [ERR_INVALID_CHAR]` for invalid header characters; otherwise
+/// returns undefined.
+///
+/// # Safety
+/// `name`/`value` are NaN-boxed `JSValue` bits.
+#[no_mangle]
+pub unsafe extern "C" fn js_http_validate_header_value(name: f64, value: f64) -> f64 {
+    if value.to_bits() == crate::value::TAG_UNDEFINED {
+        let name_disp = http_value_to_owned_string(name);
+        let message = format!("Invalid value \"undefined\" for header \"{name_disp}\"");
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_HTTP_INVALID_HEADER_VALUE");
+    }
+    // Node coerces the value to a string, then rejects control chars outside
+    // the `\t`, `\x20-\x7e`, `\x80-\xff` ranges (lib/_http_common
+    // `headerCharRegex`). Multi-byte UTF-8 bytes are all >= 0x80, so allowed.
+    let value_str = http_value_to_owned_string(value);
+    let has_invalid = value_str
+        .as_bytes()
+        .iter()
+        .any(|&b| (b < 0x20 && b != b'\t') || b == 0x7f);
+    if has_invalid {
+        let name_disp = http_value_to_owned_string(name);
+        let message = format!("Invalid character in header content [\"{name_disp}\"]");
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_CHAR");
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// #3712: `http.setMaxIdleHTTPParsers(max)` / `http.setGlobalProxyFromEnv(...)`
+/// — deterministic no-ops returning undefined (Perry has no shared parser pool
+/// or env-driven proxy state). Exposed for the static dispatch table.
+#[no_mangle]
+pub extern "C" fn js_http_setter_noop(_value: f64) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 /// Dispatch a method call on a native module namespace object.
 /// Extracts the module name from the object and dispatches to the appropriate
 /// runtime function based on (module_name, method_name).
@@ -515,6 +618,18 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "loadEnvFile") => {
             crate::process::js_process_load_env_file(arg(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        // #3712: node:http module-level header validation helpers. These mirror
+        // Node's `validateHeaderName` / `validateHeaderValue` (lib/_http_common
+        // + lib/_http_outgoing): on invalid input they throw the matching error
+        // codes, otherwise they return undefined.
+        ("http", "validateHeaderName") => js_http_validate_header_name(arg(0), arg(1)),
+        ("http", "validateHeaderValue") => js_http_validate_header_value(arg(0), arg(1)),
+        // #3712: parser/proxy setters are deterministic no-ops in Perry's
+        // runtime (no shared parser pool / env-driven proxy state), matching
+        // Node's `undefined` return for valid inputs.
+        ("http", "setMaxIdleHTTPParsers") | ("http", "setGlobalProxyFromEnv") => {
+            js_http_setter_noop(arg(0))
         }
         ("events", "init") => f64::from_bits(crate::value::TAG_UNDEFINED),
         ("events", "EventEmitterAsyncResource") => {
