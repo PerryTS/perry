@@ -2,7 +2,18 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
-## v0.5.1067 — node:https/http: URL-object request/get overload no longer throws circular-JSON (#3880)
+## v0.5.1068 — timers: drain microtasks between timer callbacks (#3870)
+
+Perry ran the microtask checkpoint only once after a whole batch of expired timers, not after each callback. So when a `setTimeout` callback queued a microtask *and* scheduled another zero-delay timeout, Perry fired the next timer before draining the microtask:
+
+```
+node:  promise|timeout1|micro-in-timeout|timeout2
+perry: promise|timeout1|timeout2|micro-in-timeout   (before)
+```
+
+Fix (`crates/perry-runtime/src/timer.rs`, `js_callback_timer_tick`): drain the microtask queue (`js_promise_run_microtasks`) after *each* timer callback rather than only once after the expired batch in the outer pump. In Node every timer callback is its own macrotask followed by a microtask checkpoint, so a `queueMicrotask`/`Promise.then` scheduled inside a timer callback now runs before the next timer fires.
+
+Validated against `node --experimental-strip-types`: all five `node-suite/timers/ordering` fixtures pass (the previously-failing `nested-order-extra` now matches). A 77-fixture sweep across `timers`/`promises`/`async-hooks` shows no regressions — the pre-existing failures (negative-delay warnings, `AbortError.code` shape, unsettled-top-level-await warnings) fail identically with and without this change (confirmed by a stashed-baseline rebuild) and are orthogonal to microtask ordering. `perry-runtime` timer + microtask unit tests green.
 
 `https.get(new URL(...), options, callback)` (and the `http`/`request` variants) threw `TypeError: Converting circular structure to JSON` before the request could be built. Root cause: `parse_client_args` classified arguments by value type, and a `URL` *instance* — a heap object, not a string — fell into the "first non-string pointer → options bag" branch. `parse_options_object` then JSON-stringified the URL, which throws on its `searchParams` ↔ owner back-reference, and the real options object was dropped.
 
