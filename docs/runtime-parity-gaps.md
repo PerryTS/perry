@@ -659,17 +659,13 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:http2
 
-**Gap APIs: 97** · Already covered: 5
+**Gap APIs: 93** · Already covered: 9
 
 #### Missing from Perry
 
 - `http2.createServer([options][, onRequestHandler])`
 - `http2.connect(authority[, options][, listener])`
-- `http2.getDefaultSettings()`
-- `http2.getPackedSettings([settings])`
-- `http2.getUnpackedSettings(buf)`
 - `http2.performServerHandshake(socket[, options])`
-- `http2.constants`
 - `session.alpnProtocol`
 - `session.closed`
 - `session.connecting`

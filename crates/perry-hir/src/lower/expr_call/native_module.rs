@@ -1030,9 +1030,13 @@ pub(super) fn try_native_module_methods(
                             let mut it = args.into_iter();
                             let target = it.next().unwrap_or(Expr::Undefined);
                             let args_arr = it.next().unwrap_or(Expr::Array(vec![]));
+                            // 3rd arg = newTarget; defaults to `undefined` so the
+                            // runtime falls back to the target/proxy itself.
+                            let new_target = it.next().unwrap_or(Expr::Undefined);
                             return Ok(Ok(Expr::ReflectConstruct {
                                 target: Box::new(target),
                                 args: Box::new(args_arr),
+                                new_target: Box::new(new_target),
                             }));
                         }
                         "defineProperty" => {

@@ -545,6 +545,21 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
     }
     if jv.is_pointer() {
         let ptr = jv.as_pointer::<u8>() as usize;
+        if ptr > 0 && ptr < 0x100000 {
+            if let Some(dispatch) = super::class_registry::handle_own_property_names_dispatch() {
+                let names = unsafe { dispatch(ptr as i64) };
+                if names.to_bits() != crate::value::TAG_UNDEFINED {
+                    let bits = names.to_bits();
+                    if bits >> 48 == 0x7FFD {
+                        let arr = (bits & crate::value::POINTER_MASK) as *mut ArrayHeader;
+                        if !arr.is_null() {
+                            return arr;
+                        }
+                    }
+                }
+            }
+            return crate::array::js_array_alloc(0);
+        }
         if crate::closure::is_closure_ptr(ptr) {
             return js_closure_dynamic_keys(ptr);
         }

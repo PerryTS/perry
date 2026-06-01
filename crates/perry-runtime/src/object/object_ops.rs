@@ -1454,6 +1454,18 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     }
     let bits = obj_value.to_bits();
     let top16 = bits >> 48;
+    if top16 == 0x7FFD {
+        let raw_addr = bits & 0x0000_FFFF_FFFF_FFFF;
+        if raw_addr > 0 && raw_addr < 0x100000 {
+            if let Some(dispatch) = super::class_registry::handle_prototype_dispatch() {
+                let proto = unsafe { dispatch(raw_addr as i64) };
+                if proto.to_bits() != crate::value::TAG_UNDEFINED {
+                    return proto;
+                }
+            }
+            return f64::from_bits(TAG_NULL);
+        }
+    }
     if top16 == 0x7FFE {
         let class_id = (bits & 0xFFFF_FFFF) as u32;
         if let Some(parent_id) = get_parent_class_id(class_id) {

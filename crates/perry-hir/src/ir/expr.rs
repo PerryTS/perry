@@ -2171,6 +2171,10 @@ pub enum Expr {
     ReflectConstruct {
         target: Box<Expr>,
         args: Box<Expr>,
+        /// Optional `newTarget` (the 3rd `Reflect.construct` argument). When the
+        /// call omits it, this lowers to `Expr::Undefined` and the runtime
+        /// defaults `newTarget` to the target/proxy itself.
+        new_target: Box<Expr>,
     },
     ReflectDefineProperty {
         target: Box<Expr>,
