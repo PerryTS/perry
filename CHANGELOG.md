@@ -2,7 +2,12 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
-## v0.5.1073 — node:test: add `assert` and `expectFailure` named exports (#3719)
+## v0.5.1074 — node:v8: startupSnapshot registrars throw plain Error + parity fixture (#3141)
+
+`v8.startupSnapshot` (added in #3679) was complete except its `addSerializeCallback` / `addDeserializeCallback` / `setDeserializeMainFunction` registrars threw a `TypeError [ERR_NOT_BUILDING_SNAPSHOT]` outside snapshot-building mode, whereas Node throws a plain **`Error`** (`name === "Error"`) with that code.
+
+- **`crates/perry-runtime/src/node_v8.rs`** + **`crates/perry-runtime/src/object/native_module_dispatch.rs`** — both throw sites now use `throw_error_with_code` (plain `Error`) instead of `throw_type_error_with_code`, matching Node's error class.
+- **`test-parity/node-suite/v8/startup-snapshot/shape.ts`** — new fixture covering the namespace shape, `isBuildingSnapshot()` → `0`, and the three registrars throwing `Error`/`ERR_NOT_BUILDING_SNAPSHOT`; byte-identical to `node --experimental-strip-types`. Closes #3141 (the helper-state manifest/runtime surface was already present; this corrects the error class and adds the missing parity coverage).
 
 Perry's `node:test` manifest claimed the registration helpers, `mock`, and `snapshot` but not Node's current `assert` (assertion-namespace object) or `expectFailure` (function) named exports, so `import { assert, expectFailure } from "node:test"` was rejected before codegen and the module-shape coverage could drift.
 

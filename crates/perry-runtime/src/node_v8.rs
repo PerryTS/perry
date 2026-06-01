@@ -477,7 +477,9 @@ pub extern "C" fn js_v8_namespace(name_ptr: *const u8, name_len: usize) -> f64 {
 /// context — Node throws `ERR_NOT_BUILDING_SNAPSHOT`.
 #[no_mangle]
 pub extern "C" fn js_v8_throw_not_building_snapshot() -> f64 {
-    crate::fs::validate::throw_type_error_with_code(
+    // #3141: Node's `ERR_NOT_BUILDING_SNAPSHOT` is a plain `Error` (name
+    // "Error"), not a `TypeError` — use the generic Error-with-code thrower.
+    crate::fs::validate::throw_error_with_code(
         "Operation not allowed when not building startup snapshot.",
         "ERR_NOT_BUILDING_SNAPSHOT",
     )

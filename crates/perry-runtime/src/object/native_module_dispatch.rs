@@ -1815,7 +1815,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("v8.startupSnapshot", m) => match m {
             "isBuildingSnapshot" => crate::node_v8::js_v8_is_building_snapshot(),
             "addSerializeCallback" | "addDeserializeCallback" | "setDeserializeMainFunction" => {
-                crate::fs::validate::throw_type_error_with_code(
+                // #3141: Node's `ERR_NOT_BUILDING_SNAPSHOT` is a plain `Error`,
+                // not a `TypeError`.
+                crate::fs::validate::throw_error_with_code(
                     "Operation not allowed when not building startup snapshot.",
                     "ERR_NOT_BUILDING_SNAPSHOT",
                 )
