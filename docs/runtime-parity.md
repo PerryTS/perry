@@ -159,6 +159,13 @@ Bun column reflects [bun.sh/docs/runtime/nodejs-apis](https://bun.sh/docs/runtim
 | `fs.writeSync(fd, string[, position[, encoding]])` | ✓ | ✓ |  |
 | `fs.writevSync(fd, buffers[, position])` | ✓ | ✓ |  |
 
+#### Exported Helpers And Aliases
+| API | Node.js | Bun | Notes |
+|-----|---------|-----|-------|
+| `fs.FileReadStream` | ✓ | ✓ | Alias of `fs.ReadStream` |
+| `fs.FileWriteStream` | ✓ | ✓ | Alias of `fs.WriteStream` |
+| `fs._toUnixTimestamp(value)` | ✓ | ⚠ | Exported helper; function name is `toUnixTimestamp` |
+
 #### Classes
 | Class / Method / Property | Node.js | Bun | Notes |
 |---------------------------|---------|-----|-------|
