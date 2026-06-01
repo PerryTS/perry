@@ -35,6 +35,7 @@ mod delete_rest;
 mod descriptors;
 mod field_get_set;
 mod field_set_by_name;
+mod global_fetch;
 mod global_this;
 mod groupby;
 pub(crate) mod has_own_helpers;
@@ -88,6 +89,7 @@ static OS_CONSTANTS_ERRNO_CACHE: AtomicU64 = AtomicU64::new(0);
 static OS_CONSTANTS_PRIORITY_CACHE: AtomicU64 = AtomicU64::new(0);
 static OS_CONSTANTS_DLOPEN_CACHE: AtomicU64 = AtomicU64::new(0);
 static GLOBAL_THIS_PTR: AtomicI64 = AtomicI64::new(0);
+static GLOBAL_THIS_READY: AtomicBool = AtomicBool::new(false);
 // #2145: the `%TypedArray%` intrinsic constructor (a closure) and its
 // `.prototype` (an object). Lazily allocated by
 // `populate_global_this_builtins` so the per-kind typed-array constructors
@@ -1451,6 +1453,7 @@ pub(crate) fn test_seed_object_cache_roots(object_cache_bits: [u64; 7], global_t
         global_this_ptr,
         Ordering::Release,
     );
+    GLOBAL_THIS_READY.store(true, Ordering::Release);
 }
 
 #[cfg(test)]
@@ -1503,6 +1506,7 @@ pub(crate) fn test_clear_object_cache_roots() {
     );
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinel into scanned GLOBAL_THIS_PTR.
     crate::gc::runtime_store_root_atomic_raw_i64(&GLOBAL_THIS_PTR, 0, Ordering::Release);
+    GLOBAL_THIS_READY.store(false, Ordering::Release);
 }
 
 /// Remove OVERFLOW_FIELDS entry for a freed object pointer.
