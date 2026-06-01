@@ -3646,8 +3646,6 @@ declare module "worker_threads" {
   /** stdlib */
   export function moveMessagePortToContext(p0: any, p1: any): any;
   /** stdlib */
-  export function parentPort(...args: any[]): any;
-  /** stdlib */
   export function postMessageToThread(p0: any, p1: any, p2: any, p3: any): any;
   /** stdlib */
   export function receiveMessageOnPort(p0: any): any;

@@ -551,6 +551,7 @@ mod tests {
             ("node:process", "env"),
             ("node:url", "URL"),
             ("node:url", "fileURLToPath"),
+            ("node:worker_threads", "parentPort"),
             ("node:worker_threads", "workerData"),
             ("node:path", "default"),
             ("node:https", "Agent"),
@@ -567,6 +568,18 @@ mod tests {
                 "{module} should expose real named export {name}"
             );
         }
+    }
+
+    #[test]
+    fn worker_threads_worker_only_callables_are_not_module_symbols() {
+        assert!(
+            module_has_symbol("node:worker_threads", "postMessage").is_none(),
+            "worker_threads.postMessage must not be exposed on the module namespace"
+        );
+        assert!(
+            !module_has_public_named_export("node:worker_threads", "postMessage"),
+            "worker_threads.postMessage must not be accepted as a named export"
+        );
     }
 
     #[test]
