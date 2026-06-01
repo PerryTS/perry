@@ -826,27 +826,26 @@ pub(super) fn try_native_module_methods(
                             )));
                         }
                         "getOwnPropertyDescriptor" => {
-                            // #2144: built-in function `.name` descriptor.
+                            // #2144/#3655: built-in function `.name` /
+                            // `.length` descriptors.
                             //
                             // `Object.getOwnPropertyDescriptor(<BuiltinCtor>,
-                            // "name")` and `…(<BuiltinNs>.<staticFn>, "name")`
-                            // — the runtime path returns `undefined` because
-                            // the bare ctor/static-fn lowers to a
-                            // `PropertyGet { GlobalGet(0), … }` whose value
-                            // is the 0 sentinel (no closure to read the
-                            // built-in `name` slot off of). Per spec the
-                            // descriptor is a non-writable, non-enumerable,
-                            // configurable data property whose value is the
-                            // function's name. Fold to an inline object
-                            // literal when we can statically recognize the
-                            // shape — same gating logic as the `.name` fold
-                            // in `expr_member.rs`.
+                            // "name"|"length")` and
+                            // `…(<BuiltinNs>.<staticFn>, "name"|"length")`
+                            // need a compile-time fold because those builtin
+                            // values are often intrinsic sentinels rather than
+                            // first-class closures. Per spec both descriptors
+                            // are non-writable, non-enumerable, configurable
+                            // data properties. Fold when we can statically
+                            // recognize the receiver shape — same gating logic
+                            // as the direct `.name` / `.length` folds in
+                            // `expr_member.rs`.
                             if call.args.len() >= 2 && args.len() >= 2 {
-                                let key_is_name = matches!(
-                                    call.args[1].expr.as_ref(),
-                                    ast::Expr::Lit(ast::Lit::Str(s)) if s.value.as_str() == Some("name")
-                                );
-                                if key_is_name {
+                                let key_name = match call.args[1].expr.as_ref() {
+                                    ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str(),
+                                    _ => None,
+                                };
+                                if matches!(key_name, Some("name" | "length")) {
                                     let lowered_obj_is_global_intrinsic = match &args[0] {
                                         Expr::GlobalGet(0) => true,
                                         Expr::PropertyGet { object: inner, .. } => {
@@ -855,13 +854,44 @@ pub(super) fn try_native_module_methods(
                                         _ => false,
                                     };
                                     if lowered_obj_is_global_intrinsic {
-                                        let folded = super::name_fold::builtin_fn_name_for_arg(
-                                            call.args[0].expr.as_ref(),
-                                        );
-                                        if let Some(fname) = folded {
-                                            return Ok(Ok(super::name_fold::name_data_descriptor(
-                                                fname,
-                                            )));
+                                        match key_name {
+                                            Some("name") => {
+                                                let folded =
+                                                    super::name_fold::builtin_fn_name_for_arg(
+                                                        call.args[0].expr.as_ref(),
+                                                    );
+                                                if let Some(fname) = folded {
+                                                    return Ok(Ok(
+                                                        super::name_fold::name_data_descriptor(
+                                                            fname,
+                                                        ),
+                                                    ));
+                                                }
+                                            }
+                                            Some("length") => {
+                                                let folded =
+                                                    super::name_fold::builtin_fn_length_for_arg(
+                                                        call.args[0].expr.as_ref(),
+                                                    )
+                                                    .or_else(|| {
+                                                        super::name_fold::builtin_fn_name_for_arg(
+                                                            call.args[0].expr.as_ref(),
+                                                        )
+                                                        .and_then(|name| {
+                                                            crate::analysis::builtin_constructor_length(
+                                                                &name,
+                                                            )
+                                                        })
+                                                    });
+                                                if let Some(len) = folded {
+                                                    return Ok(Ok(
+                                                        super::name_fold::builtin_data_descriptor(
+                                                            Expr::Number(len as f64),
+                                                        ),
+                                                    ));
+                                                }
+                                            }
+                                            _ => {}
                                         }
                                     }
                                 }

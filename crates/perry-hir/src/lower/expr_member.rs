@@ -1693,6 +1693,29 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     }
                 }
             }
+            if let Expr::PropertyGet {
+                object: inner,
+                property,
+            } = &object_expr
+            {
+                if matches!(inner.as_ref(), Expr::GlobalGet(0)) {
+                    if let ast::Expr::Member(inner_member) = member.obj.as_ref() {
+                        if let (ast::Expr::Ident(ns_ident), ast::MemberProp::Ident(method_ident)) =
+                            (inner_member.obj.as_ref(), &inner_member.prop)
+                        {
+                            let ns = ns_ident.sym.as_ref();
+                            let method = method_ident.sym.as_ref();
+                            if method == property.as_str() {
+                                if let Some(len) =
+                                    crate::analysis::builtin_static_function_length(ns, method)
+                                {
+                                    return Ok(Expr::Number(len as f64));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
