@@ -1318,8 +1318,8 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         // Deprecated path alias enumerable on the top-level and style
         // sub-namespaces, matching Node's `Object.keys(...).includes`.
         "path" => Some(PATH_NAMESPACE_KEYS),
-        "path.default" => Some(PATH_DEFAULT_KEYS),
-        "path.posix" | "path.win32" => Some(&[b"_makeLong"]),
+        "path.default" | "path.posix.default" | "path.win32.default" => Some(PATH_DEFAULT_KEYS),
+        "path.posix" | "path.win32" => Some(PATH_NAMESPACE_KEYS),
         "fs" => Some(FS_NAMESPACE_KEYS),
         "constants" => Some(deprecated_constants_keys()),
         "buffer" => Some(BUFFER_NAMESPACE_KEYS),
@@ -1386,6 +1386,8 @@ fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
         "async_hooks.default" => Some("async_hooks"),
         "os.default" => Some("os"),
         "path.default" => Some("path"),
+        "path.posix.default" => Some("path.posix"),
+        "path.win32.default" => Some("path.win32"),
         "punycode.default" => Some("punycode"),
         "querystring.default" => Some("querystring"),
         "url.default" => Some("url"),
@@ -1399,6 +1401,8 @@ fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
         "async_hooks" => Some("async_hooks.default"),
         "os" => Some("os.default"),
         "path" => Some("path.default"),
+        "path.posix" => Some("path.posix.default"),
+        "path.win32" => Some("path.win32.default"),
         "punycode" => Some("punycode.default"),
         "querystring" => Some("querystring.default"),
         "url" => Some("url.default"),
@@ -1415,9 +1419,8 @@ fn create_cjs_default_namespace(module_name: &str) -> Option<f64> {
 fn cjs_default_export_value(module_name: &str) -> Option<f64> {
     match module_name {
         "events" => Some(bound_native_callable_export_value("events", "EventEmitter")),
-        "async_hooks" | "os" | "path" | "punycode" | "querystring" | "url" | "util" => {
-            create_cjs_default_namespace(module_name)
-        }
+        "async_hooks" | "os" | "path" | "path.posix" | "path.win32" | "punycode"
+        | "querystring" | "url" | "util" => create_cjs_default_namespace(module_name),
         _ => None,
     }
 }
@@ -1446,6 +1449,8 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "os.default"
             | "path"
             | "path.default"
+            | "path.posix.default"
+            | "path.win32.default"
             | "punycode"
             | "punycode.default"
             | "punycode.ucs2"
@@ -4584,30 +4589,32 @@ pub(crate) unsafe fn get_native_module_constant(
                 "path",
                 "toNamespacedPath",
             )),
-            "posix" => Some(create_sub_namespace("path.posix")),
-            "win32" => Some(create_sub_namespace("path.win32")),
+            "posix" => cjs_default_export_value("path.posix"),
+            "win32" => cjs_default_export_value("path.win32"),
             _ => None,
         },
         "path.posix" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("path.posix"),
             "sep" => Some(str_val("/")),
             "delimiter" => Some(str_val(":")),
             "toNamespacedPath" | "_makeLong" => Some(bound_native_callable_export_value(
                 "path.posix",
                 "toNamespacedPath",
             )),
-            "posix" => Some(native_namespace_or_create("path.posix", namespace_obj)),
-            "win32" => Some(create_sub_namespace("path.win32")),
+            "posix" => cjs_default_export_value("path.posix"),
+            "win32" => cjs_default_export_value("path.win32"),
             _ => None,
         },
         "path.win32" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("path.win32"),
             "sep" => Some(str_val("\\")),
             "delimiter" => Some(str_val(";")),
             "toNamespacedPath" | "_makeLong" => Some(bound_native_callable_export_value(
                 "path.win32",
                 "toNamespacedPath",
             )),
-            "posix" => Some(create_sub_namespace("path.posix")),
-            "win32" => Some(native_namespace_or_create("path.win32", namespace_obj)),
+            "posix" => cjs_default_export_value("path.posix"),
+            "win32" => cjs_default_export_value("path.win32"),
             _ => None,
         },
         "fs" => match property {

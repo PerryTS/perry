@@ -117,6 +117,8 @@ fn is_cjs_style_native_default_import(module_name: &str) -> bool {
             | "events"
             | "os"
             | "path"
+            | "path/posix"
+            | "path/win32"
             | "punycode"
             | "querystring"
             | "sys"

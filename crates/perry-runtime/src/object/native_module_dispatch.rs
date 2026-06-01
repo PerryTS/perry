@@ -141,6 +141,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
         "async_hooks.default" => "async_hooks",
         "os.default" => "os",
         "path.default" => "path",
+        "path.posix.default" => "path.posix",
+        "path.win32.default" => "path.win32",
         "querystring.default" => "querystring",
         "url.default" => "url",
         "util.default" => "util",
