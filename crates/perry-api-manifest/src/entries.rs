@@ -2649,6 +2649,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "createPrivateKey", false, None),
     method("crypto", "createPublicKey", false, None),
     method("crypto", "generateKeyPairSync", false, None),
+    // #3927: `crypto.generateKeySync("aes"|"hmac", { length })` — the codegen
+    // dispatch (expr/calls.rs → js_crypto_generate_key_sync) and the secret-key
+    // KeyObject metadata (type/symmetricKeySize/export, fixed for 192/256 by
+    // #3930) were already complete; only this manifest row was missing, so the
+    // #463 unimplemented-API gate rejected the call before codegen ran.
+    method("crypto", "generateKeySync", false, None),
     method("crypto", "createHmac", false, None),
     // `crypto.createCipheriv(alg, key, iv)` / `createDecipheriv(...)` —
     // issue #1075. Registers a CipherHandle dispatched via the
