@@ -15,6 +15,14 @@ use crate::closure::{
 
 use super::*;
 
+/// `fs.opendirSync(path)` — codegen emits a direct call to the unmangled
+/// `js_fs_opendir_sync` symbol (runtime_decls/strings.rs). Without `#[no_mangle]`
+/// the symbol is Rust-mangled and the linker can't resolve it, so any program
+/// using `opendirSync` failed with `Undefined symbols: _js_fs_opendir_sync`
+/// (#4003-sibling found via #3964). The async/promises Dir paths reach the
+/// shared `js_fs_opendir_value` helper directly, which is why only the sync
+/// entry point was affected.
+#[no_mangle]
 pub extern "C" fn js_fs_opendir_sync(path_value: f64) -> f64 {
     match js_fs_opendir_value(path_value) {
         Ok(dir) => dir,

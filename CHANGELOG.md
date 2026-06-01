@@ -2,6 +2,14 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1076 — fix(fs): opendirSync compiles (add missing #[no_mangle])
+
+Any program using `fs.opendirSync(...)` failed to link with `Undefined symbols: _js_fs_opendir_sync`. The runtime `js_fs_opendir_sync` (`crates/perry-runtime/src/fs/dir_glob_watch.rs`) was declared in codegen (`runtime_decls/strings.rs`) and called by the unmangled symbol name, but the Rust function was missing `#[no_mangle]` — so its symbol was Rust-mangled and the linker couldn't resolve the codegen call. (Its sibling `js_fs_glob_sync`/`js_fs_glob_sync_options` both have `#[no_mangle]` and linked fine; the async/`fs.promises` Dir paths reach the shared `js_fs_opendir_value` helper directly, so only the sync entry point was broken.)
+
+Fix: add `#[no_mangle]` to `js_fs_opendir_sync`. `opendirSync` now compiles and returns a Dir (`typeof === "object"`, `readSync` a function) matching `node --experimental-strip-types`.
+
+Found while investigating #3964 (the `ERR_DIR_CONCURRENT_OPERATION` overlap semantic for `readSync`/`closeSync` during a pending async `read`/`close` remains open — that's a separate behavior on top of this compile fix).
+
 ## v0.5.1075 — fix(runtime): Buffer no longer misidentified as a Date cell in property reads (#4003)
 
 `gunzipSync(c).length` / `.byteLength` returned `undefined` for a bound-local Buffer input (Node: the decompressed byte length), while indexing, `.toString()`, `Buffer.isBuffer`, and `Buffer.byteLength(d)` all worked.
