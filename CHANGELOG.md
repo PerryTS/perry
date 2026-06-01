@@ -2,6 +2,16 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1066 — node:constants Linux-only constants gated out of the import surface on macOS (#3902)
+
+On macOS, Node's `node:constants` ESM namespace does not export six Linux-only constants (`O_DIRECT`, `O_NOATIME`, `RTLD_DEEPBIND`, `SIGPOLL`, `SIGPWR`, `SIGSTKFLT`), but Perry accepted all six as named imports and ran the program with each binding set to `undefined` — a false-positive surface: code that fails Node's ESM instantiation passed `perry check` and ran under Perry.
+
+Fix (`crates/perry-api-manifest/src/lib.rs`): a new `is_platform_unavailable_named_export` helper is consulted by `module_has_public_named_export` (the import gate behind the `U006` check). On a non-Linux host the six names are no longer valid named exports, so `perry check`/compile now rejects `import { O_DIRECT } from "node:constants"` with `error[U006] ... does not provide an export named 'O_DIRECT'`, matching Node. Valid constants (`O_RDONLY`, `O_DIRECTORY`, …) are unaffected.
+
+The entries deliberately stay in the static `API_MANIFEST` on every platform, so `--print-api-manifest` and the generated docs (`docs/api/perry.d.ts`, `docs/src/api/reference.md`) remain byte-identical regardless of the host OS the generator runs on — the existing `deprecated_constants_alias_has_manifest_entries` invariant (CI runs `api-docs-drift` on Linux). The gate touches only the import-validation path, not the docs/emit path. New test `platform_unavailable_constants_gate_the_import_surface` covers both halves.
+
+Also closed as already-fixed-on-main (stale mass-filed reports against an old baseline): **#3897** (node:buffer `Buffer.*` static methods misclassified as top-level exports — now `internal_method`, excluded) and **#3898** (node:perf_hooks `performance.*` singleton methods misclassified — now excluded). The current manifest's buffer/perf_hooks module exports already match Node.
+
 ## v0.5.1065 — node-builtin submodule default imports resolve to the module namespace (#3906, partial)
 
 Default-importing a non-native node-builtin submodule (e.g. `import tp from "node:timers/promises"`, `import sp from "node:stream/promises"`) previously lowered the binding down the generic JS-module-default path, producing a primitive (`typeof tp === "boolean"`) instead of an object — so `tp.setTimeout(...)` / `sp.finished(...)` were unreachable. In CommonJS terms the default export *is* `module.exports`, which for these modules is the module namespace itself.
