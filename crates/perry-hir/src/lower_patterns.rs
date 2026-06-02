@@ -149,6 +149,31 @@ pub(crate) fn get_binding_name(pat: &ast::Pat) -> Result<String> {
     }
 }
 
+pub(crate) fn collect_binding_names(pat: &ast::Pat, out: &mut Vec<String>) {
+    match pat {
+        ast::Pat::Ident(ident) => push_unique_name(out, ident.id.sym.to_string()),
+        ast::Pat::Array(arr) => {
+            for elem in arr.elems.iter().flatten() {
+                collect_binding_names(elem, out);
+            }
+        }
+        ast::Pat::Object(obj) => {
+            for prop in &obj.props {
+                match prop {
+                    ast::ObjectPatProp::Assign(assign) => {
+                        push_unique_name(out, assign.key.sym.to_string());
+                    }
+                    ast::ObjectPatProp::KeyValue(kv) => collect_binding_names(&kv.value, out),
+                    ast::ObjectPatProp::Rest(rest) => collect_binding_names(&rest.arg, out),
+                }
+            }
+        }
+        ast::Pat::Assign(assign) => collect_binding_names(&assign.left, out),
+        ast::Pat::Rest(rest) => collect_binding_names(&rest.arg, out),
+        ast::Pat::Expr(_) | ast::Pat::Invalid(_) => {}
+    }
+}
+
 /// Static counter for generating unique synthetic names for destructuring patterns
 static DESTRUCT_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 

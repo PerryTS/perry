@@ -505,6 +505,26 @@ pub(crate) fn lower_module_decl(
                 ast::Decl::Var(var_decl) => {
                     // Handle exported variables
                     for decl in &var_decl.decls {
+                        if is_destructuring_pattern(&decl.name) {
+                            let mut names = Vec::new();
+                            collect_binding_names(&decl.name, &mut names);
+                            if decl.init.is_some() {
+                                let mutable = var_decl.kind != ast::VarDeclKind::Const;
+                                let is_var = var_decl.kind == ast::VarDeclKind::Var;
+                                let stmts =
+                                    lower_var_decl_with_destructuring(ctx, decl, mutable, is_var)?;
+                                module.init.extend(stmts);
+                                for name in names {
+                                    module.exports.push(Export::Named {
+                                        local: name.clone(),
+                                        exported: name.clone(),
+                                    });
+                                    module.exported_objects.push(name);
+                                }
+                                continue;
+                            }
+                        }
+
                         let name = get_binding_name(&decl.name)?;
                         let ty = extract_binding_type(&decl.name);
                         if let Some(init) = &decl.init {
@@ -1926,7 +1946,36 @@ pub(crate) fn lower_namespace_as_class(
                     ast::Decl::Var(var_decl) => {
                         // Lower exported namespace variables as module-level locals
                         let mutable = var_decl.kind != ast::VarDeclKind::Const;
+                        let is_var = var_decl.kind == ast::VarDeclKind::Var;
                         for decl in &var_decl.decls {
+                            if is_destructuring_pattern(&decl.name) {
+                                let mut names = Vec::new();
+                                collect_binding_names(&decl.name, &mut names);
+                                if decl.init.is_some() {
+                                    let stmts = lower_var_decl_with_destructuring(
+                                        ctx, decl, mutable, is_var,
+                                    )?;
+                                    module.init.extend(stmts);
+                                    for name in names {
+                                        if let Some(id) = ctx.lookup_local(&name) {
+                                            ctx.namespace_vars.push((
+                                                ns_name.to_string(),
+                                                name.clone(),
+                                                id,
+                                            ));
+                                        }
+                                        if is_exported {
+                                            module.exported_objects.push(name.clone());
+                                            module.exports.push(Export::Named {
+                                                local: name.clone(),
+                                                exported: name,
+                                            });
+                                        }
+                                    }
+                                    continue;
+                                }
+                            }
+
                             let name = get_binding_name(&decl.name)?;
                             let ty = extract_binding_type(&decl.name);
                             if let Some(init) = &decl.init {
