@@ -90,6 +90,7 @@ pub mod timer;
 pub mod typed_feedback;
 pub mod typedarray;
 pub mod typedarray_half;
+pub mod typedarray_view;
 pub mod url;
 pub mod value;
 pub mod wasi;
