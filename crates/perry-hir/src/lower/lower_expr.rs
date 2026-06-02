@@ -106,6 +106,7 @@ fn is_cjs_style_native_default_import(module_name: &str) -> bool {
         module_name,
         "async_hooks"
             | "child_process"
+            | "cluster"
             | "constants"
             | "dns"
             | "dns/promises"
@@ -696,6 +697,14 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             | "clearInterval"
                             | "clearImmediate"
                             | "fetch"
+                            // Callable global helpers that otherwise resolve to
+                            // `GlobalGet(0)` (globalThis) for a bare read, so a
+                            // value `typeof` reported "object" despite being
+                            // fully callable. (#3986)
+                            | "queueMicrotask"
+                            | "structuredClone"
+                            | "btoa"
+                            | "atob"
                     ) && ctx.lookup_local(n).is_none()
                     {
                         return Ok(Expr::String("function".to_string()));

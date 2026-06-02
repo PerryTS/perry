@@ -199,6 +199,19 @@ extern "C" fn uri_error_constructor_call_thunk(
     error_constructor_call(crate::error::ERROR_KIND_URI_ERROR, message)
 }
 
+pub(crate) fn builtin_prototype_value(name: &str) -> f64 {
+    let ctor = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+    let ctor_bits = ctor.to_bits();
+    if (ctor_bits >> 48) != 0x7FFD {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let ctor_ptr = (ctor_bits & crate::value::POINTER_MASK) as usize;
+    if ctor_ptr == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype")
+}
+
 pub(crate) extern "C" fn webcrypto_illegal_constructor_thunk(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
@@ -2046,10 +2059,10 @@ pub(super) fn install_proto_method(
     method_name: &str,
     func_ptr: *const u8,
     arity: u32,
-) {
+) -> f64 {
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     if closure.is_null() {
-        return;
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     crate::closure::js_register_closure_arity(func_ptr, arity);
     super::native_module::set_bound_native_closure_name(closure, method_name);
@@ -2087,6 +2100,7 @@ pub(super) fn install_proto_method(
         "length".to_string(),
         super::PropertyAttrs::new(false, false, true),
     );
+    value
 }
 
 fn install_proto_method_rest(

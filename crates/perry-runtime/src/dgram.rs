@@ -13,7 +13,8 @@ use crate::closure::{
     js_closure_alloc, js_closure_set_capture_ptr, js_register_closure_rest, ClosureHeader,
 };
 use crate::object::{
-    js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
+    js_object_alloc, js_object_get_field_by_name_f64, js_object_keys, js_object_set_field_by_name,
+    ObjectHeader,
 };
 use crate::value::{
     js_nanbox_pointer, JSValue, POINTER_MASK, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
@@ -98,6 +99,10 @@ const SOCKET_METHODS: &[MethodSpec] = &[
     MethodSpec {
         name: "listenerCount",
         thunk: dgram_listener_count_thunk,
+    },
+    MethodSpec {
+        name: "eventNames",
+        thunk: dgram_event_names_thunk,
     },
     MethodSpec {
         name: "addMembership",
@@ -830,6 +835,39 @@ fn emit_event(socket: f64, event: &str, args: &[f64]) -> bool {
     emit_event_value(socket, str_value(event), args)
 }
 
+/// `socket.eventNames()` — the list of events with at least one registered
+/// listener, in registration order. Recomputed from the socket's hidden
+/// listener-storage fields (keyed by `EVENT_LISTENERS_PREFIX`) so it self-
+/// corrects when `once` listeners fire or listeners are removed, matching
+/// Node's EventEmitter.eventNames().
+fn event_names_impl(socket: f64) -> f64 {
+    let Some(obj) = object_ptr_from_value(socket) else {
+        return boxed_pointer(crate::array::js_array_alloc(0) as *const u8);
+    };
+    let keys = js_object_keys(obj);
+    let mut out = crate::array::js_array_alloc(0);
+    if !keys.is_null() {
+        let len = crate::array::js_array_length(keys);
+        for i in 0..len {
+            let Some(key_name) = string_to_rust(crate::array::js_array_get_f64(keys, i)) else {
+                continue;
+            };
+            let Some(event) = key_name
+                .as_bytes()
+                .strip_prefix(EVENT_LISTENERS_PREFIX)
+                .map(|rest| String::from_utf8_lossy(rest).into_owned())
+            else {
+                continue;
+            };
+            let event_value = str_value(&event);
+            if !listener_snapshot(socket, event_value).is_empty() {
+                out = crate::array::js_array_push_f64(out, event_value);
+            }
+        }
+    }
+    boxed_pointer(out as *const u8)
+}
+
 fn allocate_port(registry: &mut DgramRegistry, address: &str) -> u16 {
     for _ in 0..16384 {
         let port = registry.next_port;
@@ -1308,6 +1346,10 @@ extern "C" fn dgram_listener_count_thunk(closure: *const ClosureHeader, rest: f6
     listener_snapshot(this_value(closure), event).len() as f64
 }
 
+extern "C" fn dgram_event_names_thunk(closure: *const ClosureHeader, _rest: f64) -> f64 {
+    event_names_impl(this_value(closure))
+}
+
 extern "C" fn dgram_add_membership_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
     membership_impl(
         this_value(closure),
@@ -1497,6 +1539,11 @@ pub extern "C" fn js_dgram_socket_listener_count(handle: i64, args: *const Array
         args.first().copied().unwrap_or_else(undefined_value),
     )
     .len() as f64
+}
+
+#[no_mangle]
+pub extern "C" fn js_dgram_socket_event_names(handle: i64, _args: *const ArrayHeader) -> f64 {
+    event_names_impl(socket_value_from_handle(handle))
 }
 
 #[no_mangle]
