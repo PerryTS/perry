@@ -58,6 +58,7 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
         default: None,
         decorators: Vec::new(),
         is_rest: false,
+        arguments_object: None,
     }
 }
 
@@ -87,6 +88,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         methods: Vec::new(),
         getters: Vec::new(),
         setters: Vec::new(),
+        computed_members: Vec::new(),
         static_fields: Vec::new(),
         static_methods: Vec::new(),
         decorators: Vec::new(),
@@ -145,6 +147,7 @@ fn module_with_classes(
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
     }
 }

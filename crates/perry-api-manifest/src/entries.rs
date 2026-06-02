@@ -57,6 +57,8 @@ pub const NATIVE_MODULES: &[&str] = &[
     "http",
     "https",
     "http2",
+    "inspector",
+    "inspector/promises",
     "events",
     "domain",
     "os",
@@ -102,6 +104,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     // instance-method dispatch (no JS import surface).
     "__disposable__",
     "readline",
+    "repl",
     "string_decoder",
     "querystring",
     "cluster",
@@ -185,6 +188,8 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "dns",
     "dns/promises",
     "dgram",
+    "inspector",
+    "inspector/promises",
     "stream",
     "module",
     "url",
@@ -207,6 +212,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "wasi",
     "perf_hooks",
     "v8",
+    "repl",
 ];
 
 const fn method(
@@ -685,6 +691,34 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("iroh", "streamFinish", true, None),
     method("iroh", "streamReadToEnd", true, None),
     method("iroh", "connClose", true, None),
+    property("inspector", "default"),
+    method("inspector", "open", false, None),
+    method("inspector", "close", false, None),
+    method("inspector", "url", false, None),
+    method("inspector", "waitForDebugger", false, None),
+    property("inspector", "console"),
+    class("inspector", "Session"),
+    method("inspector", "Session", false, None),
+    method("inspector", "connect", true, Some("Session")),
+    method("inspector", "connectToMainThread", true, Some("Session")),
+    method("inspector", "disconnect", true, Some("Session")),
+    method("inspector", "post", true, Some("Session")),
+    method("inspector", "on", true, Some("Session")),
+    method("inspector", "once", true, Some("Session")),
+    property("inspector/promises", "default"),
+    class("inspector/promises", "Session"),
+    method("inspector/promises", "Session", false, None),
+    method("inspector/promises", "connect", true, Some("Session")),
+    method(
+        "inspector/promises",
+        "connectToMainThread",
+        true,
+        Some("Session"),
+    ),
+    method("inspector/promises", "disconnect", true, Some("Session")),
+    method("inspector/promises", "post", true, Some("Session")),
+    method("inspector/promises", "on", true, Some("Session")),
+    method("inspector/promises", "once", true, Some("Session")),
     method_sig("ws", "Server", false, None, &[p_any("p0")], TypeSpec::Any),
     method_sig(
         "ws",
@@ -697,6 +731,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("ws", "on", true, None),
     method("ws", "send", true, None),
     method("ws", "close", true, None),
+    // Node-compatible WebSocket ready-state constants. The `ws` package
+    // exposes these on both the module/default export and WebSocket class:
+    // CONNECTING=0, OPEN=1, CLOSING=2, CLOSED=3.
+    property("ws", "CONNECTING"),
+    property("ws", "OPEN"),
+    property("ws", "CLOSING"),
+    property("ws", "CLOSED"),
     // #1113 — `wss.handleUpgrade(req, socket, head, cb)` for a
     // `new WebSocketServer({ noServer: true })`.
     method("ws", "handleUpgrade", true, None),
@@ -3403,6 +3444,18 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("process", "stdout"),
     property("process", "stderr"),
     property("process", "env"),
+    property("process", "allowedNodeEnvironmentFlags"),
+    property("process", "argv0"),
+    property("process", "config"),
+    property("process", "debugPort"),
+    property("process", "execArgv"),
+    property("process", "execPath"),
+    property("process", "features"),
+    property("process", "finalization"),
+    property("process", "moduleLoadList"),
+    property("process", "release"),
+    property("process", "report"),
+    property("process", "title"),
     // ===========================================================
     // Class exports (constructors `new Foo(...)` from a module).
     // ===========================================================
@@ -3424,6 +3477,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("pg", "Client"),
     class("url", "URL"),
     class("url", "URLSearchParams"),
+    class("url", "URLPattern"),
+    internal_method("url", "URLPattern", false, None),
+    internal_method("url", "exec", true, Some("URLPattern")),
+    internal_method("url", "test", true, Some("URLPattern")),
     // Issue #848: string_decoder.StringDecoder — handle-based dispatch
     // for `write` / `end` + `lastNeed` / `lastTotal` / `lastChar` getters.
     class("string_decoder", "StringDecoder"),
@@ -3622,9 +3679,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- node:fs/promises direct submodule (#2728). Only the named exports
     // Perry actually backs with runtime thunks (see
     // `perry-runtime::node_submodules::fs_promises`) are declared. FileHandle
-    // methods (ftruncate/fchown/futimes etc.) are intentionally omitted — they
-    // are tracked separately (#2133). The parent `fs.promises` namespace above
-    // still resolves to the same surface.
+    // receiver-only methods are represented with class filters when runtime
+    // backed; the parent `fs.promises` namespace above still resolves to the
+    // same surface.
     property("fs/promises", "default"),
     property("fs/promises", "constants"),
     method("fs/promises", "access", false, None),
@@ -3659,6 +3716,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fs/promises", "utimes", false, None),
     method("fs/promises", "watch", false, None),
     method("fs/promises", "writeFile", false, None),
+    method("fs/promises", "pull", true, Some("FileHandle")),
+    method("fs/promises", "pullSync", true, Some("FileHandle")),
+    method("fs/promises", "writer", true, Some("FileHandle")),
     // --- console (Node global console exposed as node:console too). ---
     class("console", "Console"),
     method("console", "log", false, None),
@@ -4157,6 +4217,25 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_any("p0")],
         TypeSpec::Any,
     ),
+    // --- node:repl ---
+    property("repl", "default"),
+    property("repl", "builtinModules"),
+    property("repl", "REPL_MODE_SLOPPY"),
+    property("repl", "REPL_MODE_STRICT"),
+    class("repl", "REPLServer"),
+    class("repl", "Recoverable"),
+    method("repl", "start", false, None),
+    method("repl", "REPLServer", false, None),
+    method("repl", "Recoverable", false, None),
+    internal_method("repl", "on", true, Some("REPLServer")),
+    internal_method("repl", "addListener", true, Some("REPLServer")),
+    internal_method("repl", "once", true, Some("REPLServer")),
+    internal_method("repl", "emit", true, Some("REPLServer")),
+    internal_method("repl", "write", true, Some("REPLServer")),
+    internal_method("repl", "defineCommand", true, Some("REPLServer")),
+    internal_method("repl", "displayPrompt", true, Some("REPLServer")),
+    internal_method("repl", "clearBufferedCommand", true, Some("REPLServer")),
+    internal_method("repl", "setupHistory", true, Some("REPLServer")),
     // --- perf_hooks (W3C User Timing on `performance` + PerformanceObserver) ---
     internal_method("perf_hooks", "now", false, None),
     internal_method("perf_hooks", "mark", false, None),
@@ -4361,7 +4440,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "validateHeaderValue", false, None),
     method("http", "setMaxIdleHTTPParsers", false, None),
     method("http", "setGlobalProxyFromEnv", false, None),
+    method("http", "_connectionListener", false, None),
     class("http", "Server"),
+    class("http", "WebSocket"),
     class("http", "ClientRequest"),
     class("http", "IncomingMessage"),
     class("http", "ServerResponse"),

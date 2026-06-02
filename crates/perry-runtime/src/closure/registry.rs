@@ -24,13 +24,10 @@ use std::cell::RefCell;
 // #29 `perry/thread`) currently don't see the table because they aren't
 // supposed to invoke arbitrary user closures across the boundary anyway.
 thread_local! {
-    /// (fixed_arity, synthetic_arguments) — synthetic_arguments=true means
-    /// the rest param is the synthesized `arguments` array (HIR-injected
-    /// when the body reads `arguments` without a user-declared rest), so
-    /// the runtime must bundle ALL passed args into the rest slot (not
-    /// just trailing ones after `fixed_arity`). Refs #915 (gap 1 from
-    /// #899 — Effect's `dual(arity, body)` arity detection).
-    static CLOSURE_REST_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, (u32, bool)>> =
+    /// (fixed_arity, kind) — kind describes whether the function has an
+    /// ordinary user rest param, a synthesized `arguments` rest param, or
+    /// both a user rest param plus a hidden raw-arguments slot.
+    static CLOSURE_REST_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, (u32, RestDispatchKind)>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
     /// Side-table mapping closure body `func_ptr` -> declared param count
     /// (for closures WITHOUT a rest param — those use CLOSURE_REST_REGISTRY).
@@ -111,12 +108,8 @@ pub enum DispatchStrategy {
     /// `Function.prototype.bind` result (BOUND_FUNCTION_FUNC_PTR sentinel).
     /// Dispatch via `dispatch_bound_function`.
     BoundFunction,
-    /// Closure body has a rest param at the given fixed_arity index.
-    /// Dispatch via `dispatch_rest_bundled`. The bool flag is true when
-    /// the rest param is the synthesized `arguments` array (HIR-injected
-    /// when the body reads `arguments`); in that case all passed args
-    /// are bundled into the rest slot (not just the trailing tail).
-    Rest(u32, bool),
+    /// Closure body has a rest-like runtime bundling requirement.
+    Rest(u32, RestDispatchKind),
     /// Closure body declares an arity higher than the call sites use;
     /// dispatch must pad with TAG_UNDEFINED via `dispatch_with_arity`.
     Arity(u32),
@@ -124,6 +117,13 @@ pub enum DispatchStrategy {
     /// (declared arity == call site arity, no rest, no bound method).
     /// The hot path for the vast majority of closure call sites.
     Direct,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RestDispatchKind {
+    UserRest,
+    SyntheticArguments,
+    UserRestAndArguments,
 }
 
 thread_local! {
@@ -199,7 +199,7 @@ pub extern "C" fn js_register_closure_rest(func_ptr: *const u8, fixed_arity: u32
     }
     CLOSURE_REST_REGISTRY.with(|r| {
         r.borrow_mut()
-            .insert(func_ptr as usize, (fixed_arity, false));
+            .insert(func_ptr as usize, (fixed_arity, RestDispatchKind::UserRest));
     });
 }
 
@@ -218,8 +218,27 @@ pub extern "C" fn js_register_closure_synthetic_arguments(func_ptr: *const u8, f
         return;
     }
     CLOSURE_REST_REGISTRY.with(|r| {
-        r.borrow_mut()
-            .insert(func_ptr as usize, (fixed_arity, true));
+        r.borrow_mut().insert(
+            func_ptr as usize,
+            (fixed_arity, RestDispatchKind::SyntheticArguments),
+        );
+    });
+}
+
+/// Register a function with both a user-declared rest parameter and a hidden
+/// raw-arguments slot. Dynamic dispatch must provide two arrays: the user rest
+/// tail and the full argument list used to allocate the ECMAScript Arguments
+/// object in the callee prologue.
+#[no_mangle]
+pub extern "C" fn js_register_closure_rest_and_arguments(func_ptr: *const u8, fixed_arity: u32) {
+    if func_ptr.is_null() {
+        return;
+    }
+    CLOSURE_REST_REGISTRY.with(|r| {
+        r.borrow_mut().insert(
+            func_ptr as usize,
+            (fixed_arity, RestDispatchKind::UserRestAndArguments),
+        );
     });
 }
 
@@ -251,7 +270,7 @@ pub fn lookup_closure_rest(func_ptr: *const u8) -> Option<u32> {
 }
 
 #[inline(always)]
-pub fn lookup_closure_rest_full(func_ptr: *const u8) -> Option<(u32, bool)> {
+pub fn lookup_closure_rest_full(func_ptr: *const u8) -> Option<(u32, RestDispatchKind)> {
     CLOSURE_REST_REGISTRY.with(|r| r.borrow().get(&(func_ptr as usize)).copied())
 }
 
@@ -433,7 +452,7 @@ pub unsafe fn dispatch_rest_bundled(
     func_ptr: *const u8,
     args: &[f64],
     fixed_arity: u32,
-    synthetic_arguments: bool,
+    kind: RestDispatchKind,
 ) -> f64 {
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let k = fixed_arity as usize;
@@ -444,24 +463,19 @@ pub unsafe fn dispatch_rest_bundled(
         .map(|value| arg_scope.root_nanbox_f64(*value))
         .collect();
 
-    // Bundle args into the rest array.
-    //
-    // For a user-declared `...rest`, this is the trailing tail past the
-    // fixed params. For the HIR-synthesized `arguments` rest, JS spec
-    // semantics require ALL passed args — `arguments.length === args.length`
-    // regardless of how many fixed params the function declared. Refs
-    // #915 (gap 1 from #899): Effect's `dual(arity, body)` checks
-    // `arguments.length` to discriminate data-first vs data-last, and the
-    // body is `function (a, b) { … arguments.length … }` — pre-fix only
-    // post-`b` args showed up, so `dual(2, body)(x, y)` saw 0.
-    let rest_slice: &[f64] = if synthetic_arguments {
+    let rest_slice: &[f64] = if kind == RestDispatchKind::SyntheticArguments {
         args
     } else if provided > k {
         &args[k..]
     } else {
         &[]
     };
-    let rest_double = build_rest_array(rest_slice, synthetic_arguments);
+    let rest_double = build_rest_array(rest_slice, kind == RestDispatchKind::SyntheticArguments);
+    let all_arguments_double = if kind == RestDispatchKind::UserRestAndArguments {
+        Some(build_rest_array(args, true))
+    } else {
+        None
+    };
 
     // Read fixed args, padding with undefined when caller under-supplied.
     macro_rules! a {
@@ -476,71 +490,193 @@ pub unsafe fn dispatch_rest_bundled(
 
     match k {
         0 => {
-            let f: extern "C" fn(*const ClosureHeader, f64) -> f64 = std::mem::transmute(func_ptr);
-            f(closure, rest_double)
+            if let Some(arguments_double) = all_arguments_double {
+                let f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64 =
+                    std::mem::transmute(func_ptr);
+                f(closure, rest_double, arguments_double)
+            } else {
+                let f: extern "C" fn(*const ClosureHeader, f64) -> f64 =
+                    std::mem::transmute(func_ptr);
+                f(closure, rest_double)
+            }
         }
         1 => {
-            let f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(closure, a!(0), rest_double)
+            if let Some(arguments_double) = all_arguments_double {
+                let f: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64 =
+                    std::mem::transmute(func_ptr);
+                f(closure, a!(0), rest_double, arguments_double)
+            } else {
+                let f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64 =
+                    std::mem::transmute(func_ptr);
+                f(closure, a!(0), rest_double)
+            }
         }
         2 => {
-            let f: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(closure, a!(0), a!(1), rest_double)
+            if let Some(arguments_double) = all_arguments_double {
+                let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64) -> f64 =
+                    std::mem::transmute(func_ptr);
+                f(closure, a!(0), a!(1), rest_double, arguments_double)
+            } else {
+                let f: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64 =
+                    std::mem::transmute(func_ptr);
+                f(closure, a!(0), a!(1), rest_double)
+            }
         }
         3 => {
-            let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(closure, a!(0), a!(1), a!(2), rest_double)
+            if let Some(arguments_double) = all_arguments_double {
+                let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64) -> f64 =
+                    std::mem::transmute(func_ptr);
+                f(closure, a!(0), a!(1), a!(2), rest_double, arguments_double)
+            } else {
+                let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64) -> f64 =
+                    std::mem::transmute(func_ptr);
+                f(closure, a!(0), a!(1), a!(2), rest_double)
+            }
         }
         4 => {
-            let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(closure, a!(0), a!(1), a!(2), a!(3), rest_double)
+            if let Some(arguments_double) = all_arguments_double {
+                let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64) -> f64 =
+                    std::mem::transmute(func_ptr);
+                f(
+                    closure,
+                    a!(0),
+                    a!(1),
+                    a!(2),
+                    a!(3),
+                    rest_double,
+                    arguments_double,
+                )
+            } else {
+                let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64) -> f64 =
+                    std::mem::transmute(func_ptr);
+                f(closure, a!(0), a!(1), a!(2), a!(3), rest_double)
+            }
         }
         5 => {
-            let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(closure, a!(0), a!(1), a!(2), a!(3), a!(4), rest_double)
+            if let Some(arguments_double) = all_arguments_double {
+                let f: extern "C" fn(
+                    *const ClosureHeader,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                ) -> f64 = std::mem::transmute(func_ptr);
+                f(
+                    closure,
+                    a!(0),
+                    a!(1),
+                    a!(2),
+                    a!(3),
+                    a!(4),
+                    rest_double,
+                    arguments_double,
+                )
+            } else {
+                let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64) -> f64 =
+                    std::mem::transmute(func_ptr);
+                f(closure, a!(0), a!(1), a!(2), a!(3), a!(4), rest_double)
+            }
         }
         6 => {
-            let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64, f64) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(
-                closure,
-                a!(0),
-                a!(1),
-                a!(2),
-                a!(3),
-                a!(4),
-                a!(5),
-                rest_double,
-            )
+            if let Some(arguments_double) = all_arguments_double {
+                let f: extern "C" fn(
+                    *const ClosureHeader,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                ) -> f64 = std::mem::transmute(func_ptr);
+                f(
+                    closure,
+                    a!(0),
+                    a!(1),
+                    a!(2),
+                    a!(3),
+                    a!(4),
+                    a!(5),
+                    rest_double,
+                    arguments_double,
+                )
+            } else {
+                let f: extern "C" fn(
+                    *const ClosureHeader,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                ) -> f64 = std::mem::transmute(func_ptr);
+                f(
+                    closure,
+                    a!(0),
+                    a!(1),
+                    a!(2),
+                    a!(3),
+                    a!(4),
+                    a!(5),
+                    rest_double,
+                )
+            }
         }
         7 => {
-            let f: extern "C" fn(
-                *const ClosureHeader,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-            ) -> f64 = std::mem::transmute(func_ptr);
-            f(
-                closure,
-                a!(0),
-                a!(1),
-                a!(2),
-                a!(3),
-                a!(4),
-                a!(5),
-                a!(6),
-                rest_double,
-            )
+            if let Some(arguments_double) = all_arguments_double {
+                let f: extern "C" fn(
+                    *const ClosureHeader,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                ) -> f64 = std::mem::transmute(func_ptr);
+                f(
+                    closure,
+                    a!(0),
+                    a!(1),
+                    a!(2),
+                    a!(3),
+                    a!(4),
+                    a!(5),
+                    a!(6),
+                    rest_double,
+                    arguments_double,
+                )
+            } else {
+                let f: extern "C" fn(
+                    *const ClosureHeader,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                ) -> f64 = std::mem::transmute(func_ptr);
+                f(
+                    closure,
+                    a!(0),
+                    a!(1),
+                    a!(2),
+                    a!(3),
+                    a!(4),
+                    a!(5),
+                    a!(6),
+                    rest_double,
+                )
+            }
         }
         _ => {
             // Unsupported arity — fall back to undefined so we don't

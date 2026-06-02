@@ -1401,6 +1401,28 @@ pub fn collect_localset_ids_in_expr_filtered(
                 walk(a, out);
             }
         }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            walk(home, out);
+            walk(key, out);
+            walk(receiver, out);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            walk(home, out);
+            walk(key, out);
+            walk(receiver, out);
+            for a in args {
+                walk(a, out);
+            }
+        }
         Expr::FsWriteFileSync(p, c) => {
             walk(p, out);
             walk(c, out);

@@ -152,6 +152,84 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
         }
+        Expr::RegisterClassComputedMethod {
+            class_name,
+            key_expr,
+            method_name,
+            is_static,
+            param_count,
+            has_rest,
+        } => {
+            let key_v = lower_expr(ctx, key_expr)?;
+            if let Some(&class_id) = ctx.class_ids.get(class_name) {
+                if class_id != 0 {
+                    if let Some(llvm_name) =
+                        ctx.methods.get(&(class_name.clone(), method_name.clone()))
+                    {
+                        let func_ref = format!("@{}", llvm_name);
+                        let func_i64 = ctx.block().ptrtoint(&func_ref, I64);
+                        let cid_str = class_id.to_string();
+                        let param_count_str = param_count.to_string();
+                        let is_static_str = (*is_static as i64).to_string();
+                        let has_rest_str = (*has_rest as i64).to_string();
+                        ctx.block().call_void(
+                            "js_register_class_computed_method",
+                            &[
+                                (I64, &cid_str),
+                                (DOUBLE, &key_v),
+                                (I64, &func_i64),
+                                (I64, &param_count_str),
+                                (I64, &is_static_str),
+                                (I64, &has_rest_str),
+                            ],
+                        );
+                    }
+                }
+            }
+            Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
+        }
+        Expr::RegisterClassComputedAccessor {
+            class_name,
+            key_expr,
+            getter_name,
+            setter_name,
+            is_static,
+        } => {
+            let key_v = lower_expr(ctx, key_expr)?;
+            if let Some(&class_id) = ctx.class_ids.get(class_name) {
+                if class_id != 0 {
+                    let getter_i64 = getter_name
+                        .as_ref()
+                        .and_then(|name| ctx.methods.get(&(class_name.clone(), name.clone())))
+                        .map(|llvm_name| {
+                            let func_ref = format!("@{}", llvm_name);
+                            ctx.block().ptrtoint(&func_ref, I64)
+                        })
+                        .unwrap_or_else(|| "0".to_string());
+                    let setter_i64 = setter_name
+                        .as_ref()
+                        .and_then(|name| ctx.methods.get(&(class_name.clone(), name.clone())))
+                        .map(|llvm_name| {
+                            let func_ref = format!("@{}", llvm_name);
+                            ctx.block().ptrtoint(&func_ref, I64)
+                        })
+                        .unwrap_or_else(|| "0".to_string());
+                    let cid_str = class_id.to_string();
+                    let is_static_str = (*is_static as i64).to_string();
+                    ctx.block().call_void(
+                        "js_register_class_computed_accessor",
+                        &[
+                            (I64, &cid_str),
+                            (DOUBLE, &key_v),
+                            (I64, &getter_i64),
+                            (I64, &setter_i64),
+                            (I64, &is_static_str),
+                        ],
+                    );
+                }
+            }
+            Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
+        }
         // Issue #1772: per-evaluation class identity for a class expression.
         // Each evaluation allocates a real heap "class object" — a regular
         // object stamped with the compile-time template's `class_id` (so

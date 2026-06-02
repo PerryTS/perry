@@ -180,7 +180,7 @@ pub(crate) fn try_indirect_eval_globalthis(
 /// strict function that binding can be `undefined`, while global direct eval
 /// still sees global `this`. The indirect/global case is handled separately by
 /// [`try_indirect_eval_globalthis`] and the callable global eval thunk.
-fn try_direct_eval_this_fold(ctx: &LoweringContext, call: &ast::CallExpr) -> Option<Expr> {
+fn try_direct_eval_this_fold(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Option<Expr> {
     if call.args.len() != 1 || call.args[0].spread.is_some() {
         return None;
     }
@@ -214,7 +214,65 @@ fn try_direct_eval_this_fold(ctx: &LoweringContext, call: &ast::CallExpr) -> Opt
             _ => None,
         };
     }
+    if let Some(expr) = try_direct_eval_simple_assignment_fold(ctx, &body) {
+        return Some(expr);
+    }
     try_direct_eval_constant_add_fold(&body)
+}
+
+fn parse_eval_ident_name(src: &str) -> Option<&str> {
+    let mut chars = src.chars();
+    let first = chars.next()?;
+    if !(first == '_' || first == '$' || first.is_ascii_alphabetic()) {
+        return None;
+    }
+    if chars.all(|c| c == '_' || c == '$' || c.is_ascii_alphanumeric()) {
+        Some(src)
+    } else {
+        None
+    }
+}
+
+fn parse_eval_literal(src: &str) -> Option<Expr> {
+    let s = trim_js_eval_ws(src);
+    if let Some(inner) = s.strip_prefix('"').and_then(|rest| rest.strip_suffix('"')) {
+        return Some(Expr::String(inner.to_string()));
+    }
+    if let Some(inner) = s
+        .strip_prefix('\'')
+        .and_then(|rest| rest.strip_suffix('\''))
+    {
+        return Some(Expr::String(inner.to_string()));
+    }
+    if s == "undefined" {
+        return Some(Expr::Undefined);
+    }
+    parse_eval_number_literal(s).map(Expr::Number)
+}
+
+fn try_direct_eval_simple_assignment_fold(ctx: &mut LoweringContext, body: &str) -> Option<Expr> {
+    let src = body.trim().trim_end_matches(';').trim();
+    let is_var_assignment = src.starts_with("var ");
+    let assignment = src.strip_prefix("var ").unwrap_or(src);
+    let (name_raw, value_raw) = assignment.split_once('=')?;
+    let name = parse_eval_ident_name(trim_js_eval_ws(name_raw))?;
+    let value = parse_eval_literal(value_raw)?;
+    if let Some(id) = ctx.lookup_local(name) {
+        if is_var_assignment && !ctx.var_hoisted_ids.contains(&id) {
+            return Some(Expr::SyntaxErrorNew(Box::new(Expr::String(format!(
+                "eval var declaration conflicts with lexical binding `{name}`"
+            )))));
+        }
+        Some(Expr::LocalSet(id, Box::new(value)))
+    } else if ctx.current_strict {
+        Some(super::throw_reference_error_expr(&format!(
+            "eval assignment to undeclared identifier `{name}`"
+        )))
+    } else {
+        let id = ctx.define_local(name.to_string(), perry_types::Type::Any);
+        ctx.var_hoisted_ids.insert(id);
+        Some(Expr::LocalSet(id, Box::new(value)))
+    }
 }
 
 fn trim_js_eval_ws(s: &str) -> &str {

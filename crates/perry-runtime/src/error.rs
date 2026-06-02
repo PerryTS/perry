@@ -47,6 +47,19 @@ pub const CLASS_ID_URI_ERROR: u32 = 0xFFFF0016;
 /// `err instanceof Error` returns true on a thrown AssertionError.
 pub const CLASS_ID_ASSERTION_ERROR: u32 = 0xFFFF0020;
 
+pub(crate) fn error_kind_constructor_name(kind: u32) -> &'static str {
+    match kind {
+        ERROR_KIND_TYPE_ERROR => "TypeError",
+        ERROR_KIND_RANGE_ERROR => "RangeError",
+        ERROR_KIND_REFERENCE_ERROR => "ReferenceError",
+        ERROR_KIND_SYNTAX_ERROR => "SyntaxError",
+        ERROR_KIND_AGGREGATE_ERROR => "AggregateError",
+        ERROR_KIND_EVAL_ERROR => "EvalError",
+        ERROR_KIND_URI_ERROR => "URIError",
+        _ => "Error",
+    }
+}
+
 /// Error object header
 #[repr(C)]
 pub struct ErrorHeader {
@@ -610,6 +623,13 @@ pub extern "C" fn js_throw_bigint_constructor_type_error() -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_throw_strict_eval_arguments_syntax_error() -> f64 {
+    let message = b"Unexpected eval or arguments in strict mode";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = js_syntaxerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 pub extern "C" fn js_throw_math_constructor_type_error() -> f64 {
     throw_builtin_not_constructor("Math")
 }

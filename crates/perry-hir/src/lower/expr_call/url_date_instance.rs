@@ -109,6 +109,18 @@ pub(super) fn try_url_date_weakref_instance(
                     _ => {}
                 }
             }
+            if static_receiver_class(ctx, member.obj.as_ref()) == Some("URLPattern")
+                && matches!(method_name, "exec" | "test")
+            {
+                let pattern_expr = lower_expr(ctx, &member.obj)?;
+                return Ok(Ok(Expr::NativeMethodCall {
+                    module: "url".to_string(),
+                    class_name: Some("URLPattern".to_string()),
+                    object: Some(Box::new(pattern_expr)),
+                    method: method_name.to_string(),
+                    args,
+                }));
+            }
         }
 
         // Issue #650: gate the AMBIGUOUS Date instance method arms

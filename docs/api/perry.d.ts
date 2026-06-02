@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1749 entries across 103 modules
+// Coverage: 1788 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1692,6 +1692,8 @@ declare module "http" {
   /** stdlib */
   export class ServerResponse { [key: string]: any; }
   /** stdlib */
+  export class WebSocket { [key: string]: any; }
+  /** stdlib */
   export const METHODS: any;
   /** stdlib */
   export const STATUS_CODES: any;
@@ -1703,6 +1705,8 @@ declare module "http" {
   export function Agent(...args: any[]): any;
   /** stdlib */
   export function Server(...args: any[]): any;
+  /** stdlib */
+  export function _connectionListener(...args: any[]): any;
   /** stdlib */
   export function createServer(...args: any[]): any;
   /** stdlib */
@@ -1766,6 +1770,36 @@ declare module "https" {
   export function get(...args: any[]): any;
   /** stdlib */
   export function request(...args: any[]): any;
+}
+
+declare module "inspector" {
+  /** stdlib */
+  export class Session { [key: string]: any; }
+  /** stdlib */
+  export const console: any;
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function Session(...args: any[]): any;
+  /** stdlib */
+  export function close(...args: any[]): any;
+  /** stdlib */
+  export function open(...args: any[]): any;
+  /** stdlib */
+  export function url(...args: any[]): any;
+  /** stdlib */
+  export function waitForDebugger(...args: any[]): any;
+}
+
+declare module "inspector/promises" {
+  /** stdlib */
+  export class Session { [key: string]: any; }
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function Session(...args: any[]): any;
 }
 
 declare module "ioredis" {
@@ -2847,11 +2881,29 @@ declare module "pg" {
 
 declare module "process" {
   /** stdlib */
+  export const allowedNodeEnvironmentFlags: any;
+  /** stdlib */
   export const arch: any;
   /** stdlib */
   export const argv: any;
   /** stdlib */
+  export const argv0: any;
+  /** stdlib */
+  export const config: any;
+  /** stdlib */
+  export const debugPort: any;
+  /** stdlib */
   export const env: any;
+  /** stdlib */
+  export const execArgv: any;
+  /** stdlib */
+  export const execPath: any;
+  /** stdlib */
+  export const features: any;
+  /** stdlib */
+  export const finalization: any;
+  /** stdlib */
+  export const moduleLoadList: any;
   /** stdlib */
   export const pid: any;
   /** stdlib */
@@ -2859,11 +2911,17 @@ declare module "process" {
   /** stdlib */
   export const ppid: any;
   /** stdlib */
+  export const release: any;
+  /** stdlib */
+  export const report: any;
+  /** stdlib */
   export const stderr: any;
   /** stdlib */
   export const stdin: any;
   /** stdlib */
   export const stdout: any;
+  /** stdlib */
+  export const title: any;
   /** stdlib */
   export const version: any;
   /** stdlib */
@@ -3014,6 +3072,28 @@ declare module "redis" {
   export class Redis { [key: string]: any; }
   /** stdlib */
   export function createClient(...args: any[]): any;
+}
+
+declare module "repl" {
+  /** stdlib */
+  export class REPLServer { [key: string]: any; }
+  /** stdlib */
+  export class Recoverable { [key: string]: any; }
+  /** stdlib */
+  export const REPL_MODE_SLOPPY: any;
+  /** stdlib */
+  export const REPL_MODE_STRICT: any;
+  /** stdlib */
+  export const builtinModules: any;
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function REPLServer(...args: any[]): any;
+  /** stdlib */
+  export function Recoverable(...args: any[]): any;
+  /** stdlib */
+  export function start(...args: any[]): any;
 }
 
 declare module "sharp" {
@@ -3403,6 +3483,8 @@ declare module "url" {
   /** stdlib */
   export class URL { [key: string]: any; }
   /** stdlib */
+  export class URLPattern { [key: string]: any; }
+  /** stdlib */
   export class URLSearchParams { [key: string]: any; }
   /** stdlib */
   export class Url { [key: string]: any; }
@@ -3743,6 +3825,14 @@ declare module "ws" {
   export class WebSocket { [key: string]: any; }
   /** stdlib */
   export class WebSocketServer { [key: string]: any; }
+  /** stdlib */
+  export const CLOSED: any;
+  /** stdlib */
+  export const CLOSING: any;
+  /** stdlib */
+  export const CONNECTING: any;
+  /** stdlib */
+  export const OPEN: any;
   /** stdlib */
   export function Server(p0: any): any;
   /** stdlib */

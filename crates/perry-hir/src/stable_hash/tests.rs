@@ -271,6 +271,7 @@ fn module_metadata_affects_hash() {
         setters: vec![],
         static_fields: vec![],
         static_methods: vec![],
+        computed_members: vec![],
         decorators: vec![],
         is_exported: false,
         aliases: vec![],
@@ -350,6 +351,7 @@ pub(crate) fn canonical_module() -> Module {
                 ty: Type::Number,
                 default: None,
                 is_rest: false,
+                arguments_object: None,
                 decorators: vec![],
             },
             Param {
@@ -358,6 +360,7 @@ pub(crate) fn canonical_module() -> Module {
                 ty: Type::Number,
                 default: None,
                 is_rest: false,
+                arguments_object: None,
                 decorators: vec![],
             },
         ],

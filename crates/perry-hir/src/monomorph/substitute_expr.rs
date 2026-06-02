@@ -323,6 +323,29 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                 .map(|a| substitute_expr(a, substitutions))
                 .collect(),
         },
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => Expr::ObjectSuperPropertyGet {
+            home: Box::new(substitute_expr(home, substitutions)),
+            key: Box::new(substitute_expr(key, substitutions)),
+            receiver: Box::new(substitute_expr(receiver, substitutions)),
+        },
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => Expr::ObjectSuperMethodCall {
+            home: Box::new(substitute_expr(home, substitutions)),
+            key: Box::new(substitute_expr(key, substitutions)),
+            receiver: Box::new(substitute_expr(receiver, substitutions)),
+            args: args
+                .iter()
+                .map(|a| substitute_expr(a, substitutions))
+                .collect(),
+        },
 
         // Environment
         Expr::EnvGet(name) => Expr::EnvGet(name.clone()),
@@ -789,6 +812,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                         .map(|d| substitute_expr(d, substitutions)),
                     decorators: p.decorators.clone(),
                     is_rest: p.is_rest,
+                    arguments_object: p.arguments_object.clone(),
                 })
                 .collect(),
             return_type: substitute_type(return_type, substitutions),

@@ -192,6 +192,9 @@ pub struct Class {
     pub static_fields: Vec<ClassField>,
     /// Static methods
     pub static_methods: Vec<Function>,
+    /// Computed-key methods/accessors, preserved in source order so
+    /// declaration-time key side effects fire in the same order as JS.
+    pub computed_members: Vec<ClassComputedMember>,
     /// Legacy TypeScript decorators applied to the class.
     pub decorators: Vec<Decorator>,
     /// Whether this class is exported from the module
@@ -200,6 +203,21 @@ pub struct Class {
     /// `var X = class _X { ... new _X() ... }` records `_X` here so codegen
     /// can look it up as the same class. Refs #486.
     pub aliases: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClassComputedMemberKind {
+    Method,
+    Getter,
+    Setter,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClassComputedMember {
+    pub key_expr: Expr,
+    pub function: Function,
+    pub is_static: bool,
+    pub kind: ClassComputedMemberKind,
 }
 
 /// A class field
@@ -282,6 +300,19 @@ pub struct Function {
 
 /// A function parameter
 #[derive(Debug, Clone)]
+pub struct ArgumentsObjectMeta {
+    /// Whether the containing function body is strict.
+    pub strict: bool,
+    /// Whether the containing function has a simple parameter list.
+    pub simple_parameters: bool,
+    /// Sloppy mapped arguments bind numeric indices to these parameter locals.
+    pub mapped_parameter_ids: Vec<(u32, LocalId)>,
+    /// Whether `arguments.callee` is the restricted throwing accessor.
+    pub restricted_callee: bool,
+}
+
+/// A function parameter
+#[derive(Debug, Clone)]
 pub struct Param {
     pub id: LocalId,
     pub name: String,
@@ -291,4 +322,7 @@ pub struct Param {
     pub decorators: Vec<Decorator>,
     /// True if this is a rest parameter (...args)
     pub is_rest: bool,
+    /// Metadata for the hidden raw-arguments binding used to materialize the
+    /// ECMAScript `arguments` object in the callee prologue.
+    pub arguments_object: Option<ArgumentsObjectMeta>,
 }

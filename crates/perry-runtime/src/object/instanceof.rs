@@ -130,6 +130,16 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         if module == "wasi" && method == "WASI" && crate::wasi::is_wasi_instance(value) {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
+        if module == "repl" {
+            let matched = match method.as_str() {
+                "Recoverable" => crate::node_repl::is_recoverable_value(value),
+                "REPLServer" => crate::node_repl::is_repl_server_value(value),
+                _ => false,
+            };
+            if matched {
+                return f64::from_bits(crate::value::TAG_TRUE);
+            }
+        }
         // #2689: `net.Stream` is an alias for `net.Socket`; both should match
         // a live socket handle via the runtime probe.
         if module == "net" && matches!(method.as_str(), "Socket" | "Stream") {
@@ -203,13 +213,18 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             // the compile-time `instanceof` operator emits — see
             // perry-codegen/src/expr/instance_misc1.rs — which `js_instanceof`
             // resolves via the per-type registries (#3662). `Array`/`Object`/
-            // `Date` constructor *values* aren't identified here (they are not
-            // noop-thunk closures), so they stay a known gap for the dynamic
-            // path; the literal-RHS operator handles them at compile time.
+            // `Date` carry their own coercion thunks rather than the shared
+            // noop thunk; #4102 added those thunks to the
+            // `identify_global_builtin_constructor` allow-list so the dynamic /
+            // reflective path now resolves them here just like the literal-RHS
+            // operator does at compile time.
             "Map" => 0xFFFF0022,
             "Set" => 0xFFFF0023,
             "RegExp" => 0xFFFF0021,
             "ArrayBuffer" => 0xFFFF0025,
+            "Array" => 0xFFFF0024,
+            "Object" => 0xFFFF0050,
+            "Date" => 0xFFFF0020,
             "Error" => crate::error::CLASS_ID_ERROR,
             "TypeError" => crate::error::CLASS_ID_TYPE_ERROR,
             "RangeError" => crate::error::CLASS_ID_RANGE_ERROR,

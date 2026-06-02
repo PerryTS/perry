@@ -64,6 +64,8 @@ pub(super) fn try_module_class_static(
                                 // `module.builtinModules.slice` class static.
                                 | ("module", "builtinModules")
                                 | ("node:module", "builtinModules")
+                                | ("repl", "builtinModules")
+                                | ("node:repl", "builtinModules")
                                 // `process.version` is a string value. Let
                                 // String.prototype methods dispatch through
                                 // the normal value-method path instead of

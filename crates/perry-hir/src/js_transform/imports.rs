@@ -962,6 +962,28 @@ pub fn transform_expr(
                 transform_expr(arg, js_imports, extern_func_to_js, local_name_to_js, tracker);
             }
         }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            transform_expr(home, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(key, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(receiver, js_imports, extern_func_to_js, local_name_to_js, tracker);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            transform_expr(home, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(key, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(receiver, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            for arg in args {
+                transform_expr(arg, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            }
+        }
         // Dynamic environment variable access
         Expr::EnvGetDynamic(e) => {
             transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);

@@ -29,6 +29,7 @@ fn empty_module() -> Module {
         init_kind: perry_hir::ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
     }
 }
@@ -617,6 +618,7 @@ fn for_each_lowers_array_map_in_vstack() {
         default: None,
         decorators: Vec::new(),
         is_rest: false,
+        arguments_object: None,
     };
     let inner_text = nmc("Text", vec![Expr::LocalGet(42)]);
     let map_expr = Expr::ArrayMap {
@@ -1163,6 +1165,7 @@ fn lazyvstack_with_array_map_emits_lazy_for_each() {
         default: None,
         decorators: Vec::new(),
         is_rest: false,
+        arguments_object: None,
     };
     let inner_text = nmc("Text", vec![Expr::LocalGet(99)]);
     let map_expr = Expr::ArrayMap {

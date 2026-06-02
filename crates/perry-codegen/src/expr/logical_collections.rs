@@ -58,7 +58,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let result = blk.call(
                 I64,
                 "js_array_filter",
@@ -141,7 +142,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             Ok(blk.call(
                 DOUBLE,
                 "js_array_some",
@@ -155,7 +157,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             Ok(blk.call(
                 DOUBLE,
                 "js_array_every",
@@ -270,7 +273,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::MathMinSpread(arr_expr) => {
             let arr_box = lower_expr(ctx, arr_expr)?;
             let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
+            let arr_handle = blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &arr_box)]);
             Ok(blk.call(DOUBLE, "js_math_min_array", &[(I64, &arr_handle)]))
         }
 
@@ -293,7 +296,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::MathMaxSpread(arr_expr) => {
             let arr_box = lower_expr(ctx, arr_expr)?;
             let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
+            let arr_handle = blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &arr_box)]);
             Ok(blk.call(DOUBLE, "js_math_max_array", &[(I64, &arr_handle)]))
         }
 

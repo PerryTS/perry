@@ -1,5 +1,18 @@
 import tls from "node:tls";
 
+function hasSyntheticMarker(cert: string): boolean {
+  return cert.indexOf("Perry Runtime Root CA") !== -1 || cert.indexOf("Perry Test") !== -1;
+}
+
+function allCertsAreNonSynthetic(certs: readonly string[]): boolean {
+  for (let i = 0; i < certs.length; i++) {
+    if (hasSyntheticMarker(certs[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
 const ciphers = tls.getCiphers();
 console.log("getCiphers function:", typeof tls.getCiphers === "function");
 console.log("ciphers array:", Array.isArray(ciphers) && ciphers.length >= 10);
@@ -18,17 +31,23 @@ console.log("default constants:", tls.DEFAULT_ECDH_CURVE === "auto" &&
 
 console.log("root certs:", Array.isArray(tls.rootCertificates) &&
   Object.isFrozen(tls.rootCertificates) &&
-  tls.rootCertificates.length > 0 &&
+  tls.rootCertificates.length > 1 &&
   typeof tls.rootCertificates[0] === "string" &&
-  tls.rootCertificates[0].startsWith("-----BEGIN CERTIFICATE-----"));
+  tls.rootCertificates[0].startsWith("-----BEGIN CERTIFICATE-----") &&
+  allCertsAreNonSynthetic(tls.rootCertificates));
 
 for (const type of ["default", "system", "bundled", "extra"] as const) {
   const certs = tls.getCACertificates(type);
-  const markerOk = type === "extra" || certs[0]?.startsWith("-----BEGIN CERTIFICATE-----") === true;
-  console.log(`ca ${type}:`, Array.isArray(certs) && Object.isFrozen(certs) && markerOk);
+  const markerOk = type === "extra" || certs.length === 0 ||
+    certs[0]?.startsWith("-----BEGIN CERTIFICATE-----") === true;
+  const sizeOk = type === "extra" || (type === "system" ? certs.length !== 1 : certs.length > 1);
+  const noSynthetic = allCertsAreNonSynthetic(certs);
+  console.log(`ca ${type}:`, Array.isArray(certs) && Object.isFrozen(certs) &&
+    markerOk && sizeOk && noSynthetic);
 }
 
 console.log("ca default arg:", tls.getCACertificates().length === tls.getCACertificates("default").length);
+console.log("ca bundled root identity:", tls.getCACertificates("bundled").length === tls.rootCertificates.length);
 
 try {
   tls.getCACertificates("invalid" as any);

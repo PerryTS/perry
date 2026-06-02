@@ -1,9 +1,37 @@
 use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
 use perry_hir::{BinaryOp, Class, Expr, Function, Module, Param, Stmt};
 use perry_types::{FuncId, LocalId, Type};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
 use super::*;
+
+const MAX_INLINE_EXPR_RECURSION_DEPTH: usize = 128;
+
+thread_local! {
+    static INLINE_EXPR_RECURSION_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+struct InlineExprRecursionGuard;
+
+impl Drop for InlineExprRecursionGuard {
+    fn drop(&mut self) {
+        INLINE_EXPR_RECURSION_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+
+fn enter_inline_expr_recursion() -> Option<InlineExprRecursionGuard> {
+    let entered = INLINE_EXPR_RECURSION_DEPTH.with(|depth| {
+        let current = depth.get();
+        if current >= MAX_INLINE_EXPR_RECURSION_DEPTH {
+            false
+        } else {
+            depth.set(current + 1);
+            true
+        }
+    });
+    entered.then_some(InlineExprRecursionGuard)
+}
 
 pub fn stmt_contains_return(s: &Stmt) -> bool {
     match s {
@@ -630,6 +658,16 @@ pub fn inline_calls_in_expr(
     enclosing_class: Option<&str>,
     class_field_types: &HashMap<(String, String), String>,
 ) -> Vec<Stmt> {
+    let Some(_recursion_guard) = enter_inline_expr_recursion() else {
+        // The inliner is an optimization pass. Very deeply nested generated
+        // expression/closure trees can exceed Perry's compiler stack if we
+        // chase every child recursively; skipping deeper inlining is
+        // semantics-preserving. Clear exact receiver facts because we are no
+        // longer proving what the skipped expression may reference or mutate.
+        exact_receiver_facts.clear();
+        return Vec::new();
+    };
+
     // First try to inline this expression if it's a call
     if let Some((stmts, mut result)) = try_inline_simple_call(
         expr,
@@ -1191,13 +1229,7 @@ pub fn inline_calls_in_expr(
             for id in captures.iter().chain(mutable_captures.iter()) {
                 exact_receiver_facts.remove(id);
             }
-            let mut body_refs = HashSet::new();
-            for stmt in body {
-                collect_exact_receiver_refs_in_stmt(stmt, exact_receiver_facts, &mut body_refs);
-            }
-            for id in body_refs {
-                exact_receiver_facts.remove(&id);
-            }
+            exact_receiver_facts.clear();
             for param in params {
                 if let Some(default) = &param.default {
                     invalidate_exact_receivers_for_expr(default, exact_receiver_facts);
@@ -1788,4 +1820,59 @@ pub fn is_trivial_expr(expr: &Expr) -> bool {
             | Expr::LocalGet(_)
             | Expr::GlobalGet(_)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn nested_closure_expr(depth: usize) -> Expr {
+        let mut expr = Expr::Integer(1);
+        for func_id in 0..depth as u32 {
+            expr = Expr::Closure {
+                func_id,
+                params: Vec::new(),
+                return_type: Type::Any,
+                body: vec![Stmt::Return(Some(expr))],
+                captures: Vec::new(),
+                mutable_captures: Vec::new(),
+                captures_this: false,
+                captures_new_target: false,
+                enclosing_class: None,
+                is_arrow: false,
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+            };
+        }
+        expr
+    }
+
+    #[test]
+    fn inline_expr_skips_extremely_deep_closure_trees() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut expr = nested_closure_expr(MAX_INLINE_EXPR_RECURSION_DEPTH + 64);
+                let mut exact_receiver_facts = ExactReceiverFacts::new();
+                let mut next_local_id = 1;
+
+                let hoisted = inline_calls_in_expr(
+                    &mut expr,
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &mut exact_receiver_facts,
+                    &mut next_local_id,
+                    None,
+                    &HashMap::new(),
+                );
+
+                assert!(hoisted.is_empty());
+                assert!(exact_receiver_facts.is_empty());
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 }

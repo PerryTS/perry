@@ -67,14 +67,80 @@ pub(crate) fn lower_process_named_property(prop: &str) -> Option<Expr> {
         "stdin" => Expr::ProcessStdin,
         "stdout" => Expr::ProcessStdout,
         "stderr" => Expr::ProcessStderr,
-        "execArgv" | "moduleLoadList" => Expr::Array(Vec::new()),
-        "title" => Expr::ProcessTitle,
-        "argv0" | "execPath" => Expr::IndexGet {
-            object: Box::new(Expr::ProcessArgv),
-            index: Box::new(Expr::Number(0.0)),
-        },
+        _ => return process_metadata_native_property(prop),
+    })
+}
+
+fn process_native_property(prop: &str) -> Expr {
+    Expr::PropertyGet {
+        object: Box::new(Expr::NativeModuleRef("process".to_string())),
+        property: prop.to_string(),
+    }
+}
+
+fn process_metadata_native_property(prop: &str) -> Option<Expr> {
+    Some(match prop {
+        "allowedNodeEnvironmentFlags"
+        | "argv0"
+        | "config"
+        | "debugPort"
+        | "execArgv"
+        | "execPath"
+        | "features"
+        | "finalization"
+        | "moduleLoadList"
+        | "release"
+        | "report"
+        | "sourceMapsEnabled"
+        | "title" => process_native_property(prop),
         _ => return None,
     })
+}
+
+fn ws_ready_state_value(prop: &str) -> Option<f64> {
+    Some(match prop {
+        "CONNECTING" => 0.0,
+        "OPEN" => 1.0,
+        "CLOSING" => 2.0,
+        "CLOSED" => 3.0,
+        _ => return None,
+    })
+}
+
+fn is_ws_ready_state_receiver(
+    ctx: &LoweringContext,
+    obj_ast: &ast::Expr,
+    object_expr: &Expr,
+) -> bool {
+    fn native_ws_class_property(expr: &Expr) -> bool {
+        match expr {
+            Expr::NativeModuleRef(module) if module == "ws" => true,
+            Expr::PropertyGet { object, property }
+                if matches!(property.as_str(), "WebSocket" | "default")
+                    && matches!(object.as_ref(), Expr::NativeModuleRef(module) if module == "ws") =>
+            {
+                true
+            }
+            Expr::PropertyGet { object, property }
+                if property == "WebSocket" && matches!(object.as_ref(), Expr::GlobalGet(0)) =>
+            {
+                true
+            }
+            _ => false,
+        }
+    }
+
+    if native_ws_class_property(object_expr) {
+        return true;
+    }
+
+    let ast::Expr::Ident(obj_ident) = obj_ast else {
+        return false;
+    };
+    matches!(
+        ctx.lookup_native_module(obj_ident.sym.as_ref()),
+        Some(("ws", None | Some("default") | Some("WebSocket")))
+    )
 }
 
 fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Result<Expr> {
@@ -182,11 +248,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         let is_process_obj = obj_ident.sym.as_ref() == "process"
             || matches!(
                 ctx.lookup_native_module(obj_ident.sym.as_ref()),
-                Some(("process", None))
+                Some(("process", None)) | Some(("process.namespace", None))
             );
         if is_process_obj {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
-                match prop_ident.sym.as_ref() {
+                let prop = prop_ident.sym.as_ref();
+                if let Some(expr) = process_metadata_native_property(prop) {
+                    return Ok(expr);
+                }
+                match prop {
                     "argv" => return Ok(Expr::ProcessArgv),
                     "platform" => return Ok(Expr::OsPlatform),
                     "arch" => return Ok(Expr::OsArch),
@@ -306,7 +376,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "allowedNodeEnvironmentFlags" => {
                         return Ok(process_allowed_node_flags_literal())
                     }
-                    "report" => return Ok(process_report_literal()),
+                    "report" => return Ok(process_native_property("report")),
                     // #1346: process.argv0 / execPath / title — Node
                     // documents these as strings (program-invocation
                     // name / resolved-binary path / OS-displayed
@@ -424,7 +494,11 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         );
         if inner_is_global_process {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
-                match prop_ident.sym.as_ref() {
+                let prop = prop_ident.sym.as_ref();
+                if let Some(expr) = process_metadata_native_property(prop) {
+                    return Ok(expr);
+                }
+                match prop {
                     "argv" => return Ok(Expr::ProcessArgv),
                     "platform" => return Ok(Expr::OsPlatform),
                     "arch" => return Ok(Expr::OsArch),
@@ -470,7 +544,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "allowedNodeEnvironmentFlags" => {
                         return Ok(process_allowed_node_flags_literal())
                     }
-                    "report" => return Ok(process_report_literal()),
+                    "report" => return Ok(process_native_property("report")),
                     "argv0" | "execPath" => {
                         return Ok(Expr::IndexGet {
                             object: Box::new(Expr::ProcessArgv),
@@ -1016,6 +1090,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "url"
+                    && class_name == "URLPattern"
+                    && is_url_pattern_data_property(&property_name)
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "worker_threads"
                     && matches!(class_name.as_str(), "MessagePort" | "BroadcastChannel")
                     && matches!(
@@ -1157,6 +1240,18 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // object whose methods are callable fields. A bare method
                     // read (`typeof s.close`) should observe that closure
                     // instead of invoking the receiver stub as a getter.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if matches!(module_name.as_str(), "inspector" | "inspector/promises")
+                    && class_name == "Session"
+                    && matches!(
+                        property_name.as_str(),
+                        "connect" | "connectToMainThread" | "disconnect" | "post" | "on" | "once"
+                    )
+                {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         object: Box::new(object_expr),
@@ -1554,6 +1649,13 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     }
 
     let mut object_expr = lower_expr(ctx, &member.obj)?;
+    if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+        if let Some(value) = ws_ready_state_value(prop_ident.sym.as_ref()) {
+            if is_ws_ready_state_receiver(ctx, member.obj.as_ref(), &object_expr) {
+                return Ok(Expr::Number(value));
+            }
+        }
+    }
     let member_reads_global_fetch = matches!(
         unwrap_transparent(member.obj.as_ref()),
         ast::Expr::Ident(i) if i.sym.as_ref() == "globalThis"
@@ -2426,6 +2528,21 @@ fn is_headers_method_name(prop: &str) -> bool {
     )
 }
 
+fn is_url_pattern_data_property(prop: &str) -> bool {
+    matches!(
+        prop,
+        "protocol"
+            | "username"
+            | "password"
+            | "hostname"
+            | "port"
+            | "pathname"
+            | "search"
+            | "hash"
+            | "hasRegExpGroups"
+    )
+}
+
 fn is_worker_instance_value_property(prop: &str) -> bool {
     matches!(
         prop,
@@ -2458,20 +2575,6 @@ fn is_worker_instance_value_property(prop: &str) -> bool {
 /// generally branch on `openssl_is_boringssl` / `quic` / `typescript`
 /// rather than rejecting any unrecognised value, so a Perry-honest
 /// shape is safer than parroting Node's.
-/// process.report — Node 22's diagnostic-report control surface
-/// (`compact` / `directory` / `filename` / `signal` and the four
-/// `reportOn*` booleans, plus `getReport` / `writeReport` methods).
-/// Perry doesn't yet generate real diagnostic reports, but the shape
-/// must be present so shape-only consumers
-/// (`typeof process.report === "object"`, `Object.keys`,
-/// `process.report.directory = "..."`) don't fall over the 0.0
-/// sentinel. Methods are exposed as `undefined`; setting writable
-/// fields silently no-ops (PropertyGet/Set on a fresh object literal
-/// — Perry's runtime doesn't track an explicit cache, matching the
-/// `process.features` pattern (#1378)).
-///
-/// See #1396.
-
 /// `process.allowedNodeEnvironmentFlags` (#2589) — the Set of flags Node
 /// accepts from `NODE_OPTIONS` / the V8 environment. Perry binaries are
 /// AOT and don't honour `NODE_OPTIONS`-style runtime flags, but consumers
@@ -2766,28 +2869,6 @@ fn process_allowed_node_flags_literal() -> Expr {
             .map(|f| Expr::String((*f).to_string()))
             .collect(),
     )))
-}
-
-fn process_report_literal() -> Expr {
-    fn b(k: &str, v: bool) -> (String, Expr) {
-        (k.to_string(), Expr::Bool(v))
-    }
-    fn s(k: &str, v: &str) -> (String, Expr) {
-        (k.to_string(), Expr::String(v.to_string()))
-    }
-    Expr::Object(vec![
-        b("compact", false),
-        s("directory", ""),
-        b("excludeEnv", false),
-        b("excludeNetwork", false),
-        s("filename", ""),
-        ("getReport".to_string(), Expr::Undefined),
-        b("reportOnFatalError", false),
-        b("reportOnSignal", false),
-        b("reportOnUncaughtException", false),
-        s("signal", "SIGUSR2"),
-        ("writeReport".to_string(), Expr::Undefined),
-    ])
 }
 
 fn process_features_literal() -> Expr {

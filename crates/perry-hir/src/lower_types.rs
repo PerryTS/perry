@@ -182,7 +182,7 @@ fn infer_native_arena_call_return_type(
 fn url_encoding_constructor_type(ctx: &LoweringContext, callee: &ast::Expr) -> Option<Type> {
     fn class_type(name: &str) -> Option<Type> {
         match name {
-            "URL" | "URLSearchParams" | "TextEncoder" | "TextDecoder" => {
+            "URL" | "URLSearchParams" | "URLPattern" | "TextEncoder" | "TextDecoder" => {
                 Some(Type::Named(name.to_string()))
             }
             _ => None,
@@ -193,6 +193,7 @@ fn url_encoding_constructor_type(ctx: &LoweringContext, callee: &ast::Expr) -> O
         match (module_name, method_name) {
             ("url", Some("URL")) => class_type("URL"),
             ("url", Some("URLSearchParams")) => class_type("URLSearchParams"),
+            ("url", Some("URLPattern")) => class_type("URLPattern"),
             ("util", Some("TextEncoder")) => class_type("TextEncoder"),
             ("util", Some("TextDecoder")) => class_type("TextDecoder"),
             _ => None,

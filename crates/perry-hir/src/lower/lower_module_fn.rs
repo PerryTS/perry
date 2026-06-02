@@ -323,7 +323,8 @@ pub fn lower_module_full(
     ctx.resolved_types = resolved_types;
     ctx.is_entry_module = is_entry_module;
     ctx.is_external_module = is_external_module;
-    ctx.current_strict = module_has_strict_mode(ast_module);
+    ctx.module_strict = module_has_strict_mode(ast_module);
+    ctx.current_strict = ctx.module_strict;
     if let Some(seed) = imported_class_fields {
         ctx.seed_imported_class_fields(seed);
     }
@@ -580,6 +581,10 @@ pub fn lower_module_full(
         // expressions and object-literal methods.
         for (id, name) in ctx.closure_display_names.drain() {
             module.closure_display_names.insert(id, name);
+        }
+        // #4101: flush captured function source text for `fn.toString()`.
+        for (id, src) in ctx.closure_source_text.drain() {
+            module.closure_source_text.insert(id, src);
         }
         // Flush any pending classes created during expression lowering
         // (e.g., class expressions in `new (class extends Command { ... })()`)

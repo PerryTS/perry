@@ -6,91 +6,91 @@ Search: https://deepwiki.com/search/for-nodejs-describe-the-global_29cbf73e-483f
 
 **Question**: For Node.js, describe the global WebAssembly namespace surface relevant to runtime compatibility: own property names, constructor/error class names, static method names, constructor/function typeof, name and length expectations where visible in source/tests/docs, and which files/tests document or verify this surface. Keep the answer focused on implementing feature-detection parity in another runtime.
 
-The global `WebAssembly` namespace in Node.js exposes several constructors, error classes, and static methods relevant for runtime compatibility. These are primarily defined and verified within the V8 engine's mjsunit tests and Web Platform Tests (WPT) included in the Node.js codebase. [1](#ref-q1-1)  [2](#ref-q1-2) 
+The global `WebAssembly` namespace in Node.js exposes several constructors, error classes, and static methods relevant for runtime compatibility. These are primarily defined and verified within the V8 engine's mjsunit tests and Web Platform Tests (WPT) included in the Node.js codebase. [1](#ref-q1-1)  [2](#ref-q1-2)
 
 ### Global `WebAssembly` Object Properties
 
-The `WebAssembly` object itself is a data property on the global object. [1](#ref-q1-1)  It is an object, not a function, and cannot be called or constructed. [3](#ref-q1-3) 
+The `WebAssembly` object itself is a data property on the global object. [1](#ref-q1-1)  It is an object, not a function, and cannot be called or constructed. [3](#ref-q1-3)
 
-*   **Type**: `object` [4](#ref-q1-4) 
-*   **String Representation**: `[object WebAssembly]` [5](#ref-q1-5) 
-*   **Property Descriptors**: `writable: true`, `enumerable: false`, `configurable: true` [6](#ref-q1-6)  [7](#ref-q1-7) 
+*   **Type**: `object` [4](#ref-q1-4)
+*   **String Representation**: `[object WebAssembly]` [5](#ref-q1-5)
+*   **Property Descriptors**: `writable: true`, `enumerable: false`, `configurable: true` [6](#ref-q1-6)  [7](#ref-q1-7)
 
 ### Error Classes
 
-The `WebAssembly` namespace includes three error constructors that inherit from `Error`. [8](#ref-q1-8)  [9](#ref-q1-9)  [10](#ref-q1-10) 
+The `WebAssembly` namespace includes three error constructors that inherit from `Error`. [8](#ref-q1-8)  [9](#ref-q1-9)  [10](#ref-q1-10)
 
-*   **`WebAssembly.CompileError`** [11](#ref-q1-11) 
-    *   **Type**: `function` (constructor) [12](#ref-q1-12) 
-    *   **`name`**: `'CompileError'` [13](#ref-q1-13) 
-    *   **`length`**: `1` [14](#ref-q1-14) 
-    *   **Property Descriptors**: `writable: true`, `enumerable: false`, `configurable: true` [15](#ref-q1-15) 
-*   **`WebAssembly.LinkError`** [16](#ref-q1-16) 
-    *   **Type**: `function` (constructor) [17](#ref-q1-17) 
-    *   **`name`**: `'LinkError'` [18](#ref-q1-18) 
-    *   **`length`**: `1` [19](#ref-q1-19) 
-    *   **Property Descriptors**: `writable: true`, `enumerable: false`, `configurable: true` [20](#ref-q1-20) 
-*   **`WebAssembly.RuntimeError`** [21](#ref-q1-21) 
-    *   **Type**: `function` (constructor) [22](#ref-q1-22) 
-    *   **`name`**: `'RuntimeError'` [23](#ref-q1-23) 
-    *   **`length`**: `1` [24](#ref-q1-24) 
-    *   **Property Descriptors**: `writable: true`, `enumerable: false`, `configurable: true` [25](#ref-q1-25) 
+*   **`WebAssembly.CompileError`** [11](#ref-q1-11)
+    *   **Type**: `function` (constructor) [12](#ref-q1-12)
+    *   **`name`**: `'CompileError'` [13](#ref-q1-13)
+    *   **`length`**: `1` [14](#ref-q1-14)
+    *   **Property Descriptors**: `writable: true`, `enumerable: false`, `configurable: true` [15](#ref-q1-15)
+*   **`WebAssembly.LinkError`** [16](#ref-q1-16)
+    *   **Type**: `function` (constructor) [17](#ref-q1-17)
+    *   **`name`**: `'LinkError'` [18](#ref-q1-18)
+    *   **`length`**: `1` [19](#ref-q1-19)
+    *   **Property Descriptors**: `writable: true`, `enumerable: false`, `configurable: true` [20](#ref-q1-20)
+*   **`WebAssembly.RuntimeError`** [21](#ref-q1-21)
+    *   **Type**: `function` (constructor) [22](#ref-q1-22)
+    *   **`name`**: `'RuntimeError'` [23](#ref-q1-23)
+    *   **`length`**: `1` [24](#ref-q1-24)
+    *   **Property Descriptors**: `writable: true`, `enumerable: false`, `configurable: true` [25](#ref-q1-25)
 
 ### Constructors
 
-The `WebAssembly` object exposes several constructors for WebAssembly types. [26](#ref-q1-26) 
+The `WebAssembly` object exposes several constructors for WebAssembly types. [26](#ref-q1-26)
 
-*   **`WebAssembly.Module`** [27](#ref-q1-27) 
-    *   **Type**: `function` (constructor) [28](#ref-q1-28) 
-    *   **`name`**: `'Module'` [29](#ref-q1-29) 
-    *   **`length`**: `1` [30](#ref-q1-30) 
-    *   **Property Descriptors**: `writable: true`, `enumerable: false`, `configurable: true` [31](#ref-q1-31) 
+*   **`WebAssembly.Module`** [27](#ref-q1-27)
+    *   **Type**: `function` (constructor) [28](#ref-q1-28)
+    *   **`name`**: `'Module'` [29](#ref-q1-29)
+    *   **`length`**: `1` [30](#ref-q1-30)
+    *   **Property Descriptors**: `writable: true`, `enumerable: false`, `configurable: true` [31](#ref-q1-31)
     *   **Static Methods**:
-        *   `WebAssembly.Module.exports` [32](#ref-q1-32) : `typeof: function`, `length: 1` [33](#ref-q1-33)  [34](#ref-q1-34) 
-        *   `WebAssembly.Module.imports` [35](#ref-q1-35) : `typeof: function`, `length: 1` [36](#ref-q1-36)  [37](#ref-q1-37) 
-        *   `WebAssembly.Module.customSections` [38](#ref-q1-38) : `typeof: function`, `length: 2` [39](#ref-q1-39)  [40](#ref-q1-40) 
-        *   All static methods have property descriptors: `writable: true`, `enumerable: true`, `configurable: true` [41](#ref-q1-41) 
+        *   `WebAssembly.Module.exports` [32](#ref-q1-32) : `typeof: function`, `length: 1` [33](#ref-q1-33)  [34](#ref-q1-34)
+        *   `WebAssembly.Module.imports` [35](#ref-q1-35) : `typeof: function`, `length: 1` [36](#ref-q1-36)  [37](#ref-q1-37)
+        *   `WebAssembly.Module.customSections` [38](#ref-q1-38) : `typeof: function`, `length: 2` [39](#ref-q1-39)  [40](#ref-q1-40)
+        *   All static methods have property descriptors: `writable: true`, `enumerable: true`, `configurable: true` [41](#ref-q1-41)
 
-*   **`WebAssembly.Instance`** [42](#ref-q1-42) 
-    *   **Type**: `function` (constructor) [43](#ref-q1-43) 
-    *   **`name`**: `'Instance'` [44](#ref-q1-44) 
-    *   **`length`**: `1` [45](#ref-q1-45) 
-    *   **Property Descriptors**: `writable: true`, `enumerable: false`, `configurable: true` [46](#ref-q1-46) 
+*   **`WebAssembly.Instance`** [42](#ref-q1-42)
+    *   **Type**: `function` (constructor) [43](#ref-q1-43)
+    *   **`name`**: `'Instance'` [44](#ref-q1-44)
+    *   **`length`**: `1` [45](#ref-q1-45)
+    *   **Property Descriptors**: `writable: true`, `enumerable: false`, `configurable: true` [46](#ref-q1-46)
 
-*   **`WebAssembly.Memory`** [47](#ref-q1-47) 
-    *   **Type**: `function` (constructor) [48](#ref-q1-48) 
-    *   **`name`**: `'Memory'` [49](#ref-q1-49) 
-    *   **`length`**: `1` [50](#ref-q1-50) 
-    *   **Property Descriptors**: `writable: true`, `enumerable: false`, `configurable: true` [51](#ref-q1-51) 
+*   **`WebAssembly.Memory`** [47](#ref-q1-47)
+    *   **Type**: `function` (constructor) [48](#ref-q1-48)
+    *   **`name`**: `'Memory'` [49](#ref-q1-49)
+    *   **`length`**: `1` [50](#ref-q1-50)
+    *   **Property Descriptors**: `writable: true`, `enumerable: false`, `configurable: true` [51](#ref-q1-51)
 
-*   **`WebAssembly.Table`** [52](#ref-q1-52) 
-    *   **Type**: `function` (constructor) [53](#ref-q1-53) 
-    *   **`name`**: `'Table'` [54](#ref-q1-54) 
-    *   **`length`**: `1` [55](#ref-q1-55) 
-    *   **Property Descriptors**: `writable: true`, `enumerable: false`, `configurable: true` [56](#ref-q1-56) 
+*   **`WebAssembly.Table`** [52](#ref-q1-52)
+    *   **Type**: `function` (constructor) [53](#ref-q1-53)
+    *   **`name`**: `'Table'` [54](#ref-q1-54)
+    *   **`length`**: `1` [55](#ref-q1-55)
+    *   **Property Descriptors**: `writable: true`, `enumerable: false`, `configurable: true` [56](#ref-q1-56)
 
-*   **`WebAssembly.Global`** [57](#ref-q1-57) 
+*   **`WebAssembly.Global`** [57](#ref-q1-57)
     *   Verified in tests but full property descriptor details not shown in provided snippets
 
 ### Static Methods on `WebAssembly`
 
-*   **`WebAssembly.compile`** [58](#ref-q1-58) 
-    *   **Type**: `function` [59](#ref-q1-59) 
-    *   **`name`**: `'compile'` [60](#ref-q1-60) 
-    *   **`length`**: `1` [61](#ref-q1-61) 
-    *   **Property Descriptors**: `writable: true`, `enumerable: true`, `configurable: true` [62](#ref-q1-62) 
+*   **`WebAssembly.compile`** [58](#ref-q1-58)
+    *   **Type**: `function` [59](#ref-q1-59)
+    *   **`name`**: `'compile'` [60](#ref-q1-60)
+    *   **`length`**: `1` [61](#ref-q1-61)
+    *   **Property Descriptors**: `writable: true`, `enumerable: true`, `configurable: true` [62](#ref-q1-62)
 
-*   **`WebAssembly.validate`** [63](#ref-q1-63) 
-    *   **`length`**: `1` [63](#ref-q1-63) 
+*   **`WebAssembly.validate`** [63](#ref-q1-63)
+    *   **`length`**: `1` [63](#ref-q1-63)
 
-*   **`WebAssembly.instantiate`** [64](#ref-q1-64) 
-    *   **`length`**: `1` [64](#ref-q1-64) 
+*   **`WebAssembly.instantiate`** [64](#ref-q1-64)
+    *   **`length`**: `1` [64](#ref-q1-64)
 
 ### Prototype and Instance Properties
 
-All constructors have a `prototype` property with standard descriptors: `writable: false`, `enumerable: false`, `configurable: false`. [65](#ref-q1-65)  Each prototype has a `constructor` property pointing back to the constructor: `writable: true`, `enumerable: false`, `configurable: true`. [66](#ref-q1-66) 
+All constructors have a `prototype` property with standard descriptors: `writable: false`, `enumerable: false`, `configurable: false`. [65](#ref-q1-65)  Each prototype has a `constructor` property pointing back to the constructor: `writable: true`, `enumerable: false`, `configurable: true`. [66](#ref-q1-66)
 
-Instance properties like `WebAssembly.Instance.prototype.exports` and `WebAssembly.Memory.prototype.buffer` are accessor properties (getters only). [67](#ref-q1-67)  [68](#ref-q1-68) 
+Instance properties like `WebAssembly.Instance.prototype.exports` and `WebAssembly.Memory.prototype.buffer` are accessor properties (getters only). [67](#ref-q1-67)  [68](#ref-q1-68)
 
 ### Documentation and Verification Files
 

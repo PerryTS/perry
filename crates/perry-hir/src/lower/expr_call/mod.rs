@@ -62,6 +62,7 @@ use intrinsics::{
     try_namespace_static_method_apply_call_bind, try_native_arena_intrinsics,
     try_native_arena_public_api, try_native_memory_public_api, try_native_module_method_apply_call,
     try_pod_layout_constants, try_precompile, try_require_literal_bail,
+    try_strict_eval_arguments_assignment,
 };
 use local_array_methods::try_local_array_methods;
 use module_class_static::try_module_class_static;
@@ -216,6 +217,9 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
     if let Some(expr) = super::const_fold_fn::try_eval_function_call_fold(ctx, call)? {
         return Ok(expr);
     }
+    if let Some(expr) = try_strict_eval_arguments_assignment(ctx, call) {
+        return Ok(expr);
+    }
     // #1678: classify `Function(...)` / `eval(...)`. Bails on the
     // runtime-unknown bucket; otherwise logs + falls through.
     check_eval_function_call(ctx, call)?;
@@ -324,11 +328,31 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
         ast::Callee::Expr(expr) => {
             // Check for super.method() call
             if let ast::Expr::SuperProp(super_prop) = expr.as_ref() {
-                if let ast::SuperProp::Ident(ident) = &super_prop.prop {
-                    return Ok(Expr::SuperMethodCall {
-                        method: ident.sym.to_string(),
-                        args,
-                    });
+                match &super_prop.prop {
+                    ast::SuperProp::Ident(ident) => {
+                        if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
+                            return Ok(Expr::ObjectSuperMethodCall {
+                                home: Box::new(Expr::LocalGet(home_id)),
+                                key: Box::new(Expr::String(ident.sym.to_string())),
+                                receiver: Box::new(Expr::This),
+                                args,
+                            });
+                        }
+                        return Ok(Expr::SuperMethodCall {
+                            method: ident.sym.to_string(),
+                            args,
+                        });
+                    }
+                    ast::SuperProp::Computed(computed) => {
+                        if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
+                            return Ok(Expr::ObjectSuperMethodCall {
+                                home: Box::new(Expr::LocalGet(home_id)),
+                                key: Box::new(lower_expr(ctx, computed.expr.as_ref())?),
+                                receiver: Box::new(Expr::This),
+                                args,
+                            });
+                        }
+                    }
                 }
             }
 

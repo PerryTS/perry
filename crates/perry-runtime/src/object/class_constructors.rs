@@ -124,5 +124,6 @@ pub(crate) unsafe fn replay_class_object_constructor(
         final_args.as_ptr(),
         final_args.len(),
         total_params,
+        false,
     );
 }

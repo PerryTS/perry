@@ -51,6 +51,9 @@ await probe("promises access mode range", () => fsp.access("/tmp", 8));
 await probe("promises copyFile mode string", () =>
   fsp.copyFile("/tmp/perry_promises_arg_validation_missing_a", "/tmp/perry_promises_arg_validation_missing_b", "x" as any),
 );
+await probe("promises chmod path bool", () => fsp.chmod(true as any, 0o600));
+await probe("promises chown uid string", () => fsp.chown("/tmp", "x" as any, 0));
+await probe("promises lchown gid string", () => fsp.lchown("/tmp", 0, "x" as any));
 await probe("promises rm options string", () => fsp.rm("/tmp/perry_promises_arg_validation_missing", "x" as any));
 await probe("promises rm options null", () => fsp.rm("/tmp/perry_promises_arg_validation_missing", null as any));
 await probe("promises truncate path bool", () => fsp.truncate(true as any, 1));

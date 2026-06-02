@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2527 entries across 106 modules.
+Total: 2592 entries across 109 modules.
 
 ## Modules
 
@@ -44,6 +44,8 @@ Total: 2527 entries across 106 modules.
 - [`http`](#http)
 - [`http2`](#http2)
 - [`https`](#https)
+- [`inspector`](#inspector)
+- [`inspector/promises`](#inspector-promises)
 - [`ioredis`](#ioredis)
 - [`iroh`](#iroh)
 - [`jsonwebtoken`](#jsonwebtoken)
@@ -84,6 +86,7 @@ Total: 2527 entries across 106 modules.
 - [`readline`](#readline)
 - [`readline/promises`](#readline-promises)
 - [`redis`](#redis)
+- [`repl`](#repl)
 - [`sharp`](#sharp)
 - [`slugify`](#slugify)
 - [`sqlite`](#sqlite)
@@ -1364,6 +1367,8 @@ Total: 2527 entries across 106 modules.
 - `mkdtempDisposable` — module
 - `open` — module
 - `opendir` — module
+- `pull` — instance *(class: `FileHandle`)*
+- `pullSync` — instance *(class: `FileHandle`)*
 - `readFile` — module
 - `readdir` — module
 - `readlink` — module
@@ -1379,6 +1384,7 @@ Total: 2527 entries across 106 modules.
 - `utimes` — module
 - `watch` — module
 - `writeFile` — module
+- `writer` — instance *(class: `FileHandle`)*
 
 ### Properties
 
@@ -1397,6 +1403,7 @@ Total: 2527 entries across 106 modules.
 - `Server`
 - `ServerResponse`
 - `ServerResponse`
+- `WebSocket`
 
 ### Methods
 
@@ -1457,6 +1464,7 @@ Total: 2527 entries across 106 modules.
 - `__set_statusCode` — instance *(class: `ServerResponse`)*
 - `__set_statusMessage` — instance *(class: `ServerResponse`)*
 - `__set_timeout` — instance *(class: `HttpServer`)*
+- `_connectionListener` — module
 - `addListener` — instance *(class: `HttpServer`)*
 - `addListener` — instance *(class: `IncomingMessage`)*
 - `addListener` — instance *(class: `ServerResponse`)*
@@ -1607,6 +1615,51 @@ Total: 2527 entries across 106 modules.
 ### Properties
 
 - `globalAgent`
+
+## `inspector`
+
+### Classes
+
+- `Session`
+
+### Methods
+
+- `Session` — module
+- `close` — module
+- `connect` — instance *(class: `Session`)*
+- `connectToMainThread` — instance *(class: `Session`)*
+- `disconnect` — instance *(class: `Session`)*
+- `on` — instance *(class: `Session`)*
+- `once` — instance *(class: `Session`)*
+- `open` — module
+- `post` — instance *(class: `Session`)*
+- `url` — module
+- `waitForDebugger` — module
+
+### Properties
+
+- `console`
+- `default`
+
+## `inspector/promises`
+
+### Classes
+
+- `Session`
+
+### Methods
+
+- `Session` — module
+- `connect` — instance *(class: `Session`)*
+- `connectToMainThread` — instance *(class: `Session`)*
+- `disconnect` — instance *(class: `Session`)*
+- `on` — instance *(class: `Session`)*
+- `once` — instance *(class: `Session`)*
+- `post` — instance *(class: `Session`)*
+
+### Properties
+
+- `default`
 
 ## `ioredis`
 
@@ -2521,15 +2574,27 @@ Total: 2527 entries across 106 modules.
 
 ### Properties
 
+- `allowedNodeEnvironmentFlags`
 - `arch`
 - `argv`
+- `argv0`
+- `config`
+- `debugPort`
 - `env`
+- `execArgv`
+- `execPath`
+- `features`
+- `finalization`
+- `moduleLoadList`
 - `pid`
 - `platform`
 - `ppid`
+- `release`
+- `report`
 - `stderr`
 - `stdin`
 - `stdout`
+- `title`
 - `version`
 - `versions`
 
@@ -2616,6 +2681,35 @@ Total: 2527 entries across 106 modules.
 ### Methods
 
 - `createClient` — module
+
+## `repl`
+
+### Classes
+
+- `REPLServer`
+- `Recoverable`
+
+### Methods
+
+- `REPLServer` — module
+- `Recoverable` — module
+- `addListener` — instance *(class: `REPLServer`)*
+- `clearBufferedCommand` — instance *(class: `REPLServer`)*
+- `defineCommand` — instance *(class: `REPLServer`)*
+- `displayPrompt` — instance *(class: `REPLServer`)*
+- `emit` — instance *(class: `REPLServer`)*
+- `on` — instance *(class: `REPLServer`)*
+- `once` — instance *(class: `REPLServer`)*
+- `setupHistory` — instance *(class: `REPLServer`)*
+- `start` — module
+- `write` — instance *(class: `REPLServer`)*
+
+### Properties
+
+- `REPL_MODE_SLOPPY`
+- `REPL_MODE_STRICT`
+- `builtinModules`
+- `default`
 
 ## `sharp`
 
@@ -3076,6 +3170,7 @@ Total: 2527 entries across 106 modules.
 ### Classes
 
 - `URL`
+- `URLPattern`
 - `URLSearchParams`
 - `Url`
 
@@ -3084,6 +3179,7 @@ Total: 2527 entries across 106 modules.
 - `Url` — module
 - `domainToASCII` — module
 - `domainToUnicode` — module
+- `exec` — instance *(class: `URLPattern`)*
 - `fileURLToPath` — module
 - `fileURLToPathBuffer` — module
 - `format` — module
@@ -3091,6 +3187,7 @@ Total: 2527 entries across 106 modules.
 - `pathToFileURL` — module
 - `resolve` — module
 - `resolveObject` — module
+- `test` — instance *(class: `URLPattern`)*
 - `urlToHttpOptions` — module
 
 ### Properties
@@ -3361,6 +3458,13 @@ Total: 2527 entries across 106 modules.
 - `send` — instance
 - `send` — instance *(class: `Client`)*
 - `sendToClient` — module
+
+### Properties
+
+- `CLOSED`
+- `CLOSING`
+- `CONNECTING`
+- `OPEN`
 
 ## `zlib`
 

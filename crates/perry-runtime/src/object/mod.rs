@@ -18,6 +18,7 @@ use std::sync::RwLock;
 // Submodules (issue #1103): behavior-preserving split of the former
 // 11.2k-line object.rs. Public re-exports keep FFI symbols stable.
 mod alloc;
+mod arguments;
 mod array_object_ops;
 mod assert;
 mod bigint_dispatch;
@@ -38,6 +39,7 @@ mod global_this_tables;
 mod groupby;
 pub(crate) mod has_own_helpers;
 mod instanceof;
+mod namespace_create;
 mod native_call_method;
 mod native_module;
 mod native_module_dispatch;
@@ -46,12 +48,15 @@ mod object_literal_ops;
 mod object_ops;
 mod object_ops_frozen;
 mod polymorphic_index;
+mod primitive_proto_thunks;
+mod property_key;
 pub(crate) mod prototype_chain;
 mod prototype_helpers;
 mod reflect_support;
 mod util_types;
 mod websocket_global;
 pub use alloc::*;
+pub use arguments::*;
 pub(crate) use array_object_ops::*;
 pub use assert::*;
 pub(crate) use bigint_dispatch::*;
@@ -75,6 +80,7 @@ pub use global_this::*;
 pub(crate) use global_this_tables::*;
 pub use groupby::*;
 pub use instanceof::*;
+pub use namespace_create::*;
 pub use native_call_method::*;
 pub use native_module::*;
 pub(crate) use native_module_dispatch::*;
@@ -83,6 +89,7 @@ pub use object_literal_ops::*;
 pub use object_ops::*;
 pub use object_ops_frozen::*;
 pub use polymorphic_index::*;
+pub use property_key::*;
 pub(crate) use prototype_helpers::*;
 pub(crate) use reflect_support::*;
 pub use util_types::*;
@@ -1826,6 +1833,9 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     // Object via the GC header type byte.
     let raw_ptr = raw_addr as *const u8;
     if !raw_ptr.is_null() && (raw_ptr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        if let Some(tag) = arguments_object_to_string_tag(value) {
+            return tag;
+        }
         let gc_header = raw_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
         if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {

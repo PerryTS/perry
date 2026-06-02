@@ -14,6 +14,143 @@ const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_0062;
 const CLASS_ID_BOXED_BIGINT: u32 = 0xFFFF_0063;
 const CLASS_ID_BOXED_SYMBOL: u32 = 0xFFFF_0064;
 
+const CRYPTO_USAGE_ENCRYPT: u32 = 1 << 0;
+const CRYPTO_USAGE_DECRYPT: u32 = 1 << 1;
+const CRYPTO_USAGE_SIGN: u32 = 1 << 2;
+const CRYPTO_USAGE_VERIFY: u32 = 1 << 3;
+const CRYPTO_USAGE_DERIVE_KEY: u32 = 1 << 4;
+const CRYPTO_USAGE_DERIVE_BITS: u32 = 1 << 5;
+const CRYPTO_USAGE_WRAP_KEY: u32 = 1 << 6;
+const CRYPTO_USAGE_UNWRAP_KEY: u32 = 1 << 7;
+
+unsafe fn crypto_key_property_value(addr: usize, key_bytes: &[u8]) -> Option<JSValue> {
+    let (algo, hash, kind, extractable, usages) = crate::buffer::crypto_key_meta(addr)?;
+    match key_bytes {
+        b"algorithm" => Some(crypto_key_algorithm_value(addr, algo, hash)),
+        b"extractable" => Some(JSValue::bool(extractable)),
+        b"type" => Some(string_value(match kind {
+            2 => "private",
+            3 => "public",
+            _ => "secret",
+        })),
+        b"usages" => Some(crypto_key_usages_value(usages)),
+        _ => None,
+    }
+}
+
+unsafe fn crypto_key_algorithm_value(addr: usize, algo: u8, hash: u8) -> JSValue {
+    let obj = js_object_alloc(0, 3);
+    if obj.is_null() {
+        return JSValue::undefined();
+    }
+    set_string_field(obj, b"name", crypto_key_algorithm_name(algo));
+    if crypto_key_algorithm_has_hash(algo) {
+        let hash_obj = js_object_alloc(0, 1);
+        if !hash_obj.is_null() {
+            set_string_field(hash_obj, b"name", crypto_key_hash_name(hash));
+            set_value_field(obj, b"hash", JSValue::pointer(hash_obj as *const u8));
+        }
+    }
+    if crypto_key_algorithm_has_length(algo) {
+        let key = addr as *const crate::buffer::BufferHeader;
+        let bits = if key.is_null() {
+            0.0
+        } else {
+            crate::buffer::js_buffer_length(key) as f64 * 8.0
+        };
+        set_value_field(obj, b"length", JSValue::number(bits));
+    }
+    if let Some(curve) = crypto_key_named_curve(algo) {
+        set_string_field(obj, b"namedCurve", curve);
+    }
+    JSValue::pointer(obj as *const u8)
+}
+
+fn crypto_key_algorithm_name(algo: u8) -> &'static str {
+    match algo {
+        1 => "HMAC",
+        2 => "AES-GCM",
+        3 => "AES-KW",
+        4 => "AES-CBC",
+        5 => "AES-CTR",
+        6 => "HKDF",
+        7 => "PBKDF2",
+        8 => "ECDSA",
+        9 => "ECDH",
+        10 => "Ed25519",
+        11 => "X25519",
+        12 => "RSASSA-PKCS1-v1_5",
+        13 => "RSA-OAEP",
+        14 => "RSA-PSS",
+        _ => "",
+    }
+}
+
+fn crypto_key_hash_name(hash: u8) -> &'static str {
+    match hash {
+        1 => "SHA-1",
+        3 => "SHA-384",
+        4 => "SHA-512",
+        _ => "SHA-256",
+    }
+}
+
+fn crypto_key_algorithm_has_hash(algo: u8) -> bool {
+    matches!(algo, 1 | 12 | 13 | 14)
+}
+
+fn crypto_key_algorithm_has_length(algo: u8) -> bool {
+    matches!(algo, 1 | 2 | 3 | 4 | 5)
+}
+
+fn crypto_key_named_curve(algo: u8) -> Option<&'static str> {
+    match algo {
+        8 | 9 => Some("P-256"),
+        10 => Some("Ed25519"),
+        11 => Some("X25519"),
+        _ => None,
+    }
+}
+
+unsafe fn crypto_key_usages_value(usages: u32) -> JSValue {
+    let entries = [
+        (CRYPTO_USAGE_ENCRYPT, "encrypt"),
+        (CRYPTO_USAGE_DECRYPT, "decrypt"),
+        (CRYPTO_USAGE_SIGN, "sign"),
+        (CRYPTO_USAGE_VERIFY, "verify"),
+        (CRYPTO_USAGE_DERIVE_KEY, "deriveKey"),
+        (CRYPTO_USAGE_DERIVE_BITS, "deriveBits"),
+        (CRYPTO_USAGE_WRAP_KEY, "wrapKey"),
+        (CRYPTO_USAGE_UNWRAP_KEY, "unwrapKey"),
+    ];
+    let count = entries.iter().filter(|(bit, _)| usages & *bit != 0).count();
+    let mut arr = crate::array::js_array_alloc(count as u32);
+    for (bit, name) in entries {
+        if usages & bit == 0 {
+            continue;
+        }
+        let s = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        arr = crate::array::js_array_push(arr, JSValue::string_ptr(s));
+    }
+    JSValue::array_ptr(arr)
+}
+
+unsafe fn set_string_field(obj: *mut ObjectHeader, key: &[u8], value: &str) {
+    let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    let value = crate::string::js_string_from_bytes(value.as_ptr(), value.len() as u32);
+    js_object_set_field_by_name(obj, key, f64::from_bits(JSValue::string_ptr(value).bits()));
+}
+
+unsafe fn set_value_field(obj: *mut ObjectHeader, key: &[u8], value: JSValue) {
+    let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    js_object_set_field_by_name(obj, key, f64::from_bits(value.bits()));
+}
+
+unsafe fn string_value(value: &str) -> JSValue {
+    let s = crate::string::js_string_from_bytes(value.as_ptr(), value.len() as u32);
+    JSValue::string_ptr(s)
+}
+
 /// Get a field from an object by index
 ///
 /// #1129/#1136: the small-pointer guard below previously used a 16 MB
@@ -649,6 +786,23 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
         }
         if crate::closure::is_closure_ptr(ptr) {
             return js_closure_dynamic_keys(ptr);
+        }
+        if ptr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+            unsafe {
+                let gc_header =
+                    (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                if (*gc_header).obj_type == crate::gc::GC_TYPE_ERROR {
+                    let props = crate::node_submodules::error_user_props(ptr);
+                    let arr = crate::array::js_array_alloc(props.len() as u32);
+                    let mut out = arr;
+                    for (name, _) in props {
+                        let key =
+                            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                        out = crate::array::js_array_push(out, JSValue::string_ptr(key));
+                    }
+                    return out;
+                }
+            }
         }
         return js_object_keys(ptr as *const ObjectHeader);
     }
@@ -1685,6 +1839,8 @@ pub extern "C" fn js_object_get_field_by_name(
         let bits = obj as u64;
         if (bits >> 48) == 0x7FFE && !key.is_null() {
             let class_id = (bits & 0xFFFF_FFFF) as u32;
+            let class_value = f64::from_bits(bits);
+            let is_prototype_ref = super::class_prototype_ref_id(class_value).is_some();
             unsafe {
                 let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let name_len = (*key).byte_len as usize;
@@ -1696,15 +1852,58 @@ pub extern "C" fn js_object_get_field_by_name(
                 // collapses correctly (with v0.5.751's getPrototypeOf
                 // returning the class ref for instance receivers). Refs
                 // #420 / #618 followup.
-                if name == "constructor" && class_id != 0 && is_class_id_registered(class_id) {
-                    return JSValue::from_bits(bits);
+                if is_prototype_ref
+                    && name == "constructor"
+                    && class_id != 0
+                    && class_has_own_method(class_id, name)
+                {
+                    let value = class_prototype_method_value_for_name(class_id, name);
+                    return JSValue::from_bits(value.to_bits());
                 }
-                if name == "prototype" && class_id != 0 && is_class_id_registered(class_id) {
-                    return JSValue::from_bits(bits);
+                if name == "constructor" && class_id != 0 && is_class_id_registered(class_id) {
+                    let value = if is_prototype_ref {
+                        super::class_constructor_ref_value(class_id)
+                    } else {
+                        class_value
+                    };
+                    return JSValue::from_bits(value.to_bits());
+                }
+                if name == "prototype"
+                    && class_id != 0
+                    && is_class_id_registered(class_id)
+                    && !is_prototype_ref
+                {
+                    let value = super::class_prototype_ref_value(class_id);
+                    return JSValue::from_bits(value.to_bits());
                 }
                 if class_id != 0 && class_has_own_method(class_id, name) {
                     let value = class_prototype_method_value_for_name(class_id, name);
                     return JSValue::from_bits(value.to_bits());
+                }
+                if is_prototype_ref {
+                    if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
+                        if let Some(ref reg) = *registry {
+                            let mut cid = class_id;
+                            let mut depth = 0usize;
+                            while depth < 32 {
+                                if let Some(vtable) = reg.get(&cid) {
+                                    if let Some(&getter_ptr) = vtable.getters.get(name) {
+                                        let f: extern "C" fn(f64) -> f64 =
+                                            std::mem::transmute(getter_ptr);
+                                        return JSValue::from_bits(f(class_value).to_bits());
+                                    }
+                                }
+                                match get_parent_class_id(cid) {
+                                    Some(p) if p != 0 && p != cid => {
+                                        cid = p;
+                                        depth += 1;
+                                    }
+                                    _ => break,
+                                }
+                            }
+                        }
+                    }
+                    return JSValue::undefined();
                 }
                 if !name.is_empty() {
                     let result = CLASS_DYNAMIC_PROPS.with(|m| {
@@ -1713,6 +1912,26 @@ pub extern "C" fn js_object_get_field_by_name(
                             .and_then(|props| props.get(name).copied())
                     });
                     if let Some(v) = result {
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                    if super::class_registry::lookup_static_method_in_chain(class_id, name)
+                        .is_some()
+                    {
+                        let heap_name = {
+                            let layout =
+                                std::alloc::Layout::from_size_align(name_len.max(1), 1).unwrap();
+                            let ptr = std::alloc::alloc(layout);
+                            std::ptr::copy_nonoverlapping(name_ptr, ptr, name_len);
+                            ptr
+                        };
+                        let result = js_class_method_bind(class_value, heap_name, name_len);
+                        return JSValue::from_bits(result.to_bits());
+                    }
+                    if let Some(v) = super::class_registry::class_static_accessor_getter_value(
+                        class_id,
+                        name,
+                        class_value,
+                    ) {
                         return JSValue::from_bits(v.to_bits());
                     }
                     // #1788: a subclass of a class-expression value
@@ -2033,6 +2252,9 @@ pub extern "C" fn js_object_get_field_by_name(
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let key_len = (*key).byte_len as usize;
                 let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                if let Some(value) = crypto_key_property_value(obj as usize, key_bytes) {
+                    return value;
+                }
                 if key_bytes == b"length" || key_bytes == b"byteLength" {
                     let b = obj as *const crate::buffer::BufferHeader;
                     return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
@@ -2421,20 +2643,8 @@ pub extern "C" fn js_object_get_field_by_name(
                         return JSValue::from_bits(result.to_bits());
                     }
                     b"constructor" => {
-                        let name = match (*err_ptr).error_kind {
-                            crate::error::ERROR_KIND_TYPE_ERROR => b"TypeError".as_slice(),
-                            crate::error::ERROR_KIND_RANGE_ERROR => b"RangeError".as_slice(),
-                            crate::error::ERROR_KIND_REFERENCE_ERROR => {
-                                b"ReferenceError".as_slice()
-                            }
-                            crate::error::ERROR_KIND_SYNTAX_ERROR => b"SyntaxError".as_slice(),
-                            crate::error::ERROR_KIND_EVAL_ERROR => b"EvalError".as_slice(),
-                            crate::error::ERROR_KIND_URI_ERROR => b"URIError".as_slice(),
-                            crate::error::ERROR_KIND_AGGREGATE_ERROR => {
-                                b"AggregateError".as_slice()
-                            }
-                            _ => b"Error".as_slice(),
-                        };
+                        let name = crate::error::error_kind_constructor_name((*err_ptr).error_kind);
+                        let name = name.as_bytes();
                         let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
                         return JSValue::from_bits(v.to_bits());
                     }
@@ -2746,6 +2956,11 @@ pub extern "C" fn js_object_get_field_by_name(
                 return JSValue::undefined();
             }
         }
+        if super::is_arguments_object(obj) {
+            if let Some(value) = super::arguments_object_get_field(obj, key) {
+                return value;
+            }
+        }
 
         // #1387: `PerformanceEntry#toJSON` is a synthesized (non-enumerable)
         // method — entry objects are plain shaped objects with no stored
@@ -2892,6 +3107,10 @@ pub extern "C" fn js_object_get_field_by_name(
                     return v;
                 }
                 let class_id = (*obj).class_id;
+                if class_id != 0 && class_has_own_method(class_id, "constructor") {
+                    let value = class_prototype_method_value_for_name(class_id, "constructor");
+                    return JSValue::from_bits(value.to_bits());
+                }
                 if matches!(
                     class_id,
                     CLASS_ID_BOXED_NUMBER

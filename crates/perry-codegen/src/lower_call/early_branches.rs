@@ -79,8 +79,11 @@ pub fn try_lower_index_get_call(
     if let Expr::IndexGet { object, index } = callee {
         // Don't intercept array/typed-array element calls keyed by a numeric
         // expression — those have dedicated lowering and aren't method
-        // dispatch. Only string-ish or unknown (Any) keys route here.
-        if crate::type_analysis::is_numeric_expr(ctx, index) {
+        // dispatch. Class refs are the exception: `C[1]()` is a static
+        // computed method call after ToPropertyKey canonicalizes `1` to "1".
+        let object_is_class_ref = matches!(object.as_ref(), Expr::ClassRef(_))
+            || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name));
+        if crate::type_analysis::is_numeric_expr(ctx, index) && !object_is_class_ref {
             return Ok(None);
         }
         let is_static_string = matches!(index.as_ref(), Expr::String(_))
