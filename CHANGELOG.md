@@ -2,6 +2,40 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1096 — fix(runtime): #4004 — small-handle fetch ids must not be dereferenced as heap pointers
+
+**Root cause.** #4018 disambiguated the Web Fetch and node:http handle id-spaces by
+moving fetch `Request`/`Headers`/`Response` handles into a high band (`0x40000+`),
+disjoint from node:http/perry-ffi handles (`< 0x40000`). That fixed the dispatch-site
+collision in #4004 — but surfaced a latent crash. The runtime's type-identity probes
+(`date::is_date_cell_addr` → `is_date_value`, `map::is_registered_map`,
+`set::is_registered_set`, `weakref::weak_class_id_from_receiver`) read a `GcHeader` at
+`addr - GC_HEADER_SIZE` after only rejecting addresses below `0x1000 + GC_HEADER_SIZE`.
+Small-handle registry ids are NaN-boxed as `POINTER_TAG` values but are not heap
+addresses; while fetch handles started at `1` they fell below that floor and were
+skipped, but at `0x40000+` they sailed past it. Any **untyped** method/property dispatch
+on a fetch handle — exactly the shape a Hono `node:http` adapter takes, where
+`request.headers.get(...)` has an `any`-typed receiver — then dereferenced `id - 8`,
+reading unmapped memory and segfaulting (`EXC_BAD_ACCESS` at `0x3fff8` for handle
+`0x40000`).
+
+**Fix.** Raise the floor in those four probes to the canonical `< 0x100000` small-handle
+cutoff used throughout the runtime. Real `Date`/`Map`/`Set`/`WeakMap`/`WeakSet` cells are
+arena-allocated above the cutoff, so each remains an exact heap-pointer identity check
+with no behavior change for genuine heap objects; the whole small-handle band (Web Fetch,
+node:http/perry-ffi, timers, …) is now rejected before any GC-header deref.
+
+Also: `Headers.get` on the untyped dispatch path (`fetch/dispatch.rs`) now returns `null`
+for an absent header instead of the empty string, matching WHATWG/Node — `js_headers_get`
+signals absence with a null `StringHeader` pointer that was previously wrapped as `""`,
+which would have broken `headers.get(x) === null` checks in the same Hono path.
+
+Adds `test-parity/node-suite/http/server/request-handle-no-collision.ts`, a deterministic
+regression test that allocates a live node:http server handle (low band) alongside a fetch
+`Request` (high band) and drives the untyped `request.headers.get`/`.has` access that
+crashed. Output is byte-identical to Node. Validated: perry-runtime 962/962 and
+perry-stdlib 87/87 unit tests pass.
+
 ## v0.5.1095 — fix(runtime): Object.prototype.toString brands for Map/Set/WeakMap/WeakSet/Promise/RegExp
 
 `Object.prototype.toString.call(x)` returned `"[object Object]"` for `Map`, `Set`, `WeakMap`, `WeakSet`, `Promise`, and `RegExp` instead of Node's `"[object Map]"`, `"[object Set]"`, `"[object WeakMap]"`, `"[object WeakSet]"`, `"[object Promise]"`, and `"[object RegExp]"`. `js_object_to_string` (`object/mod.rs`) discriminated only Array/Error/Date/buffer brands and let these fall through to the generic object tag. Added per-type detection before the GC-header object discrimination: Map/Set via their registries (`is_registered_map`/`is_registered_set` — they're raw-alloc'd with no GcHeader), RegExp via `is_regex_pointer`, WeakMap/WeakSet via `weak_class_id_from_receiver`, and Promise via `js_value_is_promise`. (The RegExp *brand* is distinct from `RegExp.prototype.toString` → `/source/flags`, fixed separately in v0.5.1094.) Advances the collections / object-model / RegExp conformance issues (#3989, #3986, #4035).
