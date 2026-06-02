@@ -2,6 +2,10 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1095 — fix(runtime): Object.prototype.toString brands for Map/Set/WeakMap/WeakSet/Promise/RegExp
+
+`Object.prototype.toString.call(x)` returned `"[object Object]"` for `Map`, `Set`, `WeakMap`, `WeakSet`, `Promise`, and `RegExp` instead of Node's `"[object Map]"`, `"[object Set]"`, `"[object WeakMap]"`, `"[object WeakSet]"`, `"[object Promise]"`, and `"[object RegExp]"`. `js_object_to_string` (`object/mod.rs`) discriminated only Array/Error/Date/buffer brands and let these fall through to the generic object tag. Added per-type detection before the GC-header object discrimination: Map/Set via their registries (`is_registered_map`/`is_registered_set` — they're raw-alloc'd with no GcHeader), RegExp via `is_regex_pointer`, WeakMap/WeakSet via `weak_class_id_from_receiver`, and Promise via `js_value_is_promise`. (The RegExp *brand* is distinct from `RegExp.prototype.toString` → `/source/flags`, fixed separately in v0.5.1094.) Advances the collections / object-model / RegExp conformance issues (#3989, #3986, #4035).
+
 ## v0.5.1094 — fix(regexp): RegExp.prototype.toString returns /source/flags
 
 `/a/gi.toString()`, `String(/a/gi)`, and `` `${/a/gi}` `` all returned `"[object Object]"` instead of `"/a/gi"` — a RegExp fell through to `Object.prototype.toString` for both the explicit method call and ToString coercion. Added a shared `js_regexp_to_string(re)` helper (`/{source}/{flags}`, reusing the existing `source`/`flags` accessors) and wired it through three paths: the `regex.toString()` method dispatch (`dispatch_regex_receiver_method` + the `native_call_method` receiver gate, now `test|exec|toString`) and the ToString coercion in `js_jsvalue_to_string` (covers `String()` / template literals). Advances the RegExp conformance issue (#4035).
