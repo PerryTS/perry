@@ -749,6 +749,83 @@ extern "C" fn array_prototype_slice_thunk(
     f64::from_bits(crate::value::js_nanbox_pointer(result as i64).to_bits())
 }
 
+fn array_buffer_receiver_addr() -> Option<usize> {
+    let this_bits = IMPLICIT_THIS.with(|c| c.get());
+    let this_jsv = JSValue::from_bits(this_bits);
+    let raw = if this_jsv.is_pointer() {
+        (this_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if this_bits >> 48 == 0 && this_bits > 0x10000 {
+        this_bits as usize
+    } else {
+        return None;
+    };
+    if crate::buffer::is_registered_buffer(raw) && crate::buffer::is_array_buffer(raw) {
+        Some(raw)
+    } else {
+        None
+    }
+}
+
+fn array_buffer_brand_error() -> ! {
+    super::object_ops::throw_object_type_error(
+        b"Method get ArrayBuffer.prototype.byteLength called on incompatible receiver",
+    )
+}
+
+extern "C" fn array_buffer_byte_length_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    match array_buffer_receiver_addr() {
+        Some(addr) => {
+            let buf = addr as *const crate::buffer::BufferHeader;
+            f64::from_bits(
+                crate::value::JSValue::number(crate::buffer::js_buffer_length(buf) as f64).bits(),
+            )
+        }
+        None => array_buffer_brand_error(),
+    }
+}
+
+extern "C" fn array_buffer_is_view_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let jv = JSValue::from_bits(value.to_bits());
+    let addr = if jv.is_pointer() {
+        (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if value.to_bits() >> 48 == 0 && value.to_bits() > 0x10000 {
+        value.to_bits() as usize
+    } else {
+        0
+    };
+    let is_view = (addr != 0
+        && !crate::buffer::is_any_array_buffer(addr)
+        && (crate::buffer::is_uint8array_buffer(addr) || crate::buffer::is_data_view(addr)))
+        || jsvalue_extends_data_view(value)
+        || crate::typedarray::lookup_typed_array_kind(addr).is_some();
+    f64::from_bits(crate::value::JSValue::bool(is_view).bits())
+}
+
+fn jsvalue_extends_data_view(value: f64) -> bool {
+    let v = JSValue::from_bits(value.to_bits());
+    if !v.is_pointer() {
+        return false;
+    }
+    let ptr = v.as_pointer::<u8>();
+    if ptr.is_null() || !crate::object::is_valid_obj_ptr(ptr) {
+        return false;
+    }
+    unsafe {
+        let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+            return false;
+        }
+        let obj = ptr as *const ObjectHeader;
+        let class_id = (*obj).class_id;
+        class_id != 0 && crate::object::extends_builtin_data_view(class_id)
+    }
+}
+
 /// Resolve the `IMPLICIT_THIS` receiver to a `(typed-array ptr, kind)` if it
 /// is a typed array, else `None`. Backs the `%TypedArray%.prototype` accessor
 /// getters installed for reflection (#2060) — these fire when user code does
@@ -1798,6 +1875,15 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
             install_constructor_static(ctor, "from", array_from_thunk as *const u8, 1, false);
             install_constructor_static(ctor, "of", array_of_thunk as *const u8, 0, true);
         }
+        "ArrayBuffer" => {
+            install_constructor_static(
+                ctor,
+                "isView",
+                array_buffer_is_view_thunk as *const u8,
+                1,
+                false,
+            );
+        }
         "Response" => {
             install_constructor_static(
                 ctor,
@@ -2041,6 +2127,37 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                     ("with", 2),
                 ],
             );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "ArrayBuffer" => {
+            install_noop_proto_methods(proto_obj, &[("slice", 2)]);
+            unsafe {
+                crate::closure::js_register_closure_arity(
+                    array_buffer_byte_length_getter_thunk as *const u8,
+                    0,
+                );
+                let getter = crate::closure::js_closure_alloc(
+                    array_buffer_byte_length_getter_thunk as *const u8,
+                    0,
+                );
+                if !getter.is_null() {
+                    let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
+                    install_builtin_getter(proto_obj, "byteLength", getter_bits);
+                    set_accessor_descriptor(
+                        proto_obj as usize,
+                        "byteLength".to_string(),
+                        AccessorDescriptor {
+                            get: getter_bits,
+                            set: 0,
+                        },
+                    );
+                    set_property_attrs(
+                        proto_obj as usize,
+                        "byteLength".to_string(),
+                        PropertyAttrs::new(true, false, true),
+                    );
+                }
+            }
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "Object" => {

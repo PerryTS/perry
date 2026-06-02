@@ -1304,14 +1304,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util", "isAnyArrayBuffer") => {
             bool_tag(crate::buffer::is_any_array_buffer(ptr_addr(arg(0))))
         }
-        ("util", "isArrayBufferView") => {
-            let addr = ptr_addr(arg(0));
-            bool_tag(
-                crate::buffer::is_uint8array_buffer(addr)
-                    || crate::buffer::is_data_view(addr)
-                    || typed_kind(arg(0)).is_some(),
-            )
-        }
+        ("util", "isArrayBufferView") => crate::object::js_util_types_is_array_buffer_view(arg(0)),
         ("util", "isTypedArray") => bool_tag(typed_kind(arg(0)).is_some()),
         ("util", "isUint8Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8))
