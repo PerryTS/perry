@@ -814,6 +814,7 @@ pub fn transform_expr(
                 match elem {
                     crate::ir::ArrayElement::Expr(e) => transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker),
                     crate::ir::ArrayElement::Spread(e) => transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker),
+                    crate::ir::ArrayElement::Hole => {}
                 }
             }
         }

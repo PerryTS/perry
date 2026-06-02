@@ -625,6 +625,7 @@ impl WasmModuleEmitter {
                         ArrayElement::Expr(e) | ArrayElement::Spread(e) => {
                             self.collect_strings_in_expr(e);
                         }
+                        ArrayElement::Hole => {}
                     }
                 }
             }

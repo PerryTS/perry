@@ -55,6 +55,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             captures,
             mutable_captures,
             captures_this,
+            captures_new_target,
             is_async,
             ..
         } => {
@@ -157,17 +158,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // mutable block borrow.
             let func_name = format!("perry_closure_{}__{}", ctx.strings.module_prefix(), func_id);
 
+            // Closures may reserve extra lexical slots after ordinary
+            // captures. Keep `this` last because the runtime's
+            // CAPTURES_THIS_FLAG helpers rebind/unbind the last slot.
+            let new_target_capture_idx = auto_captures.len();
+            let this_capture_idx = auto_captures.len() + usize::from(*captures_new_target);
+
             // Closures with `captures_this` reserve one extra capture
-            // slot (at index `auto_captures.len()`) for the receiver.
+            // slot for the receiver.
             // `lower_object_literal` patches that slot with the
             // containing object pointer AFTER the closure is built.
             // Arrow-in-class closures leave it at 0.0, the existing
             // non-crashing fallback.
-            let total_caps = if *captures_this {
-                auto_captures.len() + 1
-            } else {
-                auto_captures.len()
-            };
+            let total_caps = auto_captures.len()
+                + usize::from(*captures_new_target)
+                + usize::from(*captures_this);
 
             let func_ref = format!("@{}", func_name);
             // Issue #450: when `captures_this`, OR in the runtime's
@@ -243,11 +248,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .any(|cap_id| !ctx.boxed_vars.contains(cap_id) && write_ids.contains(cap_id));
             let captured_singleton = !no_capture_singleton && !writes_unboxed_capture;
 
-            // For captures_this, the cache buffer needs an extra slot
-            // for the `this` value so the cache key distinguishes
-            // closures with different receivers. We load `this` here
-            // (mirroring the post-create patch site below) when we're
-            // taking the captured-singleton path.
+            let new_target_value_for_cache = if captured_singleton && *captures_new_target {
+                Some(if let Some(slot) = ctx.new_target_stack.last().cloned() {
+                    ctx.block().load(DOUBLE, &slot)
+                } else {
+                    ctx.block().call(DOUBLE, "js_new_target_get", &[])
+                })
+            } else {
+                None
+            };
+
+            // For captures_this, the cache buffer needs an extra slot for
+            // the `this` value so the cache key distinguishes closures with
+            // different receivers. We load `this` here (mirroring the
+            // post-create patch site below) when we're taking the
+            // captured-singleton path.
             let this_value_for_cache = if captured_singleton && *captures_this {
                 let this_slot = ctx.this_stack.last().cloned();
                 Some(if let Some(slot) = this_slot {
@@ -281,9 +296,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let v_bits = blk.bitcast_double_to_i64(v);
                         blk.store(I64, &v_bits, &slot);
                     }
+                    if let Some(new_target_v) = &new_target_value_for_cache {
+                        let slot =
+                            blk.gep(I64, &buf, &[(I64, &format!("{}", new_target_capture_idx))]);
+                        let v_bits = blk.bitcast_double_to_i64(new_target_v);
+                        blk.store(I64, &v_bits, &slot);
+                    }
                     if let Some(this_v) = &this_value_for_cache {
-                        let this_idx = auto_captures.len();
-                        let slot = blk.gep(I64, &buf, &[(I64, &format!("{}", this_idx))]);
+                        let slot = blk.gep(I64, &buf, &[(I64, &format!("{}", this_capture_idx))]);
                         let v_bits = blk.bitcast_double_to_i64(this_v);
                         blk.store(I64, &v_bits, &slot);
                     }
@@ -343,7 +363,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // that legitimately have no `this` see `undefined` (the
             // `IMPLICIT_THIS` default), not 0.0 — both are non-crashing.
             if *captures_this {
-                let this_idx = auto_captures.len().to_string();
+                let this_idx = this_capture_idx.to_string();
                 let this_slot = ctx.this_stack.last().cloned();
                 let this_value = if let Some(slot) = this_slot {
                     ctx.block().load(DOUBLE, &slot)
@@ -357,6 +377,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         (I64, &closure_handle),
                         (I32, &this_idx),
                         (DOUBLE, &this_value),
+                    ],
+                );
+            }
+            if *captures_new_target {
+                let new_target_idx = new_target_capture_idx.to_string();
+                let new_target_value = if let Some(slot) = ctx.new_target_stack.last().cloned() {
+                    ctx.block().load(DOUBLE, &slot)
+                } else {
+                    ctx.block().call(DOUBLE, "js_new_target_get", &[])
+                };
+                let blk = ctx.block();
+                blk.call_void(
+                    "js_closure_set_capture_f64",
+                    &[
+                        (I64, &closure_handle),
+                        (I32, &new_target_idx),
+                        (DOUBLE, &new_target_value),
                     ],
                 );
             }

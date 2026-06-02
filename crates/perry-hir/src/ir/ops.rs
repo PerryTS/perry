@@ -63,6 +63,8 @@ pub enum UpdateOp {
 pub enum ArrayElement {
     /// Regular element: [1, 2, 3]
     Expr(Expr),
+    /// Elision / hole: [1, , 3]
+    Hole,
     /// Spread element: [...arr]
     Spread(Expr),
 }

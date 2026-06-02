@@ -187,6 +187,10 @@ pub mod net;
     not(target_os = "android")
 ))]
 pub use net::*;
+#[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+pub mod tls;
+#[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+pub use tls::*;
 
 // === Databases ===
 // pg lives behind `bundled-pg` (v0.5.566); mysql2 lives behind

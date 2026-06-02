@@ -186,6 +186,12 @@ crates/perry-runtime/src/object/global_this.rs
 # (#4039/#4040/#4041). Peeling the cache + root-scanner groups into siblings is
 # tracked under #1435.
 crates/perry-runtime/src/object/mod.rs
+# Sibling of the #1103 object.rs split (defineProperty/getOwnPropertyNames/
+# descriptor + property-ops machinery). Already over the limit at 2004 LOC on
+# current main (independent of this PR's #3146 changes — added here so the
+# file-size gate is green). Peeling the descriptor/ops groups into further
+# siblings is tracked under #1435.
+crates/perry-runtime/src/object/object_ops.rs
 EOF
 )
 

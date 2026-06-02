@@ -55,6 +55,7 @@ fn known_submodules_have_at_least_one_export() {
 fn find_submodule_for_known_keys() {
     for key in [
         "timers_promises",
+        "vm",
         "readline_promises",
         "fs_promises",
         "stream_promises",

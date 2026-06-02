@@ -669,6 +669,8 @@ pub(crate) fn lower_module_decl(
                                                         ("https", "createServer") => {
                                                             Some("HttpsServer")
                                                         }
+                                                        ("tls", "createServer")
+                                                        | ("tls", "Server") => Some("Server"),
                                                         ("http2", "createSecureServer") => {
                                                             Some("Http2SecureServer")
                                                         }
@@ -749,6 +751,8 @@ pub(crate) fn lower_module_decl(
                                                 ("https", Some("createServer")) => {
                                                     Some("HttpsServer")
                                                 }
+                                                ("tls", Some("createServer"))
+                                                | ("tls", Some("Server")) => Some("Server"),
                                                 ("http2", Some("createSecureServer")) => {
                                                     Some("Http2SecureServer")
                                                 }
@@ -1048,6 +1052,7 @@ pub(crate) fn lower_module_decl(
 
                             let expr = lower_expr(ctx, init)?;
                             let id = if ctx.pre_registered_module_vars.remove(&name) {
+                                ctx.pre_registered_module_var_decls.remove(&name);
                                 let id = ctx.lookup_local(&name).unwrap();
                                 if let Some((_, _, existing_ty)) =
                                     ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)
@@ -1763,7 +1768,10 @@ pub(crate) fn lower_namespace_as_class(
                                 if ctx.lookup_local(&name).is_none() {
                                     let ty = extract_binding_type(&decl.name);
                                     ctx.define_local(name.clone(), ty);
-                                    ctx.pre_registered_module_vars.insert(name);
+                                    ctx.pre_registered_module_vars.insert(name.clone());
+                                    if var_decl.kind == ast::VarDeclKind::Var {
+                                        ctx.pre_registered_module_var_decls.insert(name);
+                                    }
                                 }
                             }
                         }
@@ -1793,7 +1801,10 @@ pub(crate) fn lower_namespace_as_class(
                                 .map(|ann| extract_ts_type(&ann.type_ann))
                                 .unwrap_or(Type::Any);
                             ctx.define_local(name.clone(), ty);
-                            ctx.pre_registered_module_vars.insert(name);
+                            ctx.pre_registered_module_vars.insert(name.clone());
+                            if var_decl.kind == ast::VarDeclKind::Var {
+                                ctx.pre_registered_module_var_decls.insert(name);
+                            }
                         }
                     }
                 }
@@ -1851,6 +1862,7 @@ pub(crate) fn lower_namespace_as_class(
                             if let Some(init) = &decl.init {
                                 let expr = lower_expr(ctx, init)?;
                                 let id = if ctx.pre_registered_module_vars.remove(&name) {
+                                    ctx.pre_registered_module_var_decls.remove(&name);
                                     let id = ctx.lookup_local(&name).unwrap();
                                     if let Some((_, _, existing_ty)) =
                                         ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)

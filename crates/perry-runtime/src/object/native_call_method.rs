@@ -3145,6 +3145,22 @@ pub unsafe extern "C" fn js_native_call_method(
                 return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
             } else if jsval.is_number() {
                 let n = jsval.as_number();
+                // #3146 + #2864: honour an explicit radix argument. With no
+                // argument (or an explicit `undefined`) use the default decimal
+                // formatting; otherwise delegate to the canonical radix path,
+                // which ToNumber/ToInteger-coerces + validates the radix (spec
+                // `RangeError` outside 2..=36) and formats via the shortest-
+                // round-trip V8 algorithm (`double_to_radix_string`).
+                let radix_arg = refreshed_args().first().copied();
+                let has_radix = match radix_arg {
+                    None => false,
+                    Some(r) => !JSValue::from_bits(r.to_bits()).is_undefined(),
+                };
+                if has_radix {
+                    let str_ptr =
+                        crate::value::js_jsvalue_to_string_radix(object, radix_arg.unwrap());
+                    return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
+                }
                 let s = if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
                     (n as i64).to_string()
                 } else {
@@ -3156,15 +3172,12 @@ pub unsafe extern "C" fn js_native_call_method(
                 let s = if jsval.as_bool() { "true" } else { "false" };
                 let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
                 return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
-            } else if jsval.is_undefined() {
-                let s = "undefined";
-                let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
-            } else if jsval.is_null() {
-                let s = "null";
-                let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
             }
+            // #3146: `undefined.toString()` / `null.toString()` must throw a
+            // TypeError (property read on a nullish base), not return the
+            // string "undefined"/"null". Falling through this arm without a
+            // `return` reaches the nullish-receiver throw below, which raises
+            // `Cannot read properties of <undefined|null> (reading 'toString')`.
         }
 
         // Array methods - delegate to array runtime

@@ -172,6 +172,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
 
+            // `new net.BlockList()` / `new net.SocketAddress(options)` are
+            // native-module constructor exports, so their callee arrives as
+            // `PropertyGet { NativeModuleRef("net"), ... }` rather than a bare
+            // built-in class name. Route them through `lower_new` so the
+            // handle-producing constructor arms allocate registered net handles.
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if matches!(property.as_str(), "BlockList" | "SocketAddress") {
+                    if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
+                        if mod_name == "net" || mod_name == "node:net" {
+                            return lower_new(ctx, property, args);
+                        }
+                    }
+                }
+            }
+
             // `new crypto.Certificate()` is a legacy constructor in Node, but
             // the implementation is a stateless namespace over the same SPKAC
             // helper methods as `crypto.Certificate.*`. Represent instances as
@@ -218,6 +233,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 &[(PTR, &mod_bytes_global), (I64, &mod_len_str)],
                             ));
                         }
+                    }
+                }
+            }
+
+            // `new stream.Readable(opts)` / `new stream.Writable(opts)` /
+            // `new stream.Duplex(...)` / `.Transform` / `.PassThrough` (#3663).
+            // The namespace-member form (`import * as stream` /
+            // `const stream = require('stream')`) arrives here as
+            // `NewDynamic { callee: PropertyGet { NativeModuleRef("stream"),
+            // "Readable" } }` instead of the bare-identifier `Expr::New`
+            // produced by a named ESM import. Without this arm it would fall
+            // through to the empty-object placeholder below, so the resulting
+            // object carries no EventEmitter/Writable methods and
+            // `.on()`/`.write()`/`.pipe()` throw "is not a function". Route to
+            // the same `lower_builtin_new` stream handler the named-import path
+            // uses so the runtime allocates the fully-methoded stream object.
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
+                    if mod_name == "stream"
+                        && matches!(
+                            property.as_str(),
+                            "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
+                        )
+                    {
+                        return lower_new(ctx, property, args);
                     }
                 }
             }
@@ -380,7 +420,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // class_id=0 empty-object baseline.
             let routes_through_function_construct = matches!(
                 callee.as_ref(),
-                Expr::FuncRef(_) | Expr::LocalGet(_) | Expr::PropertyGet { .. }
+                Expr::FuncRef(_)
+                    | Expr::LocalGet(_)
+                    | Expr::PropertyGet { .. }
+                    | Expr::Closure { .. }
             );
             if routes_through_function_construct {
                 let func_double = lower_expr(ctx, callee)?;

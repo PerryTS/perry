@@ -792,6 +792,15 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                 }
             }
         }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::SuperProp(super_prop)) => {
+            let mut exprs = Vec::new();
+            if let ast::SuperProp::Computed(computed) = &super_prop.prop {
+                exprs.push(lower_expr(ctx, &computed.expr)?);
+            }
+            exprs.push(*value);
+            exprs.push(throw_type_error_const_assignment(""));
+            Ok(Expr::Sequence(exprs))
+        }
         ast::AssignTarget::Pat(pat) => {
             // Destructuring assignment: [a, b] = expr or { a, b } = expr
             // We need to lower this to a sequence of assignments

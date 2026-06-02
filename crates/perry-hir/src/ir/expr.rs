@@ -412,6 +412,10 @@ pub enum Expr {
     // This expression
     This,
 
+    // `new.target` meta-property. Ordinary function bodies read this from
+    // the runtime constructor-call slot; arrows may capture it lexically.
+    NewTarget,
+
     // Super constructor call: super(args)
     SuperCall(Vec<Expr>),
 
@@ -1817,8 +1821,12 @@ pub enum Expr {
         mutable_captures: Vec<LocalId>,
         /// Whether this closure captures `this` from the enclosing scope (arrow function semantics)
         captures_this: bool,
+        /// Whether this closure captures `new.target` from the enclosing scope.
+        captures_new_target: bool,
         /// The enclosing class name if this closure captures `this` (for field access during codegen)
         enclosing_class: Option<String>,
+        /// Whether this closure came from an arrow function expression.
+        is_arrow: bool,
         /// Whether this is an async closure
         is_async: bool,
         /// Whether this is a generator closure (a `function*(){}` expression).

@@ -339,6 +339,7 @@ fn collect_used_new_fields_in_expr(
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => {
                         collect_used_new_fields_in_expr(e, non_escaping_news, used)
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }

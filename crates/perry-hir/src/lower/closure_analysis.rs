@@ -195,6 +195,7 @@ fn widen_mutable_captures_expr(
                     ArrayElement::Expr(x) | ArrayElement::Spread(x) => {
                         widen_mutable_captures_expr(x, scope_mutable)
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -489,6 +490,7 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
                     ArrayElement::Expr(x) | ArrayElement::Spread(x) => {
                         collect_closure_assigned_expr(x, out)
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -778,6 +780,7 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
                     ArrayElement::Expr(x) | ArrayElement::Spread(x) => {
                         collect_closure_captures_expr(x, out)
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -1188,6 +1191,7 @@ fn collect_closure_assigned_in_body_expr(
                     ArrayElement::Expr(x) | ArrayElement::Spread(x) => {
                         collect_closure_assigned_in_body_expr(x, out)
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }

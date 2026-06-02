@@ -812,6 +812,7 @@ pub fn fix_native_instance_expr(
                     crate::ir::ArrayElement::Spread(e) => {
                         fix_native_instance_expr(e, native_instances, local_id_instances)
                     }
+                    crate::ir::ArrayElement::Hole => {}
                 }
             }
         }

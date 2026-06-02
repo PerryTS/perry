@@ -58,6 +58,18 @@ impl<'a> FuncEmitCtx<'a> {
                             self.emit_store_arg(func, 1, e);
                             self.emit_memcall(func, "array_push_spread", 2);
                         }
+                        ArrayElement::Hole => {
+                            self.emit_frame_begin(func, 1);
+                            func.instruction(&Instruction::LocalSet(self.temp_local));
+                            self.emit_slot_addr(func, 0);
+                            func.instruction(&Instruction::LocalGet(self.temp_local));
+                            func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                                offset: 0,
+                                align: 3,
+                                memory_index: 0,
+                            }));
+                            self.emit_memcall(func, "array_push_hole", 1);
+                        }
                     }
                 }
             }

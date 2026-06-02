@@ -579,9 +579,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let val_double = lower_expr(ctx, value)?;
                 let key_idx = ctx.strings.intern(literal);
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+                super::property_set::emit_nullish_write_guard(
+                    ctx,
+                    &obj_bits,
+                    literal,
+                    "iset.literal",
+                );
                 let (obj_handle, key_raw) = {
                     let blk = ctx.block();
-                    let obj_bits = blk.bitcast_double_to_i64(&obj_box);
                     let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
                     let key_box = blk.load(DOUBLE, &key_handle_global);
                     let key_bits = blk.bitcast_double_to_i64(&key_box);
@@ -609,9 +615,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let obj_box = lower_expr(ctx, object)?;
                 let key_box = lower_expr(ctx, index)?;
                 let val_double = lower_expr(ctx, value)?;
+                let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+                super::property_set::emit_nullish_write_guard(
+                    ctx,
+                    &obj_bits,
+                    "index",
+                    "iset.string",
+                );
                 let (obj_handle, key_handle) = {
                     let blk = ctx.block();
-                    let obj_bits = blk.bitcast_double_to_i64(&obj_box);
                     let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
                     // SSO-safe key unbox — see IndexGet branch above for rationale.
                     let key_handle = unbox_str_handle(blk, &key_box);
@@ -642,6 +654,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let obj_box = lower_expr(ctx, object)?;
             let idx_box = lower_expr(ctx, index)?;
             let val_double = lower_expr(ctx, value)?;
+            let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+            super::property_set::emit_nullish_write_guard(ctx, &obj_bits, "index", "iset");
             let obj_handle = {
                 let blk = ctx.block();
                 unbox_to_i64(blk, &obj_box)

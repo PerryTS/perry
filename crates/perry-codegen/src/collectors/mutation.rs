@@ -232,6 +232,7 @@ pub fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
         Expr::Array(elements) => elements.iter().any(|e| expr_has_mutation(e, id)),
         Expr::ArraySpread(elements) => elements.iter().any(|el| match el {
             ArrayElement::Expr(e) | ArrayElement::Spread(e) => expr_has_mutation(e, id),
+            ArrayElement::Hole => false,
         }),
         Expr::Object(props) => props.iter().any(|(_, v)| expr_has_mutation(v, id)),
         Expr::Closure { body, .. } => has_any_mutation(body, id),

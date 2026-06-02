@@ -202,16 +202,55 @@ fn try_direct_eval_this_fold(ctx: &LoweringContext, call: &ast::CallExpr) -> Opt
         return None;
     }
     let body = const_string_of(&call.args[0].expr)?;
-    match normalize_eval_this_body(&body).as_deref()? {
-        "globalThis" => Some(Expr::GlobalThisExpr),
-        "this" if ctx.current_strict && ctx.scope_depth > 0 => Some(Expr::Undefined),
-        "this" => Some(Expr::This),
-        "typeof this" if ctx.current_strict && ctx.scope_depth > 0 => {
-            Some(Expr::String("undefined".to_string()))
-        }
-        "typeof this" => Some(Expr::TypeOf(Box::new(Expr::This))),
-        _ => None,
+    if let Some(normalized) = normalize_eval_this_body(&body) {
+        return match normalized.as_str() {
+            "globalThis" => Some(Expr::GlobalThisExpr),
+            "this" if ctx.current_strict && ctx.scope_depth > 0 => Some(Expr::Undefined),
+            "this" => Some(Expr::This),
+            "typeof this" if ctx.current_strict && ctx.scope_depth > 0 => {
+                Some(Expr::String("undefined".to_string()))
+            }
+            "typeof this" => Some(Expr::TypeOf(Box::new(Expr::This))),
+            _ => None,
+        };
     }
+    try_direct_eval_constant_add_fold(&body)
+}
+
+fn trim_js_eval_ws(s: &str) -> &str {
+    s.trim_matches(|c: char| {
+        c.is_whitespace()
+            || matches!(
+                c,
+                '\u{0009}'
+                    | '\u{000B}'
+                    | '\u{000C}'
+                    | '\u{0020}'
+                    | '\u{00A0}'
+                    | '\u{FEFF}'
+                    | '\u{2028}'
+                    | '\u{2029}'
+            )
+    })
+}
+
+fn parse_eval_number_literal(s: &str) -> Option<f64> {
+    let trimmed = trim_js_eval_ws(s);
+    if trimmed.is_empty() {
+        return None;
+    }
+    trimmed.parse::<f64>().ok()
+}
+
+fn try_direct_eval_constant_add_fold(body: &str) -> Option<Expr> {
+    let src = body.trim().trim_end_matches(';').trim();
+    let mut parts = src.split('+');
+    let left = parse_eval_number_literal(parts.next()?)?;
+    let right = parse_eval_number_literal(parts.next()?)?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(Expr::Number(left + right))
 }
 
 fn normalize_eval_this_body(body: &str) -> Option<String> {

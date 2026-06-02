@@ -2,6 +2,12 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1102 — chore(parity): resolve v8 skiplist/manifest triage ambiguity (#3700)
+
+`scripts/parity-skiplist.toml` skiplisted `node:v8` while the API manifest still claimed v8 entries, making compatibility triage ambiguous (a v8 failure could be bucketed as both `Skip` and a manifest/runtime gap). Documented the rule that resolves it: the skiplist and the manifest measure **different axes** — the manifest records whether an API exists and is callable; the skiplist records whether it is a byte-for-byte parity target. A skiplisted-but-manifest-claimed API is not a conflict.
+
+Verified that v8's manifest surface is genuinely callable and matches Node's *shapes* (`serialize`/`deserialize` roundtrip, `getHeapStatistics`/`getHeapSpaceStatistics`/`getHeapCodeStatistics`, `cachedDataVersionTag`, `GCProfiler`), but is not byte-parity-testable: `serialize`/`deserialize` use the JSC wire format (Perry isn't V8, so the bytes differ from Node's V8 format) and the heap-introspection/`cachedDataVersionTag` values are runtime-specific (skip categories 2 + 3). Corrected v8's skiplist reason accordingly and added a header note documenting the skiplist-vs-manifest distinction and the triage rule. `punycode` (the other module named in #3700) was already removed from the skiplist on an earlier change. Config-only; no runtime/manifest/docs impact (the parity sweep is tag-gated).
+
 ## v0.5.1101 — fix(module): implement SourceMap.findEntry / findOrigin (#3675)
 
 `new module.SourceMap(payload)` constructed an instance but `findEntry`/`findOrigin` were noop stubs that returned `undefined`. Implemented both against the Source Map v3 mappings grammar (`crates/perry-runtime/src/process.rs`):
