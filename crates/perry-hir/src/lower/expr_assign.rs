@@ -322,13 +322,11 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                         throw_reference_error_unresolvable_assignment(&name),
                     ]));
                 }
-                // Variable not found in scope — likely a closure capture that wasn't
-                // properly tracked. Create an implicit local to avoid hard failure.
                 eprintln!(
-                    "  Warning: Assignment to undeclared variable '{}', creating implicit local",
+                    "  Warning: Assignment to undeclared variable '{}', creating sloppy global",
                     name
                 );
-                let id = ctx.define_local(name, Type::Any);
+                let id = ctx.define_sloppy_implicit_global(name);
                 Ok(Expr::LocalSet(id, value))
             }
         }

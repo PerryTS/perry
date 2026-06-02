@@ -311,7 +311,15 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 }
             }
             let expr = lower_expr(ctx, &expr_stmt.expr)?;
-            result.push(Stmt::Expr(expr));
+            if matches!(
+                &expr,
+                Expr::SyntaxErrorNew(msg)
+                    if matches!(msg.as_ref(), Expr::String(s) if s.starts_with("eval var declaration conflicts with"))
+            ) {
+                result.push(Stmt::Throw(expr));
+            } else {
+                result.push(Stmt::Expr(expr));
+            }
         }
         ast::Stmt::Decl(ast::Decl::Var(var_decl)) => {
             let mutable = var_decl.kind != ast::VarDeclKind::Const;

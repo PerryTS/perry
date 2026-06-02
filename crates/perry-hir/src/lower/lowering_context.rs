@@ -212,6 +212,12 @@ pub struct LoweringContext {
     /// capture-slot would race with self-referential `const f = () => f(...)`
     /// and double-book state shared between sibling closures.
     pub(crate) module_level_ids: HashSet<LocalId>,
+    /// Sloppy assignments to unresolvable identifiers create properties on
+    /// the global object. We model the subset Perry can compile by minting a
+    /// module-level LocalId plus a synthetic top-level `var` slot after module
+    /// lowering, so closures and later top-level reads share storage.
+    pub(crate) sloppy_implicit_globals: Vec<(String, LocalId)>,
+    pub(crate) sloppy_implicit_global_ids: HashSet<LocalId>,
     /// Current function/closure nesting depth (`enter_scope` bumps this,
     /// `exit_scope` decrements). 0 == still at module top level.
     pub(crate) scope_depth: usize,

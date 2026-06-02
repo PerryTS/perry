@@ -75,6 +75,8 @@ impl LoweringContext {
             pre_registered_module_vars: HashSet::new(),
             pre_registered_module_var_decls: HashSet::new(),
             module_level_ids: HashSet::new(),
+            sloppy_implicit_globals: Vec::new(),
+            sloppy_implicit_global_ids: HashSet::new(),
             scope_depth: 0,
             scope_local_marks: Vec::new(),
             inside_block_scope: 0,
@@ -614,6 +616,23 @@ impl LoweringContext {
         id
     }
 
+    pub(crate) fn define_sloppy_implicit_global(&mut self, name: String) -> LocalId {
+        if let Some((_, id, _)) = self
+            .locals
+            .iter()
+            .rev()
+            .find(|(n, id, _)| n == &name && self.sloppy_implicit_global_ids.contains(id))
+        {
+            return *id;
+        }
+        let id = self.fresh_local();
+        self.module_level_ids.insert(id);
+        self.sloppy_implicit_global_ids.insert(id);
+        self.sloppy_implicit_globals.push((name.clone(), id));
+        self.locals.push((name, id, Type::Any));
+        id
+    }
+
     /// Drop module-level LocalIds from a closure's `captures` list. Module-
     /// level variables are loaded directly from their global data slot inside
     /// the closure body (see `closures.rs` auto-loading pass), so passing them
@@ -1074,7 +1093,15 @@ impl LoweringContext {
         debug_assert!(self.scope_depth > 0, "exit_scope called at module depth");
         self.scope_depth = self.scope_depth.saturating_sub(1);
         self.scope_local_marks.pop();
-        self.locals.truncate(mark.0);
+        if self.locals.len() > mark.0 {
+            let mut kept: Vec<(String, LocalId, Type)> = Vec::new();
+            for entry in self.locals.drain(mark.0..) {
+                if self.sloppy_implicit_global_ids.contains(&entry.1) {
+                    kept.push(entry);
+                }
+            }
+            self.locals.extend(kept);
+        }
         self.native_instances.truncate(mark.1);
         // Remove index entries for functions being truncated, then restore any
         // earlier entries that were shadowed by the removed ones.

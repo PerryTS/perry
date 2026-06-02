@@ -27,7 +27,7 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
     let obj = {
         let bits = obj as u64;
         let top16 = bits >> 48;
-        if top16 >= 0x7FF8 {
+        if top16 == 0x7FFD || top16 >= 0x7FF8 {
             if top16 == 0x7FFC {
                 return 0;
             }
@@ -247,7 +247,7 @@ pub extern "C" fn js_object_set_field_by_name(
     let obj = {
         let bits = obj as u64;
         let top16 = bits >> 48;
-        if top16 >= 0x7FF8 {
+        if top16 == 0x7FFD || top16 >= 0x7FF8 {
             // NaN-boxed value — extract lower 48 bits as pointer
             let raw = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
             if raw.is_null() || top16 == 0x7FFC {

@@ -798,6 +798,7 @@ pub unsafe extern "C" fn js_native_call_method(
     let arg_handles = root_scope.root_nanbox_f64_slice(&original_args);
     let refreshed_args = || crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
     let object = object_handle.get_nanbox_f64();
+    let jsval = JSValue::from_bits(object.to_bits());
     // RAII recursion depth guard: prevent stack overflow from circular module deps.
     // The guard auto-decrements on drop, covering all ~20 return points in this function.
     // When max depth is hit, return a pointer to a static empty object instead of undefined.
@@ -816,6 +817,27 @@ pub unsafe extern "C" fn js_native_call_method(
         }
     };
 
+    {
+        let raw_addr = if jsval.is_pointer() {
+            crate::value::js_nanbox_get_pointer(object) as usize
+        } else if (object.to_bits() >> 48) == 0 {
+            object.to_bits() as usize
+        } else {
+            0
+        };
+        if crate::closure::is_closure_ptr(raw_addr)
+            && !crate::closure::closure_is_key_deleted(raw_addr, method_name)
+        {
+            let dyn_val = crate::closure::closure_get_dynamic_prop(raw_addr, method_name);
+            if dyn_val.to_bits() != crate::value::TAG_UNDEFINED {
+                let prev_this = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
+                let result = crate::closure::js_native_call_value(dyn_val, args_ptr, args_len);
+                IMPLICIT_THIS.with(|c| c.set(prev_this));
+                return result;
+            }
+        }
+    }
+
     // Check if this is a JS handle (V8 object from JS runtime)
     if crate::value::is_js_handle(object) {
         let func_ptr =
@@ -829,7 +851,6 @@ pub unsafe extern "C" fn js_native_call_method(
         return f64::from_bits(0x7FF8_0000_0000_0001); // undefined
     }
 
-    let jsval = JSValue::from_bits(object.to_bits());
     if (object.to_bits() >> 48) == 0x7FFE {
         let class_id = (object.to_bits() & 0xFFFF_FFFF) as u32;
         if crate::object::class_prototype_ref_id(object).is_some() {

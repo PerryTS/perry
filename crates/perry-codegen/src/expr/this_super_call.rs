@@ -603,6 +603,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 crate::lower_call::FieldInitMode::SelfOnly,
             )?;
 
+            if ctx.current_closure_ptr.is_some() {
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_throw_reference_error_unresolved_get",
+                    &[],
+                ));
+            }
+
             // super() evaluates to undefined in JS.
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }

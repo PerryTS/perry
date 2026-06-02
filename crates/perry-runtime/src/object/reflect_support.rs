@@ -45,6 +45,14 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         if obj.is_null() {
             return false;
         }
+        let obj_addr = obj as usize;
+        if crate::closure::is_closure_ptr(obj_addr) {
+            let Some(key_name) = key_to_rust_string(key) else {
+                return false;
+            };
+            return crate::closure::closure_has_own_dynamic_prop(obj_addr, &key_name)
+                || matches!(key_name.as_str(), "length" | "name" | "prototype");
+        }
         let key_str = crate::builtins::js_string_coerce(key);
         if key_str.is_null() {
             return false;

@@ -222,13 +222,25 @@ pub(crate) fn generate_param_destructuring_stmts(
             // "Assignment to constant variable" (hit by Hono's RegExpRouter).
             crate::destructuring::lower_pattern_binding(ctx, pat, Expr::LocalGet(param_id), true)
         }
+        ast::Pat::Rest(rest) if is_destructuring_pattern(&rest.arg) => {
+            crate::destructuring::lower_pattern_binding(
+                ctx,
+                &rest.arg,
+                Expr::LocalGet(param_id),
+                true,
+            )
+        }
         _ => Ok(Vec::new()),
     }
 }
 
 /// Check if a pattern is a destructuring pattern (array or object)
 pub(crate) fn is_destructuring_pattern(pat: &ast::Pat) -> bool {
-    matches!(pat, ast::Pat::Array(_) | ast::Pat::Object(_))
+    match pat {
+        ast::Pat::Array(_) | ast::Pat::Object(_) => true,
+        ast::Pat::Rest(rest) => is_destructuring_pattern(&rest.arg),
+        _ => false,
+    }
 }
 
 fn push_unique_name(names: &mut Vec<String>, name: String) {
@@ -794,16 +806,20 @@ pub(crate) fn predeclare_implicit_assignment_targets(
             id
         } else if let Some(id) = ctx.lookup_local(&name) {
             id
+        } else if ctx.scope_depth > 0 {
+            ctx.define_sloppy_implicit_global(name.clone())
         } else {
             ctx.define_local(name.clone(), Type::Any)
         };
-        stmts.push(Stmt::Let {
-            id,
-            name,
-            ty: Type::Any,
-            mutable: true,
-            init: Some(Expr::Undefined),
-        });
+        if ctx.scope_depth == 0 || !ctx.sloppy_implicit_global_ids.contains(&id) {
+            stmts.push(Stmt::Let {
+                id,
+                name,
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            });
+        }
     }
     stmts
 }

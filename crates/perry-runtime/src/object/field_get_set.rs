@@ -1059,7 +1059,7 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
     let stripped = {
         let bits = obj as u64;
         let top16 = bits >> 48;
-        if top16 >= 0x7FF8 {
+        if top16 == 0x7FFD || top16 >= 0x7FF8 {
             (bits & 0x0000_FFFF_FFFF_FFFF) as *const ObjectHeader
         } else {
             obj
@@ -2131,7 +2131,7 @@ pub extern "C" fn js_object_get_field_by_name(
     let obj = {
         let bits = obj as u64;
         let top16 = bits >> 48;
-        if top16 >= 0x7FF8 {
+        if top16 == 0x7FFD || top16 >= 0x7FF8 {
             // NaN-boxed value — extract lower 48 bits as pointer
             let raw = (bits & 0x0000_FFFF_FFFF_FFFF) as *const ObjectHeader;
             if raw.is_null() || top16 == 0x7FFC {
@@ -2245,6 +2245,54 @@ pub extern "C" fn js_object_get_field_by_name(
         return JSValue::undefined();
     }
     unsafe {
+        if crate::closure::is_closure_ptr(obj as usize) {
+            if key.is_null() {
+                return JSValue::undefined();
+            }
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+            if let Ok(name_str) = std::str::from_utf8(key_bytes) {
+                if crate::closure::closure_is_key_deleted(obj as usize, name_str) {
+                    return JSValue::undefined();
+                }
+                if matches!(name_str, "caller" | "arguments")
+                    && crate::closure::closure_is_arrow(obj as *const crate::closure::ClosureHeader)
+                {
+                    crate::fs::validate::throw_type_error_with_code(
+                        "Restricted function property access",
+                        "ERR_INVALID_ARG_TYPE",
+                    );
+                }
+                let val = crate::closure::closure_get_dynamic_prop(obj as usize, name_str);
+                if val.to_bits() != crate::value::TAG_UNDEFINED {
+                    return JSValue::from_bits(val.to_bits());
+                }
+                if name_str == "length" {
+                    let closure_value = crate::value::js_nanbox_pointer(obj as i64);
+                    if let Some(arity) =
+                        super::native_module::bound_native_callable_value_arity(closure_value)
+                    {
+                        return JSValue::number(arity as f64);
+                    }
+                    if let Some(len) = super::native_module::builtin_closure_length(obj as usize) {
+                        return JSValue::number(len as f64);
+                    }
+                    let length =
+                        crate::closure::closure_length(obj as *const crate::closure::ClosureHeader);
+                    return JSValue::number(length.unwrap_or(0) as f64);
+                }
+                if name_str == "name" {
+                    let func_ptr =
+                        (*(obj as *const crate::closure::ClosureHeader)).func_ptr as usize;
+                    let fname =
+                        crate::builtins::function_name_for_ptr(func_ptr).unwrap_or_default();
+                    let s = crate::string::js_string_from_bytes(fname.as_ptr(), fname.len() as u32);
+                    return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
+                }
+            }
+            return JSValue::undefined();
+        }
         if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
             return JSValue::from_bits(val.to_bits());
         }

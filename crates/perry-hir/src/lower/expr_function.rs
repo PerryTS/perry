@@ -89,6 +89,118 @@ fn arrow_body_has_use_strict(body: &ast::BlockStmtOrExpr) -> bool {
     }
 }
 
+fn collect_direct_eval_var_names_from_pat(pat: &ast::Pat, out: &mut Vec<String>) {
+    match pat {
+        ast::Pat::Assign(assign) => {
+            collect_direct_eval_var_names_from_pat(&assign.left, out);
+            collect_direct_eval_var_names_from_expr(&assign.right, out);
+        }
+        ast::Pat::Array(arr) => {
+            for elem in arr.elems.iter().flatten() {
+                collect_direct_eval_var_names_from_pat(elem, out);
+            }
+        }
+        ast::Pat::Object(obj) => {
+            for prop in &obj.props {
+                match prop {
+                    ast::ObjectPatProp::Assign(assign) => {
+                        if let Some(default) = &assign.value {
+                            collect_direct_eval_var_names_from_expr(default, out);
+                        }
+                    }
+                    ast::ObjectPatProp::KeyValue(kv) => {
+                        collect_direct_eval_var_names_from_pat(&kv.value, out);
+                    }
+                    ast::ObjectPatProp::Rest(rest) => {
+                        collect_direct_eval_var_names_from_pat(&rest.arg, out);
+                    }
+                }
+            }
+        }
+        ast::Pat::Rest(rest) => collect_direct_eval_var_names_from_pat(&rest.arg, out),
+        _ => {}
+    }
+}
+
+fn collect_direct_eval_var_names_from_expr(expr: &ast::Expr, out: &mut Vec<String>) {
+    match expr {
+        ast::Expr::Call(call) => {
+            if let ast::Callee::Expr(callee) = &call.callee {
+                let mut callee_expr = callee.as_ref();
+                while let ast::Expr::Paren(paren) = callee_expr {
+                    callee_expr = paren.expr.as_ref();
+                }
+                if matches!(callee_expr, ast::Expr::Ident(id) if id.sym.as_ref() == "eval")
+                    && call.args.len() == 1
+                    && call.args[0].spread.is_none()
+                {
+                    if let Some(body) = crate::eval_classifier::const_string_of(&call.args[0].expr)
+                    {
+                        if let Some(name) = super::const_fold_fn::direct_eval_var_decl_name(&body) {
+                            out.push(name);
+                        }
+                    }
+                }
+                collect_direct_eval_var_names_from_expr(callee, out);
+            }
+            for arg in &call.args {
+                collect_direct_eval_var_names_from_expr(&arg.expr, out);
+            }
+        }
+        ast::Expr::Paren(paren) => collect_direct_eval_var_names_from_expr(&paren.expr, out),
+        ast::Expr::Seq(seq) => {
+            for expr in &seq.exprs {
+                collect_direct_eval_var_names_from_expr(expr, out);
+            }
+        }
+        ast::Expr::Assign(assign) => {
+            collect_direct_eval_var_names_from_expr(&assign.right, out);
+        }
+        ast::Expr::Cond(cond) => {
+            collect_direct_eval_var_names_from_expr(&cond.test, out);
+            collect_direct_eval_var_names_from_expr(&cond.cons, out);
+            collect_direct_eval_var_names_from_expr(&cond.alt, out);
+        }
+        ast::Expr::Bin(bin) => {
+            collect_direct_eval_var_names_from_expr(&bin.left, out);
+            collect_direct_eval_var_names_from_expr(&bin.right, out);
+        }
+        ast::Expr::Unary(unary) => collect_direct_eval_var_names_from_expr(&unary.arg, out),
+        ast::Expr::Update(update) => collect_direct_eval_var_names_from_expr(&update.arg, out),
+        ast::Expr::Member(member) => {
+            collect_direct_eval_var_names_from_expr(&member.obj, out);
+            if let ast::MemberProp::Computed(computed) = &member.prop {
+                collect_direct_eval_var_names_from_expr(&computed.expr, out);
+            }
+        }
+        ast::Expr::Array(arr) => {
+            for elem in arr.elems.iter().flatten() {
+                collect_direct_eval_var_names_from_expr(&elem.expr, out);
+            }
+        }
+        ast::Expr::Object(obj) => {
+            for prop in &obj.props {
+                if let ast::PropOrSpread::Prop(prop) = prop {
+                    match prop.as_ref() {
+                        ast::Prop::KeyValue(kv) => {
+                            collect_direct_eval_var_names_from_expr(&kv.value, out)
+                        }
+                        ast::Prop::Assign(assign) => {
+                            collect_direct_eval_var_names_from_expr(&assign.value, out)
+                        }
+                        ast::Prop::Getter(_)
+                        | ast::Prop::Setter(_)
+                        | ast::Prop::Method(_)
+                        | ast::Prop::Shorthand(_) => {}
+                    }
+                }
+            }
+        }
+        ast::Expr::Fn(_) | ast::Expr::Arrow(_) | ast::Expr::Class(_) => {}
+        _ => {}
+    }
+}
+
 pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> Result<Expr> {
     // Lower arrow function to a closure
     let func_id = ctx.fresh_func();
@@ -136,12 +248,11 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         let is_rest = is_rest_param(param);
         let param_ty = get_pat_type(param, ctx);
         let param_id = ctx.define_local(param_name.clone(), param_ty.clone());
-        let param_default = get_param_default(ctx, param)?;
         params.push(Param {
             id: param_id,
             name: param_name,
             ty: param_ty,
-            default: param_default,
+            default: None,
             decorators: Vec::new(),
             is_rest,
             arguments_object: None,
@@ -150,6 +261,37 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         if is_destructuring_pattern(param) {
             destructuring_params.push((param_id, param.clone()));
         }
+    }
+
+    let mut eval_var_names = Vec::new();
+    for param in &arrow.params {
+        collect_direct_eval_var_names_from_pat(param, &mut eval_var_names);
+    }
+    eval_var_names.sort();
+    eval_var_names.dedup();
+    let mut param_eval_var_stmts = Vec::new();
+    for name in eval_var_names {
+        let existing_current_scope = ctx
+            .locals
+            .iter()
+            .enumerate()
+            .rev()
+            .any(|(idx, (n, _, _))| n == &name && idx >= scope_mark.0);
+        if !existing_current_scope {
+            let id = ctx.define_local(name.clone(), Type::Any);
+            ctx.var_hoisted_ids.insert(id);
+            param_eval_var_stmts.push(Stmt::Let {
+                id,
+                name,
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            });
+        }
+    }
+
+    for (idx, param) in arrow.params.iter().enumerate() {
+        params[idx].default = get_param_default(ctx, param)?;
     }
 
     // Register arrow function parameters with known native types as native instances
@@ -219,42 +361,6 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         destructuring_stmts.extend(stmts);
     }
 
-    // Hoist function declarations in block body (JS hoisting semantics).
-    // Track the hoisted-id set so we can emit `Stmt::PreallocateBoxes`
-    // for sibling/forward captures (issue #633).
-    //
-    // Issue #838 followup (b): see the matching comment in
-    // `lower_fn_expr` for the rationale — only reuse an existing local
-    // id when the binding is in THIS scope, otherwise dayjs's minified
-    // outer-`var M = {…}` / inner-`function M(t){…}` shadow trips the
-    // codegen-side global-promotion analysis.
-    let outer_locals_len = scope_mark.0;
-    let mut hoisted_id_set: std::collections::HashSet<LocalId> = std::collections::HashSet::new();
-    if let ast::BlockStmtOrExpr::BlockStmt(block) = &*arrow.body {
-        for stmt in &block.stmts {
-            if let ast::Stmt::Decl(ast::Decl::Fn(fn_decl)) = stmt {
-                // Generator FnDecls go through a different hoist path and
-                // aren't closure-bound at the source position.
-                if fn_decl.function.body.is_some() && !fn_decl.function.is_generator {
-                    let name = fn_decl.ident.sym.to_string();
-                    let existing_in_scope = ctx
-                        .locals
-                        .iter()
-                        .enumerate()
-                        .rev()
-                        .find(|(idx, (n, _, _))| n == &name && *idx >= outer_locals_len)
-                        .map(|(_, (_, id, _))| *id);
-                    let local_id = if let Some(existing) = existing_in_scope {
-                        existing
-                    } else {
-                        ctx.define_local(name, Type::Any)
-                    };
-                    hoisted_id_set.insert(local_id);
-                }
-            }
-        }
-    }
-
     let outer_strict = ctx.current_strict;
     let is_strict = outer_strict || arrow_body_has_use_strict(&arrow.body);
     ctx.current_strict = is_strict;
@@ -269,46 +375,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     // eagerly invoke the call and break user code.
     let mut body = match &*arrow.body {
         ast::BlockStmtOrExpr::BlockStmt(block) => {
-            let mut var_hoisted = Vec::new();
-            let mut func_decls = Vec::new();
-            let mut exec_stmts = Vec::new();
-            for stmt in &block.stmts {
-                let lowered = crate::lower_decl::lower_body_stmt(ctx, stmt)?;
-                match stmt {
-                    ast::Stmt::Decl(ast::Decl::Fn(_)) => func_decls.extend(lowered),
-                    ast::Stmt::Decl(ast::Decl::Var(var_decl))
-                        if var_decl.kind == ast::VarDeclKind::Var =>
-                    {
-                        var_hoisted.extend(lowered);
-                    }
-                    _ => exec_stmts.extend(lowered),
-                }
-            }
-            var_hoisted.extend(func_decls);
-            var_hoisted.extend(exec_stmts);
-            // Issue #633: if the arrow body has any hoisted FnDecls, run
-            // the prealloc-box analysis so sibling-captured FnDecl ids
-            // and outer let/const ids referenced from inside the hoisted
-            // closure get a pre-allocated box at function entry. Without
-            // this, the hoisted closure literal is built before the
-            // captured let's `Stmt::Let` runs, and the closure's
-            // captures list snapshots the slot's uninitialized value.
-            if !hoisted_id_set.is_empty() {
-                let prealloc = crate::lower_decl::compute_prealloc_for_hoisted_closures(
-                    &var_hoisted,
-                    &hoisted_id_set,
-                );
-                if !prealloc.is_empty() {
-                    let mut with_prealloc: Vec<Stmt> = Vec::with_capacity(var_hoisted.len() + 1);
-                    with_prealloc.push(Stmt::PreallocateBoxes(prealloc));
-                    with_prealloc.extend(var_hoisted);
-                    with_prealloc
-                } else {
-                    var_hoisted
-                }
-            } else {
-                var_hoisted
-            }
+            crate::lower_decl::lower_fn_body_block_stmt(ctx, block)?
         }
         ast::BlockStmtOrExpr::Expr(expr) => {
             let return_expr = lower_expr(ctx, expr)?;
@@ -337,6 +404,10 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         let mut new_body = default_stmts;
         new_body.append(&mut body);
         body = new_body;
+    }
+    if !param_eval_var_stmts.is_empty() {
+        param_eval_var_stmts.append(&mut body);
+        body = param_eval_var_stmts;
     }
 
     ctx.exit_strict_mode();

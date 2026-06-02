@@ -184,10 +184,10 @@ pub(crate) fn lower_expr_assignment(
                     ]));
                 }
                 eprintln!(
-                    "  Warning: Assignment to undeclared variable '{}', creating implicit local",
+                    "  Warning: Assignment to undeclared variable '{}', creating sloppy global",
                     name
                 );
-                let id = ctx.define_local(name, Type::Any);
+                let id = ctx.define_sloppy_implicit_global(name);
                 Ok(Expr::LocalSet(id, value))
             }
         }
