@@ -492,21 +492,22 @@ fn reflect_ordinary_set(target: f64, key: f64, value: f64) -> f64 {
 }
 
 fn target_set(target: f64, key: f64, value: f64) {
-    if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+    let property_key = unsafe { crate::object::js_to_property_key(key) };
+    if unsafe { crate::symbol::js_is_symbol(property_key) } != 0 {
         unsafe {
-            crate::symbol::js_object_set_symbol_property(target, key, value);
+            crate::symbol::js_object_set_symbol_property(target, property_key, value);
         }
         return;
     }
     let obj_addr = extract_pointer(target.to_bits()) as usize;
     if crate::closure::is_closure_ptr(obj_addr) {
-        if let Some(name) = key_to_rust_string(key) {
+        if let Some(name) = key_to_rust_string(property_key) {
             crate::closure::closure_set_dynamic_prop(obj_addr, &name, value);
         }
         return;
     }
     let obj_ptr = obj_addr as *mut crate::ObjectHeader;
-    let key_ptr = extract_pointer(key.to_bits()) as *const crate::StringHeader;
+    let key_ptr = extract_pointer(property_key.to_bits()) as *const crate::StringHeader;
     if obj_ptr.is_null() || key_ptr.is_null() {
         return;
     }
