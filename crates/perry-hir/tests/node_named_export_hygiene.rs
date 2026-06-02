@@ -219,3 +219,27 @@ fn worker_threads_post_message_call_keeps_property_call_shape() {
         "postMessage() should remain a normal call of worker_threads.postMessage: {debug}"
     );
 }
+
+#[test]
+fn global_worker_messaging_constructors_lower_to_worker_threads() {
+    let module = lower_result(
+        r#"
+        const a = new BroadcastChannel("a");
+        const b = new globalThis.BroadcastChannel("b");
+        const c = new MessageChannel();
+        const d = new globalThis.MessageChannel();
+        console.log(a, b, c, d);
+    "#,
+    )
+    .expect("global messaging constructors should lower");
+
+    let debug = format!("{module:#?}");
+    let broadcast_count = debug.matches("method: \"BroadcastChannel\"").count();
+    let message_channel_count = debug.matches("method: \"MessageChannel\"").count();
+    assert!(
+        debug.contains("module: \"worker_threads\"")
+            && broadcast_count >= 2
+            && message_channel_count >= 2,
+        "global messaging constructors should route through worker_threads native constructors: {debug}"
+    );
+}

@@ -181,6 +181,8 @@ fn global_member_constructor_name(
             "URLPattern" => Some("URLPattern"),
             "TextEncoder" => Some("TextEncoder"),
             "TextDecoder" => Some("TextDecoder"),
+            "MessageChannel" => Some("MessageChannel"),
+            "BroadcastChannel" => Some("BroadcastChannel"),
             _ => None,
         };
     }
@@ -196,6 +198,24 @@ fn global_member_constructor_name(
         }
     }
     None
+}
+
+fn is_worker_messaging_constructor_name(name: &str) -> bool {
+    matches!(name, "MessageChannel" | "BroadcastChannel")
+}
+
+fn lower_worker_messaging_new(
+    ctx: &mut LoweringContext,
+    class_name: &str,
+    args: Option<&[ast::ExprOrSpread]>,
+) -> Result<Expr> {
+    Ok(Expr::NativeMethodCall {
+        module: "worker_threads".to_string(),
+        class_name: None,
+        object: None,
+        method: class_name.to_string(),
+        args: lower_optional_args(ctx, args)?,
+    })
 }
 
 fn lower_worker_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
@@ -244,6 +264,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             if let Some(class_name) =
                 global_member_constructor_name(ctx, obj_name, prop_ident.sym.as_ref())
             {
+                if is_worker_messaging_constructor_name(class_name) {
+                    return lower_worker_messaging_new(ctx, class_name, new_expr.args.as_deref());
+                }
                 if let Some(expr) =
                     lower_url_encoding_constructor(ctx, class_name, new_expr.args.as_deref())?
                 {
@@ -447,29 +470,12 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     Some((module_name, _)) => is_worker_threads_module_name(module_name),
                     None => false,
                 };
-            if is_worker_threads_module
-                && matches!(
+            if is_worker_threads_module && is_worker_messaging_constructor_name(&prop_ident.sym) {
+                return lower_worker_messaging_new(
+                    ctx,
                     prop_ident.sym.as_ref(),
-                    "MessageChannel" | "BroadcastChannel"
-                )
-            {
-                let args = new_expr
-                    .args
-                    .as_ref()
-                    .map(|args| {
-                        args.iter()
-                            .map(|a| lower_expr(ctx, &a.expr))
-                            .collect::<Result<Vec<_>>>()
-                    })
-                    .transpose()?
-                    .unwrap_or_default();
-                return Ok(Expr::NativeMethodCall {
-                    module: "worker_threads".to_string(),
-                    class_name: None,
-                    object: None,
-                    method: prop_ident.sym.to_string(),
-                    args,
-                });
+                    new_expr.args.as_deref(),
+                );
             }
             if is_worker_threads_module && prop_ident.sym.as_ref() == "Worker" {
                 return lower_worker_new(ctx, new_expr);
@@ -649,23 +655,13 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 Some(("worker_threads", Some("MessageChannel")))
                     | Some(("worker_threads", Some("BroadcastChannel")))
             ) {
-                let args = new_expr
-                    .args
-                    .as_ref()
-                    .map(|args| {
-                        args.iter()
-                            .map(|a| lower_expr(ctx, &a.expr))
-                            .collect::<Result<Vec<_>>>()
-                    })
-                    .transpose()?
-                    .unwrap_or_default();
-                return Ok(Expr::NativeMethodCall {
-                    module: "worker_threads".to_string(),
-                    class_name: None,
-                    object: None,
-                    method: class_name,
-                    args,
-                });
+                return lower_worker_messaging_new(ctx, &class_name, new_expr.args.as_deref());
+            }
+
+            if is_worker_messaging_constructor_name(&class_name)
+                && ctx.lookup_local(&class_name).is_none()
+            {
+                return lower_worker_messaging_new(ctx, &class_name, new_expr.args.as_deref());
             }
 
             let inspector_session_module = ctx.lookup_native_module(&class_name).and_then(

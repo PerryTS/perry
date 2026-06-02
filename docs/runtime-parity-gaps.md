@@ -32,7 +32,7 @@ Issue #3598 ("Node API compatibility epic: globalThis and Web-compatible Node gl
 
 This branch intentionally does **not** cherry-pick or stack those feature PRs. The generated manifest surfaces on current `origin/main` were audited with `./scripts/regen_api_docs.sh`; `docs/src/api/reference.md` and `docs/api/perry.d.ts` produced no diff, and `crates/perry-api-manifest/src/entries.rs` was not changed. That means this closure PR does not truthfully decrement the generated API/type counts for globals that only exist on the open feature branches.
 
-Residual #3598 work that should remain tracked by child issues includes true WeakRef/FinalizationRegistry weak semantics, BroadcastChannel delivery semantics, deeper FormData/File/Blob/multipart/body parity, full WebAssembly Instance/Memory/Table/Global/streaming execution surface beyond the current host-shim shape, and full TextEncoderStream/TextDecoderStream transform behavior.
+Residual #3598 work that should remain tracked by child issues includes true WeakRef/FinalizationRegistry weak semantics, deeper FormData/File/Blob/multipart/body parity, full WebAssembly Instance/Memory/Table/Global/streaming execution surface beyond the current host-shim shape, and full TextEncoderStream/TextDecoderStream transform behavior.
 
 ## Whole-module gaps
 
@@ -2078,8 +2078,8 @@ The counts above are the last generated parity-gap counts on this branch. They w
 | `AbortSignal.timeout(ms)` | `ffi:js_abort_signal_timeout` |
 | `new TextEncoder()` | `expr:TextEncoderNew` |
 | `new TextDecoder(label?, options?)` | `expr:TextDecoderNew` |
-| `new MessageChannel()` | `rt:js_message_channel_new` |
-| `new BroadcastChannel(name)` | `rt:js_broadcast_channel_new` |
+| `new MessageChannel()` | `stdlib:js_worker_threads_message_channel_new` via global constructor registration |
+| `new BroadcastChannel(name)` | `stdlib:js_worker_threads_broadcast_channel_new` via global constructor registration |
 | `globalThis.WebSocket` / `new WebSocket(url, protocols?)` | `ffi:js_ws_connect` + global constructor shape |
 | `crypto.getRandomValues(typedArray)` | `manifest:crypto.getRandomValues` |
 | `crypto.randomUUID()` | `expr:CryptoRandomUUID` |

@@ -5,6 +5,41 @@ use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader}
 use crate::object::{self, ObjectHeader};
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
+use std::ptr::null_mut;
+use std::sync::atomic::{AtomicPtr, Ordering};
+
+type MessageChannelFactory = extern "C" fn() -> f64;
+type BroadcastChannelFactory = extern "C" fn(f64) -> f64;
+
+static WORKER_THREADS_MESSAGE_CHANNEL_FACTORY: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static WORKER_THREADS_BROADCAST_CHANNEL_FACTORY: AtomicPtr<()> = AtomicPtr::new(null_mut());
+
+#[no_mangle]
+pub extern "C" fn js_register_worker_threads_messaging_constructors(
+    message_channel: MessageChannelFactory,
+    broadcast_channel: BroadcastChannelFactory,
+) {
+    WORKER_THREADS_MESSAGE_CHANNEL_FACTORY.store(message_channel as *mut (), Ordering::Release);
+    WORKER_THREADS_BROADCAST_CHANNEL_FACTORY.store(broadcast_channel as *mut (), Ordering::Release);
+}
+
+fn worker_threads_message_channel_factory() -> Option<MessageChannelFactory> {
+    let ptr = WORKER_THREADS_MESSAGE_CHANNEL_FACTORY.load(Ordering::Acquire);
+    if ptr.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute(ptr) })
+    }
+}
+
+fn worker_threads_broadcast_channel_factory() -> Option<BroadcastChannelFactory> {
+    let ptr = WORKER_THREADS_BROADCAST_CHANNEL_FACTORY.load(Ordering::Acquire);
+    if ptr.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute(ptr) })
+    }
+}
 
 fn js_undefined() -> f64 {
     f64::from_bits(JSValue::undefined().bits())
@@ -143,6 +178,9 @@ fn message_port_object() -> *mut ObjectHeader {
 
 #[no_mangle]
 pub extern "C" fn js_message_channel_new() -> f64 {
+    if let Some(factory) = worker_threads_message_channel_factory() {
+        return factory();
+    }
     let obj = object::js_object_alloc(0, 0);
     set_object_prototype(obj, constructor_prototype("MessageChannel"));
     set_field(obj, "constructor", get_global_constructor("MessageChannel"));
@@ -159,6 +197,9 @@ pub(crate) extern "C" fn js_message_channel_constructor_call_error(
 
 #[no_mangle]
 pub extern "C" fn js_broadcast_channel_new(name: f64) -> f64 {
+    if let Some(factory) = worker_threads_broadcast_channel_factory() {
+        return factory(name);
+    }
     let obj = object::js_object_alloc(0, 0);
     set_object_prototype(obj, constructor_prototype("BroadcastChannel"));
     set_field(
