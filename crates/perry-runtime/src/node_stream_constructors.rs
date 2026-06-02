@@ -800,6 +800,104 @@ pub extern "C" fn js_node_stream_is_writable(stream: f64) -> f64 {
     }
 }
 
+/// #2685: `stream.isDestroyed(s)`. Node returns `null` for non-streams and a
+/// boolean for real stream instances.
+#[no_mangle]
+pub extern "C" fn js_node_stream_is_destroyed(stream: f64) -> f64 {
+    if !is_classic_stream_instance_value(stream) {
+        return f64::from_bits(TAG_NULL);
+    }
+    f64::from_bits(if stream_destroyed(stream) {
+        TAG_TRUE
+    } else {
+        TAG_FALSE
+    })
+}
+
+fn bool_value(value: bool) -> f64 {
+    f64::from_bits(if value { TAG_TRUE } else { TAG_FALSE })
+}
+
+fn stream_value_addr(value: f64) -> Option<usize> {
+    let jsv = JSValue::from_bits(value.to_bits());
+    if !jsv.is_pointer() {
+        return None;
+    }
+    let addr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+    if addr < 0x10000 {
+        None
+    } else {
+        Some(addr)
+    }
+}
+
+/// #2685: `stream._isArrayBufferView(value)` aliases Node's stream-local
+/// helper semantics, where Buffer counts as an ArrayBuffer view.
+#[no_mangle]
+pub extern "C" fn js_node_stream_is_array_buffer_view(value: f64) -> f64 {
+    let Some(addr) = stream_value_addr(value) else {
+        return f64::from_bits(TAG_FALSE);
+    };
+    let registered_view = crate::buffer::is_registered_buffer(addr)
+        && (!crate::buffer::is_any_array_buffer(addr)
+            || crate::buffer::is_uint8array_buffer(addr)
+            || crate::buffer::is_data_view(addr));
+    bool_value(registered_view || crate::typedarray::lookup_typed_array_kind(addr).is_some())
+}
+
+/// #2685: `stream._isUint8Array(value)` returns true for Buffer as well as
+/// Uint8Array instances, matching Node's internal type predicate.
+#[no_mangle]
+pub extern "C" fn js_node_stream_is_uint8_array(value: f64) -> f64 {
+    let Some(addr) = stream_value_addr(value) else {
+        return f64::from_bits(TAG_FALSE);
+    };
+    let registered_uint8 = crate::buffer::is_registered_buffer(addr)
+        && (crate::buffer::is_uint8array_buffer(addr)
+            || (!crate::buffer::is_any_array_buffer(addr) && !crate::buffer::is_data_view(addr)));
+    bool_value(
+        registered_uint8
+            || crate::typedarray::lookup_typed_array_kind(addr)
+                == Some(crate::typedarray::KIND_UINT8),
+    )
+}
+
+fn stream_byte_view_bytes(value: f64) -> Vec<u8> {
+    let Some(addr) = stream_value_addr(value) else {
+        return Vec::new();
+    };
+    if crate::buffer::is_any_array_buffer(addr)
+        && !crate::buffer::is_uint8array_buffer(addr)
+        && !crate::buffer::is_data_view(addr)
+    {
+        return Vec::new();
+    }
+    if crate::buffer::is_registered_buffer(addr) {
+        let data = crate::buffer::js_native_buffer_data_ptr(value);
+        let len = crate::buffer::js_native_buffer_byte_len(value);
+        if data.is_null() || len == 0 {
+            return Vec::new();
+        }
+        return unsafe { std::slice::from_raw_parts(data, len).to_vec() };
+    }
+    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+        let ta = addr as *const crate::typedarray::TypedArrayHeader;
+        return unsafe {
+            crate::typedarray::typed_array_bytes(ta)
+                .map(|bytes| bytes.to_vec())
+                .unwrap_or_default()
+        };
+    }
+    Vec::new()
+}
+
+/// #2685: `stream._uint8ArrayToBuffer(view)` returns a Buffer containing the
+/// bytes visible through the passed ArrayBuffer view.
+#[no_mangle]
+pub extern "C" fn js_node_stream_uint8_array_to_buffer(value: f64) -> f64 {
+    buffer_value_from_bytes(&stream_byte_view_bytes(value))
+}
+
 /// #1537: `stream.getDefaultHighWaterMark(objectMode)` returns the current
 /// platform-default highWaterMark — 65536 for byte streams, 16 for
 /// objectMode (both settable via `setDefaultHighWaterMark`).

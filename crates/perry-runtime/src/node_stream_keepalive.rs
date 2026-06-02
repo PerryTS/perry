@@ -156,6 +156,16 @@ static KEEP_NS_IS_READABLE: extern "C" fn(f64) -> f64 = super::js_node_stream_is
 #[used]
 static KEEP_NS_IS_WRITABLE: extern "C" fn(f64) -> f64 = super::js_node_stream_is_writable;
 #[used]
+static KEEP_NS_IS_ARRAY_BUFFER_VIEW: extern "C" fn(f64) -> f64 =
+    super::js_node_stream_is_array_buffer_view;
+#[used]
+static KEEP_NS_IS_UINT8_ARRAY: extern "C" fn(f64) -> f64 = super::js_node_stream_is_uint8_array;
+#[used]
+static KEEP_NS_IS_DESTROYED: extern "C" fn(f64) -> f64 = super::js_node_stream_is_destroyed;
+#[used]
+static KEEP_NS_UINT8_ARRAY_TO_BUFFER: extern "C" fn(f64) -> f64 =
+    super::js_node_stream_uint8_array_to_buffer;
+#[used]
 static KEEP_NS_GET_DEFAULT_HWM: extern "C" fn(f64) -> f64 = super::js_node_stream_get_default_hwm;
 #[used]
 static KEEP_NS_SET_DEFAULT_HWM: extern "C" fn(f64, f64) -> f64 =

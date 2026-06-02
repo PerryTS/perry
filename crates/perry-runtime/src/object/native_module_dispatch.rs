@@ -1639,16 +1639,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("console", "profile") | ("console", "profileEnd") | ("console", "timeStamp") => {
             f64::from_bits(JSValue::undefined().bits())
         }
-        ("stream", "compose") => crate::node_stream::js_node_stream_compose_args(pack_args()),
-        ("stream", "duplexPair") => crate::node_stream::js_node_stream_duplex_pair(arg(0)),
-        ("stream", "pipeline") => crate::node_stream::js_node_stream_pipeline(pack_args()),
-        // Classic stream constructors are legacy-callable in Node:
-        // `PassThrough()` behaves like `new PassThrough()`.
-        ("stream", "Readable") => crate::node_stream::js_node_stream_readable_new(arg(0)),
-        ("stream", "Writable") => crate::node_stream::js_node_stream_writable_new(arg(0)),
-        ("stream", "Duplex") => crate::node_stream::js_node_stream_duplex_new(arg(0)),
-        ("stream", "Transform") => crate::node_stream::js_node_stream_transform_new(arg(0)),
-        ("stream", "PassThrough") => crate::node_stream::js_node_stream_passthrough_new(arg(0)),
+        ("stream", _) => dispatch_stream_native_module_method(method_name, args_ptr, args_len)
+            .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits())),
         ("readline", "clearLine") => {
             crate::readline_helpers::js_readline_clear_line_args(pack_args())
         }

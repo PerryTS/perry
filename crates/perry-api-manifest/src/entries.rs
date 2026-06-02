@@ -4070,6 +4070,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("stream", "isErrored", false, None),
     method("stream", "isReadable", false, None),
     method("stream", "isWritable", false, None),
+    // #2685: Node exposes these byte-view helpers and destroyed-state
+    // predicate directly from `node:stream`.
+    method("stream", "_isArrayBufferView", false, None),
+    method("stream", "_isUint8Array", false, None),
+    method("stream", "_uint8ArrayToBuffer", false, None),
+    method("stream", "isDestroyed", false, None),
     // #1537: `stream.getDefaultHighWaterMark(objectMode)` /
     // `setDefaultHighWaterMark(objectMode, value)` — the per-mode platform
     // default highWaterMark (65536 byte / 16 objectMode), mutable at runtime.

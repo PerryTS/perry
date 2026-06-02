@@ -1203,6 +1203,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_stream_is_errored", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_is_readable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_is_writable", DOUBLE, &[DOUBLE]);
+    // #2685: top-level stream helpers.
+    module.declare_function("js_node_stream_is_array_buffer_view", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_node_stream_is_uint8_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_node_stream_is_destroyed", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_node_stream_uint8_array_to_buffer", DOUBLE, &[DOUBLE]);
     // #1537: getDefaultHighWaterMark(objectMode) / setDefaultHighWaterMark(objectMode, value).
     module.declare_function("js_node_stream_get_default_hwm", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_set_default_hwm", DOUBLE, &[DOUBLE, DOUBLE]);

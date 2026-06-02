@@ -1383,6 +1383,32 @@ const ASYNC_HOOKS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"triggerAsyncId",
 ];
 
+const STREAM_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"Duplex",
+    b"PassThrough",
+    b"Readable",
+    b"Stream",
+    b"Transform",
+    b"Writable",
+    b"_isArrayBufferView",
+    b"_isUint8Array",
+    b"_uint8ArrayToBuffer",
+    b"addAbortSignal",
+    b"compose",
+    b"default",
+    b"duplexPair",
+    b"finished",
+    b"getDefaultHighWaterMark",
+    b"isDestroyed",
+    b"isDisturbed",
+    b"isErrored",
+    b"isReadable",
+    b"isWritable",
+    b"pipeline",
+    b"promises",
+    b"setDefaultHighWaterMark",
+];
+
 const DNS_DEFAULT_KEYS: &[&[u8]] = &[
     b"lookup",
     b"lookupService",
@@ -2486,6 +2512,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "url.default" => Some(URL_DEFAULT_KEYS),
         "util" => Some(UTIL_NAMESPACE_KEYS),
         "util.default" => Some(UTIL_DEFAULT_KEYS),
+        "stream" => Some(STREAM_NAMESPACE_KEYS),
         "net" => Some(&[
             b"BlockList",
             b"_createServerHandle",
@@ -3320,6 +3347,22 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("util", "debug" | "debuglog" | "inherits") => Some(2),
         ("util", "MIMEParams") => Some(0),
         ("util", "MIMEType") => Some(1),
+        ("stream", "pipeline" | "compose") => Some(0),
+        ("stream", "finished") => Some(3),
+        (
+            "stream",
+            "duplexPair"
+            | "isDisturbed"
+            | "isErrored"
+            | "isReadable"
+            | "isWritable"
+            | "getDefaultHighWaterMark"
+            | "_isArrayBufferView"
+            | "_isUint8Array"
+            | "_uint8ArrayToBuffer"
+            | "isDestroyed",
+        ) => Some(1),
+        ("stream", "setDefaultHighWaterMark" | "addAbortSignal") => Some(2),
         ("net", "createServer" | "Server") => Some(2),
         ("net", "Socket") => Some(1),
         ("net", "BlockList" | "SocketAddress") => Some(0),
@@ -4367,6 +4410,18 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("stream", "compose")
             | ("stream", "duplexPair")
             | ("stream", "pipeline")
+            | ("stream", "finished")
+            | ("stream", "isDisturbed")
+            | ("stream", "isErrored")
+            | ("stream", "isReadable")
+            | ("stream", "isWritable")
+            | ("stream", "getDefaultHighWaterMark")
+            | ("stream", "setDefaultHighWaterMark")
+            | ("stream", "addAbortSignal")
+            | ("stream", "_isArrayBufferView")
+            | ("stream", "_isUint8Array")
+            | ("stream", "_uint8ArrayToBuffer")
+            | ("stream", "isDestroyed")
             | ("stream", "Readable")
             | ("stream", "Writable")
             | ("stream", "Duplex")

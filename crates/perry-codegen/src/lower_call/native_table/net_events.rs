@@ -987,6 +987,43 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // #2685: top-level stream byte-view helpers and destroyed-state predicate.
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "_isArrayBufferView",
+        class_filter: None,
+        runtime: "js_node_stream_is_array_buffer_view",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "_isUint8Array",
+        class_filter: None,
+        runtime: "js_node_stream_is_uint8_array",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "_uint8ArrayToBuffer",
+        class_filter: None,
+        runtime: "js_node_stream_uint8_array_to_buffer",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "isDestroyed",
+        class_filter: None,
+        runtime: "js_node_stream_is_destroyed",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // #1537: `stream.getDefaultHighWaterMark(objectMode)` /
     // `setDefaultHighWaterMark(objectMode, value)` — the per-mode platform
     // default highWaterMark (65536 byte / 16 objectMode), mutable at runtime.
