@@ -1383,6 +1383,22 @@ pub(super) fn try_native_module_methods(
                         if module_name == "worker_threads" && method_name == "workerData" {
                             return Ok(Err(args));
                         }
+                        if module_name.strip_prefix("node:").unwrap_or(module_name) == "vm"
+                            && imported_method.is_none()
+                            && method_name == "Module"
+                        {
+                            let mut exprs = args;
+                            exprs.push(Expr::Call {
+                                callee: Box::new(Expr::ExternFuncRef {
+                                    name: "js_vm_module_call".to_string(),
+                                    param_types: Vec::new(),
+                                    return_type: Type::Any,
+                                }),
+                                args: Vec::new(),
+                                type_args: Vec::new(),
+                            });
+                            return Ok(Ok(Expr::Sequence(exprs)));
+                        }
                         // Unimplemented-API gate (#463 / #525) for the 2-deep
                         // `mod.method()` call form. Without this, perry/* and
                         // other native-module call sites short-circuited past

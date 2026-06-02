@@ -13,6 +13,8 @@ use super::*;
 pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // ========== node:vm ==========
     module.declare_function("js_vm_create_context", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_vm_module_call", DOUBLE, &[]);
+    module.declare_function("js_vm_module_constructor_error", DOUBLE, &[]);
 
     // ========== node:repl ==========
     module.declare_function("js_repl_start", DOUBLE, &[DOUBLE]);

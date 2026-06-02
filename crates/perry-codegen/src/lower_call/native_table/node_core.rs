@@ -235,6 +235,15 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "vm",
         has_receiver: false,
+        method: "Module",
+        class_filter: None,
+        runtime: "js_vm_module_call",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "vm",
+        has_receiver: false,
         method: "SourceTextModule",
         class_filter: None,
         runtime: "js_vm_source_text_module_new",

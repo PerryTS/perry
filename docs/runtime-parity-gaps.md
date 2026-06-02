@@ -132,9 +132,10 @@ Selected highlights (full list in `runtime-parity.md`):
 
 **Total APIs: 32** · Perry covers: import/require namespace shape, callable
 export metadata, `vm.constants`, `process.getBuiltinModule("vm")`, and
-`vm.isContext({})`, cached-data/source-map metadata shape, and
-`SourceTextModule.createCachedData()` · Gap: runtime VM execution,
-contextification, VM modules, context-loader constant behavior, and heap
+`vm.isContext({})`, cached-data/source-map metadata shape,
+`SourceTextModule.createCachedData()`, and gated
+`SourceTextModule`/`SyntheticModule` lifecycle behavior · Gap: runtime VM
+execution, contextification, context-loader constant behavior, and heap
 measurement
 
 Shape coverage is fixture-backed in `test-parity/node-suite/vm`; the generated
@@ -146,11 +147,7 @@ Selected highlights (full list in `runtime-parity.md`):
 - `script.runInContext(contextifiedObject[, options])`
 - `script.runInNewContext([contextObject[, options]])`
 - `script.runInThisContext([options])`
-- `module.error`
-- `module.identifier`
-- `module.namespace`
-- `module.status`
-- `module.evaluate([options])`
+- `vm.measureMemory([options])`
 - … and 16 more
 
 ### node:dgram

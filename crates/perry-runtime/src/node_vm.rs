@@ -250,6 +250,18 @@ fn throw_vm_type(message: &str) -> f64 {
     crate::fs::validate::throw_error_with_code(message, "ERR_INVALID_ARG_TYPE")
 }
 
+fn throw_type_error_no_code(message: &str) -> f64 {
+    let msg = string_ptr(message);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn throw_reference_error_no_code(message: &str) -> f64 {
+    let msg = string_ptr(message);
+    let err = crate::error::js_referenceerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 fn throw_vm_module_cached_data_rejected() -> f64 {
     crate::fs::validate::throw_error_with_code(
         "cachedData buffer was rejected",
@@ -1585,10 +1597,12 @@ pub fn scan_vm_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
 }
 
 pub extern "C" fn js_vm_module_call() -> f64 {
-    crate::fs::validate::throw_error_with_code(
-        "Module is not a constructor",
-        "ERR_ILLEGAL_CONSTRUCTOR",
-    )
+    throw_type_error_no_code("Class constructor Module cannot be invoked without 'new'")
+}
+
+#[no_mangle]
+pub extern "C" fn js_vm_module_constructor_error() -> f64 {
+    throw_type_error_no_code("Module is not a constructor")
 }
 
 pub extern "C" fn js_vm_source_text_module_new(code: f64, options: f64) -> f64 {
@@ -1813,7 +1827,7 @@ pub extern "C" fn js_vm_synthetic_module_set_export(
     };
     let exports = read_exports(module);
     if !exports.iter().any(|export| export.name == name) {
-        return throw_vm_status("SyntheticModule export is not declared");
+        return throw_reference_error_no_code(&format!("Export '{name}' is not defined in module"));
     }
     let Some(namespace) = namespace_for_module(module) else {
         return throw_vm_status("SyntheticModule namespace is unavailable");

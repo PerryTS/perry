@@ -3543,7 +3543,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ) => Some(0),
         // #3127/#3128/#3130/#3284: node:vm no-flag export lengths.
         ("vm", "Script") => Some(1),
-        ("vm", "Module") => Some(0),
+        ("vm", "Module") => Some(1),
         ("vm", "SourceTextModule") => Some(1),
         ("vm", "SyntheticModule") => Some(2),
         ("vm", "createContext" | "measureMemory") => Some(0),

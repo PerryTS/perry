@@ -53,6 +53,11 @@ pub extern "C" fn js_vm_measure_memory(options: f64) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_vm_module_call() -> f64 {
+    perry_runtime::node_vm::js_vm_module_call()
+}
+
+#[no_mangle]
 pub extern "C" fn js_vm_source_text_module_new(code: f64, options: f64) -> f64 {
     perry_runtime::node_vm::js_vm_source_text_module_new(code, options)
 }

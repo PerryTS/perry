@@ -445,6 +445,28 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     args,
                 });
             }
+            if is_vm_module && prop_ident.sym.as_ref() == "Module" {
+                let mut exprs = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                exprs.push(Expr::Call {
+                    callee: Box::new(Expr::ExternFuncRef {
+                        name: "js_vm_module_constructor_error".to_string(),
+                        param_types: Vec::new(),
+                        return_type: Type::Any,
+                    }),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                });
+                return Ok(Expr::Sequence(exprs));
+            }
             if obj_name == "WebAssembly" && prop_ident.sym.as_ref() == "Module" {
                 let args = new_expr
                     .args
