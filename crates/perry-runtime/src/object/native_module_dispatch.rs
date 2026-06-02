@@ -261,6 +261,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         "querystring.default" => ("querystring", false),
         "url.default" => ("url", false),
         "util.default" => ("util", false),
+        "vm.default" => ("vm", false),
         // #3987-adjacent: `process.getBuiltinModule("punycode")` returns the
         // CJS-default namespace (`punycode.default`); without this alias its
         // method calls dispatched as `("punycode.default", "decode")` — which
@@ -738,7 +739,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
             let undefined = f64::from_bits(JSValue::undefined().bits());
             crypto_random_fill_sync_dispatch(arg(0), undefined, undefined)
         }
-
+        // node:vm (createContext via #4050; rest #4079/#4087)
+        ("vm", m) => crate::node_vm::dispatch_vm_method(m, arg(0), arg(1), arg(2)),
         // ── tty module ──
         ("tty", "isatty") => crate::tty::js_tty_isatty(arg(0)),
         ("tty", "ReadStream") => crate::tty::js_tty_read_stream_new(arg(0)),

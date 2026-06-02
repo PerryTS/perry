@@ -246,9 +246,8 @@ fn supported_builtin_module_name(name: &str) -> Option<&str> {
         | "http" | "http2" | "https" | "net" | "os" | "path" | "perf_hooks" | "process"
         | "punycode" | "querystring" | "readline" | "readline/promises" | "stream"
         | "stream/promises" | "string_decoder" | "sys" | "test" | "test/reporters" | "timers"
-        | "timers/promises" | "tty" | "url" | "util" | "util/types" | "worker_threads" | "zlib" => {
-            Some(name)
-        }
+        | "timers/promises" | "tty" | "url" | "util" | "util/types" | "vm" | "worker_threads"
+        | "zlib" => Some(name),
         _ => None,
     }
 }

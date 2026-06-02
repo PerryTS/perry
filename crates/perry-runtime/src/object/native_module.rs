@@ -2098,8 +2098,6 @@ const EVENTS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"setMaxListeners",
 ];
 
-const VM_NAMESPACE_KEYS: &[&[u8]] = &[b"createContext"];
-
 const REPL_NAMESPACE_KEYS: &[&[u8]] = &[
     b"REPLServer",
     b"REPL_MODE_SLOPPY",
@@ -2132,6 +2130,21 @@ const WORKER_THREADS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"threadName",
     b"workerData",
 ];
+
+const VM_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"Script",
+    b"createContext",
+    b"createScript",
+    b"runInContext",
+    b"runInNewContext",
+    b"runInThisContext",
+    b"isContext",
+    b"compileFunction",
+    b"measureMemory",
+    b"constants",
+];
+
+const VM_CONSTANTS_KEYS: &[&[u8]] = &[b"USE_MAIN_CONTEXT_DEFAULT_LOADER", b"DONT_CONTEXTIFY"];
 
 // Linux-only open() flags: Node only enumerates these on platforms whose libc
 // defines them (e.g. `O_DIRECT`/`O_NOATIME` are absent on macOS), so gate the
@@ -2598,9 +2611,10 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"isCryptoKey",
         ]),
         "events" => Some(EVENTS_NAMESPACE_KEYS),
-        "vm" => Some(VM_NAMESPACE_KEYS),
         "repl" | "repl.default" => Some(REPL_NAMESPACE_KEYS),
         "worker_threads" => Some(WORKER_THREADS_NAMESPACE_KEYS),
+        "vm" => Some(VM_NAMESPACE_KEYS),
+        "vm.constants" => Some(VM_CONSTANTS_KEYS),
         "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
         "readline/promises" => Some(&[b"Interface", b"Readline", b"createInterface"]),
         "zlib" => Some(&[b"codes"]),
@@ -2779,6 +2793,8 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "path.win32"
             | "readline/promises"
             | "timers/promises"
+            | "vm"
+            | "vm.constants"
             | "crypto.webcrypto"
             | "crypto.subtle"
     )
@@ -3315,6 +3331,12 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
             | "cachedDataVersionTag"
             | "GCProfiler",
         ) => Some(0),
+        // #3127/#3128/#3130/#3284: node:vm no-flag export lengths.
+        ("vm", "Script") => Some(1),
+        ("vm", "createContext" | "measureMemory") => Some(0),
+        ("vm", "createScript" | "runInThisContext" | "compileFunction") => Some(2),
+        ("vm", "runInContext" | "runInNewContext") => Some(3),
+        ("vm", "isContext") => Some(1),
         ("net", "_normalizeArgs") => Some(1),
         ("net", "_createServerHandle") => Some(5),
         ("domain", "Domain" | "createDomain" | "create") => Some(0),
@@ -4250,7 +4272,6 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("process", "resourceUsage")
             | ("process", "getActiveResourcesInfo")
             | ("process", "hrtime")
-            | ("vm", "createContext")
             | ("worker_threads", "getEnvironmentData")
             | ("worker_threads", "setEnvironmentData")
             | ("worker_threads", "markAsUntransferable")
@@ -4934,6 +4955,16 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("v8", "queryObjects")
             | ("v8", "startCpuProfile")
             | ("v8", "writeHeapSnapshot")
+            // #3127/#3128/#3130/#3284: no-flag node:vm export shape.
+            | ("vm", "Script")
+            | ("vm", "createContext")
+            | ("vm", "createScript")
+            | ("vm", "runInContext")
+            | ("vm", "runInNewContext")
+            | ("vm", "runInThisContext")
+            | ("vm", "isContext")
+            | ("vm", "compileFunction")
+            | ("vm", "measureMemory")
             // #3679: v8.startupSnapshot / v8.promiseHooks namespace methods read
             // as callable values (`typeof v8.startupSnapshot.isBuildingSnapshot
             // === "function"`). Invocation routes through
@@ -6378,6 +6409,20 @@ pub(crate) unsafe fn get_native_module_constant(
         "test" => crate::node_test::property(property),
         "wasi" => match property {
             "default" => Some(native_namespace_or_create("wasi", namespace_obj)),
+            _ => None,
+        },
+        "vm" => match property {
+            "default" => Some(native_namespace_or_create("vm", namespace_obj)),
+            "constants" => Some(create_sub_namespace("vm.constants")),
+            _ => None,
+        },
+        "vm.constants" => match property {
+            "USE_MAIN_CONTEXT_DEFAULT_LOADER" => Some(crate::symbol::js_symbol_for(str_val(
+                "vm_dynamic_import_main_context_default",
+            ))),
+            "DONT_CONTEXTIFY" => Some(crate::symbol::js_symbol_for(str_val(
+                "vm_context_no_contextify",
+            ))),
             _ => None,
         },
         "stream" => match property {

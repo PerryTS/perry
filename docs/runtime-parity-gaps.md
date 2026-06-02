@@ -130,7 +130,14 @@ Selected highlights (full list in `runtime-parity.md`):
 
 ### node:vm
 
-**Total APIs: 32** · Perry covers: 0 · Gap: 32
+**Total APIs: 32** · Perry covers: import/require namespace shape, callable
+export metadata, `vm.constants`, `process.getBuiltinModule("vm")`, and
+`vm.isContext({})` · Gap: runtime VM execution, contextification, VM modules,
+context-loader constant behavior, cached data, source-map metadata, and heap
+measurement
+
+Shape coverage is fixture-backed in `test-parity/node-suite/vm`; the generated
+`test_parity_vm` inventory now skip-lists only the still-open behavior leaves.
 
 Selected highlights (full list in `runtime-parity.md`):
 

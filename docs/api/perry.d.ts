@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1788 entries across 106 modules
+// Coverage: 1798 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3757,7 +3757,28 @@ declare module "validator" {
 
 declare module "vm" {
   /** stdlib */
+  export class Script { [key: string]: any; }
+  /** stdlib */
+  export const constants: any;
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function compileFunction(...args: any[]): any;
+  /** stdlib */
   export function createContext(p0: any): any;
+  /** stdlib */
+  export function createScript(...args: any[]): any;
+  /** stdlib */
+  export function isContext(...args: any[]): any;
+  /** stdlib */
+  export function measureMemory(...args: any[]): any;
+  /** stdlib */
+  export function runInContext(...args: any[]): any;
+  /** stdlib */
+  export function runInNewContext(...args: any[]): any;
+  /** stdlib */
+  export function runInThisContext(...args: any[]): any;
 }
 
 declare module "wasi" {

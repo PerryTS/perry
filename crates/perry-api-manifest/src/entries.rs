@@ -4353,6 +4353,23 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("v8", "onAfter", true, Some("promiseHooks")),
     method("v8", "onSettled", true, Some("promiseHooks")),
     method("v8", "createHook", true, Some("promiseHooks")),
+    // --- node:vm scaffold (#3127/#3128/#3130/#3284/#3321/#3323) ---
+    // Perry exposes the no-flag Node import/require shape here: Script,
+    // callable top-level helpers, and vm.constants. VM module classes
+    // (Module/SourceTextModule/SyntheticModule) stay out of the default
+    // public manifest because Node only exposes them with
+    // --experimental-vm-modules.
+    class("vm", "Script"),
+    // createContext is registered above via method_sig (#4050).
+    method("vm", "createScript", false, None),
+    method("vm", "runInContext", false, None),
+    method("vm", "runInNewContext", false, None),
+    method("vm", "runInThisContext", false, None),
+    method("vm", "isContext", false, None),
+    method("vm", "compileFunction", false, None),
+    method("vm", "measureMemory", false, None),
+    property("vm", "constants"),
+    property("vm", "default"),
     // --- buffer (module-level helpers in addition to the Buffer class
     //     already registered above) ---
     internal_method("buffer", "alloc", false, None),
