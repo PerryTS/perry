@@ -34,6 +34,11 @@ pub unsafe extern "C" fn js_webcrypto_sign(
                 "Unable to use this key to sign",
             );
         }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_SIGN, "Unable to use this key to sign")
+        {
+            return reject_with_dom_exception(name, message);
+        }
         match compute_hmac(mat.hash, &key_bytes, &data_bytes) {
             Some(s) => s,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
@@ -44,6 +49,11 @@ pub unsafe extern "C" fn js_webcrypto_sign(
                 "InvalidAccessError",
                 "Unable to use this key to sign",
             );
+        }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_SIGN, "Unable to use this key to sign")
+        {
+            return reject_with_dom_exception(name, message);
         }
         let signing_key = match P256EcdsaSigningKey::from_slice(&key_bytes) {
             Ok(k) => k,
@@ -57,6 +67,11 @@ pub unsafe extern "C" fn js_webcrypto_sign(
                 "InvalidAccessError",
                 "Unable to use this key to sign",
             );
+        }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_SIGN, "Unable to use this key to sign")
+        {
+            return reject_with_dom_exception(name, message);
         }
         let secret: [u8; 32] = match key_bytes.as_slice().try_into() {
             Ok(s) => s,
@@ -72,6 +87,11 @@ pub unsafe extern "C" fn js_webcrypto_sign(
                 "Unable to use this key to sign",
             );
         }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_SIGN, "Unable to use this key to sign")
+        {
+            return reject_with_dom_exception(name, message);
+        }
         let private_key = match RsaPrivateKey::from_pkcs8_der(&key_bytes) {
             Ok(k) => k,
             Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
@@ -86,6 +106,11 @@ pub unsafe extern "C" fn js_webcrypto_sign(
                 "InvalidAccessError",
                 "Unable to use this key to sign",
             );
+        }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_SIGN, "Unable to use this key to sign")
+        {
+            return reject_with_dom_exception(name, message);
         }
         let salt_len = object_field_bits(algo_bits.to_bits(), b"saltLength")
             .and_then(number_from_bits)
@@ -136,6 +161,11 @@ pub unsafe extern "C" fn js_webcrypto_verify(
                 "Unable to use this key to verify",
             );
         }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_VERIFY, "Unable to use this key to verify")
+        {
+            return reject_with_dom_exception(name, message);
+        }
         let expected_sig = match compute_hmac(mat.hash, &key_bytes, &data_bytes) {
             Some(s) => s,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
@@ -147,6 +177,11 @@ pub unsafe extern "C" fn js_webcrypto_verify(
                 "InvalidAccessError",
                 "Unable to use this key to verify",
             );
+        }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_VERIFY, "Unable to use this key to verify")
+        {
+            return reject_with_dom_exception(name, message);
         }
         let verifying_key = match P256EcdsaVerifyingKey::from_sec1_bytes(&key_bytes) {
             Ok(k) => k,
@@ -163,6 +198,11 @@ pub unsafe extern "C" fn js_webcrypto_verify(
                 "InvalidAccessError",
                 "Unable to use this key to verify",
             );
+        }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_VERIFY, "Unable to use this key to verify")
+        {
+            return reject_with_dom_exception(name, message);
         }
         let public: [u8; 32] = match key_bytes.as_slice().try_into() {
             Ok(p) => p,
@@ -185,6 +225,11 @@ pub unsafe extern "C" fn js_webcrypto_verify(
                 "Unable to use this key to verify",
             );
         }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_VERIFY, "Unable to use this key to verify")
+        {
+            return reject_with_dom_exception(name, message);
+        }
         let public_key = match RsaPublicKey::from_public_key_der(&key_bytes) {
             Ok(k) => k,
             Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
@@ -196,6 +241,11 @@ pub unsafe extern "C" fn js_webcrypto_verify(
                 "InvalidAccessError",
                 "Unable to use this key to verify",
             );
+        }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_VERIFY, "Unable to use this key to verify")
+        {
+            return reject_with_dom_exception(name, message);
         }
         let salt_len = object_field_bits(algo_bits.to_bits(), b"saltLength")
             .and_then(number_from_bits)
