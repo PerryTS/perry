@@ -415,10 +415,6 @@ pub enum Expr {
     // This expression
     This,
 
-    // `new.target` meta-property. Ordinary function bodies read this from
-    // the runtime constructor-call slot; arrows may capture it lexically.
-    NewTarget,
-
     // Super constructor call: super(args)
     SuperCall(Vec<Expr>),
 
