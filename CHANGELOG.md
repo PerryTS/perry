@@ -2,6 +2,10 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1092 — fix(error): Error.prototype.toString honors instance name/message overrides
+
+`err.toString()` ignored instance-assigned `name`/`message` overrides and used the baked `ErrorHeader` values: `const e = new Error("orig"); e.name = "Custom"; e.message = "new"; e.toString()` returned `"Error: orig"` where Node returns `"Custom: new"`. The override was already stored (reading `e.name`/`e.message` returned the new values via the per-error side table), but `js_error_to_string` read only the baked `js_error_get_name`/`js_error_get_message`. It now consults `error_user_prop(error, "name"/"message")` first (ToString-coercing the override via `js_jsvalue_to_string`), falling back to the baked getters — matching `Error.prototype.toString` reading the overridable `name`/`message` own properties. Constructor-set names (subclasses), `String(err)`, and template-literal coercion are unaffected. Advances the Error conformance issue (#4032).
+
 ## v0.5.1091 — fix(runtime): ArrayBuffer.prototype resizable / maxByteLength getters
 
 `new ArrayBuffer(n).resizable` and `.maxByteLength` returned `undefined` instead of Node's `false` and `n`. Perry has no resizable ArrayBuffers, so a plain ArrayBuffer is always non-resizable (`resizable === false`) and its `maxByteLength` equals its `byteLength`. Added both getters to the registered-buffer property path in `object/field_get_set.rs`, scoped to a plain ArrayBuffer (excluding `DataView`/`SharedArrayBuffer`/typed-array views, which return `undefined` for these in Node). Advances the ArrayBuffer/DataView conformance issue (#4033).

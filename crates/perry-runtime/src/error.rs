@@ -613,8 +613,18 @@ unsafe fn read_string_header_owned(ptr: *const StringHeader) -> String {
 #[no_mangle]
 pub extern "C" fn js_error_to_string(error: *mut ErrorHeader) -> *mut StringHeader {
     unsafe {
-        let name = read_string_header_owned(js_error_get_name(error));
-        let message = read_string_header_owned(js_error_get_message(error));
+        // Instance overrides (`err.name = ...` / `err.message = ...`) recorded
+        // in the per-error side table take precedence over the baked
+        // ErrorHeader values — Node's `Error.prototype.toString` reads the
+        // overridable `name`/`message` own properties, ToString-coercing them.
+        let name = match crate::node_submodules::error_user_prop(error as usize, "name") {
+            Some(v) => read_string_header_owned(crate::value::js_jsvalue_to_string(v)),
+            None => read_string_header_owned(js_error_get_name(error)),
+        };
+        let message = match crate::node_submodules::error_user_prop(error as usize, "message") {
+            Some(v) => read_string_header_owned(crate::value::js_jsvalue_to_string(v)),
+            None => read_string_header_owned(js_error_get_message(error)),
+        };
         let result = if name.is_empty() {
             message
         } else if message.is_empty() {
