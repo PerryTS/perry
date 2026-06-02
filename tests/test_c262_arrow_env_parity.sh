@@ -88,6 +88,17 @@ var probe1, probe2;
 console.log(probe1() + ":" + probe2());
 JS
 
+cat >"$TMPDIR/scope-param-rest-elem-var-close.js" <<'JS'
+var x = "outside";
+var probeParam, probeBody;
+((
+    ...[_ = (eval("var x = \"inside\";"), probeParam = function() { return x; })]
+  ) => {
+    probeBody = function() { return x; };
+})();
+console.log(probeParam() + ":" + probeBody());
+JS
+
 cat >"$TMPDIR/scope-paramsbody-var-open.js" <<'JS'
 var x = "outside";
 var probeParams, probeBody;
@@ -104,6 +115,7 @@ run_case lexical-super-call-from-within-constructor true:2
 run_case non-strict 1
 run_case scope-body-lex-distinct ok
 run_case scope-param-rest-elem-var-open inside:inside
+run_case scope-param-rest-elem-var-close inside:inside
 run_case scope-paramsbody-var-open outside:inside
 
 echo "PASS: c262 arrow environment parity"
