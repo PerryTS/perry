@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2527 entries across 106 modules.
+Total: 2564 entries across 108 modules.
 
 ## Modules
 
@@ -44,6 +44,8 @@ Total: 2527 entries across 106 modules.
 - [`http`](#http)
 - [`http2`](#http2)
 - [`https`](#https)
+- [`inspector`](#inspector)
+- [`inspector/promises`](#inspector-promises)
 - [`ioredis`](#ioredis)
 - [`iroh`](#iroh)
 - [`jsonwebtoken`](#jsonwebtoken)
@@ -1397,6 +1399,7 @@ Total: 2527 entries across 106 modules.
 - `Server`
 - `ServerResponse`
 - `ServerResponse`
+- `WebSocket`
 
 ### Methods
 
@@ -1457,6 +1460,7 @@ Total: 2527 entries across 106 modules.
 - `__set_statusCode` — instance *(class: `ServerResponse`)*
 - `__set_statusMessage` — instance *(class: `ServerResponse`)*
 - `__set_timeout` — instance *(class: `HttpServer`)*
+- `_connectionListener` — module
 - `addListener` — instance *(class: `HttpServer`)*
 - `addListener` — instance *(class: `IncomingMessage`)*
 - `addListener` — instance *(class: `ServerResponse`)*
@@ -1607,6 +1611,51 @@ Total: 2527 entries across 106 modules.
 ### Properties
 
 - `globalAgent`
+
+## `inspector`
+
+### Classes
+
+- `Session`
+
+### Methods
+
+- `Session` — module
+- `close` — module
+- `connect` — instance *(class: `Session`)*
+- `connectToMainThread` — instance *(class: `Session`)*
+- `disconnect` — instance *(class: `Session`)*
+- `on` — instance *(class: `Session`)*
+- `once` — instance *(class: `Session`)*
+- `open` — module
+- `post` — instance *(class: `Session`)*
+- `url` — module
+- `waitForDebugger` — module
+
+### Properties
+
+- `console`
+- `default`
+
+## `inspector/promises`
+
+### Classes
+
+- `Session`
+
+### Methods
+
+- `Session` — module
+- `connect` — instance *(class: `Session`)*
+- `connectToMainThread` — instance *(class: `Session`)*
+- `disconnect` — instance *(class: `Session`)*
+- `on` — instance *(class: `Session`)*
+- `once` — instance *(class: `Session`)*
+- `post` — instance *(class: `Session`)*
+
+### Properties
+
+- `default`
 
 ## `ioredis`
 
@@ -2521,15 +2570,27 @@ Total: 2527 entries across 106 modules.
 
 ### Properties
 
+- `allowedNodeEnvironmentFlags`
 - `arch`
 - `argv`
+- `argv0`
+- `config`
+- `debugPort`
 - `env`
+- `execArgv`
+- `execPath`
+- `features`
+- `finalization`
+- `moduleLoadList`
 - `pid`
 - `platform`
 - `ppid`
+- `release`
+- `report`
 - `stderr`
 - `stdin`
 - `stdout`
+- `title`
 - `version`
 - `versions`
 

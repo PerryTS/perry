@@ -61,6 +61,7 @@ pub mod native_handle;
 pub mod navigator;
 pub mod net_validate;
 pub mod node_http2_constants;
+pub mod node_inspector;
 pub mod node_stream;
 pub mod node_submodules;
 pub mod node_test;

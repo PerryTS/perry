@@ -660,11 +660,13 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             ) -> f64;
         }
 
-        let is_http_server_method =
-            matches!(
-                method_name,
-                "listen" | "close" | "address" | "on" | "addListener"
-            ) || matches!(method_name, "closeAllConnections" | "closeIdleConnections");
+        let is_http_server_method = matches!(
+            method_name,
+            "listen" | "close" | "address" | "on" | "addListener" | "setTimeout"
+        ) || matches!(
+            method_name,
+            "closeAllConnections" | "closeIdleConnections" | "@@__perry_wk_asyncDispose"
+        );
         if is_http_server_method && unsafe { js_ext_http_server_is_handle(handle) } != 0 {
             return unsafe {
                 js_ext_http_server_dispatch_method(
@@ -1579,6 +1581,7 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "on"
                 | "addListener"
                 | "setTimeout"
+                | "@@__perry_wk_asyncDispose"
         ) && unsafe { js_ext_http_server_is_handle(handle) } != 0
         {
             return unsafe {

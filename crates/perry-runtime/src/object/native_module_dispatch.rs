@@ -219,6 +219,11 @@ pub extern "C" fn js_http_setter_noop(_value: f64) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+#[no_mangle]
+pub extern "C" fn js_http_connection_listener_noop(_socket: f64) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 /// Dispatch a method call on a native module namespace object.
 /// Extracts the module name from the object and dispatches to the appropriate
 /// runtime function based on (module_name, method_name).
@@ -465,6 +470,18 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::async_hooks::js_async_hooks_execution_async_resource()
         }
 
+        ("inspector", "open") => {
+            crate::node_inspector::js_node_inspector_open(arg(0), arg(1), arg(2))
+        }
+        ("inspector", "close") => crate::node_inspector::js_node_inspector_close(),
+        ("inspector", "url") => crate::node_inspector::js_node_inspector_url(),
+        ("inspector", "waitForDebugger") => {
+            crate::node_inspector::js_node_inspector_wait_for_debugger()
+        }
+        ("inspector", "Session") => crate::node_inspector::js_node_inspector_session_new(),
+        ("inspector/promises", "Session") => {
+            crate::node_inspector::js_node_inspector_promises_session_new()
+        }
         // ── Buffer constructor static API ──
         // `class MyBuffer extends Buffer {}; MyBuffer.from(...)` reaches this
         // path through js_class_static_method_call's native-superclass
@@ -655,6 +672,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("http", "setMaxIdleHTTPParsers") | ("http", "setGlobalProxyFromEnv") => {
             js_http_setter_noop(arg(0))
         }
+        ("http", "_connectionListener") => js_http_connection_listener_noop(arg(0)),
         ("events", "init") => f64::from_bits(crate::value::TAG_UNDEFINED),
         ("events", "EventEmitterAsyncResource") => {
             let message =

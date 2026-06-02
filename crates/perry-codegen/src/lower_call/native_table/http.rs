@@ -98,6 +98,15 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    NativeModSig {
+        module: "http",
+        has_receiver: false,
+        method: "_connectionListener",
+        class_filter: None,
+        runtime: "js_http_connection_listener_noop",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ClientRequest instance methods (`req.on/.end/.write/.setHeader/.setTimeout`).
     // Shared between `http` and `https` factories — both register the
     // returned binding under module `"http"` in the HIR class table.
