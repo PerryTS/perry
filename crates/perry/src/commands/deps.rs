@@ -221,6 +221,7 @@ impl DependencyResolver {
 fn is_node_builtin(name: &str) -> bool {
     let builtins = [
         "assert",
+        "async_hooks",
         "buffer",
         "child_process",
         "cluster",
@@ -228,12 +229,15 @@ fn is_node_builtin(name: &str) -> bool {
         "constants",
         "crypto",
         "dgram",
+        "diagnostics_channel",
         "dns",
         "domain",
         "events",
         "fs",
         "http",
+        "http2",
         "https",
+        "inspector",
         "module",
         "net",
         "os",
@@ -244,16 +248,21 @@ fn is_node_builtin(name: &str) -> bool {
         "querystring",
         "readline",
         "repl",
+        "sea",
+        "sqlite",
         "stream",
         "string_decoder",
         "sys",
+        "test",
         "timers",
         "tls",
+        "trace_events",
         "tty",
         "url",
         "util",
         "v8",
         "vm",
+        "wasi",
         "worker_threads",
         "zlib",
     ];
@@ -296,15 +305,18 @@ fn is_supported_node_builtin(name: &str) -> bool {
     matches!(
         base,
         // Real implementations
-        "crypto" | "events" | "http" | "https" | "net" | "readline"
+        "crypto" | "events" | "http" | "http2" | "https" | "net" | "readline"
         | "stream" | "streams" | "worker_threads" | "zlib"
         | "fs" | "path" | "os" | "util" | "process" | "buffer"
         | "console" | "perf_hooks" | "timers" | "url" | "querystring"
-        | "tls" | "tty" | "assert"
+        | "tls" | "tty" | "assert" | "diagnostics_channel" | "sqlite"
         // Stubs (compile + import but functionality limited)
         | "cluster" | "child_process" | "dgram" | "dns" | "domain"
         | "repl" | "punycode" | "string_decoder" | "sys" | "v8" | "vm"
-        | "constants" | "module"
+        | "constants" | "module" | "async_hooks" | "test" | "trace_events"
+        | "wasi" // NOTE: `inspector`/`inspector/promises` and `sea` are intentionally
+                 // absent — `perry compile` rejects them, so `perry check` must surface
+                 // the U006 diagnostic rather than report a clean build (#3744).
     )
 }
 
@@ -612,4 +624,107 @@ pub fn compatibility_to_diagnostics(packages: &[PackageCompatibility]) -> Diagno
     }
 
     diagnostics
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #3744: `perry check` must not report a clean build for modern Node
+    /// builtins that `perry compile` rejects. The builtin table feeds the
+    /// U006 diagnostic only when a name is recognized as a Node builtin AND
+    /// is not in the supported allowlist — so an unsupported builtin missing
+    /// from `is_node_builtin` silently passes check.
+    #[test]
+    fn modern_unsupported_builtins_are_flagged() {
+        // Compile-rejected modules: recognized as builtins, NOT supported, so
+        // `check_node_builtin_imports` surfaces the diagnostic.
+        for m in ["sea", "inspector", "node:inspector/promises", "node:sea"] {
+            assert!(is_node_builtin(m), "{m} should be a recognized builtin");
+            assert!(
+                !is_supported_node_builtin(m),
+                "{m} is not compile-supported and must be flagged by check"
+            );
+        }
+    }
+
+    /// Modern builtins that `perry compile` accepts must be in BOTH tables so
+    /// check neither false-negatives (silently passes an unsupported import)
+    /// nor false-positives (flags a working import).
+    #[test]
+    fn modern_supported_builtins_are_recognized_and_allowed() {
+        for m in [
+            "async_hooks",
+            "diagnostics_channel",
+            "http2",
+            "sqlite",
+            "test",
+            "node:test/reporters",
+            "trace_events",
+            "wasi",
+        ] {
+            assert!(is_node_builtin(m), "{m} should be a recognized builtin");
+            assert!(
+                is_supported_node_builtin(m),
+                "{m} compiles and must not be flagged by check"
+            );
+        }
+    }
+
+    /// Every compile-supported builtin must also be a recognized builtin —
+    /// otherwise the allowlist arm is dead (the gate short-circuits on
+    /// `is_node_builtin` first).
+    #[test]
+    fn supported_implies_recognized() {
+        for base in [
+            "crypto",
+            "events",
+            "http",
+            "http2",
+            "https",
+            "net",
+            "readline",
+            "stream",
+            "worker_threads",
+            "zlib",
+            "fs",
+            "path",
+            "os",
+            "util",
+            "process",
+            "buffer",
+            "console",
+            "perf_hooks",
+            "timers",
+            "url",
+            "querystring",
+            "tls",
+            "tty",
+            "assert",
+            "diagnostics_channel",
+            "sqlite",
+            "cluster",
+            "child_process",
+            "dgram",
+            "dns",
+            "domain",
+            "repl",
+            "punycode",
+            "string_decoder",
+            "sys",
+            "v8",
+            "vm",
+            "constants",
+            "module",
+            "async_hooks",
+            "test",
+            "trace_events",
+            "wasi",
+        ] {
+            assert!(
+                is_node_builtin(base),
+                "{base} is in the supported allowlist but not the builtin table"
+            );
+        }
+    }
 }
