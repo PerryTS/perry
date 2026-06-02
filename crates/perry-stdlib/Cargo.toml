@@ -344,7 +344,7 @@ hmac = { version = "0.13", optional = true }
 bcrypt = { version = "0.17", optional = true }
 jsonwebtoken = { workspace = true, optional = true }
 p256 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
-rsa = { version = "0.9", optional = true, default-features = false, features = ["pem", "sha2"] }
+rsa = { version = "0.9", optional = true, default-features = false, features = ["pem", "pkcs5", "sha2"] }
 # #1367 node:crypto X509Certificate — DER/PEM cert parsing (RustCrypto, reuses
 # the der/spki/const-oid already in the lock).
 x509-cert = { version = "0.2", optional = true, default-features = false, features = ["pem"] }

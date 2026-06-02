@@ -395,13 +395,23 @@ pub unsafe extern "C" fn js_crypto_generate_key_pair_sync_rsa(
     };
     let public_key = RsaPublicKey::from(&private_key);
     let public_pem = rsa_public_key_to_pem(&public_key).unwrap_or_default();
-    let private_pem = private_key
-        .to_pkcs8_pem(Default::default())
-        .map(|pem| pem.to_string())
-        .unwrap_or_default();
     let options = options_bits.to_bits();
     let public_as_jwk = keygen_encoding_wants_jwk(options, b"publicKeyEncoding");
     let private_as_jwk = keygen_encoding_wants_jwk(options, b"privateKeyEncoding");
+    let private_passphrase = keygen_rsa_private_encryption_passphrase(options);
+    let private_pem = if private_as_jwk {
+        String::new()
+    } else if let Some(passphrase) = private_passphrase.as_deref() {
+        private_key
+            .to_pkcs8_encrypted_pem(&mut rng, passphrase, Default::default())
+            .map(|pem| pem.to_string())
+            .unwrap_or_default()
+    } else {
+        private_key
+            .to_pkcs8_pem(Default::default())
+            .map(|pem| pem.to_string())
+            .unwrap_or_default()
+    };
 
     let obj = js_object_alloc(0, 2);
 
