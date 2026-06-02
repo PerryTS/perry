@@ -16,6 +16,57 @@ use crate::lower_patterns::lower_assign_target_to_expr;
 
 use super::{lower_expr, lower_expr_assignment, with_set_fallback_for_ident, LoweringContext};
 
+fn assignment_target_inferred_name(target: &ast::AssignTarget) -> Option<String> {
+    match target {
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) => {
+            let name = ident.id.sym.to_string();
+            (!name.is_empty()).then_some(name)
+        }
+        _ => None,
+    }
+}
+
+fn anonymous_class_without_own_static_name(class: &ast::ClassExpr) -> bool {
+    if class.ident.is_some() {
+        return false;
+    }
+    !class.class.body.iter().any(|member| match member {
+        ast::ClassMember::Method(method) if method.is_static => {
+            matches!(&method.key, ast::PropName::Ident(ident) if ident.sym.as_ref() == "name")
+                || matches!(&method.key, ast::PropName::Str(s) if s.value.as_str() == Some("name"))
+        }
+        ast::ClassMember::ClassProp(prop) if prop.is_static => {
+            matches!(&prop.key, ast::PropName::Ident(ident) if ident.sym.as_ref() == "name")
+                || matches!(&prop.key, ast::PropName::Str(s) if s.value.as_str() == Some("name"))
+        }
+        _ => false,
+    })
+}
+
+fn rhs_accepts_assignment_name(expr: &ast::Expr) -> bool {
+    match expr {
+        ast::Expr::Arrow(_) => true,
+        ast::Expr::Fn(fn_expr) => fn_expr.ident.is_none(),
+        ast::Expr::Class(class_expr) => anonymous_class_without_own_static_name(class_expr),
+        ast::Expr::Paren(paren) => rhs_accepts_assignment_name(&paren.expr),
+        _ => false,
+    }
+}
+
+fn lower_rhs_with_assignment_name(
+    ctx: &mut LoweringContext,
+    rhs: &ast::Expr,
+    name: Option<String>,
+) -> Result<Expr> {
+    let Some(name) = name.filter(|_| rhs_accepts_assignment_name(rhs)) else {
+        return lower_expr(ctx, rhs);
+    };
+    let old_name = ctx.assignment_inferred_name.replace(name);
+    let result = lower_expr(ctx, rhs);
+    ctx.assignment_inferred_name = old_name;
+    result
+}
+
 fn throw_type_error_const_assignment(name: &str) -> Expr {
     Expr::Call {
         callee: Box::new(Expr::ExternFuncRef {
@@ -163,31 +214,13 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
     }
 
-    let anonymous_class_assignment = if assign.op == ast::AssignOp::Assign {
-        simple_ident_target_name(&assign.left).and_then(|target_name| match assign.right.as_ref() {
-            ast::Expr::Class(class_expr) if class_expr.ident.is_none() => {
-                Some((target_name.to_string(), class_expr))
-            }
-            ast::Expr::Paren(paren) => match paren.expr.as_ref() {
-                ast::Expr::Class(class_expr) if class_expr.ident.is_none() => {
-                    Some((target_name.to_string(), class_expr))
-                }
-                _ => None,
-            },
-            _ => None,
-        })
-    } else {
-        None
-    };
-
-    let rhs = if let Some((target_name, class_expr)) = anonymous_class_assignment {
-        let class =
-            crate::lower_decl::lower_class_from_ast(ctx, &class_expr.class, &target_name, false)?;
-        ctx.pending_classes.push(class);
-        Expr::ClassRef(target_name)
-    } else {
-        lower_expr(ctx, &assign.right)?
-    };
+    let rhs = lower_rhs_with_assignment_name(
+        ctx,
+        &assign.right,
+        (assign.op == ast::AssignOp::Assign)
+            .then(|| assignment_target_inferred_name(&assign.left))
+            .flatten(),
+    )?;
 
     // Handle compound assignment operators (+=, -=, *=, /=, etc.)
     let value = match assign.op {

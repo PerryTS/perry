@@ -185,6 +185,13 @@ pub extern "C" fn js_object_set_field_by_name(
                     .unwrap_or("")
                     .to_string();
                 if !name.is_empty() {
+                    if name == "name"
+                        && !super::class_registry::class_is_key_deleted(class_id, &name)
+                        && super::class_registry::lookup_static_method_in_chain(class_id, &name)
+                            .is_none()
+                    {
+                        return;
+                    }
                     let has_own_data = CLASS_DYNAMIC_PROPS.with(|m| {
                         m.borrow()
                             .get(&class_id)

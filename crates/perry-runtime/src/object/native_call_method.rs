@@ -3015,6 +3015,32 @@ pub unsafe extern "C" fn js_native_call_method(
                 if key_str.is_null() {
                     return f64::from_bits(JSValue::bool(false).bits());
                 }
+                if let Some(class_id) = super::class_ref_id(object) {
+                    let present = super::has_own_helpers::str_from_string_header(key_str)
+                        .map(|key| {
+                            if super::class_registry::class_is_key_deleted(class_id, key) {
+                                false
+                            } else if key == "name"
+                                && super::class_registry::lookup_static_method_in_chain(
+                                    class_id, key,
+                                )
+                                .is_none()
+                            {
+                                super::class_registry::class_name_for_id(class_id).is_some()
+                            } else {
+                                CLASS_DYNAMIC_PROPS.with(|m| {
+                                    m.borrow()
+                                        .get(&class_id)
+                                        .is_some_and(|props| props.contains_key(key))
+                                }) || super::class_registry::lookup_static_method_in_chain(
+                                    class_id, key,
+                                )
+                                .is_some()
+                            }
+                        })
+                        .unwrap_or(false);
+                    return f64::from_bits(JSValue::bool(present).bits());
+                }
                 // #3655: a closure receiver (functions ARE objects). Report
                 // the built-in `name`/`length` (+ constructor `prototype`)
                 // and user props as own; honor `delete`. Without this, the

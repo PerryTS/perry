@@ -1682,6 +1682,23 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     },
                     _ => None,
                 });
+            let array_method_alias: Option<String> =
+                decl.init.as_deref().and_then(|init_ast| match init_ast {
+                    ast::Expr::Member(member) => match (member.obj.as_ref(), &member.prop) {
+                        (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(method_ident))
+                            if obj_ident.sym.as_ref() == "Array" =>
+                        {
+                            let method_name = method_ident.sym.as_ref();
+                            if method_name == "isArray" {
+                                Some(method_name.to_string())
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                });
 
             // Issue #886: register the alias once `id` is bound, so the
             // call-side recogniser in `lower/expr_call.rs` can route
@@ -1689,6 +1706,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
             // `Object.<method>(args)` shape already uses.
             if let Some(method_name) = object_method_alias {
                 ctx.object_static_method_aliases.insert(id, method_name);
+            }
+            if let Some(method_name) = array_method_alias {
+                ctx.array_static_method_aliases.insert(id, method_name);
             }
 
             // Issue #740: track `let/const/var <name> = ClassRef(...)` so
@@ -1750,6 +1770,11 @@ pub(crate) fn lower_var_decl_with_destructuring(
                             ctx.object_static_method_aliases.get(src_id).cloned()
                         {
                             ctx.object_static_method_aliases.insert(id, method_name);
+                        }
+                        if let Some(method_name) =
+                            ctx.array_static_method_aliases.get(src_id).cloned()
+                        {
+                            ctx.array_static_method_aliases.insert(id, method_name);
                         }
                     }
                     Expr::PropertyGet { object, property }

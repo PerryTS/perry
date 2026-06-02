@@ -53,12 +53,94 @@ fn function<'a>(module: &'a perry_hir::Module, name: &str) -> &'a Function {
         .unwrap_or_else(|| panic!("function `{name}` not found"))
 }
 
+fn closure_display_names(module: &perry_hir::Module) -> Vec<String> {
+    let mut names: Vec<String> = module.closure_display_names.values().cloned().collect();
+    names.sort();
+    names
+}
+
 fn is_number_literal(expr: &Expr, expected: f64) -> bool {
     match expr {
         Expr::Number(actual) => *actual == expected,
         Expr::Integer(actual) => (*actual as f64) == expected,
         _ => false,
     }
+}
+
+#[test]
+fn assignment_named_evaluation_names_bare_identifier_rhs_functions() {
+    let module = lower_src(
+        r#"
+        var arrow, fn, gen, cover;
+        arrow = () => {};
+        fn = function() {};
+        gen = function*() {};
+        cover = (function() {});
+        "#,
+    );
+
+    let names = closure_display_names(&module);
+    assert!(names.contains(&"arrow".to_string()), "{names:?}");
+    assert!(names.contains(&"fn".to_string()), "{names:?}");
+    assert!(names.contains(&"gen".to_string()), "{names:?}");
+    assert!(names.contains(&"cover".to_string()), "{names:?}");
+}
+
+#[test]
+fn assignment_named_evaluation_skips_non_identifier_lhs_and_sequence_rhs() {
+    let module = lower_src(
+        r#"
+        var fn, xCover, o;
+        o = {};
+        (fn) = function() {};
+        xCover = (0, function() {});
+        o.attr = function() {};
+        "#,
+    );
+
+    let names = closure_display_names(&module);
+    assert!(!names.contains(&"fn".to_string()), "{names:?}");
+    assert!(!names.contains(&"xCover".to_string()), "{names:?}");
+    assert!(!names.contains(&"attr".to_string()), "{names:?}");
+}
+
+#[test]
+fn assignment_named_evaluation_names_anonymous_class_identifier_rhs_only() {
+    let module = lower_src(
+        r#"
+        var xCls, cls, xCls2;
+        xCls = class x {};
+        cls = class {};
+        xCls2 = class { static name() {} };
+        "#,
+    );
+
+    let class_names: Vec<&str> = module
+        .classes
+        .iter()
+        .map(|class| class.name.as_str())
+        .collect();
+    assert!(class_names.contains(&"x"), "{class_names:?}");
+    assert!(class_names.contains(&"cls"), "{class_names:?}");
+    assert!(!class_names.contains(&"xCls"), "{class_names:?}");
+    assert!(!class_names.contains(&"xCls2"), "{class_names:?}");
+}
+
+#[test]
+fn array_is_array_static_alias_call_lowers_to_intrinsic() {
+    let module = lower_src(
+        r#"
+        var __isArray = Array.isArray;
+        var copy = __isArray;
+        const result = copy([]);
+        "#,
+    );
+
+    assert!(
+        matches!(top_level_init(&module, "result"), Expr::ArrayIsArray(_)),
+        "{:?}",
+        top_level_init(&module, "result")
+    );
 }
 
 #[test]

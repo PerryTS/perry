@@ -431,6 +431,12 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         None
     };
 
+    if let Some(name) = ctx.assignment_inferred_name.as_ref() {
+        if !name.is_empty() {
+            ctx.closure_display_names.insert(func_id, name.clone());
+        }
+    }
+
     Ok(Expr::Closure {
         func_id,
         params,
@@ -741,6 +747,10 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
         let own_name = ident.sym.to_string();
         if !own_name.is_empty() {
             ctx.closure_display_names.insert(func_id, own_name);
+        }
+    } else if let Some(name) = ctx.assignment_inferred_name.as_ref() {
+        if !name.is_empty() {
+            ctx.closure_display_names.insert(func_id, name.clone());
         }
     }
 

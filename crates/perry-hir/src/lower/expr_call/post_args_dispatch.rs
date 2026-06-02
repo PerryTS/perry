@@ -91,6 +91,37 @@ pub(super) fn try_object_static_alias_call(
     Err(args)
 }
 
+/// Indirect call through a captured `Array.<staticMethod>` alias.
+///
+/// Test262's property helper captures `Array.isArray` into `__isArray` and
+/// calls that local later. Direct `Array.isArray(x)` lowers through the
+/// dedicated intrinsic already; this mirrors the `Object.<static>` alias
+/// repair above for the captured form.
+pub(super) fn try_array_static_alias_call(
+    ctx: &LoweringContext,
+    call: &ast::CallExpr,
+    args: Vec<Expr>,
+    has_spread: bool,
+) -> Result<Expr, Vec<Expr>> {
+    if !has_spread {
+        if let ast::Callee::Expr(callee_expr) = &call.callee {
+            if let ast::Expr::Ident(ident) = callee_expr.as_ref() {
+                let name = ident.sym.to_string();
+                if let Some(id) = ctx.lookup_local(&name) {
+                    if matches!(
+                        ctx.array_static_method_aliases.get(&id).map(String::as_str),
+                        Some("isArray")
+                    ) {
+                        let value = args.first().cloned().unwrap_or(Expr::Undefined);
+                        return Ok(Expr::ArrayIsArray(Box::new(value)));
+                    }
+                }
+            }
+        }
+    }
+    Err(args)
+}
+
 /// `Object.hasOwnProperty.call(obj, key)` → `js_object_has_own(obj, key)`.
 ///
 /// Current NestJS `@Module()` uses this inherited Object.prototype helper

@@ -187,6 +187,10 @@ pub struct LoweringContext {
     /// (static property key); flushed into `Module.closure_display_names`
     /// alongside `pending_functions`.
     pub(crate) closure_display_names: HashMap<FuncId, String>,
+    /// Test262 assignment name inference: when lowering `lhs = rhs`, a bare
+    /// identifier lhs can provide the `NamedEvaluation` name for an anonymous
+    /// function/class rhs. This slot is set only while lowering that rhs.
+    pub(crate) assignment_inferred_name: Option<String>,
     /// #4101: original source text keyed by FuncId, captured by slicing the
     /// module source against each function's AST span at lowering time.
     /// Flushed into `Module.closure_source_text` alongside `pending_functions`.
@@ -464,6 +468,11 @@ pub struct LoweringContext {
     /// for methods that already have a dedicated recogniser arm — see
     /// `lower/expr_call.rs` for the dispatch list.
     pub(crate) object_static_method_aliases: HashMap<LocalId, String>,
+    /// Same alias-call repair for selected `Array.<staticMethod>` captures.
+    /// Test262's descriptor helper stores `Array.isArray` in a local and calls
+    /// that alias; Perry's direct-call intrinsic already works, but the value
+    /// read currently lowers to a non-callable sentinel.
+    pub(crate) array_static_method_aliases: HashMap<LocalId, String>,
     /// Issue #444: true when this module is the user-supplied entry file.
     /// Drives `import.meta.main` — Node 24+ / Bun semantics where the entry
     /// module reports `true` and every imported module reports `false`. Set

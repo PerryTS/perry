@@ -854,6 +854,11 @@ thread_local! {
     /// this side-table keyed by class_id.
     pub(crate) static CLASS_DYNAMIC_PROPS: std::cell::RefCell<std::collections::HashMap<u32, std::collections::HashMap<String, f64>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+    /// Configurable synthetic class-ref keys that were deleted (currently
+    /// `name`). Mirrors the closure deleted-key side table for ClassRef values,
+    /// which are tagged integers rather than ObjectHeader/ClosureHeader values.
+    pub(crate) static CLASS_DELETED_KEYS: std::cell::RefCell<std::collections::HashMap<u32, std::collections::HashSet<String>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 thread_local! {

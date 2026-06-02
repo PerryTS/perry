@@ -1925,6 +1925,9 @@ pub extern "C" fn js_object_get_field_by_name(
                     return JSValue::undefined();
                 }
                 if !name.is_empty() {
+                    if super::class_registry::class_is_key_deleted(class_id, name) {
+                        return JSValue::undefined();
+                    }
                     let result = CLASS_DYNAMIC_PROPS.with(|m| {
                         m.borrow()
                             .get(&class_id)

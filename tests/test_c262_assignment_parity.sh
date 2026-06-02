@@ -185,6 +185,38 @@ with (scope) {
 }
 check(caught && count === 2 && !("withPutValueBinding" in scope), "with PutValue rechecks deleted binding in strict mode");
 
+var arrowName;
+var fnName;
+var coverName;
+var memberName;
+var className;
+var o = {};
+arrowName = () => {};
+fnName = function() {};
+coverName = (function() {});
+o.method = function() {};
+className = class {};
+check(arrowName.name === "arrowName", "assignment names anonymous arrow functions");
+check(fnName.name === "fnName", "assignment names anonymous functions");
+check(coverName.name === "coverName", "assignment names parenthesized anonymous functions");
+check(o.method.name === "", "assignment does not name member-target functions");
+check(className.name === "className", "assignment names anonymous classes");
+var classNameDesc = Object.getOwnPropertyDescriptor(className, "name");
+check(classNameDesc.value === "className", "class name descriptor value");
+check(classNameDesc.writable === false, "class name descriptor writable");
+check(classNameDesc.enumerable === false, "class name descriptor enumerable");
+check(classNameDesc.configurable === true, "class name descriptor configurable");
+
+var __isArray = Array.isArray;
+check(__isArray([]) === true && __isArray({}) === false, "captured Array.isArray remains callable");
+
+function deleteByName(obj, name) {
+  return delete obj[name];
+}
+
+check(deleteByName(arrowName, "name") === true, "computed delete through parameter succeeds");
+check(!Object.prototype.hasOwnProperty.call(arrowName, "name"), "computed delete removes configurable function name");
+
 if (failures.length !== 0) {
   throw new Error(failures);
 }

@@ -509,12 +509,26 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
 
-        if (obj_value.to_bits() >> 48) == 0x7FFE {
-            let class_id = (obj_value.to_bits() & 0xFFFF_FFFF) as u32;
+        if let Some(class_id) = super::class_ref_id(obj_value) {
             let present = super::has_own_helpers::str_from_string_header(key_str)
                 .map(|key| {
-                    matches!(key, "length" | "name" | "prototype")
-                        && !super::class_registry::class_is_key_deleted(class_id, key)
+                    if super::class_registry::class_is_key_deleted(class_id, key) {
+                        false
+                    } else if matches!(key, "length" | "prototype") {
+                        true
+                    } else if key == "name"
+                        && super::class_registry::lookup_static_method_in_chain(class_id, key)
+                            .is_none()
+                    {
+                        super::class_registry::class_name_for_id(class_id).is_some()
+                    } else {
+                        CLASS_DYNAMIC_PROPS.with(|m| {
+                            m.borrow()
+                                .get(&class_id)
+                                .is_some_and(|props| props.contains_key(key))
+                        }) || super::class_registry::lookup_static_method_in_chain(class_id, key)
+                            .is_some()
+                    }
                 })
                 .unwrap_or(false);
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });

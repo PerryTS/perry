@@ -55,6 +55,11 @@ pub(crate) fn class_is_key_deleted(class_id: u32, key: &str) -> bool {
 }
 
 pub(crate) fn class_dynamic_prop_root_store(class_id: u32, name: String, value: f64) {
+    CLASS_DELETED_KEYS.with(|m| {
+        if let Some(keys) = m.borrow_mut().get_mut(&class_id) {
+            keys.remove(&name);
+        }
+    });
     CLASS_DYNAMIC_PROPS.with(|m| {
         m.borrow_mut()
             .entry(class_id)
@@ -62,6 +67,14 @@ pub(crate) fn class_dynamic_prop_root_store(class_id: u32, name: String, value: 
             .insert(name, value);
     });
     crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+}
+
+pub(crate) fn class_delete_own_dynamic_prop(class_id: u32, name: &str) {
+    CLASS_DYNAMIC_PROPS.with(|m| {
+        if let Some(props) = m.borrow_mut().get_mut(&class_id) {
+            props.remove(name);
+        }
+    });
 }
 
 pub(crate) fn class_prototype_method_value_cache_root_store(
@@ -2159,6 +2172,7 @@ fn visit_metadata_nanbox_key(
 #[cfg(test)]
 pub(crate) fn test_clear_class_side_table_roots() {
     CLASS_DYNAMIC_PROPS.with(|m| m.borrow_mut().clear());
+    CLASS_DELETED_KEYS.with(|m| m.borrow_mut().clear());
     CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| cache.borrow_mut().clear());
     if let Ok(mut guard) = CLASS_PROTOTYPE_METHODS.write() {
         *guard = None;

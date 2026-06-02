@@ -189,6 +189,20 @@ pub(crate) fn with_set_fallback_for_ident(
     }
 }
 
+fn anonymous_class_has_static_name_member(class: &ast::Class) -> bool {
+    class.body.iter().any(|member| match member {
+        ast::ClassMember::Method(method) if method.is_static => {
+            matches!(&method.key, ast::PropName::Ident(ident) if ident.sym.as_ref() == "name")
+                || matches!(&method.key, ast::PropName::Str(s) if s.value.as_str() == Some("name"))
+        }
+        ast::ClassMember::ClassProp(prop) if prop.is_static => {
+            matches!(&prop.key, ast::PropName::Ident(ident) if ident.sym.as_ref() == "name")
+                || matches!(&prop.key, ast::PropName::Str(s) if s.value.as_str() == Some("name"))
+        }
+        _ => false,
+    })
+}
+
 pub(crate) fn lower_expr_assignment(
     ctx: &mut LoweringContext,
     expr: &ast::Expr,
@@ -1757,8 +1771,16 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
         // back up.
         ast::Expr::Class(class_expr) => {
             let ident_name = class_expr.ident.as_ref().map(|i| i.sym.to_string());
-            let synthetic_name =
-                ident_name.unwrap_or_else(|| format!("__anon_class_{}", ctx.fresh_class()));
+            let synthetic_name = ident_name.unwrap_or_else(|| {
+                if !anonymous_class_has_static_name_member(&class_expr.class) {
+                    if let Some(name) = ctx.assignment_inferred_name.as_ref() {
+                        if !name.is_empty() {
+                            return name.clone();
+                        }
+                    }
+                }
+                format!("__anon_class_{}", ctx.fresh_class())
+            });
             let class = lower_class_from_ast(ctx, &class_expr.class, &synthetic_name, false)?;
             // Mixin factories like `function WithA(B) { return class extends B {} }`
             // produce a class whose super is the function-parameter `B` — a

@@ -20,6 +20,7 @@ pub extern "C" fn js_object_delete_field(
             if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
                 let class_id = obj as usize as u32;
                 if super::class_registry::class_name_for_id(class_id).is_some() {
+                    super::class_registry::class_delete_own_dynamic_prop(class_id, name);
                     super::class_registry::class_mark_key_deleted(class_id, name);
                 }
             }
