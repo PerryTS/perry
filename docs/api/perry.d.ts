@@ -868,6 +868,8 @@ declare module "crypto" {
   /** stdlib */
   export class ECDH { [key: string]: any; }
   /** stdlib */
+  export class KeyObject { [key: string]: any; }
+  /** stdlib */
   export class X509Certificate { [key: string]: any; }
   /** stdlib */
   export const Certificate: any;

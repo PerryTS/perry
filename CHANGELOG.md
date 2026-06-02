@@ -2,6 +2,10 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1107 — feat(crypto): expose KeyObject shape for secret keys (#4132)
+
+Folds in external contributor PR #4132: exposes the `crypto` `KeyObject` shape for secret keys — `createSecretKey(...)` returns a `KeyObject` with the expected `type`/`symmetricKeySize`/`asymmetricKeyType` surface and `KeyObject`/`instanceof` branding. Adds `crates/perry-runtime/src/object/native_module_crypto_key_object.rs` plus supporting dispatch wiring and a node-suite fixture. Merged on top of current `main`; only the auto-generated doc count/coverage lines conflicted and are reconciled by the end-of-batch manifest regen.
+
 ## v0.5.1106 — fix(child_process): fork lifecycle exports (#4110)
 
 Folds in external contributor PR #4110: rounds out the `child_process` fork lifecycle surface — `subprocess[Symbol.dispose]`, the `fork(...).send(...)` callback firing once the IPC channel has closed, and the forked-child object shape. Adds the supporting runtime wiring in `crates/perry-runtime/src/child_process/` plus node-suite parity fixtures. Merged on top of current `main`; only the auto-generated doc count/coverage lines conflicted and were regenerated from the manifest.
