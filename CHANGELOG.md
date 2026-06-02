@@ -2,6 +2,14 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1085 — fix(worker_threads): parentPort is null on the main thread
+
+`worker_threads.parentPort` returned a `{}` object on the **main thread**, where Node exposes `null` (only a spawned `Worker` has a `MessagePort` back to its parent). This made `if (parentPort) { … }` truthy on the main thread and `parentPort === null` false, diverging from Node.
+
+Fix (`crates/perry-stdlib/src/worker_threads.rs`): `js_worker_threads_parent_port` now returns `null` (via `js_null()`) when `CURRENT_WORKER_ID == 0` (main thread); the worker-thread branch (a real `MessagePort` object) is unchanged. `PARENT_PORT_HANDLE`'s other uses are all worker-thread-gated, so nothing relied on the main-thread handle.
+
+Validated against `node --experimental-strip-types`: `isMainThread`/`parentPort`/`parentPort === null`/`threadId` and `node-suite/worker_threads/main-thread/properties` all match; the full worker_threads suite is otherwise unaffected (worker-side parentPort messaging unchanged).
+
 ## v0.5.1084 — fix(String): indexed reads use CanonicalNumericIndexString semantics (#3987, partial)
 
 `s[NaN]`, `s[Infinity]`, `s[-1]`, `s[1.5]`, and out-of-range `s[10]` returned `""` (or a wrong/truncated char) instead of `undefined`, and `s["1"]` returned the char at index 0 instead of index 1. Codegen lowered string `s[key]` by `fptosi`-truncating the key (so `1.5`→`1`, `NaN`→`0`) and calling `js_string_char_at`, which returns `""` for out-of-range/negative — never `undefined` — and mis-resolved string keys.

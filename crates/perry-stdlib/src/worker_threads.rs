@@ -1720,7 +1720,11 @@ pub extern "C" fn js_worker_threads_parent_port() -> f64 {
     if CURRENT_WORKER_ID.with(|id| id.get()) != 0 {
         return object_value(parent_port::worker_parent_port_object());
     }
-    perry_runtime::value::js_nanbox_pointer(PARENT_PORT_HANDLE)
+    // On the main thread there is no parent port: Node exposes `parentPort`
+    // as `null` (only a spawned Worker has a MessagePort back to its parent).
+    // Returning a `{}` object here made `if (parentPort)` truthy on the main
+    // thread, diverging from Node.
+    js_null()
 }
 
 /// parentPort.postMessage(data) - JSON-stringify and write to stdout
