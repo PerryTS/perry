@@ -2251,6 +2251,23 @@ extern "C" fn object_get_own_property_names_thunk(
     super::js_object_get_own_property_names(value)
 }
 
+extern "C" fn object_get_own_property_descriptor_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    obj: f64,
+    key: f64,
+) -> f64 {
+    super::js_object_get_own_property_descriptor(obj, key)
+}
+
+extern "C" fn object_define_property_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    obj: f64,
+    key: f64,
+    descriptor: f64,
+) -> f64 {
+    super::js_object_define_property(obj, key, descriptor)
+}
+
 extern "C" fn object_from_entries_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
@@ -2556,6 +2573,20 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
                 "getOwnPropertyNames",
                 object_get_own_property_names_thunk as *const u8,
                 1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "getOwnPropertyDescriptor",
+                object_get_own_property_descriptor_thunk as *const u8,
+                2,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "defineProperty",
+                object_define_property_thunk as *const u8,
+                3,
                 false,
             );
             install_constructor_static(

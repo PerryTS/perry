@@ -332,19 +332,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                     Ok(blk.bitcast_i64_to_double(&tagged))
                 }
-                // delete arr[numericIndex] — set element to undefined
+                // delete obj[expr] — route dynamic keys through the runtime so
+                // string-valued locals (for example `delete fn[name]`) still
+                // use the ordinary property-delete path instead of being
+                // misread as numeric array indexes.
                 Expr::IndexGet { object, index } => {
-                    let arr_box = lower_expr(ctx, object)?;
+                    let obj_box = lower_expr(ctx, object)?;
                     let idx_box = lower_expr(ctx, index)?;
                     let blk = ctx.block();
-                    let arr_handle = unbox_to_i64(blk, &arr_box);
-                    // Convert index to i32. It may be a double (NaN-boxed
-                    // number) or a raw integer literal.
-                    let idx_i32 = blk.fptosi(DOUBLE, &idx_box, I32);
+                    let obj_handle = unbox_to_i64(blk, &obj_box);
                     let i32_v = blk.call(
                         I32,
-                        "js_array_delete",
-                        &[(I64, &arr_handle), (I32, &idx_i32)],
+                        "js_object_delete_dynamic",
+                        &[(I64, &obj_handle), (DOUBLE, &idx_box)],
                     );
                     let bit = blk.icmp_ne(I32, &i32_v, "0");
                     let tagged = blk.select(

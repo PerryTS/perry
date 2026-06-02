@@ -12,7 +12,18 @@ pub extern "C" fn js_object_delete_field(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
 ) -> i32 {
-    if obj.is_null() || (obj as usize) < 0x10000 || key.is_null() {
+    if obj.is_null() || key.is_null() {
+        return 1;
+    }
+    if (obj as usize) < 0x10000 {
+        unsafe {
+            if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+                let class_id = obj as usize as u32;
+                if super::class_registry::class_name_for_id(class_id).is_some() {
+                    super::class_registry::class_mark_key_deleted(class_id, name);
+                }
+            }
+        }
         return 1;
     }
     unsafe {

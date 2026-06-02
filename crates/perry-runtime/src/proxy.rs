@@ -498,7 +498,14 @@ fn target_set(target: f64, key: f64, value: f64) {
         }
         return;
     }
-    let obj_ptr = extract_pointer(target.to_bits()) as *mut crate::ObjectHeader;
+    let obj_addr = extract_pointer(target.to_bits()) as usize;
+    if crate::closure::is_closure_ptr(obj_addr) {
+        if let Some(name) = key_to_rust_string(key) {
+            crate::closure::closure_set_dynamic_prop(obj_addr, &name, value);
+        }
+        return;
+    }
+    let obj_ptr = obj_addr as *mut crate::ObjectHeader;
     let key_ptr = extract_pointer(key.to_bits()) as *const crate::StringHeader;
     if obj_ptr.is_null() || key_ptr.is_null() {
         return;
@@ -550,6 +557,14 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
         return Some(OwnSetDescriptor::Data {
             writable: attrs.writable(),
         });
+    }
+    if crate::closure::is_closure_ptr(obj_ptr) {
+        if crate::object::has_own_helpers::closure_own_key_present(obj_ptr, &key_name) {
+            return Some(OwnSetDescriptor::Data {
+                writable: !matches!(key_name.as_str(), "name" | "length"),
+            });
+        }
+        return None;
     }
     if crate::object::obj_value_has_own_key(target, key) {
         return Some(OwnSetDescriptor::Data { writable: true });
@@ -624,6 +639,9 @@ fn create_or_update_receiver_property(receiver: f64, key: f64, value: f64) -> bo
                 return call_setter_with_receiver(setter_bits, receiver, value);
             }
         }
+    } else if crate::closure::is_closure_ptr(extract_pointer(receiver.to_bits()) as usize) {
+        target_set(receiver, key, value);
+        return true;
     } else if crate::object::obj_value_no_extend(receiver) {
         return false;
     }
@@ -648,6 +666,9 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                 }
             };
         }
+        if crate::closure::is_closure_ptr(extract_pointer(current.to_bits()) as usize) {
+            return create_or_update_receiver_property(receiver, key, value);
+        }
         let Some(proto) = prototype_of_for_set(current) else {
             return create_or_update_receiver_property(receiver, key, value);
         };
@@ -667,6 +688,15 @@ pub extern "C" fn js_put_value_set(
     receiver: f64,
     strict: i32,
 ) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_nanbox_f64(target);
+    let key_handle = scope.root_nanbox_f64(key);
+    let value_handle = scope.root_nanbox_f64(value);
+    let receiver_handle = scope.root_nanbox_f64(receiver);
+    let target = target_handle.get_nanbox_f64();
+    let key = key_handle.get_nanbox_f64();
+    let value = value_handle.get_nanbox_f64();
+    let receiver = receiver_handle.get_nanbox_f64();
     let target_bits = target.to_bits();
     if target_bits == TAG_NULL || target_bits == TAG_UNDEFINED {
         let key_name = key_to_rust_string(key).unwrap_or_else(|| "property".to_string());
@@ -682,7 +712,7 @@ pub extern "C" fn js_put_value_set(
         let key_name = key_to_rust_string(key).unwrap_or_else(|| "property".to_string());
         crate::error::throw_immutable_write(0, &key_name);
     }
-    value
+    value_handle.get_nanbox_f64()
 }
 
 /// `key in proxy` — if handler.has exists, call it; otherwise delegate to

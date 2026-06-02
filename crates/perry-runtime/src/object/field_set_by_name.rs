@@ -398,6 +398,8 @@ pub extern "C" fn js_object_set_field_by_name(
                         if !attrs.writable() {
                             return;
                         }
+                    } else if matches!(name_str, "name" | "length") {
+                        return;
                     }
                     crate::closure::closure_set_dynamic_prop(obj as usize, name_str, value);
                 }

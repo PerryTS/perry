@@ -2964,6 +2964,26 @@ pub unsafe extern "C" fn js_native_call_method(
             if jsval.is_undefined() || jsval.is_null() {
                 return f64::from_bits(JSValue::bool(false).bits());
             }
+            if (object.to_bits() >> 48) == 0x7FFE {
+                let key_value = if args_len >= 1 && !args_ptr.is_null() {
+                    *args_ptr
+                } else {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                };
+                let key_str = crate::builtins::js_string_coerce(key_value);
+                let class_id = (object.to_bits() & 0xFFFF_FFFF) as u32;
+                let present = if key_str.is_null() {
+                    false
+                } else {
+                    super::has_own_helpers::str_from_string_header(key_str)
+                        .map(|key| {
+                            matches!(key, "length" | "name" | "prototype")
+                                && !super::class_registry::class_is_key_deleted(class_id, key)
+                        })
+                        .unwrap_or(false)
+                };
+                return f64::from_bits(JSValue::bool(present).bits());
+            }
             if jsval.is_pointer() {
                 let key_value = if args_len >= 1 && !args_ptr.is_null() {
                     *args_ptr

@@ -28,6 +28,32 @@ pub use super::class_handles::{
 };
 use super::*;
 
+thread_local! {
+    static CLASS_DELETED_KEYS: std::cell::RefCell<std::collections::HashMap<u32, std::collections::HashSet<String>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+pub(crate) fn class_mark_key_deleted(class_id: u32, key: &str) {
+    if class_id == 0 {
+        return;
+    }
+    CLASS_DELETED_KEYS.with(|m| {
+        m.borrow_mut()
+            .entry(class_id)
+            .or_default()
+            .insert(key.to_string());
+    });
+}
+
+pub(crate) fn class_is_key_deleted(class_id: u32, key: &str) -> bool {
+    CLASS_DELETED_KEYS.with(|m| {
+        m.borrow()
+            .get(&class_id)
+            .map(|keys| keys.contains(key))
+            .unwrap_or(false)
+    })
+}
+
 pub(crate) fn class_dynamic_prop_root_store(class_id: u32, name: String, value: f64) {
     CLASS_DYNAMIC_PROPS.with(|m| {
         m.borrow_mut()

@@ -163,7 +163,31 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
     }
 
-    let rhs = lower_expr(ctx, &assign.right)?;
+    let anonymous_class_assignment = if assign.op == ast::AssignOp::Assign {
+        simple_ident_target_name(&assign.left).and_then(|target_name| match assign.right.as_ref() {
+            ast::Expr::Class(class_expr) if class_expr.ident.is_none() => {
+                Some((target_name.to_string(), class_expr))
+            }
+            ast::Expr::Paren(paren) => match paren.expr.as_ref() {
+                ast::Expr::Class(class_expr) if class_expr.ident.is_none() => {
+                    Some((target_name.to_string(), class_expr))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+    } else {
+        None
+    };
+
+    let rhs = if let Some((target_name, class_expr)) = anonymous_class_assignment {
+        let class =
+            crate::lower_decl::lower_class_from_ast(ctx, &class_expr.class, &target_name, false)?;
+        ctx.pending_classes.push(class);
+        Expr::ClassRef(target_name)
+    } else {
+        lower_expr(ctx, &assign.right)?
+    };
 
     // Handle compound assignment operators (+=, -=, *=, /=, etc.)
     let value = match assign.op {

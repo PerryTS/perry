@@ -65,6 +65,36 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         if let Some(class_id) = class_ref_id(obj_value) {
             let method_name = metadata_key_to_string(key_value);
             if let Some(method_name) = method_name {
+                if super::class_registry::class_is_key_deleted(class_id, &method_name) {
+                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                }
+                if method_name == "name" {
+                    if let Some(cname) = super::class_registry::class_name_for_id(class_id) {
+                        let value = {
+                            let s = crate::string::js_string_from_bytes(
+                                cname.as_ptr(),
+                                cname.len() as u32,
+                            );
+                            crate::js_nanbox_string(s as i64)
+                        };
+                        let packed = b"value\0writable\0enumerable\0configurable";
+                        let desc = js_object_alloc_with_shape(
+                            0x0D_E5_C2,
+                            4,
+                            packed.as_ptr(),
+                            packed.len() as u32,
+                        );
+                        let header_size = std::mem::size_of::<ObjectHeader>();
+                        let fields = (desc as *mut u8).add(header_size) as *mut f64;
+                        // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
+                        *fields = value;
+                        *fields.add(1) = f64::from_bits(TAG_FALSE);
+                        *fields.add(2) = f64::from_bits(TAG_FALSE);
+                        *fields.add(3) = f64::from_bits(TAG_TRUE);
+                        super::rebuild_object_field_layout(desc, 4);
+                        return f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000);
+                    }
+                }
                 if method_name == "constructor" || class_has_own_method(class_id, &method_name) {
                     let value = if method_name == "constructor"
                         && super::class_prototype_ref_id(obj_value).is_some()
