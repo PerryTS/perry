@@ -342,18 +342,6 @@ fn module_set_field(obj: *mut crate::object::ObjectHeader, name: &str, value: f6
     crate::object::js_object_set_field_by_name(obj, key, value);
 }
 
-extern "C" fn module_source_map_noop(_closure: *const crate::closure::ClosureHeader) -> f64 {
-    f64::from_bits(crate::value::TAG_UNDEFINED)
-}
-
-fn module_noop_function(name: &str) -> f64 {
-    let func_ptr = module_source_map_noop as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 0);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
-    crate::object::set_bound_native_closure_name(closure, name);
-    crate::value::js_nanbox_pointer(closure as i64)
-}
-
 /// `module.builtinModules` — Node exposes this as an Array of builtin module
 /// specifiers. Perry's supported subset is smaller, but the public inventory
 /// shape should still match Node's module API.
@@ -385,16 +373,309 @@ pub extern "C" fn js_module_constants() -> f64 {
     module_object_value(constants)
 }
 
-/// Stub constructor for `new module.SourceMap(payload)`. It preserves the
-/// payload object and exposes method-shaped placeholders, but does not
-/// implement source-map lookup semantics.
+/// Constructor for `new module.SourceMap(payload)`. Preserves the payload
+/// object and exposes working `findEntry`/`findOrigin` lookups. The bound
+/// method closures capture the payload (slot 0) so the lookup thunks can
+/// decode its `mappings`/`sources`/`names` without a separate `this` channel
+/// (mirrors the dgram socket-method pattern). #3675.
 #[no_mangle]
 pub extern "C" fn js_module_source_map_new(payload: f64) -> f64 {
     let obj = crate::object::js_object_alloc(0, 3);
     module_set_field(obj, "payload", payload);
-    module_set_field(obj, "findEntry", module_noop_function("findEntry"));
-    module_set_field(obj, "findOrigin", module_noop_function("findOrigin"));
+    module_set_field(
+        obj,
+        "findEntry",
+        source_map_method(payload, "findEntry", source_map_find_entry_thunk),
+    );
+    module_set_field(
+        obj,
+        "findOrigin",
+        source_map_method(payload, "findOrigin", source_map_find_origin_thunk),
+    );
     module_object_value(obj)
+}
+
+type SourceMapThunk = extern "C" fn(*const ClosureHeader, f64) -> f64;
+
+/// Build a bound SourceMap method closure that captures `payload` in slot 0
+/// and packs all call arguments into a single rest array.
+fn source_map_method(payload: f64, name: &str, thunk: SourceMapThunk) -> f64 {
+    let func_ptr = thunk as *const u8;
+    let closure = js_closure_alloc(func_ptr, 1);
+    js_closure_set_capture_f64(closure, 0, payload);
+    crate::closure::js_register_closure_rest(func_ptr, 0);
+    crate::object::set_bound_native_closure_name(closure, name);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+/// Decode a base64 VLQ alphabet byte to its 0–63 value.
+fn source_map_b64(c: u8) -> Option<i64> {
+    match c {
+        b'A'..=b'Z' => Some((c - b'A') as i64),
+        b'a'..=b'z' => Some((c - b'a' + 26) as i64),
+        b'0'..=b'9' => Some((c - b'0' + 52) as i64),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    }
+}
+
+/// Decode one comma-delimited segment's VLQ fields.
+fn source_map_decode_segment(seg: &[u8]) -> Vec<i64> {
+    let mut out = Vec::new();
+    let mut value: i64 = 0;
+    let mut shift: u32 = 0;
+    for &b in seg {
+        let Some(digit) = source_map_b64(b) else {
+            continue;
+        };
+        let cont = (digit & 0x20) != 0;
+        value += (digit & 0x1f) << shift;
+        if cont {
+            shift += 5;
+        } else {
+            let negative = (value & 1) != 0;
+            let decoded = value >> 1;
+            out.push(if negative { -decoded } else { decoded });
+            value = 0;
+            shift = 0;
+        }
+    }
+    out
+}
+
+#[derive(Clone, Copy)]
+struct SourceMapEntry {
+    generated_line: i64,
+    generated_column: i64,
+    // `None` for genCol-only (1-field) segments that mark an unmapped position.
+    // The inner name index is `Some` only for segments that carried an explicit
+    // 5th VLQ field (a named mapping).
+    original: Option<(i64, i64, i64, Option<i64>)>, // (source_index, line, column, name_index)
+}
+
+/// Decode the full `mappings` string into ordered entries with cumulative
+/// source/line/column/name indices per the Source Map v3 grammar. `name_index`
+/// is attached only to genuinely-named (5-field) segments, matching how a
+/// position with no explicit name resolves (Node returns no `name` for the
+/// names-less mapping in the issue repro).
+fn source_map_decode(mappings: &str) -> Vec<SourceMapEntry> {
+    let mut entries = Vec::new();
+    let (mut src_idx, mut src_line, mut src_col, mut name_idx) = (0i64, 0i64, 0i64, 0i64);
+    for (gen_line, line) in mappings.split(';').enumerate() {
+        let mut gen_col = 0i64;
+        for seg in line.split(',') {
+            if seg.is_empty() {
+                continue;
+            }
+            let fields = source_map_decode_segment(seg.as_bytes());
+            if fields.is_empty() {
+                continue;
+            }
+            gen_col += fields[0];
+            let original = if fields.len() >= 4 {
+                src_idx += fields[1];
+                src_line += fields[2];
+                src_col += fields[3];
+                let name = if fields.len() >= 5 {
+                    name_idx += fields[4];
+                    Some(name_idx)
+                } else {
+                    None
+                };
+                Some((src_idx, src_line, src_col, name))
+            } else {
+                None
+            };
+            entries.push(SourceMapEntry {
+                generated_line: gen_line as i64,
+                generated_column: gen_col,
+                original,
+            });
+        }
+    }
+    entries
+}
+
+/// Read `payload.<field>` as a raw JSValue f64 (undefined when absent or when
+/// the payload is not a heap object).
+fn source_map_field(payload: f64, field: &str) -> f64 {
+    let p = JSValue::from_bits(payload.to_bits());
+    if !p.is_pointer() {
+        return undefined_value();
+    }
+    let obj = crate::value::js_nanbox_get_pointer(payload) as *const crate::object::ObjectHeader;
+    if obj.is_null() {
+        return undefined_value();
+    }
+    let key = js_string_from_bytes(field.as_ptr(), field.len() as u32);
+    let v = crate::object::js_object_get_field_by_name(obj, key);
+    f64::from_bits(v.bits())
+}
+
+/// Read `payload.<field>` as a Rust string, if it is a string value.
+fn source_map_field_string(payload: f64, field: &str) -> Option<String> {
+    let value = JSValue::from_bits(source_map_field(payload, field).to_bits());
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let bytes = unsafe { crate::string::js_string_key_bytes(value, &mut sso) }?;
+    Some(String::from_utf8_lossy(bytes).into_owned())
+}
+
+/// Read `payload.<arrayField>[index]` as a raw JSValue f64 (undefined when out
+/// of range or not an array).
+fn source_map_array_element(payload: f64, field: &str, index: i64) -> f64 {
+    if index < 0 {
+        return undefined_value();
+    }
+    let arr_value = source_map_field(payload, field);
+    let av = JSValue::from_bits(arr_value.to_bits());
+    if !av.is_pointer() {
+        return undefined_value();
+    }
+    let arr = crate::value::js_nanbox_get_pointer(arr_value) as *const crate::array::ArrayHeader;
+    if arr.is_null() {
+        return undefined_value();
+    }
+    let len = crate::array::js_array_length(arr);
+    if index as u32 >= len {
+        return undefined_value();
+    }
+    crate::array::js_array_get_f64(arr, index as u32)
+}
+
+fn source_map_collect_args(rest: f64) -> Vec<f64> {
+    let rv = JSValue::from_bits(rest.to_bits());
+    if !rv.is_pointer() {
+        return Vec::new();
+    }
+    let arr = crate::value::js_nanbox_get_pointer(rest) as *const crate::array::ArrayHeader;
+    if arr.is_null() {
+        return Vec::new();
+    }
+    let len = crate::array::js_array_length(arr);
+    (0..len)
+        .map(|i| crate::array::js_array_get_f64(arr, i))
+        .collect()
+}
+
+/// Coerce call argument `idx` to a finite number, if it is one.
+fn source_map_arg_number(args: &[f64], idx: usize) -> Option<f64> {
+    args.get(idx)
+        .map(|v| JSValue::from_bits(v.to_bits()).to_number())
+        .filter(|n| n.is_finite())
+}
+
+fn source_map_arg_i64(args: &[f64], idx: usize) -> i64 {
+    source_map_arg_number(args, idx)
+        .map(|n| n as i64)
+        .unwrap_or(0)
+}
+
+/// Decode the payload's `mappings` and return the greatest entry whose
+/// generated position is `<=` (line, column). Entries are emitted in
+/// non-decreasing order, so the last non-exceeding one wins.
+fn source_map_lookup(payload: f64, line: i64, col: i64) -> Option<SourceMapEntry> {
+    let mappings = source_map_field_string(payload, "mappings")?;
+    let mut best = None;
+    for entry in source_map_decode(&mappings) {
+        if (entry.generated_line, entry.generated_column) <= (line, col) {
+            best = Some(entry);
+        } else {
+            break;
+        }
+    }
+    best
+}
+
+/// Build the `{ name?, fileName, lineNumber, columnNumber }` shape Node's
+/// `findOrigin` echoes (name/fileName from the matched entry; line/column from
+/// the call arguments). Insertion order matches Node for byte-identical JSON.
+fn source_map_origin_object(
+    payload: f64,
+    entry: Option<SourceMapEntry>,
+    line: Option<f64>,
+    col: Option<f64>,
+) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 4);
+    if let Some(SourceMapEntry {
+        original: Some((source_index, _, _, name_index)),
+        ..
+    }) = entry
+    {
+        if let Some(name_index) = name_index {
+            let name = source_map_array_element(payload, "names", name_index);
+            if JSValue::from_bits(name.to_bits()).is_string() {
+                module_set_field(obj, "name", name);
+            }
+        }
+        module_set_field(
+            obj,
+            "fileName",
+            source_map_array_element(payload, "sources", source_index),
+        );
+    }
+    let null = f64::from_bits(crate::value::TAG_NULL);
+    module_set_field(obj, "lineNumber", line.map_or(null, |n| n));
+    module_set_field(obj, "columnNumber", col.map_or(null, |n| n));
+    module_object_value(obj)
+}
+
+/// `SourceMap#findEntry(lineNumber, columnNumber)` — return the greatest
+/// decoded entry whose generated position is `<=` the query, shaped like
+/// Node's `{ generatedLine, generatedColumn, originalSource, originalLine,
+/// originalColumn, name? }`. Returns `{}` when no entry precedes the query.
+extern "C" fn source_map_find_entry_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    let payload = js_closure_get_capture_f64(closure, 0);
+    let args = source_map_collect_args(rest);
+    let query_line = source_map_arg_i64(&args, 0);
+    let query_col = source_map_arg_i64(&args, 1);
+
+    let Some(entry) = source_map_lookup(payload, query_line, query_col) else {
+        return module_object_value(crate::object::js_object_alloc(0, 0));
+    };
+
+    let obj = crate::object::js_object_alloc(0, 6);
+    module_set_field(obj, "generatedLine", entry.generated_line as f64);
+    module_set_field(obj, "generatedColumn", entry.generated_column as f64);
+    if let Some((source_index, original_line, original_column, name_index)) = entry.original {
+        module_set_field(
+            obj,
+            "originalSource",
+            source_map_array_element(payload, "sources", source_index),
+        );
+        module_set_field(obj, "originalLine", original_line as f64);
+        module_set_field(obj, "originalColumn", original_column as f64);
+        if let Some(name_index) = name_index {
+            let name = source_map_array_element(payload, "names", name_index);
+            if JSValue::from_bits(name.to_bits()).is_string() {
+                module_set_field(obj, "name", name);
+            }
+        }
+    }
+    module_object_value(obj)
+}
+
+/// `SourceMap#findOrigin(lineNumber, columnNumber)`. Node echoes the queried
+/// coordinates (as `lineNumber`/`columnNumber`, or `null` when an argument is
+/// not a finite number) and tags on the `name`/`fileName` of the entry at that
+/// generated position. The lone special case is a numeric `(0, 0)` query, for
+/// which Node returns an empty object.
+extern "C" fn source_map_find_origin_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    let payload = js_closure_get_capture_f64(closure, 0);
+    let args = source_map_collect_args(rest);
+    let line = source_map_arg_number(&args, 0);
+    let col = source_map_arg_number(&args, 1);
+
+    if line == Some(0.0) && col == Some(0.0) {
+        return module_object_value(crate::object::js_object_alloc(0, 0));
+    }
+
+    let entry = source_map_lookup(
+        payload,
+        line.map(|n| n as i64).unwrap_or(0),
+        col.map(|n| n as i64).unwrap_or(0),
+    );
+    source_map_origin_object(payload, entry, line, col)
 }
 
 /// Module.isBuiltin(id) -> boolean
