@@ -22,6 +22,17 @@ use perry_runtime::thread::{
 use perry_runtime::value::JSValue;
 
 mod parent_port;
+mod worker_options;
+mod worker_surface;
+
+use worker_options::{apply_worker_env, restore_worker_env, WorkerOptions, WorkerResourceLimits};
+use worker_surface::{
+    empty_object, js_worker_threads_worker_off, js_worker_threads_worker_on,
+    js_worker_threads_worker_once, js_worker_threads_worker_post_message,
+    js_worker_threads_worker_ref, js_worker_threads_worker_terminate,
+    js_worker_threads_worker_unref, worker_id_from_receiver, worker_object, worker_profile_handle,
+    worker_readable_stream_object, worker_resource_limits_object,
+};
 
 // JSON functions are in perry-stdlib/src/framework/json.rs (behind http-server feature).
 // They are #[no_mangle] pub extern "C" so we can link to them at link time.
@@ -29,6 +40,9 @@ mod parent_port;
 extern "C" {
     fn js_json_parse(text_ptr: *const StringHeader) -> u64; // returns JSValue bits
     fn js_json_stringify(value: f64, type_hint: u32) -> *mut StringHeader;
+    fn js_v8_get_heap_statistics() -> f64;
+    fn js_process_cpu_usage(prior: f64) -> f64;
+    fn js_perf_event_loop_utilization(util1: f64, util2: f64) -> f64;
 }
 
 /// Handle for parentPort (always 1)
@@ -64,6 +78,10 @@ thread_local! {
     static CURRENT_WORKER_ID: Cell<u64> = const { Cell::new(0) };
     /// workerData for the current in-process Worker.
     static CURRENT_WORKER_DATA: RefCell<Option<SerializedValue>> = const { RefCell::new(None) };
+    /// Worker threadName for the current in-process Worker.
+    static CURRENT_THREAD_NAME: RefCell<String> = const { RefCell::new(String::new()) };
+    /// Worker resourceLimits for the current in-process Worker.
+    static CURRENT_RESOURCE_LIMITS: Cell<WorkerResourceLimits> = const { Cell::new(WorkerResourceLimits::node_default()) };
 }
 
 /// Per-port state for a same-process MessageChannel (#3157). A `MessageChannel`
@@ -376,95 +394,43 @@ fn get_object_field_from_value(obj_value: f64, name: &str) -> f64 {
     )
 }
 
-fn worker_id_from_receiver(receiver: i64) -> Option<u64> {
-    if receiver == 0 {
+fn object_ptr_from_value(value: f64) -> Option<*mut perry_runtime::object::ObjectHeader> {
+    if !JSValue::from_bits(value.to_bits()).is_pointer() {
         return None;
     }
-    let receiver_value = perry_runtime::value::js_nanbox_pointer(receiver);
-    let thread_id = get_object_field_from_value(receiver_value, "threadId");
-    if thread_id.is_finite() && thread_id >= 1.0 {
-        Some(thread_id as u64)
-    } else {
-        None
+    let raw = perry_runtime::value::js_nanbox_get_pointer(value) as usize;
+    if raw < 0x10000 || perry_runtime::buffer::is_registered_buffer(raw) {
+        return None;
     }
-}
-
-#[no_mangle]
-pub extern "C" fn js_worker_threads_worker_post_message(receiver: i64, value: f64) -> f64 {
-    let Some(worker_id) = worker_id_from_receiver(receiver) else {
-        return js_undefined();
-    };
-    let message = unsafe { serialize_nanbox_for_thread(value.to_bits()) };
-    let sender = WORKERS
-        .lock()
-        .unwrap()
-        .get(&worker_id)
-        .map(|worker| worker.sender.clone());
-    if let Some(sender) = sender {
-        let _ = sender.send(WorkerCommand::Message(message));
-    }
-    js_undefined()
-}
-
-#[no_mangle]
-pub extern "C" fn js_worker_threads_worker_on(receiver: i64, event: f64, callback: i64) -> f64 {
-    let Some(worker_id) = worker_id_from_receiver(receiver) else {
-        return js_undefined();
-    };
-    let callback_value = perry_runtime::value::js_nanbox_pointer(callback);
-    worker_add_listener(worker_id, event, callback_value, false)
-}
-
-#[no_mangle]
-pub extern "C" fn js_worker_threads_worker_once(receiver: i64, event: f64, callback: i64) -> f64 {
-    let Some(worker_id) = worker_id_from_receiver(receiver) else {
-        return js_undefined();
-    };
-    let callback_value = perry_runtime::value::js_nanbox_pointer(callback);
-    worker_add_listener(worker_id, event, callback_value, true)
-}
-
-#[no_mangle]
-pub extern "C" fn js_worker_threads_worker_off(receiver: i64, event: f64, callback: i64) -> f64 {
-    let Some(worker_id) = worker_id_from_receiver(receiver) else {
-        return js_undefined();
-    };
-    let Some(event) = event_name(event) else {
-        return js_undefined();
-    };
-    let callback_bits = perry_runtime::value::js_nanbox_pointer(callback).to_bits();
-    let mut workers = WORKERS.lock().unwrap();
-    if let Some(worker) = workers.get_mut(&worker_id) {
-        if let Some(listeners) = worker.listeners.get_mut(&event) {
-            listeners.retain(|listener| listener.callback_bits != callback_bits);
+    unsafe {
+        let header = (raw as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
+            as *const perry_runtime::gc::GcHeader;
+        if (*header).obj_type != perry_runtime::gc::GC_TYPE_OBJECT {
+            return None;
         }
     }
-    js_undefined()
+    Some(raw as *mut perry_runtime::object::ObjectHeader)
 }
 
-#[no_mangle]
-pub extern "C" fn js_worker_threads_worker_terminate(receiver: i64) -> f64 {
-    let Some(worker_id) = worker_id_from_receiver(receiver) else {
-        let promise = perry_runtime::js_promise_resolved(1.0);
-        return perry_runtime::value::js_nanbox_pointer(promise as i64);
-    };
-    worker_terminate_by_id(worker_id)
-}
-
-#[no_mangle]
-pub extern "C" fn js_worker_threads_worker_ref(receiver: i64) -> f64 {
-    let Some(worker_id) = worker_id_from_receiver(receiver) else {
-        return js_undefined();
-    };
-    worker_ref_by_id(worker_id)
-}
-
-#[no_mangle]
-pub extern "C" fn js_worker_threads_worker_unref(receiver: i64) -> f64 {
-    let Some(worker_id) = worker_id_from_receiver(receiver) else {
-        return js_undefined();
-    };
-    worker_unref_by_id(worker_id)
+fn array_ptr_from_value(value: f64) -> Option<*mut perry_runtime::array::ArrayHeader> {
+    if !JSValue::from_bits(value.to_bits()).is_pointer() {
+        return None;
+    }
+    let raw = perry_runtime::value::js_nanbox_get_pointer(value) as usize;
+    if raw < 0x10000 {
+        return None;
+    }
+    unsafe {
+        let header = (raw as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
+            as *const perry_runtime::gc::GcHeader;
+        let obj_type = (*header).obj_type;
+        if obj_type == perry_runtime::gc::GC_TYPE_ARRAY
+            || obj_type == perry_runtime::gc::GC_TYPE_LAZY_ARRAY
+        {
+            return Some(raw as *mut perry_runtime::array::ArrayHeader);
+        }
+    }
+    None
 }
 
 fn callback_bits_from_value(value: f64) -> Option<u64> {
@@ -872,79 +838,15 @@ fn throw_data_clone_error(detail: &str) -> ! {
     perry_runtime::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
 }
 
-fn worker_object(worker_id: u64, thread_name: &str) -> *mut perry_runtime::object::ObjectHeader {
-    let obj = perry_runtime::object::js_object_alloc(0, 0);
-    set_object_field(obj, "threadId", worker_id as f64);
-    set_object_field(
-        obj,
-        "threadName",
-        f64::from_bits(
-            JSValue::string_ptr(js_string_from_bytes(
-                thread_name.as_ptr(),
-                thread_name.len() as u32,
-            ))
-            .bits(),
-        ),
-    );
-    set_object_field(
-        obj,
-        "resourceLimits",
-        object_value(worker_resource_limits_object()),
-    );
-    set_object_field(
-        obj,
-        "postMessage",
-        closure_value_with_worker_id(worker_post_message as *const u8, 1, worker_id),
-    );
-    set_object_field(
-        obj,
-        "terminate",
-        closure_value_with_worker_id(worker_terminate as *const u8, 0, worker_id),
-    );
-    set_object_field(
-        obj,
-        "ref",
-        closure_value_with_worker_id(worker_ref as *const u8, 0, worker_id),
-    );
-    set_object_field(
-        obj,
-        "unref",
-        closure_value_with_worker_id(worker_unref as *const u8, 0, worker_id),
-    );
-    set_object_field(
-        obj,
-        "on",
-        closure_value_with_worker_id(worker_on as *const u8, 2, worker_id),
-    );
-    set_object_field(
-        obj,
-        "once",
-        closure_value_with_worker_id(worker_once as *const u8, 2, worker_id),
-    );
-    set_object_field(
-        obj,
-        "off",
-        closure_value_with_worker_id(worker_off as *const u8, 2, worker_id),
-    );
-    obj
+fn string_value(value: &str) -> f64 {
+    f64::from_bits(
+        JSValue::string_ptr(js_string_from_bytes(value.as_ptr(), value.len() as u32)).bits(),
+    )
 }
 
-fn worker_resource_limits_object() -> *mut perry_runtime::object::ObjectHeader {
-    let obj = perry_runtime::object::js_object_alloc(0, 0);
-    let keys = [
-        ("maxYoungGenerationSizeMb", 192.0),
-        ("maxOldGenerationSizeMb", 4096.0),
-        ("codeRangeSizeMb", 0.0),
-        ("stackSizeMb", 4.0),
-    ];
-    let mut keys_array = perry_runtime::js_array_alloc(keys.len() as u32);
-    for (name, value) in keys {
-        set_object_field(obj, name, value);
-        let name_ptr = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        keys_array = perry_runtime::js_array_push(keys_array, JSValue::string_ptr(name_ptr));
-    }
-    perry_runtime::js_object_set_keys(obj, keys_array);
-    obj
+fn resolved_promise_value(value: f64) -> f64 {
+    let promise = perry_runtime::js_promise_resolved(value);
+    perry_runtime::value::js_nanbox_pointer(promise as i64)
 }
 
 fn event_name(value: f64) -> Option<String> {
@@ -1036,6 +938,76 @@ fn worker_unref_by_id(worker_id: u64) -> f64 {
         worker.refed = false;
     }
     js_undefined()
+}
+
+extern "C" fn worker_get_heap_statistics(closure: *const ClosureHeader) -> f64 {
+    worker_get_heap_statistics_by_id(captured_worker_id(closure))
+}
+
+fn worker_get_heap_statistics_by_id(_worker_id: u64) -> f64 {
+    resolved_promise_value(unsafe { js_v8_get_heap_statistics() })
+}
+
+extern "C" fn worker_cpu_usage(closure: *const ClosureHeader, prior: f64) -> f64 {
+    worker_cpu_usage_by_id(captured_worker_id(closure), prior)
+}
+
+fn worker_cpu_usage_by_id(_worker_id: u64, prior: f64) -> f64 {
+    resolved_promise_value(unsafe { js_process_cpu_usage(prior) })
+}
+
+extern "C" fn worker_get_heap_snapshot(closure: *const ClosureHeader, options: f64) -> f64 {
+    worker_get_heap_snapshot_by_id(captured_worker_id(closure), options)
+}
+
+fn worker_get_heap_snapshot_by_id(_worker_id: u64, _options: f64) -> f64 {
+    resolved_promise_value(worker_readable_stream_object())
+}
+
+extern "C" fn worker_start_cpu_profile(closure: *const ClosureHeader) -> f64 {
+    worker_start_cpu_profile_by_id(captured_worker_id(closure))
+}
+
+fn worker_start_cpu_profile_by_id(_worker_id: u64) -> f64 {
+    resolved_promise_value(worker_profile_handle(0))
+}
+
+extern "C" fn worker_start_heap_profile(closure: *const ClosureHeader) -> f64 {
+    worker_start_heap_profile_by_id(captured_worker_id(closure))
+}
+
+fn worker_start_heap_profile_by_id(_worker_id: u64) -> f64 {
+    resolved_promise_value(worker_profile_handle(1))
+}
+
+#[no_mangle]
+pub extern "C" fn js_worker_threads_worker_get_heap_statistics(receiver: i64) -> f64 {
+    let worker_id = worker_id_from_receiver(receiver).unwrap_or(0);
+    worker_get_heap_statistics_by_id(worker_id)
+}
+
+#[no_mangle]
+pub extern "C" fn js_worker_threads_worker_cpu_usage(receiver: i64, prior: f64) -> f64 {
+    let worker_id = worker_id_from_receiver(receiver).unwrap_or(0);
+    worker_cpu_usage_by_id(worker_id, prior)
+}
+
+#[no_mangle]
+pub extern "C" fn js_worker_threads_worker_get_heap_snapshot(receiver: i64, options: f64) -> f64 {
+    let worker_id = worker_id_from_receiver(receiver).unwrap_or(0);
+    worker_get_heap_snapshot_by_id(worker_id, options)
+}
+
+#[no_mangle]
+pub extern "C" fn js_worker_threads_worker_start_cpu_profile(receiver: i64) -> f64 {
+    let worker_id = worker_id_from_receiver(receiver).unwrap_or(0);
+    worker_start_cpu_profile_by_id(worker_id)
+}
+
+#[no_mangle]
+pub extern "C" fn js_worker_threads_worker_start_heap_profile(receiver: i64) -> f64 {
+    let worker_id = worker_id_from_receiver(receiver).unwrap_or(0);
+    worker_start_heap_profile_by_id(worker_id)
 }
 
 fn worker_terminate_by_id(worker_id: u64) -> f64 {
@@ -1582,16 +1554,16 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     crate::common::async_bridge::ensure_pump_registered();
 
     let worker_id = NEXT_WORKER_ID.fetch_add(1, Ordering::Relaxed);
+    let options_state = WorkerOptions::from_value(options);
     let worker_data = if is_undefined(options) {
         None
     } else {
         let data = get_object_field_from_value(options, "workerData");
-        Some(unsafe { serialize_nanbox_for_thread(data.to_bits()) })
-    };
-    let thread_name = if is_undefined(options) {
-        String::new()
-    } else {
-        string_value_to_string(get_object_field_from_value(options, "name")).unwrap_or_default()
+        if is_undefined(data) {
+            None
+        } else {
+            Some(unsafe { serialize_nanbox_for_thread(data.to_bits()) })
+        }
     };
     let (tx, rx) = mpsc::channel::<WorkerCommand>();
     WORKERS.lock().unwrap().insert(
@@ -1605,9 +1577,13 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
         },
     );
 
+    let thread_options = options_state.clone();
     std::thread::spawn(move || {
+        let previous_env = apply_worker_env(&thread_options.env);
         CURRENT_WORKER_ID.with(|id| id.set(worker_id));
         CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = worker_data);
+        CURRENT_THREAD_NAME.with(|slot| *slot.borrow_mut() = thread_options.thread_name.clone());
+        CURRENT_RESOURCE_LIMITS.with(|slot| slot.set(thread_options.resource_limits));
         push_parent_event(WorkerEvent::Online(worker_id));
 
         let entry: WorkerEntry = unsafe { std::mem::transmute(entry_ptr as usize) };
@@ -1634,6 +1610,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
                 }
             }
         }));
+        restore_worker_env(previous_env);
 
         let exit_code = match result {
             Ok(()) => exit_code,
@@ -1645,7 +1622,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
         push_parent_event(WorkerEvent::Exit(worker_id, exit_code));
     });
 
-    object_value(worker_object(worker_id, &thread_name))
+    object_value(worker_object(worker_id, &options_state))
 }
 
 /// worker_threads.setEnvironmentData(key, value)
@@ -1725,6 +1702,20 @@ pub extern "C" fn js_worker_threads_parent_port() -> f64 {
     // Returning a `{}` object here made `if (parentPort)` truthy on the main
     // thread, diverging from Node.
     js_null()
+}
+
+#[no_mangle]
+pub extern "C" fn js_worker_threads_thread_name() -> f64 {
+    CURRENT_THREAD_NAME.with(|slot| string_value(&slot.borrow()))
+}
+
+#[no_mangle]
+pub extern "C" fn js_worker_threads_resource_limits() -> f64 {
+    if CURRENT_WORKER_ID.with(|id| id.get()) == 0 {
+        return object_value(empty_object());
+    }
+    CURRENT_RESOURCE_LIMITS
+        .with(|limits| object_value(worker_resource_limits_object(&limits.get())))
 }
 
 /// parentPort.postMessage(data) - JSON-stringify and write to stdout

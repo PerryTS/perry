@@ -65,6 +65,7 @@ pub(crate) use class_gc_roots::{
     test_seed_class_parent_closure_root,
 };
 pub use class_registry::*;
+pub(crate) use collection_proto_thunks::{is_builtin_map_set_value, is_builtin_set_add_value};
 pub(crate) use data_view_registry::extends_builtin_data_view;
 pub use delete_rest::*;
 pub use descriptors::*;

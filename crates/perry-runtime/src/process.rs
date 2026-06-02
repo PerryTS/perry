@@ -244,9 +244,11 @@ fn supported_builtin_module_name(name: &str) -> Option<&str> {
         "assert" | "assert/strict" | "async_hooks" | "buffer" | "child_process" | "cluster"
         | "console" | "constants" | "crypto" | "dns" | "dns/promises" | "events" | "fs"
         | "http" | "http2" | "https" | "net" | "os" | "path" | "perf_hooks" | "process"
-        | "punycode" | "querystring" | "readline" | "stream" | "stream/promises"
-        | "string_decoder" | "sys" | "test" | "test/reporters" | "timers" | "timers/promises"
-        | "tty" | "url" | "util" | "util/types" | "worker_threads" | "zlib" => Some(name),
+        | "punycode" | "querystring" | "readline" | "readline/promises" | "stream"
+        | "stream/promises" | "string_decoder" | "sys" | "test" | "test/reporters" | "timers"
+        | "timers/promises" | "tty" | "url" | "util" | "util/types" | "worker_threads" | "zlib" => {
+            Some(name)
+        }
         _ => None,
     }
 }

@@ -837,6 +837,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("dns/promises", "setLocalAddress", true, Some("Resolver")),
     // node:dgram has deterministic in-process loopback coverage for the
     // unicast subset; multicast/queue option methods remain shape-compatible.
+    // #3693: default import (`import dgram from "node:dgram"`) === the module
+    // namespace (CJS `module.exports`).
+    property("dgram", "default"),
     method("dgram", "createSocket", false, None),
     class("dgram", "Socket"),
     method("dgram", "Socket", false, None),
@@ -854,6 +857,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("dgram", "removeListener", true, Some("Socket")),
     method("dgram", "emit", true, Some("Socket")),
     method("dgram", "listenerCount", true, Some("Socket")),
+    method("dgram", "eventNames", true, Some("Socket")),
     method("dgram", "addMembership", true, Some("Socket")),
     method("dgram", "dropMembership", true, Some("Socket")),
     method("dgram", "addSourceSpecificMembership", true, Some("Socket")),
@@ -2555,6 +2559,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("worker_threads", "terminate", true, Some("Worker")),
     method("worker_threads", "ref", true, Some("Worker")),
     method("worker_threads", "unref", true, Some("Worker")),
+    method("worker_threads", "getHeapStatistics", true, Some("Worker")),
+    method("worker_threads", "cpuUsage", true, Some("Worker")),
+    method("worker_threads", "getHeapSnapshot", true, Some("Worker")),
+    method("worker_threads", "startCpuProfile", true, Some("Worker")),
+    method("worker_threads", "startHeapProfile", true, Some("Worker")),
     // node:worker_threads — value-shaped exports (#2135). Perry doesn't
     // spawn JS workers, so the main thread is the only thread: isMainThread
     // is always true, threadId is 0, resourceLimits is an empty object.
@@ -2729,6 +2738,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "publicDecrypt", false, None),
     method("crypto", "getHashes", false, None),
     method("crypto", "getCiphers", false, None),
+    // #4033-adjacent: `crypto.getCipherInfo(nameOrNid[, options])` — the runtime
+    // (`js_crypto_get_cipher_info`) + native-module dispatch already exist; only
+    // the manifest row was missing, so the #463 gate rejected the call.
+    method("crypto", "getCipherInfo", false, None),
     method("crypto", "getCurves", false, None),
     method("crypto", "getFips", false, None),
     // Web Crypto API (issue #561) — `crypto.subtle.*`. The HIR
@@ -3319,6 +3332,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `setupMaster`, `fork`, and `disconnect` route through the native
     // module bound-method path; handle sharing/listening distribution is
     // outside this manifest entry.
+    // #3687: default import (`import cluster from "node:cluster"`) is the
+    // EventEmitter-shaped `cluster.default` namespace; the `import * as`
+    // namespace keeps the shape-only surface.
+    property("cluster", "default"),
     method("cluster", "fork", false, None),
     method("cluster", "disconnect", false, None),
     method("cluster", "setupPrimary", false, None),
@@ -3341,8 +3358,21 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // as properties so the #463 strict gate doesn't bail out at compile
     // time; `get_native_module_constant` returns `undefined` at
     // runtime.
+    // #3687: the EventEmitter method surface. On the `import * as` namespace
+    // these all read `undefined` (they are not named exports); on the default
+    // import they resolve to bound methods. Registered so the #463 strict gate
+    // accepts reads/calls at compile time.
     internal_property("cluster", "on"),
     internal_property("cluster", "addListener"),
+    internal_property("cluster", "once"),
+    internal_property("cluster", "prependListener"),
+    internal_property("cluster", "prependOnceListener"),
+    internal_property("cluster", "off"),
+    internal_property("cluster", "removeListener"),
+    internal_property("cluster", "removeAllListeners"),
+    internal_property("cluster", "emit"),
+    internal_property("cluster", "eventNames"),
+    internal_property("cluster", "listenerCount"),
     // ===========================================================
     // #513 Phase A: backfill receiver-less surface for modules that
     // previously had zero entries. Without these, `module_has_any_entries`

@@ -5,6 +5,7 @@
 //! implement socket/listening handle distribution.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::Once;
 
 use crate::array::ArrayHeader;
@@ -78,6 +79,255 @@ pub fn cluster_property(property: &str) -> Option<f64> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// node:cluster default-import EventEmitter (#3687)
+//
+// In Node, `node:cluster` is a singleton EventEmitter, so the *default* import
+// (`import cluster from "node:cluster"`) exposes `on`/`once`/`emit`/… while the
+// *namespace* import (`import * as cluster`) does not (those live on
+// EventEmitter.prototype, not as named module exports). Perry models the
+// default import as a distinct `cluster.default` native-module namespace whose
+// EventEmitter method reads resolve here; the namespace import keeps the
+// `undefined` shape via `cluster_property`. Real worker-lifecycle events are
+// still deferred (closed umbrella #3605) — this is module-level listener
+// bookkeeping plus a synchronous `fork` emit so feature-detection and manual
+// `emit()` round-trips match Node.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+struct ClusterListener {
+    callback_bits: u64,
+    once: bool,
+}
+
+#[derive(Default)]
+struct ClusterEmitter {
+    events: HashMap<String, Vec<ClusterListener>>,
+    order: Vec<String>,
+}
+
+thread_local! {
+    static CLUSTER_EMITTER: RefCell<ClusterEmitter> = RefCell::new(ClusterEmitter::default());
+}
+
+/// The `cluster.default` namespace object — the value bound by
+/// `import cluster from "node:cluster"`. Cached (see
+/// `should_cache_native_module_namespace`), so EventEmitter methods can return
+/// it for `cluster.on(...) === cluster` chaining.
+fn cluster_default_value() -> f64 {
+    crate::object::js_create_native_module_namespace(
+        b"cluster.default".as_ptr(),
+        "cluster.default".len(),
+    )
+}
+
+fn cluster_emitter_event_name(event: f64) -> Option<String> {
+    let jv = JSValue::from_bits(event.to_bits());
+    if jv.is_string() || jv.is_short_string() {
+        return value_to_string(event);
+    }
+    // Non-string event names follow EventEmitter ToString semantics.
+    let coerced = crate::value::js_jsvalue_to_string(event);
+    if coerced.is_null() {
+        return None;
+    }
+    value_to_string(f64::from_bits(JSValue::string_ptr(coerced).bits()))
+}
+
+fn cluster_register_listener(event: f64, listener: f64, once: bool, prepend: bool) -> f64 {
+    if !is_closure_value(listener) {
+        return cluster_default_value();
+    }
+    if let Some(name) = cluster_emitter_event_name(event) {
+        CLUSTER_EMITTER.with(|emitter| {
+            let mut emitter = emitter.borrow_mut();
+            if !emitter.order.iter().any(|n| n == &name) {
+                emitter.order.push(name.clone());
+            }
+            let entry = ClusterListener {
+                callback_bits: listener.to_bits(),
+                once,
+            };
+            let listeners = emitter.events.entry(name).or_default();
+            if prepend {
+                listeners.insert(0, entry);
+            } else {
+                listeners.push(entry);
+            }
+        });
+    }
+    cluster_default_value()
+}
+
+pub(crate) fn cluster_emit_event(event: &str, args: &[f64]) -> bool {
+    let listeners = CLUSTER_EMITTER.with(|emitter| {
+        let mut emitter = emitter.borrow_mut();
+        let Some(listeners) = emitter.events.get_mut(event) else {
+            return Vec::new();
+        };
+        let snapshot = listeners.clone();
+        if snapshot.iter().any(|l| l.once) {
+            listeners.retain(|l| !l.once);
+            if listeners.is_empty() {
+                emitter.events.remove(event);
+                emitter.order.retain(|n| n != event);
+            }
+        }
+        snapshot
+    });
+    if listeners.is_empty() {
+        return false;
+    }
+    for listener in listeners {
+        let cb = f64::from_bits(listener.callback_bits);
+        let prev = js_implicit_this_set(cluster_default_value());
+        unsafe {
+            let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
+        }
+        js_implicit_this_set(prev);
+    }
+    true
+}
+
+fn cluster_emitter_scan(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    CLUSTER_EMITTER.with(|emitter| {
+        let mut emitter = emitter.borrow_mut();
+        for listeners in emitter.events.values_mut() {
+            for listener in listeners {
+                visitor.visit_nanbox_u64_slot(&mut listener.callback_bits);
+            }
+        }
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn js_cluster_on(event: f64, listener: f64) -> f64 {
+    ensure_cluster_runtime();
+    cluster_register_listener(event, listener, false, false)
+}
+
+#[no_mangle]
+pub extern "C" fn js_cluster_once(event: f64, listener: f64) -> f64 {
+    ensure_cluster_runtime();
+    cluster_register_listener(event, listener, true, false)
+}
+
+#[no_mangle]
+pub extern "C" fn js_cluster_prepend_listener(event: f64, listener: f64) -> f64 {
+    ensure_cluster_runtime();
+    cluster_register_listener(event, listener, false, true)
+}
+
+#[no_mangle]
+pub extern "C" fn js_cluster_prepend_once_listener(event: f64, listener: f64) -> f64 {
+    ensure_cluster_runtime();
+    cluster_register_listener(event, listener, true, true)
+}
+
+#[no_mangle]
+pub extern "C" fn js_cluster_emit(event: f64, args: *const ArrayHeader) -> f64 {
+    ensure_cluster_runtime();
+    let Some(name) = cluster_emitter_event_name(event) else {
+        return TAG_FALSE_F64;
+    };
+    let values = if args.is_null() {
+        Vec::new()
+    } else {
+        let len = crate::array::js_array_length(args);
+        let mut out = Vec::with_capacity(len as usize);
+        for i in 0..len {
+            out.push(crate::array::js_array_get_f64(args, i));
+        }
+        out
+    };
+    if cluster_emit_event(&name, &values) {
+        TAG_TRUE_F64
+    } else {
+        TAG_FALSE_F64
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_cluster_event_names() -> f64 {
+    ensure_cluster_runtime();
+    let names = CLUSTER_EMITTER.with(|emitter| {
+        let emitter = emitter.borrow();
+        emitter
+            .order
+            .iter()
+            .filter(|n| emitter.events.get(*n).is_some_and(|l| !l.is_empty()))
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    let mut arr = crate::array::js_array_alloc(names.len() as u32);
+    for name in names {
+        arr = crate::array::js_array_push(arr, JSValue::string_ptr(str_key(name.as_bytes())));
+    }
+    box_ptr(arr as *const u8)
+}
+
+#[no_mangle]
+pub extern "C" fn js_cluster_listener_count(event: f64) -> f64 {
+    ensure_cluster_runtime();
+    let Some(name) = cluster_emitter_event_name(event) else {
+        return 0.0;
+    };
+    CLUSTER_EMITTER.with(|emitter| {
+        emitter
+            .borrow()
+            .events
+            .get(&name)
+            .map(|l| l.len() as f64)
+            .unwrap_or(0.0)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn js_cluster_remove_listener(event: f64, listener: f64) -> f64 {
+    ensure_cluster_runtime();
+    if let Some(name) = cluster_emitter_event_name(event) {
+        let bits = listener.to_bits();
+        CLUSTER_EMITTER.with(|emitter| {
+            let mut emitter = emitter.borrow_mut();
+            if let Some(listeners) = emitter.events.get_mut(&name) {
+                if let Some(pos) = listeners.iter().rposition(|l| l.callback_bits == bits) {
+                    listeners.remove(pos);
+                }
+                if listeners.is_empty() {
+                    emitter.events.remove(&name);
+                    emitter.order.retain(|n| n != &name);
+                }
+            }
+        });
+    }
+    cluster_default_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_cluster_remove_all_listeners(event: f64) -> f64 {
+    ensure_cluster_runtime();
+    let jv = JSValue::from_bits(event.to_bits());
+    let target = if jv.is_undefined() || jv.is_null() {
+        None
+    } else {
+        cluster_emitter_event_name(event)
+    };
+    CLUSTER_EMITTER.with(|emitter| {
+        let mut emitter = emitter.borrow_mut();
+        match target {
+            Some(name) => {
+                emitter.events.remove(&name);
+                emitter.order.retain(|n| n != &name);
+            }
+            None => {
+                emitter.events.clear();
+                emitter.order.clear();
+            }
+        }
+    });
+    cluster_default_value()
+}
+
 #[no_mangle]
 pub extern "C" fn js_cluster_setup_primary(settings: f64) -> f64 {
     ensure_cluster_runtime();
@@ -119,6 +369,9 @@ pub extern "C" fn js_cluster_fork(env: f64) -> f64 {
 
     decorate_worker(worker, id);
     register_worker(id, worker);
+    // Node fires the cluster-level `fork` event synchronously when the worker
+    // object is created (`online`/`exit`/etc. remain deferred — #3605).
+    cluster_emit_event("fork", &[worker]);
     worker
 }
 
@@ -170,6 +423,7 @@ fn cluster_root_scanner(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
             visitor.visit_nanbox_u64_slot(bits);
         }
     });
+    cluster_emitter_scan(visitor);
 }
 
 fn register_cluster_arities() {

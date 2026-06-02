@@ -145,16 +145,22 @@ type WorkerThreadsValueGetter = extern "C" fn() -> f64;
 static WORKER_THREADS_WORKER_DATA_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
 static WORKER_THREADS_IS_MAIN_THREAD_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
 static WORKER_THREADS_PARENT_PORT_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static WORKER_THREADS_THREAD_NAME_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static WORKER_THREADS_RESOURCE_LIMITS_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
 
 #[no_mangle]
 pub extern "C" fn js_register_worker_threads_namespace_getters(
     worker_data: WorkerThreadsValueGetter,
     is_main_thread: WorkerThreadsValueGetter,
     parent_port: WorkerThreadsValueGetter,
+    thread_name: WorkerThreadsValueGetter,
+    resource_limits: WorkerThreadsValueGetter,
 ) {
     WORKER_THREADS_WORKER_DATA_GETTER.store(worker_data as *mut (), Ordering::Release);
     WORKER_THREADS_IS_MAIN_THREAD_GETTER.store(is_main_thread as *mut (), Ordering::Release);
     WORKER_THREADS_PARENT_PORT_GETTER.store(parent_port as *mut (), Ordering::Release);
+    WORKER_THREADS_THREAD_NAME_GETTER.store(thread_name as *mut (), Ordering::Release);
+    WORKER_THREADS_RESOURCE_LIMITS_GETTER.store(resource_limits as *mut (), Ordering::Release);
 }
 
 fn call_worker_threads_getter(slot: &AtomicPtr<()>, fallback: impl FnOnce() -> f64) -> f64 {
@@ -2441,6 +2447,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "events" => Some(EVENTS_NAMESPACE_KEYS),
         "worker_threads" => Some(WORKER_THREADS_NAMESPACE_KEYS),
         "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
+        "readline/promises" => Some(&[b"Interface", b"Readline", b"createInterface"]),
         "zlib" => Some(&[b"codes"]),
         _ => None,
     }
@@ -2455,6 +2462,7 @@ fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
     match module_name {
         "async_hooks.default" => Some("async_hooks"),
         "child_process.default" => Some("child_process"),
+        "cluster.default" => Some("cluster"),
         "constants.default" => Some("constants"),
         "dns.default" => Some("dns"),
         "dns/promises.default" => Some("dns/promises"),
@@ -2474,6 +2482,7 @@ fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
     match module_name {
         "async_hooks" => Some("async_hooks.default"),
         "child_process" => Some("child_process.default"),
+        "cluster" => Some("cluster.default"),
         "constants" => Some("constants.default"),
         "dns" => Some("dns.default"),
         "dns/promises" => Some("dns/promises.default"),
@@ -2497,6 +2506,16 @@ fn create_cjs_default_namespace(module_name: &str) -> Option<f64> {
 fn cjs_default_export_value(module_name: &str) -> Option<f64> {
     match module_name {
         "events" => Some(bound_native_callable_export_value("events", "EventEmitter")),
+        // #3687: `node:cluster` default import is a distinct EventEmitter-shaped
+        // `cluster.default` namespace (its `on`/`emit`/… reads diverge from the
+        // bare `import * as` namespace).
+        "cluster" => create_cjs_default_namespace("cluster"),
+        // #3693: `node:dgram` default === the module namespace (CJS
+        // `module.exports`); a cached singleton makes `dgram === ns.default`.
+        "dgram" => Some(js_create_native_module_namespace(
+            b"dgram".as_ptr(),
+            "dgram".len(),
+        )),
         "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "os" | "path"
         | "path.posix" | "path.win32" | "punycode" | "querystring" | "url" | "util" => {
             create_cjs_default_namespace(module_name)
@@ -2541,6 +2560,9 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "dns.default"
             | "dns/promises.default"
             | "child_process.default"
+            | "cluster"
+            | "cluster.default"
+            | "dgram"
             | "events"
             | "fs.constants"
             | "os"
@@ -2562,6 +2584,7 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "util.types"
             | "path.posix"
             | "path.win32"
+            | "readline/promises"
             | "timers/promises"
             | "crypto.webcrypto"
             | "crypto.subtle"
@@ -2670,6 +2693,17 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
         if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
             return value;
         }
+    }
+
+    // #3687: `node:cluster` is a singleton EventEmitter. Its EventEmitter
+    // method surface is exposed ONLY on the default import (the distinct
+    // `cluster.default` namespace) — `import * as cluster` reads these as
+    // `undefined` (they live on EventEmitter.prototype, not as named exports).
+    // Resolve them to bound methods here, before the generic
+    // `get_native_module_constant` path (where `cluster_property` would return
+    // `undefined` for `on`/`addListener`).
+    if module_name == "cluster.default" && is_cluster_emitter_method(property_name) {
+        return bound_native_callable_export_value("cluster.default", property_name);
     }
 
     if let Some(val) = get_native_module_constant(module_name, property_name, 0.0) {
@@ -2914,8 +2948,42 @@ pub(crate) fn fs_namespace_descriptor_setter_value(property_name: &str) -> f64 {
     value
 }
 
+/// The EventEmitter method names `node:cluster`'s default import exposes
+/// (#3687). Kept narrow so a typo'd `cluster.foo` still reads `undefined`.
+pub(crate) fn is_cluster_emitter_method(prop: &str) -> bool {
+    matches!(
+        prop,
+        "on" | "addListener"
+            | "once"
+            | "prependListener"
+            | "prependOnceListener"
+            | "off"
+            | "removeListener"
+            | "removeAllListeners"
+            | "emit"
+            | "eventNames"
+            | "listenerCount"
+    )
+}
+
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
+        // #3687: node:cluster — module-method `.length` matches Node.
+        ("cluster", "fork" | "disconnect" | "setupPrimary" | "setupMaster" | "Worker") => Some(1),
+        ("cluster", "emit") => Some(1),
+        ("cluster", "eventNames") => Some(0),
+        (
+            "cluster",
+            "on"
+            | "addListener"
+            | "once"
+            | "prependListener"
+            | "prependOnceListener"
+            | "removeListener"
+            | "off"
+            | "listenerCount",
+        ) => Some(2),
+        ("cluster", "removeAllListeners") => Some(1),
         ("events", "EventEmitter") => Some(1),
         ("events", "EventEmitterAsyncResource") => Some(0),
         ("events", "addAbortListener") => Some(2),
@@ -5771,20 +5839,23 @@ pub(crate) unsafe fn get_native_module_constant(
             "default" if !is_cjs_default_object => cjs_default_export_value("querystring"),
             _ => None,
         },
-        "constants" => fs_const(property)
-            .or_else(|| fs_const_tail(property))
-            .or_else(|| os_signal_const(property))
-            .or_else(|| os_errno_const(property))
-            .or_else(|| os_priority_const(property))
-            .or_else(|| os_dlopen_const(property))
-            .or_else(|| crypto_const(property))
-            .or_else(|| {
-                if property == "defaultCoreCipherList" {
-                    Some(str_val(DEFAULT_CORE_CIPHER_LIST))
-                } else {
-                    None
-                }
-            }),
+        "constants" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("constants"),
+            _ => fs_const(property)
+                .or_else(|| fs_const_tail(property))
+                .or_else(|| os_signal_const(property))
+                .or_else(|| os_errno_const(property))
+                .or_else(|| os_priority_const(property))
+                .or_else(|| os_dlopen_const(property))
+                .or_else(|| crypto_const(property))
+                .or_else(|| {
+                    if property == "defaultCoreCipherList" {
+                        Some(str_val(DEFAULT_CORE_CIPHER_LIST))
+                    } else {
+                        None
+                    }
+                }),
+        },
         "sqlite" => match property {
             "constants" => Some(create_sub_namespace("sqlite.constants")),
             "Session" => Some(sqlite_session_constructor_value()),
@@ -6114,11 +6185,17 @@ pub(crate) unsafe fn get_native_module_constant(
                 || f64::from_bits(crate::value::TAG_NULL),
             )),
             "threadId" => Some(0.0),
-            "threadName" => Some(str_val("")),
-            "resourceLimits" => {
-                let obj = crate::object::js_object_alloc(0, 0);
-                Some(crate::value::js_nanbox_pointer(obj as i64))
-            }
+            "threadName" => Some(call_worker_threads_getter(
+                &WORKER_THREADS_THREAD_NAME_GETTER,
+                || str_val(""),
+            )),
+            "resourceLimits" => Some(call_worker_threads_getter(
+                &WORKER_THREADS_RESOURCE_LIMITS_GETTER,
+                || {
+                    let obj = crate::object::js_object_alloc(0, 0);
+                    crate::value::js_nanbox_pointer(obj as i64)
+                },
+            )),
             "locks" => Some(worker_threads_locks_value()),
             "SHARE_ENV" => Some(crate::symbol::js_symbol_for(str_val(
                 "nodejs.worker_threads.SHARE_ENV",

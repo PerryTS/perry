@@ -2,6 +2,10 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1099 — fix(crypto): unblock crypto.getCipherInfo (manifest gate)
+
+`crypto.getCipherInfo(name[, options])` threw the #463 "not implemented in Perry" error, even though its runtime (`js_crypto_get_cipher_info`) and native-module dispatch (`object/native_module.rs`) were already complete — the manifest just lacked the method row, so the U-006 import/dispatch gate rejected the call. Added `method("crypto", "getCipherInfo", false, None)` to the API manifest (`entries.rs`), beside `getCiphers`. `crypto.getCipherInfo("aes-128-cbc")` now returns `{ name, nid, blockSize, ivLength, keyLength, mode }` matching Node across the standard AES cbc/gcm/ecb/wrap ciphers (by name and by NID). Advances the crypto argument/surface parity work (#3955). Same shape as the v0.5.1063 `generateKeySync` fix.
+
 ## v0.5.1098 — fix(hir): typeof queueMicrotask/structuredClone/btoa/atob is "function"
 
 `typeof queueMicrotask`, `typeof structuredClone`, `typeof btoa`, and `typeof atob` reported `"object"` instead of `"function"`, even though all four globals are fully callable with correct results. A bare read of these identifiers resolves to `GlobalGet(0)` (globalThis itself) in HIR, so a value `typeof` folded to `"object"`. The HIR-level `typeof`-of-bare-global fold (`lower/lower_expr.rs`) constant-folds known global functions (`setTimeout`, `fetch`, …) to `"function"` but was missing these four; added them (guarded by `lookup_local(n).is_none()` so a local shadow still wins). `typeof setTimeout` etc. and the call paths are unaffected. Advances the global/builtin conformance surface (#3986).
