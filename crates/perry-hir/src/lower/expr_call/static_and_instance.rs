@@ -16,6 +16,21 @@ use super::super::{
     resolve_typed_parse_ty, LoweringContext,
 };
 
+fn unwrap_ts_wrappers(e: &ast::Expr) -> &ast::Expr {
+    let mut cur = e;
+    loop {
+        cur = match cur {
+            ast::Expr::TsAs(x) => x.expr.as_ref(),
+            ast::Expr::TsNonNull(x) => x.expr.as_ref(),
+            ast::Expr::TsSatisfies(x) => x.expr.as_ref(),
+            ast::Expr::TsTypeAssertion(x) => x.expr.as_ref(),
+            ast::Expr::TsConstAssertion(x) => x.expr.as_ref(),
+            ast::Expr::Paren(x) => x.expr.as_ref(),
+            _ => return cur,
+        };
+    }
+}
+
 pub(super) fn try_static_method_and_instance(
     ctx: &mut LoweringContext,
     // #854: kept for the uniform `try_*` dispatch-helper signature; this arm
@@ -26,8 +41,36 @@ pub(super) fn try_static_method_and_instance(
 ) -> Result<Result<Expr, Vec<Expr>>> {
     // Check for static method calls (e.g., Counter.increment())
     if let ast::Expr::Member(member) = expr {
-        if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+        if let ast::Expr::Ident(obj_ident) = unwrap_ts_wrappers(member.obj.as_ref()) {
             let obj_name = obj_ident.sym.to_string();
+            if let Some((module_name, Some(class_name))) = ctx.lookup_native_module(&obj_name) {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let method_name = method_ident.sym.to_string();
+                    let normalized_module =
+                        module_name.strip_prefix("node:").unwrap_or(module_name);
+                    let is_supported_native_class_static =
+                        perry_api_manifest::iter_entries().any(|entry| {
+                            entry.module == normalized_module
+                                && entry.name == method_name
+                                && matches!(
+                                    entry.kind,
+                                    perry_api_manifest::ApiKind::Method {
+                                        has_receiver: false,
+                                        class_filter: Some(filter),
+                                    } if filter == class_name
+                                )
+                        });
+                    if is_supported_native_class_static {
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: module_name.to_string(),
+                            class_name: Some(class_name.to_string()),
+                            object: None,
+                            method: method_name,
+                            args,
+                        }));
+                    }
+                }
+            }
             // Treat uppercase imported identifiers as candidate classes —
             // we don't have cross-module class metadata at HIR-lower
             // time, so without this `import { MongoClient } from

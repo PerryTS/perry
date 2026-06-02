@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1739 entries across 102 modules
+// Coverage: 1741 entries across 102 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -177,12 +177,16 @@ declare module "async_hooks" {
   /** stdlib */
   export class AsyncResource { [key: string]: any; }
   /** stdlib */
+  export const asyncWrapProviders: any;
+  /** stdlib */
   const _default: any;
   export default _default;
   /** stdlib */
   export function createHook(...args: any[]): any;
   /** stdlib */
   export function executionAsyncId(...args: any[]): any;
+  /** stdlib */
+  export function executionAsyncResource(...args: any[]): any;
   /** stdlib */
   export function triggerAsyncId(...args: any[]): any;
 }

@@ -2806,6 +2806,42 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
         crate::closure::closure_set_dynamic_prop(closure_addr, "supportedEntryTypes", arr);
     }
 
+    if export_module_name == "async_hooks" && property_name == "AsyncLocalStorage" {
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "bind",
+            async_hooks_static_method_value(
+                crate::async_hooks::js_async_local_storage_static_bind_method as *const u8,
+                "bind",
+                1,
+                1,
+            ),
+        );
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "snapshot",
+            async_hooks_static_method_value(
+                crate::async_hooks::js_async_local_storage_static_snapshot_method as *const u8,
+                "snapshot",
+                0,
+                0,
+            ),
+        );
+    }
+
+    if export_module_name == "async_hooks" && property_name == "AsyncResource" {
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "bind",
+            async_hooks_static_method_value(
+                crate::async_hooks::js_async_resource_static_bind_method as *const u8,
+                "bind",
+                3,
+                3,
+            ),
+        );
+    }
+
     if export_module_name == "events" && property_name == "EventEmitter" {
         let async_resource_ctor =
             bound_native_callable_export_value("events", "EventEmitterAsyncResource");
@@ -2882,6 +2918,22 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
         crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
     });
     value
+}
+
+fn async_hooks_static_method_value(
+    func_ptr: *const u8,
+    name: &str,
+    fixed_arity: u32,
+    length: u32,
+) -> f64 {
+    crate::closure::js_register_closure_rest(func_ptr, fixed_arity);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    set_bound_native_closure_name(closure, name);
+    set_builtin_closure_length(closure as usize, length);
+    crate::value::js_nanbox_pointer(closure as i64)
 }
 
 extern "C" fn fs_namespace_descriptor_getter_thunk(
@@ -2996,6 +3048,12 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("querystring", "unescapeBuffer" | "unescape") => Some(2),
         ("querystring", "escape") => Some(1),
         ("querystring", "stringify" | "parse") => Some(4),
+        ("async_hooks", "AsyncLocalStorage") => Some(0),
+        ("async_hooks", "AsyncResource") => Some(2),
+        ("async_hooks", "createHook") => Some(1),
+        ("async_hooks", "executionAsyncId") => Some(0),
+        ("async_hooks", "triggerAsyncId") => Some(0),
+        ("async_hooks", "executionAsyncResource") => Some(0),
         ("url", "URL") => Some(1),
         ("tls", "getCiphers") => Some(0),
         ("tls", "getCACertificates" | "setDefaultCACertificates" | "createSecureContext") => {
@@ -5833,6 +5891,7 @@ pub(crate) unsafe fn get_native_module_constant(
         "dns/promises" => dns_error_alias(property).map(|alias| str_val(alias)),
         "async_hooks" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("async_hooks"),
+            "asyncWrapProviders" => Some(crate::async_hooks::js_async_hooks_async_wrap_providers()),
             _ => None,
         },
         "querystring" => match property {

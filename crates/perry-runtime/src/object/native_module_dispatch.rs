@@ -454,6 +454,17 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
     };
     match (module_name, method_name) {
+        ("async_hooks", "createHook") => {
+            ptr_to_f64(crate::async_hooks::js_async_hooks_create_hook(arg(0)) as *const u8)
+        }
+        ("async_hooks", "executionAsyncId") => {
+            crate::async_hooks::js_async_hooks_execution_async_id()
+        }
+        ("async_hooks", "triggerAsyncId") => crate::async_hooks::js_async_hooks_trigger_async_id(),
+        ("async_hooks", "executionAsyncResource") => {
+            crate::async_hooks::js_async_hooks_execution_async_resource()
+        }
+
         // ── Buffer constructor static API ──
         // `class MyBuffer extends Buffer {}; MyBuffer.from(...)` reaches this
         // path through js_class_static_method_call's native-superclass

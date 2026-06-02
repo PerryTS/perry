@@ -1187,9 +1187,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("commander", "parse", true, None),
     method("commander", "opts", true, None),
     property("async_hooks", "default"),
+    property("async_hooks", "asyncWrapProviders"),
     method("async_hooks", "createHook", false, None),
     method("async_hooks", "executionAsyncId", false, None),
+    method("async_hooks", "executionAsyncResource", false, None),
     method("async_hooks", "triggerAsyncId", false, None),
+    method("async_hooks", "bind", false, Some("AsyncLocalStorage")),
+    method("async_hooks", "snapshot", false, Some("AsyncLocalStorage")),
     method("async_hooks", "enable", true, Some("AsyncHook")),
     method("async_hooks", "run", true, None),
     method("async_hooks", "getStore", true, None),
@@ -1205,6 +1209,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         true,
         Some("AsyncResource"),
     ),
+    method("async_hooks", "bind", false, Some("AsyncResource")),
     method("async_hooks", "bind", true, Some("AsyncResource")),
     // #2875: DisposableStack / AsyncDisposableStack instance methods. The
     // `__disposable__` module is internal (synthesized by the var-decl
