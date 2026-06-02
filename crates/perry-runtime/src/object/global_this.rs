@@ -1924,6 +1924,35 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                     (*gc)._reserved |= crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
                 }
             }
+            // #4140: per-kind `BYTES_PER_ELEMENT` own data property on BOTH the
+            // constructor and its prototype, matching Node's descriptor
+            // `{ value, writable:false, enumerable:false, configurable:false }`.
+            // The bare `Uint8Array.BYTES_PER_ELEMENT` read folds at compile time
+            // (#2902), but the reflective forms — `getOwnPropertyDescriptor`,
+            // `hasOwnProperty`, and the chained `Float64Array.prototype
+            // .BYTES_PER_ELEMENT` — resolve off these installed own properties.
+            let ta_bytes_per_element = match name {
+                "Int8Array" | "Uint8Array" | "Uint8ClampedArray" => Some(1.0),
+                "Int16Array" | "Uint16Array" | "Float16Array" => Some(2.0),
+                "Int32Array" | "Uint32Array" | "Float32Array" => Some(4.0),
+                "Float64Array" | "BigInt64Array" | "BigUint64Array" => Some(8.0),
+                _ => None,
+            };
+            if let Some(bytes) = ta_bytes_per_element {
+                let bpe_attrs = super::PropertyAttrs::new(false, false, false);
+                for target in [closure_ptr as *mut ObjectHeader, proto_obj] {
+                    let bpe_key = crate::string::js_string_from_bytes(
+                        b"BYTES_PER_ELEMENT".as_ptr(),
+                        b"BYTES_PER_ELEMENT".len() as u32,
+                    );
+                    js_object_set_field_by_name(target, bpe_key, bytes);
+                    super::set_builtin_property_attrs(
+                        target as usize,
+                        "BYTES_PER_ELEMENT".to_string(),
+                        bpe_attrs,
+                    );
+                }
+            }
         }
         let name_bytes = name.as_bytes();
         let name_key =
