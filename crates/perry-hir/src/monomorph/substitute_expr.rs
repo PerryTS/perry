@@ -216,6 +216,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                     ArrayElement::Spread(expr) => {
                         ArrayElement::Spread(substitute_expr(expr, substitutions))
                     }
+                    ArrayElement::Hole => ArrayElement::Hole,
                 })
                 .collect(),
         ),

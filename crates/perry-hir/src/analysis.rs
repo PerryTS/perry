@@ -371,6 +371,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
                 match elem {
                     ArrayElement::Expr(e) => collect_assigned_locals_expr(e, assigned),
                     ArrayElement::Spread(e) => collect_assigned_locals_expr(e, assigned),
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -1856,6 +1857,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => {
                         replace_this_in_expr(e, this_id)
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }

@@ -334,6 +334,7 @@ impl JsEmitter {
                             self.output.push_str("...");
                             self.emit_expr(e);
                         }
+                        ArrayElement::Hole => {}
                     }
                 }
                 self.output.push(']');

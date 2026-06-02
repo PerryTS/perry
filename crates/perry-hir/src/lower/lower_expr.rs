@@ -1176,25 +1176,27 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
         ast::Expr::Assign(assign) => expr_assign::lower_assign(ctx, assign),
         ast::Expr::Cond(cond) => expr_misc::lower_cond(ctx, cond),
         ast::Expr::Array(array) => {
-            // Check if any elements are spread elements
+            // Check if any elements need the spread-aware representation.
             let has_spread = array
                 .elems
                 .iter()
                 .filter_map(|elem| elem.as_ref())
                 .any(|elem| elem.spread.is_some());
+            let has_hole = array.elems.iter().any(|elem| elem.is_none());
 
-            if has_spread {
-                // Use ArraySpread for arrays with spread elements.
-                // If a spread source is a generator call, wrap it in IteratorToArray
-                // so the codegen gets a real array to iterate.
+            if has_spread || has_hole {
+                // Use ArraySpread for arrays with spread elements or elisions.
+                // Elisions must remain holes, not explicit undefined values:
+                // own-property checks and iteration observe the difference.
                 let elements = array
                     .elems
                     .iter()
-                    .filter_map(|elem| elem.as_ref())
                     .map(|elem| {
+                        let Some(elem) = elem.as_ref() else {
+                            return Ok(ArrayElement::Hole);
+                        };
                         let expr = lower_expr(ctx, &elem.expr)?;
                         if elem.spread.is_some() {
-                            // Wrap generator calls in IteratorToArray
                             if is_generator_call_expr(ctx, &expr) {
                                 Ok(ArrayElement::Spread(Expr::IteratorToArray(Box::new(expr))))
                             } else {
@@ -1207,14 +1209,10 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     .collect::<Result<Vec<_>>>()?;
                 Ok(Expr::ArraySpread(elements))
             } else {
-                // No spread elements, use regular Array
                 let elements = array
                     .elems
                     .iter()
-                    .map(|elem| match elem.as_ref() {
-                        Some(elem) => lower_expr(ctx, &elem.expr),
-                        None => Ok(Expr::Undefined),
-                    })
+                    .map(|elem| lower_expr(ctx, &elem.as_ref().unwrap().expr))
                     .collect::<Result<Vec<_>>>()?;
                 Ok(Expr::Array(elements))
             }

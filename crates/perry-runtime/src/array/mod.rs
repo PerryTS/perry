@@ -62,7 +62,7 @@ pub use self::iter_object::{
     js_array_entries_iter_obj, js_array_keys_iter_obj, js_array_values_iter_obj,
     ARRAY_ITERATOR_CLASS_ID,
 };
-pub use self::iterator::{js_for_of_to_array, js_iterator_to_array};
+pub use self::iterator::{js_array_spread_append, js_for_of_to_array, js_iterator_to_array};
 // Issue #1572 — flatten helpers reused by `node_stream::ns_iter_flat_map`
 // so an `async function*` mapper return is driven through the iterator
 // protocol instead of being appended as a single chunk.
@@ -76,8 +76,8 @@ pub use self::jsvalue_api::{
 };
 pub use self::push_pop::{
     js_array_delete, js_array_grow, js_array_numeric_push_f64_unboxed, js_array_pop_f64,
-    js_array_push_f64, js_array_push_spread_f64, js_array_set_length, js_array_shift_f64,
-    js_array_unshift_f64, js_array_unshift_jsvalue, js_array_unshift_variadic,
+    js_array_push_f64, js_array_push_hole, js_array_push_spread_f64, js_array_set_length,
+    js_array_shift_f64, js_array_unshift_f64, js_array_unshift_jsvalue, js_array_unshift_variadic,
 };
 pub use self::reduce_right::js_array_reduce_right;
 pub use self::search::{

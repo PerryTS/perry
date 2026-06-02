@@ -209,6 +209,16 @@ pub(crate) fn is_global_registered_symbol(ptr: usize) -> bool {
 //   tracking a pointer there does not by itself keep the symbol alive.
 static SYMBOL_PROPERTIES: Mutex<Option<HashMap<usize, Vec<(usize, u64)>>>> = Mutex::new(None);
 
+#[derive(Clone, Copy)]
+struct SymbolAccessorDescriptor {
+    get: u64,
+    set: u64,
+}
+
+static SYMBOL_ACCESSOR_PROPERTIES: Mutex<
+    Option<HashMap<(usize, usize), SymbolAccessorDescriptor>>,
+> = Mutex::new(None);
+
 // Monotonic id counter for fresh symbols. Not thread-safe per-thread but
 // Symbol semantics are compatible with coarse locking.
 static NEXT_SYMBOL_ID: Mutex<u64> = Mutex::new(1);
@@ -592,8 +602,82 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     if obj_key == 0 || sym_key == 0 {
         return value_f64;
     }
+    clear_symbol_accessor_property(obj_key, sym_key);
     store_object_symbol_property_root(obj_key, sym_key, value_f64.to_bits());
     value_f64
+}
+
+fn clear_symbol_accessor_property(obj_key: usize, sym_key: usize) {
+    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
+    if let Some(map) = guard.as_mut() {
+        map.remove(&(obj_key, sym_key));
+    }
+}
+
+pub(crate) unsafe fn set_symbol_accessor_property(
+    obj_f64: f64,
+    sym_f64: f64,
+    get_bits: u64,
+    set_bits: u64,
+) {
+    let obj_key = obj_key_from_f64(obj_f64);
+    let sym_key = sym_key_from_f64(sym_f64);
+    if obj_key == 0 || sym_key == 0 {
+        return;
+    }
+    {
+        let mut props = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
+        if let Some(map) = props.as_mut() {
+            if let Some(entries) = map.get_mut(&obj_key) {
+                entries.retain(|(key, _)| *key != sym_key);
+            }
+        }
+    }
+    {
+        let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
+        if guard.is_none() {
+            *guard = Some(HashMap::new());
+        }
+        guard.as_mut().unwrap().insert(
+            (obj_key, sym_key),
+            SymbolAccessorDescriptor {
+                get: get_bits,
+                set: set_bits,
+            },
+        );
+    }
+    if get_bits != 0 {
+        publish_symbol_side_table_root_edges(sym_key, get_bits);
+    }
+    if set_bits != 0 {
+        publish_symbol_side_table_root_edges(sym_key, set_bits);
+    }
+}
+
+unsafe fn symbol_accessor_property(obj_f64: f64, sym_f64: f64) -> Option<SymbolAccessorDescriptor> {
+    let obj_key = obj_key_from_f64(obj_f64);
+    let sym_key = sym_key_from_f64(sym_f64);
+    if obj_key == 0 || sym_key == 0 {
+        return None;
+    }
+    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
+    guard
+        .as_ref()
+        .and_then(|m| m.get(&(obj_key, sym_key)).copied())
+}
+
+unsafe fn invoke_symbol_accessor_getter(get_bits: u64, receiver: f64) -> f64 {
+    if get_bits == 0 {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let closure = (get_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let prev = crate::object::js_implicit_this_set(receiver);
+    let result = crate::closure::js_closure_call0(closure);
+    crate::object::js_implicit_this_set(prev);
+    result
 }
 
 /// `obj[sym] = value` where `sym` is a Symbol. Stores into the side table.
@@ -683,6 +767,7 @@ pub fn scan_symbol_side_table_roots(mark: &mut dyn FnMut(f64)) {
 
 pub fn scan_symbol_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     scan_symbol_property_roots_mut(visitor);
+    scan_symbol_accessor_roots_mut(visitor);
     scan_class_static_symbol_roots_mut(visitor);
     scan_symbol_pointer_metadata_roots_mut(visitor);
 }
@@ -741,6 +826,40 @@ fn scan_class_static_symbol_roots_mut(visitor: &mut crate::gc::RuntimeRootVisito
     for (old_key, new_key) in key_rewrites {
         if let Some(value_bits) = map.remove(&old_key) {
             map.insert(new_key, value_bits);
+        }
+    }
+}
+
+fn scan_symbol_accessor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let mut rewrites = Vec::new();
+    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
+    let Some(map) = guard.as_mut() else {
+        return;
+    };
+
+    for (old_owner, old_sym_key) in map.keys().copied().collect::<Vec<_>>() {
+        let Some(acc) = map.get_mut(&(old_owner, old_sym_key)) else {
+            continue;
+        };
+        let mut new_owner = old_owner;
+        let mut new_sym_key = old_sym_key;
+        let owner_changed =
+            visitor.visit_metadata_usize_slot(&mut new_owner) && new_owner != old_owner;
+        let sym_changed = visitor.visit_usize_slot(&mut new_sym_key) && new_sym_key != old_sym_key;
+        if acc.get != 0 {
+            visitor.visit_nanbox_u64_slot(&mut acc.get);
+        }
+        if acc.set != 0 {
+            visitor.visit_nanbox_u64_slot(&mut acc.set);
+        }
+        if owner_changed || sym_changed {
+            rewrites.push(((old_owner, old_sym_key), (new_owner, new_sym_key)));
+        }
+    }
+
+    for (old_key, new_key) in rewrites {
+        if let Some(acc) = map.remove(&old_key) {
+            map.insert(new_key, acc);
         }
     }
 }
@@ -1048,6 +1167,15 @@ pub unsafe extern "C" fn js_object_has_own_symbol(obj_f64: f64, sym_f64: f64) ->
     if obj_key == 0 || sym_key == 0 {
         return false;
     }
+    {
+        let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
+        if guard
+            .as_ref()
+            .is_some_and(|m| m.contains_key(&(obj_key, sym_key)))
+        {
+            return true;
+        }
+    }
     let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
     if let Some(map) = guard.as_ref() {
         if let Some(entries) = map.get(&obj_key) {
@@ -1277,6 +1405,9 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                 }
             }
         }
+    }
+    if let Some(acc) = symbol_accessor_property(obj_f64, sym_f64) {
+        return invoke_symbol_accessor_getter(acc.get, obj_f64);
     }
     if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
         return v;

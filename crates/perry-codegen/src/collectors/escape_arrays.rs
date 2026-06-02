@@ -370,6 +370,7 @@ pub fn check_array_escapes_in_expr(
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => {
                         check_array_escapes_in_expr(e, candidates, escaped);
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }

@@ -176,6 +176,112 @@ fn has_named_next(value: f64) -> bool {
     is_callable_value(named_field(value, b"next"))
 }
 
+#[cold]
+fn throw_not_iterable(value: f64) -> ! {
+    let label = if value.to_bits() == crate::value::TAG_NULL {
+        "null"
+    } else if value.to_bits() == crate::value::TAG_UNDEFINED {
+        "undefined"
+    } else {
+        "value"
+    };
+    let msg = format!("{label} is not iterable");
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(msg_str);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+}
+
+#[cold]
+fn throw_iterator_method_not_callable() -> ! {
+    let msg = b"object is not iterable";
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(msg_str);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+}
+
+fn object_like_iterator_result(value: f64) -> bool {
+    let raw = crate::value::js_nanbox_get_pointer(value) as usize;
+    raw >= 0x10000
+}
+
+pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
+    use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, POINTER_MASK};
+
+    let jsv = JSValue::from_bits(value.to_bits());
+    if jsv.is_null() || jsv.is_undefined() {
+        throw_not_iterable(value);
+    }
+    if jsv.is_any_string() {
+        let str_ptr = crate::value::js_get_string_pointer_unified(value);
+        let str_bits = crate::value::STRING_TAG | (str_ptr as u64 & POINTER_MASK);
+        return crate::string::js_string_to_char_array(str_bits as i64) as *mut ArrayHeader;
+    }
+
+    let raw_ptr = js_nanbox_get_pointer(value) as usize;
+    if raw_ptr == 0 {
+        throw_not_iterable(value);
+    }
+    if let Some(entries) = entries_array_for_small_handle_id(raw_ptr as i64) {
+        return entries;
+    }
+    if crate::buffer::is_registered_buffer(raw_ptr) {
+        return crate::buffer::buffer_to_array(raw_ptr as *const crate::buffer::BufferHeader);
+    }
+    if crate::set::is_registered_set(raw_ptr) {
+        return crate::set::js_set_to_array(raw_ptr as *const crate::set::SetHeader);
+    }
+    if crate::map::is_registered_map(raw_ptr) {
+        return crate::map::js_map_entries(raw_ptr as *const crate::map::MapHeader);
+    }
+    if crate::typedarray::lookup_typed_array_kind(raw_ptr).is_some() {
+        return crate::typedarray::typed_array_to_array(
+            raw_ptr as *const crate::typedarray::TypedArrayHeader,
+        );
+    }
+
+    let iter_wk = crate::symbol::well_known_symbol("iterator");
+    if !iter_wk.is_null() {
+        let sym_f64 = f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
+        let method = unsafe { crate::symbol::js_object_get_symbol_property(value, sym_f64) };
+        if method.to_bits() != crate::value::TAG_UNDEFINED {
+            if !is_callable_value(method) {
+                throw_iterator_method_not_callable();
+            }
+            let rebound = crate::closure::clone_closure_rebind_this(method.to_bits(), value);
+            let call_target = f64::from_bits(rebound);
+            let fn_ptr = js_nanbox_get_pointer(call_target) as *const crate::closure::ClosureHeader;
+            if fn_ptr.is_null() {
+                throw_iterator_method_not_callable();
+            }
+            let iter = crate::closure::js_closure_call0(fn_ptr);
+            if crate::array::js_array_is_array(iter).to_bits() == crate::value::TAG_TRUE {
+                return js_iterator_to_array(crate::array::array_values_iter(iter));
+            }
+            if !object_like_iterator_result(iter) {
+                let msg = b"Result of the Symbol.iterator method is not an object";
+                let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+                let err = crate::error::js_typeerror_new(msg_str);
+                crate::exception::js_throw(js_nanbox_pointer(err as i64));
+            }
+            return js_iterator_to_array(iter);
+        }
+    }
+
+    if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
+        return js_iterator_to_array(crate::array::array_values_iter(value));
+    }
+    if has_named_next(value) {
+        return js_iterator_to_array(value);
+    }
+    throw_not_iterable(value);
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_spread_append(dest: *mut ArrayHeader, source: f64) -> *mut ArrayHeader {
+    let arr = array_from_spread_value(source);
+    js_array_concat(dest, arr)
+}
+
 /// Issue #1572 — node:stream uses this from `node_stream::ns_iter_flat_map`
 /// to drive an async-iterable mapper result (an `async function*` return
 /// value) without re-deriving the `Symbol.asyncIterator` lookup +
