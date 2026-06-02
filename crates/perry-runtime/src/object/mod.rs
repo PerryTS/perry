@@ -1683,6 +1683,45 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }
+    // Map / Set / WeakMap / WeakSet / Promise brands. Node tags these
+    // `[object Map]` / `[object Set]` / `[object WeakMap]` / `[object WeakSet]`
+    // / `[object Promise]`; without per-type detection they fall through to the
+    // generic `[object Object]`. Map/Set are raw-alloc'd (no GcHeader) so detect
+    // via their registries before the GC-header object discrimination below.
+    if raw_addr >= 0x1000 {
+        let tag = if crate::map::is_registered_map(raw_addr) {
+            Some("Map")
+        } else if crate::set::is_registered_set(raw_addr) {
+            Some("Set")
+        } else if crate::regex::is_regex_pointer(raw_addr as *const u8) {
+            // `Object.prototype.toString.call(/a/)` is `[object RegExp]` (the
+            // brand) — distinct from `/a/.toString()` which is `/a/` (the value).
+            Some("RegExp")
+        } else {
+            None
+        };
+        if let Some(tag) = tag {
+            let formatted = format!("[object {}]", tag);
+            let str_ptr =
+                crate::string::js_string_from_bytes(formatted.as_ptr(), formatted.len() as u32);
+            return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+        }
+    }
+    if let Some(cid) = crate::weakref::weak_class_id_from_receiver(value) {
+        let tag = if cid == crate::weakref::CLASS_ID_WEAKSET {
+            "WeakSet"
+        } else {
+            "WeakMap"
+        };
+        let formatted = format!("[object {}]", tag);
+        let str_ptr =
+            crate::string::js_string_from_bytes(formatted.as_ptr(), formatted.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
+    if crate::promise::js_value_is_promise(value) != 0 {
+        let str_ptr = crate::string::js_string_from_bytes(b"[object Promise]".as_ptr(), 16);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
     if let Some(tag) = web_stream_to_string_tag(value) {
         let formatted = format!("[object {}]", tag);
         let bytes = formatted.as_bytes();
