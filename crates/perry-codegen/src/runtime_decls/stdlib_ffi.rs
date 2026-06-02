@@ -461,6 +461,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_async_hooks_create_hook", I64, &[DOUBLE]);
     module.declare_function("js_async_hooks_execution_async_id", DOUBLE, &[]);
     module.declare_function("js_async_hooks_trigger_async_id", DOUBLE, &[]);
+    module.declare_function("js_async_hooks_execution_async_resource", DOUBLE, &[]);
     module.declare_function("js_async_hook_enable", I64, &[I64]);
     module.declare_function("js_async_hook_disable", I64, &[I64]);
     module.declare_function("js_async_resource_new", I64, &[DOUBLE, DOUBLE]);

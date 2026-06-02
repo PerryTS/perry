@@ -2,6 +2,16 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1101 — fix(module): implement SourceMap.findEntry / findOrigin (#3675)
+
+`new module.SourceMap(payload)` constructed an instance but `findEntry`/`findOrigin` were noop stubs that returned `undefined`. Implemented both against the Source Map v3 mappings grammar (`crates/perry-runtime/src/process.rs`):
+
+- Added a base64 VLQ decoder and a `mappings` parser that tracks cumulative source/original-line/original-column/name indices across segments. `findEntry(lineNumber, columnNumber)` returns the greatest decoded entry whose generated position is `<=` the query, shaped as Node's `{ generatedLine, generatedColumn, originalSource, originalLine, originalColumn, name? }` (the `name` field is attached only for genuinely-named 5-field segments).
+- `findOrigin(lineNumber, columnNumber)` matches Node's behavior: it echoes the queried coordinates (`null` when an argument is not a finite number) and tags on the matched entry's `name`/`fileName`, returning an empty object for the special numeric `(0, 0)` query.
+- The bound method closures capture the payload (slot 0) so the lookup thunks can read its `mappings`/`sources`/`names` (mirrors the dgram socket-method pattern); the old `module_noop_function`/`module_source_map_noop` stubs were removed.
+
+Verified byte-for-byte against `node --experimental-strip-types` across the issue repro, an explicit named (5-field) segment, a multi-source mapping with negative original-line deltas, and nine `findOrigin` argument permutations. New parity fixture: `test-parity/node-suite/module/methods/source-map-find-entry.ts`.
+
 ## v0.5.1100 — fix(check): reconcile stale Node builtin table with modern builtins (#3744)
 
 `perry check --check-deps` reported a clean build for unsupported modern `node:*` imports that `perry compile` rejects. The cause: the hand-maintained `is_node_builtin` table in `crates/perry/src/commands/deps.rs` predated Node's newer builtins, so names like `node:sea` and `node:inspector` were not recognized as builtins at all — and the U-006 dependency diagnostic only fires for recognized-but-unsupported builtins, so they fell through to a clean result.
