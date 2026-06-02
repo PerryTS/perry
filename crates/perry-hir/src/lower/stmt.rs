@@ -705,6 +705,8 @@ pub(crate) fn lower_stmt(
                                     // dispatches via the class-filtered entries.
                                     ("net", "Socket") => Some("Socket"),
                                     ("net", "Server") => Some("Server"),
+                                    ("net", "BlockList") => Some("BlockList"),
+                                    ("net", "SocketAddress" | "parse") => Some("SocketAddress"),
                                     _ => None,
                                 };
                                 if let Some(cn) = class_name {

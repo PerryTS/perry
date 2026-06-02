@@ -1163,7 +1163,9 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     });
                 } else if module_name == "net"
                     && ((class_name == "Socket" && is_net_socket_method_name(&property_name))
-                        || (class_name == "Server" && is_net_server_method_name(&property_name)))
+                        || (class_name == "Server" && is_net_server_method_name(&property_name))
+                        || (class_name == "BlockList"
+                            && is_net_block_list_method_name(&property_name)))
                 {
                     // `net.Socket` / `net.Server` method reads are callable
                     // values. The call form still lowers through the native
@@ -2365,6 +2367,8 @@ fn is_net_socket_method_name(prop: &str) -> bool {
             | "setEncoding"
             | "setKeepAlive"
             | "setNoDelay"
+            | "getTypeOfService"
+            | "setTypeOfService"
             | "setTimeout"
             | "unref"
             | "write"
@@ -2382,6 +2386,13 @@ fn is_net_socket_method_name(prop: &str) -> bool {
             | "setDefaultEncoding"
             | "cork"
             | "uncork"
+    )
+}
+
+fn is_net_block_list_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "addAddress" | "addRange" | "addSubnet" | "check" | "toJSON" | "fromJSON"
     )
 }
 

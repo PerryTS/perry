@@ -47,23 +47,13 @@ pub extern "C" fn js_net_create_server(
 #[no_mangle]
 pub extern "C" fn js_net_server_listen(
     handle: f64,
-    port: i32,
-    host_ptr: *const StringHeader,
-    _callback_ptr: *const ClosureHeader,
+    port: f64,
+    _arg2: f64,
+    _arg3: f64,
 ) -> i32 {
     let handle = handle as u64;
-
-    // Get host string (default to 0.0.0.0)
-    let host = if host_ptr.is_null() {
-        "0.0.0.0".to_string()
-    } else {
-        unsafe {
-            let len = (*host_ptr).byte_len as usize;
-            let data = (host_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-            let bytes = std::slice::from_raw_parts(data, len);
-            String::from_utf8_lossy(bytes).to_string()
-        }
-    };
+    let host = "0.0.0.0".to_string();
+    let port = port as i32;
 
     let addr = format!("{}:{}", host, port);
     match TcpListener::bind(&addr) {

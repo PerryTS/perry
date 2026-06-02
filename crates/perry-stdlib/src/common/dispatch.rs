@@ -1252,6 +1252,8 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
         fn js_net_socket_listener_count(handle: i64, event_ptr: i64) -> f64;
         fn js_net_socket_event_names(handle: i64) -> *mut perry_runtime::StringHeader;
         fn js_net_socket_reset_and_destroy(handle: i64) -> i64;
+        fn js_net_socket_get_type_of_service(handle: i64) -> f64;
+        fn js_net_socket_set_type_of_service(handle: i64, tos: f64) -> i64;
         // Issue #2211 — listeners()/rawListeners() return a *mut ArrayHeader
         // cast to i64; NaN-box with POINTER_TAG to surface as a real JS array.
         fn js_net_socket_listeners(handle: i64, event_ptr: i64) -> i64;
@@ -1354,6 +1356,11 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
         "address" => json_str_to_value(js_net_socket_address(handle)),
         "resetAndDestroy" => {
             js_net_socket_reset_and_destroy(handle);
+            nanbox_handle(handle)
+        }
+        "getTypeOfService" => js_net_socket_get_type_of_service(handle),
+        "setTypeOfService" if !args.is_empty() => {
+            js_net_socket_set_type_of_service(handle, args[0]);
             nanbox_handle(handle)
         }
         // Chainable Socket option setters — Node returns `this` from each
@@ -2074,6 +2081,10 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
 
     #[cfg(feature = "database-sqlite")]
     if crate::sqlite::dispatch_node_sqlite_limits_set(handle, property_name, value) {
+        return;
+    }
+
+    if crate::common::net_method_values::dispatch_property_set(handle, property_name, value) {
         return;
     }
 

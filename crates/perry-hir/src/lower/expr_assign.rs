@@ -534,10 +534,12 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                     .lookup_native_instance(&obj_name)
                     .map(|(m, c)| (m.to_string(), c.to_string()));
                 if let Some((module_name, class_name)) = native_instance {
-                    if matches!(module_name.as_str(), "http" | "https") {
+                    if matches!(module_name.as_str(), "http" | "https" | "net") {
                         if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                             let prop = prop_ident.sym.to_string();
                             let setter_method = match (class_name.as_str(), prop.as_str()) {
+                                ("Server", "maxConnections") => Some("__set_maxConnections"),
+                                ("Server", "dropMaxConnection") => Some("__set_dropMaxConnection"),
                                 ("ServerResponse", "statusCode") => Some("__set_statusCode"),
                                 ("ServerResponse", "statusMessage") => Some("__set_statusMessage"),
                                 // Issue #2210 — `server.headersTimeout = N` etc.

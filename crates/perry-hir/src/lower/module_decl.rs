@@ -638,6 +638,10 @@ pub(crate) fn lower_module_decl(
                                                         ("net", "createConnection") => {
                                                             Some("Socket")
                                                         }
+                                                        ("net", "BlockList") => Some("BlockList"),
+                                                        ("net", "SocketAddress" | "parse") => {
+                                                            Some("SocketAddress")
+                                                        }
                                                         ("dgram", "createSocket") => Some("Socket"),
                                                         // node-cron's `cron.schedule(expr, cb)` returns a job
                                                         // handle whose `start()`/`stop()`/`isRunning()` etc.
@@ -993,6 +997,8 @@ pub(crate) fn lower_module_decl(
                                             //   sock.on(...);   // dispatches to js_net_socket_on
                                             // works without ceremony.
                                             "Socket" => Some(("net", "Socket")),
+                                            "BlockList" => Some(("net", "BlockList")),
+                                            "SocketAddress" => Some(("net", "SocketAddress")),
                                             _ => {
                                                 // Also check dotted names (e.g., mysql.Pool)
                                                 if let Some(dot_pos) = type_name.find('.') {

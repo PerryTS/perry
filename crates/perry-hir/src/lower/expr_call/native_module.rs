@@ -1238,8 +1238,14 @@ pub(super) fn try_native_module_methods(
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
                         "createServer" => {
-                            let options = args.first().cloned().map(Box::new);
-                            let connection_listener = args.get(1).cloned().map(Box::new);
+                            let (options, connection_listener) = if args.len() >= 2 {
+                                (
+                                    args.first().cloned().map(Box::new),
+                                    args.get(1).cloned().map(Box::new),
+                                )
+                            } else {
+                                (None, args.first().cloned().map(Box::new))
+                            };
                             return Ok(Ok(Expr::NetCreateServer {
                                 options,
                                 connection_listener,
