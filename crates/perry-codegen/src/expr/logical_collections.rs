@@ -273,7 +273,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::MathMinSpread(arr_expr) => {
             let arr_box = lower_expr(ctx, arr_expr)?;
             let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
+            let arr_handle = blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &arr_box)]);
             Ok(blk.call(DOUBLE, "js_math_min_array", &[(I64, &arr_handle)]))
         }
 
@@ -296,7 +296,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::MathMaxSpread(arr_expr) => {
             let arr_box = lower_expr(ctx, arr_expr)?;
             let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
+            let arr_handle = blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &arr_box)]);
             Ok(blk.call(DOUBLE, "js_math_max_array", &[(I64, &arr_handle)]))
         }
 

@@ -405,6 +405,10 @@ pub extern "C" fn js_object_set_field_by_name(
             return;
         }
 
+        if super::arguments_object_set_field(obj, key, value) {
+            return;
+        }
+
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID && !key.is_null() {
             let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
             let key_len = (*key).byte_len as usize;

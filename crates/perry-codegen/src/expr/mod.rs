@@ -317,7 +317,7 @@ pub(crate) struct FnCtx<'a> {
     /// Per-function param signature: `(declared_param_count,
     /// has_rest_param)`. Used by FuncRef call sites to know whether
     /// to bundle trailing arguments into a rest array.
-    pub func_signatures: &'a std::collections::HashMap<u32, (usize, bool, bool)>,
+    pub func_signatures: &'a std::collections::HashMap<u32, (usize, bool, bool, bool)>,
     /// Function declarations where Perry appended a synthetic trailing
     /// `arguments` binding. Unlike a real rest parameter, it must receive
     /// every actual argument while fixed parameters still receive their
@@ -1405,6 +1405,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::Bool(..)
         | Expr::Undefined
         | Expr::Null
+        | Expr::NewTarget
         | Expr::Void(..)
         | Expr::TypeOf(..)
         | Expr::String(..)
@@ -1908,6 +1909,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ChildProcessKillProcess(..) => child_proc::lower(ctx, expr),
         Expr::FileURLToPath(..)
         | Expr::UrlNew { .. }
+        | Expr::UrlPatternNew { .. }
         | Expr::UrlGetHref(..)
         | Expr::UrlGetPathname(..)
         | Expr::UrlGetProtocol(..)

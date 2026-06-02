@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1778 entries across 105 modules
+// Coverage: 1779 entries across 105 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3460,6 +3460,8 @@ declare module "tursodb" {
 declare module "url" {
   /** stdlib */
   export class URL { [key: string]: any; }
+  /** stdlib */
+  export class URLPattern { [key: string]: any; }
   /** stdlib */
   export class URLSearchParams { [key: string]: any; }
   /** stdlib */

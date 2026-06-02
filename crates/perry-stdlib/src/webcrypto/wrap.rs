@@ -13,10 +13,38 @@ use super::*;
 //     existing encrypt/decrypt path takes; wrapped output is
 //     `ciphertext || tag`.
 //
-// `format` is currently restricted to `"raw"` — the only format
-// jose uses for symmetric keys. JWK / spki / pkcs8 are TODO follow-
-// ups (they require an asymmetric algorithm we haven't wired yet).
+// `format` supports `"raw"` plus secret-key `"jwk"` serialization for
+// the AES/HMAC key-management paths Perry already implements. SPKI/PKCS8
+// wrapping remains scoped to future asymmetric work.
 // =====================================================================
+
+fn secret_jwk_bytes(mat: CryptoKeyMaterial, key_bytes: &[u8]) -> Option<Vec<u8>> {
+    if mat.kind != KeyKind::Secret {
+        return None;
+    }
+    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key_bytes);
+    let json = serde_json::json!({
+        "kty": "oct",
+        "k": encoded,
+    });
+    let mut bytes = serde_json::to_vec(&json).ok()?;
+    while bytes.len() % 8 != 0 {
+        bytes.push(b' ');
+    }
+    Some(bytes)
+}
+
+fn secret_jwk_key_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let obj = value.as_object()?;
+    if obj.get("kty")?.as_str()? != "oct" {
+        return None;
+    }
+    let k = obj.get("k")?.as_str()?;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(k.as_bytes())
+        .ok()
+}
 
 /// AES-KW wrap — RFC 3394. Returns the wrapped key (8 bytes longer
 /// than `plaintext_key`). `aes-kw` 0.3 ships
@@ -115,14 +143,31 @@ pub unsafe extern "C" fn js_webcrypto_wrap_key(
             )
         }
     };
-    if format != "raw" {
+    let format_lower = format.to_ascii_lowercase();
+    if format_lower != "raw" && format_lower != "jwk" {
         return reject_with_dom_exception("NotSupportedError", "Unsupported key format");
     }
     let key_addr = strip_ptr(key_bits.to_bits());
-    if lookup_crypto_key(key_addr).is_none() {
-        return reject_with_dom_exception("InvalidAccessError", "Key is not a valid CryptoKey");
+    let key_mat = match lookup_crypto_key(key_addr) {
+        Some(m) => m,
+        None => {
+            return reject_with_dom_exception("InvalidAccessError", "Key is not a valid CryptoKey")
+        }
+    };
+    if !key_mat.extractable {
+        return reject_with_dom_exception("InvalidAccessException", "key is not extractable");
     }
-    let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
+    let raw_key_bytes = bytes_from_jsvalue(key_bits.to_bits());
+    let key_bytes = if format_lower == "jwk" {
+        match secret_jwk_bytes(key_mat, &raw_key_bytes) {
+            Some(bytes) => bytes,
+            None => {
+                return reject_with_dom_exception("NotSupportedError", "Unsupported key format")
+            }
+        }
+    } else {
+        raw_key_bytes
+    };
     let wrapping_key_addr = strip_ptr(wrapping_key_bits.to_bits());
     let wrapping_mat = match lookup_crypto_key(wrapping_key_addr) {
         Some(m) => m,
@@ -151,6 +196,13 @@ pub unsafe extern "C" fn js_webcrypto_wrap_key(
                 "The requested operation is not valid for the provided key",
             );
         }
+        if let Err((name, message)) = require_usage(
+            wrapping_mat,
+            USAGE_WRAP_KEY,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
+        }
         match aes_kw_wrap(&wrapping_key_bytes, &key_bytes) {
             Some(w) => w,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
@@ -161,6 +213,13 @@ pub unsafe extern "C" fn js_webcrypto_wrap_key(
                 "InvalidAccessError",
                 "The requested operation is not valid for the provided key",
             );
+        }
+        if let Err((name, message)) = require_usage(
+            wrapping_mat,
+            USAGE_WRAP_KEY,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
         }
         let (iv, aad) = match resolve_aes_gcm_iv_aad(wrap_algo_bits.to_bits()) {
             Some(t) => t,
@@ -182,6 +241,13 @@ pub unsafe extern "C" fn js_webcrypto_wrap_key(
                 "The requested operation is not valid for the provided key",
             );
         }
+        if let Err((name, message)) = require_usage(
+            wrapping_mat,
+            USAGE_WRAP_KEY,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
+        }
         let iv = match object_field_bytes(wrap_algo_bits.to_bits(), b"iv") {
             Some(v) => v,
             None => {
@@ -201,6 +267,13 @@ pub unsafe extern "C" fn js_webcrypto_wrap_key(
                 "InvalidAccessError",
                 "The requested operation is not valid for the provided key",
             );
+        }
+        if let Err((name, message)) = require_usage(
+            wrapping_mat,
+            USAGE_WRAP_KEY,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
         }
         let counter = match object_field_bytes(wrap_algo_bits.to_bits(), b"counter") {
             Some(v) => v,
@@ -231,6 +304,13 @@ pub unsafe extern "C" fn js_webcrypto_wrap_key(
                 "The requested operation is not valid for the provided key",
             );
         }
+        if let Err((name, message)) = require_usage(
+            wrapping_mat,
+            USAGE_WRAP_KEY,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
+        }
         let public_key = match RsaPublicKey::from_public_key_der(&wrapping_key_bytes) {
             Ok(k) => k,
             Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
@@ -260,9 +340,10 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
     unwrapping_key_bits: f64,
     unwrap_algo_bits: f64,
     unwrapped_algo_bits: f64,
-    _extractable_bits: f64,
-    _usages_bits: f64,
+    extractable_bits: f64,
+    usages_bits: f64,
 ) -> *mut Promise {
+    let extractable = bool_from_jsvalue(extractable_bits.to_bits());
     let format = match string_from_jsvalue(format_bits.to_bits()) {
         Some(s) => s,
         None => {
@@ -272,7 +353,8 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
             )
         }
     };
-    if format != "raw" {
+    let format_lower = format.to_ascii_lowercase();
+    if format_lower != "raw" && format_lower != "jwk" {
         return reject_with_dom_exception("NotSupportedError", "Unsupported key format");
     }
     let wrapped_bytes = bytes_from_jsvalue(wrapped_key_bits.to_bits());
@@ -304,6 +386,13 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
                 "The requested operation is not valid for the provided key",
             );
         }
+        if let Err((name, message)) = require_usage(
+            unwrapping_mat,
+            USAGE_UNWRAP_KEY,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
+        }
         match aes_kw_unwrap(&unwrapping_key_bytes, &wrapped_bytes) {
             Some(r) => r,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
@@ -314,6 +403,13 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
                 "InvalidAccessError",
                 "The requested operation is not valid for the provided key",
             );
+        }
+        if let Err((name, message)) = require_usage(
+            unwrapping_mat,
+            USAGE_UNWRAP_KEY,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
         }
         let (iv, aad) = match resolve_aes_gcm_iv_aad(unwrap_algo_bits.to_bits()) {
             Some(t) => t,
@@ -335,6 +431,13 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
                 "The requested operation is not valid for the provided key",
             );
         }
+        if let Err((name, message)) = require_usage(
+            unwrapping_mat,
+            USAGE_UNWRAP_KEY,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
+        }
         let iv = match object_field_bytes(unwrap_algo_bits.to_bits(), b"iv") {
             Some(v) => v,
             None => {
@@ -354,6 +457,13 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
                 "InvalidAccessError",
                 "The requested operation is not valid for the provided key",
             );
+        }
+        if let Err((name, message)) = require_usage(
+            unwrapping_mat,
+            USAGE_UNWRAP_KEY,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
         }
         let counter = match object_field_bytes(unwrap_algo_bits.to_bits(), b"counter") {
             Some(v) => v,
@@ -384,6 +494,13 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
                 "The requested operation is not valid for the provided key",
             );
         }
+        if let Err((name, message)) = require_usage(
+            unwrapping_mat,
+            USAGE_UNWRAP_KEY,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
+        }
         let private_key = match RsaPrivateKey::from_pkcs8_der(&unwrapping_key_bytes) {
             Ok(k) => k,
             Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
@@ -399,6 +516,15 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
         );
     };
 
+    let recovered = if format_lower == "jwk" {
+        match secret_jwk_key_bytes(&recovered) {
+            Some(bytes) => bytes,
+            None => return reject_with_dom_exception("DataError", "Key data is invalid"),
+        }
+    } else {
+        recovered
+    };
+
     // Register the recovered bytes as a CryptoKey under the requested
     // unwrappedKeyAlgorithm.
     let unwrapped_name = match wrap_algo_name(unwrapped_algo_bits.to_bits()) {
@@ -410,12 +536,30 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
             )
         }
     };
-    let key_algo = match unwrapped_name.as_str() {
-        "AES-GCM" => KeyAlgo::AesGcm,
-        "AES-KW" => KeyAlgo::AesKw,
-        "AES-CBC" => KeyAlgo::AesCbc,
-        "AES-CTR" => KeyAlgo::AesCtr,
+    let (key_algo, hash) = match unwrapped_name.as_str() {
+        "HMAC" => {
+            let hash = match extract_hmac_hash(unwrapped_algo_bits.to_bits()) {
+                Some(h) => h,
+                None => return reject_with_dom_exception("OperationError", "The operation failed"),
+            };
+            (KeyAlgo::Hmac, hash)
+        }
+        "AES-GCM" => (KeyAlgo::AesGcm, HashAlgo::Sha256),
+        "AES-KW" => (KeyAlgo::AesKw, HashAlgo::Sha256),
+        "AES-CBC" => (KeyAlgo::AesCbc, HashAlgo::Sha256),
+        "AES-CTR" => (KeyAlgo::AesCtr, HashAlgo::Sha256),
         _ => return reject_with_dom_exception("OperationError", "The operation failed"),
+    };
+    let usages = match validate_key_usages(
+        key_algo,
+        KeyKind::Secret,
+        usages_bits.to_bits(),
+        false,
+        "Usages cannot be empty when importing a secret key.",
+        "Unsupported key usage for the requested algorithm",
+    ) {
+        Ok(u) => u,
+        Err((name, message)) => return reject_with_dom_exception(name, message),
     };
     let buf = alloc_uint8array_from_slice(&recovered);
     if buf.is_null() {
@@ -423,11 +567,7 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
     }
     register_crypto_key(
         buf as usize,
-        CryptoKeyMaterial {
-            algo: key_algo,
-            hash: HashAlgo::Sha256,
-            kind: KeyKind::Secret,
-        },
+        CryptoKeyMaterial::new(key_algo, hash, KeyKind::Secret, extractable, usages),
     );
     let val = JSValue::pointer(buf as *const u8).bits();
     resolve_with_bits(val)

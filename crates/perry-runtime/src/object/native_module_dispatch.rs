@@ -1540,6 +1540,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("url", "domainToASCII") => crate::url::js_url_domain_to_ascii(arg(0)),
         ("url", "domainToUnicode") => crate::url::js_url_domain_to_unicode(arg(0)),
         ("url", "urlToHttpOptions") => crate::url::js_url_to_http_options(arg(0)),
+        ("url", "URLPattern") => crate::url::js_url_pattern_constructor_call(arg(0), arg(1)),
         ("url", "Url") => crate::url::js_url_legacy_url_new(),
         ("url", "format") => crate::url::js_url_format(arg(0), arg(1)),
         ("url", "parse") => crate::url::js_url_legacy_parse(arg(0), arg(1), arg(2)),

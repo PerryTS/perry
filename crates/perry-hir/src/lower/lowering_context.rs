@@ -452,6 +452,14 @@ pub struct LoweringContext {
     /// module reports `true` and every imported module reports `false`. Set
     /// by `lower_module_with_class_id_types_seed_and_entry`; default false.
     pub(crate) is_entry_module: bool,
+    /// Strictness inherited from the module/script directive prologue or from
+    /// ECMAScript module syntax. Function lowering consults this before
+    /// deciding whether its `arguments` object should be mapped.
+    pub(crate) module_strict: bool,
+    /// Stack of strict-mode state for currently lowered function/arrow bodies.
+    /// Nested ordinary functions inherit strictness from strict parents, while
+    /// a body-level `"use strict"` directive pushes strictness for children.
+    pub(crate) strict_mode_stack: Vec<bool>,
     /// Issue #668: true when this module was reached via an npm-package import
     /// (file lives under a `node_modules/` segment in either the canonical or
     /// the un-canonical resolution path). External libraries are exempt from

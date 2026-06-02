@@ -32,7 +32,7 @@ Issue #3598 ("Node API compatibility epic: globalThis and Web-compatible Node gl
 
 This branch intentionally does **not** cherry-pick or stack those feature PRs. The generated manifest surfaces on current `origin/main` were audited with `./scripts/regen_api_docs.sh`; `docs/src/api/reference.md` and `docs/api/perry.d.ts` produced no diff, and `crates/perry-api-manifest/src/entries.rs` was not changed. That means this closure PR does not truthfully decrement the generated API/type counts for globals that only exist on the open feature branches.
 
-Residual #3598 work that should remain tracked by child issues includes true WeakRef/FinalizationRegistry weak semantics, BroadcastChannel delivery semantics, deeper FormData/File/Blob/multipart/body parity, full WebAssembly Instance/Memory/Table/Global/streaming execution surface beyond the current host-shim shape, full TextEncoderStream/TextDecoderStream transform behavior, and URLPattern behavior tied to the Node 22 target.
+Residual #3598 work that should remain tracked by child issues includes true WeakRef/FinalizationRegistry weak semantics, BroadcastChannel delivery semantics, deeper FormData/File/Blob/multipart/body parity, full WebAssembly Instance/Memory/Table/Global/streaming execution surface beyond the current host-shim shape, and full TextEncoderStream/TextDecoderStream transform behavior.
 
 ## Whole-module gaps
 
@@ -1103,7 +1103,6 @@ Runtime-created fs SystemError metadata is covered by parity fixtures: sync, cal
 - `textEncoderStream.encoding`
 - `textEncoderStream.readable`
 - `textEncoderStream.writable`
-- `URLPattern` remains intentionally absent while Perry advertises a Node 22 runtime target; Node 22 latest-jod globals document `URL` and `URLSearchParams` but not `URLPattern`, which was added as a global in Node 24.
 - … and 6 more (see `runtime-parity.md` for the full list)
 
 #### Covered (sampled)
@@ -1435,8 +1434,6 @@ The runtime manifest intentionally has no rows for these unsupported FileHandle 
 - `params.toString()`
 - `params.values()`
 - `params[Symbol.iterator]()`
-- `urlPattern.exec(input[, baseURL])`
-- `urlPattern.test(input[, baseURL])`
 - `url.domainToASCII(domain)`
 - `url.domainToUnicode(domain)`
 - `url.urlToHttpOptions(url)`

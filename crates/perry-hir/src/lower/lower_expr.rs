@@ -1958,6 +1958,7 @@ pub(crate) fn try_desugar_reactive_text(
             default: None,
             decorators: Vec::new(),
             is_rest: false,
+            arguments_object: None,
         };
         let fresh_concat = lower_tpl_to_concat(ctx, tpl)?;
         let set_text_call = Expr::NativeMethodCall {

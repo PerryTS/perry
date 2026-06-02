@@ -1123,7 +1123,7 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
 
     // Probe the vtable chain for `then`. Bail out on plain objects (no class
     // method) so the await passes the original value through unchanged.
-    let (then_func_ptr, then_param_count) =
+    let (then_func_ptr, then_param_count, _then_has_synthetic_arguments) =
         match crate::object::lookup_class_method_in_chain(class_id, "then") {
             Some(p) => p,
             None => return value,

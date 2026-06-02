@@ -25,6 +25,7 @@ where
         | Expr::PodLayoutSizeOf { .. }
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. }
+        | Expr::NewTarget
         | Expr::ClassRef(_)
         | Expr::This
         | Expr::NewTarget
@@ -975,6 +976,12 @@ where
         // ─── URL family ──────────────────────────────────────────────────
         Expr::UrlNew { url, base } => {
             f(url);
+            if let Some(b) = base {
+                f(b);
+            }
+        }
+        Expr::UrlPatternNew { input, base } => {
+            f(input);
             if let Some(b) = base {
                 f(b);
             }

@@ -8,18 +8,17 @@ use super::*;
 /// - `"AES-GCM"` or `{ name: "AES-GCM" }` — keyed by 128/192/256-bit
 ///   bytes; the IV / additionalData come in at encrypt/decrypt time.
 ///
-/// `extractable` and `keyUsages` are accepted but not enforced —
-/// perry's threat model treats them as documentation. Unsupported
-/// shapes resolve to undefined (callers that then pass that into
-/// `sign`/`encrypt` will reject there with a clear error).
+/// `extractable` and `keyUsages` are stored on the returned key and
+/// enforced by later WebCrypto operations.
 #[no_mangle]
 pub unsafe extern "C" fn js_webcrypto_import_key(
     format_bits: f64,
     key_bits: f64,
     algo_bits: f64,
-    _extractable_bits: f64,
-    _usages_bits: f64,
+    extractable_bits: f64,
+    usages_bits: f64,
 ) -> *mut Promise {
+    let extractable = bool_from_jsvalue(extractable_bits.to_bits());
     let format = match string_from_jsvalue(format_bits.to_bits()) {
         Some(s) => s,
         None => {
@@ -150,6 +149,29 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
         );
     };
 
+    let empty_allowed = kind == KeyKind::Public;
+    let empty_message = if kind == KeyKind::Secret {
+        "Usages cannot be empty when importing a secret key."
+    } else {
+        "Usages cannot be empty when importing a private key."
+    };
+    let bad_message = if key_algo == KeyAlgo::Hmac {
+        "Unsupported key usage for HMAC key"
+    } else {
+        "Unsupported key usage for the requested algorithm"
+    };
+    let usages = match validate_key_usages(
+        key_algo,
+        kind,
+        usages_bits.to_bits(),
+        empty_allowed,
+        empty_message,
+        bad_message,
+    ) {
+        Ok(u) => u,
+        Err((name, message)) => return reject_with_dom_exception(name, message),
+    };
+
     let key_bytes = if format_lower == "jwk" {
         jwk_import_key_bytes(key_bits.to_bits(), key_algo, kind).unwrap_or_else(|| Vec::new())
     } else {
@@ -208,11 +230,7 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     }
     register_crypto_key(
         buf as usize,
-        CryptoKeyMaterial {
-            algo: key_algo,
-            hash,
-            kind,
-        },
+        CryptoKeyMaterial::new(key_algo, hash, kind, extractable, usages),
     );
     let val = JSValue::pointer(buf as *const u8).bits();
     resolve_with_bits(val)
@@ -242,6 +260,9 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
             return reject_with_dom_exception("InvalidAccessError", "Key is not a valid CryptoKey")
         }
     };
+    if !mat.extractable {
+        return reject_with_dom_exception("InvalidAccessException", "key is not extractable");
+    }
     if format_lower == "raw" && mat.kind == KeyKind::Private {
         return reject_with_dom_exception("OperationError", "The operation failed");
     }

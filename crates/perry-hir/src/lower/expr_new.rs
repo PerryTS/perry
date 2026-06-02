@@ -134,6 +134,16 @@ fn lower_url_encoding_constructor(
             let init_arg = args.into_iter().next();
             Ok(Some(Expr::UrlSearchParamsNew(init_arg.map(Box::new))))
         }
+        "URLPattern" => {
+            let args = lower_optional_args(ctx, args)?;
+            let mut args_iter = args.into_iter();
+            let input = args_iter.next().unwrap_or(Expr::Undefined);
+            let base = args_iter.next();
+            Ok(Some(Expr::UrlPatternNew {
+                input: Box::new(input),
+                base: base.map(Box::new),
+            }))
+        }
         "TextEncoder" => Ok(Some(Expr::TextEncoderNew)),
         "TextDecoder" => Ok(Some(lower_text_decoder_new(ctx, args)?)),
         _ => Ok(None),
@@ -143,7 +153,7 @@ fn lower_url_encoding_constructor(
 fn is_url_encoding_constructor_name(name: &str) -> bool {
     matches!(
         name,
-        "URL" | "URLSearchParams" | "TextEncoder" | "TextDecoder"
+        "URL" | "URLSearchParams" | "URLPattern" | "TextEncoder" | "TextDecoder"
     )
 }
 
@@ -152,6 +162,7 @@ fn module_constructor_name(module_name: &str, method_name: Option<&str>) -> Opti
         ("events", Some("EventEmitterAsyncResource")) => Some("EventEmitterAsyncResource"),
         ("url", Some("URL")) => Some("URL"),
         ("url", Some("URLSearchParams")) => Some("URLSearchParams"),
+        ("url", Some("URLPattern")) => Some("URLPattern"),
         ("util", Some("TextEncoder")) => Some("TextEncoder"),
         ("util", Some("TextDecoder")) => Some("TextDecoder"),
         _ => None,
@@ -167,6 +178,7 @@ fn global_member_constructor_name(
         return match prop_name {
             "URL" => Some("URL"),
             "URLSearchParams" => Some("URLSearchParams"),
+            "URLPattern" => Some("URLPattern"),
             "TextEncoder" => Some("TextEncoder"),
             "TextDecoder" => Some("TextDecoder"),
             _ => None,
@@ -1195,11 +1207,11 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 );
             }
 
-            // Handle URLSearchParams class
-            if class_name == "URLSearchParams" {
+            // Handle URLSearchParams / URLPattern classes
+            if matches!(class_name.as_str(), "URLSearchParams" | "URLPattern") {
                 return Ok(lower_url_encoding_constructor(
                     ctx,
-                    "URLSearchParams",
+                    &class_name,
                     new_expr.args.as_deref(),
                 )?
                 .unwrap());

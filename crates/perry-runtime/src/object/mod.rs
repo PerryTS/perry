@@ -18,6 +18,7 @@ use std::sync::RwLock;
 // Submodules (issue #1103): behavior-preserving split of the former
 // 11.2k-line object.rs. Public re-exports keep FFI symbols stable.
 mod alloc;
+mod arguments;
 mod array_object_ops;
 mod assert;
 mod bigint_dispatch;
@@ -55,6 +56,7 @@ mod reflect_support;
 mod util_types;
 mod websocket_global;
 pub use alloc::*;
+pub use arguments::*;
 pub(crate) use array_object_ops::*;
 pub use assert::*;
 pub(crate) use bigint_dispatch::*;
@@ -1831,6 +1833,9 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     // Object via the GC header type byte.
     let raw_ptr = raw_addr as *const u8;
     if !raw_ptr.is_null() && (raw_ptr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        if let Some(tag) = arguments_object_to_string_tag(value) {
+            return tag;
+        }
         let gc_header = raw_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
         if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {

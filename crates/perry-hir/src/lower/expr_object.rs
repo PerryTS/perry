@@ -151,6 +151,7 @@ fn lower_method_prop(
         .collect();
 
     let scope_mark = ctx.enter_scope();
+    ctx.enter_strict_mode(true);
     let mut params = Vec::new();
     for param in method.function.params.iter() {
         let param_name = get_pat_name(&param.pat)?;
@@ -176,6 +177,7 @@ fn lower_method_prop(
             default: param_default,
             decorators: Vec::new(),
             is_rest: is_rest_param(&param.pat),
+            arguments_object: None,
         });
     }
     let return_type = method
@@ -197,9 +199,7 @@ fn lower_method_prop(
         .params
         .iter()
         .any(|p| get_pat_name(&p.pat).ok().as_deref() == Some("arguments"));
-    let user_has_rest = method.function.params.iter().any(|p| is_rest_param(&p.pat));
     let needs_arguments_synth = !user_has_arguments_param
-        && !user_has_rest
         && method
             .function
             .body
@@ -207,7 +207,7 @@ fn lower_method_prop(
             .map(|b| body_uses_arguments(&b.stmts))
             .unwrap_or(false);
     if needs_arguments_synth {
-        append_synthetic_arguments_param(ctx, &mut params);
+        append_synthetic_arguments_param(ctx, &mut params, true, false, true, Vec::new());
     }
 
     let body = if let Some(ref block) = method.function.body {
@@ -215,6 +215,7 @@ fn lower_method_prop(
     } else {
         Vec::new()
     };
+    ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
 
     // Capture analysis (same pattern as arrow/function expressions)
@@ -246,9 +247,7 @@ fn lower_method_prop(
         let defaults: Vec<Option<Expr>> = params.iter().map(|p| p.default.clone()).collect();
         let param_ids: Vec<LocalId> = params.iter().map(|p| p.id).collect();
         let rest_idx = params.iter().position(|p| p.is_rest);
-        let has_synth_args = params
-            .last()
-            .is_some_and(|p| p.is_rest && p.name == "arguments");
+        let has_synth_args = params.last().is_some_and(|p| p.arguments_object.is_some());
         ctx.func_defaults
             .push((func_id, defaults, param_ids, rest_idx, has_synth_args));
         ctx.pending_functions.push(Function {
@@ -259,7 +258,7 @@ fn lower_method_prop(
             return_type,
             body,
             is_async: method.function.is_async,
-            is_generator: false,
+            is_generator: method.function.is_generator,
             is_strict: ctx.current_strict,
             was_plain_async: false,
             was_unrolled: false,
@@ -298,7 +297,7 @@ fn lower_method_prop(
             enclosing_class,
             is_arrow: false,
             is_async: method.function.is_async,
-            is_generator: false,
+            is_generator: method.function.is_generator,
             is_strict: ctx.current_strict,
         }
     };
@@ -340,6 +339,7 @@ fn lower_accessor_prop(
         .collect();
 
     let scope_mark = ctx.enter_scope();
+    ctx.enter_strict_mode(true);
     let mut params = Vec::new();
     if let Some(pat) = setter_param {
         // Setters take a single param. Skip the TS `this:` type-only marker
@@ -348,6 +348,7 @@ fn lower_accessor_prop(
         let param_name = match get_pat_name(pat) {
             Ok(n) => n,
             Err(_) => {
+                ctx.exit_strict_mode();
                 ctx.exit_scope(scope_mark);
                 return Ok(None);
             }
@@ -363,6 +364,7 @@ fn lower_accessor_prop(
                 default: param_default,
                 decorators: Vec::new(),
                 is_rest: false,
+                arguments_object: None,
             });
         }
     }
@@ -372,6 +374,7 @@ fn lower_accessor_prop(
     } else {
         Vec::new()
     };
+    ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
 
     // Capture analysis — identical pattern to `lower_method_prop`.
@@ -653,6 +656,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             default: None,
             decorators: Vec::new(),
             is_rest: false,
+            arguments_object: None,
         };
 
         // Pass 1: lower every entry's value while the IIFE parameter is in
@@ -1041,6 +1045,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         default: None,
         decorators: Vec::new(),
         is_rest: false,
+        arguments_object: None,
     };
     let mut body: Vec<Stmt> = Vec::with_capacity(computed_post_init.len() * 4 + 1);
     let mut inner_local_ids = vec![param_id];

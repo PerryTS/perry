@@ -990,7 +990,7 @@ pub fn try_lower_property_get_method_call(
                         let is_synth_args = sm
                             .params
                             .last()
-                            .map(|p| p.is_rest && p.name == "arguments")
+                            .map(|p| p.arguments_object.is_some())
                             .unwrap_or(false);
                         resolved = Some((fname, true, declared, has_rest, is_synth_args));
                         break;

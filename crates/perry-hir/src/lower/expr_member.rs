@@ -1090,6 +1090,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "url"
+                    && class_name == "URLPattern"
+                    && is_url_pattern_data_property(&property_name)
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "worker_threads"
                     && matches!(class_name.as_str(), "MessagePort" | "BroadcastChannel")
                     && matches!(
@@ -2516,6 +2525,21 @@ fn is_headers_method_name(prop: &str) -> bool {
             | "keys"
             | "set"
             | "values"
+    )
+}
+
+fn is_url_pattern_data_property(prop: &str) -> bool {
+    matches!(
+        prop,
+        "protocol"
+            | "username"
+            | "password"
+            | "hostname"
+            | "port"
+            | "pathname"
+            | "search"
+            | "hash"
+            | "hasRegExpGroups"
     )
 }
 

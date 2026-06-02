@@ -323,7 +323,8 @@ pub fn lower_module_full(
     ctx.resolved_types = resolved_types;
     ctx.is_entry_module = is_entry_module;
     ctx.is_external_module = is_external_module;
-    ctx.current_strict = module_has_strict_mode(ast_module);
+    ctx.module_strict = module_has_strict_mode(ast_module);
+    ctx.current_strict = ctx.module_strict;
     if let Some(seed) = imported_class_fields {
         ctx.seed_imported_class_fields(seed);
     }

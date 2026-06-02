@@ -3475,6 +3475,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("pg", "Client"),
     class("url", "URL"),
     class("url", "URLSearchParams"),
+    class("url", "URLPattern"),
+    internal_method("url", "URLPattern", false, None),
+    internal_method("url", "exec", true, Some("URLPattern")),
+    internal_method("url", "test", true, Some("URLPattern")),
     // Issue #848: string_decoder.StringDecoder — handle-based dispatch
     // for `write` / `end` + `lastNeed` / `lastTotal` / `lastChar` getters.
     class("string_decoder", "StringDecoder"),

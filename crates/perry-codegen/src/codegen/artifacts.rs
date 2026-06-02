@@ -84,12 +84,13 @@ pub(super) struct ModuleArtifactsCtx<'a> {
     pub static_field_globals: &'a HashMap<(String, String), String>,
     pub method_names: &'a HashMap<(String, String), String>,
     pub func_names: &'a HashMap<u32, String>,
-    pub func_signatures: &'a HashMap<u32, (usize, bool, bool)>,
+    pub func_signatures: &'a HashMap<u32, (usize, bool, bool, bool)>,
     pub func_synthetic_arguments: &'a std::collections::HashSet<u32>,
     pub module_boxed_vars: &'a std::collections::HashSet<u32>,
     pub module_local_types: &'a HashMap<u32, perry_types::Type>,
     pub closure_rest_params: &'a HashMap<u32, usize>,
     pub closure_synthetic_arguments: &'a std::collections::HashSet<u32>,
+    pub closure_rest_and_arguments: &'a std::collections::HashSet<u32>,
     pub closure_arities: &'a HashMap<u32, u32>,
     pub closure_lengths: &'a HashMap<u32, u32>,
     pub closure_arrow_functions: &'a std::collections::HashSet<u32>,
@@ -132,6 +133,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         module_local_types,
         closure_rest_params,
         closure_synthetic_arguments,
+        closure_rest_and_arguments,
         closure_arities,
         closure_lengths,
         closure_arrow_functions,
@@ -344,6 +346,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                                     default: None,
                                     decorators: Vec::new(),
                                     is_rest: false,
+                                    arguments_object: None,
                                 });
                             }
                             break;
@@ -362,6 +365,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                                     default: None,
                                     decorators: Vec::new(),
                                     is_rest: false,
+                                    arguments_object: None,
                                 });
                             }
                         } else {
@@ -1260,9 +1264,27 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             let last_is_synth_args = f
                 .params
                 .last()
-                .map(|p| p.is_rest && p.name == "arguments")
+                .map(|p| p.arguments_object.is_some())
                 .unwrap_or(false);
             if last_is_synth_args {
+                func_names
+                    .get(&f.id)
+                    .map(|name| format!("__perry_wrap_{}", name))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let user_fn_wrapper_rest_and_arguments: std::collections::HashSet<String> = hir
+        .functions
+        .iter()
+        .filter_map(|f| {
+            let last = f.params.last()?;
+            let has_user_rest = f
+                .params
+                .iter()
+                .any(|p| p.is_rest && p.arguments_object.is_none());
+            if last.arguments_object.is_some() && has_user_rest {
                 func_names
                     .get(&f.id)
                     .map(|name| format!("__perry_wrap_{}", name))
@@ -1479,6 +1501,8 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         &user_fn_wrapper_rest,
         closure_synthetic_arguments,
         &user_fn_wrapper_synthetic_arguments,
+        closure_rest_and_arguments,
+        &user_fn_wrapper_rest_and_arguments,
         &user_fn_wrapper_arity,
         &user_fn_wrapper_length,
         &user_fn_wrapper_async,

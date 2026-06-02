@@ -188,6 +188,7 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
         default: None,
         decorators: Vec::new(),
         is_rest: false,
+        arguments_object: None,
     }
 }
 

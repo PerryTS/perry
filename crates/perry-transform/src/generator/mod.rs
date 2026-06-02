@@ -119,17 +119,12 @@ pub fn transform_generators(module: &mut Module) {
     // Class method / constructor / accessor bodies can also hold generator
     // expressions (effect's classes do).
     for class in &mut module.classes {
-        for m in class
-            .methods
-            .iter_mut()
-            .chain(class.static_methods.iter_mut())
-            .chain(
-                class
-                    .computed_members
-                    .iter_mut()
-                    .map(|member| &mut member.function),
-            )
-        {
+        if let Some(ctor) = &mut class.constructor {
+            let mut b = std::mem::take(&mut ctor.body);
+            transform_generator_closures_in_stmts(&mut b, &mut next_local_id, &mut next_func_id);
+            ctor.body = b;
+        }
+        for m in &mut class.methods {
             if m.is_generator {
                 transform_generator_function_with_extra_captures(
                     m,
@@ -141,23 +136,42 @@ pub fn transform_generators(module: &mut Module) {
                     Some(class.name.clone()),
                 );
             }
-        }
-        if let Some(ctor) = &mut class.constructor {
-            let mut b = std::mem::take(&mut ctor.body);
+            let mut b = std::mem::take(&mut m.body);
             transform_generator_closures_in_stmts(&mut b, &mut next_local_id, &mut next_func_id);
-            ctor.body = b;
+            m.body = b;
+        }
+        for m in &mut class.static_methods {
+            if m.is_generator {
+                transform_generator_function(m, &mut next_local_id, &mut next_func_id);
+            }
+            let mut b = std::mem::take(&mut m.body);
+            transform_generator_closures_in_stmts(&mut b, &mut next_local_id, &mut next_func_id);
+            m.body = b;
+        }
+        // Computed-key members (#3557) are instance methods installed on the
+        // prototype, so generator computed methods get the same class-context
+        // capture treatment as ordinary methods.
+        for member in &mut class.computed_members {
+            let m = &mut member.function;
+            if m.is_generator {
+                transform_generator_function_with_extra_captures(
+                    m,
+                    &mut next_local_id,
+                    &mut next_func_id,
+                    &[],
+                    &[],
+                    true,
+                    Some(class.name.clone()),
+                );
+            }
+            let mut b = std::mem::take(&mut m.body);
+            transform_generator_closures_in_stmts(&mut b, &mut next_local_id, &mut next_func_id);
+            m.body = b;
         }
         for m in class
-            .methods
+            .getters
             .iter_mut()
-            .chain(class.static_methods.iter_mut())
-            .chain(
-                class
-                    .computed_members
-                    .iter_mut()
-                    .map(|member| &mut member.function),
-            )
-            .chain(class.getters.iter_mut().map(|(_, f)| f))
+            .map(|(_, f)| f)
             .chain(class.setters.iter_mut().map(|(_, f)| f))
         {
             let mut b = std::mem::take(&mut m.body);

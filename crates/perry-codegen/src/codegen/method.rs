@@ -59,7 +59,7 @@ pub(super) fn compile_method(
     enums: &HashMap<(String, String), perry_hir::EnumValue>,
     static_field_globals: &HashMap<(String, String), String>,
     class_ids: &HashMap<String, u32>,
-    func_signatures: &HashMap<u32, (usize, bool, bool)>,
+    func_signatures: &HashMap<u32, (usize, bool, bool, bool)>,
     func_synthetic_arguments: &std::collections::HashSet<u32>,
     module_boxed_vars: &std::collections::HashSet<u32>,
     closure_rest_params: &HashMap<u32, usize>,
@@ -88,6 +88,9 @@ pub(super) fn compile_method(
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
     let _ = lf.create_block("entry");
 
+    let mut method_boxed_vars = module_boxed_vars.clone();
+    super::arguments::add_arguments_mapped_boxes(&method.params, &mut method_boxed_vars);
+
     // Allocate slots for `this` and each parameter; pre-populate with
     // the incoming values.
     let (this_slot, locals): (String, HashMap<u32, String>) = {
@@ -96,8 +99,8 @@ pub(super) fn compile_method(
         blk.store(DOUBLE, "%this_arg", &this_slot);
         let mut map = HashMap::new();
         for p in &method.params {
-            let slot = blk.alloca(DOUBLE);
-            blk.store(DOUBLE, &format!("%arg{}", p.id), &slot);
+            let arg_name = format!("%arg{}", p.id);
+            let slot = super::arguments::store_param_slot(blk, p, &method_boxed_vars, &arg_name);
             map.insert(p.id, slot);
         }
         (this_slot, map)
@@ -110,8 +113,6 @@ pub(super) fn compile_method(
     for p in &method.params {
         local_types.insert(p.id, p.ty.clone());
     }
-
-    let method_boxed_vars = module_boxed_vars.clone();
 
     let clamp_fn_ids: std::collections::HashSet<u32> = cross_module
         .clamp3_functions
@@ -257,6 +258,12 @@ pub(super) fn compile_method(
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         buffer_alias_base,
     };
+
+    super::arguments::materialize_arguments_object(
+        &mut ctx,
+        &method.params,
+        super::arguments::ArgumentsCallee::Undefined,
+    );
 
     // Constructors emitted as standalone cross-module LLVM functions (named
     // `<prefix>__<class>_constructor`) must bake the field initializers into
@@ -544,7 +551,7 @@ pub(super) fn compile_static_method(
     enums: &HashMap<(String, String), perry_hir::EnumValue>,
     static_field_globals: &HashMap<(String, String), String>,
     class_ids: &HashMap<String, u32>,
-    func_signatures: &HashMap<u32, (usize, bool, bool)>,
+    func_signatures: &HashMap<u32, (usize, bool, bool, bool)>,
     func_synthetic_arguments: &std::collections::HashSet<u32>,
     module_prefix: &str,
     module_boxed_vars: &std::collections::HashSet<u32>,
@@ -569,12 +576,15 @@ pub(super) fn compile_static_method(
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
     let _ = lf.create_block("entry");
 
+    let mut static_boxed_vars = module_boxed_vars.clone();
+    super::arguments::add_arguments_mapped_boxes(&f.params, &mut static_boxed_vars);
+
     let locals: HashMap<u32, String> = {
         let blk = lf.block_mut(0).unwrap();
         let mut map = HashMap::new();
         for p in &f.params {
-            let slot = blk.alloca(DOUBLE);
-            blk.store(DOUBLE, &format!("%arg{}", p.id), &slot);
+            let arg_name = format!("%arg{}", p.id);
+            let slot = super::arguments::store_param_slot(blk, p, &static_boxed_vars, &arg_name);
             map.insert(p.id, slot);
         }
         map
@@ -591,7 +601,6 @@ pub(super) fn compile_static_method(
         .collect();
     let flat_const_ids: std::collections::HashSet<u32> =
         cross_module.flat_const_arrays.keys().copied().collect();
-    let static_boxed_vars = module_boxed_vars.clone();
     let native_facts = crate::collectors::collect_native_region_fact_graph(
         &f.body,
         &flat_const_ids,
@@ -732,6 +741,11 @@ pub(super) fn compile_static_method(
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         buffer_alias_base,
     };
+    super::arguments::materialize_arguments_object(
+        &mut ctx,
+        &f.params,
+        super::arguments::ArgumentsCallee::Undefined,
+    );
     if f.is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, &f.body).with_context(|| {
             format!("lowering async body of static '{}::{}'", class_name, f.name)

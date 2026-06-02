@@ -31,7 +31,7 @@ pub(super) fn compile_function(
     enums: &HashMap<(String, String), perry_hir::EnumValue>,
     static_field_globals: &HashMap<(String, String), String>,
     class_ids: &HashMap<String, u32>,
-    func_signatures: &HashMap<u32, (usize, bool, bool)>,
+    func_signatures: &HashMap<u32, (usize, bool, bool, bool)>,
     func_synthetic_arguments: &std::collections::HashSet<u32>,
     module_boxed_vars: &std::collections::HashSet<u32>,
     closure_rest_params: &HashMap<u32, usize>,
@@ -88,6 +88,9 @@ pub(super) fn compile_function(
     }
     let _ = lf.create_block("entry");
 
+    let mut boxed_vars = module_boxed_vars.clone();
+    super::arguments::add_arguments_mapped_boxes(&f.params, &mut boxed_vars);
+
     // Store each param into an alloca slot, collecting LocalId → slot
     // mappings. We release the &mut LlBlock at scope end before handing
     // the function over to the FnCtx lowering pass.
@@ -95,8 +98,8 @@ pub(super) fn compile_function(
         let blk = lf.block_mut(0).unwrap();
         let mut map = HashMap::new();
         for p in &f.params {
-            let slot = blk.alloca(DOUBLE);
-            blk.store(DOUBLE, &format!("%arg{}", p.id), &slot);
+            let arg_name = format!("%arg{}", p.id);
+            let slot = super::arguments::store_param_slot(blk, p, &boxed_vars, &arg_name);
             if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
                 blk.call_void(
                     "js_shadow_slot_bind",
@@ -125,8 +128,6 @@ pub(super) fn compile_function(
     // enclosing function or inside a closure). Box-backing lets multiple
     // closures share the same mutable cell — critical for the common
     // `let x = 0; return { get: () => x, set: (n) => x = n }` pattern.
-    let boxed_vars = module_boxed_vars.clone();
-
     // Pre-walk: which locals are provably integer-valued? Used by
     // `BinaryOp::Mod` to emit integer modulo instead of libm `fmod()`.
     let clamp_fn_ids: std::collections::HashSet<u32> = cross_module
@@ -270,6 +271,13 @@ pub(super) fn compile_function(
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         buffer_alias_base,
     };
+
+    let wrapper_name = format!("__perry_wrap_{}", llvm_name);
+    super::arguments::materialize_arguments_object(
+        &mut ctx,
+        &f.params,
+        super::arguments::ArgumentsCallee::FunctionWrapper(&wrapper_name),
+    );
 
     // Issue #92 follow-up: pre-register `buffer_data_slots` entries for
     // `Buffer`-typed function parameters so that the readInt32BE/etc.

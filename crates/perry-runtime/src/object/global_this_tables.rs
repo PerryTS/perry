@@ -56,6 +56,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "Navigator",
     "URL",
     "URLSearchParams",
+    "URLPattern",
     "AbortController",
     "AbortSignal",
     "EventTarget",
@@ -107,6 +108,7 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "TextEncoderStream"
         | "TextDecoderStream"
         | "URLSearchParams"
+        | "URLPattern"
         | "AbortController"
         | "AbortSignal"
         | "DOMException"

@@ -66,6 +66,21 @@ fn is_headers_method_name(name: &str) -> bool {
     )
 }
 
+fn is_url_pattern_data_property(name: &str) -> bool {
+    matches!(
+        name,
+        "protocol"
+            | "username"
+            | "password"
+            | "hostname"
+            | "port"
+            | "pathname"
+            | "search"
+            | "hash"
+            | "hasRegExpGroups"
+    )
+}
+
 fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &str) -> bool {
     ctx.classes
         .get(class_name)
@@ -1110,6 +1125,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // synthesized __get_<property> method instead of doing a
             // raw field load.
             if let Some(class_name) = receiver_class_name(ctx, object) {
+                if class_name == "URLPattern" && is_url_pattern_data_property(property) {
+                    let recv_box = lower_expr(ctx, object)?;
+                    let key_idx = ctx.strings.intern(property);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let blk = ctx.block();
+                    let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+                    let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                    let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_object_get_field_by_name_f64",
+                        &[(I64, &obj_handle), (I64, &key_handle)],
+                    ));
+                }
                 if class_name == "Headers"
                     && matches!(
                         property.as_str(),
