@@ -130,6 +130,8 @@ pub(super) fn try_url_date_weakref_instance(
             Some("URL")
                 | Some("Object")
                 | Some("Buffer")
+                | Some("BlockList")
+                | Some("SocketAddress")
                 | Some("Uint8Array")
                 | Some("Uint8ClampedArray")
                 | Some("Array")

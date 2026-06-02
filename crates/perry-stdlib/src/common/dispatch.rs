@@ -753,6 +753,13 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         ) {
             return v;
         }
+        if let Some(v) = crate::common::net_method_values::dispatch_external_block_list_method(
+            handle,
+            method_name,
+            &args,
+        ) {
+            return v;
+        }
     }
 
     // Web Fetch method dispatch (refs #421 — Phase 1 of the handle-NaN-boxing
@@ -1256,6 +1263,8 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
         // cast to i64; NaN-box with POINTER_TAG to surface as a real JS array.
         fn js_net_socket_listeners(handle: i64, event_ptr: i64) -> i64;
         fn js_net_socket_raw_listeners(handle: i64, event_ptr: i64) -> i64;
+        fn js_net_socket_get_type_of_service(handle: i64) -> f64;
+        fn js_net_socket_set_type_of_service(handle: i64, value: f64) -> i64;
     }
 
     // Parse a runtime StringHeader pointer (`address` / `eventNames`
@@ -1352,6 +1361,15 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
             f64::from_bits(0x7FFD_0000_0000_0000u64 | (arr as u64 & 0x0000_FFFF_FFFF_FFFF))
         }
         "address" => json_str_to_value(js_net_socket_address(handle)),
+        "getTypeOfService" => js_net_socket_get_type_of_service(handle),
+        "setTypeOfService" => {
+            let value = args
+                .first()
+                .copied()
+                .unwrap_or(f64::from_bits(0x7FFC_0000_0000_0001));
+            js_net_socket_set_type_of_service(handle, value);
+            nanbox_handle(handle)
+        }
         "resetAndDestroy" => {
             js_net_socket_reset_and_destroy(handle);
             nanbox_handle(handle)
@@ -2074,6 +2092,10 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
 
     #[cfg(feature = "database-sqlite")]
     if crate::sqlite::dispatch_node_sqlite_limits_set(handle, property_name, value) {
+        return;
+    }
+
+    if crate::common::net_method_values::dispatch_property_set(handle, property_name, value) {
         return;
     }
 

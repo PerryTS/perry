@@ -156,6 +156,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
 
+            // `new net.BlockList()` / `new net.SocketAddress(options)` are
+            // native-module constructor exports, so their callee arrives as
+            // `PropertyGet { NativeModuleRef("net"), ... }` rather than a bare
+            // built-in class name. Route them through `lower_new` so the
+            // handle-producing constructor arms allocate registered net handles.
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if matches!(property.as_str(), "BlockList" | "SocketAddress") {
+                    if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
+                        if mod_name == "net" || mod_name == "node:net" {
+                            return lower_new(ctx, property, args);
+                        }
+                    }
+                }
+            }
+
             // `new crypto.Certificate()` is a legacy constructor in Node, but
             // the implementation is a stateless namespace over the same SPKAC
             // helper methods as `crypto.Certificate.*`. Represent instances as

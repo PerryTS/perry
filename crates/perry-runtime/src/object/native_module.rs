@@ -1640,6 +1640,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "util" => Some(UTIL_NAMESPACE_KEYS),
         "util.default" => Some(UTIL_DEFAULT_KEYS),
         "net" => Some(&[
+            b"BlockList",
             b"_createServerHandle",
             b"_normalizeArgs",
             b"connect",
@@ -1650,6 +1651,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"isIPv6",
             b"Server",
             b"Socket",
+            b"SocketAddress",
             b"Stream",
             b"getDefaultAutoSelectFamily",
             b"setDefaultAutoSelectFamily",
@@ -2176,6 +2178,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("util", "MIMEType") => Some(1),
         ("net", "createServer" | "Server") => Some(2),
         ("net", "Socket") => Some(1),
+        ("net", "BlockList" | "SocketAddress") => Some(0),
         // #3720: `http2.performServerHandshake(socket[, options])` — length 1.
         ("http2", "performServerHandshake") => Some(1),
         // #3905: Node `.length` — connect(authority,options,listener)=3,
@@ -3077,6 +3080,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("net", "createServer")
             | ("net", "Server")
             | ("net", "Socket")
+            | ("net", "BlockList")
+            | ("net", "SocketAddress")
             | ("net", "_normalizeArgs")
             | ("net", "_createServerHandle")
             // #1856: `child_process.ChildProcess` reads as `[Function: ChildProcess]`.

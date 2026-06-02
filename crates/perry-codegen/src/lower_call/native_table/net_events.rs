@@ -750,7 +750,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "listen",
         class_filter: Some("Server"),
         runtime: "js_net_server_listen",
-        args: &[NA_F64, NA_PTR],
+        args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_VOID,
     },
     NativeModSig {

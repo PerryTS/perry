@@ -1398,10 +1398,22 @@ pub(crate) fn lower_var_decl_with_destructuring(
 
             let init = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
             if matches!(ty, Type::Any) {
-                if let Some(Expr::NativeMethodCall { module, method, .. }) = &init {
-                    if module == "stream" && method == "from" {
-                        ty = Type::Named("Readable".to_string());
+                match &init {
+                    Some(Expr::NativeMethodCall { module, method, .. }) => {
+                        if module == "stream" && method == "from" {
+                            ty = Type::Named("Readable".to_string());
+                        }
                     }
+                    Some(Expr::NewDynamic { callee, .. }) => {
+                        if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                            if matches!(object.as_ref(), Expr::NativeModuleRef(module) if module == "net" || module == "node:net")
+                                && matches!(property.as_str(), "BlockList" | "SocketAddress")
+                            {
+                                ty = Type::Named(property.clone());
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             // #321: a generator function EXPRESSION bound to a name (`const g =

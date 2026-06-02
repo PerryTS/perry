@@ -913,6 +913,17 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     ),
     method_sig("net", "Socket", false, None, &[], TypeSpec::Any),
     method_sig("net", "Stream", false, None, &[], TypeSpec::Any),
+    method_sig("net", "BlockList", false, None, &[], TypeSpec::Any),
+    method_sig(
+        "net",
+        "SocketAddress",
+        false,
+        None,
+        &[p_any("options")],
+        TypeSpec::Any,
+    ),
+    method("net", "isBlockList", false, Some("BlockList")),
+    method("net", "parse", false, Some("SocketAddress")),
     method_sig(
         "net",
         "_normalizeArgs",
@@ -961,6 +972,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // strict-API gate for both classes.
     method("net", "setNoDelay", true, Some("Socket")),
     method("net", "setKeepAlive", true, Some("Socket")),
+    method("net", "getTypeOfService", true, Some("Socket")),
+    method("net", "setTypeOfService", true, Some("Socket")),
     method("net", "setTimeout", true, Some("Socket")),
     method("net", "setEncoding", true, Some("Socket")),
     method("net", "setDefaultEncoding", true, Some("Socket")),
@@ -1013,6 +1026,17 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("net", "listeners", true, Some("Socket")),
     method("net", "rawListeners", true, Some("Socket")),
     method("net", "resetAndDestroy", true, Some("Socket")),
+    method("net", "addAddress", true, Some("BlockList")),
+    method("net", "addRange", true, Some("BlockList")),
+    method("net", "addSubnet", true, Some("BlockList")),
+    method("net", "check", true, Some("BlockList")),
+    method("net", "toJSON", true, Some("BlockList")),
+    method("net", "fromJSON", true, Some("BlockList")),
+    method("net", "rules", true, Some("BlockList")),
+    method("net", "address", true, Some("SocketAddress")),
+    method("net", "family", true, Some("SocketAddress")),
+    method("net", "port", true, Some("SocketAddress")),
+    method("net", "flowlabel", true, Some("SocketAddress")),
     // Issue #1123 followup — `net.Server` instance methods backing
     // `createServer(...).listen/.close/.address/.on`. Mirrors the
     // shape of the http-server rows at entries.rs:2298. The
@@ -1022,6 +1046,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // NativeMethodCall — same reason `("http", "createServer")`
     // appears here but not as a dispatch-table row.
     method("net", "listen", true, Some("Server")),
+    method("net", "listening", true, Some("Server")),
+    method("net", "maxConnections", true, Some("Server")),
+    method("net", "dropMaxConnection", true, Some("Server")),
+    method("net", "__set_maxConnections", true, Some("Server")),
+    method("net", "__set_dropMaxConnection", true, Some("Server")),
     method("net", "close", true, Some("Server")),
     method("net", "address", true, Some("Server")),
     method("net", "addListener", true, Some("Server")),
@@ -1034,6 +1063,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("net", "removeAllListeners", true, Some("Server")),
     method("net", "listenerCount", true, Some("Server")),
     method("net", "eventNames", true, Some("Server")),
+    method("net", "getConnections", true, Some("Server")),
     // Issue #2211 — `server.listeners(event)` / `server.rawListeners(event)`,
     // twin of the Socket entries above (shared handle/listener namespace).
     method("net", "listeners", true, Some("Server")),
@@ -3270,6 +3300,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("net", "Socket"),
     class("net", "Stream"),
     class("net", "Server"),
+    class("net", "BlockList"),
+    class("net", "SocketAddress"),
     class("ioredis", "Redis"),
     class("mysql2/promise", "Pool"),
     class("mysql2", "Pool"),
