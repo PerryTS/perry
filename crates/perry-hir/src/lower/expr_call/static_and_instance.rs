@@ -235,6 +235,9 @@ pub(super) fn try_static_method_and_instance(
         // The inner call might lower to a NativeMethodCall, and we need to chain properly
         if let ast::MemberProp::Ident(method_ident) = &member.prop {
             let method_name = method_ident.sym.to_string();
+            if !may_lower_to_native_method_call(ctx, &member.obj) {
+                return Ok(Err(args));
+            }
             // Lower the object expression first
             let object_expr = lower_expr(ctx, &member.obj)?;
             // Check if it's a NativeMethodCall for a fluent-API native module
@@ -380,6 +383,58 @@ pub(super) fn try_static_method_and_instance(
     }
 
     Ok(Err(args))
+}
+
+fn may_lower_to_native_method_call(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    match expr {
+        ast::Expr::Ident(ident) => ident_may_start_native_method_call(ctx, ident.sym.as_ref()),
+        ast::Expr::New(_) => detect_native_instance_expr(ctx, expr).is_some(),
+        ast::Expr::Paren(paren) => may_lower_to_native_method_call(ctx, &paren.expr),
+        ast::Expr::TsAs(ts_as) => may_lower_to_native_method_call(ctx, &ts_as.expr),
+        ast::Expr::TsNonNull(ts_nn) => may_lower_to_native_method_call(ctx, &ts_nn.expr),
+        ast::Expr::TsSatisfies(ts_sat) => may_lower_to_native_method_call(ctx, &ts_sat.expr),
+        ast::Expr::TsTypeAssertion(ts_ta) => may_lower_to_native_method_call(ctx, &ts_ta.expr),
+        ast::Expr::TsConstAssertion(ts_const) => {
+            may_lower_to_native_method_call(ctx, &ts_const.expr)
+        }
+        ast::Expr::Call(call) => {
+            if native_class_from_factory_call(ctx, call).is_some() {
+                return true;
+            }
+
+            let ast::Callee::Expr(callee_expr) = &call.callee else {
+                return false;
+            };
+            let ast::Expr::Member(member) = callee_expr.as_ref() else {
+                return false;
+            };
+
+            match member.obj.as_ref() {
+                ast::Expr::Ident(ident) => {
+                    ident_may_start_native_method_call(ctx, ident.sym.as_ref())
+                }
+                object => {
+                    detect_native_instance_expr(ctx, object).is_some()
+                        || may_lower_to_native_method_call(ctx, object)
+                }
+            }
+        }
+        _ => false,
+    }
+}
+
+fn ident_may_start_native_method_call(ctx: &LoweringContext, name: &str) -> bool {
+    if ctx.lookup_native_instance(name).is_some() || ctx.lookup_native_module(name).is_some() {
+        return true;
+    }
+
+    ctx.lookup_imported_func(name).is_some()
+        && !ctx.namespace_import_locals.contains(name)
+        && name
+            .chars()
+            .next()
+            .map(|c| c.is_uppercase())
+            .unwrap_or(false)
 }
 
 /// Resolve the native `(module, class)` produced by an inline factory call

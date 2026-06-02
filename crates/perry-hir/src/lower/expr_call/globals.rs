@@ -896,10 +896,9 @@ pub(super) fn try_global_builtins(
         }
     }
 
-    // #854: lower the callee for its side effects (registration/tagging done
-    // inside `lower_expr`) even though the resulting value is unused on the
-    // fall-through path that hands the args back to the generic dispatcher.
-    let _callee_expr = lower_expr(ctx, expr)?;
-
+    // Fall through to the shared call tail. It owns lowering the callee for
+    // the generic dispatcher; doing it speculatively here relowers every
+    // receiver in a fluent generic chain and turns `a.b().c().d()` into an
+    // exponential lowering walk.
     Ok(Err(args))
 }
