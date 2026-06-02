@@ -1590,12 +1590,18 @@ pub(crate) extern "C" fn diag_trace_promise(
             return result;
         }
     } else {
+        // Node's `tracePromise` does `Promise.resolve(fn())`, so a non-thenable
+        // return value is wrapped in an already-resolved promise: `asyncStart`
+        // and `asyncEnd` still publish, mirroring the fulfilled-promise path
+        // above (start, end, asyncStart, asyncEnd).
         publish_channel(events[1], context);
         set_field_value(
             crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader,
             "result",
             result,
         );
+        publish_channel(events[2], context);
+        publish_channel(events[3], context);
         return result;
     }
 }
