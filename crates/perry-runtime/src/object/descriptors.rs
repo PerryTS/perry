@@ -6,6 +6,38 @@
 
 use super::*;
 
+fn property_name_array_index(name: &str) -> Option<u32> {
+    if name.is_empty() || (name.len() > 1 && name.as_bytes()[0] == b'0') {
+        return None;
+    }
+    let value = name.parse::<u32>().ok()?;
+    if value == u32::MAX || value.to_string() != name {
+        return None;
+    }
+    Some(value)
+}
+
+fn sort_property_names_ecma(names: &mut Vec<String>) {
+    let mut indexed = Vec::new();
+    let mut rest = Vec::new();
+    for name in names.drain(..) {
+        if let Some(index) = property_name_array_index(&name) {
+            indexed.push((index, name));
+        } else {
+            rest.push(name);
+        }
+    }
+    indexed.sort_by_key(|(index, _)| *index);
+    names.extend(indexed.into_iter().map(|(_, name)| name));
+    names.extend(rest);
+}
+
+fn push_unique_name(names: &mut Vec<String>, name: String) {
+    if !names.iter().any(|existing| existing == &name) {
+        names.push(name);
+    }
+}
+
 /// Object.getOwnPropertyDescriptor(obj, key) — returns a data descriptor
 /// `{ value, writable, enumerable, configurable }` for data properties, or an
 /// accessor descriptor `{ get, set, enumerable, configurable }` for properties
@@ -34,7 +66,12 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             let method_name = metadata_key_to_string(key_value);
             if let Some(method_name) = method_name {
                 if method_name == "constructor" || class_has_own_method(class_id, &method_name) {
-                    let value = if method_name == "constructor" {
+                    let value = if method_name == "constructor"
+                        && super::class_prototype_ref_id(obj_value).is_some()
+                        && class_has_own_method(class_id, &method_name)
+                    {
+                        class_prototype_method_value_for_name(class_id, &method_name)
+                    } else if method_name == "constructor" {
                         obj_value
                     } else {
                         class_prototype_method_value_for_name(class_id, &method_name)
@@ -487,16 +524,72 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
             }
         }
         if let Some(class_id) = class_ref_id(obj_value) {
-            let mut names: Vec<String> = vec!["constructor".to_string()];
+            let is_prototype_ref = super::class_prototype_ref_id(obj_value).is_some();
+            let mut names: Vec<String> = if is_prototype_ref {
+                vec!["constructor".to_string()]
+            } else {
+                vec![
+                    "length".to_string(),
+                    "name".to_string(),
+                    "prototype".to_string(),
+                ]
+            };
             if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
                 if let Some(reg) = registry.as_ref() {
                     if let Some(vtable) = reg.get(&class_id) {
-                        let mut methods: Vec<String> = vtable.methods.keys().cloned().collect();
-                        methods.sort();
-                        names.extend(methods);
+                        if is_prototype_ref {
+                            let mut method_names: Vec<String> =
+                                vtable.methods.keys().cloned().collect();
+                            method_names.sort();
+                            for name in method_names {
+                                push_unique_name(&mut names, name);
+                            }
+                            let mut getter_names: Vec<String> =
+                                vtable.getters.keys().cloned().collect();
+                            getter_names.sort();
+                            for name in getter_names {
+                                push_unique_name(&mut names, name);
+                            }
+                            let mut setter_names: Vec<String> =
+                                vtable.setters.keys().cloned().collect();
+                            setter_names.sort();
+                            for name in setter_names {
+                                push_unique_name(&mut names, name.clone());
+                            }
+                        }
                     }
                 }
             }
+            if !is_prototype_ref {
+                if let Ok(static_methods) = CLASS_STATIC_METHODS.read() {
+                    if let Some(map) = static_methods.as_ref().and_then(|m| m.get(&class_id)) {
+                        let mut method_names: Vec<String> = map.keys().cloned().collect();
+                        method_names.sort();
+                        for name in method_names {
+                            push_unique_name(&mut names, name);
+                        }
+                    }
+                }
+                if let Ok(static_accessors) = CLASS_STATIC_ACCESSORS.read() {
+                    if let Some(map) = static_accessors.as_ref().and_then(|m| m.get(&class_id)) {
+                        let mut accessor_names: Vec<String> = map.keys().cloned().collect();
+                        accessor_names.sort();
+                        for name in accessor_names {
+                            push_unique_name(&mut names, name);
+                        }
+                    }
+                }
+                CLASS_DYNAMIC_PROPS.with(|m| {
+                    if let Some(props) = m.borrow().get(&class_id) {
+                        let mut prop_names: Vec<String> = props.keys().cloned().collect();
+                        prop_names.sort();
+                        for name in prop_names {
+                            push_unique_name(&mut names, name);
+                        }
+                    }
+                });
+            }
+            sort_property_names_ecma(&mut names);
             let result = crate::array::js_array_alloc(names.len() as u32);
             for name in names {
                 let str_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -610,9 +703,16 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
         }
         // Clone the keys array — Object.getOwnPropertyNames includes ALL keys (even non-enumerable).
         let len = crate::array::js_array_length(keys) as usize;
+        let order = ecma_own_key_order(keys);
+        let pos = |j: usize| -> u32 {
+            match &order {
+                Some(ord) => ord[j],
+                None => j as u32,
+            }
+        };
         let result = crate::array::js_array_alloc(len as u32);
         for i in 0..len {
-            let key_val = crate::array::js_array_get(keys, i as u32);
+            let key_val = crate::array::js_array_get(keys, pos(i));
             crate::array::js_array_push_f64(result, f64::from_bits(key_val.bits()));
         }
         f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000)

@@ -581,6 +581,10 @@ pub fn lower_module_full(
         for (id, name) in ctx.closure_display_names.drain() {
             module.closure_display_names.insert(id, name);
         }
+        // #4101: flush captured function source text for `fn.toString()`.
+        for (id, src) in ctx.closure_source_text.drain() {
+            module.closure_source_text.insert(id, src);
+        }
         // Flush any pending classes created during expression lowering
         // (e.g., class expressions in `new (class extends Command { ... })()`)
         for class in ctx.pending_classes.drain(..) {

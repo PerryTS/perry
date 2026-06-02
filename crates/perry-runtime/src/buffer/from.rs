@@ -581,6 +581,19 @@ pub extern "C" fn js_uint8array_view(
     let src = raw as *const BufferHeader;
     unsafe {
         let total_len = (*src).length as i32;
+        // #4103: spec `RangeError` for an out-of-range view. `BYTES_PER_ELEMENT`
+        // is 1 for `Uint8Array`, so there is no alignment constraint — only the
+        // offset and (offset + length) bounds against the backing buffer.
+        if byte_offset < 0 || byte_offset > total_len {
+            crate::fs::validate::throw_range_error_with_code(&format!(
+                "Start offset {byte_offset} is outside the bounds of the buffer"
+            ));
+        }
+        if requested_length >= 0 && byte_offset.saturating_add(requested_length) > total_len {
+            crate::fs::validate::throw_range_error_with_code(&format!(
+                "Invalid typed array length: {requested_length}"
+            ));
+        }
         let start = byte_offset.clamp(0, total_len);
         let len = if requested_length < 0 {
             total_len.saturating_sub(start)

@@ -160,6 +160,9 @@ pub struct LoweringContext {
     pub(crate) ui_widget_type_aliases: HashMap<String, String>,
     /// Current class being lowered (for arrow function `this` capture)
     pub(crate) current_class: Option<String>,
+    /// Home-object local for object-literal methods while their bodies are
+    /// lowered. Used to preserve `super` in object methods.
+    pub(crate) object_super_home_stack: Vec<LocalId>,
     /// Extern function types: name -> (param_types, return_type)
     /// Stores type information for declare function statements (FFI)
     pub(crate) extern_func_types: Vec<(String, Vec<Type>, Type)>,
@@ -178,6 +181,10 @@ pub struct LoweringContext {
     /// (static property key); flushed into `Module.closure_display_names`
     /// alongside `pending_functions`.
     pub(crate) closure_display_names: HashMap<FuncId, String>,
+    /// #4101: original source text keyed by FuncId, captured by slicing the
+    /// module source against each function's AST span at lowering time.
+    /// Flushed into `Module.closure_source_text` alongside `pending_functions`.
+    pub(crate) closure_source_text: HashMap<FuncId, String>,
     /// Functions that return native module instances: func_name -> (module_name, class_name)
     /// Tracks user-defined functions whose return type annotation is a native module type
     /// (e.g., initializePool(): mysql.Pool -> ("mysql2/promise", "Pool"))

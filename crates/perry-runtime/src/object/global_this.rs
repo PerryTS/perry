@@ -94,7 +94,7 @@ pub(crate) extern "C" fn global_this_builtin_noop_thunk(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-extern "C" fn global_this_date_thunk(
+pub(crate) extern "C" fn global_this_date_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _arg: f64,
 ) -> f64 {
@@ -355,7 +355,7 @@ extern "C" fn global_this_string_thunk(
     crate::value::js_nanbox_string(string_ptr as i64)
 }
 
-extern "C" fn global_this_object_thunk(
+pub(crate) extern "C" fn global_this_object_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
 ) -> f64 {
@@ -815,6 +815,35 @@ extern "C" fn function_prototype_apply_thunk(
     }
 }
 
+/// #4101: `Function.prototype.toString` as a real callable thunk. Reads the
+/// receiver from `IMPLICIT_THIS` (set by `.call`/`.apply`'s runtime arm), then:
+///   • throws a `TypeError` when `this` is not callable (the spec brand check
+///     deferred from #4098 — `Function.prototype.toString.call({})`), and
+///   • otherwise returns the function's reconstructed source text.
+/// A dedicated thunk (rather than the shared no-op) so the brand check is
+/// scoped to `Function.prototype.toString` and never fires for the lenient
+/// `Object.prototype.toString` (which keeps its own real thunk).
+extern "C" fn function_prototype_to_string_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this_bits = IMPLICIT_THIS.with(|c| c.get());
+    let this_jsv = JSValue::from_bits(this_bits);
+    let raw = if this_jsv.is_pointer() {
+        (this_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else {
+        0
+    };
+    if raw == 0 || !crate::closure::is_closure_ptr(raw) {
+        super::object_ops::throw_object_type_error(
+            b"Function.prototype.toString requires that 'this' be a Function",
+        );
+    }
+    let func_ptr = unsafe { (*(raw as *const crate::closure::ClosureHeader)).func_ptr as usize };
+    let s = crate::builtins::function_source_for_func_ptr(func_ptr);
+    let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    f64::from_bits(JSValue::string_ptr(str_ptr).bits())
+}
+
 /// Thunk for `Array.prototype.slice` exposed as a real callable closure
 /// value. Reads the array receiver from `IMPLICIT_THIS` (set by
 /// `Function.prototype.call`/`.apply`'s runtime arm in
@@ -1098,6 +1127,36 @@ fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
             "buffer",
             mk(typed_array_buffer_getter_thunk as *const u8),
         );
+    }
+}
+
+/// Install `%Function.prototype% [ @@hasInstance ]` (#3662). Pre-fix this was
+/// `undefined` — `typeof Function.prototype[Symbol.hasInstance]` reported
+/// "undefined", a reflective `.call` threw, and a class with a custom
+/// `static [Symbol.hasInstance]` was the only way to reach the protocol. The
+/// method is keyed by the real well-known `Symbol.hasInstance` (not an
+/// `@@`-string own property, which would leak into `getOwnPropertyNames`).
+fn install_function_has_instance_symbol(proto_obj: *mut ObjectHeader) {
+    if proto_obj.is_null() {
+        return;
+    }
+    unsafe {
+        let func_ptr = super::instanceof::function_prototype_has_instance_thunk as *const u8;
+        crate::closure::js_register_closure_arity(func_ptr, 1);
+        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+        if closure.is_null() {
+            return;
+        }
+        super::native_module::set_bound_native_closure_name(closure, "[Symbol.hasInstance]");
+        super::native_module::set_builtin_closure_length(closure as usize, 1);
+        let sym = crate::symbol::well_known_symbol("hasInstance");
+        if sym.is_null() {
+            return;
+        }
+        let proto_value = crate::value::js_nanbox_pointer(proto_obj as i64);
+        let sym_value = f64::from_bits(crate::value::JSValue::pointer(sym as *const u8).bits());
+        let fn_value = f64::from_bits(crate::value::js_nanbox_pointer(closure as i64).to_bits());
+        crate::symbol::js_object_set_symbol_property(proto_value, sym_value, fn_value);
     }
 }
 
@@ -2750,7 +2809,15 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                 function_prototype_apply_thunk as *const u8,
                 2,
             );
-            install_noop_proto_methods(proto_obj, &[("bind", 1), ("toString", 0)]);
+            install_noop_proto_methods(proto_obj, &[("bind", 1)]);
+            // #4101: dedicated toString thunk (source reconstruction + brand
+            // check) instead of the shared no-op.
+            install_proto_method(
+                proto_obj,
+                "toString",
+                function_prototype_to_string_thunk as *const u8,
+                0,
+            );
             install_proto_method_rest(
                 proto_obj,
                 "call",
@@ -2758,6 +2825,7 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                 1,
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_function_has_instance_symbol(proto_obj);
         }
         "String" => {
             install_noop_proto_methods(

@@ -75,6 +75,35 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                 .block()
                 .call(DOUBLE, "js_webcrypto_illegal_constructor", &[]));
         }
+        if let Some((submod_key, exported_name)) =
+            ctx.import_function_node_submodule.get(class_name).cloned()
+        {
+            if submod_key == "readline_promises" && exported_name == "Readline" {
+                let output = if let Some(first) = args.first() {
+                    lower_expr(ctx, first)?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                let options = if let Some(second) = args.get(1) {
+                    lower_expr(ctx, second)?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                for extra in args.iter().skip(2) {
+                    let _ = lower_expr(ctx, extra)?;
+                }
+                ctx.pending_declares.push((
+                    "js_readline_promises_readline_new".to_string(),
+                    DOUBLE,
+                    vec![DOUBLE, DOUBLE],
+                ));
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_readline_promises_readline_new",
+                    &[(DOUBLE, &output), (DOUBLE, &options)],
+                ));
+            }
+        }
         if let Some(val) = lower_builtin_new(ctx, class_name, args)? {
             return Ok(val);
         }

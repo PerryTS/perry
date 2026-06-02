@@ -36,6 +36,13 @@ pub fn compute_max_local_id(module: &Module) -> LocalId {
             }
             scan_stmts_for_max_local(&static_method.body, &mut max_id);
         }
+        for member in &class.computed_members {
+            scan_expr_for_max_local(&member.key_expr, &mut max_id);
+            for param in &member.function.params {
+                max_id = max_id.max(param.id);
+            }
+            scan_stmts_for_max_local(&member.function.body, &mut max_id);
+        }
         if let Some(ctor) = &class.constructor {
             for param in &ctor.params {
                 max_id = max_id.max(param.id);
@@ -383,11 +390,15 @@ pub fn compute_max_func_id(module: &Module) -> FuncId {
             .methods
             .iter()
             .chain(class.static_methods.iter())
+            .chain(class.computed_members.iter().map(|member| &member.function))
             .chain(class.constructor.iter())
             .chain(class.getters.iter().map(|(_, f)| f))
             .chain(class.setters.iter().map(|(_, f)| f))
         {
             scan_stmts_for_max_func(&m.body, &mut max_id);
+        }
+        for member in &class.computed_members {
+            scan_expr_for_max_func(&member.key_expr, &mut max_id);
         }
     }
     max_id

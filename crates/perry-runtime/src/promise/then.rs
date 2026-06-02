@@ -32,9 +32,16 @@ unsafe fn store_promise_next_slot(
 /// Allocate a new Promise
 #[no_mangle]
 pub extern "C" fn js_promise_new() -> *mut Promise {
+    js_promise_new_with_parent(ptr::null_mut())
+}
+
+/// Allocate a new Promise, recording `parent` so `v8.promiseHooks` `init`
+/// callbacks (#3139) receive the parent promise.
+pub(crate) fn js_promise_new_with_parent(parent: *mut Promise) -> *mut Promise {
     bump(&MT_PROMISE_NEW_COUNT);
-    let hooks_active = crate::async_hooks::hooks_active();
-    let raw = if hooks_active {
+    let async_hooks_active = crate::async_hooks::hooks_active();
+    let lifecycle_hooks_active = async_hooks_active || crate::v8::promise_hooks_active();
+    let raw = if lifecycle_hooks_active {
         crate::gc::gc_malloc(std::mem::size_of::<Promise>(), crate::gc::GC_TYPE_PROMISE)
     } else {
         crate::arena::arena_alloc_gc(
@@ -46,10 +53,11 @@ pub extern "C" fn js_promise_new() -> *mut Promise {
     let promise = raw as *mut Promise;
     let scope = crate::gc::RuntimeHandleScope::new();
     let promise_handle = scope.root_raw_mut_ptr(promise);
+    let parent_handle = scope.root_raw_mut_ptr(parent);
     unsafe {
         // GC_STORE_AUDIT(INIT): initializes freshly allocated Promise storage before the promise is published.
         ptr::write(promise, Promise::new());
-        if hooks_active {
+        if async_hooks_active {
             let promise = promise_handle.get_raw_mut_ptr::<Promise>();
             let resource =
                 f64::from_bits(0x7FFD_0000_0000_0000 | (promise as u64 & 0x0000_FFFF_FFFF_FFFF));
@@ -59,6 +67,10 @@ pub extern "C" fn js_promise_new() -> *mut Promise {
             (*promise).trigger_async_id = ids.trigger_async_id;
         }
     }
+    crate::v8::promise_hook_init(
+        promise_handle.get_raw_mut_ptr::<Promise>(),
+        parent_handle.get_raw_mut_ptr::<Promise>(),
+    );
     promise_handle.get_raw_mut_ptr::<Promise>()
 }
 
@@ -128,6 +140,7 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
         (*promise).state = PromiseState::Fulfilled;
         store_promise_jsvalue_slot(promise, std::ptr::addr_of_mut!((*promise).value), value);
         crate::async_hooks::promise_resolve((*promise).async_id);
+        crate::v8::promise_hook_settled(promise);
 
         // Schedule callbacks. Push to TASK_QUEUE whenever there's anything
         // for the microtask runner to do — either invoke the user callback,
@@ -291,6 +304,7 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
         (*promise).state = PromiseState::Rejected;
         store_promise_jsvalue_slot(promise, std::ptr::addr_of_mut!((*promise).reason), reason);
         crate::async_hooks::promise_resolve((*promise).async_id);
+        crate::v8::promise_hook_settled(promise);
 
         // Schedule callbacks. Same propagation rule as `js_promise_resolve`
         // (#236): push to the queue whenever there's a callback to invoke
@@ -336,7 +350,17 @@ pub extern "C" fn js_promise_then(
         return ptr::null_mut();
     }
 
-    let next = js_promise_new();
+    // `js_promise_new_with_parent` can allocate via the GC and fire
+    // `v8.promiseHooks` `init` callbacks (running JS), so root the inputs across
+    // it before threading them into the chained promise.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let promise_handle = scope.root_raw_mut_ptr(promise);
+    let on_fulfilled_handle = scope.root_raw_const_ptr(on_fulfilled);
+    let on_rejected_handle = scope.root_raw_const_ptr(on_rejected);
+    let next = js_promise_new_with_parent(promise);
+    let promise = promise_handle.get_raw_mut_ptr::<Promise>();
+    let on_fulfilled = on_fulfilled_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
+    let on_rejected = on_rejected_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
 
     unsafe {
         store_promise_closure_slot(
@@ -479,8 +503,14 @@ pub extern "C" fn js_promise_finally(
 ) -> *mut Promise {
     use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
 
-    // Create the `next` promise that callers chain off.
-    let next = js_promise_new();
+    // Create the `next` promise that callers chain off. Root inputs across the
+    // allocation since `v8.promiseHooks` `init` may run JS (#3139).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let promise_handle = scope.root_raw_mut_ptr(promise);
+    let on_finally_handle = scope.root_raw_const_ptr(on_finally);
+    let next = js_promise_new_with_parent(promise);
+    let promise = promise_handle.get_raw_mut_ptr::<Promise>();
+    let on_finally = on_finally_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
     let next_i64 = next as i64;
 
     // Build the fulfilled wrapper: captures [on_finally, next].

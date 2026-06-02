@@ -119,6 +119,29 @@ pub fn transform_generators(module: &mut Module) {
     // Class method / constructor / accessor bodies can also hold generator
     // expressions (effect's classes do).
     for class in &mut module.classes {
+        for m in class
+            .methods
+            .iter_mut()
+            .chain(class.static_methods.iter_mut())
+            .chain(
+                class
+                    .computed_members
+                    .iter_mut()
+                    .map(|member| &mut member.function),
+            )
+        {
+            if m.is_generator {
+                transform_generator_function_with_extra_captures(
+                    m,
+                    &mut next_local_id,
+                    &mut next_func_id,
+                    &[],
+                    &[],
+                    true,
+                    Some(class.name.clone()),
+                );
+            }
+        }
         if let Some(ctor) = &mut class.constructor {
             let mut b = std::mem::take(&mut ctor.body);
             transform_generator_closures_in_stmts(&mut b, &mut next_local_id, &mut next_func_id);
@@ -128,6 +151,12 @@ pub fn transform_generators(module: &mut Module) {
             .methods
             .iter_mut()
             .chain(class.static_methods.iter_mut())
+            .chain(
+                class
+                    .computed_members
+                    .iter_mut()
+                    .map(|member| &mut member.function),
+            )
             .chain(class.getters.iter_mut().map(|(_, f)| f))
             .chain(class.setters.iter_mut().map(|(_, f)| f))
         {

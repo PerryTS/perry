@@ -1685,6 +1685,8 @@ pub extern "C" fn js_object_get_field_by_name(
         let bits = obj as u64;
         if (bits >> 48) == 0x7FFE && !key.is_null() {
             let class_id = (bits & 0xFFFF_FFFF) as u32;
+            let class_value = f64::from_bits(bits);
+            let is_prototype_ref = super::class_prototype_ref_id(class_value).is_some();
             unsafe {
                 let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let name_len = (*key).byte_len as usize;
@@ -1696,15 +1698,58 @@ pub extern "C" fn js_object_get_field_by_name(
                 // collapses correctly (with v0.5.751's getPrototypeOf
                 // returning the class ref for instance receivers). Refs
                 // #420 / #618 followup.
-                if name == "constructor" && class_id != 0 && is_class_id_registered(class_id) {
-                    return JSValue::from_bits(bits);
+                if is_prototype_ref
+                    && name == "constructor"
+                    && class_id != 0
+                    && class_has_own_method(class_id, name)
+                {
+                    let value = class_prototype_method_value_for_name(class_id, name);
+                    return JSValue::from_bits(value.to_bits());
                 }
-                if name == "prototype" && class_id != 0 && is_class_id_registered(class_id) {
-                    return JSValue::from_bits(bits);
+                if name == "constructor" && class_id != 0 && is_class_id_registered(class_id) {
+                    let value = if is_prototype_ref {
+                        super::class_constructor_ref_value(class_id)
+                    } else {
+                        class_value
+                    };
+                    return JSValue::from_bits(value.to_bits());
+                }
+                if name == "prototype"
+                    && class_id != 0
+                    && is_class_id_registered(class_id)
+                    && !is_prototype_ref
+                {
+                    let value = super::class_prototype_ref_value(class_id);
+                    return JSValue::from_bits(value.to_bits());
                 }
                 if class_id != 0 && class_has_own_method(class_id, name) {
                     let value = class_prototype_method_value_for_name(class_id, name);
                     return JSValue::from_bits(value.to_bits());
+                }
+                if is_prototype_ref {
+                    if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
+                        if let Some(ref reg) = *registry {
+                            let mut cid = class_id;
+                            let mut depth = 0usize;
+                            while depth < 32 {
+                                if let Some(vtable) = reg.get(&cid) {
+                                    if let Some(&getter_ptr) = vtable.getters.get(name) {
+                                        let f: extern "C" fn(f64) -> f64 =
+                                            std::mem::transmute(getter_ptr);
+                                        return JSValue::from_bits(f(class_value).to_bits());
+                                    }
+                                }
+                                match get_parent_class_id(cid) {
+                                    Some(p) if p != 0 && p != cid => {
+                                        cid = p;
+                                        depth += 1;
+                                    }
+                                    _ => break,
+                                }
+                            }
+                        }
+                    }
+                    return JSValue::undefined();
                 }
                 if !name.is_empty() {
                     let result = CLASS_DYNAMIC_PROPS.with(|m| {
@@ -1713,6 +1758,26 @@ pub extern "C" fn js_object_get_field_by_name(
                             .and_then(|props| props.get(name).copied())
                     });
                     if let Some(v) = result {
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                    if super::class_registry::lookup_static_method_in_chain(class_id, name)
+                        .is_some()
+                    {
+                        let heap_name = {
+                            let layout =
+                                std::alloc::Layout::from_size_align(name_len.max(1), 1).unwrap();
+                            let ptr = std::alloc::alloc(layout);
+                            std::ptr::copy_nonoverlapping(name_ptr, ptr, name_len);
+                            ptr
+                        };
+                        let result = js_class_method_bind(class_value, heap_name, name_len);
+                        return JSValue::from_bits(result.to_bits());
+                    }
+                    if let Some(v) = super::class_registry::class_static_accessor_getter_value(
+                        class_id,
+                        name,
+                        class_value,
+                    ) {
                         return JSValue::from_bits(v.to_bits());
                     }
                     // #1788: a subclass of a class-expression value
@@ -2421,20 +2486,8 @@ pub extern "C" fn js_object_get_field_by_name(
                         return JSValue::from_bits(result.to_bits());
                     }
                     b"constructor" => {
-                        let name = match (*err_ptr).error_kind {
-                            crate::error::ERROR_KIND_TYPE_ERROR => b"TypeError".as_slice(),
-                            crate::error::ERROR_KIND_RANGE_ERROR => b"RangeError".as_slice(),
-                            crate::error::ERROR_KIND_REFERENCE_ERROR => {
-                                b"ReferenceError".as_slice()
-                            }
-                            crate::error::ERROR_KIND_SYNTAX_ERROR => b"SyntaxError".as_slice(),
-                            crate::error::ERROR_KIND_EVAL_ERROR => b"EvalError".as_slice(),
-                            crate::error::ERROR_KIND_URI_ERROR => b"URIError".as_slice(),
-                            crate::error::ERROR_KIND_AGGREGATE_ERROR => {
-                                b"AggregateError".as_slice()
-                            }
-                            _ => b"Error".as_slice(),
-                        };
+                        let name = crate::error::error_kind_constructor_name((*err_ptr).error_kind);
+                        let name = name.as_bytes();
                         let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
                         return JSValue::from_bits(v.to_bits());
                     }
@@ -2892,6 +2945,10 @@ pub extern "C" fn js_object_get_field_by_name(
                     return v;
                 }
                 let class_id = (*obj).class_id;
+                if class_id != 0 && class_has_own_method(class_id, "constructor") {
+                    let value = class_prototype_method_value_for_name(class_id, "constructor");
+                    return JSValue::from_bits(value.to_bits());
+                }
                 if matches!(
                     class_id,
                     CLASS_ID_BOXED_NUMBER

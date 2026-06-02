@@ -30,6 +30,11 @@ use crate::response::ServerResponse;
 use crate::server::HttpServer;
 use crate::types::{POINTER_TAG, PTR_MASK, TAG_UNDEFINED};
 
+#[repr(C)]
+struct ErrorHeader {
+    _opaque: [u8; 0],
+}
+
 extern "C" {
     fn js_node_http_server_listen(server_handle: i64, args_array: i64);
     fn js_node_http_server_close(server_handle: i64, callback: i64);
@@ -62,6 +67,15 @@ extern "C" {
         method_name_ptr: *const u8,
         method_name_len: usize,
     ) -> f64;
+    fn js_error_new_with_message(message: *mut StringHeader) -> *mut ErrorHeader;
+    fn js_nanbox_pointer(ptr: i64) -> f64;
+    fn js_object_set_field_by_name(
+        obj: *mut perry_ffi::ObjectHeader,
+        key: *const StringHeader,
+        value: f64,
+    );
+    fn js_promise_rejected(reason: f64) -> *mut crate::types::Promise;
+    fn js_promise_resolved(value: f64) -> *mut crate::types::Promise;
 
     fn js_node_http_im_method(handle: i64) -> *mut StringHeader;
     fn js_node_http_im_url(handle: i64) -> *mut StringHeader;
@@ -148,6 +162,7 @@ pub const HTTP_SERVER_METHODS: &[&str] = &[
     "on",
     "addListener",
     "setTimeout",
+    "@@__perry_wk_asyncDispose",
 ];
 
 fn http_server_method_bytes(name: &str) -> Option<&'static [u8]> {
@@ -160,6 +175,7 @@ fn http_server_method_bytes(name: &str) -> Option<&'static [u8]> {
         "on" => Some(b"on"),
         "addListener" => Some(b"addListener"),
         "setTimeout" => Some(b"setTimeout"),
+        "@@__perry_wk_asyncDispose" => Some(b"@@__perry_wk_asyncDispose"),
         _ => None,
     }
 }
@@ -290,6 +306,18 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                 js_node_http_server_set_timeout_method(handle, msecs, cb);
             }
             self_ref
+        }
+        "@@__perry_wk_asyncDispose" => {
+            if server_is_listening(handle, is_https) {
+                if is_https {
+                    js_node_https_server_close(handle, 0);
+                } else {
+                    js_node_http_server_close(handle, 0);
+                }
+                promise_resolved_undefined()
+            } else {
+                promise_rejected_server_not_running()
+            }
         }
         // `listening` is a property on the JS side; the only known property
         // bound through this dispatcher would be `.listening()` — Node doesn't
@@ -714,4 +742,36 @@ fn closure_arg(value: Option<f64>) -> i64 {
         return 0;
     }
     (bits & PTR_MASK) as i64
+}
+
+fn server_is_listening(handle: i64, is_https: bool) -> bool {
+    if is_https {
+        get_handle::<HttpsServer>(handle)
+            .map(|server| server.base.listening)
+            .unwrap_or(false)
+    } else {
+        get_handle::<HttpServer>(handle)
+            .map(|server| server.listening)
+            .unwrap_or(false)
+    }
+}
+
+fn promise_resolved_undefined() -> f64 {
+    unsafe { js_nanbox_pointer(js_promise_resolved(f64::from_bits(TAG_UNDEFINED)) as i64) }
+}
+
+fn promise_rejected_server_not_running() -> f64 {
+    unsafe {
+        let message = alloc_string("Server is not running.");
+        let err = js_error_new_with_message(message.as_raw());
+        let code_key = alloc_string("code");
+        let code_value = alloc_string("ERR_SERVER_NOT_RUNNING");
+        js_object_set_field_by_name(
+            err as *mut perry_ffi::ObjectHeader,
+            code_key.as_raw(),
+            f64::from_bits(JsValue::from_string_ptr(code_value.as_raw()).bits()),
+        );
+        let reason = js_nanbox_pointer(err as i64);
+        js_nanbox_pointer(js_promise_rejected(reason) as i64)
+    }
 }

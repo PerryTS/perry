@@ -52,6 +52,10 @@ pub fn declare_phase1(module: &mut LlModule) {
     // named function so `console.log(named)` prints `[Function: named]`
     // instead of `[Function (anonymous)]`. See #1202.
     module.declare_function("js_register_function_name", VOID, &[PTR, PTR, I32]);
+    // #4101: register a user function's original source text (keyed by the
+    // same wrapper/closure address as the name) so `fn.toString()` and
+    // `Function.prototype.toString.call(fn)` reconstruct the source.
+    module.declare_function("js_register_function_source", VOID, &[PTR, PTR, I32]);
 
     // Console.
     module.declare_function("js_console_log_dynamic", VOID, &[DOUBLE]);

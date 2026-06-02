@@ -159,6 +159,64 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &closure_handle))
         }
 
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            let home_v = lower_expr(ctx, home)?;
+            let key_v = lower_expr(ctx, key)?;
+            let recv_v = lower_expr(ctx, receiver)?;
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_object_super_get",
+                &[(DOUBLE, &home_v), (DOUBLE, &key_v), (DOUBLE, &recv_v)],
+            ))
+        }
+
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            let home_v = lower_expr(ctx, home)?;
+            let key_v = lower_expr(ctx, key)?;
+            let recv_v = lower_expr(ctx, receiver)?;
+            let mut lowered_args = Vec::with_capacity(args.len());
+            for arg in args {
+                lowered_args.push(lower_expr(ctx, arg)?);
+            }
+            let (args_ptr, args_len) = if lowered_args.is_empty() {
+                ("null".to_string(), "0".to_string())
+            } else {
+                let buf = ctx.func.alloca_entry_array(DOUBLE, lowered_args.len());
+                for (i, val) in lowered_args.iter().enumerate() {
+                    let slot = ctx.block().gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                    ctx.block().store(DOUBLE, val, &slot);
+                }
+                let ptr_reg = ctx.block().next_reg();
+                ctx.block().emit_raw(format!(
+                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                    ptr_reg,
+                    lowered_args.len(),
+                    buf
+                ));
+                (ptr_reg, lowered_args.len().to_string())
+            };
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_object_super_call",
+                &[
+                    (DOUBLE, &home_v),
+                    (DOUBLE, &key_v),
+                    (DOUBLE, &recv_v),
+                    (PTR, &args_ptr),
+                    (I64, &args_len),
+                ],
+            ))
+        }
+
         // -------- fs.readFileSync(path) -> Buffer (no encoding) --------
         // Node returns a Buffer when no encoding is supplied; mirror that.
         // js_fs_read_file_binary returns a raw *mut BufferHeader registered

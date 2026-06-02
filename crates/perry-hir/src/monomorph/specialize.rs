@@ -215,6 +215,46 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
             .collect(),
         static_fields: class.static_fields.clone(),
         static_methods: class.static_methods.clone(),
+        computed_members: class
+            .computed_members
+            .iter()
+            .map(|member| ClassComputedMember {
+                key_expr: substitute_expr(&member.key_expr, &substitutions),
+                function: Function {
+                    id: member.function.id,
+                    name: member.function.name.clone(),
+                    type_params: member.function.type_params.clone(),
+                    params: member
+                        .function
+                        .params
+                        .iter()
+                        .map(|p| Param {
+                            id: p.id,
+                            name: p.name.clone(),
+                            ty: substitute_type(&p.ty, &substitutions),
+                            default: p
+                                .default
+                                .as_ref()
+                                .map(|d| substitute_expr(d, &substitutions)),
+                            decorators: p.decorators.clone(),
+                            is_rest: p.is_rest,
+                        })
+                        .collect(),
+                    return_type: substitute_type(&member.function.return_type, &substitutions),
+                    body: substitute_stmts(&member.function.body, &substitutions),
+                    is_async: member.function.is_async,
+                    is_generator: member.function.is_generator,
+                    is_strict: member.function.is_strict,
+                    was_plain_async: member.function.was_plain_async,
+                    was_unrolled: member.function.was_unrolled,
+                    is_exported: false,
+                    captures: member.function.captures.clone(),
+                    decorators: member.function.decorators.clone(),
+                },
+                is_static: member.is_static,
+                kind: member.kind,
+            })
+            .collect(),
         decorators: class.decorators.clone(),
         is_exported: class.is_exported,
         aliases: class.aliases.clone(),

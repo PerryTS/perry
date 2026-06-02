@@ -271,6 +271,7 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(crate::regex::scan_last_exec_groups_root_mut);
     gc_register_mutable_root_scanner(crate::array::scan_template_raw_roots_mut);
     gc_register_mutable_root_scanner(crate::perf_hooks::scan_perf_entries_roots_mut);
+    gc_register_mutable_root_scanner(crate::v8::scan_v8_promise_hook_roots_mut);
     gc_register_mutable_root_scanner(crate::typed_feedback::scan_typed_feedback_roots_mut);
     gc_register_mutable_root_scanner(transition_cache_mutable_root_scanner);
     gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);

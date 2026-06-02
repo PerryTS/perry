@@ -293,6 +293,28 @@ fn update_call_sites_in_expr(
                 update_call_sites_in_expr(arg, ctx, lookup);
             }
         }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            update_call_sites_in_expr(home, ctx, lookup);
+            update_call_sites_in_expr(key, ctx, lookup);
+            update_call_sites_in_expr(receiver, ctx, lookup);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            update_call_sites_in_expr(home, ctx, lookup);
+            update_call_sites_in_expr(key, ctx, lookup);
+            update_call_sites_in_expr(receiver, ctx, lookup);
+            for arg in args.iter_mut() {
+                update_call_sites_in_expr(arg, ctx, lookup);
+            }
+        }
         Expr::NativeMethodCall { object, args, .. } => {
             if let Some(obj) = object {
                 update_call_sites_in_expr(obj, ctx, lookup);
