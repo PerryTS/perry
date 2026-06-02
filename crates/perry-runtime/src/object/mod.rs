@@ -15,8 +15,8 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::RwLock;
 
-// Submodules split from the former 11.2k-line object.rs. Children use
-// `super::*`; public items are re-exported here to preserve the surface.
+// Submodules (issue #1103): behavior-preserving split of the former
+// 11.2k-line object.rs. Public re-exports keep FFI symbols stable.
 mod alloc;
 mod array_object_ops;
 mod assert;
@@ -47,6 +47,7 @@ mod object_ops;
 mod object_ops_frozen;
 mod polymorphic_index;
 pub(crate) mod prototype_chain;
+mod prototype_helpers;
 mod reflect_support;
 mod util_types;
 mod websocket_global;
@@ -81,6 +82,7 @@ pub use object_literal_ops::*;
 pub use object_ops::*;
 pub use object_ops_frozen::*;
 pub use polymorphic_index::*;
+pub(crate) use prototype_helpers::*;
 pub(crate) use reflect_support::*;
 pub use util_types::*;
 

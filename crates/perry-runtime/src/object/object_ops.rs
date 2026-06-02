@@ -525,6 +525,23 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
                     .unwrap_or(false);
                 return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
             }
+            if ptr >= crate::gc::GC_HEADER_SIZE + 0x1000
+                && crate::object::is_valid_obj_ptr(ptr as *const u8)
+            {
+                let gc_header =
+                    (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                if (*gc_header).obj_type == crate::gc::GC_TYPE_ERROR {
+                    let present = super::has_own_helpers::str_from_string_header(key_str)
+                        .map(|key| {
+                            crate::error::js_error_has_own_property(
+                                ptr as *mut crate::error::ErrorHeader,
+                                key,
+                            )
+                        })
+                        .unwrap_or(false);
+                    return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+                }
+            }
         }
 
         let obj = extract_obj_ptr(obj_value);
@@ -1345,37 +1362,6 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
     f64::from_bits((obj as u64) | 0x7FFD_0000_0000_0000)
 }
 
-/// Object.freeze(obj) — sets the frozen flag and drops `writable` +
-/// `configurable` on every existing key so per-key descriptor lookups report
-/// the post-freeze state. Returns the object.
-fn constructor_dynamic_prototype(obj: *const ObjectHeader) -> Option<f64> {
-    if obj.is_null() {
-        return None;
-    }
-    let key =
-        crate::string::js_string_from_bytes(b"constructor".as_ptr(), b"constructor".len() as u32);
-    let constructor = js_object_get_field_by_name_f64(obj, key);
-    let bits = constructor.to_bits();
-    let top16 = bits >> 48;
-    if top16 != 0x7FFD {
-        return None;
-    }
-    let raw_addr = (bits & crate::value::POINTER_MASK) as usize;
-    if raw_addr < (crate::gc::GC_HEADER_SIZE as usize) + 0x1000 {
-        return None;
-    }
-    let gc = unsafe { gc_header_for(raw_addr as *const ObjectHeader) };
-    if unsafe { (*gc).obj_type } != crate::gc::GC_TYPE_CLOSURE {
-        return None;
-    }
-    let proto = crate::closure::closure_get_dynamic_prop(raw_addr, "prototype");
-    if crate::value::JSValue::from_bits(proto.to_bits()).is_undefined() {
-        None
-    } else {
-        Some(proto)
-    }
-}
-
 /// Object.getPrototypeOf(obj):
 /// - For an INT32-tagged class ref (top16 == 0x7FFE) — return the parent
 ///   class ref via CLASS_REGISTRY's parent_class_id chain, or null at
@@ -1471,6 +1457,12 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                         return f64::from_bits(crate::value::js_nanbox_pointer(p as i64).to_bits());
                     }
                 }
+                if (*gc).obj_type == crate::gc::GC_TYPE_ERROR {
+                    let err = raw_addr as *const crate::error::ErrorHeader;
+                    if let Some(proto) = error_kind_prototype_value((*err).error_kind) {
+                        return proto;
+                    }
+                }
                 if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY {
                     if let Some(proto) = super::array_get_prototype_of_addr(raw_addr as usize) {
                         return proto;
@@ -1531,6 +1523,12 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                     let p = crate::object::typed_array_intrinsic_proto_ptr();
                     if !p.is_null() {
                         return f64::from_bits(crate::value::js_nanbox_pointer(p as i64).to_bits());
+                    }
+                }
+                if (*gc).obj_type == crate::gc::GC_TYPE_ERROR {
+                    let err = bits as *const crate::error::ErrorHeader;
+                    if let Some(proto) = error_kind_prototype_value((*err).error_kind) {
+                        return proto;
                     }
                 }
                 if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY {

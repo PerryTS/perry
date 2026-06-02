@@ -1248,27 +1248,21 @@ pub unsafe extern "C" fn js_new_function_construct(
             // error instance with the right `.name`.
             "Error" | "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError"
             | "EvalError" | "URIError" => {
-                let has_msg = !args.is_empty() && args[0].to_bits() != crate::value::TAG_UNDEFINED;
-                let message = if has_msg {
-                    crate::builtins::js_string_coerce(args[0])
+                let kind = match name {
+                    "TypeError" => crate::error::ERROR_KIND_TYPE_ERROR,
+                    "RangeError" => crate::error::ERROR_KIND_RANGE_ERROR,
+                    "ReferenceError" => crate::error::ERROR_KIND_REFERENCE_ERROR,
+                    "SyntaxError" => crate::error::ERROR_KIND_SYNTAX_ERROR,
+                    "EvalError" => crate::error::ERROR_KIND_EVAL_ERROR,
+                    "URIError" => crate::error::ERROR_KIND_URI_ERROR,
+                    _ => crate::error::ERROR_KIND_ERROR,
+                };
+                let message = if args.is_empty() {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
                 } else {
-                    std::ptr::null_mut()
+                    args[0]
                 };
-                let error = match name {
-                    "TypeError" => crate::error::js_typeerror_new(message),
-                    "RangeError" => crate::error::js_rangeerror_new(message),
-                    "ReferenceError" => crate::error::js_referenceerror_new(message),
-                    "SyntaxError" => crate::error::js_syntaxerror_new(message),
-                    "EvalError" => crate::error::js_evalerror_new(message),
-                    "URIError" => crate::error::js_urierror_new(message),
-                    _ => {
-                        if has_msg {
-                            crate::error::js_error_new_with_message(message)
-                        } else {
-                            crate::error::js_error_new()
-                        }
-                    }
-                };
+                let error = crate::error::js_error_new_kind_from_value(kind, message);
                 return crate::value::js_nanbox_pointer(error as i64);
             }
             // #2889: `new (rebound RegExp)(pattern, flags)`.

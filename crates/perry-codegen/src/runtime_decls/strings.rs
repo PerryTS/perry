@@ -270,6 +270,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_array_concat_new", I64, &[I64, I64]);
     module.declare_function("js_error_new", I64, &[]);
     module.declare_function("js_error_new_with_message", I64, &[I64]);
+    module.declare_function("js_error_new_from_value", I64, &[DOUBLE]);
+    module.declare_function("js_error_new_kind_from_value", I64, &[I32, DOUBLE]);
+    module.declare_function("js_error_new_with_cause_from_value", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_error_new_kind_with_options_from_value",
+        I64,
+        &[I32, DOUBLE, DOUBLE],
+    );
     // `new assert.AssertionError({...})` — Expr::NewDynamic special-case.
     module.declare_function("js_assert_assertion_error_ctor", DOUBLE, &[DOUBLE]);
     // Issue #462: thrown by PropertyGet codegen on undefined/null receiver.
