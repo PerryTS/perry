@@ -2,6 +2,10 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1098 — fix(hir): typeof queueMicrotask/structuredClone/btoa/atob is "function"
+
+`typeof queueMicrotask`, `typeof structuredClone`, `typeof btoa`, and `typeof atob` reported `"object"` instead of `"function"`, even though all four globals are fully callable with correct results. A bare read of these identifiers resolves to `GlobalGet(0)` (globalThis itself) in HIR, so a value `typeof` folded to `"object"`. The HIR-level `typeof`-of-bare-global fold (`lower/lower_expr.rs`) constant-folds known global functions (`setTimeout`, `fetch`, …) to `"function"` but was missing these four; added them (guarded by `lookup_local(n).is_none()` so a local shadow still wins). `typeof setTimeout` etc. and the call paths are unaffected. Advances the global/builtin conformance surface (#3986).
+
 ## v0.5.1097 — fix(runtime): Object.prototype.toString brands for typed arrays, Symbol, BigInt (+ unify the callable thunk)
 
 `Object.prototype.toString.call(x)` returned the wrong brand for typed arrays (`new Int32Array()` → `"[object Number]"`), `Symbol` and `BigInt` (`"[object Object]"`) instead of Node's `"[object Int32Array]"`, `"[object Symbol]"`, `"[object BigInt]"`. Two parts: (1) added typed-array (`lookup_typed_array_kind` + the existing `name_for_kind`, all 12 kinds), `Symbol` (`is_registered_symbol`), and `BigInt` (`is_bigint`) brand arms to `js_object_to_string`. (2) **Root cause for these specific types**: the callable `Object.prototype.toString` (`object_prototype_to_string_thunk` in `global_this.rs`) had its **own** coarse brand logic — separate from `js_object_to_string` — that mis-tagged raw-i64 typed arrays as `[object Number]` (a small pointer bit pattern reads as a finite f64) and everything past Array/Error/Date as `[object Object]`. Replaced the thunk body with a delegation to `js_object_to_string`, so the callable form shares the full, correct brand table. Continues the brand-coverage work from v0.5.1095. Advances #4033 / #3989.
