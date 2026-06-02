@@ -191,7 +191,7 @@ codegen-units = 16
 opt-level = "s"       # Optimize for size in stdlib
 
 [workspace.package]
-version = "0.5.1087"
+version = "0.5.1088"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/PerryTS/perry"

@@ -2,6 +2,16 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1088 — fix(diagnostics_channel): drop non-Node withStoreScope; null bindStore transform throws
+
+Two `node:diagnostics_channel` store-subsystem parity fixes (epic #3839):
+
+1. **`withStoreScope` removed.** Node's Channel prototype is exactly `{subscribe, unsubscribe, publish, bindStore, unbindStore, runStores, hasSubscribers}` — there is no `withStoreScope`. Perry registered one, so `typeof ch.withStoreScope` was `"function"` (Node: `"undefined"`) and `using scope = ch.withStoreScope(...)` ran a whole block instead of throwing. Dropped the `set_field_value(obj, "withStoreScope", …)` registration in `diag_channel_object`; the unwired `diag_channel_with_store_scope` helper is retained `#[allow(dead_code)]`.
+
+2. **`null` transform is non-callable.** `bindStore(store, null)` classified `null` as the no-transform case (like `undefined`), so `runStores` passed the data straight into the store. Node (v25.x) treats a `null` (or any non-callable, non-`undefined`) transform as a function call that throws `TypeError: transform is not a function` when `runStores` invokes it, leaving the store unset. Narrowed the `StoreTransform::None` classification in `diag_channel_bind_store` to **only** `undefined` (`TAG_UNDEFINED`); `null` and other non-callables now map to `StoreTransform::NonCallable`.
+
+Fixes `diagnostics_channel/stores/with-store-scope.ts` and `…/non-callable-transform.ts`.
+
 ## v0.5.1087 — fix(diagnostics_channel): tracePromise fires asyncStart/asyncEnd for non-thenable returns
 
 `tracingChannel(...).tracePromise(fn, ctx)` where `fn` returns a **non-thenable** plain value published only `start` and `end`, omitting `asyncStart`/`asyncEnd`. Node implements `tracePromise` as `Promise.resolve(fn())`, so a non-thenable return is wrapped in an already-resolved promise and still publishes the async pair — Node emits `start|end|asyncStart|asyncEnd`. The non-thenable `else` branch in `diag_trace_promise` (`node_submodules/diagnostics.rs`) set the context `result` and published `end` but returned without publishing `events[2]`/`events[3]`; it now mirrors the fulfilled-promise path. Fixes `test-parity/node-suite/diagnostics_channel/tracing/trace-promise-non-thenable.ts`. Advances the diagnostics_channel semantic-parity epic (#3839).

@@ -877,15 +877,11 @@ pub(crate) fn ensure_channel(name: f64) -> i64 {
         method_closure(cast1(diag_channel_unbind_store), 1, id),
     );
     set_field_value(obj, "runStores", run_stores_method_closure(id));
-    set_field_value(
-        obj,
-        "withStoreScope",
-        method_closure(
-            cast1(super::diagnostics_tail::diag_channel_with_store_scope),
-            1,
-            id,
-        ),
-    );
+    // Node's diagnostics_channel Channel prototype is exactly
+    // {subscribe, unsubscribe, publish, bindStore, unbindStore, runStores,
+    // hasSubscribers} — there is no `withStoreScope`. Exposing one made
+    // `typeof ch.withStoreScope` "function" where Node has "undefined" and let
+    // `using scope = ch.withStoreScope(...)` run instead of throwing.
     DIAG_CHANNEL_BY_KEY.with(|m| {
         m.borrow_mut().insert(key, id);
     });
@@ -1112,11 +1108,14 @@ pub(crate) extern "C" fn diag_channel_bind_store(
 ) -> f64 {
     ensure_subscriber_owner_thread();
     let id = method_id(closure);
-    // An omitted, explicit `undefined`, or `null` transform is the
-    // no-transform case in Node 26; a callable is stored as-is; any other
-    // value is remembered as a non-callable transform so `runStores` can
-    // reproduce Node's uncaught `TypeError: transform is not a function`.
-    let transform = if matches!(transform.to_bits(), TAG_UNDEFINED | crate::value::TAG_NULL) {
+    // Only an omitted or explicit `undefined` transform is the no-transform
+    // case; a callable is stored as-is; ANY other value — including `null` —
+    // is remembered as a non-callable transform so `runStores` reproduces
+    // Node's uncaught `TypeError: transform is not a function` (verified
+    // against Node v25.x: `bindStore(s, null)` throws when runStores invokes
+    // it, leaving the store unset, whereas `bindStore(s, undefined)` passes
+    // the data through).
+    let transform = if transform.to_bits() == TAG_UNDEFINED {
         StoreTransform::None
     } else if valid_closure_value(transform) {
         StoreTransform::Callable(transform)
