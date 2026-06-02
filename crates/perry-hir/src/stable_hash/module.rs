@@ -33,6 +33,7 @@ impl SH for Module {
             init_kind,
             async_step_closures,
             closure_display_names,
+            closure_source_text,
             async_generator_funcs,
         } = self;
         name.hash(h);
@@ -72,6 +73,15 @@ impl SH for Module {
         for (id, name) in display_pairs {
             id.hash(h);
             name.hash(h);
+        }
+        // #4101: function source text participates in codegen (drives the
+        // js_register_function_source calls), so include it in the hash.
+        let mut source_pairs: Vec<(u32, &String)> =
+            closure_source_text.iter().map(|(k, v)| (*k, v)).collect();
+        source_pairs.sort_unstable_by_key(|(k, _)| *k);
+        for (id, src) in source_pairs {
+            id.hash(h);
+            src.hash(h);
         }
     }
 }

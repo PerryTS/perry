@@ -993,6 +993,22 @@ pub(super) fn try_native_module_method_apply_call(
 /// excluded from the receiver guard below to preserve that path. This hook
 /// only ever fires on a shape that currently *throws* (the method value reads
 /// `undefined`), so it cannot regress working code.
+/// #4101: is `expr` the member expression `Function.prototype`? Used to keep
+/// `Function.prototype.toString.call(x)` from folding into `x.toString()` so
+/// the runtime brand check (throw on non-function `this`) still fires.
+fn is_function_prototype_member(expr: &ast::Expr) -> bool {
+    let ast::Expr::Member(member) = expr else {
+        return false;
+    };
+    let ast::MemberProp::Ident(prop) = &member.prop else {
+        return false;
+    };
+    if prop.sym.as_ref() != "prototype" {
+        return false;
+    }
+    matches!(member.obj.as_ref(), ast::Expr::Ident(id) if id.sym.as_ref() == "Function")
+}
+
 pub(super) fn try_builtin_prototype_method_apply_call(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -1030,6 +1046,18 @@ pub(super) fn try_builtin_prototype_method_apply_call(
                 return Ok(None);
             };
             if !is_builtin_prototype_receiver(ctx, inner.obj.as_ref()) {
+                return Ok(None);
+            }
+            // #4101: keep `Function.prototype.toString.call(x)` reflective so
+            // the runtime thunk runs its brand check (throw a TypeError on a
+            // non-function `this`) and reconstructs source. Folding it to
+            // `x.toString()` would erase the Function brand and route through
+            // the lenient universal `toString` (returns "[object Object]", no
+            // throw). `Object.prototype.toString.call(x)` is unaffected — it
+            // keeps folding (ramda relies on it).
+            if method_ident.sym.as_ref() == "toString"
+                && is_function_prototype_member(inner.obj.as_ref())
+            {
                 return Ok(None);
             }
             method_ident.clone()

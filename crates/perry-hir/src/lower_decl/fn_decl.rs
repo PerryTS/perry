@@ -6,7 +6,8 @@ use crate::analysis::*;
 use crate::destructuring::*;
 use crate::ir::*;
 use crate::lower::{
-    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, lower_expr, LoweringContext,
+    capture_function_source, collect_for_of_pattern_leaves, emit_for_of_pattern_binding,
+    lower_expr, LoweringContext,
 };
 use crate::lower_patterns::*;
 use crate::lower_types::*;
@@ -45,6 +46,19 @@ fn function_has_use_strict(func: &ast::Function) -> bool {
 pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result<Function> {
     let name = fn_decl.ident.sym.to_string();
     let func_id = ctx.lookup_func(&name).unwrap_or_else(|| ctx.fresh_func());
+
+    // #4101: retain the original source text so `fn.toString()` reconstructs
+    // it. Slice the module source against the function's AST span; prepend the
+    // `async` keyword when the span starts at `function` (SWC's `Function.span`
+    // excludes the leading `async` modifier).
+    if fn_decl.function.body.is_some() {
+        capture_function_source(
+            ctx,
+            func_id,
+            &fn_decl.function.span,
+            fn_decl.function.is_async,
+        );
+    }
 
     // Extract type parameters from generic function declaration (e.g., function foo<T, U>(...))
     let type_params = fn_decl

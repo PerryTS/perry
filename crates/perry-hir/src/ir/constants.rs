@@ -217,6 +217,26 @@ pub fn current_module_line_at(byte_offset: u32) -> Option<usize> {
     })
 }
 
+/// #4101: extract the source text spanning `[lo, hi)` (SWC `BytePos`, which
+/// is 1-based) from the currently-installed module source. Used at lowering
+/// to retain each function's original source for `Function.prototype.toString`.
+/// Returns `None` when no source is installed (unit tests / `check`) or the
+/// span is out of range, so callers fall back to a synthesized native form.
+pub fn current_module_source_slice(lo: u32, hi: u32) -> Option<String> {
+    CURRENT_MODULE_SOURCE.with(|cell| {
+        let borrowed = cell.borrow();
+        let src = borrowed.as_ref()?;
+        // SWC BytePos starts at 1, so subtract 1 for 0-indexed slicing.
+        let start = lo.saturating_sub(1) as usize;
+        let end = hi.saturating_sub(1) as usize;
+        if start <= end && end <= src.len() {
+            src.get(start..end).map(|s| s.to_string())
+        } else {
+            None
+        }
+    })
+}
+
 /// #503: look up `// @perry-allow-dynamic` near `byte_offset` in the
 /// currently-installed module source. Returns true if the annotation
 /// appears on the same line as the offending site, or on any of the
