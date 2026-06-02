@@ -748,6 +748,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_set_max_listeners", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_get_max_listeners", DOUBLE, &[]);
     module.declare_function("js_process_get_builtin_module", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_process_execve", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     // #3108: process.sourceMapsEnabled getter + setSourceMapsEnabled(bool).
     module.declare_function("js_process_source_maps_enabled", DOUBLE, &[]);
     module.declare_function("js_process_set_source_maps_enabled", DOUBLE, &[DOUBLE]);

@@ -7,10 +7,10 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
 | Whole-module gaps (zero coverage) | 15 | 410 | n/a |
-| Partial-module gaps | 32 | 1472 | 605 |
+| Partial-module gaps | 32 | 1470 | 607 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2164** |  |
+| **Total true gaps** |  | **2162** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
@@ -18,7 +18,7 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 - `node:os` — 195
 - `node:crypto` — 128
 - `node:http2` — 97
-- `node:process (and global `process`)` — 96
+- `node:process (and global `process`)` — 94
 - `node:test (and node:test/reporters, node:test/mock)` — 93
 - `node:util` — 92
 - `node:http` — 89
@@ -495,12 +495,11 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 
 ### node:process (and global `process`)
 
-**Gap APIs: 92** · Already covered: 26
+**Gap APIs: 90** · Already covered: 28
 
 #### Missing from Perry
 
 - `process.abort()`
-- `process.execve(file[, args[, env]])`
 - `process.memoryUsage.rss()`
 - `process.availableMemory()`
 - `process.constrainedMemory()`
@@ -529,7 +528,6 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `process.dlopen(module, filename[, flags])`
 - `process.loadEnvFile(path)`
 - `process.hrtime([time])`
-- `process.permission.has(scope[, reference])`
 - `process.umask()`
 - `process.umask(mask)`
 - `process.finalization.register(ref, callback)`
@@ -556,6 +554,8 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 | `process.kill(pid[, signal])` | `expr:ProcessKill` |
 | `process.hrtime.bigint()` | `expr:ProcessHrtimeBigint` |
 | `process.nextTick(callback[, ...args])` | `expr:ProcessNextTick` |
+| `process.execve(file[, args[, env]])` | `manifest:process.execve` |
+| `process.permission.has(scope[, reference])` | `runtime:process.permission` |
 | `process.pid` | `expr:ProcessPid` |
 | `process.ppid` | `expr:ProcessPpid` |
 | `process.version` | `expr:ProcessVersion` |

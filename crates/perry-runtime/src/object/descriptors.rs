@@ -342,6 +342,15 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         }
                     }
                     let value = js_object_get_field_by_name(obj, key_str);
+                    if matches!(
+                        module_name.as_str(),
+                        "process" | "process.namespace" | "process.default"
+                    ) && key_name == "permission"
+                    {
+                        let value = crate::process::process_metadata_property("permission")
+                            .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                        return build_data_descriptor(value, false, true, false);
+                    }
                     return build_data_descriptor(f64::from_bits(value.bits()), true, true, true);
                 }
             }

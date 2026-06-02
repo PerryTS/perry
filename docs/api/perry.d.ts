@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1843 entries across 106 modules
+// Coverage: 1845 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2949,6 +2949,8 @@ declare module "process" {
   /** stdlib */
   export const moduleLoadList: any;
   /** stdlib */
+  export const permission: any;
+  /** stdlib */
   export const pid: any;
   /** stdlib */
   export const platform: any;
@@ -3012,6 +3014,8 @@ declare module "process" {
   export function dlopen(...args: any[]): any;
   /** stdlib */
   export function emitWarning(...args: any[]): any;
+  /** stdlib */
+  export function execve(...args: any[]): any;
   /** stdlib */
   export function exit(...args: any[]): any;
   /** stdlib */

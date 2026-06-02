@@ -498,6 +498,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "getBuiltinModule") => crate::process::js_process_get_builtin_module(arg(0)),
+        ("process", "execve") => crate::process::js_process_execve(arg(0), arg(1), arg(2)),
         ("module", "enableCompileCache") => crate::process::js_module_enable_compile_cache(arg(0)),
         ("module", "flushCompileCache") => crate::process::js_module_flush_compile_cache(),
         ("module", "getCompileCacheDir") => crate::process::js_module_get_compile_cache_dir(),

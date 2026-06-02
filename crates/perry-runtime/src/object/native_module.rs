@@ -1714,6 +1714,7 @@ const PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"domain",
     b"env",
     b"eventNames",
+    b"execve",
     b"execArgv",
     b"execPath",
     b"features",
@@ -1787,6 +1788,7 @@ const PROCESS_DEFAULT_KEYS: &[&[u8]] = &[
     b"domain",
     b"env",
     b"eventNames",
+    b"execve",
     b"execArgv",
     b"execPath",
     b"features",
@@ -2774,6 +2776,13 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
 }
 
 pub(crate) fn native_module_has_enumerable_key(module_name: &str, key: &str) -> bool {
+    if matches!(
+        module_name,
+        "process" | "process.namespace" | "process.default"
+    ) && key == "permission"
+    {
+        return crate::process::process_permission_enabled();
+    }
     native_module_enumerable_keys(module_name)
         .is_some_and(|keys| keys.iter().any(|candidate| *candidate == key.as_bytes()))
 }
@@ -3456,6 +3465,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
             | "_kill",
         ) => Some(0),
         ("process", "_fatalException") => Some(2),
+        ("process", "execve") => Some(1),
         ("process", "setSourceMapsEnabled") => Some(1),
         (
             "process",
@@ -4507,6 +4517,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("process", "setMaxListeners")
             | ("process", "getMaxListeners")
             | ("process", "getBuiltinModule")
+            | ("process", "execve")
             | ("process", "binding")
             | ("process", "_linkedBinding")
             | ("process", "dlopen")

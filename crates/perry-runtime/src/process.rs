@@ -531,6 +531,160 @@ fn process_report_value() -> f64 {
     obj
 }
 
+pub(crate) fn process_permission_enabled() -> bool {
+    let mut enabled = false;
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--permission" => enabled = true,
+            "--no-permission" => enabled = false,
+            _ => {}
+        }
+    }
+    enabled
+}
+
+fn process_permission_flag_values(flag: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let prefix = format!("{flag}=");
+    let mut args = std::env::args().skip(1).peekable();
+    while let Some(arg) = args.next() {
+        if let Some(value) = arg.strip_prefix(&prefix) {
+            values.extend(
+                value
+                    .split(',')
+                    .filter(|part| !part.is_empty())
+                    .map(|part| part.to_string()),
+            );
+        } else if arg == flag {
+            if let Some(next) = args.peek() {
+                if !next.starts_with("--") {
+                    if let Some(value) = args.next() {
+                        values.extend(
+                            value
+                                .split(',')
+                                .filter(|part| !part.is_empty())
+                                .map(|part| part.to_string()),
+                        );
+                    }
+                } else {
+                    values.push("*".to_string());
+                }
+            } else {
+                values.push("*".to_string());
+            }
+        }
+    }
+    values
+}
+
+fn process_permission_has_flag(flag: &str) -> bool {
+    std::env::args().skip(1).any(|arg| arg == flag)
+}
+
+fn permission_canonical_path(path: &str) -> Option<std::path::PathBuf> {
+    std::fs::canonicalize(path).ok()
+}
+
+fn permission_path_allowed(reference: &str, allowed: &[String]) -> bool {
+    if allowed.iter().any(|entry| entry == "*") {
+        return true;
+    }
+    let reference_path = permission_canonical_path(reference);
+    for entry in allowed {
+        if entry == reference {
+            return true;
+        }
+        if let (Some(reference_path), Some(allowed_path)) =
+            (reference_path.as_ref(), permission_canonical_path(entry))
+        {
+            if reference_path == &allowed_path || reference_path.starts_with(&allowed_path) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn process_permission_scope_allowed(scope: &str, reference: Option<&str>) -> bool {
+    match scope {
+        "fs.read" => {
+            let allowed = process_permission_flag_values("--allow-fs-read");
+            match reference {
+                Some(reference) => permission_path_allowed(reference, &allowed),
+                None => allowed.iter().any(|entry| entry == "*"),
+            }
+        }
+        "fs.write" => {
+            let allowed = process_permission_flag_values("--allow-fs-write");
+            match reference {
+                Some(reference) => permission_path_allowed(reference, &allowed),
+                None => allowed.iter().any(|entry| entry == "*"),
+            }
+        }
+        "child" => process_permission_has_flag("--allow-child-process"),
+        "worker" => process_permission_has_flag("--allow-worker"),
+        "addon" => process_permission_has_flag("--allow-addons"),
+        _ => false,
+    }
+}
+
+fn throw_permission_arg_type(name: &str, value: f64) -> ! {
+    let message = format!(
+        "The \"{}\" argument must be of type string. Received {}",
+        name,
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+extern "C" fn process_permission_has_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    scope_value: f64,
+    reference_value: f64,
+) -> f64 {
+    let Some(scope) = module_value_to_string(scope_value) else {
+        throw_permission_arg_type("scope", scope_value);
+    };
+    let reference_js = JSValue::from_bits(reference_value.to_bits());
+    let reference = if reference_js.is_undefined() || reference_js.is_null() {
+        None
+    } else if let Some(reference) = module_value_to_string_or_buffer(reference_value) {
+        Some(reference)
+    } else {
+        throw_permission_arg_type("reference", reference_value);
+    };
+    bool_value(process_permission_scope_allowed(
+        &scope,
+        reference.as_deref(),
+    ))
+}
+
+fn process_permission_value() -> Option<f64> {
+    if !process_permission_enabled() {
+        return None;
+    }
+    use std::cell::Cell;
+    thread_local! {
+        static CACHED_PERMISSION: Cell<f64> = const { Cell::new(0.0) };
+    }
+
+    let cached = CACHED_PERMISSION.with(|c| c.get());
+    if cached != 0.0 {
+        return Some(cached);
+    }
+
+    let obj = crate::object::js_object_alloc(0, 1);
+    module_set_field(
+        obj,
+        "has",
+        module_function2("has", process_permission_has_thunk, 2),
+    );
+    let value = module_object_value(obj);
+    CACHED_PERMISSION.with(|c| c.set(value));
+    crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    Some(value)
+}
+
 fn process_report_controller_object() -> f64 {
     let obj = crate::object::js_object_alloc(0, 11);
     module_set_field(obj, "compact", bool_value(false));
@@ -1185,6 +1339,7 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         "execArgv" | "moduleLoadList" => module_array_value(&[]),
         "features" => process_features_value(),
         "finalization" => process_finalization_value(),
+        "permission" => process_permission_value()?,
         "release" => process_release_value(),
         "report" => process_report_value(),
         "sourceMapsEnabled" => js_process_source_maps_enabled(),
@@ -3068,6 +3223,171 @@ pub(crate) fn is_array_value(jv: JSValue) -> bool {
     gc_header.obj_type == crate::gc::GC_TYPE_ARRAY
 }
 
+fn execve_throw_invalid_arg_type(name: &str, expected: &str, value: f64) -> ! {
+    let message = format!(
+        "The \"{}\" argument must be {}. Received {}",
+        name,
+        expected,
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn execve_received_value(value: f64) -> String {
+    let jv = JSValue::from_bits(value.to_bits());
+    if crate::fs::validate::is_numeric(jv) {
+        let n = if jv.is_int32() {
+            jv.as_int32() as f64
+        } else {
+            jv.as_number()
+        };
+        return crate::fs::validate::format_received_number(n);
+    }
+    if let Some(value) = module_value_to_string(value) {
+        return format!("'{}'", value);
+    }
+    crate::fs::validate::describe_received(value)
+}
+
+fn execve_env_received(value: f64) -> String {
+    let Some(obj) = module_object_ptr(value) else {
+        return crate::fs::validate::describe_received(value);
+    };
+    let keys = crate::object::js_object_keys(obj);
+    let len = crate::array::js_array_length(keys);
+    let mut parts = Vec::new();
+    for i in 0..len.min(3) {
+        let key_value = crate::array::js_array_get_f64(keys, i);
+        let key = module_value_to_string(key_value).unwrap_or_default();
+        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        let field = crate::object::js_object_get_field_by_name_f64(obj, key_ptr);
+        parts.push(format!("{}: {}", key, execve_received_value(field)));
+    }
+    if len > 3 {
+        parts.push("...".to_string());
+    }
+    format!("{{ {} }}", parts.join(", "))
+}
+
+fn execve_throw_invalid_arg_value(name: &str, received: String) -> ! {
+    let message = format!(
+        "The argument '{}' must be a string without null bytes. Received {}",
+        name, received
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE")
+}
+
+fn execve_throw_invalid_env(value: f64) -> ! {
+    let message = format!(
+        "The argument 'env' must be an object with string keys and values without null bytes. Received {}",
+        execve_env_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE")
+}
+
+fn execve_parse_args(args: f64) -> Vec<String> {
+    let args_value = JSValue::from_bits(args.to_bits());
+    if args_value.is_undefined() {
+        return Vec::new();
+    }
+    if !is_array_value(args_value) {
+        execve_throw_invalid_arg_type("args", "an instance of Array", args);
+    }
+    let arr = args_value.as_pointer::<crate::array::ArrayHeader>();
+    let len = crate::array::js_array_length(arr);
+    let mut out = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        let value = crate::array::js_array_get_f64(arr, i);
+        let Some(item) = module_value_to_string(value) else {
+            execve_throw_invalid_arg_value(&format!("args[{i}]"), execve_received_value(value));
+        };
+        if item.as_bytes().contains(&0) {
+            execve_throw_invalid_arg_value(&format!("args[{i}]"), execve_received_value(value));
+        }
+        out.push(item);
+    }
+    out
+}
+
+fn execve_parse_env(env: f64) -> Vec<(String, String)> {
+    let env_value = JSValue::from_bits(env.to_bits());
+    if env_value.is_undefined() {
+        return std::env::vars().collect();
+    }
+    let Some(obj) = module_object_ptr(env) else {
+        execve_throw_invalid_arg_type("env", "of type object", env);
+    };
+    let keys = crate::object::js_object_keys(obj);
+    let len = crate::array::js_array_length(keys);
+    let mut out = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        let key_value = crate::array::js_array_get_f64(keys, i);
+        let Some(key) = module_value_to_string(key_value) else {
+            execve_throw_invalid_env(env);
+        };
+        if key.as_bytes().contains(&0) {
+            execve_throw_invalid_env(env);
+        }
+        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        let value = crate::object::js_object_get_field_by_name_f64(obj, key_ptr);
+        let Some(value_string) = module_value_to_string(value) else {
+            execve_throw_invalid_env(env);
+        };
+        if value_string.as_bytes().contains(&0) {
+            execve_throw_invalid_env(env);
+        }
+        out.push((key, value_string));
+    }
+    out
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_execve(exec_path: f64, args: f64, env: f64) -> f64 {
+    let Some(path) = module_value_to_string(exec_path) else {
+        execve_throw_invalid_arg_type("execPath", "of type string", exec_path);
+    };
+    if path.as_bytes().contains(&0) {
+        execve_throw_invalid_arg_value("execPath", execve_received_value(exec_path));
+    }
+    let argv = execve_parse_args(args);
+    let env_pairs = execve_parse_env(env);
+
+    #[cfg(unix)]
+    {
+        let path_c = match std::ffi::CString::new(path.as_str()) {
+            Ok(path_c) => path_c,
+            Err(_) => execve_throw_invalid_arg_value("execPath", execve_received_value(exec_path)),
+        };
+        let argv_c: Vec<std::ffi::CString> = argv
+            .iter()
+            .map(|arg| std::ffi::CString::new(arg.as_str()).unwrap())
+            .collect();
+        let env_c: Vec<std::ffi::CString> = env_pairs
+            .iter()
+            .map(|(key, value)| std::ffi::CString::new(format!("{key}={value}")).unwrap())
+            .collect();
+        let mut argv_ptrs: Vec<*const libc::c_char> =
+            argv_c.iter().map(|arg| arg.as_ptr()).collect();
+        let mut env_ptrs: Vec<*const libc::c_char> =
+            env_c.iter().map(|entry| entry.as_ptr()).collect();
+        argv_ptrs.push(std::ptr::null());
+        env_ptrs.push(std::ptr::null());
+        unsafe {
+            libc::execve(path_c.as_ptr(), argv_ptrs.as_ptr(), env_ptrs.as_ptr());
+            libc::abort();
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (path, argv, env_pairs);
+        crate::fs::validate::throw_type_error_with_code(
+            "process.execve() is unavailable on this platform",
+            "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM",
+        )
+    }
+}
+
 // #3108 — `process.sourceMapsEnabled` / `process.setSourceMapsEnabled(bool)`.
 //
 // Node exposes a live boolean toggle: `setSourceMapsEnabled(true|false)`
@@ -3101,6 +3421,23 @@ fn module_value_to_string(value: f64) -> Option<String> {
         return None;
     }
     let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    module_string_header_to_string(ptr)
+}
+
+fn module_value_to_string_or_buffer(value: f64) -> Option<String> {
+    if let Some(value) = module_value_to_string(value) {
+        return Some(value);
+    }
+    if crate::buffer::js_buffer_is_buffer(value.to_bits() as i64) == 1 {
+        let addr =
+            (value.to_bits() & crate::value::POINTER_MASK) as *const crate::buffer::BufferHeader;
+        let ptr = crate::buffer::js_buffer_to_string(addr, 0);
+        return module_string_header_to_string(ptr);
+    }
+    None
+}
+
+fn module_string_header_to_string(ptr: *const StringHeader) -> Option<String> {
     if ptr.is_null() {
         return Some(String::new());
     }

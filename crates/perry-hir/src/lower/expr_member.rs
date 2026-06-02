@@ -89,6 +89,7 @@ fn process_metadata_native_property(prop: &str) -> Option<Expr> {
         | "features"
         | "finalization"
         | "moduleLoadList"
+        | "permission"
         | "release"
         | "report"
         | "sourceMapsEnabled"

@@ -192,6 +192,15 @@ pub(super) fn try_native_module_methods(
                                 args,
                             }));
                         }
+                        "execve" => {
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "execve".to_string(),
+                                args,
+                            }));
+                        }
                         "dlopen" => {
                             // #1409: process.dlopen(module, filename, flags?)
                             // is Node's native-addon (.node) loader. Perry

@@ -17,6 +17,15 @@ pub(super) const NODE_CORE_PROCESS_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "process",
         has_receiver: false,
+        method: "execve",
+        class_filter: None,
+        runtime: "js_process_execve",
+        args: &[NA_F64, NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
         method: "umask",
         class_filter: None,
         runtime: "js_process_umask_set",
