@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1739 entries across 102 modules
+// Coverage: 1743 entries across 102 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1925,15 +1925,23 @@ declare module "nanoid" {
 
 declare module "net" {
   /** stdlib */
+  export class BlockList { [key: string]: any; }
+  /** stdlib */
   export class Server { [key: string]: any; }
   /** stdlib */
   export class Socket { [key: string]: any; }
   /** stdlib */
+  export class SocketAddress { [key: string]: any; }
+  /** stdlib */
   export class Stream { [key: string]: any; }
+  /** stdlib */
+  export function BlockList(...args: any[]): any;
   /** stdlib */
   export function Server(p0: any, p1: any): any;
   /** stdlib */
   export function Socket(...args: any[]): any;
+  /** stdlib */
+  export function SocketAddress(options: any): any;
   /** stdlib */
   export function Stream(...args: any[]): any;
   /** stdlib */

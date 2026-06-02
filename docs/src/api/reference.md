@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2465 entries across 105 modules.
+Total: 2490 entries across 105 modules.
 
 ## Modules
 
@@ -1799,25 +1799,36 @@ Total: 2465 entries across 105 modules.
 
 ### Classes
 
+- `BlockList`
 - `Server`
 - `Socket`
+- `SocketAddress`
 - `Stream`
 
 ### Methods
 
+- `BlockList` — module
 - `Server` — module
 - `Socket` — module
+- `SocketAddress` — module
 - `Stream` — module
+- `__set_dropMaxConnection` — instance *(class: `Server`)*
+- `__set_maxConnections` — instance *(class: `Server`)*
 - `_createServerHandle` — module
 - `_normalizeArgs` — module
+- `addAddress` — instance *(class: `BlockList`)*
 - `addListener` — instance *(class: `Socket`)*
 - `addListener` — instance *(class: `Server`)*
+- `addRange` — instance *(class: `BlockList`)*
+- `addSubnet` — instance *(class: `BlockList`)*
 - `address` — instance *(class: `Socket`)*
+- `address` — instance *(class: `SocketAddress`)*
 - `address` — instance *(class: `Server`)*
 - `autoSelectFamilyAttemptedAddresses` — instance *(class: `Socket`)*
 - `bufferSize` — instance *(class: `Socket`)*
 - `bytesRead` — instance *(class: `Socket`)*
 - `bytesWritten` — instance *(class: `Socket`)*
+- `check` — instance *(class: `BlockList`)*
 - `close` — instance *(class: `Server`)*
 - `connect` — module
 - `connect` — instance *(class: `Socket`)*
@@ -1827,11 +1838,18 @@ Total: 2465 entries across 105 modules.
 - `createServer` — module
 - `destroy` — instance *(class: `Socket`)*
 - `destroyed` — instance *(class: `Socket`)*
+- `dropMaxConnection` — instance *(class: `Server`)*
 - `end` — instance *(class: `Socket`)*
 - `eventNames` — instance *(class: `Socket`)*
 - `eventNames` — instance *(class: `Server`)*
+- `family` — instance *(class: `SocketAddress`)*
+- `flowlabel` — instance *(class: `SocketAddress`)*
+- `fromJSON` — instance *(class: `BlockList`)*
+- `getConnections` — instance *(class: `Server`)*
 - `getDefaultAutoSelectFamily` — module
 - `getDefaultAutoSelectFamilyAttemptTimeout` — module
+- `getTypeOfService` — instance *(class: `Socket`)*
+- `isBlockList` — module *(class: `BlockList`)*
 - `isIP` — module
 - `isIPv4` — module
 - `isIPv6` — module
@@ -1840,16 +1858,20 @@ Total: 2465 entries across 105 modules.
 - `listenerCount` — instance *(class: `Server`)*
 - `listeners` — instance *(class: `Socket`)*
 - `listeners` — instance *(class: `Server`)*
+- `listening` — instance *(class: `Server`)*
 - `localAddress` — instance *(class: `Socket`)*
 - `localFamily` — instance *(class: `Socket`)*
 - `localPort` — instance *(class: `Socket`)*
+- `maxConnections` — instance *(class: `Server`)*
 - `off` — instance *(class: `Socket`)*
 - `off` — instance *(class: `Server`)*
 - `on` — instance *(class: `Socket`)*
 - `once` — instance *(class: `Socket`)*
 - `once` — instance *(class: `Server`)*
+- `parse` — module *(class: `SocketAddress`)*
 - `pause` — instance *(class: `Socket`)*
 - `pending` — instance *(class: `Socket`)*
+- `port` — instance *(class: `SocketAddress`)*
 - `rawListeners` — instance *(class: `Socket`)*
 - `rawListeners` — instance *(class: `Server`)*
 - `readyState` — instance *(class: `Socket`)*
@@ -1863,6 +1885,7 @@ Total: 2465 entries across 105 modules.
 - `removeListener` — instance *(class: `Server`)*
 - `resetAndDestroy` — instance *(class: `Socket`)*
 - `resume` — instance *(class: `Socket`)*
+- `rules` — instance *(class: `BlockList`)*
 - `setDefaultAutoSelectFamily` — module
 - `setDefaultAutoSelectFamilyAttemptTimeout` — module
 - `setDefaultEncoding` — instance *(class: `Socket`)*
@@ -1870,7 +1893,9 @@ Total: 2465 entries across 105 modules.
 - `setKeepAlive` — instance *(class: `Socket`)*
 - `setNoDelay` — instance *(class: `Socket`)*
 - `setTimeout` — instance *(class: `Socket`)*
+- `setTypeOfService` — instance *(class: `Socket`)*
 - `timeout` — instance *(class: `Socket`)*
+- `toJSON` — instance *(class: `BlockList`)*
 - `uncork` — instance *(class: `Socket`)*
 - `unref` — instance *(class: `Socket`)*
 - `upgradeToTLS` — instance *(class: `Socket`)*
