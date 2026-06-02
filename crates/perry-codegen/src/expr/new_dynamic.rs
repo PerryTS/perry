@@ -222,6 +222,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
 
+            // `new stream.Readable(opts)` / `new stream.Writable(opts)` /
+            // `new stream.Duplex(...)` / `.Transform` / `.PassThrough` (#3663).
+            // The namespace-member form (`import * as stream` /
+            // `const stream = require('stream')`) arrives here as
+            // `NewDynamic { callee: PropertyGet { NativeModuleRef("stream"),
+            // "Readable" } }` instead of the bare-identifier `Expr::New`
+            // produced by a named ESM import. Without this arm it would fall
+            // through to the empty-object placeholder below, so the resulting
+            // object carries no EventEmitter/Writable methods and
+            // `.on()`/`.write()`/`.pipe()` throw "is not a function". Route to
+            // the same `lower_builtin_new` stream handler the named-import path
+            // uses so the runtime allocates the fully-methoded stream object.
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
+                    if mod_name == "stream"
+                        && matches!(
+                            property.as_str(),
+                            "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
+                        )
+                    {
+                        return lower_new(ctx, property, args);
+                    }
+                }
+            }
+
             // `new v8.Serializer()` / `new v8.Deserializer(buf)` (and the
             // `Default*` subclasses) (#3680) — route to the runtime
             // constructors that allocate a codec-backed instance object whose

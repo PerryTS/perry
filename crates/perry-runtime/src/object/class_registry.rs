@@ -1134,6 +1134,36 @@ pub unsafe extern "C" fn js_new_function_construct(
             };
             return crate::wasi::js_wasi_new(options);
         }
+        // #3663: `new Readable(opts)` (and Writable/Duplex/Transform/PassThrough)
+        // where the constructor binding came through any aliasing path the
+        // compiler can't resolve to a bare `Expr::New` — `const { Readable } =
+        // require('stream')`, `const s = require('stream'); new s.Readable()`,
+        // or `const R = stream.Readable; new R()`. In each case the callee
+        // value is the `stream.<Ctor>` bound-method closure, so dispatch to the
+        // same runtime constructors the named-import path uses. Without this the
+        // call falls through to the empty-object baseline and the resulting
+        // object has no EventEmitter/Writable methods, so `.on()`/`.write()`/
+        // `.pipe()` throw "is not a function".
+        if module == "stream"
+            && matches!(
+                method.as_str(),
+                "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
+            )
+        {
+            let opts = if !args_ptr.is_null() && args_len > 0 {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return match method.as_str() {
+                "Readable" => crate::node_stream::js_node_stream_readable_new(opts),
+                "Writable" => crate::node_stream::js_node_stream_writable_new(opts),
+                "Duplex" => crate::node_stream::js_node_stream_duplex_new(opts),
+                "Transform" => crate::node_stream::js_node_stream_transform_new(opts),
+                "PassThrough" => crate::node_stream::js_node_stream_passthrough_new(opts),
+                _ => unreachable!(),
+            };
+        }
     }
 
     // date-fns `constructFrom` clones a Date via
