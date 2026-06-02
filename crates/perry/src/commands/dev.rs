@@ -282,7 +282,8 @@ fn build_once(
         keep_intermediates: false,
         print_hir: false,
         no_link: false,
-        enable_js_runtime: false,
+        no_codegen: false,
+        enable_wasm_runtime: false,
         target: None,
         app_bundle_id: None,
         output_type: "executable".to_string(),
@@ -294,8 +295,27 @@ fn build_once(
         geisterhand_port: None,
         minimal_stdlib: false,
         no_auto_optimize: false,
+        debug_symbols: false,
         no_cache: false,
+        fast_math: false,
+        fp_contract: None,
+        verify_native_regions: false,
+        disable_buffer_fast_path: false,
+        emit_attest: false,
+        emit_sandbox: false,
+        lockdown: false,
         min_windows_version: "10".to_string(),
+        // Phase 2 v7: harmonyos signing flags. `perry dev` is the watch
+        // mode for local iteration; unsigned HAPs are fine, fall through
+        // to env / saved config.
+        p12_keystore: None,
+        p12_password: None,
+        harmonyos_cert: None,
+        harmonyos_profile: None,
+        harmonyos_key_alias: None,
+        skip_swift_build: false,
+        trace: None,
+        focus: None,
     };
     parse_cache.reset_counters();
     let result = super::compile::run_with_parse_cache(

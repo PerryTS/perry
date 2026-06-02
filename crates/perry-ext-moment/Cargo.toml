@@ -1,0 +1,16 @@
+[package]
+name = "perry-ext-moment"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for npm `moment` — uses only `perry-ffi`. Sync, handle-based date manipulation via `chrono`."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+chrono = "0.4"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

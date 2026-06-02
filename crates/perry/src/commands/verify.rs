@@ -41,6 +41,15 @@ pub struct VerifyArgs {
     /// Timeout in seconds
     #[arg(long, default_value = "300")]
     pub timeout: u64,
+
+    /// #504 — verify the binary against its sidecar attestation file
+    /// (`<binary>.attest.json`) instead of submitting to the remote
+    /// runtime-verification service. The attestation is produced by
+    /// `perry compile --emit-attest`; this flag recomputes SHA-256
+    /// of the binary on disk and reports a single ok/mismatch line.
+    /// No network calls.
+    #[arg(long)]
+    pub attest: bool,
 }
 
 // --- Response types matching perry-verify API ---
@@ -259,7 +268,51 @@ fn display_verify_results(status: &VerifyStatusResponse) {
 }
 
 /// Entry point for `perry verify` command
+/// #504 — local attestation verification. Reads `<binary>.attest.json`,
+/// recomputes SHA-256 of the binary on disk, reports a single ok or
+/// mismatch line + exit code. No network, no consent prompt.
+fn run_local_attest_verify(binary: &PathBuf, format: OutputFormat) -> Result<()> {
+    let canonical = binary.canonicalize().unwrap_or_else(|_| binary.clone());
+    let manifest = super::attest::verify_against_sidecar(&canonical)?;
+    match format {
+        OutputFormat::Text => {
+            println!(
+                "✓ attestation matches: {}\n  sha256:  {}\n  size:    {} bytes\n  built:   unix-{}\n  perry:   {}\n  commit:  {}",
+                canonical.display(),
+                manifest.sha256,
+                manifest.size,
+                manifest.built_at_unix,
+                manifest.perry_version,
+                if manifest.commit_sha.is_empty() {
+                    "<unknown>"
+                } else {
+                    manifest.commit_sha.as_str()
+                },
+            );
+        }
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "ok": true,
+                    "binary": canonical.to_string_lossy(),
+                    "manifest": manifest,
+                })
+            );
+        }
+    }
+    Ok(())
+}
+
 pub fn run(args: VerifyArgs, format: OutputFormat, _use_color: bool) -> Result<()> {
+    // #504: `--attest` short-circuits to local-attest mode — no
+    // tokio runtime, no remote call, no beta-consent prompt.
+    // Reads `<binary>.attest.json`, recomputes SHA-256 of the binary
+    // on disk, reports a single ok/mismatch line + exit status.
+    if args.attest {
+        return run_local_attest_verify(&args.binary, format);
+    }
+
     if !crate::commands::publish::check_beta_consent("verify") {
         bail!("Aborted.");
     }

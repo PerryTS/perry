@@ -1,13 +1,24 @@
+pub mod alert;
+pub mod attributed_text;
+pub mod bottom_nav;
 pub mod button;
+pub mod calendar;
 pub mod canvas;
+pub mod chart;
+pub mod combobox;
 pub mod divider;
 pub mod form;
 pub mod hstack;
 pub mod image;
+pub mod image_gallery;
+pub mod map_view;
 pub mod navstack;
+pub mod pdf_view;
 pub mod picker;
 pub mod progressview;
 pub mod qrcode;
+pub mod rich_text;
+pub mod rich_tooltip;
 pub mod scrollview;
 pub mod securefield;
 pub mod slider;
@@ -15,10 +26,14 @@ pub mod spacer;
 pub mod splitview;
 pub mod tabbar;
 pub mod text;
+pub mod text_registry;
 pub mod textarea;
 pub mod textfield;
+pub mod toast;
 pub mod toggle;
+pub mod tree_view;
 pub mod vstack;
+pub mod webview;
 pub mod zstack;
 
 use objc2::rc::Retained;
@@ -296,6 +311,28 @@ pub unsafe fn create_cg_color(r: f64, g: f64, b: f64, a: f64) -> *mut c_void {
 }
 
 /// Set a solid background color on any widget.
+///
+/// Issue #1122 — on iOS 26 device, certain UIKit views silently drop
+/// `setBackgroundColor:` even though the call returns normally. Two
+/// confirmed cases so far:
+///
+/// 1. **Nested `UIStackView`** — the outer/root stack paints, but inner
+///    stacks render transparent. UIStackView's iOS 14+ backgroundColor
+///    routes through a hidden backing layer that the iOS 26 compositor
+///    sometimes skips for non-root stacks.
+/// 2. **`UIButton`** — the reported "no red rectangle at all" symptom
+///    on the Wishare button. PR #1127 worked around it by switching to
+///    `UIButtonTypeCustom` (avoiding the Liquid Glass tint override),
+///    and we keep a `layer.backgroundColor` belt-and-suspenders here in
+///    case a future iOS UIKit version intercepts `setBackgroundColor:`
+///    on UIButton again.
+///
+/// For both we write `setBackgroundColor:` (so non-buggy paths and iOS
+/// 17 simulator keep working unchanged) **and** push the same color
+/// down to `layer.backgroundColor` as a CGColor. CALayer's own
+/// `backgroundColor` paints reliably on iOS 26 regardless of UIKit-side
+/// interception. For ordinary UIViews `setBackgroundColor:` already
+/// routes to `layer.backgroundColor`, so this is a no-op there.
 pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     if let Some(view) = get_widget(handle) {
         unsafe {
@@ -307,6 +344,34 @@ pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
                 alpha: a
             ];
             let _: () = objc2::msg_send![&*view, setBackgroundColor: &*ui_color];
+
+            // Layer-level fallback for views known to drop or override
+            // `setBackgroundColor:` on iOS 26 device (#1122):
+            //   * UIStackView — nested stacks paint transparent
+            //   * UIButton    — Liquid Glass renderer may override
+            // Set CALayer.backgroundColor with CGColor directly so the
+            // pixels paint regardless of UIKit-side interception. For
+            // ordinary UIViews this is a no-op (setBackgroundColor:
+            // already updates layer.backgroundColor).
+            let is_stack = AnyClass::get(c"UIStackView")
+                .map(|cls| {
+                    let r: bool = objc2::msg_send![&*view, isKindOfClass: cls];
+                    r
+                })
+                .unwrap_or(false);
+            let is_button = AnyClass::get(c"UIButton")
+                .map(|cls| {
+                    let r: bool = objc2::msg_send![&*view, isKindOfClass: cls];
+                    r
+                })
+                .unwrap_or(false);
+            if is_stack || is_button {
+                let layer: *mut AnyObject = objc2::msg_send![&*view, layer];
+                if !layer.is_null() {
+                    let cg_color: *const std::ffi::c_void = objc2::msg_send![&*ui_color, CGColor];
+                    let _: () = objc2::msg_send![layer, setBackgroundColor: cg_color];
+                }
+            }
         }
     }
 }

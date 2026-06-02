@@ -161,6 +161,61 @@ pub fn set_selectable(handle: i64, selectable: bool) {
     }
 }
 
+/// Issue #707 — cap the maximum number of visible lines. 0 = unlimited.
+/// Maps to `NSTextField.setMaximumNumberOfLines:` + cell wrapping. Pair
+/// with `set_truncation_mode` to control where the ellipsis appears.
+pub fn set_number_of_lines(handle: i64, lines: i64) {
+    if let Some(view) = super::get_widget(handle) {
+        unsafe {
+            if let Some(tf_cls) = objc2::runtime::AnyClass::get(c"NSTextField") {
+                let is_tf: bool = objc2::msg_send![&*view, isKindOfClass: tf_cls];
+                if !is_tf {
+                    return;
+                }
+            }
+            let tf: &NSTextField = &*(Retained::as_ptr(&view) as *const NSTextField);
+            // Wrapping must be enabled on the cell for setMaximumNumberOfLines
+            // to take effect with truncation.
+            if let Some(cell) = tf.cell() {
+                let _: () = objc2::msg_send![&*cell, setWraps: true];
+                if lines > 0 {
+                    let current: u64 = objc2::msg_send![&*cell, lineBreakMode];
+                    if current == 0 {
+                        // NSLineBreakByTruncatingTail = 4
+                        let _: () = objc2::msg_send![&*cell, setLineBreakMode: 4u64];
+                    }
+                }
+            }
+            let _: () = objc2::msg_send![tf, setMaximumNumberOfLines: lines];
+        }
+    }
+}
+
+/// Issue #707 — control where the ellipsis appears when text overflows.
+/// 0=word-wrap (no truncation), 1=head, 2=middle, 3=tail.
+pub fn set_truncation_mode(handle: i64, mode: i64) {
+    if let Some(view) = super::get_widget(handle) {
+        unsafe {
+            if let Some(tf_cls) = objc2::runtime::AnyClass::get(c"NSTextField") {
+                let is_tf: bool = objc2::msg_send![&*view, isKindOfClass: tf_cls];
+                if !is_tf {
+                    return;
+                }
+            }
+            let tf: &NSTextField = &*(Retained::as_ptr(&view) as *const NSTextField);
+            if let Some(cell) = tf.cell() {
+                let lbm: u64 = match mode {
+                    1 => 3, // head
+                    2 => 5, // middle
+                    3 => 4, // tail
+                    _ => 0, // word-wrap
+                };
+                let _: () = objc2::msg_send![&*cell, setLineBreakMode: lbm];
+            }
+        }
+    }
+}
+
 /// Set text decoration on a Text widget via `NSAttributedString` (issue
 /// #185 Phase B). `decoration`: 0=none, 1=underline, 2=strikethrough.
 /// Reads the current `stringValue`, wraps it with the requested

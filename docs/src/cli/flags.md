@@ -50,8 +50,18 @@ Use `--output-type` to change what's produced:
 | Flag | Description |
 |------|-------------|
 | `--print-hir` | Print HIR (intermediate representation) to stdout |
+| `--trace <STAGES>` | Dump IR at one or more pipeline stages. Comma-separated: `hir` (post-transform HIR), `llvm` (per-module `.ll` into `.perry-trace/llvm/`), or `all` |
+| `--focus <NAME>` | Restrict `--trace hir` to functions/methods/classes whose name contains `NAME`, suppressing import/export/init noise. Implies `--trace hir` if no stage is given |
 | `--no-link` | Produce `.o` object file only, skip linking |
+| `--no-codegen` | Skip the `package.json` `perry.codegen` build-time steps (also `PERRY_SKIP_CODEGEN=1`). See [Project Configuration](../getting-started/project-config.md) |
 | `--keep-intermediates` | Keep `.o` and `.asm` intermediate files |
+
+The `--trace`/`--focus` pair localizes "compiled to the wrong thing" bugs:
+`perry compile foo.ts --trace hir,llvm --focus parseRow` dumps just the
+`parseRow` function's lowered HIR and the module's LLVM IR, so you can see
+which stage corrupted it without scrolling a full-module dump. `--trace llvm`
+forces a full recompile (the object cache otherwise skips codegen for
+unchanged modules, leaving the trace dir empty).
 
 ## Output Optimization
 
@@ -73,6 +83,7 @@ Minification strips comments, collapses whitespace, and mangles local variable/p
 | Flag | Description |
 |------|-------------|
 | `--enable-js-runtime` | Enable V8 JavaScript runtime for unsupported npm packages |
+| `--enable-wasm-runtime` | Force-link the wasmi WebAssembly host runtime (auto-detected when `WebAssembly.*` is referenced; needed only when loading via dlopen / FFI without a static reference) |
 | `--type-check` | Enable type checking via tsgo IPC |
 
 ## Environment Variables

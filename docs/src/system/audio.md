@@ -7,7 +7,7 @@ indicator. Every snippet below is excerpted from
 [`docs/examples/system/snippets.ts`](../../examples/system/snippets.ts) — CI
 links it on every PR.
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/system/snippets.ts:audio}}
 ```
 
@@ -46,6 +46,44 @@ indicators without dB conversion.
 Get recent waveform samples for visualization. Pass the number of samples you
 want; the runtime returns the most recent N readings from its internal ring
 buffer. Useful for drawing waveform displays or level history charts.
+
+### `audioSetOutputFilename(filename)`
+
+Set the destination path for the next call to `audioStartRecording`. Pass an
+absolute path or a path relative to the app's working directory. Must be
+called **before** `audioStartRecording`.
+
+### `audioStartRecording()`
+
+Begin writing captured microphone audio to the file set by
+`audioSetOutputFilename`. The output is a WAV file (16-bit PCM, mono,
+48 kHz on every platform). Calling without a destination set is a no-op.
+
+### `audioStopRecording()`
+
+Finalize the in-progress recording — flushes pending samples, writes the
+RIFF/WAVE header sizes, and closes the file. Safe to call when no
+recording is in flight.
+
+```typescript,no-test
+import {
+  audioStart,
+  audioStop,
+  audioSetOutputFilename,
+  audioStartRecording,
+  audioStopRecording,
+} from "perry/system";
+
+audioStart();
+audioSetOutputFilename("/tmp/captured.wav");
+audioStartRecording();
+// … capture for some duration …
+audioStopRecording();
+audioStop();
+```
+
+`audioStartRecording` does not imply `audioStart` — start the input first,
+then start the file writer.
 
 ## Platform Implementations
 

@@ -32,7 +32,38 @@ pub fn app_run(_app_handle: i64) {
     //
     // perry_main_init() is called from Swift before the app body is rendered,
     // so by the time SwiftUI queries the tree, it's fully built.
+    register_cross_platform_text_handlers();
     install_test_mode_exit_timer();
+}
+
+extern "C" {
+    /// Defined in `perry-runtime/src/ui_text_registry.rs`. Stores the
+    /// passed handler in an AtomicPtr that `perry_arkts_show_toast`
+    /// consults on each call. No-op when `ohos-napi` is on.
+    fn js_register_show_toast_handler(f: extern "C" fn(msg_ptr: *const u8, msg_len: usize));
+    fn js_register_set_text_handler(
+        f: extern "C" fn(id_ptr: *const u8, id_len: usize, val_ptr: *const u8, val_len: usize),
+    );
+    fn js_register_text_id_handler(
+        f: extern "C" fn(widget_handle: i64, id_ptr: *const u8, id_len: usize),
+    );
+    /// Issue #535 Layer 2 — `js_state_set` calls this for every NavStack
+    /// route bound to the changed state's synth id. Defined in
+    /// `perry-runtime/src/ui_text_registry.rs`'s `NAVSTACK_REGISTRY` block.
+    fn js_register_widget_hidden_handler(f: extern "C" fn(widget_handle: i64, hidden: i32));
+}
+
+extern "C" fn navstack_set_widget_hidden(widget_handle: i64, hidden: i32) {
+    crate::tree::set_hidden(widget_handle, hidden != 0);
+}
+
+fn register_cross_platform_text_handlers() {
+    unsafe {
+        js_register_show_toast_handler(crate::widgets::toast::show_toast_handler);
+        js_register_set_text_handler(crate::widgets::text_registry::set_text_handler);
+        js_register_text_id_handler(crate::widgets::text_registry::register_text_id_handler);
+        js_register_widget_hidden_handler(navstack_set_widget_hidden);
+    }
 }
 
 /// If `PERRY_UI_TEST_MODE=1`, schedule a background thread that exits the

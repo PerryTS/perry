@@ -1,0 +1,404 @@
+//! Mark-sweep garbage collector for Perry
+//!
+//! Design:
+//! - 8-byte GcHeader prepended to every heap allocation (invisible to callers)
+//! - Arena objects (arrays/objects): discovered by walking arena blocks linearly (zero per-alloc tracking cost)
+//! - Explicit malloc objects (promises/maps/errors, large closures, and compatibility residents): tracked in MALLOC_STATE
+//! - Mark phase: precise thread-local roots + optional conservative stack scan + type-specific tracing
+//! - Sweep phase: free malloc objects; arena objects added to free list for reuse
+//! - Trigger: only checked on new arena block allocation or explicit gc() call
+//!
+//! Low-pause contract:
+//! - Normal automatic GC work and mutator assists must eventually advance in
+//!   bounded work-unit steps, independent of heap size.
+//! - Explicit `gc()` calls may synchronously run the configured collection
+//!   because the caller requested that pause; traces distinguish manual minor
+//!   work from explicit full collection.
+//! - Emergency full collections are reserved for allocation failure recovery,
+//!   only outside suppressed, reentrant, or unsafe regions, and must be
+//!   reported separately.
+//!
+//! Threshold-triggered work in `gc_check_trigger()` is debt-paced: heap goals
+//! start or resume a budgeted cycle and allocation-side checks spend bounded
+//! mutator-assist work instead of running a whole automatic collection.
+
+use std::alloc::{alloc, dealloc, realloc, Layout};
+use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
+use std::ffi::c_void;
+use std::marker::PhantomData;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Mutex, MutexGuard, OnceLock,
+};
+use std::time::{Duration, Instant};
+
+mod types;
+pub use types::*;
+mod policy;
+pub(crate) use policy::gc_runtime_safepoint;
+pub use policy::*;
+mod telemetry;
+pub use telemetry::*;
+mod malloc;
+pub use malloc::*;
+mod roots;
+pub use roots::*;
+mod layout;
+pub use layout::*;
+mod trace;
+pub(crate) use trace::*;
+mod barrier;
+pub use barrier::*;
+mod copying;
+use copying::*;
+mod oldgen;
+use oldgen::*;
+mod cycle;
+use cycle::*;
+mod verify;
+pub use verify::*;
+
+pub fn gc_collect_minor() -> u64 {
+    if defer_gc_request(DeferredGcRequest::DirectMinor) {
+        return 0;
+    }
+    gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct))
+        .emit_after_current()
+}
+
+fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+    // Phase C4b-γ-3: re-entrancy guard. Without this, the evacuation
+    // pass's `arena_alloc_gc_old` can trigger `gc_check_trigger` (via
+    // `arena.alloc`'s slow-path block-fill) DURING the outer collection
+    // cycle. The outer cycle's MARK_SEEDS, CONS_PINNED, and valid_ptrs
+    // are all in indeterminate states mid-evac; a recursive
+    // `gc_collect_minor` clears them, runs its own mark phase from a
+    // mostly-empty C-stack snapshot (we're deep inside the runtime,
+    // very few user pointers reachable), evacuates whatever it can find,
+    // then returns to the outer cycle which proceeds with corrupt
+    // pinning + corrupt seed list. Symptom: bench_evac_heavy's `cache`
+    // local gets evacuated by the inner cycle (un-pinned because the
+    // inner mark_stack_roots can't see it through the deep-runtime
+    // stack), and the outer rewrite walk doesn't update the user's
+    // shadow stack slot to point at the new copy → cache.length reads
+    // garbage from the FORWARDED slot's first 8 bytes thereafter.
+    //
+    // Fix: set GC_FLAG_IN_ALLOC for the entire duration of
+    // gc_collect_minor. `gc_check_trigger` already early-returns when
+    // this bit is set. Any recursive `gc_check_trigger` call from
+    // arena_alloc_gc_old / arena_alloc_gc / gc_malloc inside the
+    // collection sees the bit and bails. The outer cycle's bookkeeping
+    // stays intact.
+    let prev_in_alloc = GC_FLAGS.with(|f| {
+        let prev = f.get();
+        f.set(prev | GC_FLAG_IN_ALLOC);
+        prev & GC_FLAG_IN_ALLOC
+    });
+    if copied_minor_promotion_handoff_due(trigger.kind) {
+        let outcome = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(
+            GcTriggerKind::SurvivorPromotionBytes,
+        ));
+        restore_minor_in_alloc(prev_in_alloc);
+        return outcome;
+    }
+    let mut trace = GcCycleTrace::new(GcCollectionKind::Minor, trigger);
+    let start = Instant::now();
+    crate::arena::old_pages_begin_gc_cycle();
+    let previous_pause_us = gc_last_pause_us();
+    let current_rss_bytes = crate::process::get_rss_bytes();
+    let evacuation_policy_allowed = gen_gc_evacuate_enabled();
+    let force_evacuation = gc_force_evacuate_enabled();
+    let old_page_selection = if evacuation_policy_allowed && old_to_young_tracking_complete() {
+        select_old_page_defrag_pages(force_evacuation)
+    } else {
+        OldPageDefragSelection::default()
+    };
+    let old_page_source_blocks =
+        crate::arena::old_arena_source_blocks_for_pages(&old_page_selection.pages);
+    // MARK_SEEDS persists across GC cycles. Clear before any try_mark
+    // call so trace sees only this cycle's freshly-marked headers.
+    clear_mark_seeds();
+    if let Some(fast_path) = gc_collect_minor_copying_fast_path(&mut trace, start, trigger.kind) {
+        let freed_bytes = fast_path.freed_bytes;
+        let elapsed_us = start.elapsed().as_micros() as u64;
+        GC_STATS.with(|stats| {
+            let mut stats = stats.borrow_mut();
+            stats.collection_count += 1;
+            stats.total_freed_bytes += freed_bytes;
+            stats.last_pause_us = elapsed_us;
+        });
+        restore_minor_in_alloc(prev_in_alloc);
+        if let Some(trace) = trace.as_mut() {
+            trace.pause_us = elapsed_us;
+            trace.capture_layout_scans();
+        }
+        return GcCollectOutcome {
+            freed_bytes,
+            malloc_swept: fast_path.malloc_swept,
+            trace,
+        };
+    }
+    clear_mark_seeds();
+    GcCycleState::new_minor_fallback(
+        trigger,
+        trace,
+        start,
+        trigger.kind.progress_kind(GcCollectionKind::Minor),
+        prev_in_alloc,
+        previous_pause_us,
+        current_rss_bytes,
+        evacuation_policy_allowed,
+        force_evacuation,
+        EVACUATION_POLICY_DISABLED_REASON,
+        old_page_selection,
+        old_page_source_blocks,
+    )
+    .run_to_completion()
+}
+
+#[inline]
+
+pub fn gen_gc_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_GEN_GC").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// Gen-GC Phase C4b: evacuation is policy-driven by default.
+/// `PERRY_GEN_GC_EVACUATE=0`, `=false`, or `=off` disables the
+/// policy. `=1`, `=true`, and `=on` are accepted for compatibility
+/// but mean "allow the auto-policy", not unconditional evacuation.
+pub fn gen_gc_evacuate_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_GEN_GC_EVACUATE").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+fn gc_force_evacuate_enabled() -> bool {
+    gen_gc_evacuate_enabled()
+        && matches!(
+            std::env::var("PERRY_GC_FORCE_EVACUATE").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+}
+
+fn gc_verify_evacuation_enabled() -> bool {
+    matches!(
+        std::env::var("PERRY_GC_VERIFY_EVACUATION").as_deref(),
+        Ok("1") | Ok("on") | Ok("true")
+    )
+}
+
+#[cfg(test)]
+fn gc_collect_inner() -> u64 {
+    if defer_gc_request(DeferredGcRequest::Collect(GcTriggerKind::Direct)) {
+        return 0;
+    }
+    gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct))
+        .emit_after_current()
+}
+
+fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+    // Issue #745: clear the per-cycle bytes-bump flag so the next
+    // gc-suppressed parse can rebaseline the trigger again. Done at
+    // the top so all entry points — full GC, minor GC, manual
+    // `gc()`, the malloc-count trigger path — keep the flag in sync.
+    GC_TRIGGER_BUMPED.with(|c| c.set(false));
+    if gen_gc_enabled() {
+        return gc_collect_minor_with_trigger(trigger);
+    }
+    gc_collect_full_mark_sweep_with_trigger(trigger)
+}
+
+fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+    GC_TRIGGER_BUMPED.with(|c| c.set(false));
+    GcCycleState::new_full(trigger).run_to_completion()
+}
+
+#[allow(dead_code)]
+fn gc_collect_emergency_full() -> GcCollectOutcome {
+    gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Emergency))
+}
+
+#[cfg(test)]
+pub(super) fn test_gc_collect_emergency_full_trace_json() -> serde_json::Value {
+    let outcome = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot {
+        kind: GcTriggerKind::Emergency,
+        steps_before: Some(GcStepSnapshot::current()),
+    });
+    outcome
+        .trace
+        .expect("test requested emergency full GC trace capture")
+        .into_json(GcStepSnapshot::current())
+}
+
+pub fn gc_init() {
+    crate::perf_hooks::init_time_origin();
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        scan_runtime_handle_roots_mut,
+        scan_runtime_handle_roots_mut_step,
+        new_runtime_handle_root_scan_state,
+        MutableRootScannerSource::RuntimeHandles,
+    );
+    gc_register_mutable_root_scanner(crate::promise::scan_native_async_completion_roots_mut);
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        promise_mutable_root_scanner,
+        crate::promise::scan_promise_roots_mut_step,
+        crate::promise::new_promise_root_scan_state,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        timer_mutable_root_scanner,
+        crate::timer::scan_timer_roots_mut_step,
+        crate::timer::new_timer_root_scan_state,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
+    gc_register_mutable_root_scanner(exception_mutable_root_scanner);
+    gc_register_mutable_root_scanner(async_context_mutable_root_scanner);
+    gc_register_mutable_root_scanner(async_hooks_mutable_root_scanner);
+    gc_register_mutable_root_scanner(shape_cache_mutable_root_scanner);
+    gc_register_mutable_root_scanner(crate::regex::scan_last_exec_groups_root_mut);
+    gc_register_mutable_root_scanner(crate::array::scan_template_raw_roots_mut);
+    gc_register_mutable_root_scanner(crate::perf_hooks::scan_perf_entries_roots_mut);
+    gc_register_mutable_root_scanner(crate::typed_feedback::scan_typed_feedback_roots_mut);
+    gc_register_mutable_root_scanner(transition_cache_mutable_root_scanner);
+    gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        crate::object::scan_class_side_table_roots_mut,
+        crate::object::scan_class_side_table_roots_mut_step,
+        crate::object::new_class_side_table_root_scan_state,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        crate::symbol::scan_symbol_side_table_roots_mut,
+        crate::symbol::scan_symbol_side_table_roots_mut_step,
+        crate::symbol::new_symbol_side_table_root_scan_state,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
+    // Issue #1813: the implicit-`this` cell holds the live receiver across a
+    // dynamically-dispatched method body. A moving GC triggered from inside
+    // that body (e.g. @perryts/mysql Pool.acquire → handshake → nativeScramble
+    // under concurrent load) must rewrite the cell, or the body's next
+    // `this`-derived dispatch derefs a relocated receiver → SIGSEGV.
+    gc_register_mutable_root_scanner(crate::object::scan_implicit_this_roots_mut);
+    // Issue #1790 (epic #1785 class-object dispatch / design #1772): the class
+    // static-inheritance side-tables CLASS_PROTOTYPE_OBJECTS and
+    // CLASS_PARENT_CLOSURES hold the heap parent (`class Sub extends make(...)`
+    // / `extends Context.Tag(..)()`) as a raw `usize` pointer. Root + rewrite
+    // them so a parent reachable only through the table survives collection and
+    // its address is fixed up after a copying-nursery / evacuation move,
+    // keeping `Sub.ast` and inherited static methods resolvable.
+    gc_register_mutable_root_scanner(crate::object::scan_class_inheritance_roots_mut);
+    // #1934: live `child_process.spawn` ChildProcess objects are reachable only
+    // from the reactor's registry (the event loop holds no JSValue root for a
+    // fire-and-forget spawn). Scan + rewrite them so a GC between ticks doesn't
+    // reclaim the object whose `data`/`exit` handlers are still pending.
+    gc_register_mutable_root_scanner(crate::child_process::reactor::cp_reactor_scan_roots_mut);
+    gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
+    gc_register_mutable_root_scanner(intern_table_mutable_root_scanner);
+    gc_register_mutable_root_scanner(small_int_cache_mutable_root_scanner);
+    gc_register_mutable_root_scanner(crate::builtins::scan_console_log_singleton_roots_mut);
+    gc_register_mutable_root_scanner(crate::builtins::scan_boxed_primitive_payload_roots_mut);
+    // Issue #841: GC roots for the per-(submodule, export) function
+    // singletons + per-submodule namespace stub objects allocated by
+    // `node_submodules.rs`. Without this scanner the next GC cycle
+    // after first import-binding use would reclaim the singletons
+    // (nothing else holds them — they live for the program's lifetime
+    // via codegen `getter` calls, not via a user-visible JSValue root).
+    gc_register_mutable_root_scanner(
+        crate::node_submodules::scan_node_submodule_singleton_roots_mut,
+    );
+    // Box-capture root scanner (mutable closure captures, esp. the
+    // generator state-machine's `__iter` and `__step` boxes that hold
+    // the iter object + step closure across awaits).
+    gc_register_mutable_root_scanner(crate::r#box::scan_box_roots_mut);
+    // Iter-result scratch slot — the async-step fast path stows the
+    // generator's most recent yield value here; it stays live until
+    // the step driver reads it back.
+    gc_register_mutable_root_scanner(crate::promise::scan_iter_result_root_mut);
+    // Async-step thunk single-slot cache (build_async_step_thunks).
+    gc_register_mutable_root_scanner(crate::promise::scan_async_step_thunk_cache_mut);
+    // Closure singleton caches. Captured-closure cache keys mirror closure
+    // capture heap words, so copied-minor must rewrite them after moving
+    // captured young values or future cache hits miss on stale addresses.
+    gc_register_mutable_root_scanner(crate::closure::scan_singleton_closure_roots_mut);
+    gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
+    // Native-module callable export singletons and process stdio stream
+    // singletons store heap pointers in TLS caches; keep them live and rewrite
+    // them if a copying collection moves their backing allocations.
+    gc_register_mutable_root_scanner(crate::object::scan_native_callable_export_roots_mut);
+    gc_register_mutable_root_scanner(crate::tls::scan_tls_roots_mut);
+    gc_register_mutable_root_scanner(crate::os::scan_process_event_listener_roots_mut);
+    gc_register_mutable_root_scanner(crate::os::scan_process_stream_singleton_roots_mut);
+    gc_register_mutable_root_scanner(crate::fs::scan_fs_stream_roots_mut);
+    gc_register_mutable_root_scanner(crate::fs::scan_fs_watcher_roots_mut);
+    #[cfg(feature = "full")]
+    gc_register_mutable_root_scanner(crate::plugin::scan_plugin_roots_mut);
+    gc_register_mutable_root_scanner(crate::geisterhand_registry::scan_geisterhand_roots_mut);
+    gc_register_mutable_root_scanner(crate::ui_text_registry::scan_ui_text_registry_roots_mut);
+    // perry/tui hook + state slot pools — they store raw NaN-boxed
+    // value bits but the GC has no other way to know which slots hold
+    // heap pointers (arrays/objects/strings stashed via setState /
+    // useState / useRef). #679 follow-up: pre-fix, an Enter-press in
+    // the perry-code demo stored a freshly-concat'd messages array,
+    // the next allocation triggered minor GC, and the array was
+    // reclaimed because nothing else held it — `messages.map(…)` on
+    // the stale pointer produced an empty render.
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        crate::tui::hooks::scan_hook_slot_roots_mut,
+        crate::tui::hooks::scan_hook_slot_roots_mut_step,
+        crate::tui::hooks::new_hook_slot_root_scan_state,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        crate::tui::state::scan_state_slot_roots_mut,
+        crate::tui::state::scan_state_slot_roots_mut_step,
+        crate::tui::state::new_state_slot_root_scan_state,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
+    #[cfg(feature = "ohos-napi")]
+    gc_register_mutable_root_scanner(crate::arkts_callbacks::arkts_callbacks_root_scanner_mut);
+}
+
+#[no_mangle]
+pub extern "C" fn js_gc_init() {
+    crate::node_submodules::diagnostics_channel_init_main_thread();
+    gc_init();
+}
+
+/// FFI: get GC stats
+#[no_mangle]
+pub extern "C" fn js_gc_stats(
+    out_collections: *mut u64,
+    out_freed: *mut u64,
+    out_pause_us: *mut u64,
+) {
+    GC_STATS.with(|stats| {
+        let stats = stats.borrow();
+        unsafe {
+            if !out_collections.is_null() {
+                *out_collections = stats.collection_count;
+            }
+            if !out_freed.is_null() {
+                *out_freed = stats.total_freed_bytes;
+            }
+            if !out_pause_us.is_null() {
+                *out_pause_us = stats.last_pause_us;
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests;

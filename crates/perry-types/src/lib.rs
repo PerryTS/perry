@@ -87,6 +87,10 @@ pub struct ObjectType {
     pub name: Option<String>,
     /// Property name -> type mapping
     pub properties: HashMap<String, PropertyInfo>,
+    /// Declared source order for closed object type literals/interfaces when
+    /// an order-sensitive lowering needs it. Ordinary structural lookups must
+    /// continue to use `properties`.
+    pub property_order: Option<Vec<String>>,
     /// Index signature (if any)
     pub index_signature: Option<Box<Type>>,
 }

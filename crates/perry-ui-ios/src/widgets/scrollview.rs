@@ -234,3 +234,113 @@ pub fn end_refreshing(scroll_handle: i64) {
         }
     }
 }
+
+// =============================================================================
+// Issue #553 — onScrollEnd hook (infinite-scroll callback)
+// =============================================================================
+
+struct ScrollEndState {
+    closure: f64,
+    threshold_px: f64,
+    armed: bool,
+}
+
+thread_local! {
+    static SCROLL_END_STATES: RefCell<HashMap<i64, ScrollEndState>> = RefCell::new(HashMap::new());
+    static SCROLL_DELEGATE_TO_HANDLE: RefCell<HashMap<usize, i64>> = RefCell::new(HashMap::new());
+}
+
+pub struct PerryScrollEndDelegateIvars {
+    key: std::cell::Cell<usize>,
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[name = "PerryScrollEndDelegate"]
+    #[ivars = PerryScrollEndDelegateIvars]
+    pub struct PerryScrollEndDelegate;
+
+    impl PerryScrollEndDelegate {
+        #[unsafe(method(scrollViewDidScroll:))]
+        fn scroll_view_did_scroll(&self, scroll: &AnyObject) {
+            let key = self.ivars().key.get();
+            let handle = SCROLL_DELEGATE_TO_HANDLE.with(|m| {
+                m.borrow().get(&key).copied().unwrap_or(0)
+            });
+            if handle == 0 { return; }
+            unsafe {
+                let offset: CGPoint = msg_send![scroll, contentOffset];
+                let size: objc2_core_foundation::CGSize = msg_send![scroll, contentSize];
+                let frame: objc2_core_foundation::CGRect = msg_send![scroll, bounds];
+                let visible_bottom = offset.y + frame.size.height;
+                let (closure, threshold_px) = SCROLL_END_STATES.with(|s| {
+                    s.borrow().get(&handle)
+                        .map(|st| (st.closure, st.threshold_px))
+                        .unwrap_or((0.0, 0.0))
+                });
+                if closure == 0.0 { return; }
+                let in_zone = visible_bottom >= size.height - threshold_px;
+                let should_fire = SCROLL_END_STATES.with(|s| {
+                    let mut states = s.borrow_mut();
+                    let Some(state) = states.get_mut(&handle) else { return false };
+                    if in_zone && state.armed {
+                        state.armed = false;
+                        true
+                    } else if !in_zone && !state.armed {
+                        state.armed = true;
+                        false
+                    } else {
+                        false
+                    }
+                });
+                if should_fire {
+                    let pkg = closure.to_bits();
+                    dispatch_async_f(
+                        &_dispatch_main_q as *const _ as *const std::ffi::c_void,
+                        pkg as *mut std::ffi::c_void,
+                        refresh_callback_trampoline,
+                    );
+                }
+            }
+        }
+    }
+);
+
+impl PerryScrollEndDelegate {
+    fn new() -> Retained<Self> {
+        let this = Self::alloc().set_ivars(PerryScrollEndDelegateIvars {
+            key: std::cell::Cell::new(0),
+        });
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
+pub fn set_scroll_end_callback(scroll_handle: i64, callback: f64, threshold_px: f64) {
+    let Some(scroll_view) = super::get_widget(scroll_handle) else {
+        return;
+    };
+    SCROLL_END_STATES.with(|s| {
+        s.borrow_mut().insert(
+            scroll_handle,
+            ScrollEndState {
+                closure: callback,
+                threshold_px: if threshold_px > 0.0 {
+                    threshold_px
+                } else {
+                    200.0
+                },
+                armed: true,
+            },
+        );
+    });
+    unsafe {
+        let delegate = PerryScrollEndDelegate::new();
+        let key = Retained::as_ptr(&delegate) as usize;
+        delegate.ivars().key.set(key);
+        SCROLL_DELEGATE_TO_HANDLE.with(|m| {
+            m.borrow_mut().insert(key, scroll_handle);
+        });
+        let _: () = msg_send![&*scroll_view, setDelegate: &*delegate];
+        std::mem::forget(delegate);
+    }
+}

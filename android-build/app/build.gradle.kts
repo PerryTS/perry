@@ -51,4 +51,7 @@ dependencies {
     // versions; messaging-ktx 23.x is the line that ships with BoM 33.x.
     implementation(platform("com.google.firebase:firebase-bom:33.5.1"))
     implementation("com.google.firebase:firebase-messaging-ktx")
+    // perry/background (#538) — WorkManager-backed deferred / periodic
+    // tasks. PerryBackgroundWorker.kt extends `androidx.work.Worker`.
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
 }

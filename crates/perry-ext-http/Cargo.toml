@@ -1,0 +1,33 @@
+[package]
+name = "perry-ext-http"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for Node's `http` / `https` modules — callback-style ClientRequest / IncomingMessage. Uses only `perry-ffi`. Async via spawn_blocking + reqwest."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+# Server-side surface (issue #577) lives in perry-ext-http-server. Pulling
+# it in as an rlib dep makes the `js_node_http_*` / `js_node_https_*` /
+# `js_node_http2_*` symbols flow through into libperry_ext_http.a so a
+# single staticlib registration in well_known_bindings.toml covers
+# both client and server. The crate split keeps the source layered.
+perry-ext-http-server = { path = "../perry-ext-http-server" }
+# #2154: Agent argument validation throws `RangeError [ERR_OUT_OF_RANGE]`
+# via `js_throw` + `register_error_code_pub`, which are perry-runtime's
+# Rust-ABI helpers (not perry-ffi's). Stays consistent with perry-stdlib's
+# parallel `http.rs` AgentHandle, which already calls into perry-runtime
+# directly. Cargo feature unification keeps the stdlib feature on when
+# both stdlib and this crate link the same perry-runtime — no duplicate
+# symbols, no behaviour change for the default `full` build.
+perry-runtime = { workspace = true, features = ["external-ws-symbols"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "http2"], default-features = false }
+tokio = { workspace = true }
+serde_json = "1"
+lazy_static = "1.5"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

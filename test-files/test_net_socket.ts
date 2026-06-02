@@ -60,3 +60,18 @@ setInterval(() => {
         process.exit(0);
     }
 }, 50);
+
+/*
+@covers
+crates/perry-stdlib/src/net/mod.rs:
+  - js_net_process_pending
+  - js_net_socket_alloc
+  - js_net_socket_connect
+  - js_net_socket_destroy
+  - js_net_socket_end
+  - js_net_socket_method_connect
+  - js_net_socket_on
+  - js_net_socket_upgrade_tls
+  - js_net_socket_write
+  - js_tls_connect
+*/

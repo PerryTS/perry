@@ -116,15 +116,18 @@ pub unsafe extern "C" fn js_mysql2_connection_end(conn_handle: Handle) -> *mut P
     promise
 }
 
-/// connection.query(sql) -> Promise<[rows, fields]>
+/// connection.query(sql, params?) -> Promise<[rows, fields]>
 ///
 /// Executes a query and returns the results.
 /// This function handles both regular connections (MysqlConnectionHandle)
-/// and pool connections (MysqlPoolConnectionHandle).
+/// and pool connections (MysqlPoolConnectionHandle). See
+/// `js_mysql2_pool_query` for rationale on accepting and binding `params`
+/// here. Issue #414.
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_connection_query(
     conn_handle: Handle,
     sql_ptr: *const u8,
+    params: JSValue,
 ) -> *mut Promise {
     let promise = js_promise_new();
 
@@ -139,6 +142,7 @@ pub unsafe extern "C" fn js_mysql2_connection_query(
         String::from_utf8_lossy(bytes).to_string()
     };
 
+    let param_values = extract_params_from_jsvalue(params);
     let is_select = is_row_returning_query(&sql);
 
     // Use spawn_for_promise_deferred to safely create JSValues on the main thread
@@ -150,8 +154,18 @@ pub unsafe extern "C" fn js_mysql2_connection_query(
             // First try as a regular connection
             if let Some(wrapper) = get_handle_mut::<MysqlConnectionHandle>(conn_handle) {
                 if let Some(conn) = wrapper.connection.as_mut() {
+                    let mut query = sqlx::query(&sql);
+                    for param in &param_values {
+                        query = match param {
+                            ParamValue::Null => query.bind(Option::<String>::None),
+                            ParamValue::String(s) => query.bind(s.clone()),
+                            ParamValue::Number(n) => query.bind(*n),
+                            ParamValue::Int(i) => query.bind(*i),
+                            ParamValue::Bool(b) => query.bind(*b),
+                        };
+                    }
                     if is_select {
-                        let query_future = sqlx::query(&sql).fetch_all(conn);
+                        let query_future = query.fetch_all(conn);
                         match timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS), query_future).await {
                             Ok(Ok(rows)) => {
                                 let raw_result = RawQueryResult::from_mysql_rows(rows);
@@ -164,7 +178,7 @@ pub unsafe extern "C" fn js_mysql2_connection_query(
                             )),
                         }
                     } else {
-                        let query_future = sqlx::query(&sql).execute(conn);
+                        let query_future = query.execute(conn);
                         match timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS), query_future).await {
                             Ok(Ok(result)) => {
                                 return Ok(QueryOutcome::Executed {
@@ -187,8 +201,18 @@ pub unsafe extern "C" fn js_mysql2_connection_query(
             // Then try as a pool connection
             if let Some(wrapper) = get_handle_mut::<MysqlPoolConnectionHandle>(conn_handle) {
                 if let Some(ref mut conn) = wrapper.connection {
+                    let mut query = sqlx::query(&sql);
+                    for param in &param_values {
+                        query = match param {
+                            ParamValue::Null => query.bind(Option::<String>::None),
+                            ParamValue::String(s) => query.bind(s.clone()),
+                            ParamValue::Number(n) => query.bind(*n),
+                            ParamValue::Int(i) => query.bind(*i),
+                            ParamValue::Bool(b) => query.bind(*b),
+                        };
+                    }
                     if is_select {
-                        let query_future = sqlx::query(&sql).fetch_all(&mut **conn);
+                        let query_future = query.fetch_all(&mut **conn);
                         match timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS), query_future).await {
                             Ok(Ok(rows)) => {
                                 let raw_result = RawQueryResult::from_mysql_rows(rows);
@@ -201,7 +225,7 @@ pub unsafe extern "C" fn js_mysql2_connection_query(
                             )),
                         }
                     } else {
-                        let query_future = sqlx::query(&sql).execute(&mut **conn);
+                        let query_future = query.execute(&mut **conn);
                         match timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS), query_future).await {
                             Ok(Ok(result)) => {
                                 return Ok(QueryOutcome::Executed {

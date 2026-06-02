@@ -30,6 +30,12 @@ links the file on every PR.
 | `audioStart()` / `audioStop()` | Microphone capture | All |
 | `audioGetLevel()` / `audioGetPeak()` | RMS / peak amplitude (`0..1`) | All |
 | `audioGetWaveform(n)` | Recent waveform samples for visualization | All |
+| `audioSetOutputFilename(p)` / `audioStartRecording()` / `audioStopRecording()` | Capture mic to a WAV file | All native |
+| `geolocationGetCurrent(ok, err)` | One-shot device position | iOS, Android, macOS |
+| `geolocationWatch(cb)` / `geolocationStopWatch(id)` | Subscribe to position updates | iOS, Android, macOS |
+| `geolocationRequestPermission(cb)` | Request location permission | iOS, Android, macOS |
+| `imagePickerPick(max, multi, cb)` | Native photo-library picker | iOS, Android, macOS |
+| `registerTask(id, fn)` / `schedule(id, …)` / `cancel(id)` | Deferred / periodic background work — see [`perry/background`](background.md) | iOS, Android, tvOS, visionOS, watchOS, macOS |
 
 > **Clipboard** lives in `perry/ui` (not `perry/system`): import `clipboardRead`
 > and `clipboardWrite` from there.
@@ -54,4 +60,6 @@ links the file on every PR.
 - [Keychain](keychain.md)
 - [Notifications](notifications.md)
 - [Audio Capture](audio.md)
+- [Geolocation & Image Picker](geolocation.md)
+- [Background Tasks](background.md)
 - [Other](other.md)

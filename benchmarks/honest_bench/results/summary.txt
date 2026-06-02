@@ -1,0 +1,24 @@
+# honest_bench — output-correctness summary
+# 300 measured rows across 15 (workload, language) pairs
+# expected.json: present
+
+## PERF — output verified to match Bun reference
+image_convolution        bun       915.4 ms  runs=20  match=20/20
+image_convolution        node     1206.6 ms  runs=20  match=20/20
+image_convolution        perry     354.0 ms  runs=20  match=20/20
+image_convolution        rust      392.1 ms  runs=20  match=20/20
+image_convolution        zig       245.4 ms  runs=20  match=20/20
+json_pipeline_full       bun       649.9 ms  runs=20  match=20/20
+json_pipeline_full       node      966.3 ms  runs=20  match=20/20
+json_pipeline_full       perry    1098.4 ms  runs=20  match=20/20
+json_pipeline_full       rust      608.3 ms  runs=20  match=20/20
+json_pipeline_full       zig       867.4 ms  runs=20  match=20/20
+json_pipeline_small      bun        51.1 ms  runs=20  match=20/20
+json_pipeline_small      node      143.6 ms  runs=20  match=20/20
+json_pipeline_small      perry      39.2 ms  runs=20  match=20/20
+json_pipeline_small      rust       34.1 ms  runs=20  match=20/20
+json_pipeline_small      zig        34.5 ms  runs=20  match=20/20
+
+# To turn mismatches into a hard CI failure: ./run.sh --strict-output
+# To refresh the reference (only when output semantics intentionally change):
+#   HONEST_BENCH_REFRESH_EXPECTED=1 ./run.sh

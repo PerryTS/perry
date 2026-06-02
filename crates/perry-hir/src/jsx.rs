@@ -48,8 +48,8 @@ pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement
         }
     }
 
-    // Use the original exported names (not the local __jsx/__jsxs aliases) so Perry
-    // generates the correct wrapper symbol names: __wrapper_jsx / __wrapper_jsxs.
+    // Use Perry's built-in extern names so codegen can route TSX straight to
+    // the native `js_jsx` / `js_jsxs` runtime adapter.
     let func_name = if children.len() > 1 { "jsxs" } else { "jsx" };
     match children.len() {
         0 => {}
@@ -90,7 +90,8 @@ pub(crate) fn lower_jsx_fragment(
         }
     }
 
-    // Use original exported names for correct wrapper symbol generation.
+    // Use Perry's built-in extern names for the same runtime routing as
+    // ordinary JSX elements.
     let func_name = if children.len() > 1 { "jsxs" } else { "jsx" };
     let mut props_fields: Vec<(String, Expr)> = Vec::new();
     match children.len() {
@@ -143,6 +144,27 @@ pub(crate) fn lower_jsx_element_name(
                     Ok(Expr::LocalGet(id))
                 } else if let Some(id) = ctx.lookup_func(&n) {
                     Ok(Expr::FuncRef(id))
+                } else if let Some((module_name, method_name)) = ctx.lookup_native_module(&n) {
+                    // Native-module-imported JSX intrinsic (e.g. `<Box>` /
+                    // `<Text>` from `perry/tui`). Tag the ExternFuncRef
+                    // with a sentinel name
+                    // `__perry_jsx_intrinsic::<module>::<method>__` so the
+                    // codegen's `jsx`/`jsxs` arm can recognise it as a
+                    // built-in intrinsic and rewrite the runtime `js_jsx`
+                    // call into a direct widget-builder call. Including
+                    // the module name in the sentinel ensures the
+                    // rewriter only triggers when the JSX-named
+                    // identifier resolves to a known native module —
+                    // never a user-defined `Box` from elsewhere
+                    // (issue #689).
+                    let module = module_name.to_string();
+                    let method = method_name.unwrap_or(&n).to_string();
+                    let sentinel = format!("__perry_jsx_intrinsic::{module}::{method}__");
+                    Ok(Expr::ExternFuncRef {
+                        name: sentinel,
+                        param_types: Vec::new(),
+                        return_type: Type::Any,
+                    })
                 } else if let Some(orig) = ctx.lookup_imported_func(&n) {
                     Ok(Expr::ExternFuncRef {
                         name: orig.to_string(),
@@ -248,17 +270,37 @@ pub(crate) fn lower_jsx_child(
     }
 }
 
-/// Normalize JSX text content following React's whitespace rules:
-/// - Split by newlines, trim each line, filter empty lines, join with a space.
+/// Normalize JSX text content following React/Babel's whitespace rules
+/// (`cleanJSXElementLiteralChild`): leading whitespace is trimmed only on
+/// non-first lines, trailing only on non-last lines, tabs become spaces, and
+/// non-empty lines are joined with a single space. Crucially a single-line
+/// text node is preserved verbatim — so the trailing space in
+/// `<h1>hello, {name}</h1>` and the gap in `{"x"} {"y"}` survive (a blanket
+/// `trim()` used to drop them, giving `hello,Perry` / `xy`) — #1653.
 pub(crate) fn normalize_jsx_text(text: &str) -> String {
-    let lines: Vec<&str> = text.split('\n').collect();
-    if lines.len() == 1 {
-        return text.trim().to_string();
-    }
-    lines
+    let lines: Vec<&str> = text.split(['\r', '\n']).collect();
+    // Index of the last line containing a non-whitespace char (Babel seeds
+    // this at 0, so an all-whitespace single space stays a single space).
+    let last_non_empty = lines
         .iter()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
+        .rposition(|l| l.contains(|c: char| c != ' ' && c != '\t'))
+        .unwrap_or(0);
+    let n = lines.len();
+    let mut out = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        let mut seg = line.replace('\t', " ");
+        if i != 0 {
+            seg = seg.trim_start_matches(' ').to_string();
+        }
+        if i != n - 1 {
+            seg = seg.trim_end_matches(' ').to_string();
+        }
+        if !seg.is_empty() {
+            if i != last_non_empty {
+                seg.push(' ');
+            }
+            out.push_str(&seg);
+        }
+    }
+    out
 }

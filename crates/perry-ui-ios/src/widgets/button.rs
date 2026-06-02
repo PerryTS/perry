@@ -87,15 +87,49 @@ pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
     let label = str_from_header(label_ptr);
 
     unsafe {
-        // UIButton.buttonWithType: 0 = UIButtonTypeCustom, 1 = UIButtonTypeSystem
+        // Issue #1122 — UIButton.buttonWithType:UIButtonTypeSystem (1)
+        // goes through iOS 26's Liquid Glass rendering path, which
+        // overrides explicit `setTitleColor:` / `setBackgroundColor:`
+        // values with the system tint/translucent fill. Custom (0)
+        // bypasses that and honors the colors we set directly — which
+        // matches what every styled Perry button author actually wants.
+        // Trade-off: Custom buttons don't get the system blue tint by
+        // default, so we set a sensible default label color (system
+        // label, i.e. dynamic black-on-light / white-on-dark) so a
+        // bare `Button("x", cb)` is still visible.
         let button: Retained<UIButton> = msg_send![
             objc2::runtime::AnyClass::get(c"UIButton").unwrap(),
-            buttonWithType: 1i64  // UIButtonTypeSystem
+            buttonWithType: 0i64  // UIButtonTypeCustom
         ];
 
         let ns_string = NSString::from_str(label);
         let _: () = msg_send![&*button, setTitle: &*ns_string, forState: 0u64]; // UIControlStateNormal = 0
         let _: () = msg_send![&*button, setAccessibilityLabel: &*ns_string];
+
+        // UIButtonTypeCustom's default title color is white, which is
+        // invisible on light backgrounds. Set the system label color
+        // (dynamic, dark-mode aware) so a bare `Button("x", cb)` is
+        // visible without callers needing `textSetColor`. Apps override
+        // via textSetColor when they want something else.
+        let uicolor_cls = objc2::runtime::AnyClass::get(c"UIColor").unwrap();
+        let default_title: *mut AnyObject = msg_send![uicolor_cls, labelColor];
+        if !default_title.is_null() {
+            let _: () = msg_send![&*button, setTitleColor: default_title, forState: 0u64];
+        }
+
+        // Issue #709: honor `\n` in button labels. UIButton's titleLabel
+        // defaults to numberOfLines=1 and silently collapses newlines into
+        // spaces. Setting it to 0 (unlimited) + word-wrap + center
+        // alignment matches what an HTML `<button>` does for multi-line
+        // text and is a safe default for single-line labels too.
+        let title_label: *mut AnyObject = msg_send![&*button, titleLabel];
+        if !title_label.is_null() {
+            let _: () = msg_send![title_label, setNumberOfLines: 0i64];
+            // NSLineBreakByWordWrapping = 0
+            let _: () = msg_send![title_label, setLineBreakMode: 0u64];
+            // NSTextAlignmentCenter = 1
+            let _: () = msg_send![title_label, setTextAlignment: 1i64];
+        }
 
         let _: () = msg_send![&*button, setTranslatesAutoresizingMaskIntoConstraints: false];
 
@@ -152,6 +186,26 @@ pub fn set_bordered(handle: i64, bordered: bool) {
 }
 
 /// Set the text color of a button.
+///
+/// Issue #1107 / #1122 — on iOS 26 devices a partial-alpha title color
+/// set via `setTitleColor:forState:` results in zero glyphs being
+/// painted (alpha == 1.0 is fine on Custom buttons, AttributedText's
+/// NSAttributedString-with-NSColor path is also fine, and iOS 17
+/// simulator is unaffected). For alpha < 1.0 we additionally emit an
+/// `NSAttributedString` (NSFont + NSColor attrs) via
+/// `setAttributedTitle:forState:` mirroring the working AttributedText
+/// path. `setTitleColor:` is still issued so any state that bypasses
+/// the attributed title (custom UIButton subclasses, future
+/// `setTitle:forState:` clobbers, etc.) still has a reasonable
+/// fallback color.
+///
+/// PR #1109 previously also called `setAttributedTitle:nil forState:0`
+/// for alpha == 1.0 to revert to the plain-title path. On iOS 26 that
+/// nil-clear path additionally suppressed the button's `setTitle:` /
+/// `setBackgroundColor:` rendering, leaving the button entirely
+/// invisible. We now always leave the attributed-title state alone for
+/// alpha == 1.0 — Custom buttons honor `setTitleColor:` directly with
+/// no need to touch the attributed-title slot.
 pub fn set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     if let Some(view) = super::get_widget(handle) {
         unsafe {
@@ -164,7 +218,79 @@ pub fn set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             ];
             // setTitleColor:forState: UIControlStateNormal = 0
             let _: () = msg_send![&*view, setTitleColor: &*color, forState: 0u64];
+            // Mirror onto tintColor so any SF Symbol image attached via
+            // `buttonSetImage` (which renders in template mode after the
+            // fix in this PR) tints to match the title color. Without
+            // this an SF-symbol Sign-Out button keeps the default
+            // system-blue glyph next to a black title.
+            let _: () = msg_send![&*view, setTintColor: &*color];
+
+            if a < 1.0 {
+                apply_button_title_color_via_attributed(&view, &color);
+            }
         }
+    }
+}
+
+/// Issue #1107 / #1122 workaround — build an NSAttributedString with
+/// NSFont + NSColor attrs from the button's current title-for-Normal
+/// and apply it via `setAttributedTitle:forState:UIControlStateNormal`.
+/// PR #1109's first take read the borrowed `titleLabel.font` pointer
+/// directly; on real device that didn't paint glyphs. This version
+/// builds a fresh `[UIFont systemFontOfSize:]` matching the titleLabel's
+/// current point size and retains the resulting NSAttributedString —
+/// the exact pattern `AttributedText::append` uses, which we know
+/// renders correctly with sub-1.0 alpha on iOS 26.
+unsafe fn apply_button_title_color_via_attributed(view: &objc2_ui_kit::UIView, color: &AnyObject) {
+    use objc2::runtime::AnyClass;
+
+    // titleForState: UIControlStateNormal = 0
+    let current_title: *const NSString = msg_send![view, titleForState: 0u64];
+    if current_title.is_null() {
+        return;
+    }
+    let length: u64 = msg_send![current_title, length];
+    if length == 0 {
+        return;
+    }
+
+    let dict_cls = AnyClass::get(c"NSMutableDictionary").unwrap();
+    let attrs: Retained<AnyObject> = msg_send![dict_cls, new];
+
+    // Build a fresh UIFont from the titleLabel's current point size —
+    // mirrors AttributedText's working path. Defaults to 17pt
+    // (UILabel's documented default) if the size read fails.
+    let title_label: *mut AnyObject = msg_send![view, titleLabel];
+    let size: objc2_core_foundation::CGFloat = if !title_label.is_null() {
+        let f: *mut AnyObject = msg_send![title_label, font];
+        if !f.is_null() {
+            msg_send![f, pointSize]
+        } else {
+            17.0
+        }
+    } else {
+        17.0
+    };
+    let font_cls = AnyClass::get(c"UIFont").unwrap();
+    let fresh_font: Retained<AnyObject> = msg_send![
+        font_cls,
+        systemFontOfSize: size
+    ];
+    let font_key = NSString::from_str("NSFont");
+    let _: () = msg_send![&*attrs, setObject: &*fresh_font, forKey: &*font_key];
+
+    let color_key = NSString::from_str("NSColor");
+    let _: () = msg_send![&*attrs, setObject: color, forKey: &*color_key];
+
+    let attr_cls = AnyClass::get(c"NSAttributedString").unwrap();
+    let alloc: *mut AnyObject = msg_send![attr_cls, alloc];
+    let raw: *mut AnyObject = msg_send![
+        alloc,
+        initWithString: current_title,
+        attributes: &*attrs
+    ];
+    if let Some(attr_str) = Retained::from_raw(raw) {
+        let _: () = msg_send![view, setAttributedTitle: &*attr_str, forState: 0u64];
     }
 }
 
@@ -189,27 +315,35 @@ pub fn set_image(handle: i64, name_ptr: *const u8) {
             let img_cls = objc2::runtime::AnyClass::get(c"UIImage").unwrap();
             let img: *mut AnyObject = msg_send![img_cls, systemImageNamed: &*ns_name];
             if !img.is_null() {
+                // Force template rendering so the symbol tints to the
+                // button's titleColor — otherwise SF Symbols paint in
+                // their default multicolor style and ignore the button.
+                // UIImage.RenderingMode.alwaysTemplate = 2.
+                let templated: *mut AnyObject = msg_send![img, imageWithRenderingMode: 2_i64];
+                let base = if !templated.is_null() { templated } else { img };
+
                 // Apply large symbol configuration
                 let config_cls = objc2::runtime::AnyClass::get(c"UIImageSymbolConfiguration");
-                if let Some(config_cls) = config_cls {
+                let final_img = if let Some(config_cls) = config_cls {
                     // UIImageSymbolScale: 1=small, 2=medium, 3=large
                     let config: *mut AnyObject = msg_send![
                         config_cls, configurationWithScale: 3_i64
                     ];
                     if !config.is_null() {
-                        let scaled_img: *mut AnyObject =
-                            msg_send![img, imageWithConfiguration: config];
-                        if !scaled_img.is_null() {
-                            let _: () = msg_send![&*view, setImage: scaled_img, forState: 0_u64];
+                        let scaled: *mut AnyObject =
+                            msg_send![base, imageWithConfiguration: config];
+                        if !scaled.is_null() {
+                            scaled
                         } else {
-                            let _: () = msg_send![&*view, setImage: img, forState: 0_u64];
+                            base
                         }
                     } else {
-                        let _: () = msg_send![&*view, setImage: img, forState: 0_u64];
+                        base
                     }
                 } else {
-                    let _: () = msg_send![&*view, setImage: img, forState: 0_u64];
-                }
+                    base
+                };
+                let _: () = msg_send![&*view, setImage: final_img, forState: 0_u64];
             }
         }
     }
@@ -303,6 +437,19 @@ pub fn set_on_tap(handle: i64, callback: f64) {
             let _: () = msg_send![&*view, addGestureRecognizer: recognizer];
 
             std::mem::forget(target);
+        }
+        // Register with geisterhand so e2e harnesses can drive list rows
+        // and any other VStack/HStack/Text that uses widgetSetOnClick.
+        // Widget-type 9 = "clickable region", callback_kind 0 = CB_ON_CLICK
+        // so POST /click/<handle> dispatches this callback.
+        #[cfg(feature = "geisterhand")]
+        {
+            extern "C" {
+                fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+            }
+            unsafe {
+                perry_geisterhand_register(handle, 9, 0, callback, std::ptr::null());
+            }
         }
     }
 }

@@ -1,0 +1,17 @@
+[package]
+name = "perry-ext-streams"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for the Web Streams API — ReadableStream / WritableStream / TransformStream / DefaultReader / DefaultWriter. Uses only `perry-ffi`."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+lazy_static = "1.5"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }
+perry-runtime.workspace = true

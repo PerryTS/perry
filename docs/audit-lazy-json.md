@@ -20,8 +20,9 @@ the language runtime uses for every other object. This is the obvious implementa
 and matches Node's `JSON.parse` behavior from the user's point of view.
 
 Versions 0.5.203 through 0.5.211 add a **second, opt-in-then-default parse strategy**
-called the "tape-based lazy parse" (or just "lazy parse"). For top-level JSON arrays
-larger than 1 KB, the parser builds a compact *tape* (a flat `Vec<TapeEntry>` of
+called the "tape-based lazy parse" (or just "lazy parse"). In current auto-mode,
+top-level JSON arrays from 1 KB through 16 MB build a compact *tape* (a flat
+`Vec<TapeEntry>` of
 structural positions — object / array starts/ends, key positions, scalar positions)
 instead of a tree. The tape is stored on a `LazyArrayHeader` alongside a sparse
 per-element materialization cache. When user code later reads elements, the runtime
@@ -37,8 +38,11 @@ compared to Node's `JSON.parse`, verified across an extensive test matrix
 The flip from "opt-in via `PERRY_JSON_TAPE=1`" to "default-on above 1024 bytes"
 happened in 0.5.211 after the runtime adaptive handling (Sections 5.4, 5.5)
 eliminated every measured workload shape where lazy was slower or heavier than
-eager. The `PERRY_JSON_TAPE=0` environment variable is a correctness escape
-hatch that forces the eager parser unconditionally.
+eager. Later tuning briefly raised the auto lower bound to 64 KB for small
+iterate-all payloads (#437); #1090 restored the current 1 KB lower bound so
+RSS-sensitive parse-churn loops use the tape path once payloads exceed the tiny
+direct threshold. The `PERRY_JSON_TAPE=0` environment variable is a
+correctness escape hatch that forces the eager parser unconditionally.
 
 **Safety claim:** the lazy path is observationally equivalent to the eager
 path under single-threaded execution. This document proves that claim by
@@ -92,11 +96,12 @@ in a single function at `crates/perry-runtime/src/json.rs:967-998`:
 
 ```rust
 const LAZY_MIN_BLOB_BYTES: usize = 1024;
+const LAZY_MAX_BLOB_BYTES: usize = 16 * 1024 * 1024;
 let tape_mode = tape_mode_from_env();
 let use_tape = match tape_mode {
     TapeMode::ForceOn  => true,
     TapeMode::ForceOff => false,
-    TapeMode::Auto     => len >= LAZY_MIN_BLOB_BYTES,
+    TapeMode::Auto     => len >= LAZY_MIN_BLOB_BYTES && len <= LAZY_MAX_BLOB_BYTES,
 };
 if use_tape {
     if let Some(result) = try_parse_via_tape(text_ptr, bytes) {
@@ -106,13 +111,14 @@ if use_tape {
 }
 ```
 
-Four cases result in the eager parser running instead:
+Five cases result in the eager parser running instead:
 
 1. Blob is smaller than 1 KB (tape build overhead dominates on tiny inputs).
 2. `PERRY_JSON_TAPE=0` (or `=off` / `=false`) is set — manual override.
-3. Top-level value is not a JSON array (object, scalar, etc.) —
+3. Blob is larger than 16 MB in auto-mode (large iterate-all payloads prefer direct).
+4. Top-level value is not a JSON array (object, scalar, etc.) —
    `try_parse_via_tape` returns `None` and we fall through.
-4. Input is malformed — the eager parser has the full error-reporting path.
+5. Input is malformed — the eager parser has the full error-reporting path.
 
 ### 3.2 What the lazy path replaces
 
@@ -131,9 +137,10 @@ its variants are unchanged *except* for two small additions:
 Earlier versions (v0.5.207–v0.5.231) supported `/** @perry-lazy */` to
 force every `JSON.parse` in a file onto the tape path regardless of
 blob size. **Removed in v0.5.232** — the runtime auto-threshold
-(lazy ≥ 1024 bytes, direct otherwise) makes the right call without
+(currently lazy for 1 KB..16 MB, direct otherwise) makes the right call without
 developer intervention; measurements showed forced-lazy was strictly
-slower than direct on sub-1KB blobs (the only case the pragma changed).
+slower than direct on very small blobs, while #1090 keeps larger parse-churn
+payloads on the lazy path for bounded RSS.
 The `PERRY_JSON_TAPE=0`/`=1` env-var escape hatch (Section 3.1) covers
 correctness fallback / testing without burdening source files.
 
@@ -553,8 +560,8 @@ Measured best-of-5 on macOS ARM64 at v0.5.211.
   cursor + adaptive threshold (Section 5.8) prevent the O(n²) and
   O(n·k) cliffs that would otherwise occur on sequential / random
   iteration.
-- **Lazy has a ~10% fixed overhead on tiny parses.** The blob-size
-  threshold of 1024 bytes (Section 3.1) keeps small parses on the
+- **Lazy has fixed overhead on tiny parses.** The blob-size
+  threshold of 1 KB (Section 3.1) keeps tiny parses on the
   eager path.
 - **RSS gap vs Bun remains.** Perry's non-generational GC retains
   more short-lived intermediate allocations than Bun's young-
@@ -661,7 +668,7 @@ Every new test in the `test_json_lazy_*` family is run against three
 paths in the CI/local harness:
 1. Default mode (auto-selects lazy or eager by blob size).
 2. `PERRY_JSON_TAPE=0` (force eager).
-3. `PERRY_JSON_TAPE=1` (force lazy even for sub-1KB blobs).
+3. `PERRY_JSON_TAPE=1` (force lazy even for blobs below the auto threshold).
 All three produce the same output. This is the invariant-test
 equivalent of running both compilers and checking they agree —
 catches any path-dependent divergence.
@@ -675,7 +682,7 @@ catches any path-dependent divergence.
    array becomes a regular materialized `ArrayHeader`. Future work
    could extend lazy to nested arrays or top-level objects (scoped
    in `docs/lazy-per-element-plan.md` §"nested lazy").
-2. **Small blobs (< 1024 bytes) bypass lazy.** The tape build + header
+2. **Tiny blobs (< 1 KB) bypass lazy.** The tape build + header
    allocation cost outpaces the savings on tiny parses. The threshold
    is configurable only via source edit (`LAZY_MIN_BLOB_BYTES` in
    `json.rs`).
@@ -753,6 +760,13 @@ For reviewers verifying this document against source:
   indeterminate static types. Full test sweep: 44/44 cargo workspace
   runs, 5/5 fastify, 4/4 thread, 106/118 parity (baseline), 24/28
   gap (baseline).
+- **0.5.844 / #437** — Raised the current auto-mode lower bound to
+  64 KB so the 21 KB `json_pipeline_small` iterate-all fixture stays
+  on the faster direct parser; `PERRY_JSON_TAPE=1` still forces lazy
+  for targeted testing.
+- **Unreleased / #1090** — Restored the auto-mode lower bound to 1 KB
+  so JSON parse-churn workloads use the tape path for sub-collector-scale
+  payloads while <1 KB blobs stay direct.
 
 ---
 

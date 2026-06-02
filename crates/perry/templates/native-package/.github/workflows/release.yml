@@ -1,0 +1,60 @@
+name: Release
+
+# Build prebuilt staticlibs for every supported target on tag, attach to the
+# GitHub release. The npm package can either vendor these (simpler) or pull
+# them via `postinstall` (smaller tarball).
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Stage artifact
+        shell: bash
+        run: |
+          mkdir -p artifact/${{ matrix.target }}
+          # macOS / Linux pattern: lib<name>.a; Windows pattern: <name>.lib
+          for f in target/${{ matrix.target }}/release/*.a target/${{ matrix.target }}/release/*.lib; do
+            [ -f "$f" ] && cp "$f" artifact/${{ matrix.target }}/
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prebuilt-${{ matrix.target }}
+          path: artifact/${{ matrix.target }}/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: prebuilt/
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: prebuilt/**

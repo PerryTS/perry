@@ -1,0 +1,6 @@
+r1.status=200
+r1.body={"hello":"world"}
+r2.status=200
+r2.body={"id":"42","name":"User 42"}
+r3.status=404
+r3.body=not found

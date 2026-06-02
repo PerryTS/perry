@@ -3,10 +3,12 @@
 use anyhow::{anyhow, Result};
 use clap::Args;
 use perry_hir::{Module as HirModule, ModuleKind};
+use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::OutputFormat;
 
@@ -14,31 +16,77 @@ use crate::OutputFormat;
 // `compile/` directory. The `compile.rs` orchestrator stays as the
 // public API surface; helpers move to focused modules so unrelated
 // changes don't churn this file.
+mod app_metadata;
+mod apple_info_plist;
+mod audit_manifest;
+mod bootstrap;
+mod bundle_apple;
+mod bundle_ios;
+mod cjs_wrap;
+mod codegen_steps;
 mod collect_modules;
+mod env_fold;
+mod harmonyos_shim;
+mod host_config;
+mod i18n_emit;
+mod init_order;
 mod library_search;
 mod link;
+mod lock_scan;
 mod object_cache;
 mod optimized_libs;
 mod parse_cache;
+mod post_link;
+mod precompile_capture;
+mod reachability;
 mod resolve;
+mod resources;
+mod sandbox_buildrs;
 mod strip_dedup;
 mod targets;
+pub mod well_known;
+pub(crate) mod widget_build;
+use app_metadata::rust_target_triple;
+// apple_info_plist helpers used through bundle_ios (no direct uses in
+// compile.rs anymore now that the iOS bundle code moved out).
+pub(crate) use audit_manifest::allowlist_matches;
+use bootstrap::{
+    apply_i18n_pass, bundle_extensions_into_ctx, dump_hir_for_debug, harvest_harmonyos_index_ets,
+    maybe_init_type_checker, rerun_collect_with_class_field_types, run_native_instance_fixups,
+    run_post_collect_preflight,
+};
+use bundle_apple::{bundle_for_tvos, bundle_for_visionos, bundle_for_watchos};
+use bundle_ios::build_ios_app_bundle;
 use collect_modules::collect_modules;
+use harmonyos_shim::emit_harmonyos_arkts_stubs;
+use host_config::apply_pkg_and_toml_config;
+use i18n_emit::{emit_android_i18n_resources, write_i18n_key_registry};
+use init_order::{classify_eager_modules, topo_sort_non_entry_modules};
+pub use library_search::find_library;
+pub(crate) use library_search::host_target_triple;
 use library_search::{
     build_geisterhand_libs, find_geisterhand_library, find_geisterhand_runtime,
-    find_geisterhand_ui, find_harmonyos_sdk, find_jsruntime_library, find_library, find_lld_link,
+    find_geisterhand_stdlib, find_geisterhand_ui, find_harmonyos_sdk, find_lld_link,
     find_llvm_tool, find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk,
-    find_runtime_library, find_stdlib_library, find_ui_library, windows_pe_subsystem_flag,
+    find_runtime_library, find_stdlib_library, find_ui_library, find_wasm_host_library,
+    windows_pe_subsystem_flag,
 };
 use link::build_and_run_link;
+pub use lock_scan::collect_native_archives_for_lock;
+pub(crate) use lock_scan::run_lock_verify_for_compile;
 use object_cache::compute_object_cache_key;
-pub use object_cache::{djb2_hash, ObjectCache};
+pub use object_cache::ObjectCache;
 use optimized_libs::{build_optimized_libs, OptimizedLibs};
 use parse_cache::parse_cached;
 pub use parse_cache::ParseCache;
+use post_link::{
+    cleanup_intermediates, emit_attestation_sidecar, print_binary_size, strip_final_binary,
+    summarize_codegen_cache_stats,
+};
 pub use resolve::find_perry_workspace_root;
+pub(crate) use resolve::validate_native_library_manifest_value;
 use resolve::{
-    cached_resolve_import, compute_module_prefix, discover_extension_entries,
+    cached_resolve_import, compute_module_prefix, declaration_sidecar_for_resolved_import,
     extract_compile_package_dir, has_perry_native_library, is_declaration_file,
     is_in_compile_package, is_in_perry_native_package, is_js_file, parse_native_library_manifest,
     parse_package_specifier, resolve_import,
@@ -46,433 +94,24 @@ use resolve::{
 use strip_dedup::strip_duplicate_objects_from_lib;
 use targets::{
     apple_sdk_version, compile_for_android_widget, compile_for_ios_widget, compile_for_wasm,
-    compile_for_watchos_widget, compile_for_wearos_tile, compile_metallib_for_bundle,
-    find_visionos_swift_runtime, find_watchos_swift_runtime, generate_js_bundle,
-    lookup_bundle_id_from_toml,
+    compile_for_watchos_widget, compile_for_wearos_tile, find_visionos_swift_runtime,
+    find_watchos_swift_runtime, generate_embedded_js_object, generate_js_bundle,
 };
 
-/// Result of a successful compilation
-pub struct CompileResult {
-    pub output_path: PathBuf,
-    pub target: String,
-    pub bundle_id: Option<String>,
-    pub is_dylib: bool,
-    /// V2.2 codegen cache stats from this build, when the cache was enabled.
-    /// `None` when disabled (`--no-cache`, `PERRY_NO_CACHE=1`, or bitcode-link mode).
-    /// Tuple is `(hits, misses, stores, store_errors)`.
-    pub codegen_cache_stats: Option<(usize, usize, usize, usize)>,
-}
+use super::progress::{ProgressSnapshot, VerboseProgress};
 
-/// In-memory TypeScript AST cache used by `perry dev` to skip reparsing
-/// unchanged files across rebuilds in a single dev session.
-///
-/// Keyed by canonical path. Staleness check is a full source byte comparison
-/// — if the bytes match what we parsed last time, reuse the cached `Module`;
-/// otherwise reparse and replace the entry. Content-addressed invalidation
-/// means formatter-on-save that rewrites trivia invalidates us correctly,
-/// and we never get confused by mtime weirdness (git checkout, touch, etc.).
-///
-#[derive(Args, Debug)]
-pub struct CompileArgs {
-    /// Input TypeScript file
-    pub input: PathBuf,
+mod types;
+pub use types::*;
 
-    /// Output executable name
-    #[arg(short, long)]
-    pub output: Option<PathBuf>,
+// `inject_ios_deeplinks`, `inject_google_auth_info_plist`, and
+// `lookup_bundle_id_from_info_plist` moved to `apple_info_plist.rs`.
+// `rust_target_triple` moved to `app_metadata.rs`.
+// `emit_harmonyos_arkts_stubs` moved to `harmonyos_shim.rs`.
 
-    /// Keep intermediate files (for debugging)
-    #[arg(long)]
-    pub keep_intermediates: bool,
-
-    /// Print the HIR (for debugging)
-    #[arg(long)]
-    pub print_hir: bool,
-
-    /// Don't link, just produce object file
-    #[arg(long)]
-    pub no_link: bool,
-
-    /// Enable V8 JavaScript runtime for importing pure JS modules from node_modules.
-    /// This is a fallback option when native compilation is not possible.
-    /// WARNING: This significantly increases binary size (~10-15MB).
-    #[arg(long)]
-    pub enable_js_runtime: bool,
-
-    /// Target platform: ios-simulator, ios, android, ios-widget, ios-widget-simulator (default: native host)
-    #[arg(long)]
-    pub target: Option<String>,
-
-    /// App bundle identifier (required for widget targets)
-    #[arg(long)]
-    pub app_bundle_id: Option<String>,
-
-    /// Output type: executable (default) or dylib (shared library plugin)
-    #[arg(long, default_value = "executable")]
-    pub output_type: String,
-
-    /// Bundle TypeScript extensions from directory.
-    /// Scans subdirectories for package.json with openclaw.extensions entries
-    /// and compiles them into the binary as static plugins.
-    #[arg(long)]
-    pub bundle_extensions: Option<PathBuf>,
-
-    /// Enable type checking via tsgo (Microsoft's native TypeScript checker).
-    /// Resolves cross-file types, interfaces, and generics for better optimization.
-    /// Requires: npm install -g @typescript/native-preview
-    #[arg(long)]
-    pub type_check: bool,
-
-    /// Minify and obfuscate JavaScript output (name mangling + whitespace removal).
-    /// Automatically enabled for --target web.
-    #[arg(long)]
-    pub minify: bool,
-
-    /// Enable compile-time feature flags (comma-separated).
-    /// Each feature becomes a `__feature_NAME__` constant (0 or 1) for dead-code elimination.
-    /// Example: --features plugins,experimental
-    #[arg(long)]
-    pub features: Option<String>,
-
-    /// Enable geisterhand in-process input fuzzer (debug/testing).
-    /// Starts an HTTP server for programmatic UI interaction.
-    #[arg(long)]
-    pub enable_geisterhand: bool,
-
-    /// Port for the geisterhand HTTP server (default: 7676).
-    /// Implies --enable-geisterhand.
-    #[arg(long)]
-    pub geisterhand_port: Option<u16>,
-
-    /// Backward-compat alias — auto-optimization is on by default and
-    /// already does what this flag used to do (and more). Setting it has
-    /// no effect on the resulting binary; kept so existing scripts don't
-    /// break.
-    #[arg(long, hide = true)]
-    pub minimal_stdlib: bool,
-
-    /// Disable automatic build-profile optimization for the user binary.
-    /// By default Perry inspects the project's imports and rebuilds
-    /// perry-runtime + perry-stdlib with the smallest matching Cargo
-    /// feature set, plus `panic = "abort"` when no `catch_unwind` callers
-    /// are reachable (no `perry/ui`, `perry/thread`, `perry/plugin`, or
-    /// geisterhand). The result is typically 30%+ smaller. Pass this flag
-    /// to fall back to the prebuilt full stdlib + unwind runtime, e.g.
-    /// when reproducing an old build or when the workspace source isn't
-    /// available.
-    #[arg(long)]
-    pub no_auto_optimize: bool,
-
-    /// Disable the per-module object cache at `.perry-cache/objects/`.
-    /// By default Perry caches each module's object bytes keyed by a
-    /// hash of the source plus every `CompileOptions` field that can
-    /// affect codegen, so unchanged modules skip the LLVM pipeline on
-    /// subsequent builds. Pass this flag (or set `PERRY_NO_CACHE=1`)
-    /// to force a full recompile, e.g. to reproduce an issue or work
-    /// around a suspected stale cache.
-    #[arg(long)]
-    pub no_cache: bool,
-
-    /// Minimum Windows version the compiled executable must run on.
-    /// Accepted values: `7`, `8`, `10` (default `10`). Ignored on every
-    /// non-Windows target.
-    ///
-    /// `10` (default) preserves current behavior — the linker picks its
-    /// default subsystem version (Win8+).
-    ///
-    /// `7` emits the linker subsystem suffix `,5.1` (e.g.
-    /// `/SUBSYSTEM:WINDOWS,5.1`) so the PE marks itself Win7-compatible.
-    /// Perry's UI runtime falls back through the DPI API tiers
-    /// (Win10 → Win8.1 → Vista) at startup via lazy GetProcAddress.
-    /// Caveats: programs that import any `.js` module pull V8/deno_core,
-    /// which is unconditionally Win10+; cosmetic effects like dark
-    /// titlebars and rounded corners silently no-op on Win7. See
-    /// `docs/src/platforms/windows-7.md` for the full story (issue #303).
-    ///
-    /// `8` emits `,6.02` — useful when a deployment baseline is Win8/10
-    /// without needing Win7.
-    #[arg(long, default_value = "10")]
-    pub min_windows_version: String,
-}
-
-/// Information about a JavaScript module that will be interpreted at runtime
-#[derive(Debug, Clone)]
-pub struct JsModule {
-    /// Absolute path to the JS file
-    pub path: PathBuf,
-    /// Source code of the JS module
-    pub source: String,
-    /// Module specifier used in imports (e.g., "lodash", "./utils.js")
-    pub specifier: String,
-}
-
-/// Compilation context tracking all modules
-pub struct CompilationContext {
-    /// Native TypeScript modules to compile
-    pub native_modules: BTreeMap<PathBuf, HirModule>,
-    /// JavaScript modules to interpret via V8
-    pub js_modules: BTreeMap<String, JsModule>,
-    /// Mapping from import specifiers to resolved paths
-    pub import_map: BTreeMap<String, PathBuf>,
-    /// Whether JS runtime is needed
-    pub needs_js_runtime: bool,
-    /// Whether perry/ui module is imported (needs UI library linking).
-    /// On the harmonyos target this is forced back to false after the
-    /// destructive Phase-2 ArkUI harvest (see `harmonyos_index_ets`) — UI
-    /// is rendered declaratively from the emitted `.ets`, not via FFIs.
-    pub needs_ui: bool,
-    /// HarmonyOS Phase 2: ArkUI source harvested from the entry module's
-    /// `App({body: ...})` call by `perry-codegen-arkts::emit_index_ets`.
-    /// `Some(...)` means the link path can skip the perry-ui-* lib (UI
-    /// is in the .ets, not the .so) and the post-link writer should drop
-    /// this content into `<output_dir>/ets/pages/Index.ets`. `None` means
-    /// the program uses no UI; falls through to the blank EntryAbility.
-    pub harmonyos_index_ets: Option<String>,
-    /// Whether perry/plugin module is imported (needs -rdynamic for symbol export)
-    pub needs_plugins: bool,
-    /// Whether perry-stdlib is needed (heavy native modules like fastify, mysql2, etc.)
-    pub needs_stdlib: bool,
-    /// Project root (where we start looking for node_modules)
-    pub project_root: PathBuf,
-    /// External native libraries discovered from package dependencies
-    pub native_libraries: Vec<NativeLibraryManifest>,
-    /// Package aliases: maps npm package name → replacement package name (from perry.packageAliases)
-    pub package_aliases: HashMap<String, String>,
-    /// Packages to compile natively instead of routing to V8 (from perry.compilePackages)
-    pub compile_packages: HashSet<String>,
-    /// First-resolved directory for each compile package (deduplication across nested node_modules)
-    pub compile_package_dirs: HashMap<String, PathBuf>,
-    /// Optional tsgo type checker client (when --type-check is enabled)
-    pub type_checker: Option<super::typecheck::TsGoClient>,
-    /// Cache for resolve_import results: (import_source, importer_dir) -> Option<(resolved_path, kind)>
-    pub resolve_cache: HashMap<(String, PathBuf), Option<(PathBuf, ModuleKind)>>,
-    /// Cache for find_node_modules results: start_dir -> Option<node_modules_dir>
-    pub node_modules_cache: HashMap<PathBuf, Option<PathBuf>>,
-    /// Whether geisterhand (in-process input fuzzer) is enabled
-    pub needs_geisterhand: bool,
-    /// Port for geisterhand HTTP server (default 7676)
-    pub geisterhand_port: u16,
-    /// Set of native module specifiers actually imported by this project
-    /// (e.g. "mysql2", "fastify", "ws"). Used by `--minimal-stdlib` to
-    /// compute the smallest perry-stdlib feature set that satisfies them.
-    pub native_module_imports: BTreeSet<String>,
-    /// Whether any TS module calls global `fetch()` (which routes to
-    /// reqwest in perry-stdlib's http-client feature).
-    pub uses_fetch: bool,
-    /// Whether any TS module uses `crypto.randomBytes` / `randomUUID` /
-    /// `sha256` / `md5` as Perry builtins (without `import crypto`).
-    /// These lower to `Expr::CryptoRandomBytes`/`CryptoRandomUUID`/
-    /// `CryptoSha256`/`CryptoMd5` which dispatch to runtime symbols that
-    /// live behind the perry-stdlib `crypto` feature.
-    pub uses_crypto_builtins: bool,
-    /// Whether `perry/thread` is imported. When true, the runtime must
-    /// keep `panic = "unwind"` so that worker-thread panics translate to
-    /// promise rejections via `catch_unwind` in `perry-runtime/src/thread.rs`
-    /// instead of aborting the whole process.
-    pub needs_thread: bool,
-    /// Per-module source hash (djb2 over the canonical source bytes).
-    /// Populated during `collect_modules` as each native TS module is read
-    /// and used by V2.2's object cache to key `.perry-cache/objects/<target>/<hash>.o`
-    /// entries without re-reading the source in the codegen loop. Mirrors the
-    /// djb2 scheme already used by `build_optimized_libs` (see prior art).
-    pub module_source_hashes: HashMap<PathBuf, u64>,
-    /// Minimum Windows version for `--target windows` builds. One of `"7"`,
-    /// `"8"`, `"10"`. `"10"` (default) means "no subsystem version suffix";
-    /// `"7"` and `"8"` emit `,5.1` / `,6.02` on the linker `/SUBSYSTEM:` flag
-    /// so the resulting PE marks itself runnable on the older OS. See issue
-    /// #303 + `docs/src/platforms/windows-7.md`. Ignored on non-Windows
-    /// targets.
-    pub min_windows_version: String,
-}
-
-impl std::fmt::Debug for CompilationContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CompilationContext")
-            .field("native_modules", &self.native_modules.len())
-            .field("js_modules", &self.js_modules.len())
-            .field("type_checker", &self.type_checker.is_some())
-            .finish()
-    }
-}
-
-impl CompilationContext {
-    pub fn new(project_root: PathBuf) -> Self {
-        Self {
-            native_modules: BTreeMap::new(),
-            js_modules: BTreeMap::new(),
-            import_map: BTreeMap::new(),
-            needs_js_runtime: false,
-            needs_ui: false,
-            harmonyos_index_ets: None,
-            needs_plugins: false,
-            needs_stdlib: false,
-            project_root,
-            native_libraries: Vec::new(),
-            package_aliases: HashMap::new(),
-            compile_packages: HashSet::new(),
-            compile_package_dirs: HashMap::new(),
-            type_checker: None,
-            resolve_cache: HashMap::new(),
-            node_modules_cache: HashMap::new(),
-            needs_geisterhand: false,
-            geisterhand_port: 7676,
-            native_module_imports: BTreeSet::new(),
-            uses_fetch: false,
-            uses_crypto_builtins: false,
-            needs_thread: false,
-            module_source_hashes: HashMap::new(),
-            min_windows_version: "10".to_string(),
-        }
-    }
-}
-
-/// External native library manifest parsed from package.json `perry.nativeLibrary` field
-#[derive(Debug, Clone)]
-pub struct NativeLibraryManifest {
-    /// Package module name (e.g., "@honeide/editor")
-    pub module: String,
-    /// Resolved package directory path
-    pub package_dir: PathBuf,
-    /// FFI function declarations
-    pub functions: Vec<NativeFunctionDecl>,
-    /// Target-specific build configuration
-    pub target_config: Option<TargetNativeConfig>,
-}
-
-/// An FFI function declaration from a native library manifest
-#[derive(Debug, Clone)]
-pub struct NativeFunctionDecl {
-    pub name: String,
-    pub params: Vec<String>,
-    pub returns: String,
-}
-
-/// Target-specific native library build configuration
-#[derive(Debug, Clone)]
-pub struct TargetNativeConfig {
-    pub crate_path: PathBuf,
-    pub lib_name: String,
-    pub frameworks: Vec<String>,
-    pub libs: Vec<String>,
-    pub pkg_config: Vec<String>,
-    /// Swift sources (absolute paths) to compile via swiftc and link into the
-    /// final binary. Used by `--features watchos-swift-app` so a native lib
-    /// can ship its own `@main struct App: App` SwiftUI root.
-    pub swift_sources: Vec<PathBuf>,
-    /// Metal shader sources (absolute paths) to compile via `xcrun metal` and
-    /// pack into `<app>.app/default.metallib`. Consumed at runtime by SwiftUI's
-    /// `ShaderLibrary.default` / Metal's dynamic loader — not linked. iOS /
-    /// tvOS / watchOS only.
-    pub metal_sources: Vec<PathBuf>,
-}
-
-/// Get the Rust target triple for a given perry target string
-fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
-    match target {
-        Some("ios-simulator") | Some("ios-widget-simulator") => Some("aarch64-apple-ios-sim"),
-        Some("ios") | Some("ios-widget") => Some("aarch64-apple-ios"),
-        Some("visionos-simulator") => Some("aarch64-apple-visionos-sim"),
-        Some("visionos") => Some("aarch64-apple-visionos"),
-        Some("watchos-simulator") => Some("aarch64-apple-watchos-sim"),
-        Some("watchos") => Some("arm64_32-apple-watchos"),
-        Some("tvos-simulator") => Some("aarch64-apple-tvos-sim"),
-        Some("tvos") => Some("aarch64-apple-tvos"),
-        Some("harmonyos") => Some("aarch64-unknown-linux-ohos"),
-        Some("harmonyos-simulator") => Some("x86_64-unknown-linux-ohos"),
-        Some("android") => Some("aarch64-linux-android"),
-        Some("linux") => Some("x86_64-unknown-linux-gnu"),
-        Some("windows") => Some("x86_64-pc-windows-msvc"),
-        Some("macos") => Some("aarch64-apple-darwin"),
-        _ => None,
-    }
-}
-
-/// Emit the ArkTS shim next to the compiled `.so` for HarmonyOS targets.
-///
-/// Writes two files:
-///
-/// * `ets/entryability/EntryAbility.ets` — UIAbility subclass that runs
-///   the Perry TS entry once in `onCreate`. Further ArkTS lifecycle hooks
-///   (background, destroy) are left as no-ops; a future version can
-///   forward them into TS callbacks.
-///
-/// * `ets/pages/Index.ets` — the landing page referenced by
-///   `windowStage.loadContent`. Minimal: a single centered `Text` that
-///   confirms the TS code ran. The HAP bundler (PR B.3) will be the first
-///   consumer of this file; for now we emit a valid ArkUI component so
-///   DevEco Studio or `hvigor check` won't reject the shim.
-///
-/// `so_filename` is templated into Index.ets's `import` so the `dlopen`
-/// name matches whatever the user passed to `-o` (defaults to
-/// `lib<stem>.so`).
-fn emit_harmonyos_arkts_stubs(
-    output_dir: &Path,
-    so_filename: &str,
-    index_ets: Option<&str>,
-) -> Result<()> {
-    let ets_dir = output_dir.join("ets");
-    let entryability_dir = ets_dir.join("entryability");
-    fs::create_dir_all(&entryability_dir)?;
-
-    // Two paths, same EntryAbility shape:
-    //
-    // 1. UI program (Phase 2): the user's TS calls `App({body: ...})`.
-    //    `perry-codegen-arkts` walked the HIR and emitted a real ArkUI
-    //    `pages/Index.ets`. Restore `onWindowStageCreate` so the ability
-    //    actually loads the page after `perryEntry.run()` returns.
-    //
-    // 2. Logic-only program (Phase 1, original): the .ets in the HAP is
-    //    just the EntryAbility wrapper that runs Perry's compiled main()
-    //    once per ability launch. Output reaches hilog. Window stays
-    //    blank because there's no page to load — calling
-    //    `windowStage.loadContent('pages/Index')` without an Index.ets
-    //    would crash at runtime, so we omit it.
-    //
-    // `es2abc --extension ts` accepts plain-TypeScript in either case;
-    // ArkUI decorators (`@Entry @Component struct`) live in the
-    // emitted-Index.ets only, never in EntryAbility.
-    let (window_imports, window_hooks) = if index_ets.is_some() {
-        (
-            "import window from '@ohos.window';\n",
-            "\x20\x20\x20\x20onWindowStageCreate(windowStage: window.WindowStage) {\n\
-             \x20\x20\x20\x20\x20\x20\x20\x20windowStage.loadContent('pages/Index');\n\
-             \x20\x20\x20\x20}\n",
-        )
-    } else {
-        ("", "")
-    };
-    let entry_ability = format!(
-        "// Auto-generated by Perry — do not edit.\n\
-         // Regenerated every `perry compile --target harmonyos`.\n\
-         import UIAbility from '@ohos.app.ability.UIAbility';\n\
-         {window_imports}\
-         import perryEntry from '{so}';\n\
-         \n\
-         export default class EntryAbility extends UIAbility {{\n\
-         \x20\x20\x20\x20onCreate(want, launchParam) {{\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20// Run the compiled Perry program once per ability instance.\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20// Returns the process-style exit code; ignored here.\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20perryEntry.run();\n\
-         \x20\x20\x20\x20}}\n\
-         \x20\x20\x20\x20onDestroy() {{}}\n\
-         {window_hooks}\
-         \x20\x20\x20\x20onForeground() {{}}\n\
-         \x20\x20\x20\x20onBackground() {{}}\n\
-         }}\n",
-        window_imports = window_imports,
-        window_hooks = window_hooks,
-        so = so_filename
-    );
-    fs::write(entryability_dir.join("EntryAbility.ets"), entry_ability)?;
-
-    if let Some(page_src) = index_ets {
-        let pages_dir = ets_dir.join("pages");
-        fs::create_dir_all(&pages_dir)?;
-        fs::write(pages_dir.join("Index.ets"), page_src)?;
-    }
-
-    Ok(())
-}
+// Phase helpers (maybe_init_type_checker, bundle_extensions_into_ctx,
+// rerun_collect_with_class_field_types, apply_geisterhand_args) moved
+// to compile/bootstrap.rs alongside the newer post-collect preflight
+// and native-instance fixup helpers.
 
 pub fn run(
     args: CompileArgs,
@@ -493,6 +132,75 @@ pub fn run_with_parse_cache(
     use_color: bool,
     verbose: u8,
 ) -> Result<CompileResult> {
+    // #835 + #846: clear the codegen-side FFI provenance set up-front
+    // so any leftover entries from a prior `perry dev` rebuild (or a
+    // failed-build early-return that skipped our drain below) don't
+    // bleed into this build's auto-link decisions.
+    let _ = perry_codegen::ext_registry::take_used_providers();
+
+    // #1663: make `--debug-symbols` retain a symbol table on every native
+    // target, not just emit a PDB on Windows. Previously the flag was a no-op
+    // on Linux/macOS, so a SIGSEGV in a compiled service (e.g. the Fastify +
+    // @perryts/mysql crash reported in #1663) symbolized to an unreadable wall
+    // of `??`, making runtime crashes nearly impossible to report. The
+    // canonical knob for "keep symbols" is the PERRY_DEBUG_SYMBOLS env var,
+    // which the codegen (`-g`/DWARF), the object-cache key, and the final
+    // `strip` step already all honor. Promote the flag to that env var here —
+    // single-threaded, before module codegen spawns rayon workers — so every
+    // layer observes it uniformly. Only set (never unset): the flag is an
+    // explicit opt-in, and a `perry dev` session that asked for symbols once
+    // wants them for the rest of the session.
+    if args.debug_symbols && std::env::var_os("PERRY_DEBUG_SYMBOLS").is_none() {
+        std::env::set_var("PERRY_DEBUG_SYMBOLS", "1");
+    }
+
+    // `--trace <stages>` consolidates the scattered debug-dump knobs into one
+    // flag. Parse it up-front (single-threaded, before codegen spawns rayon
+    // workers) so the `llvm` stage can promote itself to the env vars the
+    // codegen + linker already honor, exactly like `--debug-symbols` above.
+    // `--focus NAME` alone implies `hir` — asking to focus something with no
+    // stage selected obviously means "show me that function's HIR".
+    let trace_stages: std::collections::HashSet<String> = args
+        .trace
+        .as_deref()
+        .map(|s| {
+            s.split(',')
+                .map(|t| t.trim().to_ascii_lowercase())
+                .filter(|t| !t.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let trace_all = trace_stages.contains("all");
+    let trace_hir = trace_all
+        || trace_stages.contains("hir")
+        || args.print_hir
+        || (trace_stages.is_empty() && args.focus.is_some());
+    let trace_llvm = trace_all || trace_stages.contains("llvm");
+    if trace_llvm {
+        // Land .ll files in a predictable per-build directory so the user
+        // doesn't have to remember PERRY_SAVE_LL / PERRY_LLVM_KEEP_IR. Don't
+        // clobber an explicit env override.
+        if std::env::var_os("PERRY_SAVE_LL").is_none() {
+            // Absolute path: codegen runs the .ll write on rayon workers whose
+            // cwd we don't want to depend on. Join against cwd up-front.
+            let dir = std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(".perry-trace")
+                .join("llvm");
+            let _ = std::fs::create_dir_all(&dir);
+            std::env::set_var("PERRY_SAVE_LL", &dir);
+            std::env::set_var("PERRY_LLVM_KEEP_IR", "1");
+            // The per-module object cache short-circuits codegen for unchanged
+            // modules — which means `emit_module` (and thus the .ll write)
+            // never runs and the trace dir comes up empty. Force a full
+            // recompile for this build, exactly like --verify-native-regions.
+            std::env::set_var("PERRY_NO_CACHE", "1");
+            if matches!(format, OutputFormat::Text) {
+                println!("[trace] LLVM IR → {}", dir.display());
+            }
+        }
+    }
+
     match format {
         OutputFormat::Text => println!("Collecting modules..."),
         OutputFormat::Json => {}
@@ -514,336 +222,95 @@ pub fn run_with_parse_cache(
 
     let mut ctx = CompilationContext::new(project_root.clone());
 
-    // Read perry.packageAliases from the project's package.json (if present)
-    // This allows mapping npm package imports to native Perry packages at compile time.
-    // Example: { "@parse/node-apn": "perry-push", "@prisma/client": "perry-prisma" }
-    // Walk up from project_root (which is the parent of the entry file) to find package.json.
-    let pkg_json_path = {
-        let mut dir = project_root.clone();
-        let mut found = None;
-        loop {
-            let candidate = dir.join("package.json");
-            if candidate.exists() {
-                found = Some(candidate);
-                break;
-            }
-            if !dir.pop() {
-                break;
-            }
-        }
-        found
-    };
-    if let Some(pkg_json_path) = pkg_json_path {
-        if let Ok(content) = fs::read_to_string(&pkg_json_path) {
-            if let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(aliases) = pkg
-                    .get("perry")
-                    .and_then(|p| p.get("packageAliases"))
-                    .and_then(|a| a.as_object())
-                {
-                    for (from, to) in aliases {
-                        if let Some(to_str) = to.as_str() {
-                            match format {
-                                OutputFormat::Text => {
-                                    println!("  Package alias: {} → {}", from, to_str)
-                                }
-                                OutputFormat::Json => {}
-                            }
-                            ctx.package_aliases.insert(from.clone(), to_str.to_string());
-                        }
-                    }
-                }
-                if let Some(compile_pkgs) = pkg
-                    .get("perry")
-                    .and_then(|p| p.get("compilePackages"))
-                    .and_then(|a| a.as_array())
-                {
-                    for pkg_name in compile_pkgs {
-                        if let Some(name) = pkg_name.as_str() {
-                            match format {
-                                OutputFormat::Text => println!("  Compile package: {}", name),
-                                OutputFormat::Json => {}
-                            }
-                            ctx.compile_packages.insert(name.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // Tier 2.x: package.json + perry.toml + i18n + google_auth config
+    // loading lifted into compile/host_config.rs::apply_pkg_and_toml_config.
+    let (i18n_config, i18n_translations) =
+        apply_pkg_and_toml_config(&args, &project_root, &mut ctx, format)?;
 
-    // --- i18n: parse [i18n] config from perry.toml and load locale files ---
-    let mut i18n_config: Option<perry_transform::i18n::I18nConfig> = None;
-    let mut i18n_translations: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    // #1680 (Phase 2 of #1677): run host-declared build-time codegen steps
+    // (e.g. `ajv/standalone`, `prisma generate`) before module collection so
+    // the eval-free generated output is on disk for the normal compile path.
+    let skip_codegen = args.no_codegen || codegen_steps::skip_from_env();
+    codegen_steps::run_codegen_steps(&ctx, skip_codegen, format)?;
 
-    // Walk up from project_root to find perry.toml (it may be in parent of src/)
-    let toml_root = {
-        let mut dir = project_root.clone();
-        loop {
-            if dir.join("perry.toml").exists() {
-                break Some(dir);
-            }
-            if !dir.pop() {
-                break None;
-            }
-        }
-    };
-    if let Some(ref toml_dir) = toml_root {
-        let toml_path = toml_dir.join("perry.toml");
-        if toml_path.exists() {
-            if let Ok(content) = fs::read_to_string(&toml_path) {
-                if let Ok(doc) = content.parse::<toml::Table>() {
-                    if let Some(i18n) = doc.get("i18n").and_then(|v| v.as_table()) {
-                        let locales: Vec<String> = i18n
-                            .get("locales")
-                            .and_then(|v| v.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        let default_locale = i18n
-                            .get("default_locale")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("en")
-                            .to_string();
-                        let dynamic = i18n
-                            .get("dynamic")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false);
+    // #1681 (Phase 3 of #1677): self-hosted build-time `precompile(...)`.
+    // If this is the capture subprocess, enter capture mode; otherwise, when
+    // the entry uses `precompile(`, compile+run it via Perry itself (no node,
+    // no V8) to evaluate the codegen at build time and install the captured
+    // generated sources for the main compile below.
+    precompile_capture::prepare_precompile(&args, &mut ctx, format)?;
 
-                        // Parse [i18n.currencies] — locale → currency code
-                        let mut currencies = HashMap::new();
-                        if let Some(curr_table) = i18n.get("currencies").and_then(|v| v.as_table())
-                        {
-                            for (locale, code) in curr_table {
-                                if let Some(code_str) = code.as_str() {
-                                    currencies.insert(locale.clone(), code_str.to_string());
-                                }
-                            }
-                        }
-
-                        if !locales.is_empty() {
-                            match format {
-                                OutputFormat::Text => println!(
-                                    "  i18n: {} locale(s) [{}], default: {}",
-                                    locales.len(),
-                                    locales.join(", "),
-                                    default_locale
-                                ),
-                                OutputFormat::Json => {}
-                            }
-
-                            // Load locale files
-                            let locales_dir = toml_dir.join("locales");
-                            for locale in &locales {
-                                let locale_file = locales_dir.join(format!("{}.json", locale));
-                                if locale_file.exists() {
-                                    if let Ok(json_content) = fs::read_to_string(&locale_file) {
-                                        match serde_json::from_str::<BTreeMap<String, String>>(
-                                            &json_content,
-                                        ) {
-                                            Ok(translations) => {
-                                                match format {
-                                                    OutputFormat::Text => println!(
-                                                        "    Loaded locales/{}.json ({} keys)",
-                                                        locale,
-                                                        translations.len()
-                                                    ),
-                                                    OutputFormat::Json => {}
-                                                }
-                                                i18n_translations
-                                                    .insert(locale.clone(), translations);
-                                            }
-                                            Err(e) => {
-                                                eprintln!("  Warning: Failed to parse locales/{}.json: {}", locale, e);
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    eprintln!(
-                                        "  Warning: Locale file locales/{}.json not found",
-                                        locale
-                                    );
-                                }
-                            }
-
-                            i18n_config = Some(perry_transform::i18n::I18nConfig {
-                                locales,
-                                default_locale,
-                                dynamic,
-                                currencies,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Initialize tsgo type checker if --type-check is enabled
-    if args.type_check {
-        match super::typecheck::TsGoClient::spawn(&project_root) {
-            Ok(mut client) => {
-                // Try to load the project's tsconfig.json
-                if let Some(tsconfig) = super::typecheck::find_tsconfig(&project_root) {
-                    match format {
-                        OutputFormat::Text => println!("  Type checking enabled (tsgo)"),
-                        OutputFormat::Json => {}
-                    }
-                    if let Err(e) = client.load_project(&tsconfig) {
-                        match format {
-                            OutputFormat::Text => eprintln!("  Warning: tsgo project load failed: {}. Continuing without type checking.", e),
-                            OutputFormat::Json => {}
-                        }
-                    } else {
-                        ctx.type_checker = Some(client);
-                    }
-                } else {
-                    match format {
-                        OutputFormat::Text => {
-                            eprintln!("  Warning: No tsconfig.json found. Type checking disabled.")
-                        }
-                        OutputFormat::Json => {}
-                    }
-                }
-            }
-            Err(e) => match format {
-                OutputFormat::Text => eprintln!("  Warning: {}", e),
-                OutputFormat::Json => {}
-            },
-        }
-    }
+    maybe_init_type_checker(&args, &project_root, format, &mut ctx);
 
     let mut visited = HashSet::new();
     let mut next_class_id: perry_hir::ClassId = 1; // Start at 1, 0 is reserved for "no parent"
     let skip_transforms = matches!(args.target.as_deref(), Some("web") | Some("wasm"));
+    let progress = VerboseProgress::new(format, verbose);
+
+    // Issue #444: canonicalize the user's entry path once so collect_modules
+    // can compare every module's canonical path against it and set
+    // `is_entry_module=true` only on the actual entry (driving
+    // `import.meta.main`). Failures fall through silently — collect_modules
+    // canonicalizes again and would surface any IO error there.
+    if ctx.entry_canonical.is_none() {
+        if let Ok(c) = args.input.canonicalize() {
+            ctx.entry_canonical = Some(c);
+        }
+    }
 
     collect_modules(
         &args.input,
         &mut ctx,
         &mut visited,
-        args.enable_js_runtime,
         format,
         args.target.as_deref(),
         &mut next_class_id,
         skip_transforms,
+        &progress,
         parse_cache.as_deref_mut(),
     )?;
 
     // Bundle extensions if --bundle-extensions specified
-    let mut bundled_extensions: Vec<(PathBuf, String)> = Vec::new();
-    if let Some(ext_dir) = &args.bundle_extensions {
-        let ext_entries = discover_extension_entries(ext_dir)?;
-        match format {
-            OutputFormat::Text => println!("Bundling {} extension(s)...", ext_entries.len()),
-            OutputFormat::Json => {}
-        }
-        for (entry_path, plugin_id) in &ext_entries {
-            match format {
-                OutputFormat::Text => {
-                    println!("  Extension: {} ({})", plugin_id, entry_path.display())
-                }
-                OutputFormat::Json => {}
-            }
-            collect_modules(
-                entry_path,
+    let bundled_extensions: Vec<(PathBuf, String)> =
+        if let Some(ext_dir) = args.bundle_extensions.clone() {
+            bundle_extensions_into_ctx(
+                &ext_dir,
+                &args,
                 &mut ctx,
                 &mut visited,
-                args.enable_js_runtime,
-                format,
-                args.target.as_deref(),
                 &mut next_class_id,
                 skip_transforms,
+                &progress,
                 parse_cache.as_deref_mut(),
-            )?;
-            bundled_extensions.push((entry_path.canonicalize()?, plugin_id.clone()));
-        }
-    }
+                format,
+            )?
+        } else {
+            Vec::new()
+        };
 
-    // Recompute project_root as the common ancestor of all module paths.
-    // The initial project_root is the parent of the entry file, but modules may be in sibling
-    // directories (e.g., entry in workers/, modules in lib/). This ensures unique module names.
-    if ctx.native_modules.len() > 1 {
-        let mut common: Option<PathBuf> = None;
-        for path in ctx.native_modules.keys() {
-            if let Some(parent) = path.parent() {
-                match &common {
-                    None => common = Some(parent.to_path_buf()),
-                    Some(prev) => {
-                        // Find common prefix of prev and parent
-                        let mut new_common = PathBuf::new();
-                        for (a, b) in prev.components().zip(parent.components()) {
-                            if a == b {
-                                new_common.push(a);
-                            } else {
-                                break;
-                            }
-                        }
-                        common = Some(new_common);
-                    }
-                }
-            }
-        }
-        if let Some(new_root) = common {
-            if !new_root.as_os_str().is_empty() {
-                ctx.project_root = new_root;
-                // Re-set module names based on the new project root
-                let paths: Vec<PathBuf> = ctx.native_modules.keys().cloned().collect();
-                for path in paths {
-                    if let Some(module) = ctx.native_modules.get_mut(&path) {
-                        let filename = path
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("module.ts");
-                        module.name = path
-                            .strip_prefix(&ctx.project_root)
-                            .ok()
-                            .and_then(|p| p.to_str())
-                            .map(|s| s.to_string())
-                            .unwrap_or_else(|| filename.to_string());
-                    }
-                }
-            }
-        }
-    }
+    rerun_collect_with_class_field_types(
+        &args,
+        &mut ctx,
+        &mut visited,
+        &mut next_class_id,
+        skip_transforms,
+        &progress,
+        parse_cache.as_deref_mut(),
+        format,
+    )?;
 
-    let total_modules = ctx.native_modules.len() + ctx.js_modules.len();
-    match format {
-        OutputFormat::Text => {
-            println!(
-                "Found {} module(s): {} native, {} JavaScript",
-                total_modules,
-                ctx.native_modules.len(),
-                ctx.js_modules.len()
-            );
-        }
-        OutputFormat::Json => {}
-    }
+    run_post_collect_preflight(&args, &mut ctx, format)?;
 
-    if args.enable_geisterhand || args.geisterhand_port.is_some() {
-        ctx.needs_geisterhand = true;
-        if let Some(port) = args.geisterhand_port {
-            ctx.geisterhand_port = port;
-        }
-    }
-
-    // Validate --min-windows-version. Accepted: "7", "8", "10". Anything
-    // else is a hard error so typos like `--min-windows-version=11` fail
-    // loudly instead of silently behaving like the default. See issue #303
-    // and `docs/src/platforms/windows-7.md`.
-    match args.min_windows_version.as_str() {
-        "7" | "8" | "10" => {
-            ctx.min_windows_version = args.min_windows_version.clone();
-        }
-        other => {
-            anyhow::bail!(
-                "--min-windows-version: expected '7', '8', or '10', got '{}'. \
-                 See docs/src/platforms/windows-7.md for the trade-offs.",
-                other
-            );
-        }
+    // #2309: tree-shake the final module graph — prune unreachable
+    // node_modules modules and re-raise any deferred refusal that survives.
+    // No-op unless tree-shaking is enabled (byte-identical to pre-#2309).
+    {
+        let entry_canonical = ctx.entry_canonical.clone().unwrap_or_else(|| {
+            args.input
+                .canonicalize()
+                .unwrap_or_else(|_| args.input.clone())
+        });
+        reachability::tree_shake(&mut ctx, &entry_canonical)?;
     }
 
     // --- Web/WASM target: emit WASM binary + JS runtime bridge ---
@@ -871,259 +338,16 @@ pub fn run_with_parse_cache(
         return compile_for_wearos_tile(&ctx, &args, format);
     }
 
-    // Transform JS imports + fix local native instances (parallel,
-    // fused per-module). Tier 4.2 (v0.5.335): pre-fix this was two
-    // separate `par_iter_mut().for_each(...)` passes back-to-back.
-    // The two operations are independent within a single module, so
-    // running them inside one rayon job per module amortizes the
-    // scheduler cost. The js_imports step is gated on
-    // `needs_js_runtime`; modules that don't need it pay only the
-    // cheap branch.
-    use rayon::prelude::*;
-    let needs_js_runtime = ctx.needs_js_runtime;
-    ctx.native_modules
-        .par_iter_mut()
-        .for_each(|(_, hir_module)| {
-            if needs_js_runtime {
-                perry_hir::transform_js_imports(hir_module);
-            }
-            perry_hir::fix_local_native_instances(hir_module);
-        });
+    run_native_instance_fixups(&mut ctx);
+    harvest_harmonyos_index_ets(&args, &mut ctx, format);
 
-    // Build map of exported native instances from all modules. Must
-    // run AFTER fix_local_native_instances above so the exports list
-    // reflects post-rewrite state.
-    let mut exported_instances: BTreeMap<(String, String), perry_hir::ExportedNativeInstance> =
-        BTreeMap::new();
-    for (path, hir_module) in &ctx.native_modules {
-        let path_str = path.to_string_lossy().to_string();
-        for (export_name, native_module, native_class) in &hir_module.exported_native_instances {
-            exported_instances.insert(
-                (path_str.clone(), export_name.clone()),
-                perry_hir::ExportedNativeInstance {
-                    native_module: native_module.clone(),
-                    native_class: native_class.clone(),
-                },
-            );
-        }
+    let i18n_table = apply_i18n_pass(&mut ctx, i18n_config.as_ref(), &i18n_translations, format);
+
+    if trace_hir {
+        dump_hir_for_debug(&ctx, args.focus.as_deref());
     }
 
-    // Build map of exported functions that return native instances.
-    let mut exported_func_return_instances: BTreeMap<
-        (String, String),
-        perry_hir::ExportedNativeInstance,
-    > = BTreeMap::new();
-    for (path, hir_module) in &ctx.native_modules {
-        let path_str = path.to_string_lossy().to_string();
-        for (func_name, native_module, native_class) in
-            &hir_module.exported_func_return_native_instances
-        {
-            exported_func_return_instances.insert(
-                (path_str.clone(), func_name.clone()),
-                perry_hir::ExportedNativeInstance {
-                    native_module: native_module.clone(),
-                    native_class: native_class.clone(),
-                },
-            );
-        }
-    }
-
-    // Cross-module fix → local-fix re-run → monomorphize (parallel,
-    // fused per-module). Tier 4.2: pre-fix this was three separate
-    // `par_iter_mut().for_each(...)` passes. The local-fix re-run
-    // depends on `fix_cross_module_native_instances` having
-    // populated cross-module type info on this module, and
-    // monomorphize depends on the post-local-fix module shape — but
-    // both dependencies are intra-module, so running all three in
-    // one rayon job per module is safe and saves two scheduler
-    // round-trips. The cross-module step is gated on at least one
-    // export existing (skip the call entirely otherwise).
-    let has_native_exports =
-        !exported_instances.is_empty() || !exported_func_return_instances.is_empty();
-    ctx.native_modules
-        .par_iter_mut()
-        .for_each(|(_, hir_module)| {
-            if has_native_exports {
-                perry_hir::fix_cross_module_native_instances(
-                    hir_module,
-                    &exported_instances,
-                    &exported_func_return_instances,
-                );
-            }
-            // Always re-run local fix (matches pre-Tier-4.2 behaviour —
-            // the prior code unconditionally ran a second local-fix pass
-            // after the cross-module branch). When `has_native_exports`
-            // is false this is effectively a no-op since nothing changed
-            // since the first local-fix in Pass A above.
-            perry_hir::fix_local_native_instances(hir_module);
-            perry_hir::monomorphize_module(hir_module);
-        });
-
-    // --- HarmonyOS Phase 2: harvest perry/ui App({body: ...}) into ArkUI ---
-    //
-    // Runs BEFORE codegen so the LLVM backend never sees the App call (it
-    // would otherwise try to emit `perry_ui_app_create` / `_set_body` / `_run`
-    // FFIs that are unresolved on OHOS — there's no `perry-ui-harmonyos` crate
-    // by design, since OHOS owns its own UI tree via ArkTS).
-    //
-    // `emit_index_ets` walks the entry module's `init`, finds the App call's
-    // `body:` expression, emits a declarative `pages/Index.ets`, and replaces
-    // the `Stmt::Expr(NativeMethodCall { method: "App" })` with a no-op
-    // `Stmt::Expr(Number(0.0))`. After the strip, codegen sees a logic-only
-    // module — Perry's `main()` runs in `EntryAbility.onCreate` and ArkUI
-    // renders the harvested page on `onWindowStageCreate`.
-    //
-    // Also flips `ctx.needs_ui` back to false so the link path skips the
-    // perry-ui-* lib check (which would fail on the OHOS target since no
-    // such lib exists).
-    if matches!(
-        args.target.as_deref(),
-        Some("harmonyos") | Some("harmonyos-simulator")
-    ) {
-        // Compute entry path locally — the canonical `entry_path` binding is
-        // declared further down in run_with_parse_cache (at the codegen-loop
-        // entry-detection site) and isn't in scope here yet. This local copy
-        // is identical: ctx.native_modules is keyed by canonicalized paths.
-        let entry_path_local = args
-            .input
-            .canonicalize()
-            .unwrap_or_else(|_| args.input.clone());
-        if let Some(entry_hir) = ctx.native_modules.get_mut(&entry_path_local) {
-            match perry_codegen_arkts::emit_index_ets(entry_hir) {
-                Ok(Some(ets_source)) => {
-                    if matches!(format, OutputFormat::Text) {
-                        println!(
-                            "  harmonyos: harvested perry/ui App({{body: ...}}) → \
-                             {} bytes ArkUI Index.ets (perry-codegen-arkts)",
-                            ets_source.len()
-                        );
-                    }
-                    ctx.harmonyos_index_ets = Some(ets_source);
-                    // UI is in the .ets, not the .so — release the
-                    // perry-ui-* link requirement.
-                    ctx.needs_ui = false;
-                }
-                Ok(None) => {
-                    // Logic-only program — keep needs_ui as-is. (If the user
-                    // imported perry/ui without ever calling App({...}), the
-                    // link will still fail — that's a real bug to surface.)
-                }
-                Err(e) => {
-                    eprintln!(
-                        "Warning: perry-codegen-arkts harvest failed ({}); \
-                         falling back to blank window.",
-                        e
-                    );
-                }
-            }
-        }
-    }
-
-    // --- i18n: apply i18n transform pass ---
-    let i18n_table = if let Some(ref config) = i18n_config {
-        let table =
-            perry_transform::i18n::apply_i18n(&mut ctx.native_modules, config, &i18n_translations);
-        // Report diagnostics
-        for diag in &table.diagnostics {
-            match diag.severity {
-                perry_transform::i18n::I18nSeverity::Warning => match format {
-                    OutputFormat::Text => eprintln!("  i18n warning: {}", diag.message),
-                    OutputFormat::Json => {}
-                },
-                perry_transform::i18n::I18nSeverity::Error => match format {
-                    OutputFormat::Text => eprintln!("  i18n error: {}", diag.message),
-                    OutputFormat::Json => {}
-                },
-            }
-        }
-        match format {
-            OutputFormat::Text => {
-                if !table.keys.is_empty() {
-                    println!(
-                        "  i18n: {} localizable string(s) detected",
-                        table.keys.len()
-                    );
-                }
-            }
-            OutputFormat::Json => {}
-        }
-        // The LLVM backend threads i18n through `CompileOptions::i18n_table`
-        // (set per-job at the dispatch site below). No thread-local needed.
-        Some(table)
-    } else {
-        None
-    };
-
-    if args.print_hir {
-        for (path, hir_module) in &ctx.native_modules {
-            println!("\n=== HIR (after monomorphization): {} ===", path.display());
-            println!("Module: {}", hir_module.name);
-            println!("Imports: {}", hir_module.imports.len());
-            for import in &hir_module.imports {
-                println!(
-                    "  - {} ({} specifiers, kind: {:?})",
-                    import.source,
-                    import.specifiers.len(),
-                    import.module_kind
-                );
-            }
-            println!("Exports: {}", hir_module.exports.len());
-            println!("Functions: {}", hir_module.functions.len());
-            for func in &hir_module.functions {
-                println!(
-                    "  - {} (params: {}, type_params: {}, async: {}, exported: {})",
-                    func.name,
-                    func.params.len(),
-                    func.type_params.len(),
-                    func.is_async,
-                    func.is_exported
-                );
-                for p in &func.params {
-                    println!("      param {} (id={}): {:?}", p.name, p.id, p.ty);
-                }
-                for (i, stmt) in func.body.iter().enumerate() {
-                    println!("      [{}] {:?}", i, stmt);
-                }
-            }
-            println!("Init statements: {}", hir_module.init.len());
-            for (i, stmt) in hir_module.init.iter().enumerate() {
-                println!("  [{}] {:?}", i, stmt);
-            }
-            println!("===========\n");
-        }
-
-        if !ctx.js_modules.is_empty() {
-            println!("\n=== JavaScript Modules (interpreted) ===");
-            for (specifier, module) in &ctx.js_modules {
-                println!("  {} -> {}", specifier, module.path.display());
-            }
-            println!("===========\n");
-        }
-    }
-
-    // --- i18n: write key registry ---
-    if let Some(ref table) = i18n_table {
-        if !table.keys.is_empty() {
-            let perry_dir = ctx.project_root.join(".perry");
-            let _ = fs::create_dir_all(&perry_dir);
-            let registry: Vec<serde_json::Value> = table
-                .keys
-                .iter()
-                .enumerate()
-                .map(|(i, key)| {
-                    serde_json::json!({
-                        "key": key,
-                        "string_idx": i,
-                    })
-                })
-                .collect();
-            let registry_json = serde_json::json!({ "keys": registry });
-            let _ = fs::write(
-                perry_dir.join("i18n-keys.json"),
-                serde_json::to_string_pretty(&registry_json).unwrap_or_default(),
-            );
-        }
-    }
+    write_i18n_key_registry(&ctx, i18n_table.as_ref());
 
     match format {
         OutputFormat::Text => println!("Generating code..."),
@@ -1138,132 +362,9 @@ pub fn run_with_parse_cache(
         .canonicalize()
         .unwrap_or_else(|_| args.input.clone());
 
-    // Collect non-entry module names for init function calls
-    // Topologically sort by import dependencies so that if module A imports from module B,
-    // module B is initialized first. This ensures module-level variables (e.g., Maps) are
-    // allocated before other modules try to use them via imported functions.
-    let non_entry_module_names: Vec<String> = {
-        // Build path->name mapping and dependency graph
-        let mut path_to_name: HashMap<PathBuf, String> = HashMap::new();
-        let mut name_to_path: HashMap<String, PathBuf> = HashMap::new();
-        let mut deps: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
-
-        for (path, hir_module) in &ctx.native_modules {
-            if *path == entry_path {
-                continue;
-            }
-            path_to_name.insert(path.clone(), hir_module.name.clone());
-            name_to_path.insert(hir_module.name.clone(), path.clone());
-
-            let mut module_deps = Vec::new();
-            for import in &hir_module.imports {
-                if let Some(ref resolved) = import.resolved_path {
-                    let resolved_path = PathBuf::from(resolved);
-                    if resolved_path != entry_path
-                        && ctx.native_modules.contains_key(&resolved_path)
-                    {
-                        module_deps.push(resolved_path);
-                    }
-                }
-            }
-            // Also treat ExportAll/ReExport sources as dependencies.
-            // If module A does `export * from './B'`, then B must be initialized before A
-            // so that B's export globals are set before any consumer of A reads them.
-            for export in &hir_module.exports {
-                let source = match export {
-                    perry_hir::Export::ExportAll { source } => Some(source),
-                    perry_hir::Export::ReExport { source, .. } => Some(source),
-                    // #310 — namespace re-export's target file must also be
-                    // initialized before this re-exporter so consumers see
-                    // populated export globals when they reach through.
-                    perry_hir::Export::NamespaceReExport { source, .. } => Some(source),
-                    perry_hir::Export::Named { .. } => None,
-                };
-                if let Some(src) = source {
-                    if let Some((resolved_path, _)) = resolve_import(
-                        src,
-                        path,
-                        &ctx.project_root,
-                        &ctx.compile_packages,
-                        &ctx.compile_package_dirs,
-                    ) {
-                        if resolved_path != entry_path
-                            && ctx.native_modules.contains_key(&resolved_path)
-                        {
-                            module_deps.push(resolved_path);
-                        }
-                    }
-                }
-            }
-            deps.insert(path.clone(), module_deps);
-        }
-
-        // DFS-based topological sort (handles circular dependencies gracefully)
-        // Dependencies are visited before the module itself. Cycles are broken
-        // at the back-edge (module already being visited), ensuring the best
-        // possible ordering even with circular imports.
-        let mut sorted = Vec::new();
-        let mut visited: HashSet<PathBuf> = HashSet::new();
-        let mut visiting: HashSet<PathBuf> = HashSet::new(); // cycle detection
-
-        fn dfs_visit(
-            path: &PathBuf,
-            deps: &HashMap<PathBuf, Vec<PathBuf>>,
-            path_to_name: &HashMap<PathBuf, String>,
-            visited: &mut HashSet<PathBuf>,
-            visiting: &mut HashSet<PathBuf>,
-            sorted: &mut Vec<String>,
-        ) {
-            if visited.contains(path) || visiting.contains(path) {
-                return; // already done or cycle back-edge
-            }
-            visiting.insert(path.clone());
-
-            // Visit dependencies first (so they get initialized before us)
-            if let Some(module_deps) = deps.get(path) {
-                // Sort deps for deterministic order
-                let mut sorted_deps = module_deps.clone();
-                sorted_deps.sort();
-                for dep in &sorted_deps {
-                    dfs_visit(dep, deps, path_to_name, visited, visiting, sorted);
-                }
-            }
-
-            visiting.remove(path);
-            visited.insert(path.clone());
-            if let Some(name) = path_to_name.get(path) {
-                sorted.push(name.clone());
-            }
-        }
-
-        // Sort starting nodes for deterministic iteration order
-        let mut all_paths: Vec<PathBuf> = path_to_name.keys().cloned().collect();
-        all_paths.sort();
-
-        for path in &all_paths {
-            dfs_visit(
-                path,
-                &deps,
-                &path_to_name,
-                &mut visited,
-                &mut visiting,
-                &mut sorted,
-            );
-        }
-
-        sorted
-    };
-
-    if matches!(format, OutputFormat::Text) && verbose > 0 {
-        eprintln!(
-            "\nModule init order ({} modules):",
-            non_entry_module_names.len()
-        );
-        for (i, name) in non_entry_module_names.iter().enumerate() {
-            eprintln!("  [{}] {}", i, name);
-        }
-        eprintln!();
-    }
+    classify_eager_modules(&mut ctx, &entry_path);
+    let non_entry_module_names: Vec<String> =
+        topo_sort_non_entry_modules(&ctx, &entry_path, format, verbose);
 
     // Build a map of all exported enums from all modules (owned data, no borrows)
     // Key: (resolved_path, enum_name) -> Vec<(member_name, EnumValue)>
@@ -1443,11 +544,59 @@ pub fn run_with_parse_cache(
     // Build a map of all exported classes from all modules
     // Key: (resolved_path, class_name) -> Class reference
     let mut exported_classes: BTreeMap<(String, String), &perry_hir::Class> = BTreeMap::new();
+    // Issue #489 followup: canonical defining path keyed by class id. The
+    // re-export propagation loop below adds extra `(re_export_path,
+    // class_name)` entries pointing at the same class, and the transitive
+    // parent-class closure later picks `exported_classes`'s first BTreeMap
+    // match by name — which is whichever path sorts earliest, often a
+    // barrel `index.js` rather than the actual defining file. That gives
+    // the imported parent class a `source_prefix` of the barrel, and the
+    // codegen later emits dispatch references to
+    // `perry_method_<barrel>__<Class>__<method>` while the source module
+    // defines the symbol under `perry_method_<origin>__<Class>__<method>`
+    // — undefined-symbol link error. Drizzle hits this:
+    // `mysql-proxy/session.js` calls `.then` on a Promise; perry's name-
+    // based dispatch picks `QueryPromise.then` from the transitive parent
+    // closure (`MySqlPreparedQuery extends QueryPromise`), but the
+    // canonical path is `query-promise.js`, not `index.js` which
+    // re-exports it via `export *`.
+    let mut class_canonical_path: std::collections::HashMap<perry_hir::ClassId, String> =
+        std::collections::HashMap::new();
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
         for class in &hir_module.classes {
             if class.is_exported {
                 exported_classes.insert((path_str.clone(), class.name.clone()), class);
+                class_canonical_path
+                    .entry(class.id)
+                    .or_insert_with(|| path_str.clone());
+            }
+        }
+        // Issue #485: handle `export { Local as Exported }` for classes.
+        // Without this, a module that declares `class Hono extends … {}` and
+        // re-exports it via `export { Hono as HonoBase }` registers under
+        // (path, "Hono") only — but the importer's lookup uses the imported
+        // (alias) side: `(path, "HonoBase")`. The miss makes
+        // `imported_classes` skip the entry entirely, so the importing module
+        // gets no class metadata for HonoBase, no constructor symbol via
+        // `imported_class_ctors`, and `super(...)` from a subclass (e.g. the
+        // Hono class in hono.js extends HonoBase) silently no-ops — the
+        // subclass's `app.fetch` / `app.get` / etc. arrow-class-field methods
+        // are never installed onto `this`.
+        for export in &hir_module.exports {
+            if let perry_hir::Export::Named { local, exported } = export {
+                if local == exported {
+                    continue;
+                }
+                if let Some(class) = hir_module
+                    .classes
+                    .iter()
+                    .find(|c| c.name == *local && c.is_exported)
+                {
+                    exported_classes
+                        .entry((path_str.clone(), exported.clone()))
+                        .or_insert(class);
+                }
             }
         }
     }
@@ -1458,6 +607,21 @@ pub fn run_with_parse_cache(
     let mut exported_var_names: BTreeSet<(String, String)> = BTreeSet::new();
     // Build a map of all exported functions with their param counts from all modules
     let mut exported_func_param_counts: BTreeMap<(String, String), usize> = BTreeMap::new();
+    // Issue #608 — parallel map: which exported functions have a trailing
+    // `...rest` parameter. Cross-module call sites consult this to bundle
+    // trailing args into a `js_array_alloc(n)` rest array before the call,
+    // mirroring the same-module fast path that uses `func_signatures`'s
+    // has_rest bit. Without this map, `import { sql } from "pkg"` followed
+    // by `sql\`hello ${x}\`` (which the HIR desugars to `sql(stringsArr, x)`)
+    // emits a 2-arg call whose callee reads `params` as the raw 2nd arg
+    // instead of `[x]`. Sparse map (only `true` entries stored).
+    let mut exported_func_has_rest: BTreeMap<(String, String), bool> = BTreeMap::new();
+    // #1816: exported functions whose trailing param is the HIR-synthesized
+    // `arguments` rest (a body that references `arguments`). These need the
+    // cross-module call to bundle ALL passed args into that param (matching
+    // `arguments.length` spec semantics), not just the trailing ones — distinct
+    // from a real `...rest`. effect's `pipe`/`dual` are the load-bearing case.
+    let mut exported_func_synthetic_arguments: BTreeSet<(String, String)> = BTreeSet::new();
     // Build a map of all exported functions with their return types from all modules
     let mut exported_func_return_types: BTreeMap<(String, String), perry_types::Type> =
         BTreeMap::new();
@@ -1479,6 +643,16 @@ pub fn run_with_parse_cache(
                 if func.is_async {
                     exported_async_funcs.insert((path_str.clone(), func.name.clone()));
                 }
+                if func.params.last().is_some_and(|p| p.is_rest) {
+                    exported_func_has_rest.insert((path_str.clone(), func.name.clone()), true);
+                }
+                if func
+                    .params
+                    .last()
+                    .is_some_and(|p| p.is_rest && p.name == "arguments")
+                {
+                    exported_func_synthetic_arguments.insert((path_str.clone(), func.name.clone()));
+                }
             }
         }
         // Also register exported_functions aliases (e.g., "default" → actual function)
@@ -1493,7 +667,17 @@ pub fn run_with_parse_cache(
                     .entry(key.clone())
                     .or_insert_with(|| func.return_type.clone());
                 if func.is_async {
-                    exported_async_funcs.insert(key);
+                    exported_async_funcs.insert(key.clone());
+                }
+                if func.params.last().is_some_and(|p| p.is_rest) {
+                    exported_func_has_rest.entry(key.clone()).or_insert(true);
+                }
+                if func
+                    .params
+                    .last()
+                    .is_some_and(|p| p.is_rest && p.name == "arguments")
+                {
+                    exported_func_synthetic_arguments.insert(key);
                 }
             }
         }
@@ -1540,27 +724,52 @@ pub fn run_with_parse_cache(
                         if *is_async {
                             exported_async_funcs.insert((path_str.clone(), name.clone()));
                         }
+                        if params.last().is_some_and(|p| p.is_rest) {
+                            exported_func_has_rest.insert((path_str.clone(), name.clone()), true);
+                        }
                     }
                 }
             }
         }
     }
 
-    // Populate exported_var_names: names that are in exported_objects but NOT
-    // in exported_func_param_counts (closures assigned to const are in both).
+    // Populate exported_var_names: closures-assigned-to-const are in BOTH
+    // `exported_objects` and `exported_func_param_counts`, but their
+    // `perry_fn_<src>__<name>` symbol is a ZERO-arg getter (returns the
+    // global closure pointer), not the function body — so at call sites
+    // we still need to fetch the value via the getter and then closure-call.
+    // The `is_function_alias` exclusion keeps `function foo(){}` decls out
+    // (their perry_fn_<…> symbol IS the function body).
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
+        let is_function_decl: std::collections::HashSet<&String> = hir_module
+            .functions
+            .iter()
+            .filter(|f| f.is_exported)
+            .map(|f| &f.name)
+            .collect();
         for obj_name in &hir_module.exported_objects {
-            let key = (path_str.clone(), obj_name.clone());
-            if !exported_func_param_counts.contains_key(&key) {
-                exported_var_names.insert(key);
+            if is_function_decl.contains(obj_name) {
+                continue;
             }
+            let key = (path_str.clone(), obj_name.clone());
+            exported_var_names.insert(key);
         }
     }
 
     // Build a map of all exports from all modules: module_path -> HashMap<export_name, origin_module_path>
     // This is used for namespace imports (`import * as X from './module'`) to resolve all exports
     let mut all_module_exports: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    // Issue #678: parallel map carrying the *origin name* alongside the
+    // origin path. When `ink/build/index.js` says `export { default as
+    // render } from './render.js'`, `all_module_exports[ink_path]["render"]
+    // = render_js_path` and `all_module_export_origin_names[ink_path]
+    // ["render"] = "default"`. The codegen consumer of an import that
+    // resolves through this chain forms `perry_fn_<render_js>__default`
+    // instead of `perry_fn_<render_js>__render` — without it the linker
+    // fails on the missing `_perry_fn_<render_js>__render` symbol.
+    let mut all_module_export_origin_names: BTreeMap<String, BTreeMap<String, String>> =
+        BTreeMap::new();
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
         let exports = all_module_exports
@@ -1590,8 +799,32 @@ pub fn run_with_parse_cache(
         }
         // Named exports (export { foo, bar as baz })
         for export in &hir_module.exports {
-            if let perry_hir::Export::Named { exported, .. } = export {
+            if let perry_hir::Export::Named { local, exported } = export {
                 exports.insert(exported.clone(), path_str.clone());
+                // #1758: a LOCAL renamed export of a CLASS
+                // (`export { Number$ as Number }`, no `from`) must record the
+                // origin (local) name so importers resolve `ns.Number` to the
+                // defining class `Number$`. The re-export propagation loop below
+                // only records origin names for cross-module
+                // `export { X as Y } from "src"`. Without this, the
+                // namespace-member class value-read (property_get.rs) looks up
+                // `class_ids["Number"]` (the export alias) — a miss — and
+                // `S.Number` falls back to the global `Number`, losing all
+                // inherited statics (effect's `S.Number.ast` → undefined →
+                // Schema decode crash). Scoped to classes: renamed var/func
+                // exports route through wrapper-symbol emission that keys on the
+                // export name, and feeding the origin name there breaks linking.
+                if local != exported
+                    && hir_module
+                        .classes
+                        .iter()
+                        .any(|c| c.name == *local && c.is_exported)
+                {
+                    all_module_export_origin_names
+                        .entry(path_str.clone())
+                        .or_insert_with(BTreeMap::new)
+                        .insert(exported.clone(), local.clone());
+                }
             }
             // ReExport is handled in the propagation loop below (avoids borrow issues)
         }
@@ -1599,7 +832,13 @@ pub fn run_with_parse_cache(
 
     // Propagate exports through ExportAll and ReExport chains
     loop {
-        let mut new_export_entries: Vec<(String, String, String)> = Vec::new(); // (module_path, export_name, origin_path)
+        // (module_path, export_name, origin_path, origin_name_in_origin).
+        // The fourth tuple element drives Issue #678's per-export
+        // origin-name map: when a re-export renames a name across a hop
+        // (`export { default as render } from './render.js'`), the
+        // consumer must use the *origin* name (`default`) as the symbol
+        // suffix, not the consumer-visible one (`render`).
+        let mut new_export_entries: Vec<(String, String, String, String)> = Vec::new();
         for (path, hir_module) in &ctx.native_modules {
             let path_str = path.to_string_lossy().to_string();
             for export in &hir_module.exports {
@@ -1620,10 +859,23 @@ pub fn run_with_parse_cache(
                                         .map(|e| e.contains_key(name))
                                         .unwrap_or(false);
                                     if !already_exists {
+                                        // `export * from "src"` doesn't
+                                        // rename — origin_name == export_name.
+                                        // But if `src` itself remapped this
+                                        // name (e.g. `export { default as
+                                        // foo } from './x.js'`), propagate
+                                        // the deeper origin name across this
+                                        // transitive hop.
+                                        let deep_origin_name = all_module_export_origin_names
+                                            .get(&source_path_str)
+                                            .and_then(|m| m.get(name))
+                                            .cloned()
+                                            .unwrap_or_else(|| name.clone());
                                         new_export_entries.push((
                                             path_str.clone(),
                                             name.clone(),
                                             origin.clone(),
+                                            deep_origin_name,
                                         ));
                                     }
                                 }
@@ -1651,10 +903,23 @@ pub fn run_with_parse_cache(
                                         .map(|v| v == origin)
                                         .unwrap_or(false);
                                     if !already_correct {
+                                        // Walk one more hop: if `src` itself
+                                        // remapped `imported` to a deeper
+                                        // origin name (`src` did its own
+                                        // `export { default as imported }
+                                        // from "..."`), record THAT deeper
+                                        // name so the consumer's symbol-suffix
+                                        // resolution skips both hops.
+                                        let deep_origin_name = all_module_export_origin_names
+                                            .get(&source_path_str)
+                                            .and_then(|m| m.get(imported))
+                                            .cloned()
+                                            .unwrap_or_else(|| imported.clone());
                                         new_export_entries.push((
                                             path_str.clone(),
                                             exported.clone(),
                                             origin.clone(),
+                                            deep_origin_name,
                                         ));
                                     }
                                 }
@@ -1696,10 +961,19 @@ pub fn run_with_parse_cache(
                                                     .map(|v| v == origin)
                                                     .unwrap_or(false);
                                                 if !already_correct {
+                                                    let deep_origin_name =
+                                                        all_module_export_origin_names
+                                                            .get(&source_path_str)
+                                                            .and_then(|m| m.get(&imported_name))
+                                                            .cloned()
+                                                            .unwrap_or_else(|| {
+                                                                imported_name.clone()
+                                                            });
                                                     new_export_entries.push((
                                                         path_str.clone(),
                                                         exported.clone(),
                                                         origin.clone(),
+                                                        deep_origin_name,
                                                     ));
                                                 }
                                             }
@@ -1716,17 +990,46 @@ pub fn run_with_parse_cache(
         if new_export_entries.is_empty() {
             break;
         }
-        for (module_path, name, origin) in new_export_entries {
+        for (module_path, name, origin, origin_name) in new_export_entries {
             all_module_exports
-                .entry(module_path)
+                .entry(module_path.clone())
                 .or_insert_with(BTreeMap::new)
-                .insert(name, origin);
+                .insert(name.clone(), origin);
+            // Only record the origin-name entry when it actually differs
+            // from the export name (the common identity case is implicit —
+            // the codegen helper falls back to the imported name when no
+            // entry is present). This keeps the map sparse and easy to
+            // reason about.
+            if origin_name != name {
+                all_module_export_origin_names
+                    .entry(module_path)
+                    .or_insert_with(BTreeMap::new)
+                    .insert(name, origin_name);
+            }
         }
     }
 
-    // Also propagate exported_func_param_counts through ExportAll/ReExport/Named chains
+    // Also propagate exported_func_param_counts AND exported_func_has_rest
+    // through ExportAll/ReExport/Named chains.
+    //
+    // Drizzle-sqlite blocker: pre-fix the rest-only table only carried entries
+    // for the SOURCE module of the function declaration (e.g.
+    // `drizzle-orm/better-sqlite3/driver.js::drizzle`), so when a downstream
+    // module re-exported it via `export * from "./driver.js"` (the canonical
+    // npm-package barrel pattern in `drizzle-orm/better-sqlite3/index.js`),
+    // the re-exported entry was never written. Consumers importing `drizzle`
+    // from `"drizzle-orm/better-sqlite3"` (resolving to index.js) looked up
+    // `(index.js, "drizzle")` in `exported_func_has_rest`, missed → no rest
+    // bundling at the call site → `function drizzle(...params)` ran with
+    // `params` as raw f64 args instead of a bundled array → `params[0]`
+    // indexed into a non-array and read undefined. Symptom: `drizzle(sqlite)`
+    // saw `params[0] === undefined`, took the `params[0] === void 0` branch
+    // and constructed a fresh `new Client()` (heap wrapper, NOT the
+    // small-handle Database the user passed), and every downstream
+    // `this.client.prepare(...)` failed with `prepare is not a function`.
+    // Refs #645 deeper followup, #488.
     loop {
-        let mut new_func_entries: Vec<((String, String), usize)> = Vec::new();
+        let mut new_func_entries: Vec<((String, String), usize, bool)> = Vec::new();
         for (path, hir_module) in &ctx.native_modules {
             let path_str = path.to_string_lossy().to_string();
             for export in &hir_module.exports {
@@ -1745,7 +1048,11 @@ pub fn run_with_parse_cache(
                                 if src_path == &source_path_str {
                                     let key = (path_str.clone(), func_name.clone());
                                     if !exported_func_param_counts.contains_key(&key) {
-                                        new_func_entries.push((key, param_count));
+                                        let has_rest = exported_func_has_rest
+                                            .get(&(src_path.clone(), func_name.clone()))
+                                            .copied()
+                                            .unwrap_or(false);
+                                        new_func_entries.push((key, param_count, has_rest));
                                     }
                                 }
                             }
@@ -1769,7 +1076,11 @@ pub fn run_with_parse_cache(
                                 if src_path == &source_path_str && func_name == imported {
                                     let key = (path_str.clone(), exported.clone());
                                     if !exported_func_param_counts.contains_key(&key) {
-                                        new_func_entries.push((key, param_count));
+                                        let has_rest = exported_func_has_rest
+                                            .get(&(src_path.clone(), func_name.clone()))
+                                            .copied()
+                                            .unwrap_or(false);
+                                        new_func_entries.push((key, param_count, has_rest));
                                     }
                                 }
                             }
@@ -1803,7 +1114,11 @@ pub fn run_with_parse_cache(
                                         {
                                             let key = (path_str.clone(), exported.clone());
                                             if !exported_func_param_counts.contains_key(&key) {
-                                                new_func_entries.push((key, param_count));
+                                                let has_rest = exported_func_has_rest
+                                                    .get(&key_src)
+                                                    .copied()
+                                                    .unwrap_or(false);
+                                                new_func_entries.push((key, param_count, has_rest));
                                             }
                                         }
                                     }
@@ -1818,8 +1133,11 @@ pub fn run_with_parse_cache(
         if new_func_entries.is_empty() {
             break;
         }
-        for (key, param_count) in new_func_entries {
-            exported_func_param_counts.insert(key, param_count);
+        for (key, param_count, has_rest) in new_func_entries {
+            exported_func_param_counts.insert(key.clone(), param_count);
+            if has_rest {
+                exported_func_has_rest.insert(key, true);
+            }
         }
     }
 
@@ -2125,7 +1443,11 @@ pub fn run_with_parse_cache(
     };
 
     // Pre-compute native library FFI functions
-    let ffi_functions: Vec<(String, Vec<String>, String)> = ctx
+    let ffi_functions: Vec<(
+        String,
+        Vec<perry_api_manifest::NativeAbiType>,
+        perry_api_manifest::NativeAbiType,
+    )> = ctx
         .native_libraries
         .iter()
         .flat_map(|lib| {
@@ -2135,9 +1457,26 @@ pub fn run_with_parse_cache(
         })
         .collect();
 
+    // #1110 (follow-up): every loaded `perry.nativeLibrary` static
+    // archive carries unresolved references to `perry_ffi_promise_new`
+    // / `perry_ffi_promise_resolve_bits` / `perry_ffi_spawn_blocking`
+    // (the C-ABI shims that perry-ffi declares and perry-stdlib
+    // defines — see `crates/perry-stdlib/src/perry_ffi_async.rs`).
+    // Wrappers like `@perryts/storekit` invariably use them — every
+    // `returns: "promise"` manifest entry compiles to a perry-ffi
+    // call site that pulls the symbol in. If the user's TS source
+    // never touched anything else from `perry-stdlib`'s surface, the
+    // existing `ctx.needs_stdlib` heuristic stayed `false` and the
+    // link command was `Linking (runtime-only)…`, with the
+    // perry_ffi_* symbols then surfacing as `Undefined symbols for
+    // architecture arm64` at the final ld step. Force-enable stdlib
+    // linkage whenever any nativeLibrary manifest is loaded.
+    if !ctx.native_libraries.is_empty() {
+        ctx.needs_stdlib = true;
+    }
+
     // Pre-compute JS module specifiers
     let js_module_specifiers: Vec<String> = ctx.js_modules.keys().cloned().collect();
-    let needs_js_runtime = ctx.needs_js_runtime || args.enable_js_runtime;
 
     // Compile native modules in parallel using rayon
 
@@ -2170,22 +1509,311 @@ pub fn run_with_parse_cache(
 
     // V2.2: Per-module object cache at `.perry-cache/objects/<target>/<key>.o`.
     // Disabled when the user passed `--no-cache`, when `PERRY_NO_CACHE=1`, or
-    // when we're in bitcode-link mode (the artifacts aren't object files).
+    // when we're in bitcode-link mode (the artifacts aren't object files), or
+    // when native-region verification is enabled and lowering must run.
     // Key derivation: `compute_object_cache_key(opts, source_hash, perry_version)`.
     let cache_env_disabled = std::env::var("PERRY_NO_CACHE").ok().as_deref() == Some("1");
-    let cache_enabled = !args.no_cache && !cache_env_disabled && !bitcode_link;
+    let verify_native_regions = args.verify_native_regions
+        || std::env::var("PERRY_VERIFY_NATIVE_REGIONS").ok().as_deref() == Some("1");
+    let disable_buffer_fast_path = args.disable_buffer_fast_path
+        || std::env::var("PERRY_DISABLE_BUFFER_FAST_PATH")
+            .ok()
+            .as_deref()
+            == Some("1");
+    let cache_enabled =
+        !args.no_cache && !cache_env_disabled && !bitcode_link && !verify_native_regions;
     // Target dir name for the cache layout. Using the resolved LLVM triple
     // keeps cross-compile caches from colliding with native-host caches.
     let cache_target_dir = target.as_deref().unwrap_or("host");
     let object_cache = ObjectCache::new(&ctx.project_root, cache_target_dir, cache_enabled);
     let perry_version = env!("CARGO_PKG_VERSION");
 
+    // Issue #100: precompute the dynamic-import plumbing so the rayon
+    // per-module compile worker has everything it needs.
+    //
+    //  1. `dyn_target_paths`: every native-module path that is the
+    //     target of at least one `await import("...")` site anywhere
+    //     in the program. Those modules need a `__perry_ns_<prefix>`
+    //     global emitted + populated at the end of their `__init`.
+    //  2. `path_to_module_name`: lookup from resolved path back to the
+    //     `Module::name` string used for flatten_exports / Export
+    //     source-key resolution.
+    //  3. `per_module_namespace_entries`: for each dynamic-import
+    //     target, the resolved `NamespaceEntry` list — driven by
+    //     `flatten_exports` then enriched with kind info (Var /
+    //     Function / Class / NestedNamespace) by walking the source
+    //     module's HIR. Computed once here so the parallel codegen
+    //     workers don't need cross-module HIR access.
+    //  4. `per_module_dyn_import_targets`: for each module's own
+    //     `Expr::DynamicImport` sites, the map from path-arg string
+    //     to target sanitized prefix. Codegen at the dispatch site
+    //     reads `@__perry_ns_<target_prefix>`.
+    let sanitize_module_name = |s: &str| -> String {
+        let mut out: String = s
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        if out
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+        {
+            out.insert(0, '_');
+        }
+        out
+    };
+    let mut path_to_module_name: HashMap<PathBuf, String> = HashMap::new();
+    let mut module_name_to_path: HashMap<String, PathBuf> = HashMap::new();
+    for (path, hir_module) in &ctx.native_modules {
+        path_to_module_name.insert(path.clone(), hir_module.name.clone());
+        module_name_to_path.insert(hir_module.name.clone(), path.clone());
+    }
+    // Build a normalized HIR-by-name map for `flatten_exports`. Each
+    // module's `Export::ReExport::source`, `Export::ExportAll::source`,
+    // and `Export::NamespaceReExport::source` strings hold the raw
+    // specifier as written in source (`"./inner.ts"`); flatten_exports
+    // keys its lookup on `Module::name`. Rewrite the source field of
+    // every export to the target module's `Module::name` (via
+    // `resolve_import` → `path_to_module_name`) so the cross-module
+    // lookup resolves the right HIR.
+    let mut module_name_to_module: HashMap<String, perry_hir::Module> = HashMap::new();
+    for (path, hir_module) in &ctx.native_modules {
+        let mut rewritten = hir_module.clone();
+        for export in rewritten.exports.iter_mut() {
+            match export {
+                perry_hir::Export::ReExport { source, .. }
+                | perry_hir::Export::ExportAll { source }
+                | perry_hir::Export::NamespaceReExport { source, .. } => {
+                    if let Some((resolved_path, _)) = resolve_import(
+                        source,
+                        path,
+                        &ctx.project_root,
+                        &ctx.compile_packages,
+                        &ctx.compile_package_dirs,
+                    ) {
+                        if let Some(name) = path_to_module_name.get(&resolved_path) {
+                            *source = name.clone();
+                        }
+                    }
+                }
+                perry_hir::Export::Named { .. } => {}
+            }
+        }
+        module_name_to_module.insert(hir_module.name.clone(), rewritten);
+    }
+    // Set of native-module paths that are dynamic-import targets. We
+    // also build a parallel set keyed by Module::name for flatten_exports.
+    let mut dyn_target_paths: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    for (_path, hir_module) in &ctx.native_modules {
+        for import in &hir_module.imports {
+            // `is_dynamic` covers dynamic-only synthetic edges;
+            // `is_dynamic_target` (#1672) covers a static edge that is
+            // ALSO the target of a dynamic `import()` in the same module.
+            // Both need the target to emit `@__perry_ns_<prefix>`.
+            if !(import.is_dynamic || import.is_dynamic_target) {
+                continue;
+            }
+            if let Some(rp) = &import.resolved_path {
+                dyn_target_paths.insert(PathBuf::from(rp));
+            }
+        }
+    }
+    // Per-module precomputed namespace_entries (keyed by path).
+    let mut per_module_namespace_entries: HashMap<PathBuf, Vec<perry_codegen::NamespaceEntry>> =
+        HashMap::new();
+    for target_path in &dyn_target_paths {
+        let target_hir = match ctx.native_modules.get(target_path) {
+            Some(m) => m,
+            None => continue, // native/JS module — handled elsewhere
+        };
+        let target_name = target_hir.name.clone();
+        let lookup = |s: &str| module_name_to_module.get(s);
+        let flat = perry_hir::flatten_exports(&target_name, &lookup);
+        let mut entries: Vec<perry_codegen::NamespaceEntry> = Vec::new();
+        for fe in flat {
+            // Locate source module's HIR (where the binding lives).
+            let source_mod = module_name_to_module.get(&fe.source_module);
+            let source_prefix = source_mod
+                .map(|m| sanitize_module_name(&m.name))
+                .unwrap_or_else(|| sanitize_module_name(&fe.source_module));
+            let kind = if let Some(nested) = &fe.nested_namespace_of {
+                let nested_prefix = module_name_to_module
+                    .get(nested)
+                    .map(|m| sanitize_module_name(&m.name))
+                    .unwrap_or_else(|| sanitize_module_name(nested));
+                perry_codegen::NamespaceEntryKind::NestedNamespace {
+                    source_prefix: nested_prefix,
+                }
+            } else if fe.source_module == target_name {
+                // Local binding — find what kind it is in target_hir.
+                if let Some(func) = target_hir
+                    .functions
+                    .iter()
+                    .find(|f| f.name == fe.source_local)
+                {
+                    let scoped = format!(
+                        "perry_fn_{}__{}",
+                        sanitize_module_name(&target_hir.name),
+                        sanitize_module_name(&func.name)
+                    );
+                    perry_codegen::NamespaceEntryKind::LocalFunction {
+                        wrap_symbol: format!("__perry_wrap_{}", scoped),
+                    }
+                } else if let Some(class) = target_hir
+                    .classes
+                    .iter()
+                    .find(|c| c.name == fe.source_local)
+                {
+                    perry_codegen::NamespaceEntryKind::LocalClass {
+                        class_id: class.id as u32,
+                    }
+                } else if let Some(global) = target_hir
+                    .globals
+                    .iter()
+                    .find(|g| g.name == fe.source_local)
+                {
+                    let gname = format!(
+                        "perry_global_{}__{}",
+                        sanitize_module_name(&target_hir.name),
+                        global.id
+                    );
+                    perry_codegen::NamespaceEntryKind::LocalVar { global_name: gname }
+                } else {
+                    // Best-effort: treat unknown locals as Var sourced
+                    // by getter. This covers re-export shapes that the
+                    // local-detection misses; the cross-module getter
+                    // for the same module returns the value too.
+                    perry_codegen::NamespaceEntryKind::ForeignVar {
+                        source_prefix: sanitize_module_name(&target_hir.name),
+                        source_local: fe.source_local.clone(),
+                    }
+                }
+            } else {
+                // Cross-module binding. Determine if it's a function in
+                // the source module so codegen can emit the closure
+                // singleton path; otherwise treat as a foreign var
+                // (`perry_fn_<src>__<local>()` getter).
+                if let Some(src) = source_mod {
+                    if let Some(func) = src.functions.iter().find(|f| f.name == fe.source_local) {
+                        perry_codegen::NamespaceEntryKind::ForeignFunction {
+                            source_prefix: source_prefix.clone(),
+                            source_local: fe.source_local.clone(),
+                            param_count: func.params.len(),
+                        }
+                    } else if let Some(class) =
+                        src.classes.iter().find(|c| c.name == fe.source_local)
+                    {
+                        perry_codegen::NamespaceEntryKind::LocalClass {
+                            class_id: class.id as u32,
+                        }
+                    } else {
+                        perry_codegen::NamespaceEntryKind::ForeignVar {
+                            source_prefix: source_prefix.clone(),
+                            source_local: fe.source_local.clone(),
+                        }
+                    }
+                } else {
+                    perry_codegen::NamespaceEntryKind::ForeignVar {
+                        source_prefix: source_prefix.clone(),
+                        source_local: fe.source_local.clone(),
+                    }
+                }
+            };
+            entries.push(perry_codegen::NamespaceEntry {
+                name: fe.name,
+                kind,
+            });
+        }
+        per_module_namespace_entries.insert(target_path.clone(), entries);
+    }
+    // For each consumer module, map every `Expr::DynamicImport` arg-path
+    // string (as resolved in `collect_modules`) to the target's
+    // sanitized prefix. Built by scanning the consumer's imports for
+    // `is_dynamic == true` (dynamic-only edges) or `is_dynamic_target ==
+    // true` (#1672: a static edge that is also a dynamic-import target)
+    // and reading the `source` + `resolved_path`.
+    let mut per_module_dyn_import_targets: HashMap<PathBuf, HashMap<String, String>> =
+        HashMap::new();
+    for (path, hir_module) in &ctx.native_modules {
+        let mut local_map: HashMap<String, String> = HashMap::new();
+        for import in &hir_module.imports {
+            if !(import.is_dynamic || import.is_dynamic_target) {
+                continue;
+            }
+            let rp = match &import.resolved_path {
+                Some(p) => PathBuf::from(p),
+                None => {
+                    // #1671: a dynamic `import('hono/jsx/server')` resolves to a
+                    // known node-submodule with no compiled-source backing — the
+                    // runtime ships its namespace. Record a sentinel prefix the
+                    // dynamic-import codegen recognises and routes to
+                    // `js_node_submodule_namespace` (instead of rejecting).
+                    if let Some(key) =
+                        self::collect_modules::known_node_submodule_key(&import.source)
+                    {
+                        local_map.insert(import.source.clone(), format!("__node_submod__{}", key));
+                    } else if import.is_native {
+                        // #1673: a dynamic `import('node:crypto')` /
+                        // `import('node:util')` targets a general native builtin
+                        // that is NOT in the node-submodule table and has no
+                        // compiled-source backing. The runtime builds its
+                        // namespace object via `js_create_native_module_namespace`
+                        // (the same object `require('node:crypto')` and `import *
+                        // as` produce). Record a `__native_mod__<name>` sentinel,
+                        // keyed by the `node:`-stripped module name, that the
+                        // dynamic-import codegen routes to that builder. An
+                        // unsupported builtin never reaches here (`is_native` is
+                        // false for it → no map entry → the dispatch rejects,
+                        // matching Node's failure mode).
+                        let native_name = import
+                            .source
+                            .strip_prefix("node:")
+                            .unwrap_or(&import.source);
+                        local_map.insert(
+                            import.source.clone(),
+                            format!("__native_mod__{}", native_name),
+                        );
+                    }
+                    continue;
+                }
+            };
+            let target_name = match path_to_module_name.get(&rp) {
+                Some(n) => n.clone(),
+                None => continue,
+            };
+            let target_prefix = sanitize_module_name(&target_name);
+            local_map.insert(import.source.clone(), target_prefix);
+        }
+        if !local_map.is_empty() {
+            per_module_dyn_import_targets.insert(path.clone(), local_map);
+        }
+    }
+
+    let total_codegen_modules = ctx.native_modules.len();
+    let codegen_modules_started = AtomicUsize::new(0);
     let compile_results: Vec<Result<(PathBuf, Vec<u8>), String>> = ctx
         .native_modules
         .par_iter()
         .map(|(path, hir_module)| {
             // Compile this module to LLVM IR (or .ll text in bitcode-link mode)
             // and return the object bytes for the linker to consume.
+            let codegen_index = codegen_modules_started.fetch_add(1, Ordering::Relaxed) + 1;
+            progress.record(ProgressSnapshot {
+                stage: "codegen",
+                module_path: Some(path),
+                module_name: Some(&hir_module.name),
+                visited: Some(codegen_index),
+                total: Some(total_codegen_modules),
+                collected: Some(total_codegen_modules),
+                ..Default::default()
+            });
             let is_entry = path == &entry_path;
             // Compute the prefix list of non-entry modules so the
             // entry main can call each `<prefix>__init` in order.
@@ -2239,6 +1867,82 @@ pub fn run_with_parse_cache(
             } else {
                 Vec::new()
             };
+            // Issue #753: every module receives the program-wide set of
+            // Deferred module prefixes. The entry main filters these
+            // out of its eager init call sequence; non-entry modules
+            // ignore it. Empty when no module in the program is
+            // Deferred (i.e. no dynamic `import()` sites).
+            let deferred_module_prefixes: std::collections::HashSet<String> = ctx
+                .native_modules
+                .iter()
+                .filter(|(_, m)| m.init_kind == perry_hir::ModuleInitKind::Deferred)
+                .map(|(_, m)| sanitize_name(&m.name))
+                .collect();
+            // Issue #753: prefixes of this module's static-import +
+            // re-export source modules (non-entry only — the entry's
+            // body is in `main`, not a `__init`). The wrapper at
+            // `<prefix>__init` calls each dep's `__init` before
+            // dispatching to `<prefix>__init_body`; this transitively
+            // initializes any Deferred dep reached only through this
+            // module's re-export chain. For Eager modules the calls
+            // short-circuit on the idempotent guard's first-write
+            // check (one load + cmp + cond_br each).
+            let module_init_deps: Vec<String> = if is_entry {
+                Vec::new()
+            } else {
+                let mut deps: Vec<String> = Vec::new();
+                let mut seen: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                let entry_prefix = ctx
+                    .native_modules
+                    .get(&entry_path)
+                    .map(|m| sanitize_name(&m.name));
+                let push_dep = |deps: &mut Vec<String>,
+                                seen: &mut std::collections::HashSet<String>,
+                                prefix: String| {
+                    if Some(&prefix) == entry_prefix.as_ref() {
+                        return;
+                    }
+                    if seen.insert(prefix.clone()) {
+                        deps.push(prefix);
+                    }
+                };
+                for import in &hir_module.imports {
+                    if import.is_dynamic || import.type_only {
+                        continue;
+                    }
+                    if let Some(resolved) = &import.resolved_path {
+                        let resolved_path = PathBuf::from(resolved);
+                        if let Some(src_mod) = ctx.native_modules.get(&resolved_path) {
+                            push_dep(&mut deps, &mut seen, sanitize_name(&src_mod.name));
+                        }
+                    }
+                }
+                for export in &hir_module.exports {
+                    let src = match export {
+                        perry_hir::Export::ExportAll { source } => Some(source.clone()),
+                        perry_hir::Export::ReExport { source, .. } => Some(source.clone()),
+                        perry_hir::Export::NamespaceReExport { source, .. } => {
+                            Some(source.clone())
+                        }
+                        perry_hir::Export::Named { .. } => None,
+                    };
+                    if let Some(src) = src {
+                        if let Some((resolved_path, _)) = resolve_import(
+                            &src,
+                            path,
+                            &ctx.project_root,
+                            &ctx.compile_packages,
+                            &ctx.compile_package_dirs,
+                        ) {
+                            if let Some(src_mod) = ctx.native_modules.get(&resolved_path) {
+                                push_dep(&mut deps, &mut seen, sanitize_name(&src_mod.name));
+                            }
+                        }
+                    }
+                }
+                deps
+            };
             // Build import → source-prefix table for cross-module
             // ExternFuncRef calls. For each Named import in this
             // module, look up the source module's HIR by resolved
@@ -2246,7 +1950,68 @@ pub fn run_with_parse_cache(
             // to generate `perry_fn_<source_prefix>__<name>`.
             let mut import_function_prefixes: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
+            // Issue #678: parallel to `import_function_prefixes`. When the
+            // import traverses a re-export rename (`export { default as render
+            // } from './render.js'`), the consumer sees `render` but the
+            // origin module emits the symbol with its own export name
+            // (`default`). This map captures the consumer-name → origin-name
+            // override so every `perry_fn_<src>__<suffix>` construction site
+            // can pick the right suffix. Absent entries (the common case)
+            // mean no rename — the consumer name is the origin name.
+            let mut import_function_origin_names:
+                std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            // Issue #678 followup: imports landing in `ModuleKind::Interpreted`
+            // (V8 fallback). The codegen probes this map BEFORE
+            // `perry_fn_<src>__<name>` symbol formation and routes hits
+            // through `js_call_v8_export(specifier, name, args, argc)`.
+            // Pre-fix, V8-backed imports were silently dropped from
+            // `import_function_prefixes`, so the consumer's call
+            // emitted a bare `call double @<name>` against an
+            // undefined symbol — every `import { render } from "ink"`
+            // (or similar where the package fell back to V8) failed at
+            // link time with `Undefined symbols: _perry_fn_..._render`.
+            let mut import_function_v8_specifiers:
+                std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            // Issue #841: named-import → (submodule_key, exported_name)
+            // for the five recognized Node submodules with no perry-stdlib
+            // backing. Populated by a dedicated pass below; consumed by
+            // codegen's `Expr::ExternFuncRef` value-form catch-all.
+            let mut import_function_node_submodule:
+                std::collections::HashMap<String, (String, String)> =
+                std::collections::HashMap::new();
+            // Issue #841 companion: local-namespace → submodule_key for
+            // `import * as ns from "node:<submod>"`.
+            let mut namespace_node_submodules:
+                std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            // Issue #678 followup (namespace branch): local-namespace →
+            // V8 module specifier for `import * as ns from "<v8-module>"`.
+            // Populated in the V8-imports pass below at the same site that
+            // would otherwise no-op on `ImportSpecifier::Namespace`. Used
+            // by codegen's StaticMethodCall / namespace-member-call
+            // lowering to route `ns.member(args)` through
+            // `js_call_v8_export` when nothing else seeded
+            // `import_function_prefixes` for the member.
+            let mut namespace_v8_specifiers:
+                std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            // Issue #680: per-namespace member resolution. Disambiguates
+            // `random.make` vs `tracer.make` when multiple namespaces
+            // export the same member name. Keyed by `(namespace_local,
+            // member_name)` → `source_prefix`.
+            let mut namespace_member_prefixes: std::collections::HashMap<(String, String), String> =
+                std::collections::HashMap::new();
             let mut namespace_imports: Vec<String> = Vec::new();
+            // Issue #321: subset of `namespace_imports` populated only by the
+            // named-import-of-namespace-reexport branch below (`import { Effect
+            // } from "effect"` where effect's index.ts has `export * as Effect
+            // from "./Effect.js"`). The codegen's StaticMethodCall arm consults
+            // this to decide whether it can route var-shape members through
+            // `js_closure_callN`; see the field doc in codegen.rs.
+            let mut namespace_reexport_named_imports: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
             let mut imported_classes: Vec<perry_codegen::ImportedClass> = Vec::new();
             let mut imported_enums: Vec<(String, Vec<(String, perry_hir::EnumValue)>)> = Vec::new();
             let mut imported_async_set: std::collections::HashSet<String> =
@@ -2255,11 +2020,86 @@ pub fn run_with_parse_cache(
                 std::collections::HashMap::new();
             let mut imported_return_types: std::collections::HashMap<String, perry_types::Type> =
                 std::collections::HashMap::new();
+            // Issue #608 — set of imported function names whose source-side
+            // signature has a trailing `...rest` parameter. Built alongside
+            // `imported_param_counts` from the source module's
+            // `exported_func_has_rest` table; consulted by the cross-module
+            // call site in `lower_call.rs` to bundle trailing args into a
+            // single rest array. Sparse set (only `true` entries stored).
+            let mut imported_has_rest: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            // #1816: imported functions whose trailing param is the synthesized
+            // `arguments` rest — the cross-module call must bundle ALL args into
+            // it, not just trailing. Built alongside `imported_has_rest`.
+            let mut imported_synthetic_arguments: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
             let mut imported_vars: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
 
+            // Issue #629: register namespace imports BEFORE the main
+            // resolution loop so unresolved-source bindings still flow
+            // to the codegen's `namespace_imports` set. Without this,
+            // the early `continue` for unresolved imports below means
+            // `import * as fsp from "node:fs/promises"` (when
+            // fs/promises has no perry-stdlib backing) leaves `fsp`
+            // off the namespace list — the catch-all in
+            // `Expr::ExternFuncRef` then returns TAG_TRUE and
+            // `typeof fsp === "boolean"`. Registering here lets the
+            // catch-all route through `js_unresolved_namespace_stub`
+            // (typeof "object", missing properties → undefined).
+            //
+            // Issue #684: skip WHOLE-DECL type-only imports
+            // (`import type * as X from "..."`). They're erased at
+            // runtime — the local binding never appears in any
+            // value-position expression, so registering it as a
+            // namespace would only widen the per-namespace member
+            // map below. Per-specifier type-only (`import { type Foo,
+            // bar }`) is still handled because the same import has
+            // value specifiers; the whole-decl flag is the one that
+            // makes the entire import a no-op.
+            for import in &hir_module.imports {
+                if import.type_only {
+                    continue;
+                }
+                for spec in &import.specifiers {
+                    if let perry_hir::ImportSpecifier::Namespace { local } = spec {
+                        if !namespace_imports.contains(&local) {
+                            namespace_imports.push(local.clone());
+                        }
+                    }
+                }
+            }
+
             for import in &hir_module.imports {
                 if import.module_kind != perry_hir::ModuleKind::NativeCompiled {
+                    continue;
+                }
+                // Issue #684: skip WHOLE-DECL type-only imports
+                // (`import type * as X`, `import type { Foo }`). They
+                // contribute zero runtime state — neither the namespace
+                // binding nor the named members ever appear in a
+                // value-position expression after type erasure. Pre-fix
+                // the loop below treated them like value imports and
+                // registered every export of the source module into
+                // `import_function_prefixes` / `namespace_member_prefixes`,
+                // which collided with later named-import registrations:
+                //   effect's `ParseResult.ts` has both
+                //     `import { TaggedError } from "./Data.js"`
+                //     `import type * as Schema from "./Schema.js"`
+                //   Schema.ts also exports `TaggedError`, so the type-only
+                //   loop iteration registered `TaggedError → Schema_ts`
+                //   into `import_function_prefixes`. If Schema.ts was
+                //   processed AFTER Data.ts (HashMap iteration order is
+                //   unstable), the Schema entry won — and top-level
+                //   `class ParseError extends TaggedError("ParseError")`
+                //   dispatched into Schema.ts's `TaggedError` instead of
+                //   Data.ts's. Worse, Schema.ts is type-only so it isn't
+                //   in `module_init_deps` either, meaning its backing
+                //   global was still 0.0 — `js_closure_call1(0.0, ...)`
+                //   threw `TypeError: value is not a function` during
+                //   `ParseResult.ts__init`. Closes #684 (companion to
+                //   #680's `module_init_deps` filter at L3234).
+                if import.type_only {
                     continue;
                 }
                 let resolved_path = match &import.resolved_path {
@@ -2276,6 +2116,23 @@ pub fn run_with_parse_cache(
                     Some(m) => sanitize_name(&m.name),
                     None => continue,
                 };
+                // PerryTS/storekit#1: when the import source is a package that
+                // declares `perry.nativeLibrary` (e.g. `@perryts/storekit`),
+                // its `.ts` source is a wrapper holding ambient `export
+                // declare function` signatures — the real implementation lives
+                // in the linked static library. There is no Perry wrapper
+                // symbol `perry_fn_<src>__<name>` for the source to emit, so
+                // registering the FFI specifier in `import_function_prefixes`
+                // would route the caller through an undefined wrapper and
+                // fail at link time. The per-specifier skip below lets
+                // `lower_call.rs` fall through to the FFI-manifest path
+                // (consults `ctx.ffi_signatures`, emits the call against the
+                // FFI symbol declared in `package.json :: perry.nativeLibrary.
+                // functions` plus a matching `declare external`).
+                let native_library_for_import = ctx
+                    .native_libraries
+                    .iter()
+                    .find(|nl| nl.module == import.source);
 
                 for spec in &import.specifiers {
                     // Handle namespace imports (import * as X)
@@ -2288,10 +2145,53 @@ pub fn run_with_parse_cache(
                                     compute_module_prefix(origin_path, &ctx.project_root);
                                 import_function_prefixes
                                     .insert(export_name.clone(), origin_prefix.clone());
+                                // Issue #678: surface origin-name overrides
+                                // for namespace-imported members too. A
+                                // member reached via a re-export rename
+                                // (`export { default as foo }`) needs the
+                                // codegen to call `perry_fn_<origin>__default`
+                                // when the consumer writes `ns.foo()`.
+                                if let Some(origin_name) = all_module_export_origin_names
+                                    .get(&resolved_path_str)
+                                    .and_then(|m| m.get(export_name))
+                                {
+                                    if origin_name != export_name {
+                                        import_function_origin_names
+                                            .insert(export_name.clone(), origin_name.clone());
+                                    }
+                                }
+                                // Issue #680: also register under the
+                                // per-namespace key so `random.make` and
+                                // `tracer.make` can be disambiguated.
+                                namespace_member_prefixes.insert(
+                                    (local.clone(), export_name.clone()),
+                                    origin_prefix.clone(),
+                                );
 
                                 let key = (origin_path.clone(), export_name.clone());
                                 if let Some(&param_count) = exported_func_param_counts.get(&key) {
                                     imported_param_counts.insert(export_name.clone(), param_count);
+                                }
+                                if exported_func_has_rest.get(&key).copied().unwrap_or(false) {
+                                    imported_has_rest.insert(export_name.clone());
+                                }
+                                if exported_func_synthetic_arguments.contains(&key) {
+                                    imported_synthetic_arguments.insert(export_name.clone());
+                                }
+                                // Issue #636: namespace-imported vars must
+                                // route through the zero-arg getter at
+                                // call sites (`ns.fn(args)` where `fn` is a
+                                // `let`/`const` binding holding a closure
+                                // — the canonical `export const make = (s)
+                                // => ...` shape). Without this, the codegen
+                                // falls through to the direct-call path
+                                // which treats the getter's return value
+                                // as the call result instead of invoking
+                                // the closure with `args`. Mirrors the
+                                // named-import branch at the var-detection
+                                // arm below.
+                                if exported_var_names.contains(&key) {
+                                    imported_vars.insert(export_name.clone());
                                 }
                                 if let Some(class) = exported_classes.get(&key) {
                                     imported_classes.push(perry_codegen::ImportedClass {
@@ -2313,10 +2213,20 @@ pub fn run_with_parse_cache(
                                             .iter()
                                             .map(|m| m.params.len())
                                             .collect(),
+                                        method_has_rest: class
+                                            .methods
+                                            .iter()
+                                            .map(|m| m.params.iter().any(|p| p.is_rest))
+                                            .collect(),
                                         static_method_names: class
                                             .static_methods
                                             .iter()
                                             .map(|m| m.name.clone())
+                                            .collect(),
+                                        static_field_names: class
+                                            .static_fields
+                                            .iter()
+                                            .map(|f| f.name.clone())
                                             .collect(),
                                         getter_names: class
                                             .getters
@@ -2332,11 +2242,13 @@ pub fn run_with_parse_cache(
                                         field_names: class
                                             .fields
                                             .iter()
+                                            .filter(|f| f.key_expr.is_none())
                                             .map(|f| f.name.clone())
                                             .collect(),
                                         field_types: class
                                             .fields
                                             .iter()
+                                            .filter(|f| f.key_expr.is_none())
                                             .map(|f| f.ty.clone())
                                             .collect(),
                                         source_class_id: Some(class.id),
@@ -2359,6 +2271,21 @@ pub fn run_with_parse_cache(
                         }
                         perry_hir::ImportSpecifier::Namespace { .. } => unreachable!(),
                     };
+
+                    // PerryTS/storekit#1: skip the wrapper-fn registration
+                    // when this specifier names an FFI function declared in
+                    // the source package's `perry.nativeLibrary.functions`
+                    // manifest. See the comment at `native_library_for_import`
+                    // above for the full rationale — the short version is
+                    // that the source `.ts` is ambient and has no Perry
+                    // wrapper for the linker to resolve, so we want the
+                    // FFI-manifest path in `lower_call.rs` to win.
+                    if native_library_for_import
+                        .map(|nl| nl.functions.iter().any(|f| f.name == exported_name))
+                        .unwrap_or(false)
+                    {
+                        continue;
+                    }
 
                     // Issue #310: when the source module re-exports the
                     // imported name as a namespace (`export * as Foo from
@@ -2396,17 +2323,63 @@ pub fn run_with_parse_cache(
                                     break;
                                 };
                                 namespace_imports.push(local_name.clone());
+                                // Issue #321: tag this local as a "named-import-
+                                // of-namespace-reexport" so codegen's
+                                // StaticMethodCall arm knows to route var-shape
+                                // members through `js_closure_callN`. See the
+                                // expr.rs StaticMethodCall comment for why this
+                                // is scoped narrowly.
+                                namespace_reexport_named_imports.insert(local_name.clone());
                                 for (export_name, origin_path) in target_exports {
                                     let origin_prefix =
                                         compute_module_prefix(origin_path, &ctx.project_root);
                                     import_function_prefixes
                                         .insert(export_name.clone(), origin_prefix.clone());
+                                    // Issue #678: surface origin-name overrides
+                                    // for the NamespaceReExport branch too.
+                                    if let Some(origin_name) = all_module_export_origin_names
+                                        .get(&ns_target_str)
+                                        .and_then(|m| m.get(export_name))
+                                    {
+                                        if origin_name != export_name {
+                                            import_function_origin_names
+                                                .insert(export_name.clone(), origin_name.clone());
+                                        }
+                                    }
 
                                     let key = (origin_path.clone(), export_name.clone());
                                     if let Some(&param_count) = exported_func_param_counts.get(&key)
                                     {
                                         imported_param_counts
                                             .insert(export_name.clone(), param_count);
+                                    }
+                                    if exported_func_has_rest.get(&key).copied().unwrap_or(false) {
+                                        imported_has_rest.insert(export_name.clone());
+                                    }
+                                    if exported_func_synthetic_arguments.contains(&key) {
+                                        imported_synthetic_arguments.insert(export_name.clone());
+                                    }
+                                    // Issue #321: NamespaceReExport members
+                                    // that are var-shaped exports (the
+                                    // canonical `export const succeed = (v) =>
+                                    // ...` shape in effect/Effect.ts and
+                                    // co-equivalent re-export hubs) must land
+                                    // in `imported_vars` so the codegen's
+                                    // StaticMethodCall and namespace-member
+                                    // call sites route through the zero-arg
+                                    // getter + `js_closure_callN`. Without
+                                    // this, `import { Effect } from "effect";
+                                    // Effect.succeed(42)` emitted a 1-arg
+                                    // direct call against the 0-arg getter
+                                    // — the source returned the closure
+                                    // pointer unchanged and `typeof
+                                    // Effect.succeed(42)` was `"function"`,
+                                    // and `runSync(program)` then threw
+                                    // `Cannot read properties of undefined`
+                                    // on `program._tag`. Mirrors the
+                                    // `Namespace { local }` branch above.
+                                    if exported_var_names.contains(&key) {
+                                        imported_vars.insert(export_name.clone());
                                     }
                                     if let Some(class) = exported_classes.get(&key) {
                                         imported_classes.push(perry_codegen::ImportedClass {
@@ -2428,10 +2401,20 @@ pub fn run_with_parse_cache(
                                                 .iter()
                                                 .map(|m| m.params.len())
                                                 .collect(),
+                                            method_has_rest: class
+                                                .methods
+                                                .iter()
+                                                .map(|m| m.params.iter().any(|p| p.is_rest))
+                                                .collect(),
                                             static_method_names: class
                                                 .static_methods
                                                 .iter()
                                                 .map(|m| m.name.clone())
+                                                .collect(),
+                                            static_field_names: class
+                                                .static_fields
+                                                .iter()
+                                                .map(|f| f.name.clone())
                                                 .collect(),
                                             getter_names: class
                                                 .getters
@@ -2447,11 +2430,13 @@ pub fn run_with_parse_cache(
                                             field_names: class
                                                 .fields
                                                 .iter()
+                                                .filter(|f| f.key_expr.is_none())
                                                 .map(|f| f.name.clone())
                                                 .collect(),
                                             field_types: class
                                                 .fields
                                                 .iter()
+                                                .filter(|f| f.key_expr.is_none())
                                                 .map(|f| f.ty.clone())
                                                 .collect(),
                                             source_class_id: Some(class.id),
@@ -2472,21 +2457,31 @@ pub fn run_with_parse_cache(
 
                     let key = (resolved_path_str.clone(), exported_name.clone());
 
-                    // Resolve effective prefix (follow re-exports)
-                    let effective_prefix =
+                    // Resolve the ORIGIN path of `exported_name` by following
+                    // re-exports. `index.js`'s `export { pgTable } from "./table.js"`
+                    // means the immediate import resolves to index.js but the
+                    // actual `Let pgTable = (...) => ...` lives in table.js. The
+                    // `exported_var_names` set is keyed by the ORIGIN path, so
+                    // looking up `(index.js, "pgTable")` misses; we need to walk
+                    // the re-export chain to find table.js. Refs #420.
+                    let origin_path: String =
                         if let Some(exports) = all_module_exports.get(&resolved_path_str) {
-                            if let Some(origin_path) = exports.get(&exported_name) {
-                                if origin_path != &resolved_path_str {
-                                    compute_module_prefix(origin_path, &ctx.project_root)
-                                } else {
-                                    source_prefix.clone()
-                                }
+                            if let Some(p) = exports.get(&exported_name) {
+                                p.clone()
                             } else {
-                                source_prefix.clone()
+                                resolved_path_str.clone()
                             }
                         } else {
-                            source_prefix.clone()
+                            resolved_path_str.clone()
                         };
+                    let origin_key = (origin_path.clone(), exported_name.clone());
+
+                    // Resolve effective prefix (follow re-exports)
+                    let effective_prefix = if origin_path != resolved_path_str {
+                        compute_module_prefix(&origin_path, &ctx.project_root)
+                    } else {
+                        source_prefix.clone()
+                    };
 
                     import_function_prefixes
                         .insert(exported_name.clone(), effective_prefix.clone());
@@ -2495,9 +2490,107 @@ pub fn run_with_parse_cache(
                             .insert(local_name.clone(), effective_prefix.clone());
                     }
 
+                    // Issue #678: if the import chain renames through a
+                    // re-export (`export { default as render } from
+                    // './render.js'`), the symbol in the origin module
+                    // is `perry_fn_<origin>__default`, not
+                    // `perry_fn_<origin>__render`. Surface the deeper
+                    // origin name via `import_function_origin_names` so
+                    // the codegen can pick the right suffix when forming
+                    // the extern symbol. The map is sparse — entries are
+                    // only inserted when origin_name != exported_name.
+                    let resolved_origin_name = all_module_export_origin_names
+                        .get(&resolved_path_str)
+                        .and_then(|m| m.get(&exported_name))
+                        .cloned();
+                    if let Some(ref origin_name) = resolved_origin_name {
+                        if origin_name != &exported_name {
+                            import_function_origin_names
+                                .insert(exported_name.clone(), origin_name.clone());
+                            if local_name != exported_name {
+                                import_function_origin_names
+                                    .insert(local_name.clone(), origin_name.clone());
+                            }
+                        }
+                    }
+
+                    // Issue #35 (#321): companion to the HIR-side change in
+                    // `module_decl.rs` (Named specifier now registers
+                    // `(local, local)`, so an ALIASED named import's
+                    // `ExternFuncRef` carries the unique LOCAL name). The
+                    // origin module still emits its symbol under the EXPORTED
+                    // name, so map `local → exported_name` (or the deeper
+                    // re-export origin name when one applies) here so codegen
+                    // forms `perry_fn_<src>__<exported>` rather than
+                    // `perry_fn_<src>__<local>`. Mirrors the #901 Default-import
+                    // override below. Only needed when `local != exported`
+                    // (the alias case); the no-alias case carries the export
+                    // name verbatim. Skip if the re-export-rename block above
+                    // already inserted a (deeper) override for this local.
+                    if matches!(spec, perry_hir::ImportSpecifier::Named { .. })
+                        && local_name != exported_name
+                        && !import_function_origin_names.contains_key(&local_name)
+                    {
+                        import_function_origin_names
+                            .insert(local_name.clone(), exported_name.clone());
+                    }
+
+                    // Issue #901: companion to the HIR-side change at
+                    // `crates/perry-hir/src/lower.rs`'s Default specifier
+                    // (which now registers `(local, local)` instead of
+                    // `(local, "default")`). The HIR's `ExternFuncRef` now
+                    // carries the LOCAL name (unique per import site), so
+                    // `import_function_prefixes.get(local)` resolves to the
+                    // right source module. But the symbol the codegen emits
+                    // must still be `perry_fn_<src>__default` (or whatever
+                    // origin-name the source actually exports default as),
+                    // not `perry_fn_<src>__<local>` — the source module emits
+                    // its default-export symbol under the literal "default"
+                    // suffix. Insert the local→"default" override (or the
+                    // resolved origin name, when a re-export renamed it) so
+                    // every `perry_fn_<src>__<suffix>` construction site
+                    // probing `import_function_origin_names` picks the right
+                    // suffix. Pre-fix two same-file default imports of
+                    // different modules collided on the "default" key and
+                    // pino's `SORTING_ORDER.ASC` threw because `_req_9`
+                    // (`./lib/constants`) and `_req_10` (`./lib/tools`) both
+                    // resolved to `./lib/tools`. Pairs with the HIR change;
+                    // both must land for the resolution to be correct.
+                    if matches!(spec, perry_hir::ImportSpecifier::Default { .. }) {
+                        let suffix = resolved_origin_name
+                            .clone()
+                            .unwrap_or_else(|| exported_name.clone());
+                        import_function_origin_names
+                            .insert(local_name.clone(), suffix);
+                    }
+
                     // Imported variables (not functions) — ExternFuncRef-as-value
-                    // should call the getter, not wrap as closure.
-                    if exported_var_names.contains(&key) {
+                    // should call the getter, not wrap as closure. Look up by the
+                    // ORIGIN path (where the `Let X = ...` actually lives), not
+                    // the immediate import path. Without this, re-exports through
+                    // `index.js` barrel files (drizzle's `pg-core/index.js`,
+                    // hono's adapter index files, etc.) silently fall through to
+                    // the direct-call path which treats the zero-arg getter's
+                    // return value AS the call result — pgTable("users", cols)
+                    // returned the closure handle (typeof === "function") with no
+                    // pgTable body actually invoked.
+                    //
+                    // Issue #678 followup: when a re-export rename routes
+                    // the import through `export default <var>`, the origin
+                    // module's `exported_objects` carries the synthetic
+                    // "default" entry (the only thing exported at that
+                    // shape) — not the consumer-visible name. Probe both
+                    // keys so the var-vs-function classification fires
+                    // even when re-export renaming is in play.
+                    let origin_key_under_origin_name = resolved_origin_name
+                        .as_ref()
+                        .map(|n| (origin_path.clone(), n.clone()));
+                    if exported_var_names.contains(&origin_key)
+                        || origin_key_under_origin_name
+                            .as_ref()
+                            .map(|k| exported_var_names.contains(k))
+                            .unwrap_or(false)
+                    {
                         imported_vars.insert(exported_name.clone());
                         if local_name != exported_name {
                             imported_vars.insert(local_name.clone());
@@ -2506,6 +2599,89 @@ pub fn run_with_parse_cache(
 
                     // Imported classes
                     if let Some(class) = exported_classes.get(&key) {
+                        // Issue #665: when the user wrote `import X from "pkg"`
+                        // and `pkg`'s default export is a class, the importer
+                        // still registers `exported_name="default"` into
+                        // `import_function_prefixes` above. Codegen's wrapper-
+                        // emission loop iterates that map and — for any name
+                        // NOT in `imported_class_names` — emits a function
+                        // wrapper that calls `perry_fn_<src>__default`, which
+                        // the source module never defines (the source only has
+                        // a `_Child_constructor` symbol). That declares an
+                        // unresolved extern and the link step errors with
+                        // `Undefined symbols: ___perry_wrap_perry_fn_<src>__default`.
+                        // Push a SECOND ImportedClass entry whose `local_alias`
+                        // is the exported_name (`"default"` for default imports,
+                        // or the original-name for `{ Foo as Bar }`-style
+                        // renames). codegen's `imported_class_names` builder
+                        // adds both `ic.name` and `ic.local_alias`, so the
+                        // exported_name lands in the set and the wrapper-
+                        // emission loop takes the `is_class` no-op-stub branch
+                        // instead of declaring a phantom function. The second
+                        // entry also registers `class_ids[exported_name]`,
+                        // letting consumer-side `Expr::ExternFuncRef { name:
+                        // exported_name }` resolve to the class-id NaN-box.
+                        if local_name != exported_name {
+                            imported_classes.push(perry_codegen::ImportedClass {
+                                name: class.name.clone(),
+                                local_alias: Some(exported_name.clone()),
+                                source_prefix: effective_prefix.clone(),
+                                constructor_param_count: class
+                                    .constructor
+                                    .as_ref()
+                                    .map(|c| c.params.len())
+                                    .unwrap_or(0),
+                                method_names: class
+                                    .methods
+                                    .iter()
+                                    .map(|m| m.name.clone())
+                                    .collect(),
+                                method_param_counts: class
+                                    .methods
+                                    .iter()
+                                    .map(|m| m.params.len())
+                                    .collect(),
+                                method_has_rest: class
+                                    .methods
+                                    .iter()
+                                    .map(|m| m.params.iter().any(|p| p.is_rest))
+                                    .collect(),
+                                static_method_names: class
+                                    .static_methods
+                                    .iter()
+                                    .map(|m| m.name.clone())
+                                    .collect(),
+                                static_field_names: class
+                                    .static_fields
+                                    .iter()
+                                    .map(|f| f.name.clone())
+                                    .collect(),
+                                getter_names: class
+                                    .getters
+                                    .iter()
+                                    .map(|(n, _)| n.clone())
+                                    .collect(),
+                                setter_names: class
+                                    .setters
+                                    .iter()
+                                    .map(|(n, _)| n.clone())
+                                    .collect(),
+                                parent_name: class.extends_name.clone(),
+                                field_names: class
+                                    .fields
+                                    .iter()
+                                    .filter(|f| f.key_expr.is_none())
+                                    .map(|f| f.name.clone())
+                                    .collect(),
+                                field_types: class
+                                    .fields
+                                    .iter()
+                                    .filter(|f| f.key_expr.is_none())
+                                    .map(|f| f.ty.clone())
+                                    .collect(),
+                                source_class_id: Some(class.id),
+                            });
+                        }
                         imported_classes.push(perry_codegen::ImportedClass {
                             name: class.name.clone(),
                             local_alias: if local_name != class.name {
@@ -2525,16 +2701,36 @@ pub fn run_with_parse_cache(
                                 .iter()
                                 .map(|m| m.params.len())
                                 .collect(),
+                            method_has_rest: class
+                                .methods
+                                .iter()
+                                .map(|m| m.params.iter().any(|p| p.is_rest))
+                                .collect(),
                             static_method_names: class
                                 .static_methods
                                 .iter()
                                 .map(|m| m.name.clone())
                                 .collect(),
+                            static_field_names: class
+                                .static_fields
+                                .iter()
+                                .map(|f| f.name.clone())
+                                .collect(),
                             getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
                             setter_names: class.setters.iter().map(|(n, _)| n.clone()).collect(),
                             parent_name: class.extends_name.clone(),
-                            field_names: class.fields.iter().map(|f| f.name.clone()).collect(),
-                            field_types: class.fields.iter().map(|f| f.ty.clone()).collect(),
+                            field_names: class
+                                .fields
+                                .iter()
+                                .filter(|f| f.key_expr.is_none())
+                                .map(|f| f.name.clone())
+                                .collect(),
+                            field_types: class
+                                .fields
+                                .iter()
+                                .filter(|f| f.key_expr.is_none())
+                                .map(|f| f.ty.clone())
+                                .collect(),
                             source_class_id: Some(class.id),
                         });
                     }
@@ -2544,6 +2740,22 @@ pub fn run_with_parse_cache(
                         imported_param_counts.insert(exported_name.clone(), param_count);
                         if local_name != exported_name {
                             imported_param_counts.insert(local_name.clone(), param_count);
+                        }
+                    }
+
+                    // Issue #608 — propagate has_rest alongside the param
+                    // count so the cross-module call site can pack the
+                    // trailing args into a rest array.
+                    if exported_func_has_rest.get(&key).copied().unwrap_or(false) {
+                        imported_has_rest.insert(exported_name.clone());
+                        if local_name != exported_name {
+                            imported_has_rest.insert(local_name.clone());
+                        }
+                    }
+                    if exported_func_synthetic_arguments.contains(&key) {
+                        imported_synthetic_arguments.insert(exported_name.clone());
+                        if local_name != exported_name {
+                            imported_synthetic_arguments.insert(local_name.clone());
                         }
                     }
 
@@ -2640,18 +2852,223 @@ pub fn run_with_parse_cache(
                                 .iter()
                                 .map(|m| m.params.len())
                                 .collect(),
+                            method_has_rest: class
+                                .methods
+                                .iter()
+                                .map(|m| m.params.iter().any(|p| p.is_rest))
+                                .collect(),
                             static_method_names: class
                                 .static_methods
                                 .iter()
                                 .map(|m| m.name.clone())
                                 .collect(),
+                            static_field_names: class
+                                .static_fields
+                                .iter()
+                                .map(|f| f.name.clone())
+                                .collect(),
                             getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
                             setter_names: class.setters.iter().map(|(n, _)| n.clone()).collect(),
                             parent_name: class.extends_name.clone(),
-                            field_names: class.fields.iter().map(|f| f.name.clone()).collect(),
-                            field_types: class.fields.iter().map(|f| f.ty.clone()).collect(),
+                            field_names: class
+                                .fields
+                                .iter()
+                                .filter(|f| f.key_expr.is_none())
+                                .map(|f| f.name.clone())
+                                .collect(),
+                            field_types: class
+                                .fields
+                                .iter()
+                                .filter(|f| f.key_expr.is_none())
+                                .map(|f| f.ty.clone())
+                                .collect(),
                             source_class_id: Some(class.id),
                         });
+                    }
+                }
+            }
+
+            // Issue #678 followup: V8-fallback imports. Native imports above
+            // wire `perry_fn_<src>__<name>` extern symbols; V8 imports route
+            // through the runtime bridge instead. We populate BOTH
+            // `import_function_prefixes` (with a synthetic prefix so the
+            // codegen's `Some(source_prefix) = prefixes.get(name)` arm fires
+            // and the V8-specifier short-circuit inside it triggers) AND
+            // `import_function_v8_specifiers` (the actual specifier the bridge
+            // hands to `js_load_module`). The synthetic prefix never reaches
+            // a `perry_fn_...` symbol because every codegen site probes
+            // `import_function_v8_specifiers` first.
+            for import in &hir_module.imports {
+                if import.type_only {
+                    continue;
+                }
+                if import.module_kind != perry_hir::ModuleKind::Interpreted {
+                    continue;
+                }
+                // The V8 bridge takes a specifier string and resolves it
+                // through deno_core's Node loader — bare specifiers like
+                // "ink" and absolute paths both work. Prefer the resolved
+                // canonical path (matches the `JsModule.specifier` key in
+                // `ctx.js_modules`) so the same module-handle cache hits
+                // across imports of the same package from different sites.
+                let specifier = import
+                    .resolved_path
+                    .clone()
+                    .unwrap_or_else(|| import.source.clone());
+                let synthetic_prefix = format!("__v8__{}", sanitize_name(&specifier));
+                for spec in &import.specifiers {
+                    match spec {
+                        perry_hir::ImportSpecifier::Named { imported, local } => {
+                            import_function_prefixes
+                                .insert(local.clone(), synthetic_prefix.clone());
+                            import_function_v8_specifiers
+                                .insert(local.clone(), specifier.clone());
+                            if local != imported {
+                                import_function_prefixes
+                                    .insert(imported.clone(), synthetic_prefix.clone());
+                                import_function_v8_specifiers
+                                    .insert(imported.clone(), specifier.clone());
+                                // Issue #818 (Effect.succeed pattern) follow-up:
+                                // when an aliased named-import (`import { Foo
+                                // as Bar }`) of a V8 module is used as a
+                                // static-method receiver (`Bar.method(...)`),
+                                // the codegen's StaticMethodCall arm sees
+                                // class_name = "Bar" — but the V8 namespace
+                                // exposes the property under "Foo". Record the
+                                // local→imported mapping in
+                                // `import_function_origin_names` so the bridge
+                                // call reaches the right namespace property.
+                                // Without this, aliased Effect-shaped imports
+                                // would look up a missing property and fall to
+                                // undefined.
+                                import_function_origin_names
+                                    .insert(local.clone(), imported.clone());
+                            }
+                        }
+                        perry_hir::ImportSpecifier::Default { local } => {
+                            import_function_prefixes
+                                .insert(local.clone(), synthetic_prefix.clone());
+                            import_function_v8_specifiers
+                                .insert(local.clone(), specifier.clone());
+                            // #1195 — `import YAML from "yaml"` lands here.
+                            // When the local name is used as a static-method
+                            // receiver (`YAML.parse(...)`), the StaticMethodCall
+                            // arm in expr/static_method.rs looks up
+                            // `import_function_origin_names[class_name]` to
+                            // pick the namespace property name, falling back
+                            // to the local name. Without this insert, the
+                            // bridge would ask V8 for `ns.YAML` (which doesn't
+                            // exist on the proxy module's namespace; it
+                            // re-exports the default under the literal
+                            // "default" key). Record the local→"default"
+                            // override so the bridge resolves the right
+                            // namespace property.
+                            import_function_origin_names
+                                .insert(local.clone(), "default".to_string());
+                        }
+                        perry_hir::ImportSpecifier::Namespace { local } => {
+                            // Namespace bindings (`import * as X from "ink"`)
+                            // are already registered into `namespace_imports`
+                            // by the pre-loop above. For pure-namespace usage
+                            // with no companion `Named` import, the V8 module
+                            // has no static export list to register members
+                            // against — so we record `local → specifier` here.
+                            // The codegen's StaticMethodCall arm and the
+                            // namespace-member-call arm in `lower_call.rs`
+                            // probe `namespace_v8_specifiers` and, on a hit,
+                            // emit `js_call_v8_export(specifier, member,
+                            // args, argc)` so `R.sum([1,2,3])` (`import * as
+                            // R from "ramda"`) reaches V8 instead of falling
+                            // to the `double_literal(0.0)` stub. Unblocks
+                            // ramda / date-fns / jose / effect wildcard
+                            // namespace usage.
+                            namespace_v8_specifiers
+                                .insert(local.clone(), specifier.clone());
+                        }
+                    }
+                }
+            }
+
+            // Issue #841: register named + namespace imports from the
+            // five recognized Node submodules — `node:timers/promises`,
+            // `node:readline/promises`, `node:stream/promises`,
+            // `node:stream/consumers`, `node:sys`. These don't resolve
+            // to anything perry-stdlib can back, but the runtime ships
+            // a `js_node_submodule_export_as_function` helper that
+            // returns a function singleton for each known export, plus
+            // `js_node_submodule_namespace` for namespace shapes.
+            //
+            // Without this registration the codegen's `ExternFuncRef`
+            // value-form catch-all fell to TAG_TRUE, so `typeof
+            // setTimeout` (from `node:timers/promises`) reported
+            // `"boolean"` instead of `"function"`. Namespaces were
+            // hard-errored at module-collection time pre-fix
+            // (`collect_modules.rs::known_node_submodule_key`); they
+            // now flow through and land here.
+            for import in &hir_module.imports {
+                if import.type_only {
+                    continue;
+                }
+                let submod_key = match self::collect_modules::known_node_submodule_key(&import.source) {
+                    Some(k) => k.to_string(),
+                    None => continue,
+                };
+                for spec in &import.specifiers {
+                    match spec {
+                        perry_hir::ImportSpecifier::Named { imported, local } => {
+                            // #1213: node:timers named imports (`import {
+                            // setTimeout } from "node:timers"`) keep the global
+                            // timer codegen fast-path (which handles the
+                            // `setTimeout(fn, delay, ...args)` varargs form).
+                            // Routing them through the submodule thunk here
+                            // would drop varargs — only the `import * as`
+                            // namespace shape uses the submodule.
+                            if submod_key != "timers" {
+                                import_function_node_submodule.insert(
+                                    local.clone(),
+                                    (submod_key.clone(), imported.clone()),
+                                );
+                                if local != imported {
+                                    import_function_node_submodule.insert(
+                                        imported.clone(),
+                                        (submod_key.clone(), imported.clone()),
+                                    );
+                                }
+                            }
+                        }
+                        perry_hir::ImportSpecifier::Default { local } => {
+                            // Some historical submodules model their default
+                            // import as the namespace object. Other submodules
+                            // with CommonJS-style default objects route through
+                            // the explicit "default" export below.
+                            //
+                            if matches!(submod_key.as_str(), "timers" | "trace_events") {
+                                // Default imports of these modules are module
+                                // objects — route to the namespace so they work
+                                // like `import * as ...` (#1213, #2629).
+                                namespace_node_submodules
+                                    .insert(local.clone(), submod_key.clone());
+                                if !namespace_imports.contains(&local) {
+                                    namespace_imports.push(local.clone());
+                                }
+                            } else {
+                                // Default imports route to "default" — these
+                                // submodules either expose a real default
+                                // (`node:sys` aliases `node:util`) or need a
+                                // tracked placeholder to keep the catch-all
+                                // from firing on `import x from "node:..."`.
+                                import_function_node_submodule.insert(
+                                    local.clone(),
+                                    (submod_key.clone(), "default".to_string()),
+                                );
+                            }
+                        }
+                        perry_hir::ImportSpecifier::Namespace { local } => {
+                            namespace_node_submodules
+                                .insert(local.clone(), submod_key.clone());
+                            // Already in `namespace_imports` via the
+                            // pre-loop at L3441; nothing else to do.
+                        }
                     }
                 }
             }
@@ -2726,6 +3143,12 @@ pub fn run_with_parse_cache(
                     | "globalThis" | "this"
                     // Perry runtime / UI / system primitives
                     | "Widget" | "Color" | "Font" | "Image"
+                    // Perry native-memory marker types
+                    | "NativeArena" | "NativeArenaOwner"
+                    | "PerryPod" | "PerryPodView"
+                    | "PerryU32" | "PerryU64" | "PerryUSize"
+                    | "PerryF32" | "PerryF64" | "PerryI32" | "PerryI64"
+                    | "PerryBufferLen" | "PerryHandleId"
                 )
             }
             let mut local_known: std::collections::HashSet<String> =
@@ -2905,16 +3328,36 @@ pub fn run_with_parse_cache(
                                 .iter()
                                 .map(|m| m.params.len())
                                 .collect(),
+                            method_has_rest: class
+                                .methods
+                                .iter()
+                                .map(|m| m.params.iter().any(|p| p.is_rest))
+                                .collect(),
                             static_method_names: class
                                 .static_methods
                                 .iter()
                                 .map(|m| m.name.clone())
                                 .collect(),
+                            static_field_names: class
+                                .static_fields
+                                .iter()
+                                .map(|f| f.name.clone())
+                                .collect(),
                             getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
                             setter_names: class.setters.iter().map(|(n, _)| n.clone()).collect(),
                             parent_name: class.extends_name.clone(),
-                            field_names: class.fields.iter().map(|f| f.name.clone()).collect(),
-                            field_types: class.fields.iter().map(|f| f.ty.clone()).collect(),
+                            field_names: class
+                                .fields
+                                .iter()
+                                .filter(|f| f.key_expr.is_none())
+                                .map(|f| f.name.clone())
+                                .collect(),
+                            field_types: class
+                                .fields
+                                .iter()
+                                .filter(|f| f.key_expr.is_none())
+                                .map(|f| f.ty.clone())
+                                .collect(),
                             source_class_id: Some(class.id),
                         });
                     }
@@ -2934,29 +3377,137 @@ pub fn run_with_parse_cache(
             // the receiver class at every step of the chain.
             let mut visited_imports: std::collections::HashSet<String> =
                 imported_classes.iter().map(|ic| ic.name.clone()).collect();
-            let mut closure_worklist: Vec<String> = visited_imports.iter().cloned().collect();
-            while let Some(name) = closure_worklist.pop() {
-                let ic_idx = imported_classes.iter().position(|ic| ic.name == name);
-                let Some(idx) = ic_idx else { continue };
+            // Issue #26 / #321: a class's `extends` parent must be resolved in
+            // the CHILD's own source module — same-named classes in different
+            // modules (effect's `Type` in SchemaAST.ts vs ParseResult.ts) are
+            // distinct. The by-NAME `visited_imports` dedup above would import
+            // only the first `Type` seen and skip the SchemaAST one, so
+            // SchemaAST's `OptionalType extends Type` chain loses its real
+            // parent's fields. Track parent additions by (path, name) identity
+            // so the correct-module parent is pulled in even when its bare
+            // name was already visited. Codegen's prefix-disambiguated parent
+            // resolver then picks the right one.
+            let mut visited_parent_paths: std::collections::HashSet<(String, String)> =
+                std::collections::HashSet::new();
+            // Worklist of INDICES into `imported_classes` (not names): a name
+            // can map to several entries (same-named cross-module classes,
+            // refs #26), so we must process the exact entry we added, not the
+            // first by-name match.
+            let mut closure_worklist: Vec<usize> = (0..imported_classes.len()).collect();
+            while let Some(idx) = closure_worklist.pop() {
+                if idx >= imported_classes.len() {
+                    continue;
+                }
                 let field_types_clone = imported_classes[idx].field_types.clone();
-                for ty in &field_types_clone {
-                    let ref_name = match ty {
-                        perry_types::Type::Named(n) => n.clone(),
-                        perry_types::Type::Generic { base, .. } => base.clone(),
-                        _ => continue,
-                    };
-                    if visited_imports.contains(&ref_name) {
+                let parent_name_clone = imported_classes[idx].parent_name.clone();
+                // The child's own canonical source path, used to resolve its
+                // `extends` parent in the child's module scope.
+                let child_src_path: Option<String> = imported_classes[idx]
+                    .source_class_id
+                    .and_then(|cid| class_canonical_path.get(&cid).cloned());
+                // Issue #485: include the class's parent in the transitive
+                // closure too. Without this, `import { Sub } from 'pkg'` where
+                // `Sub extends Base` (and Base lives in another file inside
+                // the same package) leaves Base unimported on this side, so
+                // codegen builds Sub's per-class shape with zero parent-field
+                // contribution. Sub instances allocate too few inline slots
+                // and the parent's cross-module ctor's `this.field = …`
+                // writes overflow the object header — `f.field` reads
+                // undefined on the importing side.
+                //
+                // `is_parent_ref` marks the entry that came from `extends`
+                // (vs a field-type reference): parent refs get path-aware
+                // resolution + (path,name) dedup so the correct-module parent
+                // is imported even past the bare-name dedup. Field-type refs
+                // keep the legacy by-name behavior.
+                let refs: Vec<(String, bool)> = field_types_clone
+                    .iter()
+                    .filter_map(|ty| match ty {
+                        perry_types::Type::Named(n) => Some(n.clone()),
+                        perry_types::Type::Generic { base, .. } => Some(base.clone()),
+                        _ => None,
+                    })
+                    .map(|n| (n, false))
+                    .chain(parent_name_clone.into_iter().map(|n| (n, true)))
+                    .collect();
+                for (ref_name, is_parent_ref) in refs {
+                    // Issue #489: pick the canonical defining path for the
+                    // parent class (where `class N { ... }` actually lives)
+                    // rather than the first BTreeMap match by name (which
+                    // can be a re-export barrel). Without this, drizzle's
+                    // `MySqlPreparedQuery extends QueryPromise` chain pulls
+                    // QueryPromise in under `drizzle-orm/index.js` (because
+                    // `index.js` does `export * from "./query-promise.js"`
+                    // and sorts before `query-promise.js`), and the dispatch
+                    // table emits `perry_method_<index_js>__QueryPromise__then`
+                    // — undefined symbol at link time.
+                    //
+                    // Issue #26: for a parent ref, prefer the same-named class
+                    // in the CHILD's own source module before any global match.
+                    let found = is_parent_ref
+                        .then_some(())
+                        .and(child_src_path.as_ref())
+                        .and_then(|cp| {
+                            exported_classes
+                                .iter()
+                                .find(|((path, cname), _)| cname == &ref_name && path == cp)
+                        })
+                        .or_else(|| {
+                            exported_classes.iter().find(|((path, cname), class)| {
+                                cname == &ref_name
+                                    && class_canonical_path
+                                        .get(&class.id)
+                                        .map(|cp| cp == path)
+                                        .unwrap_or(true)
+                            })
+                        })
+                        .or_else(|| {
+                            exported_classes
+                                .iter()
+                                .find(|((_, cname), _)| cname == &ref_name)
+                        })
+                        .map(|((path, _), class)| (path.clone(), *class));
+                    // Dedup: parent refs key on (resolved_path, name) so a
+                    // distinct same-named parent in another module is still
+                    // imported; all other refs key on name only (legacy).
+                    if is_parent_ref {
+                        if let Some((src_path, _)) = &found {
+                            if !visited_parent_paths
+                                .insert((src_path.clone(), ref_name.clone()))
+                            {
+                                continue;
+                            }
+                            // Already have an entry under this name from a
+                            // DIFFERENT module: still add this (path,name)
+                            // variant so codegen can disambiguate, but skip
+                            // re-pushing to the worklist by name below.
+                        } else {
+                            continue;
+                        }
+                    } else if visited_imports.contains(&ref_name) {
                         continue;
                     }
-                    let found = exported_classes
-                        .iter()
-                        .find(|((_, cname), _)| cname == &ref_name)
-                        .map(|((path, _), class)| (path.clone(), *class));
                     if let Some((src_path, class)) = found {
                         let class_prefix = compute_module_prefix(&src_path, &ctx.project_root);
+                        // Issue #485: when the child's `parent_name` doesn't
+                        // match the source class's `class.name` (because the
+                        // parent was imported via a rename — `import { Base
+                        // as HBase } from './base.js'` or
+                        // `export { Base as HBase }` on the source side),
+                        // expose the stub under the alias the child knows.
+                        // Without this, codegen's `imported_class_stubs`
+                        // would register the parent under "Base" while the
+                        // child's `extends_name` is "HBase", and the
+                        // packed-keys / slot-index walker fails to traverse
+                        // the chain.
+                        let alias = if ref_name != class.name {
+                            Some(ref_name.clone())
+                        } else {
+                            None
+                        };
                         imported_classes.push(perry_codegen::ImportedClass {
                             name: class.name.clone(),
-                            local_alias: None,
+                            local_alias: alias,
                             source_prefix: class_prefix,
                             constructor_param_count: class
                                 .constructor
@@ -2969,20 +3520,42 @@ pub fn run_with_parse_cache(
                                 .iter()
                                 .map(|m| m.params.len())
                                 .collect(),
+                            method_has_rest: class
+                                .methods
+                                .iter()
+                                .map(|m| m.params.iter().any(|p| p.is_rest))
+                                .collect(),
                             static_method_names: class
                                 .static_methods
                                 .iter()
                                 .map(|m| m.name.clone())
                                 .collect(),
+                            static_field_names: class
+                                .static_fields
+                                .iter()
+                                .map(|f| f.name.clone())
+                                .collect(),
                             getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
                             setter_names: class.setters.iter().map(|(n, _)| n.clone()).collect(),
                             parent_name: class.extends_name.clone(),
-                            field_names: class.fields.iter().map(|f| f.name.clone()).collect(),
-                            field_types: class.fields.iter().map(|f| f.ty.clone()).collect(),
+                            field_names: class
+                                .fields
+                                .iter()
+                                .filter(|f| f.key_expr.is_none())
+                                .map(|f| f.name.clone())
+                                .collect(),
+                            field_types: class
+                                .fields
+                                .iter()
+                                .filter(|f| f.key_expr.is_none())
+                                .map(|f| f.ty.clone())
+                                .collect(),
                             source_class_id: Some(class.id),
                         });
                         visited_imports.insert(ref_name.clone());
-                        closure_worklist.push(ref_name);
+                        // Process the entry we just pushed (by index, so a
+                        // same-named distinct-module class isn't skipped). Refs #26.
+                        closure_worklist.push(imported_classes.len() - 1);
                     }
                 }
             }
@@ -3023,24 +3596,31 @@ pub fn run_with_parse_cache(
             } else {
                 Vec::new()
             };
-            let js_module_specifiers_vec: Vec<String> = if needs_js_runtime {
-                js_module_specifiers.clone()
-            } else {
-                Vec::new()
-            };
+            let js_module_specifiers_vec: Vec<String> = js_module_specifiers.clone();
 
             let opts = perry_codegen::CompileOptions {
                 target: resolved_triple,
                 is_entry_module: is_entry,
                 non_entry_module_prefixes,
                 import_function_prefixes,
+                import_function_origin_names,
+                import_function_v8_specifiers,
+                import_function_node_submodule,
+                namespace_node_submodules,
+                namespace_v8_specifiers,
+                namespace_member_prefixes,
                 emit_ir_only: bitcode_link,
+                verify_native_regions,
+                disable_buffer_fast_path,
                 namespace_imports,
+                namespace_reexport_named_imports,
                 imported_classes,
                 imported_enums,
                 imported_async_funcs: imported_async_set,
                 type_aliases: type_alias_map,
                 imported_func_param_counts: imported_param_counts,
+                imported_func_has_rest: imported_has_rest,
+                imported_func_synthetic_arguments: imported_synthetic_arguments,
                 imported_func_return_types: imported_return_types,
                 imported_vars,
 
@@ -3050,29 +3630,115 @@ pub fn run_with_parse_cache(
                 needs_ui: ctx.needs_ui,
                 needs_geisterhand: ctx.needs_geisterhand,
                 geisterhand_port: ctx.geisterhand_port,
-                needs_js_runtime,
                 enabled_features: compiled_features.clone(),
                 native_module_init_names: native_module_init_names_vec,
                 js_module_specifiers: js_module_specifiers_vec,
                 bundled_extensions: bundled_ext_vec,
                 native_library_functions: ffi_functions.clone(),
                 i18n_table: i18n_snapshot.clone(),
+                fast_math: ctx.fast_math,
+                fp_contract_mode: ctx.fp_contract_mode,
+                app_metadata: ctx.app_metadata.clone(),
+                // Issue #100: namespace_entries empty unless this
+                // module is a dynamic-import target; the consumer-side
+                // dispatch map is empty unless this module performs
+                // dynamic imports.
+                namespace_entries: per_module_namespace_entries
+                    .get(path)
+                    .cloned()
+                    .unwrap_or_default(),
+                dynamic_import_path_to_prefix: per_module_dyn_import_targets
+                    .get(path)
+                    .cloned()
+                    .unwrap_or_default(),
+                deferred_module_prefixes,
+                module_init_deps,
+                // Issue #842: signal side-effect-only dynamic-import
+                // targets to codegen so it still emits
+                // `@__perry_ns_<prefix>` + populator. `dyn_target_paths`
+                // is the authoritative set built from every consumer's
+                // `import.is_dynamic` resolved paths; `namespace_entries`
+                // alone is insufficient because it's empty when the
+                // target has no `export` statements.
+                is_dynamic_import_target: dyn_target_paths.contains(path),
             };
-            // V2.2 object cache lookup. The key hashes every codegen-affecting
-            // field of `opts` together with this module's source hash and the
-            // perry version. A hit returns the exact `.o` bytes we emitted
-            // the last time opts + source were identical — cross-run bit
-            // identity, not just semantic equivalence. A miss (no entry,
-            // disabled cache, or IO error) falls through to `compile_module`.
-            let cache_key = if object_cache.is_enabled() {
-                let source_hash = ctx.module_source_hashes.get(path).copied().unwrap_or(0);
-                Some(compute_object_cache_key(&opts, source_hash, perry_version))
+            // V2.2 + #686 object cache lookup. The key hashes every
+            // codegen-affecting field of `opts` together with this
+            // module's post-transform HIR fingerprint and the perry
+            // version. A hit returns the exact `.o` bytes we emitted
+            // the last time opts + HIR were identical — cross-run bit
+            // identity, not just semantic equivalence.
+            //
+            // The HIR fingerprint is computed inside this rayon job
+            // (paralelizes the cost across modules and avoids an extra
+            // serial O(modules) pass). Crucially, every HIR-mutating
+            // pass (inline_functions, unroll_static_loops,
+            // inline_finally_into_returns, transform_async_to_generator,
+            // transform_generators per-module; transform_js_imports,
+            // fix_local_native_instances, fix_cross_module_native_instances,
+            // monomorphize_module, perry_codegen_arkts::emit_index_ets,
+            // perry_transform::i18n::apply_i18n, fix_imported_enums
+            // cross-module) has already run by the time we get here, so
+            // the hash captures the exact tree that `compile_module`
+            // will consume. `compile_module` takes `&Module` (shared
+            // reference) — see crates/perry-codegen/src/codegen.rs:388 —
+            // so it cannot mutate the HIR after the hash is taken.
+            let (cache_key, hir_hash_for_diag) = if object_cache.is_enabled() {
+                let hir_hash = perry_hir::stable_hash::hash_module(hir_module);
+                (
+                    Some(compute_object_cache_key(&opts, hir_hash, perry_version)),
+                    Some(hir_hash),
+                )
             } else {
-                None
+                (None, None)
             };
             let object_code = match cache_key.and_then(|k| object_cache.lookup(k)) {
                 Some(bytes) => bytes,
                 None => {
+                    // PERRY_DEV_VERBOSE=1: report the per-module HIR + cache
+                    // key on every miss, so a user can diff hashes between
+                    // builds and answer "why didn't my cosmetic edit hit?"
+                    // (#686 acceptance criterion).
+                    if let (Some(k), Some(hh)) = (cache_key, hir_hash_for_diag) {
+                        if std::env::var("PERRY_DEV_VERBOSE").as_deref() == Ok("1") {
+                            eprintln!(
+                                "  • cache miss: {} hir={:016x} key={:016x}",
+                                hir_module.name, hh, k
+                            );
+                        }
+                        // PERRY_CACHE_DEBUG_HIR=1: also dump the post-transform
+                        // HIR of misses to .perry-cache/debug/<key>.txt so a
+                        // user can diff two miss-dumps and see exactly what
+                        // differed. Best-effort — IO errors never fail the
+                        // build.
+                        if std::env::var("PERRY_CACHE_DEBUG_HIR").as_deref() == Ok("1") {
+                            let dump_dir = ctx.project_root.join(".perry-cache").join("debug");
+                            if std::fs::create_dir_all(&dump_dir).is_ok() {
+                                let dump_path =
+                                    dump_dir.join(format!("{:016x}.txt", k));
+                                let _ = std::fs::write(
+                                    &dump_path,
+                                    format!(
+                                        "module: {}\npath: {}\nhir_hash: {:016x}\ncache_key: {:016x}\n\n{:#?}\n",
+                                        hir_module.name,
+                                        path.display(),
+                                        hh,
+                                        k,
+                                        hir_module,
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                    progress.heartbeat(ProgressSnapshot {
+                        stage: "codegen",
+                        module_path: Some(path),
+                        module_name: Some(&hir_module.name),
+                        visited: Some(codegen_index),
+                        total: Some(total_codegen_modules),
+                        collected: Some(total_codegen_modules),
+                        ..Default::default()
+                    });
                     let bytes = perry_codegen::compile_module(hir_module, opts).map_err(|e| {
                         format!(
                             "Error compiling module '{}' ({}) with --backend llvm: {:#}",
@@ -3205,6 +3871,24 @@ pub fn run_with_parse_cache(
             .map(|name| failed_modules.iter().any(|m| m == name))
             .unwrap_or(false);
 
+        // #3527: a per-module codegen failure produces a broken (or empty
+        // stub) object. The driver historically linked empty `<prefix>__init`
+        // stubs for *non-entry* failed modules and still reported success
+        // (`COMPILE_EXIT=0`). For a real program that's a false positive: the
+        // textbook Express app surfaced 49 modules failing codegen, linked
+        // anyway, and `Bus error: 10`d at launch with zero output. The exit
+        // code lied. Default to aborting the build on ANY module codegen
+        // failure so the failure is visible in the exit status. The old
+        // stub-link path — genuinely useful for the iterative "peel back one
+        // blocker at a time" debugging the issue author did — stays available
+        // behind `PERRY_ALLOW_PARTIAL_CODEGEN=1`.
+        let allow_partial = std::env::var_os("PERRY_ALLOW_PARTIAL_CODEGEN").is_some();
+        // A failed entry module always aborts: its `main` symbol is required
+        // by the linker and an empty `<prefix>__init` stub doesn't satisfy
+        // it. A non-entry failure aborts unless the partial-codegen hatch is
+        // set.
+        let will_abort = entry_failed || !allow_partial;
+
         let bar = "═".repeat(72);
         let (red_on, red_off, bold_on, bold_off) = if use_color {
             ("\x1b[1;31m", "\x1b[0m", "\x1b[1m", "\x1b[0m")
@@ -3212,23 +3896,28 @@ pub fn run_with_parse_cache(
             ("", "", "", "")
         };
         eprintln!();
+        eprintln!("{}{}{}", red_on, bar, red_off);
         if entry_failed {
-            eprintln!("{}{}{}", red_on, bar, red_off);
             eprintln!(
                 "{}✗ ENTRY MODULE FAILED TO COMPILE — REFUSING TO LINK{}",
                 red_on, red_off
             );
-            eprintln!("{}{}{}", red_on, bar, red_off);
+        } else if will_abort {
+            eprintln!(
+                "{}✗ {} module(s) failed to compile — REFUSING TO LINK{}",
+                red_on,
+                failed_modules.len(),
+                red_off
+            );
         } else {
-            eprintln!("{}{}{}", red_on, bar, red_off);
             eprintln!(
                 "{}⚠ {} module(s) failed to compile — linking with empty stubs{}",
                 red_on,
                 failed_modules.len(),
                 red_off
             );
-            eprintln!("{}{}{}", red_on, bar, red_off);
         }
+        eprintln!("{}{}{}", red_on, bar, red_off);
         eprintln!();
         for m in &failed_modules {
             let is_entry = Some(m.as_str()) == entry_module_name.as_deref();
@@ -3239,7 +3928,7 @@ pub fn run_with_parse_cache(
         if entry_failed {
             eprintln!("Aborting: the entry module's `main` symbol is required by the linker.");
             eprintln!("Fix the codegen errors above (search for `Error compiling module`)");
-            eprintln!("and re-run. The driver previously emitted an empty `_perry_init_*`");
+            eprintln!("and re-run. The driver previously emitted an empty `<prefix>__init`");
             eprintln!("stub here and continued to link, which produced the misleading");
             eprintln!("`Undefined symbols: \"_main\"` error far downstream.");
             eprintln!();
@@ -3247,11 +3936,83 @@ pub fn run_with_parse_cache(
                 "entry module '{}' failed to compile (see errors above)",
                 entry_module_name.as_deref().unwrap_or("?")
             ));
-        } else {
-            eprintln!("Continuing with linking. Empty `_perry_init_*` stubs will be");
-            eprintln!("emitted for the failed modules so the binary still links, but");
-            eprintln!("any code in those modules will be inert at runtime.");
+        } else if will_abort {
+            eprintln!(
+                "Aborting: {} module(s) above failed codegen. Linking the surviving",
+                failed_modules.len()
+            );
+            eprintln!("objects with empty stubs would produce a binary that crashes (Bus");
+            eprintln!("error / SIGSEGV) the moment any code in a failed module runs — so the");
+            eprintln!("build fails here rather than emitting a misleading COMPILE_EXIT=0.");
             eprintln!();
+            eprintln!("Fix the codegen errors above (search for `Error compiling module`),");
+            eprintln!("or set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`");
+            eprintln!("stubs for the failed modules and surface deeper errors during");
+            eprintln!("iterative debugging (the resulting binary is inert/unsafe in those");
+            eprintln!("modules and may crash at runtime).");
+            eprintln!();
+            return Err(anyhow!(
+                "{} module(s) failed to compile (see errors above); set \
+                 PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
+                failed_modules.len()
+            ));
+        } else {
+            eprintln!("PERRY_ALLOW_PARTIAL_CODEGEN=1 set: continuing with linking. Empty");
+            eprintln!("`<prefix>__init` stubs will be emitted for the failed modules so the");
+            eprintln!("binary still links, but any code in those modules will be inert at");
+            eprintln!("runtime (and may crash if actually invoked).");
+            eprintln!();
+        }
+    }
+
+    // #835 + #846: fold the codegen-side FFI provenance registry into
+    // ctx so the well-known flip and `needs_stdlib` decisions below see
+    // the symbols codegen actually emitted, not just the modules the
+    // user imported. Today, codegen for compiled-package code can emit
+    // (e.g.) `js_node_http_create_server` or `js_readable_stream_new`
+    // without any `import "node:http"` / `import "streams"` showing up
+    // in `ctx.native_module_imports` — Effect's `Stream`, Express's
+    // server, and similar shapes lower the FFI calls directly. The
+    // registry (`crates/perry-codegen/src/ext_registry.rs`) records
+    // every call-emission site against its providing crate; here we
+    // drain that record and route each entry through the existing
+    // `needs_stdlib` + `native_module_imports` machinery. Done before
+    // `build_optimized_libs` so `compute_required_features` and the
+    // well-known flip both see the augmented set.
+    {
+        use perry_codegen::ext_registry::{take_used_providers, OwnerKind};
+        let providers = take_used_providers();
+        for owner in providers {
+            match owner {
+                OwnerKind::Stdlib { feature } => {
+                    ctx.needs_stdlib = true;
+                    // Follow-up to #835/#846: codegen-emitted Stdlib
+                    // FFIs (Effect `Stream`, etc.) flip needs_stdlib
+                    // here, but the auto-optimize layer
+                    // (`build_optimized_libs`) rebuilds perry-stdlib
+                    // with only the features `compute_required_features`
+                    // derived from `native_module_imports` — which is
+                    // empty when no `import "streams"` appears in the
+                    // user TS. Without the feature, the symbol's
+                    // module is `#[cfg]`-gated out and the link fails
+                    // with "Undefined symbols: _js_readable_stream_…".
+                    // Inject the feature here so the rebuild includes
+                    // the providing module.
+                    if let Some(feat) = feature {
+                        ctx.extra_stdlib_features.insert(feat);
+                    }
+                }
+                OwnerKind::WellKnown(key) => {
+                    // Inserting into native_module_imports flips the
+                    // well-known mechanism for this binding. Also flip
+                    // `needs_stdlib` because the link step's
+                    // "Linking (with stdlib)..." vs "(runtime-only)"
+                    // gate is what brings the well-known libs onto the
+                    // command line (see link.rs:881-916).
+                    ctx.native_module_imports.insert(key.to_string());
+                    ctx.needs_stdlib = true;
+                }
+            }
         }
     }
 
@@ -3285,14 +4046,17 @@ pub fn run_with_parse_cache(
             .clone()
             .or_else(|| find_runtime_library(target.as_deref()).ok());
         let stdlib_lib_path = stdlib_lib_resolved.clone();
-        // Check if jsruntime will be used - if so, don't generate stubs for its symbols
-        let use_jsruntime = ctx.needs_js_runtime || args.enable_js_runtime;
         // Check if stdlib will be linked - if so, it provides perry_runtime symbols (no stubs needed)
         let target_is_windows = matches!(target.as_deref(), Some("windows"))
             || (cfg!(target_os = "windows") && target.is_none());
         let will_link_stdlib = (ctx.needs_stdlib || target_is_windows) && stdlib_lib_path.is_some();
-        let jsruntime_lib_path = if use_jsruntime {
-            find_jsruntime_library(target.as_deref())
+        // Issue #76 — when the wasm host is
+        // being linked, scan its archive so the `perry_wasm_host_*` symbols
+        // are recognised as defined and we don't synthesise empty stubs that
+        // would shadow the real implementations.
+        let use_wasm_host = ctx.needs_wasm_runtime || args.enable_wasm_runtime;
+        let wasm_host_lib_path = if use_wasm_host {
+            find_wasm_host_library(target.as_deref())
         } else {
             None
         };
@@ -3305,7 +4069,7 @@ pub fn run_with_parse_cache(
                 all_scan_paths.push(p.clone());
             }
         }
-        if let Some(ref p) = jsruntime_lib_path {
+        if let Some(ref p) = wasm_host_lib_path {
             all_scan_paths.push(p.clone());
         }
         // Scan UI library for defined symbols so we don't generate stubs for
@@ -3392,8 +4156,7 @@ pub fn run_with_parse_cache(
                             if st == "U" {
                                 if cn.starts_with("__export_") || cn.starts_with("__wrapper_") {
                                     local_undef.insert(cn.to_string());
-                                } else if !use_jsruntime
-                                    && !will_link_stdlib
+                                } else if !will_link_stdlib
                                     && (cn == "js_call_function"
                                         || cn == "js_load_module"
                                         || cn == "js_new_from_handle"
@@ -3502,9 +4265,12 @@ pub fn run_with_parse_cache(
                         }
                         OutputFormat::Json => {}
                     }
-                    // Clean up intermediate .ll files
-                    for ll in &ll_files {
-                        let _ = fs::remove_file(ll);
+                    // Clean up intermediate .ll files unless the caller
+                    // explicitly requested debuggable compiler artifacts.
+                    if !args.keep_intermediates {
+                        for ll in &ll_files {
+                            let _ = fs::remove_file(ll);
+                        }
                     }
                     // Replace obj_paths with the merged .o + any stubs
                     obj_paths = vec![linked_obj];
@@ -3532,7 +4298,9 @@ pub fn run_with_parse_cache(
                     perry_codegen::linker::compile_ll_to_object(&ll_text, target.as_deref())?;
                 let obj_path = p.with_extension("o");
                 fs::write(&obj_path, &obj_bytes)?;
-                let _ = fs::remove_file(p);
+                if !args.keep_intermediates {
+                    let _ = fs::remove_file(p);
+                }
                 new_obj_paths.push(obj_path);
             } else {
                 new_obj_paths.push(p.clone());
@@ -3545,23 +4313,77 @@ pub fn run_with_parse_cache(
     };
 
     // Generate JS bundle if needed
-    let _js_bundle_path = if ctx.needs_js_runtime && !ctx.js_modules.is_empty() {
+    let _js_bundle_path = if !ctx.js_modules.is_empty() {
         let bundle_path = generate_js_bundle(&ctx, Path::new("."))?;
         match format {
             OutputFormat::Text => println!("Generated JS bundle: {}", bundle_path.display()),
             OutputFormat::Json => {}
+        }
+        // Issue #818 follow-up: embed every JS module's source into the
+        // final binary too. The V8 fallback `ModuleLoader` consults this
+        // map before falling back to disk, so the resulting binary needs
+        // no `node_modules/` co-located at runtime. The compiled `.o`
+        // contributes a `__attribute__((constructor))` that calls
+        // `js_register_embedded_module` once per bundled file.
+        let tmp_dir = std::env::temp_dir().join(format!("perry-embed-{}", std::process::id()));
+        let _ = fs::create_dir_all(&tmp_dir);
+        match generate_embedded_js_object(&ctx, &tmp_dir) {
+            Ok(obj) => {
+                if matches!(format, OutputFormat::Text) {
+                    println!("Embedded JS bundle: {}", obj.display());
+                }
+                obj_paths.push(obj);
+            }
+            Err(e) => {
+                // Don't hard-fail — the on-disk `__perry_js_bundle.js`
+                // still exists and the runtime falls back to filesystem
+                // reads. Surface a warning so the build is visibly
+                // degraded rather than silently shipping a binary that
+                // requires `node_modules/`.
+                eprintln!(
+                    "warning: failed to embed JS bundle into binary ({}); the resulting binary will still require node_modules/ at runtime",
+                    e
+                );
+            }
         }
         Some(bundle_path)
     } else {
         None
     };
 
-    let stem = args
+    let raw_stem = args
         .input
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("output");
+    // Issue #500: the input file stem flows into argv as `-o <stem>.dylib`
+    // (and friends) to the linker. A pathological input filename like
+    // `@evil.ts` re-triggers the ld64 response-file class of bug
+    // (originally fixed in #467 for `package.json` names only). Route
+    // through the shared sanitizer so the entire char-class is scrubbed
+    // at one fuzz-tested choke point.
+    let stem_owned = super::sanitize::sanitize_for_linker_argv(raw_stem);
+    let stem = stem_owned.as_str();
     let is_dylib = args.output_type == "dylib";
+    // #1088 — staticlib output: a Rust/C/C++ host links our `.a` / `.lib`
+    // alongside `libperry_runtime.a` (and friends) and drives the event
+    // loop itself via the FFI surface in `perry-runtime/src/event_pump.rs`
+    // (`perry_poll`, `perry_has_work`, `perry_next_wake_ms`,
+    // `perry_set_wake_callback`). Behaves like `dylib` at the codegen
+    // layer (no `main` emission, `perry_module_init` entrypoint), but the
+    // link step uses `ar` instead of `cc -shared`.
+    let is_staticlib = args.output_type == "staticlib";
+    // #854: kept as documentation of the library-output predicate; the
+    // exe_path closure below branches on is_dylib/is_staticlib directly,
+    // so this aggregate is currently unread.
+    let _is_library_output = is_dylib || is_staticlib;
+    // Capture the args fields that helpers downstream of the
+    // `args.output.unwrap_or_else(...)` partial-move still need.
+    // Per the saved feedback note on this file: any helper extracted
+    // from `run_with_parse_cache` after this point must take individual
+    // fields, not `&CompileArgs`.
+    let input_path_owned: PathBuf = args.input.clone();
+    let app_bundle_id_owned: Option<String> = args.app_bundle_id.clone();
     let exe_path = args.output.unwrap_or_else(|| {
         if is_dylib {
             #[cfg(target_os = "macos")]
@@ -3571,6 +4393,17 @@ pub fn run_with_parse_cache(
             #[cfg(not(target_os = "macos"))]
             {
                 PathBuf::from(format!("{}.so", stem))
+            }
+        } else if is_staticlib {
+            // #1088 — Windows hosts expect `.lib`; everywhere else uses
+            // the Unix `lib<stem>.a` convention so the archive is reachable
+            // from `-l<stem>` at the host's link step.
+            if matches!(target.as_deref(), Some("windows"))
+                || (target.is_none() && cfg!(target_os = "windows"))
+            {
+                PathBuf::from(format!("{}.lib", stem))
+            } else {
+                PathBuf::from(format!("lib{}.a", stem))
             }
         } else if matches!(
             target.as_deref(),
@@ -3591,26 +4424,134 @@ pub fn run_with_parse_cache(
     });
 
     if !failed_modules.is_empty() {
-        // The loud failure summary + entry-module abort already ran
-        // earlier (right after the parallel compile loop), so by the
-        // time we get here we know the entry module compiled OK and
-        // every entry in `failed_modules` is a non-entry module that
-        // we're consciously stubbing out so the binary can still link.
-        // Generate one empty `_perry_init_*` per failed module — the
-        // entry main calls each non-entry init in order, so the symbols
-        // need to exist or the linker will fail.
+        // The loud failure summary + abort already ran earlier (right
+        // after the parallel compile loop). #3527: reaching this block
+        // with a non-empty `failed_modules` now implies the caller set
+        // `PERRY_ALLOW_PARTIAL_CODEGEN=1` — without it, any module failure
+        // returns `Err` up there. So by the time we get here we know the
+        // entry module compiled OK and every entry in `failed_modules` is
+        // a non-entry module the caller has explicitly opted to stub out
+        // so the binary can still link.
+        // Generate one empty `<prefix>__init` per failed module — the
+        // entry main and any consumer module call each non-entry init
+        // in order, so the symbols need to exist or the linker fails.
+        //
+        // #837 fix: the old format was `_perry_init_<sanitized>`, which
+        // was the naming convention before the codegen switched to
+        // `<prefix>__init` for module initializers (see
+        // crates/perry-codegen/src/codegen.rs:4668). The stub symbols
+        // never matched the consumer-side declarations, so any program
+        // with a failed-but-stubbable module dep — for example uuid's
+        // sha1.js, which v5.js imports and the codegen can't yet lower
+        // because of Uint8Array.of with 20 args — failed at link with
+        // `Undefined symbols: _<prefix>__init`. Tracking the codegen
+        // naming closes the link without papering over the underlying
+        // module-failure: the binary still links, the stubbed module
+        // body is inert, and any actual call into the missing exports
+        // remains the symptom that surfaces the real bug.
+        let sanitize_module_name = |m: &str| -> String {
+            let mut out: String = m
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                out.insert(0, '_');
+            }
+            out
+        };
         let stub_init_names: Vec<String> = failed_modules
             .iter()
-            .map(|m| {
-                let sanitized = m.replace(|c: char| !c.is_alphanumeric() && c != '_', "_");
-                format!("_perry_init_{}", sanitized)
-            })
+            .map(|m| format!("{}__init", sanitize_module_name(m)))
             .collect();
-        if !stub_init_names.is_empty() {
-            let stub_bytes = perry_codegen::stubs::generate_stub_object(
+        // #903 follow-up (uuid regression): also emit closure-wrapper
+        // stubs for the named exports of each failed module. Pre-#903 a
+        // consumer's `import sha1 from "./sha1.js"` collided in the
+        // shared `import_function_prefixes["default"]` slot with the
+        // same file's `import v35 from "./v35.js"`, so the consumer-
+        // side reference resolved to v35.js's wrapper symbol — which
+        // existed because v35.js compiles fine. #903 corrected the
+        // resolution so each default binding tracks its own source,
+        // which surfaced uuid's preexisting sha1.js codegen failure
+        // (`Uint8Array.of` with 20 args bails at lower_call.rs:~3226)
+        // as a link error: `__perry_wrap_perry_fn_<sha1.js>__default`
+        // is referenced by v5.js but never defined because sha1.js's
+        // compile aborted before reaching the wrapper-emission loops
+        // in codegen.rs:~2697 / ~2810.
+        //
+        // The link error is the symptom; the root cause (sha1.js
+        // codegen) stays open. Emit no-op wrapper stubs so the link
+        // succeeds — consumers that never call into the failed module
+        // (uuid `v4()` is the canonical case; it doesn't use sha1)
+        // run correctly, and consumers that DO call in observe a
+        // NaN-boxed undefined return value (matching the inert
+        // `__init` behavior).
+        let mut stub_wrapper_names: Vec<String> = Vec::new();
+        let mut stub_func_names: Vec<String> = Vec::new();
+        for module_name in &failed_modules {
+            let prefix = sanitize_module_name(module_name);
+            // Look up the module's HIR (parse + lower succeeded; only
+            // codegen failed, so the exports are known). The
+            // `failed_modules` entry is `hir.name` from the codegen
+            // error message at the par_iter site, not the original
+            // path key, so iterate the native_modules map to find
+            // the matching HIR.
+            let Some(hir) = ctx.native_modules.values().find(|h| h.name == *module_name) else {
+                continue;
+            };
+            for export in &hir.exports {
+                if let perry_hir::Export::Named { exported, .. } = export {
+                    let sanitized_exp = exported
+                        .chars()
+                        .map(|c| {
+                            if c.is_ascii_alphanumeric() || c == '_' {
+                                c
+                            } else {
+                                '_'
+                            }
+                        })
+                        .collect::<String>();
+                    // Closure-wrapper form: consumer reads the import
+                    // as a function value (`js_closure_alloc_singleton(
+                    // @__perry_wrap_perry_fn_<src>__<name>)`).
+                    let wrap_sym = format!("__perry_wrap_perry_fn_{}__{}", prefix, sanitized_exp);
+                    stub_wrapper_names.push(wrap_sym);
+                    // Direct-call form: consumer invokes the import
+                    // by name (`perry_fn_<src>__<name>(args…)`). For
+                    // a failed module the function never received a
+                    // body, so emit a nullary stub returning undefined.
+                    // The link only cares about the symbol existing;
+                    // an arity mismatch at the call site lowers to an
+                    // LLVM `call` with whatever args the consumer
+                    // pushed — the body just discards them and
+                    // returns undefined. Same fallback shape the
+                    // empty `<prefix>__init` stub uses.
+                    let direct_sym = format!("perry_fn_{}__{}", prefix, sanitized_exp);
+                    stub_func_names.push(direct_sym);
+                }
+            }
+        }
+        // Combine the `__init` stubs and the direct-call stubs into
+        // one `missing_func_symbols` bucket — both share the nullary-
+        // returning-undefined shape. Dedup to keep LLVM from
+        // complaining about duplicate definitions in case the same
+        // export is named twice (e.g. an alias).
+        stub_func_names.extend(stub_init_names);
+        stub_func_names.sort();
+        stub_func_names.dedup();
+        stub_wrapper_names.sort();
+        stub_wrapper_names.dedup();
+        if !stub_func_names.is_empty() || !stub_wrapper_names.is_empty() {
+            let stub_bytes = perry_codegen::stubs::generate_stub_object_full(
                 &[],
-                &stub_init_names,
+                &stub_func_names,
                 &[],
+                &stub_wrapper_names,
                 target.as_deref(),
             )?;
             let stub_path = PathBuf::from("_perry_failed_stubs.o");
@@ -3664,9 +4605,145 @@ pub fn run_with_parse_cache(
         || (target.is_none() && cfg!(target_os = "linux"));
     let _is_windows = matches!(target.as_deref(), Some("windows"))
         || (target.is_none() && cfg!(target_os = "windows"));
-    // is_watchos / is_tvos are defined below (near jsruntime_lib).
+    // is_watchos / is_tvos are defined below (near the per-platform link step).
     // The is_cross_* bindings used to live here, but they're now derived
     // inside `link::build_and_run_link` which is the only consumer.
+
+    // #1088 — staticlib output: bundle the object files into a `.a` / `.lib`
+    // archive. Skip runtime / stdlib linking entirely; the Rust/C/C++ host
+    // is expected to link `libperry_runtime.a` (and any extension archives
+    // it uses) alongside our archive at its own link step. Codegen already
+    // emits `perry_module_init` instead of `main` (see is_dylib branch in
+    // codegen/entry.rs, which now also covers `staticlib`).
+    if is_staticlib {
+        let is_windows_target = matches!(target.as_deref(), Some("windows"))
+            || (target.is_none() && cfg!(target_os = "windows"));
+        // Best-effort: drop a stale archive first so `ar` doesn't append to a
+        // previous build's contents.
+        let _ = fs::remove_file(&exe_path);
+        let mut cmd = if is_windows_target {
+            // MSVC `lib.exe` is the standard host on Windows; mingw users
+            // can override with `AR=...` since `cc::ar_name()` parity isn't
+            // available here.
+            let mut c = Command::new("lib.exe");
+            c.arg(format!("/OUT:{}", exe_path.display()));
+            c
+        } else {
+            let mut c = Command::new("ar");
+            // `c` create, `r` insert/replace, `s` write index. Matches what
+            // rustc invokes via cc-rs for `crate-type = staticlib`.
+            c.arg("crs").arg(&exe_path);
+            c
+        };
+        for obj_path in &obj_paths {
+            cmd.arg(obj_path);
+        }
+        let status = cmd.status()?;
+        if !status.success() {
+            return Err(anyhow!("Archiving staticlib failed"));
+        }
+
+        match format {
+            OutputFormat::Text => println!("Wrote static archive: {}", exe_path.display()),
+            OutputFormat::Json => {
+                println!("{{\"output\": \"{}\"}}", exe_path.display());
+            }
+        }
+
+        // #1088 follow-up: emit `<output>.linkdeps.json` next to the archive
+        // so the host's build system can discover exactly which extra
+        // archives it must add to its own link line. Perry already resolved
+        // this set above (build_optimized_libs, the well-known table flips,
+        // jsruntime / wasm-host finders) — emit it as a machine-readable
+        // sidecar instead of forcing hosts to scrape the build log or
+        // re-derive it from `well_known_bindings.toml`.
+        // `libfoo.a` -> `libfoo.linkdeps.json`, `foo.lib` -> `foo.linkdeps.json`.
+        // Drops the archive extension so the sidecar isn't named
+        // `*.a.linkdeps.json`, which trips some tooling that strips file
+        // extensions to derive a target's "name".
+        let manifest_path = exe_path.with_extension("linkdeps.json");
+        let mut link_archives: Vec<serde_json::Value> = Vec::new();
+        let push_archive = |link_archives: &mut Vec<serde_json::Value>, role: &str, path: &Path| {
+            let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            link_archives.push(serde_json::json!({
+                "role": role,
+                "path": abs.display().to_string(),
+            }));
+        };
+        let runtime_lib_for_manifest = optimized_libs
+            .runtime
+            .clone()
+            .or_else(|| find_runtime_library(target.as_deref()).ok());
+        if let Some(p) = &runtime_lib_for_manifest {
+            push_archive(&mut link_archives, "runtime", p);
+        }
+        if let Some(p) = &stdlib_lib_resolved {
+            push_archive(&mut link_archives, "stdlib", p);
+        }
+        if ctx.needs_wasm_runtime || args.enable_wasm_runtime {
+            if let Some(p) = find_wasm_host_library(target.as_deref()) {
+                push_archive(&mut link_archives, "wasm-host", &p);
+            }
+        }
+        if ctx.needs_ui {
+            if let Some(p) = find_ui_library(target.as_deref()) {
+                push_archive(&mut link_archives, "ui", &p);
+            }
+        }
+        for p in &optimized_libs.well_known_libs {
+            push_archive(&mut link_archives, "well-known", p);
+        }
+        let archive_abs = exe_path.canonicalize().unwrap_or_else(|_| exe_path.clone());
+        let manifest = serde_json::json!({
+            "version": 1,
+            "archive": archive_abs.display().to_string(),
+            "entry_symbol": "perry_module_init",
+            "target": target.clone().unwrap_or_else(|| "native".to_string()),
+            "link_archives": link_archives,
+        });
+        if let Err(e) = fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).unwrap_or_default(),
+        ) {
+            // Best-effort: a failed sidecar write shouldn't fail the
+            // build — the archive is the load-bearing artifact, the
+            // manifest is convenience. Surface the error so the host
+            // can fall back to scraping `--verbose` output if needed.
+            eprintln!(
+                "warning: failed to write linkdeps manifest at {}: {}",
+                manifest_path.display(),
+                e
+            );
+        } else if let OutputFormat::Text = format {
+            println!("Wrote link manifest: {}", manifest_path.display());
+        }
+
+        if !args.keep_intermediates {
+            for obj_path in &obj_paths {
+                let _ = fs::remove_file(obj_path);
+            }
+        }
+
+        let codegen_cache_stats = if object_cache.is_enabled() {
+            Some((
+                object_cache.hits(),
+                object_cache.misses(),
+                object_cache.stores(),
+                object_cache.store_errors(),
+            ))
+        } else {
+            None
+        };
+        return Ok(CompileResult {
+            output_path: exe_path,
+            target: target.clone().unwrap_or_else(|| "native".to_string()),
+            bundle_id: None,
+            // Reuse the dylib flag downstream — both library outputs share the
+            // "no embedded event loop, host drives `perry_module_init`" shape.
+            is_dylib: true,
+            codegen_cache_stats,
+        });
+    }
 
     // For dylib output, skip runtime/stdlib linking — symbols resolve from host at dlopen time
     if is_dylib {
@@ -3734,44 +4811,74 @@ pub fn run_with_parse_cache(
     // prebuilt one. Auto-mode never enables panic=abort when geisterhand
     // is on, so the geisterhand path always uses the prebuilt variant.
     let runtime_lib = if ctx.needs_geisterhand {
-        if let Some(gh_rt) = find_geisterhand_runtime(target.as_deref()) {
-            gh_rt
-        } else {
-            find_runtime_library(target.as_deref())?
+        // The geisterhand-enabled runtime/UI/registry libs live in
+        // target/geisterhand and are auto-built on first use. On a cold
+        // build they don't exist yet at this point — the link step builds
+        // any missing ones, but that runs *after* runtime_lib is resolved.
+        // Build them now, before selecting the runtime, so we don't fall
+        // through to find_runtime_library() and pick the *host* runtime
+        // (wrong target + wrong feature set). That fallback is what makes a
+        // cold `--target ios --enable-geisterhand` fail with "building for
+        // 'iOS-simulator', but linking in object file built for 'macOS'"
+        // (#1311 Ask #2). This mirrors the missing-libs check in the link
+        // step and is idempotent — that check then finds them present.
+        let gh_missing = find_geisterhand_runtime(target.as_deref()).is_none()
+            || find_geisterhand_library(target.as_deref()).is_none()
+            || (ctx.needs_stdlib && find_geisterhand_stdlib(target.as_deref()).is_none())
+            || (ctx.needs_ui && find_geisterhand_ui(target.as_deref()).is_none());
+        if gh_missing {
+            build_geisterhand_libs(target.as_deref(), format)?;
+        }
+        match find_geisterhand_runtime(target.as_deref()) {
+            Some(gh_rt) => gh_rt,
+            None => find_runtime_library(target.as_deref())?,
         }
     } else if let Some(auto_rt) = optimized_libs.runtime.clone() {
         auto_rt
     } else {
         find_runtime_library(target.as_deref())?
     };
-    let stdlib_lib = stdlib_lib_resolved.clone();
+    // #1383 — under --enable-geisterhand, prefer the geisterhand-built stdlib
+    // over the auto-optimized one. `build_geisterhand_libs` (already run above
+    // when selecting `runtime_lib`) compiles perry-stdlib into target/geisterhand
+    // with its full default feature set (incl. `async-runtime` → the
+    // `perry_ffi_promise_*` shims) against the geisterhand-featured, hash-
+    // consistent perry-runtime. The auto-optimized stdlib (`stdlib_lib_resolved`)
+    // is rebuilt with --no-default-features and a feature set computed from the
+    // app's *TS* imports, so it omits async-runtime when the async surface comes
+    // from a native binding (@perryts/storekit/google-auth/play-billing) rather
+    // than TS — producing the `Undefined symbols: _perry_ffi_promise_new` link
+    // failure this issue describes. Linking the geisterhand stdlib also keeps the
+    // bundled perry-runtime hash-consistent with `gh_runtime`. Fall back to the
+    // auto-optimized stdlib when geisterhand is off or its stdlib isn't present.
+    let stdlib_lib = if ctx.needs_geisterhand {
+        find_geisterhand_stdlib(target.as_deref()).or_else(|| stdlib_lib_resolved.clone())
+    } else {
+        stdlib_lib_resolved.clone()
+    };
     let is_watchos = matches!(
         target.as_deref(),
         Some("watchos") | Some("watchos-simulator")
     );
     let is_tvos = matches!(target.as_deref(), Some("tvos") | Some("tvos-simulator"));
-    let jsruntime_lib = if !is_ios
-        && !is_visionos
-        && !is_android
-        && !is_harmonyos
-        && !is_watchos
-        && !is_tvos
-        && (ctx.needs_js_runtime || args.enable_js_runtime)
-    {
-        match find_jsruntime_library(target.as_deref()) {
+
+    // Issue #76 — locate the wasmi-based host library when WebAssembly runtime
+    // support is requested. Absence is
+    // a hard error when codegen detected `WebAssembly.*` usage, otherwise the
+    // flag-only case silently degrades to None (the user will hit a link
+    // error on first use, with the symbol name as the breadcrumb).
+    let wasm_host_lib = if ctx.needs_wasm_runtime || args.enable_wasm_runtime {
+        match find_wasm_host_library(target.as_deref()) {
             Some(lib) => {
-                match format {
-                    OutputFormat::Text => {
-                        println!("Using V8 JavaScript runtime for JS module support")
-                    }
-                    OutputFormat::Json => {}
+                if let OutputFormat::Text = format {
+                    println!("Using wasmi WebAssembly host runtime");
                 }
                 Some(lib)
             }
             None => {
-                if ctx.needs_js_runtime {
+                if ctx.needs_wasm_runtime {
                     return Err(anyhow!(
-                        "JavaScript modules found but libperry_jsruntime.a not found. Build it with: cargo build --release -p perry-jsruntime"
+                        "WebAssembly.* used but libperry_wasm_host.a not found. Build it with: cargo build --release -p perry-wasm-host"
                     ));
                 }
                 None
@@ -3791,9 +4898,11 @@ pub fn run_with_parse_cache(
         &compiled_features,
         &runtime_lib,
         &stdlib_lib,
-        &jsruntime_lib,
+        &optimized_libs.well_known_libs,
+        &wasm_host_lib,
         &exe_path,
         format,
+        args.debug_symbols,
     )?;
 
     // HarmonyOS: emit the ArkTS EntryAbility + Index page next to the .so,
@@ -3816,6 +4925,8 @@ pub fn run_with_parse_cache(
             // ctx.harmonyos_index_ets has the harvested ArkUI (if any). We just
             // pass it through to the EntryAbility/Index.ets writer.
             let index_ets = ctx.harmonyos_index_ets.as_deref();
+            resources::stage_native_library_artifacts(&ctx, output_dir, format)?;
+            let native_resources_dir = output_dir.join("NativeLibraries");
             match emit_harmonyos_arkts_stubs(output_dir, so_filename, index_ets) {
                 Err(e) => eprintln!("Warning: failed to emit ArkTS shim: {}", e),
                 Ok(()) => {
@@ -3823,12 +4934,43 @@ pub fn run_with_parse_cache(
                         println!("Wrote ArkTS shim: {}/ets/", output_dir.display());
                     }
                     let sdk = find_harmonyos_sdk();
+                    // Locate the user's `assets/` folder so harmonyos_hap can
+                    // copy it into the HAP's `resources/rawfile/`. Walk up
+                    // from the entry file's directory looking for `assets/`
+                    // — handles the common shape `<root>/src/app.ts` +
+                    // `<root>/assets/icon.png` and the simpler in-root case.
+                    let assets_dir = {
+                        let mut probe = project_root.clone();
+                        let mut found: Option<PathBuf> = None;
+                        for _ in 0..4 {
+                            let candidate = probe.join("assets");
+                            if candidate.is_dir() {
+                                found = Some(candidate);
+                                break;
+                            }
+                            if !probe.pop() {
+                                break;
+                            }
+                        }
+                        found
+                    };
                     let hap_args = crate::commands::harmonyos_hap::HapBuildArgs {
                         so_path: &exe_path,
                         ets_dir: &output_dir.join("ets"),
                         stem,
                         sdk_native: sdk.as_deref(),
                         quiet: !matches!(format, OutputFormat::Text),
+                        // Phase 2 v7: forward CLI signing flags through to
+                        // sign_hap. Each is None when the user didn't pass
+                        // the flag; sign_hap then falls through to env var
+                        // → saved config → bail.
+                        p12_keystore: args.p12_keystore.as_deref(),
+                        p12_password: args.p12_password.as_deref(),
+                        cert_chain: args.harmonyos_cert.as_deref(),
+                        profile: args.harmonyos_profile.as_deref(),
+                        key_alias: args.harmonyos_key_alias.as_deref(),
+                        assets_dir: assets_dir.as_deref(),
+                        native_resources_dir: Some(native_resources_dir.as_path()),
                     };
                     match crate::commands::harmonyos_hap::build_hap(&hap_args) {
                         Ok(res) => {
@@ -3861,14 +5003,16 @@ pub fn run_with_parse_cache(
                 if let Some(ref target_config) = native_lib.target_config {
                     let lib_name = &target_config.lib_name;
                     if lib_name.ends_with(".so") {
+                        // Refs #564: use the shared probe helper so we also
+                        // catch `target/<host-triple>/release/` when cargo
+                        // is configured with a pinned default target.
                         let crate_target_dir = target_config.crate_path.join("target");
-                        let candidate = if let Some(triple) = rust_target_triple(target.as_deref())
-                        {
-                            crate_target_dir.join(triple).join("release").join(lib_name)
-                        } else {
-                            crate_target_dir.join("release").join(lib_name)
-                        };
-                        if candidate.exists() {
+                        let candidate = library_search::locate_native_lib_artifact(
+                            &crate_target_dir,
+                            target.as_deref(),
+                            lib_name,
+                        );
+                        if let Some(candidate) = candidate {
                             let dest = output_dir.join(lib_name);
                             if let Err(e) = fs::copy(&candidate, &dest) {
                                 eprintln!(
@@ -3896,1116 +5040,55 @@ pub fn run_with_parse_cache(
 
     // For iOS targets, create a .app bundle
     if is_ios {
-        let app_dir = exe_path.with_extension("app");
-        let _ = fs::create_dir_all(&app_dir);
-        let bundle_exe = app_dir.join(exe_path.file_name().unwrap_or_default());
-        fs::copy(&exe_path, &bundle_exe)?;
-        let _ = fs::remove_file(&exe_path);
-
-        let exe_stem = exe_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(stem);
-        // Precedence: --app-bundle-id CLI flag > perry.toml [ios].bundle_id / [app]
-        // / [project] / top-level > package.json "bundleId" > com.perry.{name}.
-        // CLI wins so callers (doc-tests harness, CI, scripts) can override the
-        // embedded ID without editing manifests; without this the app installs
-        // under its fallback CFBundleIdentifier and a later `simctl launch
-        // <custom-id>` fails with FBSOpenApplicationServiceErrorDomain code=4.
-        let bundle_id = args
-            .app_bundle_id
-            .clone()
-            .or_else(|| {
-                (|| -> Option<String> {
-                    let mut dir = args.input.canonicalize().ok()?;
-                    for _ in 0..5 {
-                        dir = dir.parent()?.to_path_buf();
-                        // Check perry.toml first: [ios].bundle_id, then top-level bundle_id
-                        let toml_path = dir.join("perry.toml");
-                        if toml_path.exists() {
-                            if let Ok(data) = fs::read_to_string(&toml_path) {
-                                if let Ok(doc) = data.parse::<toml::Table>() {
-                                    let toml_bid = doc
-                                        .get("ios")
-                                        .and_then(|i| i.get("bundle_id"))
-                                        .or_else(|| doc.get("app").and_then(|a| a.get("bundle_id")))
-                                        .or_else(|| {
-                                            doc.get("project").and_then(|p| p.get("bundle_id"))
-                                        })
-                                        .or_else(|| doc.get("bundle_id"))
-                                        .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string());
-                                    if toml_bid.is_some() {
-                                        return toml_bid;
-                                    }
-                                }
-                            }
-                        }
-                        // Then check package.json
-                        let pkg = dir.join("package.json");
-                        if pkg.exists() {
-                            let data = fs::read_to_string(pkg).ok()?;
-                            let idx = data.find("\"bundleId\"")?;
-                            let colon = data[idx..].find(':')?;
-                            let q1 = data[idx + colon..].find('"')? + idx + colon + 1;
-                            let q2 = data[q1..].find('"')? + q1;
-                            return Some(data[q1..q2].to_string());
-                        }
-                    }
-                    None
-                })()
-            })
-            .unwrap_or_else(|| format!("com.perry.{}", exe_stem));
-        result_bundle_id = Some(bundle_id.clone());
-        result_app_dir = Some(app_dir.clone());
-
-        // Read perry.toml for version, build_number, name
-        let (toml_version, toml_build_number, _toml_name) =
-            (|| -> Option<(Option<String>, Option<String>, Option<String>)> {
-                let mut dir = args.input.canonicalize().ok()?;
-                for _ in 0..5 {
-                    dir = dir.parent()?.to_path_buf();
-                    let toml_path = dir.join("perry.toml");
-                    if toml_path.exists() {
-                        let data = fs::read_to_string(&toml_path).ok()?;
-                        let doc: toml::Table = data.parse().ok()?;
-                        let project = doc.get("project")?.as_table()?;
-                        let version = project
-                            .get("version")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
-                        let build_number = project.get("build_number").and_then(|v| {
-                            v.as_integer()
-                                .map(|n| n.to_string())
-                                .or_else(|| v.as_str().map(|s| s.to_string()))
-                        });
-                        let name = project
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
-                        return Some((version, build_number, name));
-                    }
-                }
-                None
-            })()
-            .unwrap_or((None, None, None));
-        let app_version = toml_version.as_deref().unwrap_or("1.0.0");
-        let app_build_number = toml_build_number.as_deref().unwrap_or("1");
-
-        let encryption_exempt_plist = (|| -> Option<String> {
-            let mut dir = args.input.canonicalize().ok()?;
-            for _ in 0..5 {
-                dir = dir.parent()?.to_path_buf();
-                let toml_path = dir.join("perry.toml");
-                if toml_path.exists() {
-                    let data = fs::read_to_string(toml_path).ok()?;
-                    let doc: toml::Table = data.parse().ok()?;
-                    let ios = doc.get("ios")?.as_table()?;
-                    let exempt = ios.get("encryption_exempt")?.as_bool()?;
-                    if exempt {
-                        return Some(
-                            "    <key>ITSAppUsesNonExemptEncryption</key>\n    <false/>".into(),
-                        );
-                    } else {
-                        return Some(
-                            "    <key>ITSAppUsesNonExemptEncryption</key>\n    <true/>".into(),
-                        );
-                    }
-                }
-            }
-            None
-        })()
-        .unwrap_or_default();
-
-        // Game-loop apps use traditional UIApplicationMain lifecycle, not SceneDelegate.
-        // Including UIApplicationSceneManifest causes a black screen with game-loop.
-        let scene_manifest = if compiled_features.iter().any(|f| f == "ios-game-loop") {
-            String::new()
-        } else {
-            r#"    <key>UIApplicationSceneManifest</key>
-    <dict>
-        <key>UIApplicationSupportsMultipleScenes</key>
-        <false/>
-        <key>UISceneConfigurations</key>
-        <dict>
-            <key>UIWindowSceneSessionRoleApplication</key>
-            <array>
-                <dict>
-                    <key>UISceneConfigurationName</key>
-                    <string>Default Configuration</string>
-                    <key>UISceneDelegateClassName</key>
-                    <string>PerrySceneDelegate</string>
-                </dict>
-            </array>
-        </dict>
-    </dict>
-"#
-            .to_string()
-        };
-
-        // Simulator bundles must declare iPhoneSimulator / iphonesimulator in
-        // Info.plist. Mismatch against the Mach-O LC_BUILD_VERSION (which is
-        // "iphonesimulator" when the binary was built for -target
-        // aarch64-apple-ios-sim) causes simctl to refuse launch with
-        // `FBSOpenApplicationServiceErrorDomain code=4`.
-        let is_sim = matches!(target.as_deref(), Some("ios-simulator"));
-        let plist_supported_platform = if is_sim {
-            "iPhoneSimulator"
-        } else {
-            "iPhoneOS"
-        };
-        let plist_platform_name = if is_sim {
-            "iphonesimulator"
-        } else {
-            "iphoneos"
-        };
-        let plist_sdk_name = if is_sim {
-            "iphonesimulator"
-        } else {
-            "iphoneos"
-        };
-        let info_plist = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>{exe_stem}</string>
-    <key>CFBundleIdentifier</key>
-    <string>{bundle_id}</string>
-    <key>CFBundleName</key>
-    <string>{exe_stem}</string>
-    <key>CFBundleVersion</key>
-    <string>{app_build_number}</string>
-    <key>CFBundleShortVersionString</key>
-    <string>{app_version}</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleIconName</key>
-    <string>AppIcon</string>
-    <key>MinimumOSVersion</key>
-    <string>17.0</string>
-    <key>CFBundleSupportedPlatforms</key>
-    <array><string>{plist_supported_platform}</string></array>
-    <key>DTPlatformName</key>
-    <string>{plist_platform_name}</string>
-    <key>DTPlatformVersion</key>
-    <string>26.4</string>
-    <key>DTSDKName</key>
-    <string>{plist_sdk_name}26.4</string>
-    <key>DTPlatformBuild</key>
-    <string>23E237</string>
-    <key>DTSDKBuild</key>
-    <string>23E237</string>
-    <key>DTXcode</key>
-    <string>2640</string>
-    <key>DTXcodeBuild</key>
-    <string>17E192</string>
-    <key>DTCompiler</key>
-    <string>com.apple.compilers.llvm.clang.1_0</string>
-    <key>UIRequiredDeviceCapabilities</key>
-    <array><string>arm64</string></array>
-    <key>CFBundleIcons</key>
-    <dict>
-        <key>CFBundlePrimaryIcon</key>
-        <dict>
-            <key>CFBundleIconFiles</key>
-            <array>
-                <string>AppIcon60x60</string>
-            </array>
-        </dict>
-    </dict>
-    <key>CFBundleIcons~ipad</key>
-    <dict>
-        <key>CFBundlePrimaryIcon</key>
-        <dict>
-            <key>CFBundleIconFiles</key>
-            <array>
-                <string>AppIcon76x76</string>
-            </array>
-        </dict>
-    </dict>
-    <key>UIDeviceFamily</key>
-    <array>
-        <integer>1</integer>
-        <integer>2</integer>
-    </array>
-    <key>UILaunchScreen</key>
-    <dict/>
-    <key>UISupportedInterfaceOrientations</key>
-    <array>
-        <string>UIInterfaceOrientationPortrait</string>
-        <string>UIInterfaceOrientationPortraitUpsideDown</string>
-        <string>UIInterfaceOrientationLandscapeLeft</string>
-        <string>UIInterfaceOrientationLandscapeRight</string>
-    </array>
-    <key>UISupportedInterfaceOrientations~ipad</key>
-    <array>
-        <string>UIInterfaceOrientationPortrait</string>
-        <string>UIInterfaceOrientationPortraitUpsideDown</string>
-        <string>UIInterfaceOrientationLandscapeLeft</string>
-        <string>UIInterfaceOrientationLandscapeRight</string>
-    </array>
-    {scene_manifest}</dict>
-</plist>"#,
-        );
-
-        // Apply orientations from perry.toml [ios].orientations
-        let info_plist = (|| -> Option<String> {
-            let mut dir = args.input.canonicalize().ok()?;
-            for _ in 0..5 {
-                dir = dir.parent()?.to_path_buf();
-                let toml_path = dir.join("perry.toml");
-                if toml_path.exists() {
-                    let data = fs::read_to_string(&toml_path).ok()?;
-                    let doc: toml::Table = data.parse().ok()?;
-                    let ios = doc.get("ios")?.as_table()?;
-                    let orientations = ios.get("orientations")?.as_array()?;
-                    let mut entries = Vec::new();
-                    for o in orientations {
-                        let s = o.as_str()?;
-                        match s {
-                            "landscape" => {
-                                entries.push("UIInterfaceOrientationLandscapeLeft");
-                                entries.push("UIInterfaceOrientationLandscapeRight");
-                            }
-                            "portrait" => {
-                                entries.push("UIInterfaceOrientationPortrait");
-                                entries.push("UIInterfaceOrientationPortraitUpsideDown");
-                            }
-                            other => {
-                                // Allow raw UIInterfaceOrientation* values
-                                if other.starts_with("UIInterfaceOrientation") {
-                                    entries.push(other);
-                                }
-                            }
-                        }
-                    }
-                    if !entries.is_empty() {
-                        let xml: String = entries.iter()
-                            .map(|e| format!("        <string>{}</string>", e))
-                            .collect::<Vec<_>>().join("\n");
-                        let all_orientations = format!(
-                            "    <key>UISupportedInterfaceOrientations</key>\n    <array>\n{}\n    </array>",
-                            xml
-                        );
-                        // Replace both iPhone and iPad orientation blocks
-                        let mut plist = info_plist.clone();
-                        // Replace iPhone orientations
-                        if let (Some(start), Some(_)) = (
-                            plist.find("<key>UISupportedInterfaceOrientations</key>"),
-                            plist.find("<key>UISupportedInterfaceOrientations~ipad</key>"),
-                        ) {
-                            let ipad_start = plist.find("<key>UISupportedInterfaceOrientations~ipad</key>").unwrap();
-                            // Find end of iPhone array
-                            let _iphone_section = &plist[start..ipad_start];
-                            plist = format!(
-                                "{}{}\n    {}",
-                                &plist[..start],
-                                all_orientations,
-                                &plist[ipad_start..]
-                            );
-                            // iPad must always have all 4 orientations for App Store validation
-                            // (the app can still lock to landscape at runtime)
-                        }
-                        return Some(plist);
-                    }
-                }
-            }
-            None
-        })().unwrap_or(info_plist);
-
-        // Append usage descriptions for camera and microphone
-        let usage_descriptions = concat!(
-            "    <key>NSCameraUsageDescription</key>\n",
-            "    <string>This app uses the camera to identify colors.</string>\n",
-            "    <key>NSMicrophoneUsageDescription</key>\n",
-            "    <string>This app uses the microphone to measure sound levels.</string>",
-        );
-        let info_plist = info_plist.replace(
-            "</dict>\n</plist>",
-            &format!("{}\n</dict>\n</plist>", usage_descriptions),
-        );
-
-        // Append ITSAppUsesNonExemptEncryption if configured in perry.toml
-        let info_plist = if !encryption_exempt_plist.is_empty() {
-            info_plist.replace(
-                "</dict>\n</plist>",
-                &format!("{}\n</dict>\n</plist>", encryption_exempt_plist),
-            )
-        } else {
-            info_plist
-        };
-
-        // Append custom Info.plist entries from [ios.info_plist] in perry.toml
-        let custom_plist_entries = (|| -> Option<String> {
-            let mut dir = args.input.canonicalize().ok()?;
-            for _ in 0..5 {
-                dir = dir.parent()?.to_path_buf();
-                let toml_path = dir.join("perry.toml");
-                if toml_path.exists() {
-                    let data = fs::read_to_string(&toml_path).ok()?;
-                    let doc: toml::Table = data.parse().ok()?;
-                    let ios = doc.get("ios")?.as_table()?;
-                    let info_plist_table = ios.get("info_plist")?.as_table()?;
-                    let mut entries = String::new();
-                    for (key, value) in info_plist_table {
-                        if let Some(s) = value.as_str() {
-                            entries.push_str(&format!(
-                                "    <key>{}</key>\n    <string>{}</string>\n",
-                                key, s
-                            ));
-                        } else if let Some(b) = value.as_bool() {
-                            entries.push_str(&format!(
-                                "    <key>{}</key>\n    <{}/>",
-                                key,
-                                if b { "true" } else { "false" }
-                            ));
-                        }
-                    }
-                    if !entries.is_empty() {
-                        return Some(entries);
-                    }
-                }
-            }
-            None
-        })()
-        .unwrap_or_default();
-        let info_plist = if !custom_plist_entries.is_empty() {
-            info_plist.replace(
-                "</dict>\n</plist>",
-                &format!("{}</dict>\n</plist>", custom_plist_entries),
-            )
-        } else {
-            info_plist
-        };
-
-        fs::write(app_dir.join("Info.plist"), info_plist)?;
-
-        // Read splash screen config from package.json perry.splash section
-        let splash_config: Option<(Option<std::path::PathBuf>, String, Option<std::path::PathBuf>)> = (|| -> Option<(Option<std::path::PathBuf>, String, Option<std::path::PathBuf>)> {
-            let mut dir = args.input.canonicalize().ok()?;
-            for _ in 0..5 {
-                dir = dir.parent()?.to_path_buf();
-                let pkg = dir.join("package.json");
-                if pkg.exists() {
-                    let data = fs::read_to_string(&pkg).ok()?;
-                    let pkg_val: serde_json::Value = serde_json::from_str(&data).ok()?;
-                    let splash = pkg_val.get("perry")?.get("splash")?;
-
-                    // Check for custom storyboard override first
-                    if let Some(sb_path) = splash.get("ios").and_then(|i| i.get("storyboard")).and_then(|v| v.as_str()) {
-                        let abs = dir.join(sb_path);
-                        if abs.exists() {
-                            return Some((None, "#FFFFFF".into(), Some(abs)));
-                        }
-                    }
-
-                    // Resolve image: splash.ios.image -> splash.image
-                    let image_path = splash.get("ios").and_then(|i| i.get("image")).and_then(|v| v.as_str())
-                        .or_else(|| splash.get("image").and_then(|v| v.as_str()))
-                        .map(|p| dir.join(p))
-                        .filter(|p| p.exists());
-
-                    // Resolve background: splash.ios.background -> splash.background -> "#FFFFFF"
-                    let background = splash.get("ios").and_then(|i| i.get("background")).and_then(|v| v.as_str())
-                        .or_else(|| splash.get("background").and_then(|v| v.as_str()))
-                        .unwrap_or("#FFFFFF")
-                        .to_string();
-
-                    if image_path.is_some() || background != "#FFFFFF" {
-                        return Some((image_path, background, None));
-                    }
-                    return None;
-                }
-            }
-            None
-        })();
-
-        // Write a compiled LaunchScreen storyboard — with splash image if configured,
-        // otherwise a minimal blank storyboard so iPadOS treats the app as native iPad.
-        let launch_sb_xml = if let Some((ref image_path, ref bg_hex, ref custom_sb)) = splash_config
-        {
-            if let Some(custom) = custom_sb {
-                // Custom storyboard: copy as-is
-                fs::read_to_string(custom).unwrap_or_default()
-            } else {
-                // Copy splash image into bundle
-                if let Some(img) = image_path {
-                    let _ = fs::copy(img, app_dir.join("splash_image.png"));
-                }
-
-                // Parse hex color to RGB floats
-                let hex = bg_hex.trim_start_matches('#');
-                let (r, g, b) = if hex.len() == 6 {
-                    let rv = u8::from_str_radix(&hex[0..2], 16).unwrap_or(255) as f64 / 255.0;
-                    let gv = u8::from_str_radix(&hex[2..4], 16).unwrap_or(255) as f64 / 255.0;
-                    let bv = u8::from_str_radix(&hex[4..6], 16).unwrap_or(255) as f64 / 255.0;
-                    (rv, gv, bv)
-                } else {
-                    (1.0, 1.0, 1.0)
-                };
-
-                let image_views = if image_path.is_some() {
-                    format!(
-                        r#"
-                        <subviews>
-                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" image="splash_image" translatesAutoresizingMaskIntoConstraints="NO" id="img-splash-1">
-                                <rect key="frame" x="132.5" y="362" width="128" height="128"/>
-                                <constraints>
-                                    <constraint firstAttribute="width" constant="128" id="img-w-1"/>
-                                    <constraint firstAttribute="height" constant="128" id="img-h-1"/>
-                                </constraints>
-                            </imageView>
-                        </subviews>
-                        <constraints>
-                            <constraint firstItem="img-splash-1" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="cx-1"/>
-                            <constraint firstItem="img-splash-1" firstAttribute="centerY" secondItem="Ze5-6b-2t3" secondAttribute="centerY" id="cy-1"/>
-                        </constraints>"#
-                    )
-                } else {
-                    String::new()
-                };
-
-                let resources = if image_path.is_some() {
-                    r#"
-    <resources>
-        <image name="splash_image" width="128" height="128"/>
-    </resources>"#
-                        .to_string()
-                } else {
-                    String::new()
-                };
-
-                format!(
-                    r#"<?xml version="1.0" encoding="UTF-8"?>
-<document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="21701" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES" initialViewController="01J-lp-oVM">
-    <scenes>
-        <scene sceneID="EHf-IW-A2E">
-            <objects>
-                <viewController id="01J-lp-oVM" sceneMemberID="viewController">
-                    <view key="view" contentMode="scaleToFill" id="Ze5-6b-2t3">
-                        <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
-                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
-                        <color key="backgroundColor" red="{r}" green="{g}" blue="{b}" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>{image_views}
-                    </view>
-                </viewController>
-                <placeholder placeholderIdentifier="IBFirstResponder" id="iYj-Kq-Ea1" userLabel="First Responder" sceneMemberID="firstResponder"/>
-            </objects>
-            <point key="canvasLocation" x="0" y="0"/>
-        </scene>
-    </scenes>{resources}
-</document>"#
-                )
-            }
-        } else {
-            // No splash config — minimal blank storyboard for iPadOS compatibility
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="21701" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES" initialViewController="01J-lp-oVM">
-    <scenes>
-        <scene sceneID="EHf-IW-A2E">
-            <objects>
-                <viewController id="01J-lp-oVM" sceneMemberID="viewController">
-                    <view key="view" contentMode="scaleToFill" id="Ze5-6b-2t3">
-                        <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
-                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
-                        <color key="backgroundColor" systemColor="systemBackgroundColor"/>
-                    </view>
-                </viewController>
-                <placeholder placeholderIdentifier="IBFirstResponder" id="iYj-Kq-Ea1" userLabel="First Responder" sceneMemberID="firstResponder"/>
-            </objects>
-            <point key="canvasLocation" x="0" y="0"/>
-        </scene>
-    </scenes>
-</document>"#.to_string()
-        };
-
-        let sb_source = app_dir.join("_LaunchScreen.storyboard");
-        fs::write(&sb_source, launch_sb_xml)?;
-        let storyboardc = app_dir.join("Base.lproj").join("LaunchScreen.storyboardc");
-        let _ = fs::create_dir_all(app_dir.join("Base.lproj"));
-        let _ = fs::remove_dir_all(&storyboardc);
-        let ibt_result = std::process::Command::new("ibtool")
-            .arg("--compile")
-            .arg(storyboardc.as_os_str())
-            .arg(sb_source.as_os_str())
-            .output();
-        let _ = fs::remove_file(&sb_source);
-        if ibt_result.is_err() || !ibt_result.as_ref().unwrap().status.success() {
-            eprintln!("Warning: ibtool failed to compile LaunchScreen.storyboard");
-        }
-
-        // Bundle resource files: scan source for ImageFile('...') calls and copy referenced files
-        // Also copy any directories named 'logo', 'assets', 'resources', 'images' from the project root
-        let source_dir = args
-            .input
-            .canonicalize()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.to_path_buf()));
-        if let Some(src_dir) = &source_dir {
-            // Walk up to find project root (where package.json is)
-            let mut project_root = src_dir.clone();
-            for _ in 0..5 {
-                if project_root.join("package.json").exists() {
-                    break;
-                }
-                if let Some(parent) = project_root.parent() {
-                    project_root = parent.to_path_buf();
-                } else {
-                    break;
-                }
-            }
-            // Copy common resource directories into the bundle
-            for dir_name in &["logo", "assets", "resources", "images"] {
-                let resource_dir = project_root.join(dir_name);
-                if resource_dir.is_dir() {
-                    let dest = app_dir.join(dir_name);
-                    eprintln!(
-                        "[perry] iOS asset copy: src={} -> dst={}",
-                        resource_dir.display(),
-                        dest.display()
-                    );
-                    fn copy_dir_recursive(
-                        src: &std::path::Path,
-                        dst: &std::path::Path,
-                    ) -> std::io::Result<()> {
-                        fs::create_dir_all(dst)?;
-                        for entry in fs::read_dir(src)? {
-                            let entry = entry?;
-                            let ty = entry.file_type()?;
-                            let dest_path = dst.join(entry.file_name());
-                            if ty.is_dir() {
-                                copy_dir_recursive(&entry.path(), &dest_path)?;
-                            } else {
-                                fs::copy(entry.path(), &dest_path)?;
-                            }
-                        }
-                        Ok(())
-                    }
-                    let _ = copy_dir_recursive(&resource_dir, &dest);
-                }
-            }
-        }
-
-        // --- i18n: generate .lproj bundles for iOS/macOS ---
-        if let (Some(ref table), Some(ref config)) = (&i18n_table, &i18n_config) {
-            if !table.keys.is_empty() {
-                for (locale_idx, locale) in config.locales.iter().enumerate() {
-                    let lproj_dir = app_dir.join(format!("{}.lproj", locale));
-                    let _ = fs::create_dir_all(&lproj_dir);
-                    let mut strings_content = String::new();
-                    for (key_idx, key) in table.keys.iter().enumerate() {
-                        let flat_idx = locale_idx * table.keys.len() + key_idx;
-                        let value = table
-                            .translations
-                            .get(flat_idx)
-                            .cloned()
-                            .unwrap_or_else(|| key.clone());
-                        // Escape for .strings format
-                        let escaped_key = key.replace('\\', "\\\\").replace('"', "\\\"");
-                        let escaped_val = value.replace('\\', "\\\\").replace('"', "\\\"");
-                        strings_content
-                            .push_str(&format!("\"{}\" = \"{}\";\n", escaped_key, escaped_val));
-                    }
-                    let _ = fs::write(lproj_dir.join("Localizable.strings"), &strings_content);
-                }
-                match format {
-                    OutputFormat::Text => println!(
-                        "  Generated {}.lproj bundles for {} locale(s)",
-                        config.locales.join(", "),
-                        config.locales.len()
-                    ),
-                    OutputFormat::Json => {}
-                }
-            }
-        }
-
-        compile_metallib_for_bundle(&ctx, target.as_deref(), &app_dir, format)?;
-
-        match format {
-            OutputFormat::Text => {
-                println!("Wrote iOS app bundle: {}", app_dir.display());
-                println!();
-                println!("To run on iOS Simulator:");
-                println!("  xcrun simctl install booted {}", app_dir.display());
-                println!("  xcrun simctl launch booted {}", bundle_id);
-            }
-            OutputFormat::Json => {
-                let result = serde_json::json!({
-                    "success": true,
-                    "output": app_dir.to_string_lossy(),
-                    "bundle_id": bundle_id,
-                    "native_modules": ctx.native_modules.len(),
-                    "js_modules": ctx.js_modules.len(),
-                });
-                println!("{}", serde_json::to_string(&result)?);
-            }
-        }
+        let (app_dir, bundle_id) = build_ios_app_bundle(
+            &input_path_owned,
+            app_bundle_id_owned.as_deref(),
+            &ctx,
+            &exe_path,
+            stem,
+            target.as_deref(),
+            &compiled_features,
+            i18n_table.as_ref(),
+            i18n_config.as_ref(),
+            format,
+        )?;
+        result_bundle_id = Some(bundle_id);
+        result_app_dir = Some(app_dir);
     } else if is_visionos {
-        let app_dir = exe_path.with_extension("app");
-        let _ = fs::create_dir_all(&app_dir);
-        let bundle_exe = app_dir.join(exe_path.file_name().unwrap_or_default());
-        fs::copy(&exe_path, &bundle_exe)?;
-        let _ = fs::remove_file(&exe_path);
-
-        let exe_stem = exe_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(stem);
-        let bundle_id = lookup_bundle_id_from_toml(&args.input, "visionos")
-            .or_else(|| lookup_bundle_id_from_toml(&args.input, "app"))
-            .or_else(|| lookup_bundle_id_from_toml(&args.input, "ios"))
-            .unwrap_or_else(|| format!("com.perry.{}", exe_stem));
-        result_bundle_id = Some(bundle_id.clone());
-        result_app_dir = Some(app_dir.clone());
-
-        let (
-            app_version,
-            app_build_number,
-            deployment_target,
-            encryption_exempt,
-            custom_plist_entries,
-        ) = (|| -> Option<(String, String, String, Option<bool>, String)> {
-            let mut dir = args.input.canonicalize().ok()?;
-            for _ in 0..5 {
-                dir = dir.parent()?.to_path_buf();
-                let toml_path = dir.join("perry.toml");
-                if !toml_path.exists() {
-                    continue;
-                }
-                let data = fs::read_to_string(&toml_path).ok()?;
-                let doc: toml::Table = data.parse().ok()?;
-                let project = doc.get("project").and_then(|v| v.as_table());
-                let visionos = doc.get("visionos").and_then(|v| v.as_table());
-                let version = project
-                    .and_then(|p| p.get("version"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("1.0.0")
-                    .to_string();
-                let build_number = project
-                    .and_then(|p| p.get("build_number"))
-                    .and_then(|v| {
-                        v.as_integer()
-                            .map(|n| n.to_string())
-                            .or_else(|| v.as_str().map(|s| s.to_string()))
-                    })
-                    .unwrap_or_else(|| "1".to_string());
-                let deployment_target = visionos
-                    .and_then(|v| {
-                        v.get("deployment_target")
-                            .or_else(|| v.get("minimum_version"))
-                    })
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("1.0")
-                    .to_string();
-                let encryption_exempt = visionos
-                    .and_then(|v| v.get("encryption_exempt"))
-                    .and_then(|v| v.as_bool());
-                let mut entries = String::new();
-                if let Some(info_plist) = visionos
-                    .and_then(|v| v.get("info_plist"))
-                    .and_then(|v| v.as_table())
-                {
-                    for (key, value) in info_plist {
-                        if let Some(s) = value.as_str() {
-                            entries.push_str(&format!(
-                                "    <key>{}</key>\n    <string>{}</string>\n",
-                                key, s
-                            ));
-                        } else if let Some(b) = value.as_bool() {
-                            entries.push_str(&format!(
-                                "    <key>{}</key>\n    <{}/>\n",
-                                key,
-                                if b { "true" } else { "false" }
-                            ));
-                        } else if let Some(i) = value.as_integer() {
-                            entries.push_str(&format!(
-                                "    <key>{}</key>\n    <integer>{}</integer>\n",
-                                key, i
-                            ));
-                        }
-                    }
-                }
-                return Some((
-                    version,
-                    build_number,
-                    deployment_target,
-                    encryption_exempt,
-                    entries,
-                ));
-            }
-            Some((
-                "1.0.0".to_string(),
-                "1".to_string(),
-                "1.0".to_string(),
-                None,
-                String::new(),
-            ))
-        })()
-        .unwrap();
-
-        let platform_name = if target.as_deref() == Some("visionos-simulator") {
-            "XRSimulator"
-        } else {
-            "XROS"
-        };
-
-        let mut info_plist = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>{exe_stem}</string>
-    <key>CFBundleIdentifier</key>
-    <string>{bundle_id}</string>
-    <key>CFBundleName</key>
-    <string>{exe_stem}</string>
-    <key>CFBundleVersion</key>
-    <string>{app_build_number}</string>
-    <key>CFBundleShortVersionString</key>
-    <string>{app_version}</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>MinimumOSVersion</key>
-    <string>{deployment_target}</string>
-    <key>CFBundleSupportedPlatforms</key>
-    <array>
-        <string>{platform_name}</string>
-    </array>
-    <key>UIRequiredDeviceCapabilities</key>
-    <array>
-        <string>arm64</string>
-    </array>
-    <key>UIDeviceFamily</key>
-    <array>
-        <integer>7</integer>
-    </array>
-    <key>UILaunchScreen</key>
-    <dict/>
-    <key>UIApplicationSceneManifest</key>
-    <dict>
-        <key>UIApplicationSupportsMultipleScenes</key>
-        <true/>
-        <key>UIApplicationPreferredDefaultSceneSessionRole</key>
-        <string>UIWindowSceneSessionRoleApplication</string>
-        <key>UISceneConfigurations</key>
-        <dict/>
-    </dict>
-</dict>
-</plist>"#
-        );
-
-        let usage_descriptions = concat!(
-            "    <key>NSCameraUsageDescription</key>\n",
-            "    <string>This app uses the camera to identify colors.</string>\n",
-            "    <key>NSMicrophoneUsageDescription</key>\n",
-            "    <string>This app uses the microphone to measure sound levels.</string>\n",
-        );
-        info_plist = info_plist.replace(
-            "</dict>\n</plist>",
-            &format!("{}</dict>\n</plist>", usage_descriptions),
-        );
-
-        if let Some(exempt) = encryption_exempt {
-            let encryption_entry = format!(
-                "    <key>ITSAppUsesNonExemptEncryption</key>\n    <{}/>\n",
-                if exempt { "false" } else { "true" }
-            );
-            info_plist = info_plist.replace(
-                "</dict>\n</plist>",
-                &format!("{}</dict>\n</plist>", encryption_entry),
-            );
-        }
-
-        if !custom_plist_entries.is_empty() {
-            info_plist = info_plist.replace(
-                "</dict>\n</plist>",
-                &format!("{}</dict>\n</plist>", custom_plist_entries),
-            );
-        }
-
-        fs::write(app_dir.join("Info.plist"), info_plist)?;
-
-        let source_dir = args
-            .input
-            .canonicalize()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.to_path_buf()));
-        if let Some(src_dir) = &source_dir {
-            let mut project_root = src_dir.clone();
-            for _ in 0..5 {
-                if project_root.join("package.json").exists()
-                    || project_root.join("perry.toml").exists()
-                {
-                    break;
-                }
-                if let Some(parent) = project_root.parent() {
-                    project_root = parent.to_path_buf();
-                } else {
-                    break;
-                }
-            }
-            fn copy_dir_recursive(
-                src: &std::path::Path,
-                dst: &std::path::Path,
-            ) -> std::io::Result<()> {
-                fs::create_dir_all(dst)?;
-                for entry in fs::read_dir(src)? {
-                    let entry = entry?;
-                    let ty = entry.file_type()?;
-                    let dest_path = dst.join(entry.file_name());
-                    if ty.is_dir() {
-                        copy_dir_recursive(&entry.path(), &dest_path)?;
-                    } else {
-                        fs::copy(entry.path(), &dest_path)?;
-                    }
-                }
-                Ok(())
-            }
-            for dir_name in &["logo", "assets", "resources", "images"] {
-                let resource_dir = project_root.join(dir_name);
-                if resource_dir.is_dir() {
-                    let dest = app_dir.join(dir_name);
-                    let _ = copy_dir_recursive(&resource_dir, &dest);
-                }
-            }
-        }
-
-        if let (Some(ref table), Some(ref config)) = (&i18n_table, &i18n_config) {
-            if !table.keys.is_empty() {
-                for (locale_idx, locale) in config.locales.iter().enumerate() {
-                    let lproj_dir = app_dir.join(format!("{}.lproj", locale));
-                    let _ = fs::create_dir_all(&lproj_dir);
-                    let mut strings_content = String::new();
-                    for (key_idx, key) in table.keys.iter().enumerate() {
-                        let flat_idx = locale_idx * table.keys.len() + key_idx;
-                        let value = table
-                            .translations
-                            .get(flat_idx)
-                            .cloned()
-                            .unwrap_or_else(|| key.clone());
-                        let escaped_key = key.replace('\\', "\\\\").replace('"', "\\\"");
-                        let escaped_val = value.replace('\\', "\\\\").replace('"', "\\\"");
-                        strings_content
-                            .push_str(&format!("\"{}\" = \"{}\";\n", escaped_key, escaped_val));
-                    }
-                    let _ = fs::write(lproj_dir.join("Localizable.strings"), &strings_content);
-                }
-            }
-        }
-
-        match format {
-            OutputFormat::Text => {
-                println!("Wrote visionOS app bundle: {}", app_dir.display());
-                println!();
-                println!("To run on Apple Vision Pro Simulator:");
-                println!("  xcrun simctl install booted {}", app_dir.display());
-                println!("  xcrun simctl launch booted {}", bundle_id);
-            }
-            OutputFormat::Json => {
-                let result = serde_json::json!({
-                    "success": true,
-                    "output": app_dir.to_string_lossy(),
-                    "bundle_id": bundle_id,
-                    "native_modules": ctx.native_modules.len(),
-                    "js_modules": ctx.js_modules.len(),
-                });
-                println!("{}", serde_json::to_string(&result)?);
-            }
-        }
+        let (app_dir, bundle_id) = bundle_for_visionos(
+            &exe_path,
+            stem,
+            target.as_deref(),
+            &args.input,
+            &ctx,
+            i18n_table.as_ref(),
+            i18n_config.as_ref(),
+            format,
+        )?;
+        result_bundle_id = Some(bundle_id);
+        result_app_dir = Some(app_dir);
     } else if is_watchos {
-        // Create watchOS .app bundle
-        let app_dir = exe_path.with_extension("app");
-        let _ = fs::create_dir_all(&app_dir);
-        let bundle_exe = app_dir.join(exe_path.file_name().unwrap_or_default());
-        fs::copy(&exe_path, &bundle_exe)?;
-        let _ = fs::remove_file(&exe_path);
-
-        let exe_stem = exe_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(stem);
-        let bundle_id = lookup_bundle_id_from_toml(&args.input, "watchos")
-            .or_else(|| lookup_bundle_id_from_toml(&args.input, "app"))
-            .unwrap_or_else(|| format!("com.perry.{}", exe_stem));
-        result_bundle_id = Some(bundle_id.clone());
-        result_app_dir = Some(app_dir.clone());
-
-        let info_plist = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>{exe_stem}</string>
-    <key>CFBundleIdentifier</key>
-    <string>{bundle_id}</string>
-    <key>CFBundleName</key>
-    <string>{exe_stem}</string>
-    <key>CFBundleVersion</key>
-    <string>1.0</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
-    <key>MinimumOSVersion</key>
-    <string>10.0</string>
-    <key>UIDeviceFamily</key>
-    <array>
-        <integer>4</integer>
-    </array>
-    <key>WKApplication</key>
-    <true/>
-    <key>WKWatchOnly</key>
-    <true/>
-</dict>
-</plist>"#
-        );
-        fs::write(app_dir.join("Info.plist"), info_plist)?;
-
-        // Copy project resource directories into the bundle so
-        // bloom_load_texture / load_sound / read_file can resolve relative
-        // asset paths via [[NSBundle mainBundle] resourcePath].
-        let source_dir = args
-            .input
-            .canonicalize()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.to_path_buf()));
-        if let Some(src_dir) = &source_dir {
-            let mut project_root = src_dir.clone();
-            for _ in 0..5 {
-                if project_root.join("package.json").exists()
-                    || project_root.join("perry.toml").exists()
-                {
-                    break;
-                }
-                if let Some(parent) = project_root.parent() {
-                    project_root = parent.to_path_buf();
-                } else {
-                    break;
-                }
-            }
-            fn copy_dir_recursive(
-                src: &std::path::Path,
-                dst: &std::path::Path,
-            ) -> std::io::Result<()> {
-                fs::create_dir_all(dst)?;
-                for entry in fs::read_dir(src)? {
-                    let entry = entry?;
-                    let ty = entry.file_type()?;
-                    let dest_path = dst.join(entry.file_name());
-                    if ty.is_dir() {
-                        copy_dir_recursive(&entry.path(), &dest_path)?;
-                    } else {
-                        fs::copy(entry.path(), &dest_path)?;
-                    }
-                }
-                Ok(())
-            }
-            for dir_name in &["logo", "assets", "resources", "images"] {
-                let resource_dir = project_root.join(dir_name);
-                if resource_dir.is_dir() {
-                    let dest = app_dir.join(dir_name);
-                    let _ = copy_dir_recursive(&resource_dir, &dest);
-                }
-            }
-        }
-
-        compile_metallib_for_bundle(&ctx, target.as_deref(), &app_dir, format)?;
-
-        match format {
-            OutputFormat::Text => {
-                println!("Wrote watchOS app bundle: {}", app_dir.display());
-                println!();
-                println!("To run on Apple Watch Simulator:");
-                println!("  xcrun simctl install booted {}", app_dir.display());
-                println!("  xcrun simctl launch booted {}", bundle_id);
-            }
-            OutputFormat::Json => {
-                let result = serde_json::json!({
-                    "success": true,
-                    "output": app_dir.to_string_lossy(),
-                    "bundle_id": bundle_id,
-                    "native_modules": ctx.native_modules.len(),
-                    "js_modules": ctx.js_modules.len(),
-                });
-                println!("{}", serde_json::to_string(&result)?);
-            }
-        }
+        let (app_dir, bundle_id) = bundle_for_watchos(
+            &exe_path,
+            stem,
+            target.as_deref(),
+            &args.input,
+            &ctx,
+            format,
+        )?;
+        result_bundle_id = Some(bundle_id);
+        result_app_dir = Some(app_dir);
     } else if is_tvos {
-        // Create tvOS .app bundle
-        let app_dir = exe_path.with_extension("app");
-        let _ = fs::create_dir_all(&app_dir);
-        let bundle_exe = app_dir.join(exe_path.file_name().unwrap_or_default());
-        fs::copy(&exe_path, &bundle_exe)?;
-        let _ = fs::remove_file(&exe_path);
-
-        let exe_stem = exe_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(stem);
-        let bundle_id = lookup_bundle_id_from_toml(&args.input, "tvos")
-            .or_else(|| lookup_bundle_id_from_toml(&args.input, "app"))
-            .unwrap_or_else(|| format!("com.perry.{}", exe_stem));
-        result_bundle_id = Some(bundle_id.clone());
-        result_app_dir = Some(app_dir.clone());
-
-        let info_plist = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>{exe_stem}</string>
-    <key>CFBundleIdentifier</key>
-    <string>{bundle_id}</string>
-    <key>CFBundleName</key>
-    <string>{exe_stem}</string>
-    <key>CFBundleVersion</key>
-    <string>1.0</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
-    <key>MinimumOSVersion</key>
-    <string>17.0</string>
-    <key>UIDeviceFamily</key>
-    <array>
-        <integer>3</integer>
-    </array>
-    <key>UILaunchScreen</key>
-    <dict/>
-    <key>UIRequiresFullScreen</key>
-    <true/>
-    <key>NSPrincipalClass</key>
-    <string>BloomApplication</string>
-</dict>
-</plist>"#
-        );
-        fs::write(app_dir.join("Info.plist"), info_plist)?;
-
-        compile_metallib_for_bundle(&ctx, target.as_deref(), &app_dir, format)?;
-
-        match format {
-            OutputFormat::Text => {
-                println!("Wrote tvOS app bundle: {}", app_dir.display());
-                println!();
-                println!("To run on Apple TV Simulator:");
-                println!("  xcrun simctl install booted {}", app_dir.display());
-                println!("  xcrun simctl launch booted {}", bundle_id);
-            }
-            OutputFormat::Json => {
-                let result = serde_json::json!({
-                    "success": true,
-                    "output": app_dir.to_string_lossy(),
-                    "bundle_id": bundle_id,
-                    "native_modules": ctx.native_modules.len(),
-                    "js_modules": ctx.js_modules.len(),
-                });
-                println!("{}", serde_json::to_string(&result)?);
-            }
-        }
+        let (app_dir, bundle_id) = bundle_for_tvos(
+            &exe_path,
+            stem,
+            target.as_deref(),
+            &args.input,
+            &ctx,
+            format,
+        )?;
+        result_bundle_id = Some(bundle_id);
+        result_app_dir = Some(app_dir);
     } else {
         // For Windows/Linux (non-bundle targets), copy asset directories next to the exe
         // so that resolve_asset_path can find them relative to the executable.
@@ -5068,6 +5151,9 @@ pub fn run_with_parse_cache(
                     }
                 }
             }
+            if !is_harmonyos {
+                resources::stage_native_library_artifacts(&ctx, output_dir, format)?;
+            }
         }
 
         match format {
@@ -5082,120 +5168,70 @@ pub fn run_with_parse_cache(
                 println!("{}", serde_json::to_string(&result)?);
             }
         }
-    }
 
-    // --- i18n: generate Android values-xx/ resources ---
-    if is_android {
-        if let (Some(ref table), Some(ref config)) = (&i18n_table, &i18n_config) {
-            if !table.keys.is_empty() {
-                let output_dir = exe_path.parent().unwrap_or(Path::new("."));
-                let res_dir = output_dir.join("res");
-                for (locale_idx, locale) in config.locales.iter().enumerate() {
-                    let values_dir = if locale_idx == 0 {
-                        res_dir.join("values") // default locale
-                    } else {
-                        res_dir.join(format!("values-{}", locale))
-                    };
-                    let _ = fs::create_dir_all(&values_dir);
-                    let mut xml =
-                        String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n");
-                    for (key_idx, key) in table.keys.iter().enumerate() {
-                        let flat_idx = locale_idx * table.keys.len() + key_idx;
-                        let value = table
-                            .translations
-                            .get(flat_idx)
-                            .cloned()
-                            .unwrap_or_else(|| key.clone());
-                        // Sanitize key for Android resource name (alphanumeric + underscore)
-                        let res_name: String = key
-                            .chars()
-                            .map(|c| {
-                                if c.is_alphanumeric() || c == '_' {
-                                    c
-                                } else {
-                                    '_'
-                                }
-                            })
-                            .collect();
-                        // Escape XML special chars
-                        let escaped = value
-                            .replace('&', "&amp;")
-                            .replace('<', "&lt;")
-                            .replace('>', "&gt;")
-                            .replace('"', "&quot;")
-                            .replace('\'', "\\'");
-                        xml.push_str(&format!(
-                            "    <string name=\"{}\">{}</string>\n",
-                            res_name, escaped
-                        ));
-                    }
-                    xml.push_str("</resources>\n");
-                    let _ = fs::write(values_dir.join("strings.xml"), &xml);
+        // #506 — emit `<binary>.sandbox` next to the binary when
+        // `--emit-sandbox` (or the equivalent env / package.json
+        // knob) is set. macOS only for the MVP; other platforms
+        // log a once-per-build note that the kernel-sandbox MVP
+        // is macOS-only and the matching seccomp / AppContainer /
+        // ... support lands as #506 follow-up.
+        if ctx.emit_sandbox {
+            #[cfg(target_os = "macos")]
+            {
+                match super::sandbox_profile::emit_macos_sandbox_profile(&ctx, &exe_path) {
+                    Ok(path) => match format {
+                        OutputFormat::Text => {
+                            println!("Wrote sandbox profile: {}", path.display())
+                        }
+                        OutputFormat::Json => {}
+                    },
+                    Err(e) => match format {
+                        OutputFormat::Text => {
+                            eprintln!("warning: failed to emit sandbox profile: {}", e);
+                        }
+                        OutputFormat::Json => {}
+                    },
                 }
-                match format {
-                    OutputFormat::Text => println!(
-                        "  Generated res/values-*/strings.xml for {} locale(s)",
-                        config.locales.len()
-                    ),
-                    OutputFormat::Json => {}
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                if let OutputFormat::Text = format {
+                    eprintln!(
+                        "note: `--emit-sandbox` is macOS-only in this MVP; Linux seccomp + Windows AppContainer support tracked under #506."
+                    );
                 }
             }
         }
     }
 
-    // Strip debug symbols from the final binary (reduces size significantly)
-    // Skip for iOS/Android/HarmonyOS cross-compilation — host strip can't handle
-    // foreign architectures (macOS BSD strip fails on ELF with the noisy
-    // "non-object and non-archive file" warning).
-    // Skip for watchOS — bundling above already moved exe_path into the .app
-    // Skip when PERRY_DEBUG_SYMBOLS=1 is set — keep symbols for crash debugging
-    if !is_dylib
-        && !is_ios
-        && !is_visionos
-        && !is_tvos
-        && !is_watchos
-        && !is_harmonyos
-        && target.as_deref() != Some("android")
-        && std::env::var("PERRY_DEBUG_SYMBOLS").is_err()
-    {
-        if ctx.needs_plugins {
-            // When plugins are enabled, use strip -x to keep exported symbols
-            // (dlopen'd plugins need to resolve hone_host_api_* from the main executable)
-            let _ = std::process::Command::new("strip")
-                .arg("-x")
-                .arg(&exe_path)
-                .status();
-        } else {
-            let _ = std::process::Command::new("strip").arg(&exe_path).status();
-        }
-    }
+    emit_android_i18n_resources(
+        is_android,
+        i18n_table.as_ref(),
+        i18n_config.as_ref(),
+        &exe_path,
+        format,
+    );
 
-    // Print binary size
-    if let OutputFormat::Text = format {
-        if let Ok(meta) = fs::metadata(&exe_path) {
-            let size_mb = meta.len() as f64 / 1_048_576.0;
-            println!("Binary size: {:.1}MB", size_mb);
-        }
-    }
+    strip_final_binary(
+        &ctx,
+        &exe_path,
+        target.as_deref(),
+        is_dylib,
+        is_ios,
+        is_visionos,
+        is_tvos,
+        is_watchos,
+        is_harmonyos,
+    );
 
-    if !args.keep_intermediates {
-        for obj_path in &obj_paths {
-            let _ = fs::remove_file(obj_path);
-        }
-    }
+    emit_attestation_sidecar(&ctx, &exe_path, format);
+
+    print_binary_size(format, &exe_path);
+
+    cleanup_intermediates(args.keep_intermediates, &obj_paths);
 
     let final_output_path = result_app_dir.unwrap_or(exe_path);
-
-    let codegen_cache_stats = if object_cache.is_enabled() {
-        Some((
-            object_cache.hits(),
-            object_cache.misses(),
-            object_cache.stores(),
-            object_cache.store_errors(),
-        ))
-    } else {
-        None
-    };
+    let codegen_cache_stats = summarize_codegen_cache_stats(&object_cache);
 
     Ok(CompileResult {
         output_path: final_output_path,
@@ -5207,56 +5243,17 @@ pub fn run_with_parse_cache(
 }
 
 #[cfg(test)]
-mod windows_link_tests {
-    use super::windows_pe_subsystem_flag;
+mod windows_link_tests;
 
-    // Regression guard for issue #120: without an explicit subsystem flag the
-    // MSVC linker historically defaulted to WINDOWS (2), silently detaching
-    // stdout/stderr so console.log output never reached the terminal.
+// `app_metadata_tests` moved to `compile/app_metadata.rs`.
 
-    #[test]
-    fn cli_build_uses_console_subsystem() {
-        assert_eq!(windows_pe_subsystem_flag(false, "10"), "/SUBSYSTEM:CONSOLE");
-    }
+// `js_runtime_gate_tests` and `allowlist_tests` moved to
+// `compile/audit_manifest.rs` alongside the helpers they cover.
 
-    #[test]
-    fn ui_build_uses_windows_subsystem() {
-        assert_eq!(windows_pe_subsystem_flag(true, "10"), "/SUBSYSTEM:WINDOWS");
-    }
+// (allowlist_tests body removed — coverage lives in compile/audit_manifest.rs)
 
-    // Issue #303: --min-windows-version=7 emits the ,5.1 suffix that marks
-    // the PE as Win7-compatible.
-    #[test]
-    fn min_windows_7_appends_5_1_suffix() {
-        assert_eq!(
-            windows_pe_subsystem_flag(false, "7"),
-            "/SUBSYSTEM:CONSOLE,5.1"
-        );
-        assert_eq!(
-            windows_pe_subsystem_flag(true, "7"),
-            "/SUBSYSTEM:WINDOWS,5.1"
-        );
-    }
+// `collect_native_archives_for_lock`, `for_each_native_library_package`,
+// `derive_target_key`, `run_lock_verify_for_compile`, and the
+// `lock_integration_tests` module all moved to `compile/lock_scan.rs`.
 
-    // Issue #303: --min-windows-version=8 emits the ,6.02 suffix.
-    #[test]
-    fn min_windows_8_appends_6_02_suffix() {
-        assert_eq!(
-            windows_pe_subsystem_flag(false, "8"),
-            "/SUBSYSTEM:CONSOLE,6.02"
-        );
-        assert_eq!(
-            windows_pe_subsystem_flag(true, "8"),
-            "/SUBSYSTEM:WINDOWS,6.02"
-        );
-    }
-
-    // Anything other than 7/8/10 falls through to no suffix — caller-side
-    // CompileArgs validation rejects unknown values before reaching the
-    // linker, so this branch is unreachable in practice but documented.
-    #[test]
-    fn unknown_min_windows_falls_through_to_default() {
-        assert_eq!(windows_pe_subsystem_flag(false, "11"), "/SUBSYSTEM:CONSOLE");
-        assert_eq!(windows_pe_subsystem_flag(true, ""), "/SUBSYSTEM:WINDOWS");
-    }
-}
+// (lock_integration_tests body removed — coverage lives in compile/lock_scan.rs)

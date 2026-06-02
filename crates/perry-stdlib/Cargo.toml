@@ -13,66 +13,262 @@ crate-type = ["rlib", "staticlib"]
 default = ["full"]
 
 # Full stdlib - everything included
-full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "validation", "net", "tls"]
+full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "validation", "net", "tls", "bundled-dotenv", "bundled-slugify", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams", "bundled-fastify"]
 
 # Minimal core - just what's needed for basic programs
 core = []
 
+# In-tree implementation of the npm `dotenv` package (#466 Phase 4
+# step 2). Default-on; turned off by the compiler when the
+# well-known bindings table (`well_known_bindings.toml`) routes
+# `import 'dotenv'` to `perry-ext-dotenv` so the link line doesn't
+# end up with two copies of `_js_dotenv_*` symbols. Programs that
+# don't import dotenv pay nothing for this either way.
+bundled-dotenv = []
+
+# In-tree implementation of `slugify` — same gating contract as
+# `bundled-dotenv` (#466 Phase 4 step 2). Default-on through
+# `default = ["full"]`; the well-known flip strips this when
+# `import 'slugify'` resolves to perry-ext-slugify instead.
+bundled-slugify = []
+
+# In-tree implementation of `lru-cache`. Default-on through
+# `default = ["full"]`; flipped to perry-ext-lru-cache by the
+# well-known table (#466 Phase 4). Pulls the `lru` crate dep so
+# both halves of the gate move in lockstep.
+bundled-lru-cache = ["dep:lru"]
+
+# Pure-Rust wrapper, no extra deps. Default-on through `full`.
+bundled-exponential-backoff = []
+
+# EventEmitter — pure Rust, no extra deps. Default-on through `full`.
+bundled-events = []
+
+# decimal.js / bignumber.js — needs `rust_decimal`. Default-on
+# through `full`.
+bundled-decimal = ["dep:rust_decimal"]
+
+# dayjs / date-fns — chrono is always-on (used by lots of stdlib),
+# so this gate just toggles whether perry-stdlib's dayjs module is
+# compiled in. Default-on through `full`; the well-known flip
+# strips it when `import 'dayjs'` resolves to perry-ext-dayjs.
+bundled-dayjs = []
+
+# moment — same gating contract as bundled-dayjs (chrono is
+# always-on). Default-on through `full`; flipped to perry-ext-moment
+# by the well-known table.
+bundled-moment = []
+
+# commander — pure-Rust, no extra deps. Default-on through `full`;
+# the well-known flip strips this when `import 'commander'` resolves
+# to perry-ext-commander instead.
+bundled-commander = []
+
 # HTTP server (hyper-based native framework)
 # Note: dashmap is now always-on (used by core handle registry), no longer listed here.
-http-server = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes", "async-runtime"]
+# `http-server` umbrella retained for backwards-compat — it now
+# transitively pulls `bundled-fastify` (v0.5.572's per-binding gate
+# the well-known flip toggles for `import 'fastify'`). The
+# `framework` module stays on `http-server` directly so it remains
+# available for non-fastify hyper users; perry-ext-fastify ships
+# its own self-contained surface.
+http-server = ["bundled-fastify", "dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes", "async-runtime"]
+bundled-fastify = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes", "async-runtime"]
 
-# HTTP client (node-fetch, axios)
-http-client = ["dep:reqwest", "async-runtime"]
+# HTTP client (node-fetch, axios) — single umbrella for both. The
+# well-known flip strips this when the user imports either module
+# (both perry-ext-fetch and perry-ext-axios cover the symbol surface
+# under the umbrella). Per-binding splits could land later if a
+# program needs e.g. axios-only without fetch, but in practice they
+# share the reqwest dep so splitting saves no binary size.
+# `bundled-streams` rides under the umbrella for backwards-compat
+# with v0.5.571's `--features http-client` callers (which got
+# `pub mod streams` transitively). The well-known flip strips
+# `bundled-streams` directly, and also strips `http-client` when
+# axios / node-fetch / http / https is imported through the
+# well-known table — both ends move in lockstep.
+http-client = ["dep:reqwest", "async-runtime", "bundled-streams"]
 
-# WebSocket
-websocket = ["dep:tokio-tungstenite", "dep:futures-util", "async-runtime"]
+# Web Streams API (issue #237). Per-binding gate v0.5.572 — the
+# well-known flip routes `import 'streams'` to perry-ext-streams
+# by stripping this feature. Default-on through `default = ["full"]`
+# and through the `http-client` umbrella for legacy callers.
+bundled-streams = []
+
+# WebSocket — `websocket` umbrella retained for backwards-compat;
+# v0.5.571's well-known flip toggles `bundled-ws` instead so
+# `import 'ws'` can route to perry-ext-ws without duplicate
+# `_js_ws_*` symbols at link time.
+websocket = ["bundled-ws"]
+bundled-ws = ["dep:tokio-tungstenite", "dep:futures-util", "async-runtime"]
+
+# Activated by `optimized_libs::build_optimized_libs` when the
+# well-known flip strips `bundled-ws` and routes `import 'ws'` to
+# perry-ext-ws. Tells perry-stdlib's `js_stdlib_process_pending`
+# to call `js_ws_process_pending` even though `pub mod ws` isn't
+# compiled in — the symbol is provided by perry-ext-ws at link
+# time. Mirrors `external-net-pump` (v0.5.579). Closes #606's
+# follow-up: without this, perry-ext-ws's accept-loop tokio task
+# pushes `Listening` / `Connection` / `Message` events to its
+# event queue but the main thread never drains them, so handlers
+# never fire and the program hangs after the SIGABRT fix.
+external-ws-pump = ["async-runtime"]
 
 # Raw TCP sockets (`net.Socket` — Postgres wire driver, custom protocols).
-net = ["async-runtime"]
+# `net` umbrella retained for backwards-compat; v0.5.571's
+# well-known flip toggles `bundled-net` instead so `import 'net'`
+# can route to perry-ext-net.
+net = ["bundled-net"]
+bundled-net = ["async-runtime"]
+
+# Activated by `optimized_libs::build_optimized_libs` (v0.5.579) when
+# the well-known flip strips `bundled-net` and routes `import 'net'`
+# to perry-ext-net. Tells perry-stdlib's `js_stdlib_process_pending`
+# to call `js_net_process_pending` even though `pub mod net` isn't
+# compiled in — the symbol is provided by perry-ext-net at link
+# time. No fallback no-op stub: gating on this feature ensures
+# perry-stdlib only emits the call site (and thus the undefined
+# extern reference) when perry-ext-net is guaranteed to be linked.
+external-net-pump = ["async-runtime"]
+
+# Activated by `optimized_libs::build_optimized_libs` (#1843) when the
+# well-known flip routes `node:zlib` to perry-ext-zlib and strips
+# `compression`. Tells perry-stdlib's `js_stdlib_process_pending` /
+# `js_stdlib_has_active_handles` to drain perry-ext-zlib's deferred
+# stream-event queue (`js_ext_zlib_process_pending` /
+# `js_ext_zlib_has_active_handles`), and routes lost-static-type
+# `gz.write()` / `.on()` / `.pipe()` calls through
+# `js_ext_zlib_dispatch_method`. Mirrors `external-net-pump`. No async
+# runtime needed (zlib compression is synchronous), but the pump call
+# sites live in the async-bridge module which is `async-runtime`-gated.
+external-zlib-pump = ["async-runtime"]
+
+# Activated by `optimized_libs::build_optimized_libs` (v0.5.714) when
+# the well-known flip routes `node:http` / `node:https` / `node:http2`
+# to perry-ext-http (which bundles perry-ext-http-server). Tells
+# perry-stdlib's `js_stdlib_process_pending` and
+# `js_stdlib_has_active_handles` to call into perry-ext-http-server's
+# `js_node_http_server_process_pending` / `js_node_http_server_has_active`
+# externs each tick. Without this, the http server's accept-loop
+# tokio task pushes pending requests that nobody drains and the
+# program either hangs (pre-fix listen() blocked the main thread)
+# or exits before the listener task can dispatch any request.
+# Mirrors `external-net-pump` and `external-ws-pump`. Closes #604.
+external-http-server-pump = ["async-runtime"]
+
+# Activated by `optimized_libs::build_optimized_libs` when the well-known
+# flip routes `node:http` / `node:https` to perry-ext-http and the user
+# code calls `http.request` / `http.get` (client side). Tells
+# perry-stdlib's `js_stdlib_process_pending` and
+# `js_stdlib_has_active_handles` to call into perry-ext-http's
+# `js_http_process_pending` / `js_http_has_pending` externs each tick.
+# Without this the client-side response/error events stay queued and
+# the program exits before any callback fires. Issue #769.
+external-http-client-pump = ["async-runtime"]
+
+# Activated by `optimized_libs::build_optimized_libs` when the well-known
+# flip routes `import 'fastify'` to perry-ext-fastify (which is the
+# default path for the bundled-fastify feature). Tells perry-stdlib's
+# `js_stdlib_process_pending` / `js_stdlib_has_active_handles` to call
+# into perry-ext-fastify's `js_fastify_process_pending` /
+# `js_fastify_has_active` externs each tick. Without this, the
+# (now non-blocking) `listen()` returns but no main-thread code ever
+# drains pending requests — programs that combine fastify with an
+# in-process `fetch` against itself, lifecycle hooks, or async route
+# handlers hang. Mirrors `external-http-server-pump`.
+external-fastify-pump = ["async-runtime"]
 
 # TLS — direct `tls.connect()` and `socket.upgradeToTLS()` (Postgres SSLRequest flow).
 # Uses rustls (not native-tls) to avoid OpenSSL on every platform and keep Android
 # cross-compile unblocked; matches reqwest/tokio-tungstenite/mongodb feature flags.
-tls = ["net", "dep:tokio-rustls", "dep:rustls", "dep:rustls-native-certs"]
+tls = ["bundled-net", "dep:tokio-rustls", "dep:rustls", "dep:rustls-native-certs"]
 
 # Databases
 database = ["database-postgres", "database-mysql", "database-sqlite", "database-redis", "database-mongodb"]
-database-postgres = ["dep:sqlx", "async-runtime"]
-database-mysql = ["dep:sqlx", "async-runtime"]
+# `database-postgres` umbrella retained for backwards-compat;
+# v0.5.566's well-known flip toggles `bundled-pg` instead.
+database-postgres = ["bundled-pg"]
+bundled-pg = ["dep:sqlx", "async-runtime"]
+# `database-mysql` umbrella retained for backwards-compat;
+# v0.5.567's well-known flip toggles `bundled-mysql2` instead.
+database-mysql = ["bundled-mysql2"]
+bundled-mysql2 = ["dep:sqlx", "async-runtime"]
 database-sqlite = ["dep:rusqlite"]
-database-redis = ["dep:redis", "async-runtime"]
-database-mongodb = ["dep:mongodb", "dep:bson", "dep:futures-util", "async-runtime"]
+# `database-redis` umbrella retained for backwards-compat;
+# v0.5.565's well-known flip toggles `bundled-ioredis` instead.
+database-redis = ["bundled-ioredis"]
+bundled-ioredis = ["dep:redis", "async-runtime"]
+# `database-mongodb` umbrella retained for backwards-compat;
+# v0.5.568's well-known flip toggles `bundled-mongodb` instead.
+database-mongodb = ["bundled-mongodb"]
+bundled-mongodb = ["dep:mongodb", "dep:bson", "dep:futures-util", "async-runtime"]
 
 # Crypto (sha256, md5, bcrypt, jwt, etc.)
 # Implies `async-runtime` because bcrypt/jwt/argon2 hashing offloads to
 # `tokio::task::spawn_blocking`, and `ids` because `crypto.randomUUID()`
 # delegates to the `uuid` crate.
-crypto = ["dep:sha2", "dep:sha1", "dep:md-5", "dep:hex", "dep:hmac", "dep:bcrypt", "dep:jsonwebtoken", "dep:aes", "dep:cbc", "dep:scrypt", "dep:pbkdf2", "dep:argon2", "dep:base64", "dep:x25519-dalek", "dep:ed25519-dalek", "dep:aes-gcm", "dep:hkdf", "async-runtime", "ids"]
+# `crypto` stays as the umbrella for backwards-compat; `bundled-bcrypt`
+# and `bundled-argon2` (v0.5.537) split out the two password-hashing
+# bindings so the well-known flip (#466 Phase 4 step 2) can route them
+# to perry-ext-bcrypt / perry-ext-argon2 without taking the rest of
+# the crypto surface offline.
+crypto = ["dep:sha2", "dep:sha1", "dep:sha3", "dep:rsa-sha1", "dep:md-5", "dep:hex", "dep:hmac", "dep:aes", "dep:cbc", "dep:ecb", "dep:ctr", "dep:scrypt", "dep:pbkdf2", "dep:base64", "dep:x25519-dalek", "dep:ed25519-dalek", "dep:aes-gcm", "dep:ghash", "dep:aes-kw", "dep:hkdf", "dep:p256", "dep:x509-cert", "async-runtime", "ids", "bundled-bcrypt", "bundled-argon2", "bundled-jsonwebtoken", "bundled-ethers"]
+bundled-bcrypt = ["dep:bcrypt", "async-runtime"]
+bundled-argon2 = ["dep:argon2", "async-runtime"]
+bundled-jsonwebtoken = ["dep:jsonwebtoken", "dep:p256", "dep:rsa", "dep:spki"]
+# ethers blockchain utilities — pure Rust, no extra deps. Default-on
+# through `crypto` umbrella; the well-known flip strips this and
+# routes to perry-ext-ethers when `import 'ethers'` is detected.
+bundled-ethers = []
 
-# Compression (zlib)
-compression = ["dep:flate2"]
+# Compression (zlib + brotli)
+# `brotli` rides under the same `compression` umbrella; needed by
+# axios's `zlib.createBrotliDecompress` feature-check (#axios e2e).
+compression = ["dep:flate2", "dep:brotli"]
 
-# Email (nodemailer)
-email = ["dep:lettre", "async-runtime"]
+# Email (nodemailer) — `email` umbrella retained for
+# backwards-compat; v0.5.558's well-known flip toggles
+# `bundled-nodemailer` instead.
+email = ["bundled-nodemailer"]
+bundled-nodemailer = ["dep:lettre", "async-runtime"]
 
-# Image processing (sharp)
-image = ["dep:image"]
+# Image processing (sharp) — `image` umbrella stays for
+# backwards-compat; v0.5.551's well-known flip toggles
+# `bundled-sharp` instead.
+image = ["bundled-sharp"]
+bundled-sharp = ["dep:image"]
 
-# HTML parsing (cheerio)
-html-parser = ["dep:scraper"]
+# HTML parsing (cheerio) — `html-parser` umbrella stays for
+# backwards-compat; v0.5.550's well-known flip toggles
+# `bundled-cheerio` instead.
+html-parser = ["bundled-cheerio"]
+bundled-cheerio = ["dep:scraper"]
 
-# Scheduler (cron)
-scheduler = ["dep:cron", "dep:tokio-cron-scheduler", "async-runtime"]
+# Scheduler (cron) — `scheduler` umbrella retained for
+# backwards-compat; v0.5.564's well-known flip toggles
+# `bundled-cron` instead.
+scheduler = ["bundled-cron"]
+bundled-cron = ["dep:cron", "dep:tokio-cron-scheduler", "async-runtime"]
 
-# Rate limiting
-rate-limit = ["dep:governor", "async-runtime"]
+# Rate limiting — `rate-limit` umbrella stays for backwards-compat;
+# v0.5.552's well-known flip toggles `bundled-ratelimit` instead.
+rate-limit = ["bundled-ratelimit"]
+bundled-ratelimit = ["dep:governor", "async-runtime"]
 
-# Validation
-validation = ["dep:validator", "dep:regex"]
+# Validation — `validation` umbrella stays for backwards-compat;
+# v0.5.538's well-known flip toggles `bundled-validator` instead.
+validation = ["bundled-validator"]
+bundled-validator = ["dep:validator", "dep:regex"]
 
-# UUID/nanoid
-ids = ["dep:uuid", "dep:nanoid"]
+# UUID/nanoid — `ids` stays as the umbrella for backwards compat;
+# from v0.5.534 onwards the per-binding split (`bundled-uuid` /
+# `bundled-nanoid`) is what the well-known bindings flip (#466
+# Phase 4 step 2) toggles. Each sub-feature pulls in its own
+# optional dep + gates its own module so a wrapper port can strip
+# exactly one binding from perry-stdlib without affecting the other.
+ids = ["bundled-uuid", "bundled-nanoid"]
+bundled-uuid = ["dep:uuid"]
+bundled-nanoid = ["dep:nanoid"]
 
 # Async runtime (tokio) - internal feature
 async-runtime = ["dep:tokio"]
@@ -120,7 +316,7 @@ rand = "0.8"  # Required by lodash (core module)
 # === OPTIONAL DEPENDENCIES ===
 
 # Async runtime
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "macros", "io-util"], optional = true }
+tokio = { version = "1", features = ["full"], optional = true }
 
 # HTTP Server
 hyper = { version = "1.4", features = ["server", "http1", "http2"], optional = true }
@@ -129,13 +325,13 @@ http-body-util = { version = "0.1", optional = true }
 bytes = { version = "1.5", optional = true }
 # DashMap is used by the always-on handle registry (`common/handle.rs`),
 # so it must NOT be optional — every minimal-stdlib build needs it.
-dashmap = "6.0"
+dashmap = "6.2"
 
 # HTTP Client
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "http2"], default-features = false, optional = true }
 
 # WebSocket
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"], optional = true }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"], optional = true }
 futures-util = { version = "0.3", optional = true }
 
 # TLS (for net.Socket.upgradeToTLS and tls.connect) — rustls-only, no OpenSSL.
@@ -144,33 +340,50 @@ rustls = { version = "0.23", optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
 
 # Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "mysql", "postgres", "chrono"], optional = true }
-redis = { version = "0.25", features = ["tokio-comp", "connection-manager"], optional = true }
-mongodb = { version = "3.5", default-features = false, features = ["compat-3-0-0", "rustls-tls", "dns-resolver"], optional = true }
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "mysql", "postgres", "chrono"], optional = true }
+redis = { version = "1.2", features = ["tokio-comp", "connection-manager"], optional = true }
+mongodb = { version = "3.7", default-features = false, features = ["compat-3-0-0", "rustls-tls", "dns-resolver"], optional = true }
 bson = { version = "2.9", optional = true }
-rusqlite = { version = "0.31", features = ["bundled"], optional = true }
+rusqlite = { version = "0.32.1", features = ["bundled", "column_decltype", "limits", "session"], optional = true }
 
 # Crypto
-sha2 = { version = "0.10", optional = true }
-sha1 = { version = "0.10", optional = true }
-md-5 = { version = "0.10", optional = true }
+sha2 = { version = "0.11", optional = true }
+sha1 = { version = "0.11", optional = true }
+sha3 = { version = "0.11", optional = true }
+rsa-sha1 = { package = "sha1", version = "0.10", optional = true }
+md-5 = { version = "0.11", optional = true }
 hex = { version = "0.4", optional = true }
-hmac = { version = "0.12", optional = true }
-bcrypt = { version = "0.15", optional = true }
-jsonwebtoken = { version = "9.3", optional = true }
+hmac = { version = "0.13", optional = true }
+bcrypt = { version = "0.17", optional = true }
+jsonwebtoken = { workspace = true, optional = true }
+p256 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
+rsa = { version = "0.9", optional = true, default-features = false, features = ["pem", "sha2"] }
+# #1367 node:crypto X509Certificate — DER/PEM cert parsing (RustCrypto, reuses
+# the der/spki/const-oid already in the lock).
+x509-cert = { version = "0.2", optional = true, default-features = false, features = ["pem"] }
+spki = { version = "0.7", optional = true, default-features = false, features = ["pem", "alloc"] }
 aes = { version = "0.8", optional = true }
 cbc = { version = "0.1", optional = true }
+ecb = { version = "0.1", optional = true }
+ctr = { version = "0.9", optional = true }
 scrypt = { version = "0.11", optional = true }
-pbkdf2 = { version = "0.12", features = ["simple"], optional = true }
+pbkdf2 = { version = "0.13", features = ["hmac"], optional = true }
 argon2 = { version = "0.5", optional = true }
 base64 = { version = "0.22", optional = true }
 x25519-dalek = { version = "2.0", features = ["static_secrets"], optional = true }
 ed25519-dalek = { version = "2.1", optional = true }
 aes-gcm = { version = "0.10", optional = true }
-hkdf = { version = "0.12", optional = true }
+ghash = { version = "0.5", optional = true }
+# AES-KW (RFC 3394) — used by `crypto.subtle.wrapKey` / `unwrapKey`
+# when the wrap algorithm is `{ name: 'AES-KW' }`. Gated under the
+# `crypto` umbrella so it tracks the rest of the symmetric surface.
+aes-kw = { version = "0.3.0", optional = true }
+hkdf = { version = "0.13", optional = true }
 
 # Compression
 flate2 = { version = "1.0", optional = true }
+# Brotli decompression — feature-checked by axios at module init.
+brotli = { version = "8.0.2", optional = true }
 
 # Email
 lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "builder", "hostname", "pool"], optional = true }
@@ -179,31 +392,48 @@ lettre = { version = "0.11", default-features = false, features = ["tokio1", "to
 image = { version = "0.25", optional = true }
 
 # HTML parser
-scraper = { version = "0.19", optional = true }
+scraper = { version = "0.27", optional = true }
 
 # Scheduler
 cron = { version = "0.12", optional = true }
 tokio-cron-scheduler = { version = "0.10", optional = true }
 
 # Rate limiting
-governor = { version = "0.6", optional = true }
+governor = { version = "0.10", optional = true }
 
 # Validation
-validator = { version = "0.18", features = ["derive"], optional = true }
+validator = { version = "0.20", features = ["derive"], optional = true }
 regex = { version = "1.10", optional = true }
 
 # IDs
 uuid = { version = "1.11", features = ["v4", "v1", "v7"], optional = true }
-nanoid = { version = "0.4", optional = true }
+nanoid = { version = "0.5", optional = true }
 
-# LRU Cache
-lru = "0.12"
+# LRU Cache — optional from v0.5.539 so the well-known flip can
+# strip the perry-stdlib copy when `import 'lru-cache'` resolves
+# to perry-ext-lru-cache instead.
+lru = { version = "0.18", optional = true }
 
 # CLI parsing (Commander)
 clap = { version = "4.4", features = ["derive"] }
 
-# Decimal math (Big.js / Decimal.js)
-rust_decimal = { version = "1.33", features = ["maths"] }
+# Decimal math (Big.js / Decimal.js) — optional from v0.5.547 so
+# the well-known flip can strip perry-stdlib's copy when
+# `import 'decimal.js'` resolves to perry-ext-decimal instead.
+rust_decimal = { version = "1.33", features = ["maths"], optional = true }
+
+# libc — termios for readline's raw-mode toggle (#347 Phase 2). The
+# Unix path uses tcsetattr/cfmakeraw; Windows uses SetConsoleMode via
+# the windows-sys crate (#406). iOS/Android stdlibs are stubbed
+# entirely (no terminal surface on those platforms).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_System_Console",
+    "Win32_Foundation",
+] }
 
 [dev-dependencies]
 # Property tests for the container FFI bridge (gated behind `container` feature

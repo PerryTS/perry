@@ -1,0 +1,20 @@
+[package]
+name = "perry-ext-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for Node `net.Socket` — TCP + optional TLS upgrade. Uses only `perry-ffi`. Async via spawn_blocking-per-socket. Phase 5 #466 — first net-IO wrapper port."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+tokio = { workspace = true }
+tokio-rustls = "0.26"
+rustls = "0.23"
+rustls-native-certs = "0.8"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }
+perry-runtime.workspace = true

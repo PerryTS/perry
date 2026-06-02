@@ -1,0 +1,6 @@
+controller /users
+route path /:id
+route key find
+method custom ok
+method param find
+method paramtypes true

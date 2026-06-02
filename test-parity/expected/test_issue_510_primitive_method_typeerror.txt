@@ -1,0 +1,5 @@
+read missing on string: undefined
+read missing on number: undefined
+read missing on bool: undefined
+about to throw — last line of stdout
+TypeError: (string).lengt is not a function

@@ -1,0 +1,8 @@
+{
+  "name": "issue-321-named-namespace-reexport",
+  "version": "0.0.0",
+  "type": "module",
+  "perry": {
+    "compilePackages": ["mini-effect"]
+  }
+}

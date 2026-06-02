@@ -1,6 +1,7 @@
 package com.perry.app
 
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.widget.FrameLayout
@@ -51,6 +52,28 @@ class PerryActivity : Activity() {
         // Initialize the bridge with this Activity
         PerryBridge.init(this, rootLayout)
 
+        // #1138 — install optional `@perryts/google-auth` Kotlin
+        // bridge if the package is present in the produced APK.
+        // Uses reflection so the call is a no-op when the package
+        // isn't installed (keeps the template build green for apps
+        // that don't depend on Google Sign In).
+        try {
+            val cls = Class.forName("com.perryts.googleauth.PerryGoogleAuth")
+            cls.getMethod("install", android.content.Context::class.java)
+               .invoke(null, this)
+        } catch (_: ClassNotFoundException) {
+            // not installed — fine
+        } catch (e: Throwable) {
+            android.util.Log.w("PerryActivity",
+                "PerryGoogleAuth.install failed: ${e.message}")
+        }
+
+        // Issue #583: capture the cold-start URL (if any). Tapping a
+        // `myapp://…` link or a Universal-Link `https://yourdomain.com/…`
+        // launches us with `intent.data` populated. The bridge holds the
+        // URL until the JS module's `appOnOpenUrl` registers its handler.
+        intent?.data?.toString()?.let { PerryBridge.onDeepLinkColdStart(it) }
+
         // Request any dangerous runtime permissions declared in the manifest
         // before starting native code, so they're available when needed.
         val needed = getDangerousPermissionsToRequest()
@@ -100,6 +123,32 @@ class PerryActivity : Activity() {
                     grantResults[0] == PackageManager.PERMISSION_GRANTED
                 PerryBridge.onAudioPermissionResult(granted)
             }
+            45 -> { // GEOLOCATION_PERMISSION_REQUEST (issue #552)
+                val granted = grantResults.isNotEmpty() &&
+                    grantResults.any { it == PackageManager.PERMISSION_GRANTED }
+                PerryBridge.onGeolocationPermissionResult(granted)
+            }
+        }
+    }
+
+    /**
+     * Issue #583: foreground deep-link delivery. The OS calls this when the
+     * Activity is already running (singleTop launchMode in the manifest)
+     * and the user taps a deep link — the new URL arrives in this Intent
+     * rather than via a fresh onCreate.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.data?.toString()?.let { PerryBridge.onDeepLinkForeground(it) }
+    }
+
+    @Deprecated("Required to wire pre-existing file dialog and the issue #552 image picker")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        when (requestCode) {
+            42 -> PerryBridge.onFileDialogResult(resultCode, data) // FILE_PICK_REQUEST
+            46 -> PerryBridge.onImagePickerResult(resultCode, data) // IMAGE_PICK_REQUEST (#552)
         }
     }
 
@@ -133,8 +182,43 @@ class PerryActivity : Activity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        PerryBridge.forwardMapsLifecycle("resume")
+    }
+
+    override fun onPause() {
+        super.onPause()
+        PerryBridge.forwardMapsLifecycle("pause")
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        PerryBridge.forwardMapsLifecycle("lowMemory")
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        PerryBridge.forwardMapsLifecycle("destroy")
         PerryBridge.nativeShutdown()
+    }
+
+    // Issue #1864: continuous keyboard events. Forward every hardware key
+    // event to the native dispatcher BEFORE letting the system handle it,
+    // so onKeyDown/onKeyUp fire even for keys the app doesn't otherwise
+    // intercept. `super.dispatchKeyEvent` still runs so EditText / focus
+    // navigation keep working.
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        try {
+            PerryBridge.nativeDispatchKey(
+                event.keyCode,
+                event.action,
+                event.metaState,
+                event.repeatCount,
+            )
+        } catch (_: UnsatisfiedLinkError) {
+            // Native lib not loaded yet (key arrived during early startup).
+        }
+        return super.dispatchKeyEvent(event)
     }
 }

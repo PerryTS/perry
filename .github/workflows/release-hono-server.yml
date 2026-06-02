@@ -1,0 +1,59 @@
+name: Release @perryts/hono-server
+
+# Independent release path for the packages/hono-perry-server workspace package
+# (@perryts/hono-server). Deliberately decoupled from the compiler's
+# `release-packages.yml` (`v*` tag → 120-min gated Homebrew/apt/winget/npm-CLI
+# pipeline): bumping a ~50-line adapter must not cut a full Perry release.
+#
+# Trigger: push a `hono-server-v<version>` tag whose version matches
+# packages/hono-perry-server/package.json (e.g. `hono-server-v0.1.1`).
+on:
+  push:
+    tags:
+      - "hono-server-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # REQUIRED for OIDC Trusted Publisher + npm --provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/hono-perry-server
+    steps:
+      - uses: actions/checkout@v6
+
+      # Node 24 ships npm 11.x. OIDC Trusted Publishing needs npm >= 11.5.1;
+      # Node 22's npm 10.x silently fails the OIDC handshake and the registry
+      # returns a misleading 404 on PUT. Do NOT set `registry-url` here — it
+      # writes a token-based .npmrc that contradicts OIDC (the publish targets
+      # the default registry.npmjs.org regardless).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Upgrade npm (OIDC Trusted Publisher requires >= 11.5.1)
+        run: npm install -g npm@latest
+
+      # Guard against a mislabeled release: the tag's version must equal the
+      # version in package.json. Tag-pushes only — workflow_dispatch (manual
+      # republish of current main) skips this.
+      - name: Verify tag matches package version
+        if: github.ref_type == 'tag'
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#hono-server-v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME implies $TAG_VERSION but package.json is $PKG_VERSION"
+            exit 1
+          fi
+          echo "Publishing @perryts/hono-server@$PKG_VERSION"
+
+      # `access: public` is set in package.json publishConfig, so no --access
+      # flag is needed. --provenance attaches the signed build attestation
+      # (visible on the npm package page).
+      - name: Publish to npm (provenance via OIDC)
+        run: npm publish --provenance

@@ -1,0 +1,290 @@
+# Well-known native bindings registry (#466 Phase 4).
+#
+# Maps bare npm package names that Perry natively supports to the
+# bundled wrapper crate that ships with the compiler. When a user
+# writes `import { config } from 'dotenv'` and there's no
+# `node_modules/dotenv/` on disk, this table is what Perry consults
+# to find the implementation.
+#
+# Resolution precedence (see docs/src/native-libraries/manifest-v1.md):
+#   1. node_modules/<name>/  with  perry.nativeLibrary  →  use it
+#   2. node_modules/<name>/  without manifest           →  V8 fallback
+#   3. well_known_bindings.toml (this file)             →  bundled crate
+#   4. nothing matches                                  →  resolution error
+#
+# Adding an entry here:
+#   - the `crate` value is the workspace member crate name (e.g.
+#     `perry-ext-dotenv`); Perry derives the staticlib path as
+#     `target/release/lib<crate-name-with-dashes-underscored>.a`.
+#   - the wrapper crate must export the same `js_<package>_*`
+#     symbols that perry-stdlib's existing implementation does, so
+#     codegen-side dispatch keeps working unchanged.
+#   - users can override an entry by installing their own wrapper
+#     in `node_modules/<name>/` — that always wins.
+#
+# Migration order tracks #466 Phase 5 (smallest first). Each entry
+# is gated on the bundled crate actually existing in the workspace
+# — wrappers that haven't been ported yet have no entry.
+
+[bindings.dotenv]
+crate = "perry-ext-dotenv"
+# Library file name without the `lib` prefix or `.a` extension.
+# Cargo derives this from the crate name by replacing `-` with `_`,
+# but stating it explicitly here is documentation for humans
+# inspecting the table.
+lib = "perry_ext_dotenv"
+# Tracking issue for the migration; surfaced in error messages
+# when the bundled .a is missing at link time.
+tracking = "#466"
+
+[bindings.nanoid]
+crate = "perry-ext-nanoid"
+lib = "perry_ext_nanoid"
+tracking = "#466"
+
+[bindings.uuid]
+crate = "perry-ext-uuid"
+lib = "perry_ext_uuid"
+tracking = "#466"
+
+[bindings.slugify]
+crate = "perry-ext-slugify"
+lib = "perry_ext_slugify"
+tracking = "#466"
+
+[bindings.bcrypt]
+crate = "perry-ext-bcrypt"
+lib = "perry_ext_bcrypt"
+tracking = "#466"
+
+[bindings.argon2]
+crate = "perry-ext-argon2"
+lib = "perry_ext_argon2"
+tracking = "#466"
+
+[bindings.jsonwebtoken]
+crate = "perry-ext-jsonwebtoken"
+lib = "perry_ext_jsonwebtoken"
+tracking = "#466"
+
+[bindings.validator]
+crate = "perry-ext-validator"
+lib = "perry_ext_validator"
+tracking = "#466"
+
+[bindings.lru-cache]
+crate = "perry-ext-lru-cache"
+lib = "perry_ext_lru_cache"
+tracking = "#466"
+
+[bindings.better-sqlite3]
+crate = "perry-ext-better-sqlite3"
+lib = "perry_ext_better_sqlite3"
+tracking = "#466"
+
+[bindings.zlib]
+crate = "perry-ext-zlib"
+lib = "perry_ext_zlib"
+tracking = "#466"
+
+[bindings.exponential-backoff]
+crate = "perry-ext-exponential-backoff"
+lib = "perry_ext_exponential_backoff"
+tracking = "#466"
+
+# NOTE: tursodb (#424) and iroh (#425) lived here through v0.5.556 but
+# were moved out to standalone third-party repositories in v0.5.557:
+#   - https://github.com/PerryTS/tursodb-bindings  → `bun add @perryts/tursodb`
+#   - https://github.com/PerryTS/iroh-bindings     → `bun add @perryts/iroh`
+# They were the demonstration cases of the "third-party native binding"
+# hypothesis from #466. Now that the package.json `perry.nativeLibrary`
+# resolution path is wired through (and the surface required is stable
+# in perry-ffi v0.5), they belong outside the perry monorepo as separate
+# npm packages users install on demand. The well-known table here keeps
+# its job: bundling the wrappers that *port* perry-stdlib's existing
+# in-tree implementations, not net-new functionality.
+
+[bindings.axios]
+crate = "perry-ext-axios"
+lib = "perry_ext_axios"
+tracking = "#466"
+
+[bindings.events]
+crate = "perry-ext-events"
+lib = "perry_ext_events"
+tracking = "#466"
+
+[bindings."decimal.js"]
+crate = "perry-ext-decimal"
+lib = "perry_ext_decimal"
+tracking = "#466"
+
+[bindings."bignumber.js"]
+crate = "perry-ext-decimal"
+lib = "perry_ext_decimal"
+tracking = "#466"
+
+[bindings.dayjs]
+crate = "perry-ext-dayjs"
+lib = "perry_ext_dayjs"
+tracking = "#466"
+
+[bindings."date-fns"]
+crate = "perry-ext-dayjs"
+lib = "perry_ext_dayjs"
+tracking = "#466"
+
+[bindings.moment]
+crate = "perry-ext-moment"
+lib = "perry_ext_moment"
+tracking = "#466"
+
+[bindings.cheerio]
+crate = "perry-ext-cheerio"
+lib = "perry_ext_cheerio"
+tracking = "#466"
+
+[bindings.sharp]
+crate = "perry-ext-sharp"
+lib = "perry_ext_sharp"
+tracking = "#466"
+
+[bindings."rate-limiter-flexible"]
+crate = "perry-ext-ratelimit"
+lib = "perry_ext_ratelimit"
+tracking = "#466"
+
+[bindings.commander]
+crate = "perry-ext-commander"
+lib = "perry_ext_commander"
+tracking = "#466"
+
+[bindings.ethers]
+crate = "perry-ext-ethers"
+lib = "perry_ext_ethers"
+tracking = "#466"
+
+[bindings.cron]
+crate = "perry-ext-cron"
+lib = "perry_ext_cron"
+tracking = "#466"
+
+[bindings."node-cron"]
+crate = "perry-ext-cron"
+lib = "perry_ext_cron"
+tracking = "#466"
+
+[bindings.ioredis]
+crate = "perry-ext-ioredis"
+lib = "perry_ext_ioredis"
+tracking = "#466"
+
+[bindings.redis]
+crate = "perry-ext-ioredis"
+lib = "perry_ext_ioredis"
+tracking = "#466"
+
+[bindings.pg]
+crate = "perry-ext-pg"
+lib = "perry_ext_pg"
+tracking = "#466"
+
+[bindings.mysql2]
+crate = "perry-ext-mysql2"
+lib = "perry_ext_mysql2"
+tracking = "#466"
+
+[bindings."mysql2/promise"]
+crate = "perry-ext-mysql2"
+lib = "perry_ext_mysql2"
+tracking = "#466"
+
+[bindings.nodemailer]
+crate = "perry-ext-nodemailer"
+lib = "perry_ext_nodemailer"
+tracking = "#466"
+
+[bindings.mongodb]
+crate = "perry-ext-mongodb"
+lib = "perry_ext_mongodb"
+tracking = "#466"
+
+[bindings."node-fetch"]
+crate = "perry-ext-fetch"
+lib = "perry_ext_fetch"
+tracking = "#466"
+
+[bindings.fetch]
+crate = "perry-ext-fetch"
+lib = "perry_ext_fetch"
+tracking = "#466"
+
+[bindings.ws]
+crate = "perry-ext-ws"
+lib = "perry_ext_ws"
+tracking = "#466"
+
+[bindings.net]
+crate = "perry-ext-net"
+lib = "perry_ext_net"
+tracking = "#466"
+
+[bindings.http]
+crate = "perry-ext-http"
+lib = "perry_ext_http"
+tracking = "#466"
+
+[bindings.https]
+crate = "perry-ext-http"
+lib = "perry_ext_http"
+tracking = "#466"
+
+# Server-side `node:http2` lives in perry-ext-http-server, but its
+# symbols are pulled in transitively through perry-ext-http (rlib
+# dep), so the staticlib binding stays uniform across http/https/http2.
+[bindings.http2]
+crate = "perry-ext-http"
+lib = "perry_ext_http"
+tracking = "#577"
+
+[bindings.streams]
+crate = "perry-ext-streams"
+lib = "perry_ext_streams"
+tracking = "#466"
+
+[bindings.fastify]
+crate = "perry-ext-fastify"
+lib = "perry_ext_fastify"
+tracking = "#466"
+
+# `@perryts/google-auth` is no longer bundled — extracted to a
+# standalone repo (https://github.com/PerryTS/google-auth) and
+# published as an npm package starting v0.5.1015. The previous
+# in-tree binding (perry-ext-google-auth) only shipped a
+# `not-yet-implemented` stub; the standalone package carries the
+# real GoogleSignIn iOS bridge + CredentialManager Android bridge.
+# Users now `npm install @perryts/google-auth`; perry resolves the
+# native lib through the standard `perry.nativeLibrary` lookup.
+# `@perryts/pdf` — official PDF creation package (issue #516).
+# Companion to the existing PdfView widget (rendering/viewing side
+# already shipped in perry-ui-{ios,visionos,macos}). The producer
+# side here wraps the pure-Rust `printpdf` crate behind a five-
+# function FFI: createPdf / pdfAddText / pdfAddLine / pdfNewPage /
+# pdfSave. Page units = PDF points (1/72"), origin = bottom-left
+# per the PDF standard.
+[bindings."@perryts/pdf"]
+crate = "perry-ext-pdf"
+lib = "perry_ext_pdf"
+tracking = "#516"
+
+# `perry/ads` — official in-app advertising package (issue #867).
+# Interstitial + rewarded + banner FFI over Google Mobile Ads
+# (iOS via SwiftPM, Android via play-services-ads). MVP scaffold:
+# every FFI entry point resolves a structured
+# `{ error: "no-sdk-linked" }` placeholder. Real SDK integration,
+# GDPR/ATT consent flow, and Info.plist / AndroidManifest auto-
+# injection are tracked as follow-ups under the same issue.
+[bindings."perry/ads"]
+crate = "perry-ext-ads"
+lib = "perry_ext_ads"
+tracking = "#867"

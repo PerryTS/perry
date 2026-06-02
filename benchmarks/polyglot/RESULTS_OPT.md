@@ -2,48 +2,75 @@
 
 Same benchmarks as [`RESULTS.md`](./RESULTS.md), but with a second column
 per native language showing what happens when the language is given the
-flags and idioms that match what Perry does by default.
+flags and idioms equivalent to **Perry `--fast-math`** (since v0.5.585,
+fast-math is opt-in; the previous "Perry default" through v0.5.584 is
+now the `--fast-math` mode).
 
-**Run date:** 2026-04-15 — Perry commit `e1cbd37`.
+**Run date (Perry):** 2026-05-06 — Perry commit `main` (v0.5.585).
+The 2026-05-14 v0.5.908 default-mode polyglot sweep (see `RESULTS.md`)
+did not rerun `bench_opt.*` — the table here is preserved as the
+last side-by-side opt-tuning sweep. The 2026-05-14 default-column
+numbers in `RESULTS.md` match v0.5.585 within 1-4 ms (e.g. fibonacci
+304 → 309, loop_overhead 95 → 97, math_intensive 50 → 51), so the
+opt-side cells here are within noise of the current binary; the
+shape (which language's `opt` flags close the gap to Perry
+`--fast-math`) is unchanged.
+**Run date (other languages):** 2026-04-15 — refreshed when next opt
+sweep runs.
 **Hardware:** Apple M1 Max, macOS 26.4.
-**Methodology:** best of 5 per cell (best of 20 for `fibonacci`).
+**Methodology:** Perry RUNS=11 median; other languages best of 5 per
+cell (best of 20 for `fibonacci`) — methodology was modernized after
+this table was first written; full RUNS=11 + p95 + σ are in
+`RESULTS_AUTO.md`.
 
 ## Side by side
 
-All times in milliseconds. `Δ` = (default − opt) / default. Positive = opt
-is faster.
+All times in milliseconds. `Δ` = (default − opt) / default. Positive =
+opt is faster.
 
-| Benchmark        | Perry |  C++<br>dflt |  C++<br>opt |  ΔC++ | Rust<br>dflt | Rust<br>opt | ΔRust |  Go<br>dflt |  Go<br>opt |  ΔGo | Swift<br>dflt | Swift<br>opt | ΔSwift |
-|------------------|------:|-------------:|------------:|------:|-------------:|------------:|------:|------------:|-----------:|-----:|--------------:|-------------:|-------:|
-| loop_overhead    |    12 |           98 |          12 |  88%  |           99 |          24 |  76%  |          97 |         99 |  0%  |            97 |           24 |   75%  |
-| math_intensive   |    14 |           50 |          14 |  72%  |           49 |          14 |  71%  |          49 |         49 |  0%  |            49 |           14 |   71%  |
-| accumulate       |    24 |           97 |          26 |  73%  |           97 |          41 |  58%  |          99 |         70 | 29%  |            96 |           42 |   56%  |
-| array_write      |     2 |            2 |           2 |   0%  |            7 |           7 |   0%  |           9 |          9 |  0%  |             2 |            2 |    0%  |
-| array_read       |     3 |            9 |           1 |  89%  |           10 |           9 |  10%  |          10 |         11 | -10% |             9 |            9 |    0%  |
-| nested_loops     |     9 |            8 |           1 |  88%  |            8 |           8 |   0%  |          10 |          9 | 10%  |             8 |            8 |    0%  |
-| fibonacci        |   311 |          310 |         312 |  -1%  |          319 |         319 |   0%  |         450 |        454 | -1%  |           403 |          360 |   11%  |
-| object_create    |     2 |            0 |           0 |  --   |            0 |           0 |  --   |           0 |          0 |  --  |             0 |            0 |    --  |
+**The "Perry" column shows BOTH Perry default and Perry `--fast-math`**
+since v0.5.585's flip means the apples-to-apples comparison against
+each language's `opt` column is the `--fast` value. Perry default
+sits roughly where each language's `dflt` column sits on the FP-
+foldable benches.
+
+| Benchmark        | Perry<br>dflt | Perry<br>--fast |  C++<br>dflt |  C++<br>opt |  ΔC++ | Rust<br>dflt | Rust<br>opt | ΔRust |  Go<br>dflt |  Go<br>opt |  ΔGo | Swift<br>dflt | Swift<br>opt | ΔSwift |
+|------------------|--------------:|----------------:|-------------:|------------:|------:|-------------:|------------:|------:|------------:|-----------:|-----:|--------------:|-------------:|-------:|
+| loop_overhead    |            95 |              12 |           98 |          12 |  88%  |           99 |          24 |  76%  |          97 |         99 |  0%  |            97 |           24 |   75%  |
+| math_intensive   |            50 |              14 |           50 |          14 |  72%  |           49 |          14 |  71%  |          49 |         49 |  0%  |            49 |           14 |   71%  |
+| accumulate       |            95 |              33 |           97 |          26 |  73%  |           97 |          41 |  58%  |          99 |         70 | 29%  |            96 |           42 |   56%  |
+| array_write      |             4 |               3 |            2 |           2 |   0%  |            7 |           7 |   0%  |           9 |          9 |  0%  |             2 |            2 |    0%  |
+| array_read       |            11 |              11 |            9 |           1 |  89%  |           10 |           9 |  10%  |          10 |         11 | -10% |             9 |            9 |    0%  |
+| nested_loops     |            17 |              17 |            8 |           1 |  88%  |            8 |           8 |   0%  |          10 |          9 | 10%  |             8 |            8 |    0%  |
+| fibonacci        |           304 |             304 |          310 |         312 |  -1%  |          319 |         319 |   0%  |         450 |        454 | -1%  |           403 |          360 |   11%  |
+| object_create    |             2 |               0 |            0 |           0 |  --   |            0 |           0 |  --   |           0 |          0 |  --  |             0 |            0 |    --  |
 
 ## The one-line story per language
 
 **C++ (`bench_opt.cpp`, `-O3 -ffast-math -std=c++17`):** adding `-ffast-math`
 and switching `accumulate` to `int64_t` closes every gap. C++ matches Perry
-to the millisecond on `loop_overhead` (12 = 12) and `math_intensive` (14 =
-14), and **beats Perry** on `array_read` (1 < 3) and `nested_loops` (1 < 9)
-because clang's autovectorizer on ffast-math flat-array sums is more
-aggressive than what Perry currently emits. The thesis is confirmed: the
-entire Perry advantage on numeric f64 loops is the default flag choice,
-not the compiler or the codegen backend.
+`--fast-math` to the millisecond on `loop_overhead` (12 = 12) and
+`math_intensive` (14 = 14), and **beats Perry** on `array_read` (1 < 11)
+and `nested_loops` (1 < 17) because clang's autovectorizer on ffast-math
+flat-array sums is more aggressive than what Perry currently emits.
+The thesis is confirmed: the entire Perry-vs-C++ advantage on numeric
+f64 loops is one flag choice on each side. With v0.5.585's flip, that
+flag choice is now visible in the table — Perry default sits with C++
+default (95-98 ms, 50 ms); Perry `--fast` sits with C++ `-ffast-math`
+(12 ms, 14 ms).
 
 **Rust (`bench_opt.rs`, stable + `-C llvm-args=-fp-contract=fast`):** manual
 4-way unrolling + iterator form + `i64` accumulate closes **most** of the
 gap, but not all. `loop_overhead` goes from 99 → 24 ms (76% improvement)
-but doesn't reach Perry's 12 ms — because stable Rust has no way to expose
-LLVM's `reassoc` flag on individual fadd instructions. Nightly Rust's
-`std::intrinsics::fadd_fast` would get there; we intentionally stayed on
-stable. This is an interesting finding: Rust's *type system* can express
-what Perry does (via `i64`), but Rust's *compile flags* cannot express
-what Perry does (via `reassoc`).
+but doesn't reach Perry `--fast`'s 12 ms — because stable Rust has no
+way to expose LLVM's `reassoc` flag on individual fadd instructions.
+Nightly Rust's `std::intrinsics::fadd_fast` (or the more recent
+`#![feature(float_algebraic)]` API) would get there; we intentionally
+stayed on stable. This is an interesting finding: Rust stable's
+*type system* can express what Perry `--fast-math` does (via `i64`),
+but Rust stable's *compile flags* cannot express what Perry
+`--fast-math` does (via `reassoc`). Perry default sits at 95 ms,
+right next to Rust default at 99 ms.
 
 **Go (`bench_opt.go`, `go build`):** the only language that **cannot** close
 the `loop_overhead` / `math_intensive` gap at all. Go has no `-ffast-math`,

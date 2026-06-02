@@ -1,0 +1,7 @@
+L:addr-object=true
+L:port>0=true
+S:got:ping
+C:got:pong
+C:end
+C:close
+S:closed

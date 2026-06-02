@@ -15,7 +15,7 @@ use anyhow::Result;
 use perry_hir::Expr;
 
 use crate::expr::{lower_expr, unbox_to_i64, FnCtx};
-use crate::types::{DOUBLE, I64};
+use crate::types::{DOUBLE, I64, VOID};
 
 // `extract_options_fields` and `get_raw_string_ptr` stay in
 // `lower_call.rs` (the parent module) — they're used by other parts
@@ -38,11 +38,10 @@ pub(super) fn apply_inline_style(
                 let v = lower_expr(ctx, val)?;
                 ctx.pending_declares.push((
                     "perry_ui_widget_set_corner_radius".to_string(),
-                    DOUBLE,
+                    VOID,
                     vec![I64, DOUBLE],
                 ));
-                ctx.block().call(
-                    DOUBLE,
+                ctx.block().call_void(
                     "perry_ui_widget_set_corner_radius",
                     &[(I64, handle), (DOUBLE, &v)],
                 );
@@ -51,11 +50,10 @@ pub(super) fn apply_inline_style(
                 let v = lower_expr(ctx, val)?;
                 ctx.pending_declares.push((
                     "perry_ui_widget_set_opacity".to_string(),
-                    DOUBLE,
+                    VOID,
                     vec![I64, DOUBLE],
                 ));
-                ctx.block().call(
-                    DOUBLE,
+                ctx.block().call_void(
                     "perry_ui_widget_set_opacity",
                     &[(I64, handle), (DOUBLE, &v)],
                 );
@@ -64,11 +62,10 @@ pub(super) fn apply_inline_style(
                 let v = lower_expr(ctx, val)?;
                 ctx.pending_declares.push((
                     "perry_ui_widget_set_border_width".to_string(),
-                    DOUBLE,
+                    VOID,
                     vec![I64, DOUBLE],
                 ));
-                ctx.block().call(
-                    DOUBLE,
+                ctx.block().call_void(
                     "perry_ui_widget_set_border_width",
                     &[(I64, handle), (DOUBLE, &v)],
                 );
@@ -77,14 +74,11 @@ pub(super) fn apply_inline_style(
                 let s = get_raw_string_ptr(ctx, val)?;
                 ctx.pending_declares.push((
                     "perry_ui_widget_set_tooltip".to_string(),
-                    DOUBLE,
+                    VOID,
                     vec![I64, I64],
                 ));
-                ctx.block().call(
-                    DOUBLE,
-                    "perry_ui_widget_set_tooltip",
-                    &[(I64, handle), (I64, &s)],
-                );
+                ctx.block()
+                    .call_void("perry_ui_widget_set_tooltip", &[(I64, handle), (I64, &s)]);
             }
             "hidden" => {
                 let v = lower_expr(ctx, val)?;
@@ -92,14 +86,11 @@ pub(super) fn apply_inline_style(
                 let bits = unbox_to_i64(blk, &v);
                 ctx.pending_declares.push((
                     "perry_ui_set_widget_hidden".to_string(),
-                    DOUBLE,
+                    VOID,
                     vec![I64, I64],
                 ));
-                ctx.block().call(
-                    DOUBLE,
-                    "perry_ui_set_widget_hidden",
-                    &[(I64, handle), (I64, &bits)],
-                );
+                ctx.block()
+                    .call_void("perry_ui_set_widget_hidden", &[(I64, handle), (I64, &bits)]);
             }
             "enabled" => {
                 let v = lower_expr(ctx, val)?;
@@ -107,11 +98,10 @@ pub(super) fn apply_inline_style(
                 let bits = unbox_to_i64(blk, &v);
                 ctx.pending_declares.push((
                     "perry_ui_widget_set_enabled".to_string(),
-                    DOUBLE,
+                    VOID,
                     vec![I64, I64],
                 ));
-                ctx.block().call(
-                    DOUBLE,
+                ctx.block().call_void(
                     "perry_ui_widget_set_enabled",
                     &[(I64, handle), (I64, &bits)],
                 );
@@ -126,11 +116,10 @@ pub(super) fn apply_inline_style(
                 let (r, g, b, a) = lower_color_with_runtime_fallback(ctx, val)?;
                 ctx.pending_declares.push((
                     "perry_ui_widget_set_background_color".to_string(),
-                    DOUBLE,
+                    VOID,
                     vec![I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
                 ));
-                ctx.block().call(
-                    DOUBLE,
+                ctx.block().call_void(
                     "perry_ui_widget_set_background_color",
                     &[
                         (I64, handle),
@@ -149,11 +138,10 @@ pub(super) fn apply_inline_style(
                 let (r, g, b, a) = lower_color_with_runtime_fallback(ctx, val)?;
                 ctx.pending_declares.push((
                     "perry_ui_text_set_color".to_string(),
-                    DOUBLE,
+                    VOID,
                     vec![I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
                 ));
-                ctx.block().call(
-                    DOUBLE,
+                ctx.block().call_void(
                     "perry_ui_text_set_color",
                     &[
                         (I64, handle),
@@ -168,11 +156,10 @@ pub(super) fn apply_inline_style(
                 let (r, g, b, a) = lower_color_with_runtime_fallback(ctx, val)?;
                 ctx.pending_declares.push((
                     "perry_ui_widget_set_border_color".to_string(),
-                    DOUBLE,
+                    VOID,
                     vec![I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
                 ));
-                ctx.block().call(
-                    DOUBLE,
+                ctx.block().call_void(
                     "perry_ui_widget_set_border_color",
                     &[
                         (I64, handle),
@@ -206,11 +193,10 @@ pub(super) fn apply_inline_style(
                 };
                 ctx.pending_declares.push((
                     "perry_ui_widget_set_edge_insets".to_string(),
-                    DOUBLE,
+                    VOID,
                     vec![I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
                 ));
-                ctx.block().call(
-                    DOUBLE,
+                ctx.block().call_void(
                     "perry_ui_widget_set_edge_insets",
                     &[
                         (I64, handle),
@@ -225,11 +211,10 @@ pub(super) fn apply_inline_style(
                 if let Some((cr, cg, cb, ca, blur, dx, dy)) = extract_shadow_obj(ctx, val)? {
                     ctx.pending_declares.push((
                         "perry_ui_widget_set_shadow".to_string(),
-                        DOUBLE,
+                        VOID,
                         vec![I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
                     ));
-                    ctx.block().call(
-                        DOUBLE,
+                    ctx.block().call_void(
                         "perry_ui_widget_set_shadow",
                         &[
                             (I64, handle),
@@ -254,12 +239,11 @@ pub(super) fn apply_inline_style(
                 };
                 ctx.pending_declares.push((
                     "perry_ui_text_set_decoration".to_string(),
-                    DOUBLE,
+                    VOID,
                     vec![I64, I64],
                 ));
                 let n_str = n.to_string();
-                ctx.block().call(
-                    DOUBLE,
+                ctx.block().call_void(
                     "perry_ui_text_set_decoration",
                     &[(I64, handle), (I64, &n_str)],
                 );
@@ -274,14 +258,13 @@ pub(super) fn apply_inline_style(
                     let (r2, g2, b2, a2) = c2;
                     ctx.pending_declares.push((
                         "perry_ui_widget_set_background_gradient".to_string(),
-                        DOUBLE,
+                        VOID,
                         vec![
                             I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
                             DOUBLE,
                         ],
                     ));
-                    ctx.block().call(
-                        DOUBLE,
+                    ctx.block().call_void(
                         "perry_ui_widget_set_background_gradient",
                         &[
                             (I64, handle),

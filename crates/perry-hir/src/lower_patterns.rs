@@ -215,7 +215,12 @@ pub(crate) fn generate_param_destructuring_stmts(
 ) -> Result<Vec<Stmt>> {
     match pat {
         ast::Pat::Array(_) | ast::Pat::Object(_) => {
-            crate::destructuring::lower_pattern_binding(ctx, pat, Expr::LocalGet(param_id), false)
+            // Function parameters are mutable bindings (like `let`), so the
+            // destructured locals must be mutable too — JS lets you reassign a
+            // destructured param (`([a, b]) => { b -= 1 }`). Passing `false`
+            // here marked them `const` and made any such reassignment throw
+            // "Assignment to constant variable" (hit by Hono's RegExpRouter).
+            crate::destructuring::lower_pattern_binding(ctx, pat, Expr::LocalGet(param_id), true)
         }
         _ => Ok(Vec::new()),
     }
@@ -285,10 +290,24 @@ pub(crate) fn pre_scan_fastify_handler_params(
         ast::Expr::Fn(_) => return None, // fn expressions handled separately
         _ => return None,
     };
-    let req_name = arrow.params.first().and_then(pat_ident_name)?;
+    // Issue #1070: `setErrorHandler(async (err, req, reply) => …)` —
+    // the first arrow param is the THROWN VALUE, not a fastify Request.
+    // Registering `err` as `("fastify", "Request")` causes `err.problem`
+    // (or any user-field access on a thrown class instance) to lower to
+    // a NativeMethodCall whose method name isn't in the fastify Request
+    // dispatch table → the lower_native_method_call fall-through emits
+    // `double_literal(0.0)`, so the access prints as `0`. Skip the first
+    // arrow param for setErrorHandler so only params[1] / params[2]
+    // (the real Request / Reply) get the native-instance tags.
+    let (req_param_idx, reply_param_idx) = if method_name == "setErrorHandler" {
+        (1, 2)
+    } else {
+        (0, 1)
+    };
+    let req_name = arrow.params.get(req_param_idx).and_then(pat_ident_name)?;
     let reply_name = arrow
         .params
-        .get(1)
+        .get(reply_param_idx)
         .and_then(pat_ident_name)
         .unwrap_or_default();
     Some((req_name, reply_name))
@@ -303,14 +322,296 @@ fn pat_ident_name(pat: &ast::Pat) -> Option<String> {
     }
 }
 
+/// Pre-scan for `http.createServer((req, res) => ...)` and
+/// `createServer((req, res) => ...)` (named import from node:http).
+/// Issue #577 mirror of `pre_scan_fastify_handler_params`. Returns
+/// the (request_local, response_local) names so the caller can
+/// register them as `("http", "IncomingMessage")` and
+/// `("http", "ServerResponse")` native instances BEFORE the arrow
+/// body is lowered — that way `req.method` / `res.end(...)` inside
+/// the handler dispatch through NATIVE_MODULE_TABLE.
+///
+/// Returns `None` for any other call shape.
+pub(crate) fn pre_scan_node_http_create_server_params(
+    ctx: &crate::lower::LoweringContext,
+    call: &ast::CallExpr,
+) -> Option<(String, String)> {
+    use ast::Callee;
+    let callee_expr = match &call.callee {
+        Callee::Expr(e) => e,
+        _ => return None,
+    };
+
+    let (module_name, method_name) = match callee_expr.as_ref() {
+        ast::Expr::Member(member) => {
+            let obj_ident = match member.obj.as_ref() {
+                ast::Expr::Ident(i) => i,
+                _ => return None,
+            };
+            let obj_name = obj_ident.sym.to_string();
+            let (module, _) = ctx.lookup_native_module(&obj_name)?;
+            let method = match &member.prop {
+                ast::MemberProp::Ident(i) => i.sym.to_string(),
+                _ => return None,
+            };
+            (module.to_string(), method)
+        }
+        ast::Expr::Ident(ident) => {
+            let func_name = ident.sym.to_string();
+            let (module, method_opt) = ctx.lookup_native_module(&func_name)?;
+            let method = method_opt?.to_string();
+            (module.to_string(), method)
+        }
+        _ => return None,
+    };
+
+    let _matched = match (module_name.as_str(), method_name.as_str()) {
+        ("http", "createServer") => true,
+        ("https", "createServer") => true,
+        ("http2", "createSecureServer") => true,
+        _ => return None,
+    };
+
+    let handler_arg = call.args.last()?;
+    if handler_arg.spread.is_some() {
+        return None;
+    }
+    let arrow = match handler_arg.expr.as_ref() {
+        ast::Expr::Arrow(a) => a,
+        _ => return None,
+    };
+    let req_name = arrow.params.first().and_then(pat_ident_name)?;
+    let res_name = arrow
+        .params
+        .get(1)
+        .and_then(pat_ident_name)
+        .unwrap_or_default();
+    if res_name.is_empty() {
+        return None;
+    }
+    Some((req_name, res_name))
+}
+
+/// Pre-scan for `http.get(url, (res) => …)` / `http.request(opts, (res) =>
+/// …)` / `https.get` / `https.request`. Issue #1124 followup — the
+/// `data` / `end` listeners on the IncomingMessage that arrives at the
+/// response callback need to dispatch via NATIVE_MODULE_TABLE entries
+/// (class_filter = Some("IncomingMessage")). Pre-fix the `(res)` param
+/// was untagged so `res.on('data', cb)` fell through to
+/// `js_native_call_method` → small-handle dispatch → no IncomingMessage
+/// `on` arm → listener never registered → `'end'` never fired and the
+/// (post-#1124-followup) Buffer body never flowed to the user.
+///
+/// Mirrors `pre_scan_node_http_create_server_params` shape but for the
+/// CLIENT factory + single-param `(res)` arrow shape.
+///
+/// Returns `Some(res_local_name)` when the pattern matches.
+pub(crate) fn pre_scan_node_http_client_callback_params(
+    ctx: &crate::lower::LoweringContext,
+    call: &ast::CallExpr,
+) -> Option<String> {
+    use ast::Callee;
+    let callee_expr = match &call.callee {
+        Callee::Expr(e) => e,
+        _ => return None,
+    };
+
+    let (module_name, method_name) = match callee_expr.as_ref() {
+        ast::Expr::Member(member) => {
+            let obj_ident = match member.obj.as_ref() {
+                ast::Expr::Ident(i) => i,
+                _ => return None,
+            };
+            let obj_name = obj_ident.sym.to_string();
+            let (module, _) = ctx.lookup_native_module(&obj_name)?;
+            let method = match &member.prop {
+                ast::MemberProp::Ident(i) => i.sym.to_string(),
+                _ => return None,
+            };
+            (module.to_string(), method)
+        }
+        ast::Expr::Ident(ident) => {
+            let func_name = ident.sym.to_string();
+            let (module, method_opt) = ctx.lookup_native_module(&func_name)?;
+            let method = method_opt?.to_string();
+            (module.to_string(), method)
+        }
+        _ => return None,
+    };
+
+    // Only http/https request/get factories. http2's `connect()` returns a
+    // ClientHttp2Session — different surface, separate pre-scan.
+    let _matched = match (module_name.as_str(), method_name.as_str()) {
+        ("http", "get" | "request") => true,
+        ("https", "get" | "request") => true,
+        _ => return None,
+    };
+
+    // The response callback is the last arrow/function arg. Walk
+    // backwards so options-then-cb shapes (`http.request(opts, cb)`)
+    // and url-then-cb shapes (`http.get(url, cb)`) both resolve.
+    let handler_arg = call.args.last()?;
+    if handler_arg.spread.is_some() {
+        return None;
+    }
+    let arrow = match handler_arg.expr.as_ref() {
+        ast::Expr::Arrow(a) => a,
+        _ => return None,
+    };
+    // First (and typically only) arrow param is the IncomingMessage.
+    arrow.params.first().and_then(pat_ident_name)
+}
+
+/// Pre-scan for `httpServer.on('upgrade', (req, wsId, head) => …)`
+/// (issue #577 Phase 4). When the receiver is a registered HttpServer
+/// native instance and the event name is `'upgrade'`, register the
+/// SECOND arrow param (`wsId`) as a `("ws", "Client")` native instance
+/// BEFORE the body is lowered, so calls inside the handler like
+/// `wsId.send(...)` / `wsId.on('message', cb)` / `wsId.close()`
+/// dispatch through the dedicated Client-class entries in
+/// NATIVE_MODULE_TABLE (which call the `js_ws_send_client_i64` /
+/// `js_ws_close_client_i64` / `js_ws_on_client_i64` shims that take
+/// the receiver as `i64` after `unbox_to_i64` — the wsId arrives
+/// from the upgrade dispatch NaN-boxed POINTER_TAG so the unbox
+/// extracts the raw integer correctly).
+///
+/// Returns `Some(wsId_local_name)` when the pattern matches.
+pub(crate) fn pre_scan_node_http_upgrade_params(
+    ctx: &crate::lower::LoweringContext,
+    call: &ast::CallExpr,
+) -> Option<String> {
+    use ast::Callee;
+    let callee_expr = match &call.callee {
+        Callee::Expr(e) => e,
+        _ => return None,
+    };
+    let member = match callee_expr.as_ref() {
+        ast::Expr::Member(m) => m,
+        _ => return None,
+    };
+    let obj_ident = match member.obj.as_ref() {
+        ast::Expr::Ident(i) => i,
+        _ => return None,
+    };
+    let obj_name = obj_ident.sym.to_string();
+    let (module, class) = ctx.lookup_native_instance(&obj_name)?;
+    if module != "http" || class != "HttpServer" {
+        return None;
+    }
+    let method_name = match &member.prop {
+        ast::MemberProp::Ident(i) => i.sym.to_string(),
+        _ => return None,
+    };
+    if method_name != "on" && method_name != "addListener" {
+        return None;
+    }
+    // First arg must be the literal string "upgrade".
+    let event_arg = call.args.first()?;
+    let event_name = match event_arg.expr.as_ref() {
+        ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str().unwrap_or(""),
+        _ => return None,
+    };
+    if event_name != "upgrade" {
+        return None;
+    }
+    // Second arg = handler. Pull the second param (wsId).
+    let handler_arg = call.args.get(1)?;
+    if handler_arg.spread.is_some() {
+        return None;
+    }
+    let arrow = match handler_arg.expr.as_ref() {
+        ast::Expr::Arrow(a) => a,
+        _ => return None,
+    };
+    let ws_id_name = arrow.params.get(1).and_then(pat_ident_name)?;
+    Some(ws_id_name)
+}
+
+/// Issue #2211 — pre-scan for `request.on('socket', sock => …)` (and the
+/// `'connect'`/`'connection'` aliases). When the receiver is a
+/// `ClientRequest` native instance and the event name is `'socket'`,
+/// register the SINGLE arrow param as a `("net", "Socket")` native
+/// instance BEFORE the body is lowered, so introspection calls inside
+/// the handler — `sock.listeners('timeout')`, `sock.eventNames()`,
+/// `sock.removeListener(...)` — dispatch through the class-filtered
+/// Socket rows in NATIVE_MODULE_TABLE instead of failing the codegen-
+/// emitted `value is not a function` check.
+///
+/// Returns `Some(socket_local_name)` when the pattern matches.
+pub(crate) fn pre_scan_node_http_client_request_socket_params(
+    ctx: &crate::lower::LoweringContext,
+    call: &ast::CallExpr,
+) -> Option<String> {
+    use ast::Callee;
+    let callee_expr = match &call.callee {
+        Callee::Expr(e) => e,
+        _ => return None,
+    };
+    let member = match callee_expr.as_ref() {
+        ast::Expr::Member(m) => m,
+        _ => return None,
+    };
+    let obj_ident = match member.obj.as_ref() {
+        ast::Expr::Ident(i) => i,
+        _ => return None,
+    };
+    let obj_name = obj_ident.sym.to_string();
+    let (module, class) = ctx.lookup_native_instance(&obj_name)?;
+    if module != "http" || class != "ClientRequest" {
+        return None;
+    }
+    let method_name = match &member.prop {
+        ast::MemberProp::Ident(i) => i.sym.to_string(),
+        _ => return None,
+    };
+    if method_name != "on" && method_name != "addListener" && method_name != "once" {
+        return None;
+    }
+    // First arg must be `'socket'` / `'connect'` / `'connection'`. Node
+    // fires the same socket reference on all three so the same param-tag
+    // applies; pinning the literal here keeps unrelated events (`'response'`,
+    // `'error'`) untouched.
+    let event_arg = call.args.first()?;
+    let event_name = match event_arg.expr.as_ref() {
+        ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str().unwrap_or(""),
+        _ => return None,
+    };
+    if !matches!(event_name, "socket" | "connect" | "connection") {
+        return None;
+    }
+    let handler_arg = call.args.get(1)?;
+    if handler_arg.spread.is_some() {
+        return None;
+    }
+    let arrow = match handler_arg.expr.as_ref() {
+        ast::Expr::Arrow(a) => a,
+        _ => return None,
+    };
+    arrow.params.first().and_then(pat_ident_name)
+}
+
 /// Detect if an expression represents a native handle instance (Big, Decimal, etc.)
 /// Returns the module name if it does.
-pub(crate) fn detect_native_instance_expr(expr: &ast::Expr) -> Option<&'static str> {
+///
+/// A user `class Big {...}` (or `Decimal`, etc.) in the current module shadows
+/// the hardcoded library-name mapping — without that gate `class Big { f0=0; }
+/// const b = new Big(); b.f0` returned 0 because the value was routed through
+/// big.js's handle-based dispatch.
+pub(crate) fn detect_native_instance_expr(
+    ctx: &LoweringContext,
+    expr: &ast::Expr,
+) -> Option<&'static str> {
     match expr {
         // new Big(...) / new Decimal(...) / new BigNumber(...)
         ast::Expr::New(new_expr) => {
             if let ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
-                match ident.sym.as_ref() {
+                let class_name = ident.sym.as_ref();
+                if ctx.classes_index.contains_key(class_name)
+                    || ctx.pending_classes.iter().any(|c| c.name == class_name)
+                {
+                    return None;
+                }
+                match class_name {
                     "Big" => Some("big.js"),
                     "Decimal" => Some("decimal.js"),
                     "BigNumber" => Some("bignumber.js"),
@@ -327,7 +628,7 @@ pub(crate) fn detect_native_instance_expr(expr: &ast::Expr) -> Option<&'static s
             if let ast::Callee::Expr(callee_expr) = &call_expr.callee {
                 if let ast::Expr::Member(member) = callee_expr.as_ref() {
                     // Recursively check the object
-                    detect_native_instance_expr(&member.obj)
+                    detect_native_instance_expr(ctx, &member.obj)
                 } else {
                     None
                 }

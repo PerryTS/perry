@@ -1,0 +1,22 @@
+[package]
+name = "perry-ext-better-sqlite3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for the npm `better-sqlite3` package — uses only `perry-ffi`. First database wrapper port (Phase 5 step 10) and acceptance test for perry-ffi's JsValue + object/array surface. Foundation for the Tursodb port in #424."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+# `bundled` statically links the SQLite C source — no system
+# libsqlite3 dependency, identical to perry-stdlib's existing
+# rusqlite usage. Without this, `_sqlite3_*` symbols come up
+# unresolved at the final link step on hosts that don't ship
+# libsqlite3 in the default search path (or where the system one
+# is too old).
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

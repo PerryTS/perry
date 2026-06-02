@@ -1,0 +1,4 @@
+A typeof: object
+A truthy: true
+B typeof: object
+B truthy: true

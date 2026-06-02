@@ -10,15 +10,22 @@ thread_local! {
     static NAV_STACKS: RefCell<HashMap<i64, Vec<i64>>> = RefCell::new(HashMap::new());
 }
 
+// Use a plain UIView (not UIStackView) so the standard `add_child` falls
+// through to zstack-style "pin to fill parent" pinning. State-driven
+// `NavStack(state, routes)` adds N route bodies up front and toggles
+// visibility via setHidden; UIStackView with axis=vertical leaves a
+// single visible child laid out at its intrinsic content size (small for
+// VStack(Spacer, Text, Spacer) shapes), so the screen stayed blank
+// (#612). With z-stack pinning, every route body fills the navstack
+// area; hidden ones simply don't paint.
 pub fn create(_title_ptr: *const u8, body_handle: i64) -> i64 {
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     unsafe {
-        let stack_cls = objc2::runtime::AnyClass::get(c"UIStackView").unwrap();
-        let obj: *mut AnyObject = msg_send![stack_cls, alloc];
+        let cls = objc2::runtime::AnyClass::get(c"UIView").unwrap();
+        let obj: *mut AnyObject = msg_send![cls, alloc];
         let obj: *mut AnyObject = msg_send![obj, init];
-        let stack: Retained<UIView> = Retained::retain(obj as *mut UIView).unwrap();
-        let _: () = msg_send![&*stack, setAxis: 1i64]; // vertical
-        let handle = super::register_widget(stack);
+        let view: Retained<UIView> = Retained::retain(obj as *mut UIView).unwrap();
+        let handle = super::register_widget(view);
         if body_handle > 0 {
             super::add_child(handle, body_handle);
         }

@@ -13,7 +13,9 @@ each delta.
 
 ## Results
 
-**Run date:** 2026-04-25 — Perry commit `main` (v0.5.249).
+**Run date:** 2026-05-14 — Perry v0.5.908, full polyglot sweep across
+all 10 runtimes. Both `default` and `--fast-math` Perry columns,
+on an otherwise-idle machine.
 **Hardware:** Apple M1 Max (10 cores, 64 GB RAM), macOS 26.4.
 **Methodology:** RUNS=11 per cell. **Median wall-clock ms below**;
 full per-cell stats (median + p95 + σ + min + max) in `RESULTS_AUTO.md`.
@@ -21,17 +23,37 @@ full per-cell stats (median + p95 + σ + min + max) in `RESULTS_AUTO.md`.
 (P-core preferred via throughput/latency tiers, NOT strict affinity —
 Apple does not expose unprivileged hard core pinning). Lower is better.
 
-| Benchmark           | Perry |  Rust |   C++ |    Go | Swift |  Java |  Node |   Bun |  Python |
-|---------------------|------:|------:|------:|------:|------:|------:|------:|------:|--------:|
-| fibonacci           |   318 |   330 |   315 |   451 |   406 |   282 |  1022 |   589 |   16054 |
-| loop_overhead       |    12 |    98 |    98 |    98 |   143 |   100 |    54 |    46 |    3019 |
-| **loop_data_dependent** | **235** | **229** | **129** | **128** | **233** | **229** | **322** | **232** | **10750** |
-| array_write         |     4 |     7 |     3 |     9 |     2 |     7 |     9 |     6 |     401 |
-| array_read          |     4 |     9 |     9 |    11 |     9 |    12 |    13 |    16 |     342 |
-| math_intensive      |    14 |    48 |    51 |    49 |    50 |    74 |    51 |    51 |    2238 |
-| object_create       |     1 |     0 |     0 |     0 |     0 |     5 |    11 |     6 |     164 |
-| nested_loops        |    18 |     8 |     8 |    10 |     8 |    11 |    18 |    21 |     484 |
-| accumulate          |    34 |    98 |    98 |    98 |    98 |   100 |   617 |   100 |    5048 |
+**The two Perry columns (`default` / `--fast-math`):** since v0.5.585,
+LLVM `reassoc + contract` per-instruction fast-math flags on f64 ops
+are opt-in. Default mode produces bit-exact f64 output with Node;
+`--fast-math` permits the optimizer to reassociate FP chains and fuse
+multiply-adds. The flag's win is concentrated on trivially-foldable
+accumulator patterns (`loop_overhead`, `math_intensive`, `accumulate`);
+on data-dependent kernels (`loop_data_dependent`), the columns are
+identical because the sequential carry can't be reordered regardless.
+See `../docs/src/cli/fast-math.md` for the full behavior contract.
+
+| Benchmark           | Perry default | Perry --fast |  Rust |   C++ |    Go | Swift |  Java |  Node |   Bun |  Python |
+|---------------------|--------------:|-------------:|------:|------:|------:|------:|------:|------:|------:|--------:|
+| fibonacci           |           309 |          306 |   316 |   309 |   446 |   401 |   278 |   987 |   518 |   12382 |
+| loop_overhead       |            97 |           12 |    97 |    96 |    96 |    96 |    97 |    53 |    41 |    1967 |
+| **loop_data_dependent** | **225** | **224** | **226** | **129** | **128** | **225** | **226** | **226** | **230** | **6068** |
+| array_write         |             3 |            4 |     7 |     2 |     9 |     2 |     6 |     9 |     6 |     331 |
+| array_read          |            11 |           11 |     9 |     9 |    10 |     9 |    11 |    14 |    16 |     236 |
+| math_intensive      |            51 |           14 |    48 |    50 |    48 |    48 |    50 |    49 |    50 |    1579 |
+| object_create       |             2 |            0 |     0 |     0 |     0 |     0 |     5 |     8 |     6 |     133 |
+| nested_loops        |            18 |           17 |     8 |     8 |    10 |     8 |    10 |    17 |    20 |     353 |
+| accumulate          |            97 |           34 |    97 |    96 |    96 |    96 |    98 |   597 |    98 |    4382 |
+
+> Clean v0.5.908 sweep on an idle machine — both Perry columns and all
+> peer languages re-measured together. σ on Perry cells is 0.3-2.2 ms
+> across the board (vs the 25-57 ms spread in yesterday's contaminated
+> v0.5.891 sweep). `fibonacci` and `loop_data_dependent` are within
+> 3 ms between default and `--fast-math`, confirming the structural
+> expectation (integer recursion / sequential FP carry are fast-math-
+> immune). Trivially-foldable rows (`loop_overhead` / `math_intensive`
+> / `accumulate`) reproduce the v0.5.585 fast-math win pattern to the
+> millisecond.
 
 **New benchmark in v0.5.249: `loop_data_dependent`.** Same shape as
 `loop_overhead` but with a multiplicative carry through `sum` and

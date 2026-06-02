@@ -1,0 +1,13 @@
+[package]
+name = "perry-doc-fixture-my-bindings"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Doc fixture backing the native-libraries authoring guide. Not for end-user consumption."
+
+[lib]
+name = "perry_ext_my_bindings"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi = { workspace = true }

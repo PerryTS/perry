@@ -1,0 +1,7 @@
+class inherited base
+class own missing undefined
+class override child
+has inherited true false
+keys inherited true false
+method inherited /base
+method own missing undefined

@@ -33,36 +33,69 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{CompilationContext, NativeFunctionDecl, NativeLibraryManifest, TargetNativeConfig};
+use super::CompilationContext;
+#[cfg(test)]
+use super::{NativeBackend, NativeLibraryManifest};
+
+mod native_library;
+pub(crate) use native_library::validate_native_library_manifest_value;
+pub(super) use native_library::{
+    has_perry_native_library, has_perry_native_module, parse_native_library_manifest,
+    validate_abi_version,
+};
+#[cfg(test)]
+use native_library::{split_module_spec, PERRY_FFI_ABI_VERSION};
+
+/// True when `dir` is the root of the Perry workspace (carries the
+/// marker crates the auto-optimize relink reaches for).
+fn is_perry_workspace_root(dir: &Path) -> bool {
+    dir.join("crates/perry-runtime").is_dir() && dir.join("crates/perry-ui-geisterhand").is_dir()
+}
+
+/// Locate the workspace root by walking up from the perry executable.
+///
+/// A `cargo`/dev install typically exposes `perry` as a **symlink**
+/// (e.g. `~/.cargo/bin/perry -> .../target/release/perry`).
+/// `std::env::current_exe()` returns that symlink path on macOS, so the
+/// `../../` walk would otherwise climb `~/.cargo/bin → ~/.cargo → ~` and
+/// never reach the workspace — silently dropping the per-feature
+/// `perry-ext-*` libs at link time (issue #2531; same class as #846,
+/// whose auto-optimize fix the symlink defeated). Canonicalize the exe
+/// first so the walk starts from the real `target/release/perry`.
+fn workspace_root_from_exe(exe: &Path) -> Option<PathBuf> {
+    let exe = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
+    let dir = exe.parent()?;
+    // Binary in target/release/ → workspace is ../../
+    for ancestor in [
+        dir.to_path_buf(),
+        dir.join(".."),
+        dir.join("../.."),
+        dir.join("../../.."),
+    ] {
+        // A missing/uncanonicalizable ancestor must be skipped, not abort
+        // the whole search — otherwise the cwd fallback below never runs.
+        if let Ok(candidate) = std::fs::canonicalize(&ancestor) {
+            if is_perry_workspace_root(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
 
 /// Find the Perry workspace root by searching upward from the executable location.
 pub fn find_perry_workspace_root() -> Option<PathBuf> {
     // First try: relative to the perry executable
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            // Binary in target/release/ → workspace is ../../
-            for ancestor in [
-                dir,
-                &dir.join(".."),
-                &dir.join("../.."),
-                &dir.join("../../.."),
-            ] {
-                let candidate = std::fs::canonicalize(ancestor).ok()?;
-                if candidate.join("crates/perry-runtime").is_dir()
-                    && candidate.join("crates/perry-ui-geisterhand").is_dir()
-                {
-                    return Some(candidate);
-                }
-            }
+        if let Some(root) = workspace_root_from_exe(&exe) {
+            return Some(root);
         }
     }
     // Second try: current working directory or its ancestors
     if let Ok(cwd) = std::env::current_dir() {
         let mut dir = cwd.as_path();
         loop {
-            if dir.join("crates/perry-runtime").is_dir()
-                && dir.join("crates/perry-ui-geisterhand").is_dir()
-            {
+            if is_perry_workspace_root(dir) {
                 return Some(dir.to_path_buf());
             }
             dir = dir.parent()?;
@@ -71,164 +104,8 @@ pub fn find_perry_workspace_root() -> Option<PathBuf> {
     None
 }
 
-/// Check if a package directory has a perry.nativeLibrary field in its package.json
-pub(super) fn has_perry_native_library(package_dir: &Path) -> bool {
-    let package_json = package_dir.join("package.json");
-    if let Ok(content) = fs::read_to_string(&package_json) {
-        if let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content) {
-            return pkg
-                .get("perry")
-                .and_then(|p| p.get("nativeLibrary"))
-                .is_some();
-        }
-    }
-    false
-}
-
-/// Check if a package directory has `perry.nativeModule: true` in its package.json.
-///
-/// Packages that set this flag contain Perry-compatible TypeScript source code
-/// and should be compiled natively (NativeCompiled) rather than interpreted via V8.
-/// This is the mechanism used by `perry-react`, `perry-react-dom`, and similar
-/// first-party TypeScript packages that rely on `perry/ui` or other native modules.
-pub(super) fn has_perry_native_module(package_dir: &Path) -> bool {
-    let package_json = package_dir.join("package.json");
-    if let Ok(content) = fs::read_to_string(&package_json) {
-        if let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content) {
-            return pkg
-                .get("perry")
-                .and_then(|p| p.get("nativeModule"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-        }
-    }
-    false
-}
-
-/// Parse a native library manifest from a package's package.json
-pub(super) fn parse_native_library_manifest(
-    package_dir: &Path,
-    module_name: &str,
-    target: Option<&str>,
-) -> Option<NativeLibraryManifest> {
-    let package_json = package_dir.join("package.json");
-    let content = fs::read_to_string(&package_json).ok()?;
-    let pkg: serde_json::Value = serde_json::from_str(&content).ok()?;
-
-    let native_lib = pkg.get("perry")?.get("nativeLibrary")?;
-
-    // Parse functions.
-    //
-    // Valid `returns` values (codegen dispatch in lower_call.rs):
-    //   "string" / "ptr"  → PTR return (*const u8 / *const StringHeader);
-    //                        NaN-boxed as STRING_TAG.  Use when Rust fn is
-    //                        declared `-> *const u8`.
-    //   "i64_str"         → I64 return that IS a *StringHeader address;
-    //                        NaN-boxed as STRING_TAG without sitofp.  Use
-    //                        when Rust fn is declared `-> i64` but the value
-    //                        is a string pointer (closes issue #222).
-    //   "i64"             → I64 return; sitofp → JS number.  Opaque handles,
-    //                        counts, etc.
-    //   "void"            → no return value.
-    //   (anything else)   → treated as f64 (Perry double ABI).
-    let functions: Vec<NativeFunctionDecl> = native_lib
-        .get("functions")?
-        .as_array()?
-        .iter()
-        .filter_map(|f| {
-            Some(NativeFunctionDecl {
-                name: f.get("name")?.as_str()?.to_string(),
-                params: f
-                    .get("params")?
-                    .as_array()?
-                    .iter()
-                    .filter_map(|p| p.as_str().map(|s| s.to_string()))
-                    .collect(),
-                returns: f.get("returns")?.as_str()?.to_string(),
-            })
-        })
-        .collect();
-
-    // Parse target config
-    let target_key = match target {
-        Some("ios-simulator") | Some("ios") => "ios",
-        Some("visionos-simulator") | Some("visionos") => "visionos",
-        Some("android") => "android",
-        Some("tvos-simulator") | Some("tvos") => "tvos",
-        Some("watchos-simulator") | Some("watchos") => "watchos",
-        Some("harmonyos-simulator") | Some("harmonyos") => "harmonyos",
-        Some("linux") => "linux",
-        Some("windows") => "windows",
-        Some("web") => "web",
-        None if cfg!(target_os = "linux") => "linux",
-        None if cfg!(target_os = "windows") => "windows",
-        _ => "macos",
-    };
-
-    let target_config = native_lib
-        .get("targets")
-        .and_then(|t| t.get(target_key))
-        .map(|tc| TargetNativeConfig {
-            crate_path: package_dir.join(tc.get("crate").and_then(|c| c.as_str()).unwrap_or("")),
-            lib_name: tc
-                .get("lib")
-                .and_then(|l| l.as_str())
-                .unwrap_or("")
-                .to_string(),
-            frameworks: tc
-                .get("frameworks")
-                .and_then(|f| f.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            libs: tc
-                .get("libs")
-                .and_then(|l| l.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            pkg_config: tc
-                .get("pkgConfig")
-                .and_then(|p| p.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            swift_sources: tc
-                .get("swift_sources")
-                .and_then(|s| s.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(|p| package_dir.join(p)))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            metal_sources: tc
-                .get("metal_sources")
-                .and_then(|s| s.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(|p| package_dir.join(p)))
-                        .collect()
-                })
-                .unwrap_or_default(),
-        });
-
-    Some(NativeLibraryManifest {
-        module: module_name.to_string(),
-        package_dir: package_dir.to_path_buf(),
-        functions,
-        target_config,
-    })
-}
+#[cfg(test)]
+mod tests;
 
 /// Packages that Perry provides built-in native extensions for.
 /// These must never be loaded into V8 — Perry's codegen intercepts all imports
@@ -292,6 +169,72 @@ pub(super) fn is_in_compile_package(path: &Path, compile_packages: &HashSet<Stri
         }
     }
     false
+}
+
+/// Enumerate every installed package name reachable from `project_root`'s
+/// `node_modules` tree (the nearest one walking up, plus any nested
+/// `node_modules` directories for transitive deps npm chose not to hoist).
+///
+/// Used by #3527 to materialize the `"*"` / `"@scope/*"` wildcard entries in
+/// `perry.compilePackages` into concrete package names. The routing
+/// predicates (`is_in_compile_package`, the HIR `COMPILE_PACKAGES_OVERRIDE`,
+/// and the many `compile_packages.contains(name)` sites) all match exact
+/// package names, so the wildcard has to be expanded before routing or it is a
+/// silent no-op. Returns scoped names as `@scope/name`.
+pub(super) fn enumerate_installed_packages(project_root: &Path) -> HashSet<String> {
+    let mut out = HashSet::new();
+    if let Some(nm) = find_node_modules(project_root) {
+        collect_packages_in_node_modules(&nm, &mut out);
+    }
+    out
+}
+
+/// Walk a single `node_modules` directory, recording each package name and
+/// recursing into any nested `node_modules` it contains.
+fn collect_packages_in_node_modules(node_modules: &Path, out: &mut HashSet<String>) {
+    let entries = match fs::read_dir(node_modules) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        // Skip npm bookkeeping dirs (`.bin`, `.cache`, `.package-lock.json`).
+        if name.starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if name.starts_with('@') {
+            // Scope directory: each child is a `@scope/pkg`.
+            if let Ok(scoped) = fs::read_dir(&path) {
+                for sub in scoped.flatten() {
+                    let sub_name = sub.file_name();
+                    let sub_name = sub_name.to_string_lossy();
+                    if sub_name.starts_with('.') {
+                        continue;
+                    }
+                    let sub_path = sub.path();
+                    if !sub_path.is_dir() {
+                        continue;
+                    }
+                    out.insert(format!("{}/{}", name, sub_name));
+                    let nested = sub_path.join("node_modules");
+                    if nested.is_dir() {
+                        collect_packages_in_node_modules(&nested, out);
+                    }
+                }
+            }
+            continue;
+        }
+        out.insert(name.to_string());
+        let nested = path.join("node_modules");
+        if nested.is_dir() {
+            collect_packages_in_node_modules(&nested, out);
+        }
+    }
 }
 
 /// Find node_modules directory starting from a given path
@@ -586,13 +529,17 @@ pub(super) fn resolve_package_source_entry(
 }
 
 /// Resolve exports field from package.json
-pub(super) fn resolve_exports(exports: &serde_json::Value, subpath: &str) -> Option<String> {
+fn resolve_exports_with_conditions(
+    exports: &serde_json::Value,
+    subpath: &str,
+    conditions: &[&str],
+) -> Option<String> {
     match exports {
         serde_json::Value::String(s) => Some(s.clone()),
         serde_json::Value::Object(map) => {
             // Try the specific subpath first
             if let Some(entry) = map.get(subpath) {
-                return resolve_exports(entry, subpath);
+                return resolve_exports_with_conditions(entry, subpath, conditions);
             }
 
             // Try wildcard patterns (e.g., "./*" -> "./src/*.ts")
@@ -605,7 +552,9 @@ pub(super) fn resolve_exports(exports: &serde_json::Value, subpath: &str) -> Opt
                         let suffix = parts[1];
                         if subpath.starts_with(prefix) && subpath.ends_with(suffix) {
                             let matched = &subpath[prefix.len()..subpath.len() - suffix.len()];
-                            if let Some(template) = resolve_exports(value, subpath) {
+                            if let Some(template) =
+                                resolve_exports_with_conditions(value, subpath, conditions)
+                            {
                                 return Some(template.replace('*', matched));
                             }
                         }
@@ -617,9 +566,9 @@ pub(super) fn resolve_exports(exports: &serde_json::Value, subpath: &str) -> Opt
             // This handles the case where we've matched a subpath and now need to resolve the conditions.
             // "perry" is checked first so packages can ship a TypeScript source entry
             // intended for Perry compilation alongside a pre-built JS entry for Node/Bun.
-            for condition in ["perry", "import", "module", "default", "require", "node"] {
-                if let Some(entry) = map.get(condition) {
-                    return resolve_exports(entry, subpath);
+            for condition in conditions {
+                if let Some(entry) = map.get(*condition) {
+                    return resolve_exports_with_conditions(entry, subpath, conditions);
                 }
             }
 
@@ -627,6 +576,136 @@ pub(super) fn resolve_exports(exports: &serde_json::Value, subpath: &str) -> Opt
         }
         _ => None,
     }
+}
+
+/// Resolve exports field from package.json for executable module entries.
+pub(super) fn resolve_exports(exports: &serde_json::Value, subpath: &str) -> Option<String> {
+    resolve_exports_with_conditions(
+        exports,
+        subpath,
+        &["perry", "import", "module", "default", "require", "node"],
+    )
+}
+
+fn canonical_existing_declaration(path: PathBuf) -> Option<PathBuf> {
+    if path.exists() && is_declaration_file(&path) {
+        Some(path.canonicalize().unwrap_or(path))
+    } else {
+        None
+    }
+}
+
+fn declaration_sidecar_for_implementation(implementation_path: &Path) -> Option<PathBuf> {
+    let ext = implementation_path.extension().and_then(|e| e.to_str())?;
+    let candidates: &[&str] = match ext {
+        "js" => &["d.ts"],
+        "mjs" => &["d.mts", "d.ts"],
+        "cjs" => &["d.cts", "d.ts"],
+        _ => &[],
+    };
+    for candidate_ext in candidates {
+        if let Some(sidecar) =
+            canonical_existing_declaration(implementation_path.with_extension(candidate_ext))
+        {
+            return Some(sidecar);
+        }
+    }
+    None
+}
+
+fn package_dir_for_resolved_path(resolved_path: &Path, package_name: &str) -> Option<PathBuf> {
+    if let Some(dir) = extract_compile_package_dir(resolved_path, package_name) {
+        return Some(dir);
+    }
+
+    let mut current = resolved_path.parent();
+    while let Some(dir) = current {
+        let pkg_json = dir.join("package.json");
+        if pkg_json.exists() {
+            if let Ok(content) = fs::read_to_string(&pkg_json) {
+                if let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if pkg.get("name").and_then(|v| v.as_str()) == Some(package_name) {
+                        return Some(dir.to_path_buf());
+                    }
+                }
+            }
+        }
+        current = dir.parent();
+    }
+
+    None
+}
+
+pub(super) fn resolve_package_declaration_entry(
+    package_dir: &Path,
+    subpath: Option<&str>,
+    implementation_path: Option<&Path>,
+) -> Option<PathBuf> {
+    let package_json = package_dir.join("package.json");
+    if package_json.exists() {
+        let pkg = fs::read_to_string(&package_json)
+            .ok()
+            .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok());
+
+        if let Some(pkg) = pkg {
+            let export_key = if let Some(sub) = subpath {
+                format!("./{}", sub)
+            } else {
+                ".".to_string()
+            };
+
+            if let Some(exports) = pkg.get("exports") {
+                if let Some(entry) =
+                    resolve_exports_with_conditions(exports, &export_key, &["types", "typings"])
+                {
+                    if let Some(path) = canonical_existing_declaration(package_dir.join(entry)) {
+                        return Some(path);
+                    }
+                }
+            }
+
+            if subpath.is_none() {
+                for field in ["types", "typings"] {
+                    if let Some(types_path) = pkg.get(field).and_then(|v| v.as_str()) {
+                        if let Some(path) =
+                            canonical_existing_declaration(package_dir.join(types_path))
+                        {
+                            return Some(path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    implementation_path.and_then(declaration_sidecar_for_implementation)
+}
+
+pub(super) fn declaration_sidecar_for_resolved_import(
+    import_source: &str,
+    resolved_path: &Path,
+) -> Option<PathBuf> {
+    if is_declaration_file(resolved_path) {
+        return canonical_existing_declaration(resolved_path.to_path_buf());
+    }
+
+    if !(import_source.starts_with("./")
+        || import_source.starts_with("../")
+        || import_source.starts_with('/'))
+    {
+        let (package_name, subpath) = parse_package_specifier(import_source);
+        if let Some(package_dir) = package_dir_for_resolved_path(resolved_path, &package_name) {
+            if let Some(sidecar) = resolve_package_declaration_entry(
+                &package_dir,
+                subpath.as_deref(),
+                Some(resolved_path),
+            ) {
+                return Some(sidecar);
+            }
+        }
+    }
+
+    declaration_sidecar_for_implementation(resolved_path)
 }
 
 /// Determine if a file is a JavaScript file (not TypeScript)
@@ -640,7 +719,8 @@ pub(super) fn is_js_file(path: &Path) -> bool {
 
 /// Determine if a file is a TypeScript declaration file (.d.ts)
 pub(super) fn is_declaration_file(path: &Path) -> bool {
-    path.to_string_lossy().ends_with(".d.ts")
+    let path = path.to_string_lossy();
+    path.ends_with(".d.ts") || path.ends_with(".d.mts") || path.ends_with(".d.cts")
 }
 
 /// Determine if a file is a TypeScript file (but not a declaration file)
@@ -655,6 +735,19 @@ pub(super) fn is_ts_file(path: &Path) -> bool {
     }
 }
 
+pub(super) fn resolve_relative_import_path(
+    import_source: &str,
+    importer_path: &Path,
+) -> Option<PathBuf> {
+    if !import_source.starts_with("./") && !import_source.starts_with("../") {
+        return None;
+    }
+    let parent = importer_path.parent()?;
+    let resolved = parent.join(import_source);
+    let path = resolve_with_extensions(&resolved)?;
+    path.canonicalize().ok()
+}
+
 /// Resolve an import specifier to a file path
 pub(super) fn resolve_import(
     import_source: &str,
@@ -663,22 +756,53 @@ pub(super) fn resolve_import(
     compile_packages: &HashSet<String>,
     compile_package_dirs: &HashMap<String, PathBuf>,
 ) -> Option<(PathBuf, ModuleKind)> {
-    // Check if it's a native Rust stdlib module
-    if perry_hir::is_native_module(import_source) {
+    // Check if it's a native Rust stdlib module. Refs #665: when the user has
+    // explicitly opted the package into `perry.compilePackages`, they want
+    // their `node_modules` copy compiled from source (cjs_wrap + native
+    // codegen), not the built-in Rust FFI binding — which for some packages
+    // (e.g. `rate-limiter-flexible`'s `perry-ext-ratelimit`) is incomplete.
+    // The opt-in is package-scoped: bare `rate-limiter-flexible` and any
+    // subpath under it both fall through to file resolution.
+    let (native_check_pkg, _) = parse_package_specifier(import_source);
+    if perry_hir::is_native_module(import_source) && !compile_packages.contains(&native_check_pkg) {
         return None; // Native modules are handled by stdlib, not file imports
     }
 
     // Handle relative imports (./ or ../)
     if import_source.starts_with("./") || import_source.starts_with("../") {
-        let parent = importer_path.parent()?;
-        let resolved = parent.join(import_source);
-        if let Some(path) = resolve_with_extensions(&resolved) {
-            let kind = if is_js_file(&path) && !is_in_compile_package(&path, compile_packages) {
+        if let Some(canonical) = resolve_relative_import_path(import_source, importer_path) {
+            // Refs #486: a relative `import './foo.js'` from inside a compile
+            // package must classify as NativeCompiled even when the resolved
+            // file lives outside the literal `node_modules/<pkg>/` substring
+            // — `file:./lib3` deps and symlinked package roots both canonicalize
+            // away from `node_modules`, but their files are still part of the
+            // compile-package compile scope. Without this, re-exports inside
+            // such packages (e.g. `lib3/index.js` doing `export { C } from
+            // './c.js'`) silently fall through to ModuleKind::Interpreted, the
+            // dependent file never enters `ctx.native_modules`, and importing
+            // modules see `imported_classes=[]` for symbols re-exported from it.
+            let in_compile_pkg = is_in_compile_package(&canonical, compile_packages)
+                || compile_package_dirs.values().any(|dir| {
+                    if canonical.starts_with(dir) {
+                        let relative = canonical.strip_prefix(dir).unwrap_or(canonical.as_path());
+                        !relative.to_string_lossy().contains("node_modules/")
+                    } else {
+                        false
+                    }
+                });
+            // #1721 / #668: a *user* `.js` (outside node_modules) compiles
+            // natively now — mirrors collect_modules' `should_use_js_runtime`.
+            // Its import edge MUST be NativeCompiled so the importer wires
+            // `perry_fn_<prefix>__*` symbols; leaving it Interpreted routes to
+            // the (removed, post-#1696) V8 bridge and the default/named export
+            // symbols never link.
+            let in_node_modules = canonical.to_string_lossy().contains("node_modules");
+            let kind = if is_js_file(&canonical) && !in_compile_pkg && in_node_modules {
                 ModuleKind::Interpreted
             } else {
                 ModuleKind::NativeCompiled
             };
-            return Some((path.canonicalize().ok()?, kind));
+            return Some((canonical, kind));
         }
         return None;
     }
@@ -687,12 +811,15 @@ pub(super) fn resolve_import(
     if import_source.starts_with('/') {
         let resolved = PathBuf::from(import_source);
         if let Some(path) = resolve_with_extensions(&resolved) {
-            let kind = if is_js_file(&path) {
+            let canonical = path.canonicalize().ok()?;
+            // #1721: same node_modules-gated rule as relative imports.
+            let in_node_modules = canonical.to_string_lossy().contains("node_modules");
+            let kind = if is_js_file(&canonical) && in_node_modules {
                 ModuleKind::Interpreted
             } else {
                 ModuleKind::NativeCompiled
             };
-            return Some((path.canonicalize().ok()?, kind));
+            return Some((canonical, kind));
         }
         return None;
     }
@@ -752,10 +879,19 @@ pub(super) fn resolve_import(
                         // If effective_dir failed (shouldn't happen), try the local dir
                         return Some((entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
                     }
-                    // For other node_modules packages, treat as Interpreted
-                    // Even .ts files in node_modules are library source code,
-                    // not user code to be compiled. V8 will handle them at runtime.
-                    return Some((entry.canonicalize().ok()?, ModuleKind::Interpreted));
+                    // For other node_modules packages, classify by file
+                    // extension. `.ts` / `.tsx` sources are compiled natively.
+                    // `.js` / `.mjs` / `.cjs` and other shapes stay Interpreted;
+                    // since runtime-JS (V8) support was removed, reaching one of
+                    // these is a hard error surfaced by the V8-free gate after
+                    // module collection.
+                    let canonical = entry.canonicalize().ok()?;
+                    let kind = if is_ts_file(&canonical) {
+                        ModuleKind::NativeCompiled
+                    } else {
+                        ModuleKind::Interpreted
+                    };
+                    return Some((canonical, kind));
                 }
             }
         }
@@ -804,7 +940,18 @@ pub(super) fn resolve_import(
                         ));
                     }
                 }
-                return Some((entry.canonicalize().ok()?, ModuleKind::Interpreted));
+                // `.ts`/`.tsx` → NativeCompiled, as the node_modules fallback
+                // above. #1721: `file:` deps live outside node_modules (user
+                // code), so their `.js` also compiles natively; only genuine
+                // node_modules JS stays Interpreted.
+                let canonical = entry.canonicalize().ok()?;
+                let in_node_modules = canonical.to_string_lossy().contains("node_modules");
+                let kind = if is_ts_file(&canonical) || !in_node_modules {
+                    ModuleKind::NativeCompiled
+                } else {
+                    ModuleKind::Interpreted
+                };
+                return Some((canonical, kind));
             }
         }
     }

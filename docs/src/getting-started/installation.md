@@ -108,14 +108,20 @@ For iOS development, install Xcode (not just Command Line Tools) for the iOS SDK
 
 ### Linux
 
-Install GTK4 development libraries for UI apps:
+Install GTK4 + libshumate + GStreamer development libraries for UI apps. (You
+only need these if you build for `--target linux` — pure-CLI / cross-compile
+to other platforms doesn't require them.)
 
 ```bash
-# Ubuntu/Debian
-sudo apt install libgtk-4-dev
+# Ubuntu / Debian
+sudo apt install libgtk-4-dev libshumate-dev libgstreamer1.0-dev
 
 # Fedora
-sudo dnf install gtk4-devel
+sudo dnf install gtk4-devel libshumate-devel gstreamer1-devel \
+                 gstreamer1-plugins-base-devel
+
+# Arch
+sudo pacman -S gtk4 libshumate gstreamer gst-plugins-base
 ```
 
 ### Windows

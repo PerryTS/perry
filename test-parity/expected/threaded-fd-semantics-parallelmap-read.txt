@@ -1,0 +1,2 @@
+parallelMap captured fd read: EBADF:read,EBADF:read,EBADF:read,EBADF:read
+main fd read bytes: 1

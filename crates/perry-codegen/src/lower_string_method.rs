@@ -12,7 +12,15 @@ use crate::expr::{
     FnCtx,
 };
 use crate::type_analysis::is_string_expr;
-use crate::types::{DOUBLE, I1, I32, I64};
+use crate::types::{DOUBLE, I1, I32, I64, PTR};
+
+fn regexp_search_method_id(property: &str) -> String {
+    match property {
+        "startsWith" => "1".to_string(),
+        "endsWith" => "2".to_string(),
+        _ => "0".to_string(),
+    }
+}
 
 /// Lower `s.method(args…)` for a string-typed receiver. Currently
 /// supported methods: `indexOf` (1 or 2 args), `slice`, `substring`,
@@ -68,15 +76,22 @@ pub(crate) fn lower_string_method(
             Ok(blk.sitofp(I32, &result_i32, DOUBLE))
         }
         "slice" | "substring" => {
-            if args.is_empty() || args.len() > 2 {
+            if args.len() > 2 {
                 bail!(
-                    "perry-codegen: String.{} expects 1 or 2 args, got {}",
+                    "perry-codegen: String.{} expects 0, 1 or 2 args, got {}",
                     property,
                     args.len()
                 );
             }
-            let start_d = lower_expr(ctx, &args[0])?;
-            // 2-arg form: explicit end. 1-arg form: end defaults to the
+            // Issue #316: 0-arg form is the spec'd "clone" idiom —
+            // `s.slice()` ≡ `s.slice(0, length)`. Was rejected at
+            // codegen with "expects 1 or 2 args, got 0" before this fix.
+            let start_d = if args.is_empty() {
+                "0.0".to_string()
+            } else {
+                lower_expr(ctx, &args[0])?
+            };
+            // 2-arg form: explicit end. 0/1-arg form: end defaults to the
             // string's length, computed inline (load i32 at offset 0).
             let end_d = if args.len() == 2 {
                 lower_expr(ctx, &args[1])?
@@ -108,9 +123,10 @@ pub(crate) fn lower_string_method(
             Ok(nanbox_string_inline(blk, &result_handle))
         }
         "split" => {
-            if args.len() != 1 {
+            // Issue #567: accept the optional 2nd `limit: number` arg.
+            if args.is_empty() || args.len() > 2 {
                 bail!(
-                    "perry-codegen: String.split expects 1 arg (delimiter), got {}",
+                    "perry-codegen: String.split expects 1 or 2 args (delimiter[, limit]), got {}",
                     args.len()
                 );
             }
@@ -119,16 +135,68 @@ pub(crate) fn lower_string_method(
             // their GC header and delegate to js_string_split_regex
             // internally. This avoids needing a new LLVM runtime decl.
             let delim_box = lower_expr(ctx, &args[0])?;
+            let limit_d = if args.len() == 2 {
+                Some(lower_expr(ctx, &args[1])?)
+            } else {
+                None
+            };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let delim_handle = unbox_str_handle(blk, &delim_box);
-            let result_arr = blk.call(
-                I64,
-                "js_string_split",
-                &[(I64, &recv_handle), (I64, &delim_handle)],
-            );
+            let result_arr = if let Some(limit_d) = limit_d {
+                let limit_i32 = blk.fptosi(DOUBLE, &limit_d, I32);
+                blk.call(
+                    I64,
+                    "js_string_split_n",
+                    &[(I64, &recv_handle), (I64, &delim_handle), (I32, &limit_i32)],
+                )
+            } else {
+                blk.call(
+                    I64,
+                    "js_string_split",
+                    &[(I64, &recv_handle), (I64, &delim_handle)],
+                )
+            };
             // Returns an array pointer (ArrayHeader*) — NaN-box with POINTER_TAG.
             Ok(crate::expr::nanbox_pointer_inline(blk, &result_arr))
+        }
+        // toLocaleLowerCase / toLocaleUpperCase — honor the `locales` arg:
+        // validate BCP 47 tags (throwing RangeError on a bad tag) and apply
+        // Turkic (tr/az) dotted/dotless `I` casing. Other locales fall back to
+        // language-neutral Unicode casing. Closes #2781. (#592: Effect's
+        // `aliasOrValue` at Cron.ts:846 was the original user-impact site.)
+        "toLocaleLowerCase" | "toLocaleUpperCase" => {
+            if args.len() > 1 {
+                bail!(
+                    "perry-codegen: String.{} expects 0 or 1 args, got {}",
+                    property,
+                    args.len()
+                );
+            }
+            // The `locales` arg is passed as a NaN-boxed JSValue (double) to the
+            // runtime, which extracts/validates it. Missing → undefined.
+            let locales_box = if args.is_empty() {
+                None
+            } else {
+                Some(lower_expr(ctx, &args[0])?)
+            };
+            let blk = ctx.block();
+            let locales_box = match locales_box {
+                Some(v) => v,
+                None => blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64),
+            };
+            let recv_handle = unbox_str_handle(blk, &recv_box);
+            let runtime_fn = if property == "toLocaleLowerCase" {
+                "js_string_to_locale_lower_case"
+            } else {
+                "js_string_to_locale_upper_case"
+            };
+            let result = blk.call(
+                I64,
+                runtime_fn,
+                &[(I64, &recv_handle), (DOUBLE, &locales_box)],
+            );
+            Ok(nanbox_string_inline(blk, &result))
         }
         // Unary string-returning methods (no args).
         "toLowerCase" | "toUpperCase" | "trim" | "trimStart" | "trimEnd" => {
@@ -153,16 +221,23 @@ pub(crate) fn lower_string_method(
             Ok(nanbox_string_inline(blk, &result))
         }
         "charAt" => {
-            if args.len() != 1 {
-                bail!(
-                    "perry-codegen: String.charAt expects 1 arg, got {}",
-                    args.len()
-                );
+            // #2787: a missing index defaults to 0; the provided index is
+            // coerced with JS `ToIntegerOrInfinity` (undefined/NaN -> 0) rather
+            // than a raw `fptosi`, which is UB on a NaN bit pattern.
+            // #3987: JS ignores extra args to `charAt` but still evaluates them
+            // (left-to-right, for side effects). Use args[0] as the index and
+            // lower the rest, discarding their values, instead of bailing.
+            let idx_d = if args.is_empty() {
+                crate::nanbox::double_literal(0.0)
+            } else {
+                lower_expr(ctx, &args[0])?
+            };
+            for extra in args.iter().skip(1) {
+                let _ = lower_expr(ctx, extra)?;
             }
-            let idx_d = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let idx_i32 = blk.fptosi(DOUBLE, &idx_d, I32);
+            let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
             let result = blk.call(
                 I64,
                 "js_string_char_at",
@@ -180,11 +255,10 @@ pub(crate) fn lower_string_method(
             let count_d = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let count_i32 = blk.fptosi(DOUBLE, &count_d, I32);
             let result = blk.call(
                 I64,
                 "js_string_repeat",
-                &[(I64, &recv_handle), (I32, &count_i32)],
+                &[(I64, &recv_handle), (DOUBLE, &count_d)],
             );
             Ok(nanbox_string_inline(blk, &result))
         }
@@ -217,12 +291,18 @@ pub(crate) fn lower_string_method(
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let needle_handle = unbox_str_handle(blk, &needle_box);
-            if needle_is_regex && repl_is_function {
+            if repl_is_function {
                 // repl_box is a NaN-boxed closure pointer (double).
-                // js_string_replace_regex_fn takes the callback as f64.
+                // The callback helpers take the callback as f64.
+                let runtime_fn = match (needle_is_regex, property) {
+                    (true, "replaceAll") => "js_string_replace_all_regex_fn",
+                    (true, _) => "js_string_replace_regex_fn",
+                    (false, "replaceAll") => "js_string_replace_all_string_fn",
+                    (false, _) => "js_string_replace_string_fn",
+                };
                 let result = blk.call(
                     I64,
-                    "js_string_replace_regex_fn",
+                    runtime_fn,
                     &[
                         (I64, &recv_handle),
                         (I64, &needle_handle),
@@ -234,7 +314,13 @@ pub(crate) fn lower_string_method(
             // Issue #214: SSO-safe unbox of replacement string.
             let repl_handle = unbox_str_handle(blk, &repl_box);
             let runtime_fn = if needle_is_regex {
-                if repl_has_named {
+                if property == "replaceAll" {
+                    if repl_has_named {
+                        "js_string_replace_all_regex_named"
+                    } else {
+                        "js_string_replace_all_regex"
+                    }
+                } else if repl_has_named {
                     "js_string_replace_regex_named"
                 } else {
                     "js_string_replace_regex"
@@ -257,13 +343,20 @@ pub(crate) fn lower_string_method(
         }
         // str.at(i) / str.charCodeAt(i) / str.codePointAt(i)
         "at" => {
-            if args.len() != 1 {
-                bail!("perry-codegen: String.at expects 1 arg, got {}", args.len());
+            // #2787: missing index -> 0; JS index coercion (undefined/NaN -> 0).
+            // `js_string_at` already resolves negative indices relative to len.
+            // #3987: ignore extra args (still evaluate for side effects).
+            let idx_d = if args.is_empty() {
+                crate::nanbox::double_literal(0.0)
+            } else {
+                lower_expr(ctx, &args[0])?
+            };
+            for extra in args.iter().skip(1) {
+                let _ = lower_expr(ctx, extra)?;
             }
-            let idx_d = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let idx_i32 = blk.fptosi(DOUBLE, &idx_d, I32);
+            let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
             // js_string_at returns a NaN-boxed string or undefined directly.
             Ok(blk.call(
                 DOUBLE,
@@ -272,16 +365,19 @@ pub(crate) fn lower_string_method(
             ))
         }
         "codePointAt" => {
-            if args.is_empty() || args.len() > 1 {
-                bail!(
-                    "perry-codegen: String.codePointAt expects 1 arg, got {}",
-                    args.len()
-                );
+            // #2787: missing index -> 0; JS index coercion (undefined/NaN -> 0).
+            // #3987: ignore extra args (still evaluate for side effects).
+            let idx_d = if args.is_empty() {
+                crate::nanbox::double_literal(0.0)
+            } else {
+                lower_expr(ctx, &args[0])?
+            };
+            for extra in args.iter().skip(1) {
+                let _ = lower_expr(ctx, extra)?;
             }
-            let idx_d = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let idx_i32 = blk.fptosi(DOUBLE, &idx_d, I32);
+            let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
             // Returns NaN-boxed number or undefined directly.
             Ok(blk.call(
                 DOUBLE,
@@ -290,16 +386,19 @@ pub(crate) fn lower_string_method(
             ))
         }
         "charCodeAt" => {
-            if args.is_empty() || args.len() > 1 {
-                bail!(
-                    "perry-codegen: String.charCodeAt expects 1 arg, got {}",
-                    args.len()
-                );
+            // #2787: missing index -> 0; JS index coercion (undefined/NaN -> 0).
+            // #3987: ignore extra args (still evaluate for side effects).
+            let idx_d = if args.is_empty() {
+                crate::nanbox::double_literal(0.0)
+            } else {
+                lower_expr(ctx, &args[0])?
+            };
+            for extra in args.iter().skip(1) {
+                let _ = lower_expr(ctx, extra)?;
             }
-            let idx_d = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let idx_i32 = blk.fptosi(DOUBLE, &idx_d, I32);
+            let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
             // js_string_char_code_at returns a plain f64 (NaN for OOB).
             Ok(blk.call(
                 DOUBLE,
@@ -308,21 +407,42 @@ pub(crate) fn lower_string_method(
             ))
         }
         "lastIndexOf" => {
-            if args.len() != 1 {
+            if args.is_empty() || args.len() > 2 {
                 bail!(
-                    "perry-codegen: String.lastIndexOf expects 1 arg, got {}",
+                    "perry-codegen: String.lastIndexOf expects 1 or 2 args, got {}",
                     args.len()
                 );
             }
             let needle_box = lower_expr(ctx, &args[0])?;
+            // Optional `position` (2nd arg). Without it, use the plain
+            // last-index-of (search to the end); with it, the position-aware
+            // variant. Mirrors the `indexOf` arm.
+            let pos_double = if args.len() == 2 {
+                Some(lower_expr(ctx, &args[1])?)
+            } else {
+                None
+            };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let needle_handle = unbox_str_handle(blk, &needle_box);
-            let i32_v = blk.call(
-                I32,
-                "js_string_last_index_of",
-                &[(I64, &recv_handle), (I64, &needle_handle)],
-            );
+            let i32_v = if let Some(pos_d) = pos_double {
+                blk.call(
+                    I32,
+                    "js_string_last_index_of_from",
+                    &[
+                        (I64, &recv_handle),
+                        (I64, &needle_handle),
+                        (DOUBLE, &pos_d),
+                        (I32, "1"),
+                    ],
+                )
+            } else {
+                blk.call(
+                    I32,
+                    "js_string_last_index_of",
+                    &[(I64, &recv_handle), (I64, &needle_handle)],
+                )
+            };
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
         "padStart" | "padEnd" => {
@@ -348,7 +468,13 @@ pub(crate) fn lower_string_method(
             };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let len_i32 = blk.fptosi(DOUBLE, &len_d, I32);
+            // Pass `target_length` as raw DOUBLE — the runtime does the
+            // ToLength coercion (NaN/negative → 0, Infinity / huge values
+            // clamped to a sane max). Pre-fix the codegen did
+            // `fptosi(DOUBLE → I32)` here, which is undefined behavior on
+            // NaN per LLVM semantics; the resulting i32 then aliased the
+            // runtime's `u32` parameter and a literal `-1` became
+            // `0xFFFFFFFF`, looping to fill 4 GiB of padding before OOM.
             let runtime_fn = if property == "padStart" {
                 "js_string_pad_start"
             } else {
@@ -357,32 +483,31 @@ pub(crate) fn lower_string_method(
             let result = blk.call(
                 I64,
                 runtime_fn,
-                &[(I64, &recv_handle), (I32, &len_i32), (I64, &pad_handle)],
+                &[(I64, &recv_handle), (DOUBLE, &len_d), (I64, &pad_handle)],
             );
             Ok(nanbox_string_inline(blk, &result))
         }
         "normalize" => {
-            // 0 or 1 string arg. Empty arg → default ("NFC" handled by
-            // the runtime when form is null).
+            // 0 or 1 arg. The runtime applies ToString + form validation:
+            // omitted (undefined) → NFC default; explicit null/""/"BAD" →
+            // RangeError. Pass the raw NaN-boxed form value (#2782).
             if args.len() > 1 {
                 bail!(
                     "perry-codegen: String.normalize expects 0 or 1 args, got {}",
                     args.len()
                 );
             }
-            let form_handle = if args.is_empty() {
-                "0".to_string()
+            let form_box = if args.is_empty() {
+                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             } else {
-                let form_box = lower_expr(ctx, &args[0])?;
-                let blk = ctx.block();
-                unbox_str_handle(blk, &form_box)
+                lower_expr(ctx, &args[0])?
             };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let result = blk.call(
                 I64,
                 "js_string_normalize",
-                &[(I64, &recv_handle), (I64, &form_handle)],
+                &[(I64, &recv_handle), (DOUBLE, &form_box)],
             );
             Ok(nanbox_string_inline(blk, &result))
         }
@@ -394,19 +519,41 @@ pub(crate) fn lower_string_method(
                 );
             }
             let other_box = lower_expr(ctx, &args[0])?;
-            // Ignore optional locale/options args.
-            for extra in args.iter().skip(1) {
-                let _ = lower_expr(ctx, extra)?;
+            // `options` is the 3rd arg; `locales` (2nd) is validated for its
+            // RangeError side effect (#2781) but collation ordering stays
+            // locale-neutral (full ICU deferred). With an options object
+            // present, route to the variant that honors `{ numeric: true }`.
+            let locales_box = if args.len() >= 2 {
+                Some(lower_expr(ctx, &args[1])?)
+            } else {
+                None
+            };
+            let options_box = if args.len() == 3 {
+                Some(lower_expr(ctx, &args[2])?)
+            } else {
+                None
+            };
+            let blk = ctx.block();
+            if let Some(loc) = &locales_box {
+                blk.call_void("js_string_validate_locales", &[(DOUBLE, loc)]);
             }
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let other_handle = unbox_str_handle(blk, &other_box);
             // Returns a plain f64 (-1/0/1) — NOT NaN-tagged.
-            Ok(blk.call(
-                DOUBLE,
-                "js_string_locale_compare",
-                &[(I64, &recv_handle), (I64, &other_handle)],
-            ))
+            if let Some(opts) = options_box {
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_string_locale_compare_opts",
+                    &[(I64, &recv_handle), (I64, &other_handle), (DOUBLE, &opts)],
+                ))
+            } else {
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_string_locale_compare",
+                    &[(I64, &recv_handle), (I64, &other_handle)],
+                ))
+            }
         }
         "search" => {
             if args.len() != 1 {
@@ -514,8 +661,11 @@ pub(crate) fn lower_string_method(
             Ok(nanbox_string_inline(ctx.block(), &acc_handle))
         }
         "substr" => {
-            // Legacy substr(start, length) — map to slice(start, start+length).
-            // Without a dedicated runtime helper we approximate with substring.
+            // Legacy substr(start, length) — distinct from substring/slice:
+            // negative start counts from the end, the 2nd arg is a LENGTH, and
+            // a non-positive length yields "". Routed to the dedicated runtime
+            // helper `js_string_substr` (#2897). The length sentinel i32::MIN
+            // signals "argument omitted" (take rest of string).
             if args.is_empty() || args.len() > 2 {
                 bail!(
                     "perry-codegen: String.substr expects 1 or 2 args, got {}",
@@ -523,55 +673,83 @@ pub(crate) fn lower_string_method(
                 );
             }
             let start_d = lower_expr(ctx, &args[0])?;
+            let len_d = if args.len() == 2 {
+                Some(lower_expr(ctx, &args[1])?)
+            } else {
+                None
+            };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let start_i32 = blk.fptosi(DOUBLE, &start_d, I32);
-            let end_i32 = if args.len() == 2 {
-                let len_d = lower_expr(ctx, &args[1])?;
-                let blk = ctx.block();
-                let len_i32 = blk.fptosi(DOUBLE, &len_d, I32);
-                blk.add(I32, &start_i32, &len_i32)
-            } else {
-                // Default end = receiver length.
-                let blk = ctx.block();
-                let len_ptr = blk.inttoptr(I64, &recv_handle);
-                blk.load(I32, &len_ptr)
+            let length_i32 = match len_d {
+                Some(len_d) => blk.fptosi(DOUBLE, &len_d, I32),
+                // i32::MIN sentinel = "length omitted".
+                None => i32::MIN.to_string(),
             };
-            let blk = ctx.block();
             let result = blk.call(
                 I64,
-                "js_string_substring",
-                &[(I64, &recv_handle), (I32, &start_i32), (I32, &end_i32)],
+                "js_string_substr",
+                &[(I64, &recv_handle), (I32, &start_i32), (I32, &length_i32)],
             );
             Ok(nanbox_string_inline(blk, &result))
         }
         "startsWith" | "endsWith" => {
-            if args.len() != 1 {
+            // Spec allows the 2-arg form: startsWith(searchString, position)
+            // and endsWith(searchString, endPosition). Closes #315.
+            if args.is_empty() || args.len() > 2 {
                 bail!(
-                    "perry-codegen: String.{} expects 1 arg, got {}",
+                    "perry-codegen: String.{} expects 1 or 2 args, got {}",
                     property,
                     args.len()
                 );
             }
             let other_box = lower_expr(ctx, &args[0])?;
+            let pos_d = if args.len() == 2 {
+                Some(lower_expr(ctx, &args[1])?)
+            } else {
+                None
+            };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let other_handle = unbox_str_handle(blk, &other_box);
-            let runtime_fn = if property == "startsWith" {
-                "js_string_starts_with"
-            } else {
-                "js_string_ends_with"
-            };
-            let result_i32 = blk.call(
-                I32,
-                runtime_fn,
-                &[(I64, &recv_handle), (I64, &other_handle)],
+            let method_id = regexp_search_method_id(property);
+            let other_handle = blk.call(
+                I64,
+                "js_string_search_value_to_string",
+                &[(DOUBLE, &other_box), (I32, &method_id)],
             );
+            let result_i32 = if let Some(pos_d) = pos_d {
+                let pos_i32 = blk.fptosi(DOUBLE, &pos_d, I32);
+                let runtime_fn = if property == "startsWith" {
+                    "js_string_starts_with_at"
+                } else {
+                    "js_string_ends_with_at"
+                };
+                blk.call(
+                    I32,
+                    runtime_fn,
+                    &[(I64, &recv_handle), (I64, &other_handle), (I32, &pos_i32)],
+                )
+            } else {
+                let runtime_fn = if property == "startsWith" {
+                    "js_string_starts_with"
+                } else {
+                    "js_string_ends_with"
+                };
+                blk.call(
+                    I32,
+                    runtime_fn,
+                    &[(I64, &recv_handle), (I64, &other_handle)],
+                )
+            };
             Ok(i32_bool_to_nanbox(blk, &result_i32))
         }
         "includes" => {
-            // str.includes(sub) -> boolean. Implemented as
-            // js_string_index_of(str, sub) != -1, then NaN-tagged.
+            // str.includes(sub, position?) -> boolean. Implemented as
+            // js_string_index_of_from(str, sub, position) != -1, then
+            // NaN-tagged. #2812: the optional `position` argument must be
+            // honored (search starts there), matching the dynamic dispatch
+            // path. Negative/NaN clamp to 0 and Infinity saturates past the
+            // end inside js_string_index_of_from.
             if args.is_empty() || args.len() > 2 {
                 bail!(
                     "perry-codegen: String.includes expects 1 or 2 args, got {}",
@@ -579,17 +757,31 @@ pub(crate) fn lower_string_method(
                 );
             }
             let needle_box = lower_expr(ctx, &args[0])?;
-            // Optional fromIndex param is ignored for the boolean form.
-            if args.len() == 2 {
-                let _ = lower_expr(ctx, &args[1])?;
-            }
+            // Preserve evaluation of the second argument for side effects and
+            // use it as the start index when present.
+            let pos_d = if args.len() == 2 {
+                Some(lower_expr(ctx, &args[1])?)
+            } else {
+                None
+            };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let needle_handle = unbox_str_handle(blk, &needle_box);
+            let method_id = regexp_search_method_id(property);
+            let needle_handle = blk.call(
+                I64,
+                "js_string_search_value_to_string",
+                &[(DOUBLE, &needle_box), (I32, &method_id)],
+            );
+            let from_i32 = match pos_d {
+                // Use the runtime ToIntegerOrInfinity helper rather than a raw
+                // `fptosi`, which is undefined for Infinity/NaN.
+                Some(pos_d) => blk.call(I32, "js_string_position_to_index", &[(DOUBLE, &pos_d)]),
+                None => "0".to_string(),
+            };
             let idx_i32 = blk.call(
                 I32,
-                "js_string_index_of",
-                &[(I64, &recv_handle), (I64, &needle_handle)],
+                "js_string_index_of_from",
+                &[(I64, &recv_handle), (I64, &needle_handle), (I32, &from_i32)],
             );
             // includes := indexOf != -1
             let neg_one = "-1".to_string();
@@ -616,14 +808,53 @@ pub(crate) fn lower_string_method(
             let handle = blk.call(I64, "js_jsvalue_to_string", &[(DOUBLE, &recv_box)]);
             Ok(nanbox_string_inline(blk, &handle))
         }
-        // Best-effort fallback: lower args for side effects, return
-        // the receiver string. Compile succeeds; runtime gets the
-        // pre-method-call value.
+        // Issue #510: an unknown method on a string-typed receiver
+        // (e.g. `s.lengt()` — typo of `length`) was previously
+        // silently lowered to `Ok(recv_box)`, which evaluated the
+        // call to the receiver itself and let execution continue.
+        // That masked typos as no-ops and matched neither Node nor
+        // the spec.
+        //
+        // Match Node: emit a TypeError abort via
+        // `js_throw_type_error_not_a_function("string", "<prop>")`,
+        // followed by `unreachable` (the helper is `-> !`). The
+        // arguments to the unknown method are still lowered for
+        // side effects, in case any of them have observable
+        // effects on completed evaluation order.
         _ => {
             for a in args {
                 let _ = lower_expr(ctx, a)?;
             }
-            Ok(recv_box)
+            // Intern the receiver-kind label and the property name
+            // into the string pool so we can pass byte ptr + length
+            // to the runtime helper (same shape #462 uses for
+            // `js_throw_type_error_property_access`).
+            let kind_idx = ctx.strings.intern("string");
+            let kind_entry = ctx.strings.entry(kind_idx);
+            let kind_bytes_global = format!("@{}", kind_entry.bytes_global);
+            let kind_len_str = kind_entry.byte_len.to_string();
+            let prop_idx = ctx.strings.intern(property);
+            let prop_entry = ctx.strings.entry(prop_idx);
+            let prop_bytes_global = format!("@{}", prop_entry.bytes_global);
+            let prop_len_str = prop_entry.byte_len.to_string();
+            let blk = ctx.block();
+            blk.call_void(
+                "js_throw_type_error_not_a_function",
+                &[
+                    (PTR, &kind_bytes_global),
+                    (I64, &kind_len_str),
+                    (PTR, &prop_bytes_global),
+                    (I64, &prop_len_str),
+                ],
+            );
+            blk.unreachable();
+            // The block is now terminated; downstream lowering
+            // expects a value register to phi against. Return a
+            // placeholder undefined — `unreachable` above means
+            // this is never read at runtime.
+            Ok(crate::nanbox::double_literal(f64::from_bits(
+                crate::nanbox::TAG_UNDEFINED,
+            )))
         }
     }
 }
@@ -773,17 +1004,126 @@ pub(crate) fn lower_string_concat(
     let l_box = lower_expr(ctx, left)?;
     let r_box = lower_expr(ctx, right)?;
     let blk = ctx.block();
-    // Issue #214: inline `bitcast + and POINTER_MASK_I64` returns garbage
-    // for SSO operands (SHORT_STRING_TAG = 0x7FF9, lower 48 bits encode
-    // payload, not a pointer). Route through `unbox_str_handle` →
-    // `js_get_string_pointer_unified` which materializes SSO to heap.
-    let l_handle = unbox_str_handle(blk, &l_box);
-    let r_handle = unbox_str_handle(blk, &r_box);
+    // SSO-aware fast path: pass operands as NaN-boxed f64s directly to
+    // `js_string_concat_sso`, which keeps SSO operands inline (no
+    // materialise-to-heap defeat) and returns the result NaN-boxed —
+    // SSO when the total fits 5 bytes, heap-pointer otherwise. Saves up
+    // to 3 heap allocations per concat on hot paths like ABC451D's
+    // recursive `before + after` (1.4M concats with 1-9 byte operands).
+    Ok(blk.call(
+        DOUBLE,
+        "js_string_concat_box",
+        &[(DOUBLE, &l_box), (DOUBLE, &r_box)],
+    ))
+}
+
+/// Cap the per-call part count for the n-way fold. Must match the
+/// runtime's `MAX_PARTS` in `js_string_concat_chain`. 32 covers every
+/// realistic CSV / log-line / template chain in user code.
+const CONCAT_CHAIN_MAX_PARTS: usize = 32;
+
+/// Try to flatten a left-spine of `Binary { Add }` nodes where every Add
+/// has at least one statically-string operand. Returns the parts in
+/// left-to-right (source-order) order. Returns `None` if the chain is
+/// shorter than the existing pairwise fast path's preference, has too
+/// many parts, or contains an Add node where neither side is statically
+/// string (which would risk numeric semantics under JS spec).
+///
+/// Caller passes the OUTERMOST Add's children. If the outermost Add's
+/// left child is itself a string-shaped Add, we recurse into it; right
+/// children are always leaves in our flat representation.
+pub(crate) fn flatten_string_add_chain<'a>(
+    ctx: &FnCtx<'_>,
+    left: &'a Expr,
+    right: &'a Expr,
+) -> Option<Vec<&'a Expr>> {
+    use perry_hir::BinaryOp;
+
+    let mut parts: Vec<&Expr> = Vec::with_capacity(8);
+    parts.push(right);
+
+    // Walk down the left spine. At each step, the current `cur` was the
+    // left child of an Add we already accepted — so we know `cur + ...`
+    // is string-shaped at the level above. We need each Add we descend
+    // INTO to itself be string-shaped (≥1 statically-string operand), so
+    // the entire chain has unambiguous string semantics.
+    let mut cur: &Expr = left;
+    loop {
+        match cur {
+            Expr::Binary {
+                op: BinaryOp::Add,
+                left: l,
+                right: r,
+            } => {
+                let l_str = crate::type_analysis::is_definitely_string_expr(ctx, l);
+                let r_str = crate::type_analysis::is_definitely_string_expr(ctx, r);
+                if !l_str && !r_str {
+                    // Stop the descent — this Add isn't unambiguously
+                    // string-shaped. Treat the entire `cur` subtree as
+                    // one opaque part.
+                    parts.push(cur);
+                    break;
+                }
+                parts.push(r);
+                cur = l;
+                if parts.len() >= CONCAT_CHAIN_MAX_PARTS {
+                    return None;
+                }
+            }
+            _ => {
+                parts.push(cur);
+                break;
+            }
+        }
+    }
+
+    parts.reverse();
+    Some(parts)
+}
+
+/// Lower a flat parts list to a single `js_string_concat_chain` call.
+/// Each part is lowered to its NaN-boxed value, then stored into a
+/// stack-allocated `[CONCAT_CHAIN_MAX_PARTS x double]` buffer; we pass
+/// the base pointer + N to the runtime helper, which produces a single
+/// allocation containing the entire concatenated result.
+///
+/// The buffer is fixed-size (always sized to MAX_PARTS) and hoisted to
+/// the function entry block via `alloca_entry_array`. A non-entry-block
+/// alloca lowers to a runtime `sub %rsp, N` with no matching restore;
+/// inside a loop body that's a stack leak (issue #167 — same shape that
+/// blew up `buf.readInt32BE` in tight loops). Function-entry allocas
+/// run once at prologue and the slot dominates every reachable use.
+/// One per-function buffer is shared across all chain call sites — fine
+/// because each chain call writes its parts and immediately calls into
+/// the runtime helper before any other call site can clobber the slots.
+pub(crate) fn lower_string_concat_chain(ctx: &mut FnCtx<'_>, parts: &[&Expr]) -> Result<String> {
+    debug_assert!(parts.len() >= 2);
+    debug_assert!(parts.len() <= CONCAT_CHAIN_MAX_PARTS);
+
+    // Lower each part first (in source order); side effects must fire
+    // left-to-right per JS spec.
+    let mut lowered: Vec<String> = Vec::with_capacity(parts.len());
+    for p in parts {
+        lowered.push(lower_expr(ctx, p)?);
+    }
+
+    let n = lowered.len();
+    // Hoist the buffer to the function entry block. Issue #167.
+    let buf_reg = ctx.func.alloca_entry_array(DOUBLE, CONCAT_CHAIN_MAX_PARTS);
+    let blk = ctx.block();
+    for (i, val) in lowered.iter().enumerate() {
+        let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+        blk.store(DOUBLE, val, &slot);
+    }
+    // Pass the array's base pointer as i64 (codegen ABI uses i64 for
+    // raw pointer args matching the existing `js_string_concat` shape).
+    let base_i64 = blk.next_reg();
+    blk.emit_raw(format!("{} = ptrtoint ptr {} to i64", base_i64, buf_reg));
+
     let result_handle = blk.call(
         I64,
-        "js_string_concat",
-        &[(I64, &l_handle), (I64, &r_handle)],
+        "js_string_concat_chain",
+        &[(I64, &base_i64), (I32, &format!("{}", n))],
     );
-    // Inline NaN-box (STRING_TAG) — concat always returns a real heap ptr.
     Ok(nanbox_string_inline(blk, &result_handle))
 }

@@ -24,7 +24,7 @@ People are building real apps with Perry today. Here are some highlights:
 | [**Bloom Engine**](https://bloomengine.dev) | Native TypeScript game engine — Metal, DirectX 12, Vulkan, OpenGL. Write games in TS, ship native. | macOS, Windows, Linux, iOS, tvOS, Android |
 | [**Mango**](https://github.com/MangoQuery/app) | Native MongoDB GUI. ~7 MB binary, <100 MB RAM, sub-second cold start. | macOS, Windows, Linux, iOS, Android |
 | [**Hone**](https://hone.codes) | AI-powered native code editor with built-in terminal, Git, and LSP. | macOS, Windows, Linux, iOS, Android, Web |
-| [**Pry**](https://github.com/nicktrebes/perry-pry) | Fast, native JSON viewer with tree navigation and search. | macOS, iOS, Android |
+| [**Pry**](https://github.com/PerryTS/pry) | Fast, native JSON viewer with tree navigation and search. | macOS, iOS, Android |
 | [**dB Meter**](https://dbmeter.app) | Real-time sound level measurement with 60fps updates and per-device calibration. | iOS, macOS, Android |
 
 ### Screenshots
@@ -50,74 +50,42 @@ People are building real apps with Perry today. Here are some highlights:
 
 ## Performance
 
-Perry beats Node.js and Bun on every benchmark below. Best of 5 runs (best of 3 for cheap cells), macOS ARM64 (Apple Silicon), Node.js v25, Bun 1.3, rerun 2026-04-23 on v0.5.173.
+> **As of v0.5.585, fast-math is opt-in.** Perry's default mode emits no `reassoc + contract` per-instruction FMF flags, so f64 arithmetic is bit-exact with Node. `--fast-math` (CLI), `PERRY_FAST_MATH=1` (env), or `"perry": { "fastMath": true }` in `package.json` re-enables the flags. See [`docs/src/cli/fast-math.md`](docs/src/cli/fast-math.md) for the discussion of when it does and doesn't matter. The numbers below are Perry's default mode unless noted.
 
-| Benchmark | Perry | Node.js | Bun | vs Node | What it tests |
-|-----------|-------|---------|-----|---------|---------------|
-| factorial | 31ms | 596ms | 98ms | **19x faster** | Modular accumulation (integer fast path) |
-| method_calls | 1ms | 11ms | 9ms | **11x faster** | Class method dispatch (10M calls) |
-| loop_overhead | 15ms | 61ms | 50ms | **4x faster** | Tight numeric loop (100M iterations) |
-| math_intensive | 14ms | 52ms | 52ms | **3.7x faster** | Harmonic series (50M iterations) |
-| fibonacci(40) | 320ms | 1033ms | 521ms | **3.2x faster** | Recursive function calls (i64 specialization) |
-| array_read | 5ms | 13ms | 15ms | **2.6x faster** | Sequential read (10M elements) |
-| closure | 10ms | 309ms | 51ms | **31x faster** | Closure creation + invocation (10M calls) |
-| array_write | 4ms | 9ms | 7ms | **2.3x faster** | Sequential write (10M elements) |
-| object_create | 3ms | 9ms | 8ms | **3x faster** | Object allocation (1M objects, scalar replacement) |
-| binary_trees | 3ms | 10ms | 7ms | **3.3x faster** | Tree allocation + traversal (1M nodes, scalar replacement) |
-| string_concat | 0ms | 3ms | 2ms | **fast** | 100K string appends |
-| nested_loops | 9ms | 20ms | 20ms | **2.2x faster** | Nested array access (3000x3000) |
-| prime_sieve | 5ms | 8ms | 7ms | **1.6x faster** | Sieve of Eratosthenes |
-| mandelbrot | 23ms | 25ms | 30ms | **1.1x faster** | Complex f64 iteration (800x800) |
-| matrix_multiply | 24ms | 34ms | 35ms | **1.4x faster** | 256x256 matrix multiply |
-| json_roundtrip | 314ms | 377ms | 250ms | **1.2x faster** | 50× `JSON.parse` + `JSON.stringify` on a ~1MB, 10K-item blob |
+Numbers below are from a 2026-05-14 sweep on macOS ARM64 (M1 Max, RUNS=11 medians, `taskpolicy -t 0 -l 0`) at Perry v0.5.908 on an otherwise-idle machine. All languages re-measured together this run. Source + methodology in [`benchmarks/polyglot/`](benchmarks/polyglot/).
 
-Perry compiles to native machine code via LLVM — no JIT warmup, no interpreter overhead. Key optimizations: **scalar replacement** of non-escaping objects (escape analysis eliminates heap allocation entirely — object fields become registers), inline bump allocator for objects that do escape, i32 loop counters for bounded array access, `reassoc contract` fast-math flags, integer-modulo fast path (`fptosi → srem → sitofp` instead of `fmod`), elimination of redundant `js_number_coerce` calls on numeric function returns, i64 specialization for pure numeric recursive functions, and `<2 x double>` parallel-accumulator vectorization on pure-fadd reduction loops (restored in v0.5.164 via [#140](https://github.com/PerryTS/perry/issues/140)).
+| Benchmark           | Perry |  Rust |   C++ |    Go | Swift |  Java |  Node |   Bun | What it tests |
+|---------------------|------:|------:|------:|------:|------:|------:|------:|------:|---------------|
+| fibonacci           |   309 |   316 |   309 |   446 |   401 |   278 |   987 |   518 | Recursive function calls (i64 specialization) |
+| loop_data_dependent |   225 |   226 |   129 |   128 |   225 |   226 |   226 |   230 | Multiplicative carry through `sum` (genuinely-non-foldable f64) |
+| object_create       |     2 |     0 |     0 |     0 |     0 |     5 |     8 |     6 | Object allocation (1M objects, scalar replacement) |
+| nested_loops        |    18 |     8 |     8 |    10 |     8 |    10 |    17 |    20 | Nested array access (cache-bound) |
+| array_read          |    11 |     9 |     9 |    10 |     9 |    11 |    14 |    16 | Sequential read (10M elements) |
+| array_write         |     3 |     7 |     2 |     9 |     2 |     6 |     9 |     6 | Sequential write (10M elements) |
 
-### Perry vs compiled languages
+Default Perry runs in the same neighborhood as Rust default `-O`, C++ `-O3`, and Swift `-O` on every row — competitive on integer recursion (`fibonacci` 309 vs Rust 316 / C++ 309), within a tick of native on object allocation thanks to scalar replacement (`object_create`), within a few ms on cache-bound work (`nested_loops`, `array_read`/`array_write`), and matching the no-contract compiled pack on genuinely-non-foldable f64 (`loop_data_dependent` 225 vs Rust 226 / Bun 230 / Node 226). Apple Clang `-O3` and Go default win the `loop_data_dependent` row at 128-129 by fusing `sum * a + b` into a single `FMADDD` instruction (FMA contraction is `-ffp-contract=fast` — a separate knob `--fast-math` deliberately doesn't toggle). Python column omitted to keep the table readable; full numbers in [`benchmarks/polyglot/RESULTS.md`](benchmarks/polyglot/RESULTS.md).
 
-Perry also competes with systems languages. All implementations use `f64`/`double` to match TypeScript's `number` type — no SIMD intrinsics, no unsafe code. See [`benchmarks/polyglot/`](benchmarks/polyglot/) for source and methodology.
+We deliberately don't lead with the trivially-foldable accumulator microbenchmarks (`loop_overhead` / `math_intensive` / `accumulate`) that Perry posted big numbers on through v0.5.584. Those are flag-aggressiveness probes — they measure whether each compiler applied `reassoc + autovectorize` to a `sum += 1.0`-shaped loop, not how fast the resulting loop computes under load. Perry default sits in the no-flags pack (97 / 51 / 97 ms in this sweep) on all three; `--fast-math` recovers 12 / 14 / 34 ms. C++ `-O3 -ffast-math` matches Perry `--fast-math` to the millisecond on the same kernels — same LLVM pipeline, one flag. The full breakdown is in [`benchmarks/README.md`](benchmarks/README.md#optimization-probes-compiler-flag-aggressiveness-not-runtime-perf) and [`polyglot/RESULTS_OPT.md`](benchmarks/polyglot/RESULTS_OPT.md).
 
-| Benchmark | Perry | Rust | C++ | Go | Swift | Java | Node | Bun | Python |
-|-----------|-------|------|-----|----|-------|------|------|-----|--------|
-| fibonacci | 309 | 321 | **308** | 445 | 410 | **280** | 1001 | 516 | 16055 |
-| loop_overhead | **12** | 96 | 96 | 96 | 96 | 98 | 58 | 40 | 3011 |
-| array_write | 3 | 7 | **2** | 8 | **2** | 6 | 9 | 6 | 396 |
-| array_read | **3** | 9 | 9 | 10 | 9 | 11 | 13 | 16 | 344 |
-| math_intensive | **14** | 48 | 50 | 49 | 48 | 50 | 49 | 50 | 2245 |
-| object_create | 2 | **0** | **0** | **0** | **0** | 5 | 8 | 6 | 160 |
-| nested_loops | 10 | **8** | **8** | 9 | **8** | 10 | 17 | 20 | 476 |
-| accumulate | **25** | 95 | 97 | 97 | 97 | 97 | 594 | 99 | 4991 |
+### vs Node.js and Bun
 
-Perry leads on 5 of 8 cells (`loop_overhead`, `array_read`, `math_intensive`, `accumulate`, and tied on `fibonacci` within noise), trails by 1-2 ms on three (`object_create`, `nested_loops`, `array_write`) where Rust/C++/Go/Swift benefit from stack-allocated struct layout. Perry's biggest wins — 8× on `loop_overhead`, 3-4× on `math_intensive` / `accumulate` — come from `<2 x double>` parallel-accumulator autovectorization of pure-fadd reduction loops, restored in v0.5.164 after the regression tracked as [#140](https://github.com/PerryTS/perry/issues/140).
+Perry's broader benchmark suite covers workloads outside the polyglot set — closures, classes, JSON, prime sieve, etc. Numbers below from the 2026-05-14 v0.5.908 sweep via `benchmarks/suite/run_benchmarks.sh` (single-run-per-cell, not RUNS=11 medians — see [`benchmarks/polyglot/`](benchmarks/polyglot/) for the rigorous multi-run methodology).
 
-**The `loop_overhead` / `math_intensive` / `accumulate` gaps vs Rust/C++ come from two stacked optimizations, not a codegen-backend advantage.** (1) Perry emits `reassoc contract` on f64 ops because TS `number` semantics can't observe the difference; Rust/C++/Go/Swift default to strict-IEEE fadd (3-cycle latency wall, unreassociable). (2) On top of `reassoc`, LLVM autovectorizes the body into a `<2 x double>` parallel-accumulator reduction with interleave count 4. Same `bench.cpp` with `g++ -O3 -ffast-math` hits 11 ms on `loop_overhead` — same LLVM, same pipeline, one flag flip. Go has no fast-math flag at all, which is why it matches Rust/C++ despite using a different backend. [`benchmarks/polyglot/RESULTS_OPT.md`](benchmarks/polyglot/RESULTS_OPT.md) documents the per-language opt sweep: with fast-math enabled, C++ matches Perry to the millisecond. `object_create` stays at 0ms thanks to scalar replacement — non-escaping objects are decomposed into register-allocated fields, matching the 0ms floor Rust/C++ get from stack allocation. See [`benchmarks/polyglot/RESULTS.md`](benchmarks/polyglot/RESULTS.md) for the full writeup.
+| Benchmark | Perry (v0.5.908) | Node.js | Bun | What it tests |
+|-----------|-----------------:|--------:|----:|---------------|
+| factorial | 107ms | 591ms | 97ms | Modular accumulation (integer fast path) |
+| method_calls | 9ms | 11ms | 9ms | Class method dispatch (10M calls) |
+| closure | 50ms | 304ms | 51ms | Closure creation + invocation (10M calls) |
+| binary_trees | 2ms | 10ms | 7ms | Tree allocation + traversal (1M nodes, scalar replacement) |
+| string_concat | 0ms | 3ms | 1ms | 100K string appends |
+| prime_sieve | 3ms | 8ms | 7ms | Sieve of Eratosthenes |
+| mandelbrot | 28ms | 25ms | 29ms | Complex f64 iteration (800x800) |
+| matrix_multiply | 28ms | 34ms | 34ms | 256x256 matrix multiply |
+| json_roundtrip (lazy tape, gen-gc) | 83ms | 377ms | 249ms | 50× `JSON.parse` + `JSON.stringify` on a ~1MB, 10K-item blob |
 
-### LLVM backend progress
+`closure` and `factorial` are still slower than the older v0.5.173 baseline (10 → 50 ms, 31 → 107 ms). The v0.5.585 fast-math opt-in flip accounts for `factorial` (integer modulo plus an FP-tail reduction that the old default-on fast-math collapsed); `closure` regression is tracked as a follow-up. `method_calls` is back at baseline this sweep (9 ms) — yesterday's 25 ms reading was single-run noise from concurrent CPU load. The wins on `binary_trees` / `string_concat` / `prime_sieve` / `mandelbrot` / `matrix_multiply` against Node/Bun hold steady. Single-run cells are noisier than RUNS=11 medians; the lower-noise multi-run polyglot table above remains the canonical comparison.
 
-Perry switched from Cranelift to LLVM as its sole code generation backend in v0.5.0. The initial cutover had significant performance regressions due to NaN-boxing overhead in the new backend. Subsequent optimization work recovered and surpassed the original numbers:
-
-| Benchmark | Cranelift | LLVM v0.5.0 | LLVM now | Node.js |
-|-----------|-----------|-------------|----------|---------|
-| method_calls | 16ms | 1,084ms | **1ms** | 11ms |
-| math_intensive | 370ms | 131ms | **14ms** | 52ms |
-| object_create | 5ms | 318ms | **3ms** | 9ms |
-| binary_trees | — | — | **3ms** | 10ms |
-| matrix_multiply | 61ms | 184ms | **24ms** | 34ms |
-| nested_loops | 32ms | 57ms | **9ms** | 20ms |
-| array_read | 4ms | 26ms | **5ms** | 13ms |
-| mandelbrot | 71ms | 47ms | **23ms** | 25ms |
-| string_concat | 7ms | 0–1ms | **0ms** | 3ms |
-| prime_sieve | 11ms | 11ms | **5ms** | 8ms |
-| fibonacci(40) | 505ms | 1,156ms | **320ms** | 1033ms |
-| closure | — | — | **10ms** | 309ms |
-| factorial | — | — | **31ms** | 596ms |
-| json_roundtrip | — | — | **314ms** | 377ms |
-
-The Cranelift column is from the pre-v0.5.0 era (the old README on `main`). LLVM v0.5.0 was the initial cutover — it regressed badly because the new backend routed most operations through runtime helpers instead of inlining them. The current LLVM column shows the state after scalar replacement of non-escaping objects, inline bump allocators, i32 loop counters, fast-math flags, integer-mod fast paths, loop-invariant length hoisting, and redundant number-coerce elimination. LLVM now beats both Cranelift and Node on every workload.
-
-### A note on compile times
-
-Cranelift is often praised for fast compilation, and it is — but the difference is smaller than you'd expect. Perry previously used Cranelift and switched to LLVM in v0.5.0. Compile times increased by only ~20-50ms (8-19%), because the bulk of Perry's compile time is SWC parsing, HIR lowering, and linking — not the codegen backend. On a typical file LLVM adds about 25ms over Cranelift while producing code that runs up to 24x faster. A worthwhile trade.
+Perry compiles to native machine code via LLVM — no JIT warmup, no interpreter overhead. Key optimizations that apply in both modes: **scalar replacement** of non-escaping objects (escape analysis eliminates heap allocation entirely — object fields become registers), inline bump allocator for objects that do escape, i32 loop counters for bounded array access, integer-modulo fast path (`fptosi → srem → sitofp` instead of `fmod`), elimination of redundant `js_number_coerce` calls on numeric function returns, and i64 specialization for pure numeric recursive functions.
 
 Run benchmarks yourself: `cd benchmarks/suite && ./run_benchmarks.sh` (requires node, cargo; optional: bun, shermes).
 
@@ -307,23 +275,21 @@ The output is a standalone binary — no `node_modules` needed at runtime.
 
 ## Example Projects
 
-The `example-code/` directory contains ready-to-run projects showing Perry in real-world scenarios:
+Ready-to-run demos live in their own repo: **[PerryTS/perry-examples](https://github.com/PerryTS/perry-examples)**.
 
 | Example | Stack | What it demonstrates |
 |---------|-------|---------------------|
-| **[express-postgres](example-code/express-postgres/)** | Express + PostgreSQL | Multi-file routes, middleware (CORS, Helmet), connection pooling, error handling |
-| **[fastify-redis-mysql](example-code/fastify-redis-mysql/)** | Fastify + Redis + MySQL | Rate limiting, caching layer, database queries, dotenv config |
-| **[hono-mongodb](example-code/hono-mongodb/)** | Hono + MongoDB | Lightweight HTTP framework with document database |
-| **[nestjs-typeorm](example-code/nestjs-typeorm/)** | NestJS + TypeORM | Decorator-based architecture, dependency injection |
-| **[nextjs-prisma](example-code/nextjs-prisma/)** | Next.js-style + Prisma | ORM integration, database migrations |
-| **[koa-redis](example-code/koa-redis/)** | Koa + Redis | Middleware composition, session storage |
-| **[http-server](example-code/http-server/)** | Raw HTTP | Low-level request handling, routing, JSON APIs |
-| **[blockchain-demo](example-code/blockchain-demo/)** | Custom | Blockchain implementation in pure TypeScript |
-
-Each example has its own `package.json` and can be compiled with:
+| **[express-postgres](https://github.com/PerryTS/perry-examples/tree/main/express-postgres)** | Express + PostgreSQL | Multi-file routes, middleware (CORS, Helmet), connection pooling, error handling |
+| **[fastify-redis-mysql](https://github.com/PerryTS/perry-examples/tree/main/fastify-redis-mysql)** | Fastify + Redis + MySQL | Rate limiting, caching layer, database queries, dotenv config |
+| **[hono-mongodb](https://github.com/PerryTS/perry-examples/tree/main/hono-mongodb)** | Hono + MongoDB | Lightweight HTTP framework with document database |
+| **[nestjs-typeorm](https://github.com/PerryTS/perry-examples/tree/main/nestjs-typeorm)** | NestJS + TypeORM | Decorator-based architecture, dependency injection |
+| **[nextjs-prisma](https://github.com/PerryTS/perry-examples/tree/main/nextjs-prisma)** | Next.js-style + Prisma | ORM integration, database migrations |
+| **[koa-redis](https://github.com/PerryTS/perry-examples/tree/main/koa-redis)** | Koa + Redis | Middleware composition, session storage |
+| **[blockchain-demo](https://github.com/PerryTS/perry-examples/tree/main/blockchain-demo)** | Custom | Blockchain implementation in pure TypeScript |
 
 ```bash
-cd example-code/fastify-redis-mysql
+git clone https://github.com/PerryTS/perry-examples
+cd perry-examples/fastify-redis-mysql
 npm install
 perry compile src/index.ts -o server && ./server
 ```
@@ -599,7 +565,7 @@ Then compile with `--enable-js-runtime` as usual. Packages in the list are compi
 
 - **Scalar Replacement** — escape analysis identifies non-escaping objects (`let p = new Point(x, y); sum += p.x + p.y`); fields are decomposed into stack allocas that LLVM promotes to registers — zero heap allocation
 - **NaN-Boxing** — all values are 64-bit words (f64/u64); no boxing overhead for numbers
-- **Mark-Sweep GC** — conservative stack scan, arena block walking, 8-byte GcHeader per alloc
+- **Generational Mark-Sweep GC** — per-thread nursery + old-gen arenas, precise shadow stack + conservative stack scan, two-bit aging, 8-byte GcHeader per alloc
 - **Inline Bump Allocator** — objects that do escape use a 13-cycle inline arena bump (no function call on hot path)
 - **Parallel Compilation** — rayon-based module codegen, transform passes, and symbol scanning across CPU cores
 - **FMA / CSE / Loop Unrolling** — fused multiply-add, common subexpression elimination, 8x loop unroll
@@ -755,7 +721,6 @@ perry/
 │   ├── perry-jsruntime/        # Optional V8 interop via QuickJS
 │   └── perry-diagnostics/      # Error reporting
 ├── docs/                       # Documentation site (mdBook)
-├── example-code/               # 8 example applications
 ├── benchmarks/                 # Benchmark suite (Perry vs Node.js vs Bun)
 ├── packages/                   # npm packages (@perryts/threads)
 └── test-files/                 # Test suite
@@ -765,10 +730,82 @@ perry/
 
 ## Runtime Characteristics
 
-- **Garbage Collection** — mark-sweep GC with conservative stack scanning, arena block walking, 8-byte GcHeader per allocation
+- **Garbage Collection** — generational mark-sweep GC, per-thread nursery + old-gen arenas, precise shadow stack + conservative stack scan, two-bit aging tenures objects after 2 minor cycles, 8-byte GcHeader per allocation
 - **Single-Threaded by Default** — async I/O on Tokio workers, callbacks on main thread. Use `perry/thread` for explicit multi-threading.
 - **No Runtime Type Checking** — types erased at compile time. Use `typeof` and `instanceof` for runtime checks.
 - **Small Binaries** — ~330KB hello world, ~48MB with full stdlib. Automatically stripped.
+
+---
+
+## Privacy & Telemetry
+
+Perry ships **two independent opt-in channels** for sending data home —
+nothing leaves your machine without an explicit `enabled = true` or `on` in
+`~/.perry/config.toml`. Both honour `PERRY_NO_TELEMETRY=1` and `CI=true`.
+
+### 1. Generic usage analytics — `telemetry.enabled`
+
+Counts `perry compile`, `perry init`, `perry publish` invocations on a
+background HTTP POST. Sends: command name, platform (`darwin`/`linux`/...),
+Perry version, success/error status, and an anonymous client UUID.
+
+### 2. Compatibility reports — `telemetry.compatibility_reports` (#849)
+
+Separate opt-in for "I hit an unsupported TS/Node feature and bailed." Sends
+a structured report when the compiler emits one of these diagnostic codes:
+`UnsupportedBinaryOp`, `UnsupportedExpression`, `UnsupportedStatement`,
+`DynamicPropertyAccess`, `ImplicitCoercion`, `UnresolvedImport`, `NoOpStub`.
+
+Three modes:
+
+- `off` — never send. Sink isn't even installed; zero overhead.
+- `ask` (default) — when a qualifying diagnostic fires, prompt once per
+  session: `[y] just this once / [a] always / [n] not this time / [N] never`.
+- `on` — always send (after dedup + redaction). No prompt.
+
+**What's sent (the entire payload schema):**
+
+```json
+{
+  "perry_version": "0.5.x",
+  "client_id": "uuid",
+  "code": "UnsupportedExpression",
+  "category": "gap-categorical",
+  "stage": "hir-lower",
+  "snippet_hash": "sha256:...",
+  "snippet_redacted": "let <id1> = await <id2>();",
+  "ts_feature": "decorator",
+  "node_api": "node:async_hooks.createHook",
+  "os": "darwin-arm64",
+  "node_target": "20"
+}
+```
+
+**What's NEVER sent:** raw source, file paths, project names, env vars, your
+program's stdout/stderr, dependency tree, or anything tied to identity
+beyond the existing anonymous `client_id`. Snippets are redacted before
+hashing — string literals → `"<str>"`, numbers → `<num>`, identifiers
+(except built-ins like `console`, `Math`, `Promise`) → `<id1>`, `<id2>`,
+capped at 200 chars, with a hard reject if any invariant fails.
+
+A local 30-day dedup cache at `~/.perry/.report-cache` prevents resending
+the same `snippet_hash` on every reload.
+
+### Inspecting & managing
+
+```bash
+perry doctor                          # shows current mode, sent/queued counts
+perry doctor --show-pending-reports   # print redacted payloads queued this run
+perry doctor --clear-report-cache     # wipe the 30-day dedup cache
+```
+
+To opt out at the file level, edit `~/.perry/config.toml`:
+
+```toml
+[telemetry]
+enabled = false                  # generic analytics off
+compatibility_reports = "off"    # #849 compat reports off
+```
 
 ---
 

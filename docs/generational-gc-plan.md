@@ -218,7 +218,8 @@ allocation paths.
 
 **Scope:**
 - Codegen emits write barriers at every heap store (behind
-  `PERRY_WRITE_BARRIERS=1` feature flag for initial rollout).
+  an initial `PERRY_WRITE_BARRIERS=1` rollout flag; barriers are now
+  default-on with `PERRY_WRITE_BARRIERS=0`/`off`/`false` as the opt-out).
 - Minor GC actually collects the nursery.
 - `PERRY_GEN_GC=1` gates minor GC firing.
 

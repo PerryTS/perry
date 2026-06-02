@@ -10,7 +10,7 @@
 //! `new (someFn)(args)` form via `Expr::NewDynamic`.
 
 use anyhow::{anyhow, Result};
-use perry_types::LocalId;
+use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use crate::ir::Expr;
@@ -19,7 +19,477 @@ use crate::lower_types::extract_ts_type_with_ctx;
 
 use super::{lower_expr, LoweringContext};
 
+/// Lower `new TextDecoder(label?, { fatal?, ignoreBOM? })` into
+/// `Expr::TextDecoderNew { label, fatal, ignore_bom }`. Shared by
+/// `expr_new.rs` (bound to a local) and `textencoder.rs` (inline
+/// `new TextDecoder(...).decode(...)`).
+pub(crate) fn lower_text_decoder_new(
+    ctx: &mut LoweringContext,
+    args: Option<&[ast::ExprOrSpread]>,
+) -> Result<Expr> {
+    let label = match args.and_then(|a| a.first()) {
+        Some(arg) => lower_expr(ctx, &arg.expr)?,
+        None => Expr::Undefined,
+    };
+    let mut fatal = Expr::Bool(false);
+    let mut ignore_bom = Expr::Bool(false);
+    if let Some(opts) = args.and_then(|a| a.get(1)) {
+        if let ast::Expr::Object(obj) = opts.expr.as_ref() {
+            for prop in &obj.props {
+                if let ast::PropOrSpread::Prop(p) = prop {
+                    if let ast::Prop::KeyValue(kv) = p.as_ref() {
+                        let key = match &kv.key {
+                            ast::PropName::Ident(i) => i.sym.to_string(),
+                            ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                            _ => continue,
+                        };
+                        match key.as_str() {
+                            "fatal" => fatal = lower_expr(ctx, &kv.value)?,
+                            "ignoreBOM" => ignore_bom = lower_expr(ctx, &kv.value)?,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(Expr::TextDecoderNew {
+        label: Box::new(label),
+        fatal: Box::new(fatal),
+        ignore_bom: Box::new(ignore_bom),
+    })
+}
+
+fn peel_new_callee(mut expr: &ast::Expr) -> &ast::Expr {
+    loop {
+        match expr {
+            ast::Expr::Paren(paren) => expr = paren.expr.as_ref(),
+            ast::Expr::TsAs(ts_as) => expr = ts_as.expr.as_ref(),
+            ast::Expr::TsTypeAssertion(ts_ta) => expr = ts_ta.expr.as_ref(),
+            ast::Expr::TsNonNull(ts_non_null) => expr = ts_non_null.expr.as_ref(),
+            ast::Expr::TsConstAssertion(ts_const) => expr = ts_const.expr.as_ref(),
+            _ => return expr,
+        }
+    }
+}
+
+fn nonconstructable_builtin_throw_expr(name: &str, mut args: Vec<Expr>) -> Expr {
+    let helper = match name {
+        "Symbol" => "js_throw_symbol_constructor_type_error",
+        "BigInt" => "js_throw_bigint_constructor_type_error",
+        "Math" => "js_throw_math_constructor_type_error",
+        _ => unreachable!(),
+    };
+    let throw_expr = Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: helper.to_string(),
+            param_types: Vec::new(),
+            return_type: Type::Any,
+        }),
+        args: Vec::new(),
+        type_args: Vec::new(),
+    };
+
+    if args.is_empty() {
+        throw_expr
+    } else {
+        args.push(throw_expr);
+        Expr::Sequence(args)
+    }
+}
+
+fn lower_optional_args(
+    ctx: &mut LoweringContext,
+    args: Option<&[ast::ExprOrSpread]>,
+) -> Result<Vec<Expr>> {
+    args.map(|args| {
+        args.iter()
+            .map(|a| lower_expr(ctx, &a.expr))
+            .collect::<Result<Vec<_>>>()
+    })
+    .transpose()
+    .map(|args| args.unwrap_or_default())
+}
+
+fn lower_url_encoding_constructor(
+    ctx: &mut LoweringContext,
+    class_name: &str,
+    args: Option<&[ast::ExprOrSpread]>,
+) -> Result<Option<Expr>> {
+    match class_name {
+        "URL" => {
+            let args = lower_optional_args(ctx, args)?;
+            let mut args_iter = args.into_iter();
+            let url_arg = args_iter
+                .next()
+                .ok_or_else(|| anyhow!("URL constructor requires at least 1 argument"))?;
+            let base_arg = args_iter.next();
+            Ok(Some(Expr::UrlNew {
+                url: Box::new(url_arg),
+                base: base_arg.map(Box::new),
+            }))
+        }
+        "URLSearchParams" => {
+            let args = lower_optional_args(ctx, args)?;
+            let init_arg = args.into_iter().next();
+            Ok(Some(Expr::UrlSearchParamsNew(init_arg.map(Box::new))))
+        }
+        "TextEncoder" => Ok(Some(Expr::TextEncoderNew)),
+        "TextDecoder" => Ok(Some(lower_text_decoder_new(ctx, args)?)),
+        _ => Ok(None),
+    }
+}
+
+fn is_url_encoding_constructor_name(name: &str) -> bool {
+    matches!(
+        name,
+        "URL" | "URLSearchParams" | "TextEncoder" | "TextDecoder"
+    )
+}
+
+fn module_constructor_name(module_name: &str, method_name: Option<&str>) -> Option<&'static str> {
+    match (module_name, method_name) {
+        ("events", Some("EventEmitterAsyncResource")) => Some("EventEmitterAsyncResource"),
+        ("url", Some("URL")) => Some("URL"),
+        ("url", Some("URLSearchParams")) => Some("URLSearchParams"),
+        ("util", Some("TextEncoder")) => Some("TextEncoder"),
+        ("util", Some("TextDecoder")) => Some("TextDecoder"),
+        _ => None,
+    }
+}
+
+fn global_member_constructor_name(
+    ctx: &LoweringContext,
+    obj_name: &str,
+    prop_name: &str,
+) -> Option<&'static str> {
+    if obj_name == "globalThis" && ctx.lookup_local("globalThis").is_none() {
+        return match prop_name {
+            "URL" => Some("URL"),
+            "URLSearchParams" => Some("URLSearchParams"),
+            "TextEncoder" => Some("TextEncoder"),
+            "TextDecoder" => Some("TextDecoder"),
+            _ => None,
+        };
+    }
+
+    if let Some(module_name) = ctx.lookup_builtin_module_alias(obj_name) {
+        if let Some(name) = module_constructor_name(module_name, Some(prop_name)) {
+            return Some(name);
+        }
+    }
+    if let Some((module_name, None)) = ctx.lookup_native_module(obj_name) {
+        if let Some(name) = module_constructor_name(module_name, Some(prop_name)) {
+            return Some(name);
+        }
+    }
+    None
+}
+
+fn lower_worker_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
+    let args = new_expr
+        .args
+        .as_ref()
+        .map(|args| {
+            args.iter()
+                .map(|a| lower_expr(ctx, &a.expr))
+                .collect::<Result<Vec<_>>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let mut args = args.into_iter();
+    let filename = args.next().unwrap_or(Expr::Undefined);
+    let options = args.next().map(Box::new);
+    Ok(Expr::WorkerNew {
+        paths: Vec::new(),
+        filename: Box::new(filename),
+        options,
+    })
+}
+
+fn is_worker_threads_module_name(module_name: &str) -> bool {
+    module_name == "worker_threads" || module_name == "node:worker_threads"
+}
+
 pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
+    let callee_expr = peel_new_callee(new_expr.callee.as_ref());
+
+    // Issue #422: `new net.Socket()` over a `net` module alias. The
+    // generic Member-callee path below would lower this to
+    // `Expr::NewDynamic`, whose codegen fallback returns an empty
+    // ObjectHeader placeholder — every subsequent `sock.connect/.on/.write`
+    // would silently no-op. Reroute to a receiver-less `NativeMethodCall`
+    // whose method name is the class name; the dispatch table in
+    // `lower_call.rs::NATIVE_MODULE_TABLE` has a `("net", "Socket")` row
+    // pointing at `js_net_socket_alloc`, and the let-stmt machinery in
+    // `lower.rs` registers the result as a `("net", "Socket")` native
+    // instance so subsequent method calls dispatch correctly.
+    if let ast::Expr::Member(member) = callee_expr {
+        if let (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(prop_ident)) =
+            (peel_new_callee(member.obj.as_ref()), &member.prop)
+        {
+            let obj_name = obj_ident.sym.as_ref();
+            if let Some(class_name) =
+                global_member_constructor_name(ctx, obj_name, prop_ident.sym.as_ref())
+            {
+                if let Some(expr) =
+                    lower_url_encoding_constructor(ctx, class_name, new_expr.args.as_deref())?
+                {
+                    return Ok(expr);
+                }
+            }
+
+            let is_net_module =
+                obj_name == "net" || ctx.lookup_builtin_module_alias(obj_name) == Some("net");
+            if is_net_module && matches!(prop_ident.sym.as_ref(), "Socket" | "Stream" | "Server") {
+                let args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                let method = if prop_ident.sym.as_ref() == "Stream" {
+                    "Socket"
+                } else {
+                    prop_ident.sym.as_ref()
+                };
+                return Ok(Expr::NativeMethodCall {
+                    module: "net".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: method.to_string(),
+                    args,
+                });
+            }
+            // #2129: `new http.Agent(options?)` / `new https.Agent(options?)`.
+            // Same pattern as `new net.Socket()` above — reroute to a
+            // receiver-less `NativeMethodCall` so the dispatch table's
+            // `("http"|"https", "Agent")` row runs `js_*_agent_new`.
+            // The let-stmt machinery in `lower.rs` then registers the
+            // result as an `("http", "Agent")` native instance so
+            // `agent.getName/.destroy/.maxSockets` etc. dispatch through
+            // the class-filtered Agent rows. `https` Agent instances are
+            // also tagged under `("http", "Agent")` so they share the
+            // method surface — only the constructor's default protocol
+            // differs.
+            let is_http_module =
+                obj_name == "http" || ctx.lookup_builtin_module_alias(obj_name) == Some("http");
+            let is_https_module =
+                obj_name == "https" || ctx.lookup_builtin_module_alias(obj_name) == Some("https");
+            if (is_http_module || is_https_module) && prop_ident.sym.as_ref() == "Agent" {
+                let args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                return Ok(Expr::NativeMethodCall {
+                    module: if is_https_module {
+                        "https".to_string()
+                    } else {
+                        "http".to_string()
+                    },
+                    class_name: None,
+                    object: None,
+                    method: "Agent".to_string(),
+                    args,
+                });
+            }
+            let is_url_module =
+                obj_name == "url" || ctx.lookup_builtin_module_alias(obj_name) == Some("url");
+            if is_url_module && prop_ident.sym.as_ref() == "Url" {
+                return Ok(Expr::NativeMethodCall {
+                    module: "url".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "Url".to_string(),
+                    args: Vec::new(),
+                });
+            }
+            let dns_module =
+                if obj_name == "dns" || ctx.lookup_builtin_module_alias(obj_name) == Some("dns") {
+                    Some("dns".to_string())
+                } else if ctx.lookup_builtin_module_alias(obj_name) == Some("dns/promises") {
+                    Some("dns/promises".to_string())
+                } else {
+                    ctx.lookup_native_module(obj_name)
+                        .and_then(|(module_name, method)| {
+                            if matches!(module_name, "dns" | "dns/promises")
+                                && (method.is_none() || method.as_deref() == Some("default"))
+                            {
+                                Some(module_name.to_string())
+                            } else {
+                                None
+                            }
+                        })
+                };
+            if let Some(module_name) = dns_module {
+                if prop_ident.sym.as_ref() == "Resolver" {
+                    let args = new_expr
+                        .args
+                        .as_ref()
+                        .map(|args| {
+                            args.iter()
+                                .map(|a| lower_expr(ctx, &a.expr))
+                                .collect::<Result<Vec<_>>>()
+                        })
+                        .transpose()?
+                        .unwrap_or_default();
+                    return Ok(Expr::NativeMethodCall {
+                        module: module_name,
+                        class_name: None,
+                        object: None,
+                        method: "Resolver".to_string(),
+                        args,
+                    });
+                }
+            }
+            let is_module_module = obj_name == "module"
+                || ctx.lookup_builtin_module_alias(obj_name) == Some("module")
+                || ctx
+                    .lookup_native_module(obj_name)
+                    .map(|(module_name, _)| module_name == "module")
+                    .unwrap_or(false);
+            if is_module_module && prop_ident.sym.as_ref() == "SourceMap" {
+                let args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                return Ok(Expr::NativeMethodCall {
+                    module: "module".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "SourceMap".to_string(),
+                    args,
+                });
+            }
+            if obj_name == "WebAssembly" && prop_ident.sym.as_ref() == "Module" {
+                let args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                if let Some(bytes) = args.into_iter().next() {
+                    ctx.uses_webassembly = true;
+                    return Ok(Expr::WebAssemblyModuleNew(Box::new(bytes)));
+                }
+            }
+            let is_util_module = obj_name == "util"
+                || obj_name == "sys"
+                || ctx.lookup_builtin_module_alias(obj_name) == Some("util")
+                || ctx.lookup_builtin_module_alias(obj_name) == Some("sys")
+                || ctx
+                    .lookup_native_module(obj_name)
+                    .map(|(module_name, method)| {
+                        method.is_none() && matches!(module_name, "util" | "sys")
+                    })
+                    .unwrap_or(false);
+            if is_util_module && matches!(prop_ident.sym.as_ref(), "MIMEType" | "MIMEParams") {
+                let args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                return Ok(Expr::NativeMethodCall {
+                    module: if obj_name == "sys"
+                        || ctx.lookup_builtin_module_alias(obj_name) == Some("sys")
+                    {
+                        "sys".to_string()
+                    } else {
+                        "util".to_string()
+                    },
+                    class_name: None,
+                    object: None,
+                    method: prop_ident.sym.to_string(),
+                    args,
+                });
+            }
+            let module_alias = obj_ident.sym.as_ref();
+            let is_worker_threads_module = module_alias == "worker_threads"
+                || ctx.lookup_builtin_module_alias(module_alias) == Some("worker_threads")
+                || match ctx.lookup_native_module(module_alias) {
+                    Some((module_name, _)) => is_worker_threads_module_name(module_name),
+                    None => false,
+                };
+            if is_worker_threads_module
+                && matches!(
+                    prop_ident.sym.as_ref(),
+                    "MessageChannel" | "BroadcastChannel"
+                )
+            {
+                let args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                return Ok(Expr::NativeMethodCall {
+                    module: "worker_threads".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: prop_ident.sym.to_string(),
+                    args,
+                });
+            }
+            if is_worker_threads_module && prop_ident.sym.as_ref() == "Worker" {
+                return lower_worker_new(ctx, new_expr);
+            }
+            if let Some((module_name, _)) = ctx.lookup_native_module(module_alias) {
+                let class_name = prop_ident.sym.as_ref();
+                if matches!(
+                    (module_name, class_name),
+                    ("events", "EventEmitterAsyncResource")
+                        | ("async_hooks", "AsyncLocalStorage" | "AsyncResource")
+                        | ("sqlite", "DatabaseSync" | "Session" | "StatementSync")
+                ) {
+                    let args = new_expr
+                        .args
+                        .as_ref()
+                        .map(|args| {
+                            args.iter()
+                                .map(|a| lower_expr(ctx, &a.expr))
+                                .collect::<Result<Vec<_>>>()
+                        })
+                        .transpose()?
+                        .unwrap_or_default();
+                    return Ok(Expr::New {
+                        class_name: class_name.to_string(),
+                        args,
+                        type_args: Vec::new(),
+                    });
+                }
+            }
+        }
+    }
+
     // Issue #237: pre-register the controller param of every
     // `start` / `pull` / `cancel` / `transform` / `flush` callback
     // passed to `new ReadableStream({...})` /
@@ -119,11 +589,189 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     }
 
     // Try to extract class name from callee
-    match new_expr.callee.as_ref() {
+    match callee_expr {
         ast::Expr::Ident(ident) => {
             let class_name = ident.sym.to_string();
+            if matches!(
+                ctx.lookup_native_module(&class_name),
+                Some(("url", Some("Url")))
+            ) {
+                return Ok(Expr::NativeMethodCall {
+                    module: "url".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "Url".to_string(),
+                    args: Vec::new(),
+                });
+            }
+
+            // #3157: `import { MessageChannel } from "worker_threads"` then
+            // `new MessageChannel()` — the bare-ident form must route to the
+            // same receiver-less worker_threads NativeMethodCall as the
+            // `new worker_threads.MessageChannel()` member form above, so the
+            // runtime `js_worker_threads_message_channel_new` allocates the
+            // real `{ port1, port2 }` object. Without this it falls through to
+            // the user-class `Expr::New` path and gets an empty object.
+            if matches!(
+                ctx.lookup_native_module(&class_name),
+                Some(("worker_threads", Some("MessageChannel")))
+                    | Some(("worker_threads", Some("BroadcastChannel")))
+            ) {
+                let args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                return Ok(Expr::NativeMethodCall {
+                    module: "worker_threads".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: class_name,
+                    args,
+                });
+            }
+
+            if matches!(class_name.as_str(), "MIMEType" | "MIMEParams") {
+                if let Some((module_name, Some(method_name))) =
+                    ctx.lookup_native_module(&class_name)
+                {
+                    if matches!(module_name, "util" | "sys")
+                        && matches!(method_name, "MIMEType" | "MIMEParams")
+                    {
+                        let module_name = module_name.to_string();
+                        let method_name = method_name.to_string();
+                        let args = new_expr
+                            .args
+                            .as_ref()
+                            .map(|args| {
+                                args.iter()
+                                    .map(|a| lower_expr(ctx, &a.expr))
+                                    .collect::<Result<Vec<_>>>()
+                            })
+                            .transpose()?
+                            .unwrap_or_default();
+                        return Ok(Expr::NativeMethodCall {
+                            module: module_name,
+                            class_name: None,
+                            object: None,
+                            method: method_name,
+                            args,
+                        });
+                    }
+                }
+            }
+
+            if let Some((module_name, method_name)) = ctx.lookup_native_module(&class_name) {
+                if let Some(class_name) = module_constructor_name(module_name, method_name) {
+                    if let Some(expr) =
+                        lower_url_encoding_constructor(ctx, class_name, new_expr.args.as_deref())?
+                    {
+                        return Ok(expr);
+                    }
+                }
+            }
+
+            if let Some(resolved) = ctx.resolve_class_alias(&class_name) {
+                if is_url_encoding_constructor_name(&resolved) {
+                    if let Some(expr) =
+                        lower_url_encoding_constructor(ctx, &resolved, new_expr.args.as_deref())?
+                    {
+                        return Ok(expr);
+                    }
+                }
+            }
+
+            if class_name == "Worker"
+                && ctx
+                    .lookup_native_module("Worker")
+                    .map(|(module_name, export_name)| {
+                        is_worker_threads_module_name(module_name) && export_name == Some("Worker")
+                    })
+                    .unwrap_or(false)
+            {
+                return lower_worker_new(ctx, new_expr);
+            }
+
+            // #1677 `new Function(...)` handling, when `Function` is not
+            // shadowed. Phase 1 (#1679) first: when every argument is a
+            // compile-time-constant string, fold the call into a real
+            // native function. Otherwise Phase 0 (#1678): refuse the
+            // runtime-unknown bucket with a precise diagnostic; log the
+            // const/known-codegen buckets and fall through to the existing
+            // placeholder lowering.
+            if class_name == "Function"
+                && ctx.lookup_local("Function").is_none()
+                && ctx.lookup_func("Function").is_none()
+                && ctx.lookup_class("Function").is_none()
+            {
+                let args_slice = new_expr.args.as_deref().unwrap_or(&[]);
+                if let Some(folded) = super::const_fold_fn::try_const_fold_function_construct(
+                    ctx,
+                    args_slice,
+                    crate::eval_classifier::EvalSurface::NewFunction,
+                    new_expr.span,
+                )? {
+                    return Ok(folded);
+                }
+                // Not fully const-foldable — body is the last argument
+                // (`new Function(p1, p2, body)`); earlier args are param names.
+                let body_arg = args_slice.last().map(|a| a.expr.as_ref());
+                crate::eval_classifier::check_site(
+                    crate::eval_classifier::EvalSurface::NewFunction,
+                    body_arg,
+                    &ctx.source_file_path,
+                    new_expr.span,
+                )?;
+            }
+
+            // #1691: an inline `new Request(...)` / `new Response(...)` / etc.
+            // whose result is consumed immediately (never bound to a local)
+            // skips the var-decl detection in destructuring/var_decl.rs, so
+            // `uses_fetch` would stay false and the auto-optimize build would
+            // strip the fetch / http-client feature — the link then fails on
+            // `_js_request_new` / `_js_request_text` / … Set the flag here so
+            // the inline and variable-assigned forms agree. (Lowering itself
+            // is unchanged — these fall through to `Expr::New { class_name }`
+            // below, which codegen dispatches to the runtime ctor.)
+            if matches!(
+                class_name.as_str(),
+                "Request"
+                    | "Response"
+                    | "Headers"
+                    | "FormData"
+                    | "Blob"
+                    | "File"
+                    | "ReadableStream"
+                    | "WritableStream"
+                    | "TransformStream"
+            ) {
+                ctx.uses_fetch = true;
+            }
 
             // Handle built-in types
+            if class_name == "Object"
+                && ctx.lookup_local("Object").is_none()
+                && ctx.lookup_func("Object").is_none()
+                && ctx.lookup_class("Object").is_none()
+            {
+                let mut args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                let arg = args.drain(..).next().unwrap_or(Expr::Undefined);
+                return Ok(Expr::ObjectCoerce(Box::new(arg)));
+            }
             if class_name == "Map" {
                 // new Map() or new Map(entries)
                 let args = new_expr
@@ -165,7 +813,13 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 }
             }
             if class_name == "Date" {
-                // new Date() or new Date(timestamp)
+                // new Date() / new Date(ts) / new Date(year, month, day, h?, m?, s?, ms?).
+                // The multi-arg form is what dayjs's parseDate uses
+                // (`new Date(d[1], m, d[3] || 1, ...)`) — without it the
+                // codegen used to silently discard all but the first
+                // argument, so a string year "2024" got parsed as
+                // 2024 ms-since-epoch (issue: dayjs format prints
+                // "292278994-08" because $d.getTime() ends up garbage).
                 let args = new_expr
                     .args
                     .as_ref()
@@ -176,13 +830,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     })
                     .transpose()?
                     .unwrap_or_default();
-                if args.is_empty() {
-                    return Ok(Expr::DateNew(None));
-                } else {
-                    return Ok(Expr::DateNew(Some(Box::new(
-                        args.into_iter().next().unwrap(),
-                    ))));
-                }
+                return Ok(Expr::DateNew(args));
             }
             if class_name == "RegExp" {
                 // new RegExp(pattern[, flags]) — for string-literal args,
@@ -221,11 +869,39 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         flags: flags_lit,
                     });
                 }
-                // Fall through to generic class instantiation for
-                // non-literal args (e.g. `new RegExp(userInput)`).
-                // That path is currently broken too, but at least
-                // doesn't regress on the literal case which is far
-                // more common.
+                // Dynamic-arg `new RegExp(...)`: pattern (or flags) is
+                // a runtime value. Fold to the same `RegExpDynamic`
+                // variant the bare-call recognizer in expr_call.rs
+                // produces — both lower to `js_regexp_new` with
+                // dynamically-resolved string handles. Followup to
+                // #957 / PR #959.
+                if let Some(args) = args_ast {
+                    if !args.is_empty() && args.iter().all(|a| a.spread.is_none()) {
+                        let pattern = lower_expr(ctx, &args[0].expr)?;
+                        let flags = if args.len() >= 2 {
+                            Some(Box::new(lower_expr(ctx, &args[1].expr)?))
+                        } else {
+                            None
+                        };
+                        return Ok(Expr::RegExpDynamic {
+                            pattern: Box::new(pattern),
+                            flags,
+                        });
+                    }
+                }
+            }
+            if matches!(class_name.as_str(), "Symbol" | "BigInt" | "Math") {
+                let args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                return Ok(nonconstructable_builtin_throw_expr(&class_name, args));
             }
             if class_name == "Proxy" {
                 let args = new_expr
@@ -244,6 +920,29 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 return Ok(Expr::ProxyNew {
                     target: Box::new(target),
                     handler: Box::new(handler),
+                });
+            }
+            if matches!(class_name.as_str(), "Number" | "String" | "Boolean") {
+                let mut args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                let kind = match class_name.as_str() {
+                    "Number" => crate::BoxedPrimitiveKind::Number,
+                    "String" => crate::BoxedPrimitiveKind::String,
+                    "Boolean" => crate::BoxedPrimitiveKind::Boolean,
+                    _ => unreachable!(),
+                };
+                let arg = args.drain(..).next().unwrap_or(Expr::Undefined);
+                return Ok(Expr::BoxedPrimitiveNew {
+                    kind,
+                    arg: Box::new(arg),
                 });
             }
             if ctx.proxy_locals.contains(&class_name) {
@@ -286,7 +985,14 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     });
                 }
             }
-            // Handle AggregateError separately (2-arg form: errors array, message)
+            // Handle AggregateError separately:
+            // `new AggregateError(errors, message?, options?)`.
+            //
+            // #2838: `errors` is forwarded as a raw runtime value (not coerced
+            // to an array literal) so the runtime consumes any iterable and
+            // throws TypeError on a missing/non-iterable argument — so a
+            // missing first arg defaults to `undefined`, NOT an empty array.
+            // #2836: the third `options` argument carries `{ cause }`.
             if class_name == "AggregateError" {
                 let args = new_expr
                     .args
@@ -299,11 +1005,13 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     .transpose()?
                     .unwrap_or_default();
                 let mut iter = args.into_iter();
-                let errors = iter.next().unwrap_or(Expr::Array(vec![]));
+                let errors = iter.next().unwrap_or(Expr::Undefined);
                 let message = iter.next().unwrap_or(Expr::String("".to_string()));
+                let options = iter.next().map(Box::new);
                 return Ok(Expr::AggregateErrorNew {
                     errors: Box::new(errors),
                     message: Box::new(message),
+                    options,
                 });
             }
 
@@ -324,72 +1032,90 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 // would miss it. Pull `cause` directly from the AST first, then
                 // fall through to the standard argument lowering for other shapes.
                 let ast_args = new_expr.args.as_deref().unwrap_or(&[]);
-                if ast_args.len() == 2 && class_name == "Error" {
+                // #2836: a 2-argument constructor — `new <ErrorKind>(message,
+                // options)` — applies the ES2022 `{ cause }` option across the
+                // base `Error` AND every native subclass. `BugIndicatingError`
+                // (an effect-internal Error subclass) keeps its plain shape.
+                if ast_args.len() == 2 && class_name != "BugIndicatingError" {
                     let msg = lower_expr(ctx, &ast_args[0].expr)?;
                     // Peel `Expr::Paren(({ cause: e }))` — SWC preserves paren
-                    // nodes, so without unwrapping the outer Object match below
-                    // would miss `new Error(msg, ({ cause }))` and we'd silently
-                    // drop the cause.
+                    // nodes, so without unwrapping the literal fast path below
+                    // would miss `new Error(msg, ({ cause }))`.
                     let mut opts_expr: &ast::Expr = &ast_args[1].expr;
                     while let ast::Expr::Paren(p) = opts_expr {
                         opts_expr = &p.expr;
                     }
-                    // Look for `{ cause: <expr> }` or `{ cause }` at the AST level.
-                    if let ast::Expr::Object(opts_obj) = opts_expr {
-                        for prop in &opts_obj.props {
-                            if let ast::PropOrSpread::Prop(p) = prop {
-                                match p.as_ref() {
-                                    ast::Prop::KeyValue(kv) => {
-                                        let key = match &kv.key {
-                                            ast::PropName::Ident(i) => i.sym.to_string(),
-                                            ast::PropName::Str(s) => {
-                                                s.value.as_str().unwrap_or("").to_string()
+                    // Fast path for base `Error` with a literal `{ cause: <e> }`
+                    // / `{ cause }` — emits the existing `ErrorNewWithCause`
+                    // variant (no runtime options read). Subclasses and dynamic
+                    // option objects fall through to the runtime helper below.
+                    if class_name == "Error" {
+                        if let ast::Expr::Object(opts_obj) = opts_expr {
+                            for prop in &opts_obj.props {
+                                if let ast::PropOrSpread::Prop(p) = prop {
+                                    match p.as_ref() {
+                                        ast::Prop::KeyValue(kv) => {
+                                            let key = match &kv.key {
+                                                ast::PropName::Ident(i) => i.sym.to_string(),
+                                                ast::PropName::Str(s) => {
+                                                    s.value.as_str().unwrap_or("").to_string()
+                                                }
+                                                _ => continue,
+                                            };
+                                            if key == "cause" {
+                                                let cause = lower_expr(ctx, &kv.value)?;
+                                                return Ok(Expr::ErrorNewWithCause {
+                                                    message: Box::new(msg),
+                                                    cause: Box::new(cause),
+                                                });
                                             }
-                                            _ => continue,
-                                        };
-                                        if key == "cause" {
-                                            let cause = lower_expr(ctx, &kv.value)?;
+                                        }
+                                        ast::Prop::Shorthand(ident) => {
+                                            let name = ident.sym.to_string();
+                                            if name != "cause" {
+                                                continue;
+                                            }
+                                            let cause = if let Some(func_id) =
+                                                ctx.lookup_func(&name)
+                                            {
+                                                Expr::FuncRef(func_id)
+                                            } else if let Some(local_id) = ctx.lookup_local(&name) {
+                                                Expr::LocalGet(local_id)
+                                            } else if ctx.lookup_class(&name).is_some() {
+                                                Expr::ClassRef(name.clone())
+                                            } else {
+                                                continue;
+                                            };
                                             return Ok(Expr::ErrorNewWithCause {
                                                 message: Box::new(msg),
                                                 cause: Box::new(cause),
                                             });
                                         }
+                                        _ => {}
                                     }
-                                    // ES2022 shorthand `new Error(msg, { cause })`
-                                    // — the canonical idiom inside a `catch (cause)`
-                                    // block. Resolve the ident the same way the
-                                    // HIR Object-literal lowering does: func /
-                                    // local / class-ref precedence.
-                                    ast::Prop::Shorthand(ident) => {
-                                        let name = ident.sym.to_string();
-                                        if name != "cause" {
-                                            continue;
-                                        }
-                                        let cause = if let Some(func_id) = ctx.lookup_func(&name) {
-                                            Expr::FuncRef(func_id)
-                                        } else if let Some(local_id) = ctx.lookup_local(&name) {
-                                            Expr::LocalGet(local_id)
-                                        } else if ctx.lookup_class(&name).is_some() {
-                                            Expr::ClassRef(name.clone())
-                                        } else {
-                                            // Unresolvable identifier — fall through
-                                            // to the no-cause path below.
-                                            continue;
-                                        };
-                                        return Ok(Expr::ErrorNewWithCause {
-                                            message: Box::new(msg),
-                                            cause: Box::new(cause),
-                                        });
-                                    }
-                                    _ => {}
                                 }
                             }
                         }
                     }
-                    // No recognizable `cause` key — lower the opts for side effects,
-                    // then emit a plain Error with just the message.
-                    let _ = lower_expr(ctx, &ast_args[1].expr)?;
-                    return Ok(Expr::ErrorNew(Some(Box::new(msg))));
+                    // General case: lower the options as a runtime value and let
+                    // the runtime read `.cause`. Works for `new TypeError(m,
+                    // { cause })`, `new RangeError(m, opts)`, base Error with a
+                    // variable-held options object, etc. ERROR_KIND_* values are
+                    // hardcoded here (perry-hir has no perry-runtime dep): Error=0,
+                    // TypeError=1, RangeError=2, ReferenceError=3, SyntaxError=4.
+                    let kind: u32 = match class_name.as_str() {
+                        "TypeError" => 1,
+                        "RangeError" => 2,
+                        "ReferenceError" => 3,
+                        "SyntaxError" => 4,
+                        _ => 0,
+                    };
+                    let options = lower_expr(ctx, &ast_args[1].expr)?;
+                    return Ok(Expr::ErrorNewWithOptions {
+                        kind,
+                        message: Box::new(msg),
+                        options: Box::new(options),
+                    });
                 }
 
                 let args = new_expr
@@ -405,18 +1131,10 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
 
                 if args.is_empty() {
                     return match class_name.as_str() {
-                        "TypeError" => {
-                            Ok(Expr::TypeErrorNew(Box::new(Expr::String("".to_string()))))
-                        }
-                        "RangeError" => {
-                            Ok(Expr::RangeErrorNew(Box::new(Expr::String("".to_string()))))
-                        }
-                        "ReferenceError" => Ok(Expr::ReferenceErrorNew(Box::new(Expr::String(
-                            "".to_string(),
-                        )))),
-                        "SyntaxError" => {
-                            Ok(Expr::SyntaxErrorNew(Box::new(Expr::String("".to_string()))))
-                        }
+                        "TypeError" => Ok(Expr::TypeErrorNew(Box::new(Expr::Undefined))),
+                        "RangeError" => Ok(Expr::RangeErrorNew(Box::new(Expr::Undefined))),
+                        "ReferenceError" => Ok(Expr::ReferenceErrorNew(Box::new(Expr::Undefined))),
+                        "SyntaxError" => Ok(Expr::SyntaxErrorNew(Box::new(Expr::Undefined))),
                         _ => Ok(Expr::ErrorNew(None)),
                     };
                 } else {
@@ -433,43 +1151,19 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
 
             // Handle URL class
             if class_name == "URL" {
-                // new URL(url) or new URL(url, base)
-                let args = new_expr
-                    .args
-                    .as_ref()
-                    .map(|args| {
-                        args.iter()
-                            .map(|a| lower_expr(ctx, &a.expr))
-                            .collect::<Result<Vec<_>>>()
-                    })
-                    .transpose()?
-                    .unwrap_or_default();
-                let mut args_iter = args.into_iter();
-                let url_arg = args_iter
-                    .next()
-                    .ok_or_else(|| anyhow!("URL constructor requires at least 1 argument"))?;
-                let base_arg = args_iter.next();
-                return Ok(Expr::UrlNew {
-                    url: Box::new(url_arg),
-                    base: base_arg.map(Box::new),
-                });
+                return Ok(
+                    lower_url_encoding_constructor(ctx, "URL", new_expr.args.as_deref())?.unwrap(),
+                );
             }
 
             // Handle URLSearchParams class
             if class_name == "URLSearchParams" {
-                // new URLSearchParams() or new URLSearchParams(init)
-                let args = new_expr
-                    .args
-                    .as_ref()
-                    .map(|args| {
-                        args.iter()
-                            .map(|a| lower_expr(ctx, &a.expr))
-                            .collect::<Result<Vec<_>>>()
-                    })
-                    .transpose()?
-                    .unwrap_or_default();
-                let init_arg = args.into_iter().next();
-                return Ok(Expr::UrlSearchParamsNew(init_arg.map(Box::new)));
+                return Ok(lower_url_encoding_constructor(
+                    ctx,
+                    "URLSearchParams",
+                    new_expr.args.as_deref(),
+                )?
+                .unwrap());
             }
 
             // Handle WeakRef class — wraps a value (object) in a weak reference object.
@@ -485,10 +1179,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     })
                     .transpose()?
                     .unwrap_or_default();
-                let target = args
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| anyhow!("WeakRef constructor requires 1 argument"))?;
+                let target = args.into_iter().next().unwrap_or(Expr::Undefined);
                 return Ok(Expr::WeakRefNew(Box::new(target)));
             }
 
@@ -506,19 +1197,26 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     })
                     .transpose()?
                     .unwrap_or_default();
-                let cb = args.into_iter().next().ok_or_else(|| {
-                    anyhow!("FinalizationRegistry constructor requires a callback argument")
-                })?;
+                let cb = args.into_iter().next().unwrap_or(Expr::Undefined);
                 return Ok(Expr::FinalizationRegistryNew(Box::new(cb)));
             }
             // Handle TextEncoder constructor
             if class_name == "TextEncoder" {
-                return Ok(Expr::TextEncoderNew);
+                return Ok(lower_url_encoding_constructor(
+                    ctx,
+                    "TextEncoder",
+                    new_expr.args.as_deref(),
+                )?
+                .unwrap());
             }
-            // Handle TextDecoder constructor
+            // Handle TextDecoder constructor: new TextDecoder(label?, opts?)
             if class_name == "TextDecoder" {
-                // new TextDecoder() or new TextDecoder("utf-8") — we only support UTF-8
-                return Ok(Expr::TextDecoderNew);
+                return Ok(lower_url_encoding_constructor(
+                    ctx,
+                    "TextDecoder",
+                    new_expr.args.as_deref(),
+                )?
+                .unwrap());
             }
 
             // Handle Uint8Array constructor
@@ -592,13 +1290,81 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         .collect()
                 })
                 .unwrap_or_default();
+            if ctx.lookup_class(&class_name).is_none() {
+                if let Some(resolved) = ctx.resolve_class_alias(&class_name) {
+                    if matches!(resolved.as_str(), "Blob" | "File" | "WebSocket") {
+                        if matches!(resolved.as_str(), "Blob" | "File") {
+                            ctx.uses_fetch = true;
+                        }
+                        return Ok(Expr::New {
+                            class_name: resolved,
+                            args,
+                            type_args,
+                        });
+                    }
+                }
+            }
+            // Issue #838 followup (b): when `<Ident>` is NOT a real
+            // class but resolves to a local binding, route through
+            // `Expr::NewDynamic { callee: LocalGet(id), … }` so codegen
+            // reaches the `js_new_function_construct` helper. dayjs's
+            // minified outer `var _ = (function(){function M(){…}; …;
+            // return M; })()` flows here: `_`'s init is a `Call` (not a
+            // raw `Closure`/`FuncRef`), so the `function_valued_locals`
+            // tracking can't prove function-ness at HIR time — but the
+            // runtime helper performs its own `CLOSURE_MAGIC` check
+            // before dispatching the constructor, so non-callable
+            // receivers fall back to a class_id=0 empty-object
+            // allocation that matches the pre-fix baseline. Real
+            // classes still win — the `lookup_class` check above
+            // returns `Expr::New { class_name }` before reaching here.
+            if ctx.lookup_class(&class_name).is_none() {
+                if let Some(local_id) = ctx.lookup_local(&class_name) {
+                    return Ok(Expr::NewDynamic {
+                        callee: Box::new(Expr::LocalGet(local_id)),
+                        args,
+                    });
+                }
+                // ES5 function constructors: `function Foo(){ this.x = … }`
+                // used as `new Foo()`. A top-level `function` declaration is
+                // tracked as a func (not a local, not a class), so neither the
+                // local branch above nor the `lookup_class` path fires — it
+                // would otherwise fall through to `Expr::New { class_name }`,
+                // whose codegen finds no class named `Foo` and produces an
+                // empty placeholder object that never runs the constructor
+                // body (so `this.x = …` writes are lost and `new Foo().x` is
+                // `undefined`). Route through `NewDynamic { FuncRef }` instead,
+                // which reaches `js_new_function_construct`: it allocates the
+                // instance, binds `this` for the duration of the call, runs the
+                // body, and returns the populated object — the same helper the
+                // local-binding path above relies on.
+                if let Some(func_id) = ctx.lookup_func(&class_name) {
+                    return Ok(Expr::NewDynamic {
+                        callee: Box::new(Expr::FuncRef(func_id)),
+                        args,
+                    });
+                }
+            }
             // Issue #212: classes nested in a function may capture
             // enclosing-scope locals. `lower_class_decl` extended the
             // constructor with one synthesized param per captured id;
             // pass each as `LocalGet(id)` here so the outer scope's
             // current value is snapshotted onto the new instance.
+            //
+            // Issue #740: when `class_name` is the name of a `let/const`
+            // alias (`const C = Inner` or `const C = makeChild(...)`
+            // where the returned class is statically known via a
+            // `ClassRef` chain), resolve through the alias before
+            // looking up captures. Plain function-return aliases
+            // (`const C = makeChild("foo")`) can't be resolved at HIR
+            // time — those flow through the closure mechanism in
+            // `compile_function` (the function body inlines `new`
+            // with the captures forwarded correctly).
+            let lookup_name = ctx
+                .resolve_class_alias(&class_name)
+                .unwrap_or_else(|| class_name.clone());
             let class_captures: Vec<LocalId> = ctx
-                .lookup_class_captures(&class_name)
+                .lookup_class_captures(&lookup_name)
                 .map(|c| c.to_vec())
                 .unwrap_or_default();
             for cid in class_captures {
@@ -613,7 +1379,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
         // Non-identifier callee (e.g., new (condition ? A : B)() or new someVar())
         _ => {
             // Check for class expressions: new (class extends X { ... })()
-            let class_expr_opt = match new_expr.callee.as_ref() {
+            let class_expr_opt = match callee_expr {
                 ast::Expr::Class(ce) => Some(ce),
                 ast::Expr::Paren(paren) => match paren.expr.as_ref() {
                     ast::Expr::Class(ce) => Some(ce),
@@ -652,7 +1418,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
 
-            let callee = Box::new(lower_expr(ctx, &new_expr.callee)?);
+            let callee = Box::new(lower_expr(ctx, callee_expr)?);
             let args = new_expr
                 .args
                 .as_ref()
@@ -663,6 +1429,36 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 })
                 .transpose()?
                 .unwrap_or_default();
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if matches!(object.as_ref(), Expr::GlobalGet(_))
+                    && matches!(property.as_str(), "Symbol" | "BigInt" | "Math")
+                {
+                    return Ok(nonconstructable_builtin_throw_expr(property, args));
+                }
+                if matches!(object.as_ref(), Expr::GlobalGet(_))
+                    && matches!(property.as_str(), "Blob" | "File" | "WebSocket")
+                {
+                    if matches!(property.as_str(), "Blob" | "File") {
+                        ctx.uses_fetch = true;
+                    }
+                    return Ok(Expr::New {
+                        class_name: property.clone(),
+                        args,
+                        type_args: Vec::new(),
+                    });
+                }
+                if matches!(object.as_ref(), Expr::NativeModuleRef(module)
+                    if module == "buffer" || module == "node:buffer")
+                    && matches!(property.as_str(), "Blob" | "File")
+                {
+                    ctx.uses_fetch = true;
+                    return Ok(Expr::New {
+                        class_name: property.clone(),
+                        args,
+                        type_args: Vec::new(),
+                    });
+                }
+            }
             Ok(Expr::NewDynamic { callee, args })
         }
     }

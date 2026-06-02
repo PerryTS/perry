@@ -5,7 +5,7 @@ use objc2_app_kit::{NSImage, NSImageView, NSView};
 use objc2_foundation::{MainThreadMarker, NSString};
 
 /// Extract a &str from a *const StringHeader pointer.
-fn str_from_header(ptr: *const u8) -> &'static str {
+pub(crate) fn str_from_header(ptr: *const u8) -> &'static str {
     if ptr.is_null() {
         return "";
     }
@@ -122,6 +122,143 @@ pub fn create_file(path_ptr: *const u8) -> i64 {
         let view: Retained<NSView> = Retained::cast_unchecked(image_view);
         super::register_widget(view)
     }
+}
+
+/// Create an NSImageView whose bytes are fetched from a URL (or `data:`
+/// URI) asynchronously and applied on the main thread (#635). `alt`,
+/// when non-empty, becomes the view's accessibility description.
+/// Returns the widget handle immediately; the image appears once the
+/// fetch resolves.
+pub fn create_url(url_ptr: *const u8, alt_ptr: *const u8) -> i64 {
+    let url = str_from_header(url_ptr).to_string();
+    let alt = str_from_header(alt_ptr);
+    let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
+
+    unsafe {
+        let image_view: Retained<NSImageView> = msg_send![
+            NSImageView::alloc(mtm), initWithFrame: objc2_core_foundation::CGRect::new(
+                objc2_core_foundation::CGPoint::new(0.0, 0.0),
+                objc2_core_foundation::CGSize::new(64.0, 64.0),
+            )
+        ];
+
+        // ScaleAxesIndependently lets the contained NSImage stretch to
+        // the view's bounds. Callers can override with `imageSetSize`.
+        let _: () = msg_send![&*image_view, setImageScaling: 0i64];
+
+        if !alt.is_empty() {
+            let ns_alt = NSString::from_str(alt);
+            let _: () = msg_send![&*image_view, setAccessibilityLabel: &*ns_alt];
+        }
+
+        let view: Retained<NSView> = Retained::cast_unchecked(image_view);
+        let handle = super::register_widget(view);
+
+        if !url.is_empty() {
+            load_remote(handle, url);
+        }
+
+        handle
+    }
+}
+
+/// Background-fetch + main-thread-apply for a remote URL. Uses Rust
+/// std::thread for the off-main-thread hop and `dispatch_async_f` to
+/// the main queue for the apply.
+fn load_remote(handle: i64, url: String) {
+    extern "C" {
+        static _dispatch_main_q: std::ffi::c_void;
+        fn dispatch_async_f(
+            queue: *const std::ffi::c_void,
+            context: *mut std::ffi::c_void,
+            work: unsafe extern "C" fn(*mut std::ffi::c_void),
+        );
+    }
+
+    std::thread::spawn(move || {
+        let bytes_opt: Option<Vec<u8>> = unsafe {
+            let url_cls = match objc2::runtime::AnyClass::get(c"NSURL") {
+                Some(c) => c,
+                None => return,
+            };
+            let ns: Retained<NSString> = NSString::from_str(&url);
+            let nsurl: *mut objc2::runtime::AnyObject = msg_send![url_cls, URLWithString: &*ns];
+            if nsurl.is_null() {
+                return;
+            }
+            let data_cls = match objc2::runtime::AnyClass::get(c"NSData") {
+                Some(c) => c,
+                None => return,
+            };
+            let data: *mut objc2::runtime::AnyObject =
+                msg_send![data_cls, dataWithContentsOfURL: nsurl];
+            if data.is_null() {
+                return;
+            }
+            let len: usize = msg_send![data, length];
+            if len == 0 {
+                return;
+            }
+            let raw: *const u8 = msg_send![data, bytes];
+            if raw.is_null() {
+                return;
+            }
+            Some(std::slice::from_raw_parts(raw, len).to_vec())
+        };
+
+        let bytes = match bytes_opt {
+            Some(b) => b,
+            None => return,
+        };
+
+        struct Apply {
+            handle: i64,
+            bytes: Vec<u8>,
+        }
+        let apply = Box::into_raw(Box::new(Apply { handle, bytes }));
+
+        unsafe extern "C" fn finish(ctx: *mut std::ffi::c_void) {
+            let _ = std::panic::catch_unwind(|| {
+                let p = unsafe { Box::from_raw(ctx as *mut Apply) };
+                unsafe {
+                    let view = match super::get_widget(p.handle) {
+                        Some(v) => v,
+                        None => return,
+                    };
+                    let ns_data_cls = match objc2::runtime::AnyClass::get(c"NSData") {
+                        Some(c) => c,
+                        None => return,
+                    };
+                    let ns_data: *mut objc2::runtime::AnyObject = msg_send![
+                        ns_data_cls,
+                        dataWithBytes: p.bytes.as_ptr() as *const std::ffi::c_void,
+                        length: p.bytes.len()
+                    ];
+                    if ns_data.is_null() {
+                        return;
+                    }
+                    let image_cls = match objc2::runtime::AnyClass::get(c"NSImage") {
+                        Some(c) => c,
+                        None => return,
+                    };
+                    let img: *mut objc2::runtime::AnyObject = msg_send![image_cls, alloc];
+                    let img: *mut objc2::runtime::AnyObject = msg_send![img, initWithData: ns_data];
+                    if img.is_null() {
+                        return;
+                    }
+                    let _: () = msg_send![&*view, setImage: img];
+                }
+            });
+        }
+
+        unsafe {
+            dispatch_async_f(
+                &_dispatch_main_q as *const _ as *const std::ffi::c_void,
+                apply as *mut std::ffi::c_void,
+                finish,
+            );
+        }
+    });
 }
 
 /// Set the frame size of an image widget.

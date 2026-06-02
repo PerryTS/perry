@@ -438,6 +438,24 @@ pub fn clear(menu_handle: i64) {
     }
 }
 
+/// Look up the HMENU for a menu handle. Used by `tray::handle_callback_message`
+/// so a tray right-click can pop the same menu the user built with
+/// `menuCreate` / `menuAddItem`. Returns `None` if the handle is unknown
+/// or out of range.
+#[cfg(target_os = "windows")]
+pub fn get_hmenu(menu_handle: i64) -> Option<HMENU> {
+    MENUS.with(|menus| {
+        let menus = menus.borrow();
+        let idx = (menu_handle - 1) as usize;
+        menus.get(idx).map(|m| m.hmenu)
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn get_hmenu(_menu_handle: i64) -> Option<isize> {
+    None
+}
+
 /// Dispatch a menu item click to its callback.
 pub fn dispatch_menu_item(id: u16) {
     // Extract callback BEFORE calling it — the JS callback may re-enter

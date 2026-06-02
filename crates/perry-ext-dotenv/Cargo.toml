@@ -1,0 +1,16 @@
+[package]
+name = "perry-ext-dotenv"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for the npm `dotenv` package — wraps Rust's std env API behind the same `dotenv.config()` / `dotenv.parse()` surface that Node code uses. Acceptance test for the perry-ffi v0.5 surface (#466 Phase 1 / 5 step 1)."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

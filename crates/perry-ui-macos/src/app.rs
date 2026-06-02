@@ -45,6 +45,16 @@ pub(crate) struct WindowEntry {
 pub(crate) struct AppEntry {
     pub(crate) window: Retained<NSWindow>,
     pub(crate) _root_widget: Option<i64>,
+    /// Issue #1280 — initial window state applied on `app_run`. `zoom:` /
+    /// `toggleFullScreen:` need the window to be key+ordered front first.
+    pub(crate) window_state: Option<WindowState>,
+}
+
+/// Issue #1280 — initial window state for the main app window.
+#[derive(Copy, Clone)]
+pub(crate) enum WindowState {
+    Maximized,
+    Fullscreen,
 }
 
 /// Extract a &str from a *const StringHeader pointer.
@@ -114,6 +124,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
             apps.push(AppEntry {
                 window,
                 _root_widget: None,
+                window_state: None,
             });
             apps.len() as i64 // 1-based handle
         })
@@ -384,6 +395,13 @@ pub fn app_run(_app_handle: i64) {
     // Install crash reporting hooks before anything else
     crate::crash_log::install_crash_hooks();
 
+    // Phase 2 v3.3: register cross-platform showToast / setText handlers.
+    // These are no-ops on harmonyos (where the ArkUI drain-queue path
+    // owns the dispatch) but on macOS they wire `perry_arkts_show_toast`
+    // and `perry_arkts_set_text` to our native NSPanel toast presenter
+    // and NSTextField setStringValue: respectively.
+    register_cross_platform_text_handlers();
+
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     let app = NSApplication::sharedApplication(mtm);
@@ -466,6 +484,41 @@ pub fn app_run(_app_handle: i64) {
             }
 
             entry.window.makeKeyAndOrderFront(None);
+
+            // Issue #1280 — apply initial window state. zoom: is the AppKit
+            // "green button" maximize (respects dock + menu bar). The
+            // toggleFullScreen: path enters native fullscreen on its own
+            // Space. Both need the window to be key+ordered front, which is
+            // why this runs here rather than in the setter.
+            if let Some(state) = entry.window_state {
+                unsafe {
+                    match state {
+                        WindowState::Maximized => {
+                            let _: () =
+                                msg_send![&*entry.window, zoom: std::ptr::null::<AnyObject>()];
+                        }
+                        WindowState::Fullscreen => {
+                            let style_mask: usize = msg_send![&*entry.window, styleMask];
+                            // Native fullscreen needs Resizable in the style
+                            // mask; transient borderless / non-resizable
+                            // windows can't enter it cleanly.
+                            let resizable = NSWindowStyleMask::Resizable.0 as usize;
+                            if style_mask & resizable != 0 {
+                                let _: () = msg_send![
+                                    &*entry.window,
+                                    toggleFullScreen: std::ptr::null::<AnyObject>()
+                                ];
+                            } else {
+                                // Fallback: zoom() to maximize within the screen.
+                                let _: () = msg_send![
+                                    &*entry.window,
+                                    zoom: std::ptr::null::<AnyObject>()
+                                ];
+                            }
+                        }
+                    }
+                }
+            }
         }
     });
 
@@ -473,6 +526,10 @@ pub fn app_run(_app_handle: i64) {
     unsafe {
         let delegate = PerryAppDelegate::new();
         let _: () = msg_send![&*app, setDelegate: &*delegate];
+        // Issue #583: register the kAEGetURL handler so legacy URL-launch
+        // pathways (older Spotlight, AppleScript `open location`) reach the
+        // same dispatch as the AppKit application:openURLs: surface.
+        crate::deeplinks::install_apple_event_handler(&*delegate as *const _ as *const AnyObject);
         std::mem::forget(delegate);
     }
 
@@ -629,6 +686,27 @@ pub fn set_max_size(app_handle: i64, w: f64, h: f64) {
     });
 }
 
+/// Issue #1280 — record the requested initial window state. Applied in
+/// `app_run` after the window is key+ordered front (zoom: / toggleFullScreen:
+/// don't take effect on a window that hasn't been shown yet).
+/// `value_ptr` is a StringHeader pointer to one of
+/// "normal" | "maximized" | "fullscreen". Anything else is silently ignored.
+pub fn set_window_state(app_handle: i64, value_ptr: *const u8) {
+    let state_str = str_from_header(value_ptr);
+    let state = match state_str {
+        "maximized" => Some(WindowState::Maximized),
+        "fullscreen" => Some(WindowState::Fullscreen),
+        _ => None,
+    };
+    APPS.with(|a| {
+        let mut apps = a.borrow_mut();
+        let idx = (app_handle - 1) as usize;
+        if idx < apps.len() {
+            apps[idx].window_state = state;
+        }
+    });
+}
+
 /// Resize the main app window dynamically.
 pub fn app_set_size(app_handle: i64, width: f64, height: f64) {
     APPS.with(|a| {
@@ -639,7 +717,7 @@ pub fn app_set_size(app_handle: i64, width: f64, height: f64) {
             unsafe {
                 let frame: CGRect = msg_send![window, frame];
                 let new_frame = CGRect::new(frame.origin, CGSize::new(width, height));
-                let _: () = msg_send![window, setFrame: new_frame display: true animate: true];
+                let _: () = msg_send![window, setFrame: new_frame, display: true, animate: true];
             }
         }
     });
@@ -1135,6 +1213,7 @@ extern "C" {
     fn js_promise_run_microtasks() -> i32;
     fn js_callback_timer_tick() -> i32;
     fn js_interval_timer_tick() -> i32;
+    fn js_frame_pump_default() -> i32;
 }
 
 pub struct PerryTimerTargetIvars {
@@ -1194,6 +1273,10 @@ define_class!(
                 unsafe {
                     js_callback_timer_tick();
                     js_interval_timer_tick();
+                    // Issue #1865: perry/ui `onFrame` one-shot display-link
+                    // callbacks. Driven off the same ~8ms pump for now;
+                    // CADisplayLink-quality vsync alignment is a follow-up.
+                    js_frame_pump_default();
                     js_promise_run_microtasks();
                     // Process deferred promise resolutions from perry-stdlib tokio workers.
                     // No-op if perry-stdlib is not linked (function pointer not registered).
@@ -1331,6 +1414,34 @@ define_class!(
                     user_info as *const _ as *mut AnyObject,
                 );
             }
+        }
+
+        /// Issue #583: AppKit URL delivery. AppKit calls this on launch
+        /// (cold-start) and while the app is running (foreground). The
+        /// dispatch helper inspects `mark_launched` to label the source.
+        #[unsafe(method(application:openURLs:))]
+        fn application_open_urls(&self, _app: &AnyObject, urls: &AnyObject) {
+            unsafe {
+                crate::deeplinks::dispatch_open_urls(urls as *const AnyObject);
+            }
+        }
+
+        /// Issue #583: legacy `kAEGetURL` Apple Event. Some launchers
+        /// (older Spotlight, AppleScript `open location`) deliver custom
+        /// schemes through this surface instead of the AppKit method.
+        #[unsafe(method(apple_event_get_url:withReplyEvent:))]
+        fn apple_event_get_url(&self, event: &AnyObject, _reply: &AnyObject) {
+            unsafe {
+                crate::deeplinks::dispatch_apple_event_url(event as *const AnyObject);
+            }
+        }
+
+        /// Issue #583: NSApplication finished launching — flip the
+        /// cold-start gate. Subsequent URL deliveries get
+        /// `source = "foreground"`.
+        #[unsafe(method(applicationDidFinishLaunching:))]
+        fn application_did_finish_launching(&self, _notification: &AnyObject) {
+            crate::deeplinks::mark_launched();
         }
     }
 );
@@ -1541,7 +1652,7 @@ pub fn window_set_size(window_handle: i64, width: f64, height: f64) {
                         CGSize::new(width, height),
                     );
                     let _: () =
-                        objc2::msg_send![window, setFrame: new_frame display: true animate: false];
+                        objc2::msg_send![window, setFrame: new_frame, display: true, animate: false];
                 }
             }
         });
@@ -1560,7 +1671,7 @@ pub fn window_set_size(window_handle: i64, width: f64, height: f64) {
                     CGSize::new(width, height),
                 );
                 let _: () =
-                    objc2::msg_send![window, setFrame: new_frame display: true animate: true];
+                    objc2::msg_send![window, setFrame: new_frame, display: true, animate: true];
             }
         }
     });
@@ -1665,4 +1776,49 @@ pub fn get_app_icon(path_ptr: *const u8) -> i64 {
             widgets::register_widget(view)
         }
     })
+}
+
+// ============================================================================
+// Phase 2 v3.3: cross-platform showToast / setText wiring.
+// ============================================================================
+
+extern "C" {
+    /// Defined in `perry-runtime/src/ui_text_registry.rs`. Stores the
+    /// passed handler in an AtomicPtr that
+    /// `perry_arkts_show_toast`/`perry_arkts_set_text`/`perry_arkts_register_text_id`
+    /// consult on each call. No-op when `ohos-napi` is on (the drain-queue
+    /// path owns dispatch there).
+    fn js_register_show_toast_handler(f: extern "C" fn(msg_ptr: *const u8, msg_len: usize));
+    fn js_register_set_text_handler(
+        f: extern "C" fn(id_ptr: *const u8, id_len: usize, val_ptr: *const u8, val_len: usize),
+    );
+    fn js_register_text_id_handler(
+        f: extern "C" fn(widget_handle: i64, id_ptr: *const u8, id_len: usize),
+    );
+    /// Issue #535 Layer 2 — `js_state_set` calls this for every NavStack
+    /// route bound to the changed state's synth id. Defined in
+    /// `perry-runtime/src/ui_text_registry.rs`'s `NAVSTACK_REGISTRY` block.
+    fn js_register_widget_hidden_handler(f: extern "C" fn(widget_handle: i64, hidden: i32));
+    /// Issue #610 — `js_state_set` calls this for every ForEach binding
+    /// when the bound `State<number>`'s value changes. The handler clears
+    /// the host's children, calls `render_closure(i)` for each
+    /// `i in [0..count)`, and adds each returned widget. Defined in
+    /// `perry-runtime/src/ui_text_registry.rs`'s `FOREACH_REGISTRY` block.
+    fn js_register_foreach_render_handler(
+        f: extern "C" fn(container_handle: i64, render_closure: f64, count: f64),
+    );
+}
+
+extern "C" fn navstack_set_widget_hidden(widget_handle: i64, hidden: i32) {
+    widgets::set_hidden(widget_handle, hidden != 0);
+}
+
+fn register_cross_platform_text_handlers() {
+    unsafe {
+        js_register_show_toast_handler(widgets::toast::show_toast_handler);
+        js_register_set_text_handler(widgets::text_registry::set_text_handler);
+        js_register_text_id_handler(widgets::text_registry::register_text_id_handler);
+        js_register_widget_hidden_handler(navstack_set_widget_hidden);
+        js_register_foreach_render_handler(widgets::foreach_registry::render_handler);
+    }
 }

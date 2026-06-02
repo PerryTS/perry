@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 /// Result of scanning a package for compatibility
+// #854: analysis record — `path`/`files_checked` are populated for
+// diagnostics but not consumed on the current report path.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PackageCompatibility {
     pub name: String,
@@ -26,6 +29,9 @@ pub struct CompatibilityIssue {
     pub message: String,
 }
 
+// #854: issue-classification enum; `DynamicPropertyAccess`/`UnsupportedSyntax`
+// are handled in `severity()` but not yet constructed by any scan rule.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IssueKind {
     /// eval() or new Function() usage
@@ -56,6 +62,9 @@ impl IssueKind {
 }
 
 /// Dependency resolver that tracks all imports and their resolution status
+// #854: `resolved_packages` is populated during resolution but not read back
+// on the current path; kept as part of the resolver state.
+#[allow(dead_code)]
 pub struct DependencyResolver {
     /// Root directory of the project
     project_root: PathBuf,
@@ -212,6 +221,7 @@ impl DependencyResolver {
 fn is_node_builtin(name: &str) -> bool {
     let builtins = [
         "assert",
+        "async_hooks",
         "buffer",
         "child_process",
         "cluster",
@@ -219,12 +229,15 @@ fn is_node_builtin(name: &str) -> bool {
         "constants",
         "crypto",
         "dgram",
+        "diagnostics_channel",
         "dns",
         "domain",
         "events",
         "fs",
         "http",
+        "http2",
         "https",
+        "inspector",
         "module",
         "net",
         "os",
@@ -235,16 +248,21 @@ fn is_node_builtin(name: &str) -> bool {
         "querystring",
         "readline",
         "repl",
+        "sea",
+        "sqlite",
         "stream",
         "string_decoder",
         "sys",
+        "test",
         "timers",
         "tls",
+        "trace_events",
         "tty",
         "url",
         "util",
         "v8",
         "vm",
+        "wasi",
         "worker_threads",
         "zlib",
     ];
@@ -257,6 +275,49 @@ fn is_node_builtin(name: &str) -> bool {
 /// Check if an import is a Perry built-in module
 fn is_perry_builtin(name: &str) -> bool {
     name.starts_with("perry/")
+}
+
+/// Node.js built-ins that Perry compiles and runs successfully — either
+/// via a `perry-stdlib` module (`events`, `http`, `crypto`, `readline`,
+/// `streams`, `net`, `worker_threads`, `zlib`) or via direct codegen
+/// support in the compiler (`fs`, `path`, `os`, `util`, `process`,
+/// `buffer`, `console`, `perf_hooks`, `timers`, `url`, `querystring`,
+/// `assert`, `stream`, `tls`, `https`, `tty`, etc.).
+///
+/// Issue #419: pre-fix, `check --check-deps` flagged every Node built-in
+/// as `U006: cannot be used in native compilation` regardless of
+/// whether `perry compile` would in fact build and run the program.
+/// MedusaJS-class real codebases reported 8+ false positives. Verified
+/// with a synthetic `import * as m from "<builtin>"; console.log(typeof m)`
+/// per builtin: every name in the Node `is_node_builtin` list compiles
+/// to a runnable binary on current `perry`.
+///
+/// Names that are *known stubs* (cluster, child_process, dgram, dns,
+/// domain, repl, punycode, string_decoder, sys, v8, vm, constants,
+/// module) compile but expose limited functionality at runtime —
+/// they're included in this allowlist so the static `--check-deps`
+/// signal doesn't false-positive on them either, matching the
+/// "compiles ⇒ no U006" contract from the issue. Their runtime stubs
+/// are still tracked separately (via per-module gap-tests).
+fn is_supported_node_builtin(name: &str) -> bool {
+    let base = name.split('/').next().unwrap_or(name);
+    let base = base.strip_prefix("node:").unwrap_or(base);
+    matches!(
+        base,
+        // Real implementations
+        "crypto" | "events" | "http" | "http2" | "https" | "net" | "readline"
+        | "stream" | "streams" | "worker_threads" | "zlib"
+        | "fs" | "path" | "os" | "util" | "process" | "buffer"
+        | "console" | "perf_hooks" | "timers" | "url" | "querystring"
+        | "tls" | "tty" | "assert" | "diagnostics_channel" | "sqlite"
+        // Stubs (compile + import but functionality limited)
+        | "cluster" | "child_process" | "dgram" | "dns" | "domain"
+        | "repl" | "punycode" | "string_decoder" | "sys" | "v8" | "vm"
+        | "constants" | "module" | "async_hooks" | "test" | "trace_events"
+        | "wasi" // NOTE: `inspector`/`inspector/promises` and `sea` are intentionally
+                 // absent — `perry compile` rejects them, so `perry check` must surface
+                 // the U006 diagnostic rather than report a clean build (#3744).
+    )
 }
 
 /// Check a package for compatibility issues
@@ -475,7 +536,10 @@ pub fn check_node_builtin_imports(
     let mut diagnostics = Diagnostics::new();
 
     for import in all_imports {
-        if is_node_builtin(import) && !is_perry_builtin(import) {
+        if is_node_builtin(import)
+            && !is_perry_builtin(import)
+            && !is_supported_node_builtin(import)
+        {
             let files = import_locations
                 .get(import)
                 .map(|f| {
@@ -560,4 +624,107 @@ pub fn compatibility_to_diagnostics(packages: &[PackageCompatibility]) -> Diagno
     }
 
     diagnostics
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #3744: `perry check` must not report a clean build for modern Node
+    /// builtins that `perry compile` rejects. The builtin table feeds the
+    /// U006 diagnostic only when a name is recognized as a Node builtin AND
+    /// is not in the supported allowlist — so an unsupported builtin missing
+    /// from `is_node_builtin` silently passes check.
+    #[test]
+    fn modern_unsupported_builtins_are_flagged() {
+        // Compile-rejected modules: recognized as builtins, NOT supported, so
+        // `check_node_builtin_imports` surfaces the diagnostic.
+        for m in ["sea", "inspector", "node:inspector/promises", "node:sea"] {
+            assert!(is_node_builtin(m), "{m} should be a recognized builtin");
+            assert!(
+                !is_supported_node_builtin(m),
+                "{m} is not compile-supported and must be flagged by check"
+            );
+        }
+    }
+
+    /// Modern builtins that `perry compile` accepts must be in BOTH tables so
+    /// check neither false-negatives (silently passes an unsupported import)
+    /// nor false-positives (flags a working import).
+    #[test]
+    fn modern_supported_builtins_are_recognized_and_allowed() {
+        for m in [
+            "async_hooks",
+            "diagnostics_channel",
+            "http2",
+            "sqlite",
+            "test",
+            "node:test/reporters",
+            "trace_events",
+            "wasi",
+        ] {
+            assert!(is_node_builtin(m), "{m} should be a recognized builtin");
+            assert!(
+                is_supported_node_builtin(m),
+                "{m} compiles and must not be flagged by check"
+            );
+        }
+    }
+
+    /// Every compile-supported builtin must also be a recognized builtin —
+    /// otherwise the allowlist arm is dead (the gate short-circuits on
+    /// `is_node_builtin` first).
+    #[test]
+    fn supported_implies_recognized() {
+        for base in [
+            "crypto",
+            "events",
+            "http",
+            "http2",
+            "https",
+            "net",
+            "readline",
+            "stream",
+            "worker_threads",
+            "zlib",
+            "fs",
+            "path",
+            "os",
+            "util",
+            "process",
+            "buffer",
+            "console",
+            "perf_hooks",
+            "timers",
+            "url",
+            "querystring",
+            "tls",
+            "tty",
+            "assert",
+            "diagnostics_channel",
+            "sqlite",
+            "cluster",
+            "child_process",
+            "dgram",
+            "dns",
+            "domain",
+            "repl",
+            "punycode",
+            "string_decoder",
+            "sys",
+            "v8",
+            "vm",
+            "constants",
+            "module",
+            "async_hooks",
+            "test",
+            "trace_events",
+            "wasi",
+        ] {
+            assert!(
+                is_node_builtin(base),
+                "{base} is in the supported allowlist but not the builtin table"
+            );
+        }
+    }
 }

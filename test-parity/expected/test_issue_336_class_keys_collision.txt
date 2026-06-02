@@ -1,0 +1,6 @@
+a.kind: a
+a.value: 1
+a.describe(): a/1
+b.kind: a
+b.value: 1
+b.describe(): a/1

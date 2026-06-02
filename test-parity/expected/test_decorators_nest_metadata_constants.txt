@@ -1,0 +1,2 @@
+constant injectable key true
+constant param key true

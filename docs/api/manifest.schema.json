@@ -1,0 +1,653 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.perryts.com/native-libraries/manifest.schema.json",
+  "title": "Perry native-library manifest (v1)",
+  "description": "Validates the `perry.nativeLibrary` field in a package.json that exports Rust-backed FFI bindings to Perry. See docs/src/native-libraries/manifest-v1.md for prose.",
+  "type": "object",
+  "properties": {
+    "perry": {
+      "type": "object",
+      "properties": {
+        "nativeLibrary": { "$ref": "#/$defs/nativeLibrary" }
+      }
+    }
+  },
+  "$defs": {
+    "nativeLibrary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["functions"],
+      "properties": {
+        "abiVersion": {
+          "type": "string",
+          "description": "Semver range of perry-ffi this wrapper was built against. Required from v0.6.0; warning-only in v0.5.x.",
+          "examples": ["0.5", "0.5.3", "^0.5"]
+        },
+        "functions": {
+          "type": "array",
+          "description": "FFI function declarations exported by the wrapper's staticlib.",
+          "items": { "$ref": "#/$defs/functionDecl" }
+        },
+        "targets": {
+          "type": "object",
+          "description": "Per-target build configuration.",
+          "additionalProperties": { "$ref": "#/$defs/targetConfig" },
+          "properties": {
+            "macos":     { "$ref": "#/$defs/targetConfig" },
+            "ios":       { "$ref": "#/$defs/targetConfig" },
+            "linux":     { "$ref": "#/$defs/targetConfig" },
+            "windows":   { "$ref": "#/$defs/targetConfig" },
+            "android":   { "$ref": "#/$defs/targetConfig" },
+            "web":       { "$ref": "#/$defs/targetConfig" },
+            "harmonyos": { "$ref": "#/$defs/targetConfig" },
+            "tvos":      { "$ref": "#/$defs/targetConfig" },
+            "watchos":   { "$ref": "#/$defs/targetConfig" },
+            "visionos":  { "$ref": "#/$defs/targetConfig" }
+          }
+        }
+      }
+    },
+    "functionDecl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "params", "returns"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "C-style symbol name. Convention: `js_<package>_<function>`."
+        },
+        "params": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/abiParamDescriptor" }
+        },
+        "returns": { "$ref": "#/$defs/abiReturnDescriptor" }
+      }
+    },
+    "abiParamDescriptor": {
+      "description": "Native ABI descriptor for one TypeScript argument. `buffer+len` consumes one JS argument and lowers to two native slots; `pod` consumes one JS object-shaped argument and lowers through a verifier-backed C-layout record pointer; `pod+count` consumes one JS POD view and lowers to `(ptr, usize record_count)`.",
+      "anyOf": [
+        { "$ref": "#/$defs/abiParamString" },
+        { "$ref": "#/$defs/abiStructuredParam" }
+      ]
+    },
+    "abiReturnDescriptor": {
+      "description": "Native ABI descriptor for the return value. `buffer+len` and `pod` are parameter-only.",
+      "anyOf": [
+        { "$ref": "#/$defs/abiReturnString" },
+        { "$ref": "#/$defs/abiStructuredReturn" }
+      ]
+    },
+    "abiDescriptor": {
+      "description": "Native ABI descriptor accepted as metadata, for example the result type inside `promise<T>`.",
+      "anyOf": [
+        { "$ref": "#/$defs/abiDescriptorString" },
+        { "$ref": "#/$defs/abiStructuredDescriptor" }
+      ]
+    },
+    "abiParamString": {
+      "type": "string",
+      "anyOf": [
+        {
+          "enum": [
+            "jsvalue",
+            "js_value",
+            "string",
+            "bool",
+            "boolean",
+            "i32",
+            "i64",
+            "i64_str",
+            "u32",
+            "u64",
+            "usize",
+            "f32",
+            "f64",
+            "number",
+            "ptr",
+            "buffer_len",
+            "buffer+len",
+            "handle",
+            "promise"
+          ]
+        },
+        { "pattern": "^handle<[^>]+>$" },
+        { "pattern": "^promise<[^>]+>$" }
+      ]
+    },
+    "abiReturnString": {
+      "type": "string",
+      "anyOf": [
+        {
+          "enum": [
+            "jsvalue",
+            "js_value",
+            "string",
+            "bool",
+            "boolean",
+            "i32",
+            "i64",
+            "i64_str",
+            "u32",
+            "u64",
+            "usize",
+            "f32",
+            "f64",
+            "number",
+            "ptr",
+            "buffer_len",
+            "handle",
+            "promise",
+            "void"
+          ]
+        },
+        { "pattern": "^handle<[^>]+>$" },
+        { "pattern": "^promise<[^>]+>$" }
+      ]
+    },
+    "abiDescriptorString": {
+      "type": "string",
+      "anyOf": [
+        {
+          "enum": [
+            "jsvalue",
+            "js_value",
+            "string",
+            "bool",
+            "boolean",
+            "i32",
+            "i64",
+            "i64_str",
+            "u32",
+            "u64",
+            "usize",
+            "f32",
+            "f64",
+            "number",
+            "ptr",
+            "buffer_len",
+            "buffer+len",
+            "handle",
+            "promise",
+            "void"
+          ]
+        },
+        { "pattern": "^handle<[^>]+>$" },
+        { "pattern": "^promise<[^>]+>$" }
+      ]
+    },
+    "abiStructuredParam": {
+      "oneOf": [
+        { "$ref": "#/$defs/abiStructuredParamDescriptor" }
+      ],
+      "not": {
+        "type": "object",
+        "required": ["kind"],
+        "properties": { "kind": { "const": "void" } }
+      }
+    },
+    "abiStructuredReturn": {
+      "oneOf": [
+        { "$ref": "#/$defs/abiStructuredReturnDescriptor" }
+      ],
+      "not": {
+        "type": "object",
+        "required": ["kind"],
+        "properties": {
+          "kind": { "enum": ["buffer+len", "pod", "pod+count"] }
+        }
+      }
+    },
+    "abiStructuredParamDescriptor": {
+      "oneOf": [
+        { "$ref": "#/$defs/abiParamHandleDescriptor" },
+        { "$ref": "#/$defs/abiParamPromiseDescriptor" },
+        { "$ref": "#/$defs/abiBufferAndLenDescriptor" },
+        { "$ref": "#/$defs/abiPodDescriptor" },
+        { "$ref": "#/$defs/abiPodAndCountDescriptor" },
+        { "$ref": "#/$defs/abiScalarDescriptor" }
+      ]
+    },
+    "abiStructuredReturnDescriptor": {
+      "oneOf": [
+        { "$ref": "#/$defs/abiReturnHandleDescriptor" },
+        { "$ref": "#/$defs/abiReturnPromiseDescriptor" },
+        { "$ref": "#/$defs/abiBufferAndLenDescriptor" },
+        { "$ref": "#/$defs/abiPodDescriptor" },
+        { "$ref": "#/$defs/abiScalarDescriptor" }
+      ]
+    },
+    "abiStructuredDescriptor": {
+      "oneOf": [
+        { "$ref": "#/$defs/abiHandleDescriptor" },
+        { "$ref": "#/$defs/abiMetadataPromiseDescriptor" },
+        { "$ref": "#/$defs/abiBufferAndLenDescriptor" },
+        { "$ref": "#/$defs/abiPodDescriptor" },
+        { "$ref": "#/$defs/abiScalarDescriptor" }
+      ]
+    },
+    "abiParamHandleDescriptor": {
+      "allOf": [
+        { "$ref": "#/$defs/abiHandleDescriptor" },
+        {
+          "not": {
+            "type": "object",
+            "required": ["finalizer"]
+          },
+          "description": "Native handle parameters may not declare finalizers."
+        }
+      ]
+    },
+    "abiReturnHandleDescriptor": {
+      "$ref": "#/$defs/abiHandleDescriptor"
+    },
+    "abiParamPromiseDescriptor": {
+      "allOf": [
+        { "$ref": "#/$defs/abiPromiseDescriptor" },
+        {
+          "not": {
+            "type": "object",
+            "required": ["completion"],
+            "properties": { "completion": { "const": "native_async" } }
+          },
+          "description": "Native async promise completion is only valid on returns."
+        }
+      ]
+    },
+    "abiReturnPromiseDescriptor": {
+      "$ref": "#/$defs/abiPromiseDescriptor"
+    },
+    "abiMetadataPromiseDescriptor": {
+      "allOf": [
+        { "$ref": "#/$defs/abiPromiseDescriptor" },
+        {
+          "not": {
+            "type": "object",
+            "required": ["completion"],
+            "properties": { "completion": { "const": "native_async" } }
+          },
+          "description": "Nested promise metadata cannot opt into native async completion."
+        }
+      ]
+    },
+    "abiHandleDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "required": ["finalizer"]
+          },
+          "then": {
+            "type": "object",
+            "required": ["ownership"],
+            "properties": {
+              "ownership": { "const": "owned" }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "kind": { "const": "handle" },
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Optional metadata naming the native handle type."
+        },
+        "ownership": {
+          "enum": ["borrowed", "owned"],
+          "default": "borrowed",
+          "description": "Whether JavaScript owns the wrapped native resource."
+        },
+        "nullable": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether a null native resource pointer is valid."
+        },
+        "thread": {
+          "enum": ["any", "main", "creator"],
+          "default": "any",
+          "description": "Thread-affinity contract enforced when unwrapping the handle."
+        },
+        "finalizer": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Optional one-shot finalizer symbol. Valid only on owned return handles."
+        },
+        "debugName": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Short debug name stored in the runtime handle payload."
+        }
+      }
+    },
+    "abiPromiseDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "promise" },
+        "result": {
+          "$ref": "#/$defs/abiDescriptor",
+          "description": "Optional metadata describing the JavaScript promise result."
+        },
+        "completion": {
+          "enum": ["direct", "native_async"],
+          "default": "direct",
+          "description": "Promise completion machinery. `native_async` is valid only for return descriptors."
+        },
+        "thread": {
+          "enum": ["any", "main"],
+          "default": "any",
+          "description": "Thread policy for native async completion requests."
+        }
+      }
+    },
+    "abiBufferAndLenDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "buffer+len" }
+      }
+    },
+    "abiPodDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "pod" },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Optional record name used in diagnostics and proof artifacts."
+        },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/abiPodFieldDescriptor" },
+          "description": "Ordered C-layout fields. Field order is part of the ABI."
+        }
+      }
+    },
+    "abiPodAndCountDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "pod+count" },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Optional record name used in diagnostics and proof artifacts."
+        },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/abiPodFieldDescriptor" },
+          "description": "Ordered C-layout record fields. The JS argument supplies a packed record view and Perry lowers it to data pointer plus record count."
+        }
+      }
+    },
+    "abiPodFieldDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "oneOf": [
+        { "required": ["type"] },
+        { "required": ["abi"] }
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "JavaScript object property and C-layout field name."
+        },
+        "type": {
+          "$ref": "#/$defs/abiPodFieldType",
+          "description": "Native scalar ABI descriptor for this field."
+        },
+        "abi": {
+          "$ref": "#/$defs/abiPodFieldType",
+          "description": "Alias for `type` when the manifest author wants to avoid a JavaScript property named `type`."
+        }
+      }
+    },
+    "abiPodFieldType": {
+      "description": "Scalar ABI descriptor accepted inside a `pod` field.",
+      "anyOf": [
+        { "$ref": "#/$defs/abiPodFieldString" },
+        { "$ref": "#/$defs/abiPodFieldStructuredScalar" }
+      ]
+    },
+    "abiPodFieldString": {
+      "type": "string",
+      "enum": [
+        "i32",
+        "i64",
+        "u32",
+        "u64",
+        "usize",
+        "f32",
+        "f64",
+        "number",
+        "buffer_len",
+        "handle_id"
+      ]
+    },
+    "abiPodFieldStructuredScalar": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "enum": [
+                "i32",
+                "i64",
+                "u32",
+                "u64",
+                "usize",
+                "f32",
+                "f64",
+                "number",
+                "buffer_len",
+                "handle_id"
+              ]
+            }
+          }
+        },
+        {
+          "$ref": "#/$defs/abiPodDescriptor"
+        }
+      ]
+    },
+    "abiScalarDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "jsvalue",
+            "js_value",
+            "string",
+            "bool",
+            "boolean",
+            "i32",
+            "i64",
+            "i64_str",
+            "u32",
+            "u64",
+            "usize",
+            "f32",
+            "f64",
+            "number",
+            "ptr",
+            "buffer_len",
+            "void"
+          ]
+        }
+      }
+    },
+    "targetConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "type": "boolean",
+          "description": "Set false when this package intentionally does not ship the selected target. Perry skips the target config without requiring crate/lib/prebuilt metadata."
+        },
+        "unavailableReason": {
+          "type": "string",
+          "description": "Human-readable reason shown when available is false."
+        },
+        "unavailable_reason": {
+          "type": "string",
+          "description": "Snake_case alias for unavailableReason."
+        },
+        "crate": {
+          "type": "string",
+          "description": "Path (relative to package.json) to the Cargo crate that produces the staticlib."
+        },
+        "lib": {
+          "type": "string",
+          "description": "Library name (without `lib` prefix or `.a` extension)."
+        },
+        "frameworks": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Apple-only frameworks (-framework <name>)."
+        },
+        "libs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "System libraries (-l<name>)."
+        },
+        "pkgConfig": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "libDirs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Additional library search paths, relative to package.json unless absolute."
+        },
+        "resources": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Native resource files/directories copied into NativeLibraries/<package>/ in the target bundle or output staging directory."
+        },
+        "shaderOutputs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Precompiled shader/resource outputs copied into NativeLibraries/<package>/ in the target bundle or output staging directory."
+        },
+        "shader_outputs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Snake_case alias for shaderOutputs."
+        },
+        "backends": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "metal": { "$ref": "#/$defs/backendConfig" },
+            "vulkan": { "$ref": "#/$defs/backendConfig" },
+            "d3d12": { "$ref": "#/$defs/backendConfig" }
+          },
+          "description": "Backend-specific packaging metadata. Metal is Apple-only; Vulkan is supported on macOS/Linux/Windows/Android/HarmonyOS; D3D12 is Windows-only."
+        },
+        "swift_sources": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "metal_sources": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "prebuilt": {
+          "type": "string",
+          "description": "Path to a pre-built .a archive. When set, Perry skips `cargo build`."
+        }
+      }
+    },
+    "backendConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "type": "boolean",
+          "description": "Set false when this backend is intentionally unavailable for this target."
+        },
+        "unavailableReason": {
+          "type": "string"
+        },
+        "unavailable_reason": {
+          "type": "string"
+        },
+        "prebuilt": {
+          "type": "string",
+          "description": "Backend-specific archive to link in addition to the target-level archive."
+        },
+        "frameworks": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "libs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "libDirs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "pkgConfig": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "shaderSources": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Source shaders compiled during packaging with xcrun metal, glslc, or dxc. Override discovery with PERRY_XCRUN, PERRY_GLSLC, or PERRY_DXC."
+        },
+        "shader_sources": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Snake_case alias for shaderSources."
+        },
+        "shaderOutputs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "shader_outputs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "resources": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "package": {
+          "type": "object",
+          "description": "Optional descriptive backend artifact metadata emitted as perry-backend-package.json inside NativeLibraries/<package>/<backend>/.",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string" },
+            "version": { "type": "string" },
+            "kind": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,56 @@
+name: Security Audit
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 12 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: security-audit
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Run cargo audit
+        # Default cargo-audit behavior: fail on `vulnerability` advisories
+        # (real CVEs), surface `unmaintained` / `notice` / `unsound` /
+        # `yanked` advisories as warnings.
+        #
+        # `--ignore` accepts specific RUSTSEC IDs that are acknowledged
+        # transitive-dep advisories with no actionable upstream fix:
+        #
+        # - RUSTSEC-2023-0071 (rsa) — Marvin attack timing side-channel;
+        #   upstream marks "No fixed upgrade is available". The rsa
+        #   crate is a transitive dep through several stacks; tracking
+        #   for upstream fix.
+        # - RUSTSEC-2026-0118 / -0119 (hickory-proto) — DNS query
+        #   amplification + DoS surface; transitive via reqwest's
+        #   tls-rustls path. Upstream hickory has a fix in main but
+        #   not yet released; tracking.
+        #
+        # Previously the job ran `--deny warnings` which also
+        # escalated every "unmaintained crate" notice into a hard
+        # failure (adler, fxhash, paste, number_prefix, bincode v1,
+        # etc.) — those have no in-tree replacement and were blocking
+        # merges without an actionable fix. Dropped that flag; warnings
+        # still surface in the log.
+        run: |
+          cargo audit \
+            --ignore RUSTSEC-2023-0071 \
+            --ignore RUSTSEC-2026-0118 \
+            --ignore RUSTSEC-2026-0119

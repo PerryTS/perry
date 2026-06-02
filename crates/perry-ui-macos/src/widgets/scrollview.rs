@@ -1,10 +1,18 @@
 use objc2::msg_send;
 use objc2::rc::Retained;
-use objc2::runtime::{AnyClass, AnyObject};
+use objc2::runtime::{AnyClass, AnyObject, Sel};
+use objc2::{define_class, AnyThread, DefinedClass};
 use objc2_app_kit::{NSScrollView, NSView};
 use objc2_core_foundation::{CGPoint, CGRect};
-use objc2_foundation::{MainThreadMarker, NSObjectProtocol};
+use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol, NSString};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::Once;
+
+extern "C" {
+    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_nanbox_get_pointer(value: f64) -> i64;
+}
 
 // Raw ObjC runtime FFI for dynamic class registration
 extern "C" {
@@ -190,6 +198,153 @@ pub fn set_offset(scroll_handle: i64, offset: f64) {
             let point = CGPoint::new(0.0, offset);
             let _: () = msg_send![&*content_view, setBoundsOrigin: point];
         }
+    }
+}
+
+// =============================================================================
+// Issue #553 — onScrollEnd hook (infinite-scroll callback)
+// =============================================================================
+
+struct ScrollEndState {
+    closure: f64,
+    threshold_px: f64,
+    armed: bool,
+}
+
+thread_local! {
+    static SCROLL_END_STATES: RefCell<HashMap<i64, ScrollEndState>> = RefCell::new(HashMap::new());
+    static SCROLL_END_OBSERVER_TO_HANDLE: RefCell<HashMap<usize, i64>> = RefCell::new(HashMap::new());
+}
+
+pub struct PerryScrollEndObserverIvars {
+    key: std::cell::Cell<usize>,
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[name = "PerryScrollEndObserver"]
+    #[ivars = PerryScrollEndObserverIvars]
+    pub struct PerryScrollEndObserver;
+
+    impl PerryScrollEndObserver {
+        #[unsafe(method(boundsDidChange:))]
+        fn bounds_did_change(&self, _notification: &AnyObject) {
+            let key = self.ivars().key.get();
+            let handle = SCROLL_END_OBSERVER_TO_HANDLE.with(|m| {
+                m.borrow().get(&key).copied().unwrap_or(0)
+            });
+            if handle == 0 {
+                return;
+            }
+            check_scroll_end(handle);
+        }
+    }
+);
+
+impl PerryScrollEndObserver {
+    fn new(key: usize) -> Retained<Self> {
+        let this = Self::alloc().set_ivars(PerryScrollEndObserverIvars {
+            key: std::cell::Cell::new(key),
+        });
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
+fn check_scroll_end(handle: i64) {
+    let Some(scroll_view) = super::get_widget(handle) else {
+        return;
+    };
+    let (closure, in_zone) = unsafe {
+        let sv: &NSScrollView = &*(Retained::as_ptr(&scroll_view) as *const NSScrollView);
+        let content_view = sv.contentView();
+        let bounds: CGRect = msg_send![&*content_view, bounds];
+        let doc: Retained<AnyObject> = msg_send![sv, documentView];
+        if Retained::as_ptr(&doc).is_null() {
+            return;
+        }
+        let doc_frame: CGRect = msg_send![&*doc, frame];
+        let visible_bottom = bounds.origin.y + bounds.size.height;
+        let (closure, threshold_px) = SCROLL_END_STATES.with(|s| {
+            s.borrow()
+                .get(&handle)
+                .map(|st| (st.closure, st.threshold_px))
+                .unwrap_or((0.0, 0.0))
+        });
+        let in_zone = visible_bottom >= doc_frame.size.height - threshold_px;
+        (closure, in_zone)
+    };
+    if closure == 0.0 {
+        return;
+    }
+    let should_fire = SCROLL_END_STATES.with(|s| {
+        let mut states = s.borrow_mut();
+        let Some(state) = states.get_mut(&handle) else {
+            return false;
+        };
+        if in_zone && state.armed {
+            state.armed = false;
+            true
+        } else if !in_zone && !state.armed {
+            state.armed = true;
+            false
+        } else {
+            false
+        }
+    });
+    if should_fire {
+        unsafe {
+            let ptr = js_nanbox_get_pointer(closure) as *const u8;
+            js_closure_call0(ptr);
+        }
+    }
+}
+
+/// Fire `callback` once when the user scrolls within `threshold_px` of the
+/// content's bottom edge. Re-arms when the user scrolls back up past the
+/// threshold so the callback can fire repeatedly across pagination loads.
+pub fn set_scroll_end_callback(scroll_handle: i64, callback: f64, threshold_px: f64) {
+    let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
+    let Some(scroll_view) = super::get_widget(scroll_handle) else {
+        return;
+    };
+    SCROLL_END_STATES.with(|s| {
+        s.borrow_mut().insert(
+            scroll_handle,
+            ScrollEndState {
+                closure: callback,
+                threshold_px: if threshold_px > 0.0 {
+                    threshold_px
+                } else {
+                    200.0
+                },
+                armed: true,
+            },
+        );
+    });
+    unsafe {
+        let sv: &NSScrollView = &*(Retained::as_ptr(&scroll_view) as *const NSScrollView);
+        let clip: Retained<AnyObject> = Retained::cast_unchecked(sv.contentView());
+        let _: () = msg_send![&*clip, setPostsBoundsChangedNotifications: true];
+
+        let observer = PerryScrollEndObserver::new(0);
+        let observer_addr = Retained::as_ptr(&observer) as usize;
+        observer.ivars().key.set(observer_addr);
+        SCROLL_END_OBSERVER_TO_HANDLE.with(|m| {
+            m.borrow_mut().insert(observer_addr, scroll_handle);
+        });
+
+        let nc_cls = AnyClass::get(c"NSNotificationCenter").unwrap();
+        let nc: Retained<AnyObject> = msg_send![nc_cls, defaultCenter];
+        let name = NSString::from_str("NSViewBoundsDidChangeNotification");
+        let sel = Sel::register(c"boundsDidChange:");
+        let _: () = msg_send![
+            &*nc,
+            addObserver: &*observer,
+            selector: sel,
+            name: &*name,
+            object: &*clip,
+        ];
+        std::mem::forget(observer);
     }
 }
 

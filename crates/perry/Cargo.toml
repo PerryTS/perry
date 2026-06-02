@@ -24,6 +24,7 @@ perry-codegen-arkts.workspace = true
 perry-codegen-glance.workspace = true
 perry-codegen-wear-tiles.workspace = true
 perry-codegen-wasm.workspace = true
+perry-api-manifest = { workspace = true, features = ["serde"] }
 
 clap.workspace = true
 anyhow.workspace = true
@@ -37,7 +38,6 @@ dialoguer.workspace = true
 toml.workspace = true
 walkdir.workspace = true
 notify.workspace = true
-atty.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
@@ -48,9 +48,23 @@ flate2.workspace = true
 tar.workspace = true
 base64.workspace = true
 zip.workspace = true
-jsonwebtoken = "9.3"
+jsonwebtoken.workspace = true
+semver = "1.0"
 dotenvy = "0.15"
 rayon = "1.10"
+regex = "1"
+
+# Cross-platform file locking (Unix flock + Windows LockFileEx) — used by
+# the auto-optimize driver in commands/compile/optimized_libs.rs to
+# serialize parallel `perry compile` invocations that target the same
+# `target/perry-auto-<hash>` directory. Without this, two workers
+# rebuilding the same feature combo race on the .a write — clang in
+# worker B sees a momentarily-missing file and bails with errno=2. Was
+# the root cause that forced the v0.5.384 NJOBS 6→3 retreat in the
+# CI compile-smoke job; v0.5.429 restores NJOBS=6 once this lands.
+# Already in the transitive link surface (gzip-header pulls it via
+# bindgen), so it's a no-cost direct dep.
+fslock = "0.2"
 
 # `perry updater` sign-side tooling (closes #229 loop). All three are
 # already in the link surface via perry-runtime / perry-stdlib's crypto
@@ -58,9 +72,13 @@ rayon = "1.10"
 # the CLI module. ed25519-dalek 2.1 takes any CryptoRng; we use rand 0.9
 # for the keygen seed.
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 rand = "0.9"
+# chrono is already a transitive dep through perry-stdlib; listing it
+# here makes the year accessor available to `perry native init`'s
+# LICENSE template substitution.
+chrono = "0.4"
 
 [dev-dependencies]
 tempfile = "3"

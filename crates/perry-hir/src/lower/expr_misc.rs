@@ -47,22 +47,37 @@ pub(super) fn lower_await(ctx: &mut LoweringContext, await_expr: &ast::AwaitExpr
 }
 
 pub(super) fn lower_super_prop(
-    _ctx: &mut LoweringContext,
+    ctx: &mut LoweringContext,
     super_prop: &ast::SuperPropExpr,
 ) -> Result<Expr> {
-    // super.property access — used in super.method() calls. When used
-    // as a call target, the Call expression detects this and routes
-    // through SuperMethodCall. Direct super property access (without
-    // the trailing call) is a syntax form Perry hasn't implemented yet.
+    // `super.<prop>` as a value (NOT followed by a call). Call-form
+    // `super.method(...)` is detected in lower_call.rs and routed through
+    // SuperMethodCall before this function ever runs, so we only land
+    // here for value-form reads like `super._next` (rxjs's
+    // OperatorSubscriber), `super.value` (NestJS adapter chains), etc.
+    //
+    // Ident form (`super.foo`) routes through Expr::SuperPropertyGet so
+    // codegen can do an explicit parent-class vtable lookup (issue
+    // #774). The previous `this.<prop>` approximation silently
+    // returned the child override when the child shadowed the
+    // property; strict JS resolves through the parent prototype.
+    //
+    // Computed form (`super[expr]`) is kept on the `this[expr]`
+    // fallback for now — computed super needs a runtime dispatch
+    // that's out of scope for #774 (the dominant PR #754 rxjs /
+    // NestJS patterns are all ident-form method calls, which go
+    // through SuperMethodCall anyway).
     match &super_prop.prop {
-        ast::SuperProp::Ident(_ident) => crate::lower_bail!(
-            super_prop.span,
-            "Direct super property access not yet supported, use super.method()"
-        ),
-        ast::SuperProp::Computed(_) => crate::lower_bail!(
-            super_prop.span,
-            "Computed super property access not supported"
-        ),
+        ast::SuperProp::Ident(ident) => Ok(Expr::SuperPropertyGet {
+            property: ident.sym.to_string(),
+        }),
+        ast::SuperProp::Computed(computed) => {
+            let index = Box::new(lower_expr(ctx, &computed.expr)?);
+            Ok(Expr::IndexGet {
+                object: Box::new(Expr::This),
+                index,
+            })
+        }
     }
 }
 
@@ -73,7 +88,18 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
         ast::UpdateOp::MinusMinus => BinaryOp::Sub,
     };
 
-    match update.arg.as_ref() {
+    // Unwrap compile-time-only wrappers: `obj.x!++` (TS non-null assertion) and
+    // `(obj.x)++` (parenthesized) are transparent to update-expression lowering.
+    let mut arg = update.arg.as_ref();
+    loop {
+        match arg {
+            ast::Expr::TsNonNull(inner) => arg = inner.expr.as_ref(),
+            ast::Expr::Paren(inner) => arg = inner.expr.as_ref(),
+            _ => break,
+        }
+    }
+
+    match arg {
         // Simple identifier: x++ or ++x
         ast::Expr::Ident(ident) => {
             let name = ident.sym.to_string();
@@ -193,18 +219,25 @@ pub(super) fn lower_meta_prop(
     meta_prop: &ast::MetaPropExpr,
 ) -> Result<Expr> {
     // import.meta / new.target. Property access on either (e.g.
-    // `import.meta.url`) is handled by the Member expression arm.
+    // `import.meta.url`) is intercepted at the Member expression arm
+    // (`expr_member::lower_member`) and folded directly to a literal —
+    // the Object synthesis below is the fallback for the rare bare
+    // `import.meta` use (spread, destructure, JSON.stringify, etc.).
     match meta_prop.kind {
         ast::MetaPropKind::ImportMeta => {
-            // Return the file:// URL directly for `import.meta.url`.
-            // Since `import.meta` is typically only used via `.url`,
-            // we synthesise a small one-field object so the Member
-            // arm's PropertyGet path resolves it.
-            let file_url = format!("file://{}", ctx.source_file_path);
-            Ok(Expr::Object(vec![(
-                "url".to_string(),
-                Expr::String(file_url),
-            )]))
+            // Bare `import.meta` reference. Property access goes through
+            // the Member arm and folds to a literal directly; this Object
+            // is the fallback for the rare cases where the value is used
+            // as an object (spread / destructure / passed to a function).
+            // Carries the same set of properties the Member arm exposes
+            // so `Object.keys(import.meta).includes("url")` still works.
+            let (url, dirname, filename) = import_meta_paths(ctx);
+            Ok(Expr::Object(vec![
+                ("url".to_string(), Expr::String(url)),
+                ("main".to_string(), Expr::Bool(ctx.is_entry_module)),
+                ("dirname".to_string(), Expr::String(dirname)),
+                ("filename".to_string(), Expr::String(filename)),
+            ]))
         }
         ast::MetaPropKind::NewTarget => {
             // Inside a class constructor, `new.target` evaluates to the
@@ -224,6 +257,23 @@ pub(super) fn lower_meta_prop(
             }
         }
     }
+}
+
+/// Issue #444: compute the `(url, dirname, filename)` triplet exposed via
+/// `import.meta`. Mirrors Node 20+ semantics — `url` is `file://<path>`,
+/// `filename` is the absolute file path, `dirname` is its parent directory.
+/// Used by both the bare-`import.meta` Object synthesis above and the
+/// member-access fast path in `expr_member::lower_member`.
+pub(crate) fn import_meta_paths(ctx: &LoweringContext) -> (String, String, String) {
+    let path = &ctx.source_file_path;
+    let url = format!("file://{}", path);
+    let dirname = match path.rfind('/') {
+        Some(i) if i > 0 => path[..i].to_string(),
+        Some(_) => "/".to_string(),
+        None => String::new(),
+    };
+    let filename = path.to_string();
+    (url, dirname, filename)
 }
 
 pub(super) fn lower_yield(ctx: &mut LoweringContext, y: &ast::YieldExpr) -> Result<Expr> {

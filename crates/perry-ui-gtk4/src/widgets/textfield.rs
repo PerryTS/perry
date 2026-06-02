@@ -1,5 +1,5 @@
 use gtk4::prelude::*;
-use gtk4::Entry;
+use gtk4::{Entry, EventControllerFocus};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -7,9 +7,12 @@ thread_local! {
     /// Map from entry ID to closure pointer (f64 NaN-boxed)
     static TEXTFIELD_CALLBACKS: RefCell<HashMap<usize, f64>> = RefCell::new(HashMap::new());
     static NEXT_TEXTFIELD_ID: RefCell<usize> = RefCell::new(1);
+    /// Track every Entry handle we've created so blur_all() can iterate.
+    static REGISTERED_ENTRIES: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
 }
 
 extern "C" {
+    fn js_closure_call0(closure: *const u8) -> f64;
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
@@ -64,7 +67,9 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
         }
     });
 
-    super::register_widget(entry.upcast())
+    let handle = super::register_widget(entry.upcast());
+    REGISTERED_ENTRIES.with(|v| v.borrow_mut().push(handle));
+    handle
 }
 
 /// Focus an editable text field.
@@ -116,6 +121,63 @@ pub fn set_string_value(handle: i64, text_ptr: *const u8) {
     if let Some(widget) = super::get_widget(handle) {
         if let Some(entry) = widget.downcast_ref::<Entry>() {
             entry.set_text(text);
+        }
+    }
+}
+
+/// Wire `on_submit(value)` to the GtkEntry "activate" signal (Enter key).
+/// The callback receives the current text as a NaN-boxed string, matching the
+/// macOS `setOnSubmit` shape.
+pub fn set_on_submit(handle: i64, on_submit: f64) {
+    if let Some(widget) = super::get_widget(handle) {
+        if let Some(entry) = widget.downcast_ref::<Entry>() {
+            entry.connect_activate(move |entry| {
+                let text = entry.text().to_string();
+                let bytes = text.as_bytes();
+                let str_ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64) };
+                let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
+                let closure_ptr = unsafe { js_nanbox_get_pointer(on_submit) };
+                if closure_ptr != 0 {
+                    unsafe {
+                        js_closure_call1(closure_ptr as *const u8, nanboxed);
+                    }
+                }
+            });
+        }
+    }
+}
+
+/// Wire `on_focus()` to GtkEntry's focus-enter event via EventControllerFocus.
+/// Fires when the field receives keyboard focus; matches macOS semantics.
+pub fn set_on_focus(handle: i64, on_focus: f64) {
+    if let Some(widget) = super::get_widget(handle) {
+        if let Some(entry) = widget.downcast_ref::<Entry>() {
+            let controller = EventControllerFocus::new();
+            controller.connect_enter(move |_| {
+                let closure_ptr = unsafe { js_nanbox_get_pointer(on_focus) };
+                if closure_ptr != 0 {
+                    unsafe {
+                        js_closure_call0(closure_ptr as *const u8);
+                    }
+                }
+            });
+            entry.add_controller(controller);
+        }
+    }
+}
+
+/// Drop focus from every registered text field. Mirrors macOS `blurAll()` —
+/// useful for "tap outside to dismiss keyboard" patterns. We hand focus to each
+/// entry's parent root so nothing in the field tree retains it.
+pub fn blur_all() {
+    let handles: Vec<i64> = REGISTERED_ENTRIES.with(|v| v.borrow().clone());
+    for handle in handles {
+        if let Some(widget) = super::get_widget(handle) {
+            if let Some(entry) = widget.downcast_ref::<Entry>() {
+                if let Some(root) = entry.root() {
+                    root.set_focus(None::<&gtk4::Widget>);
+                }
+            }
         }
     }
 }

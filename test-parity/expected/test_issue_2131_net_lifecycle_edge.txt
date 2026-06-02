@@ -1,0 +1,14 @@
+C:event-names>=4=true
+C:connect-count>=1=true
+S:data-listeners-after-remove=1
+S:got:ping
+S:addr-object=true
+S:addr-has-port=true
+C:got:pong
+C:once-fires-pre-emit=0
+C:end
+C:connect-fired=1
+C:close
+C:data-count-post-drain=0
+S:close-count-after-remove=0
+S:closed

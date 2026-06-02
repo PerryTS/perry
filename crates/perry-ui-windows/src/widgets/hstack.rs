@@ -4,7 +4,7 @@
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Gdi::{
-    CreateSolidBrush, FillRect, SetBkMode, HBRUSH, HDC, TRANSPARENT,
+    CreateSolidBrush, FillRect, SetBkMode, COLOR_WINDOW, HBRUSH, HDC, TRANSPARENT,
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -31,7 +31,10 @@ fn ensure_class_registered() {
             style: CS_HREDRAW | CS_VREDRAW,
             lpfnWndProc: Some(container_wnd_proc),
             hInstance: HINSTANCE::from(hinstance),
-            hbrBackground: HBRUSH(std::ptr::null_mut()),
+            // Default window-color class brush — see vstack.rs / #1542. A null
+            // brush leaves uncovered/exposed area black; the WM_ERASEBKGND
+            // handler still returns early for an explicit background color.
+            hbrBackground: HBRUSH((COLOR_WINDOW.0 + 1) as *mut _),
             lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
             ..Default::default()
         };

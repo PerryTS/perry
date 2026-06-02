@@ -15,11 +15,16 @@
 
 - [Supported Features](language/supported-features.md)
 - [Type System](language/type-system.md)
+- [Decorators](language/decorators.md)
 - [Limitations](language/limitations.md)
 
 # npm Packages
 
 - [Porting Packages (experimental)](packages/porting.md)
+- [Native Bindings — Overview](native-libraries/overview.md)
+  - [Authoring a Native Binding](native-libraries/authoring-guide.md)
+  - [`perry-ffi` ABI Reference](native-libraries/abi.md)
+  - [Manifest Schema (spec v1)](native-libraries/manifest-v1.md)
 
 # Multi-Threading
 
@@ -38,12 +43,22 @@
 - [Events](ui/events.md)
 - [Canvas](ui/canvas.md)
 - [Menus](ui/menus.md)
+- [Tray Icon](ui/tray.md)
 - [Dialogs](ui/dialogs.md)
 - [Table](ui/table.md)
 - [Animation](ui/animation.md)
+- [Frame Callbacks](ui/on-frame.md)
 - [Multi-Window](ui/multi-window.md)
 - [Theming](ui/theming.md)
 - [Camera](ui/camera.md)
+- [WebView](ui/webview.md)
+
+# Terminal UI
+
+- [Overview](tui/overview.md)
+- [Widgets](tui/widgets.md)
+- [Hooks](tui/hooks.md)
+- [Examples](tui/examples.md)
 
 # Platforms
 
@@ -54,6 +69,7 @@
 - [tvOS](platforms/tvos.md)
 - [watchOS](platforms/watchos.md)
 - [Android](platforms/android.md)
+- [HarmonyOS NEXT](platforms/harmonyos.md)
 - [Windows](platforms/windows.md)
   - [Windows 7 Compatibility](platforms/windows-7.md)
 - [Linux (GTK4)](platforms/linux.md)
@@ -70,6 +86,7 @@
 - [Containers](stdlib/container.md)
 - [Utilities](stdlib/utilities.md)
 - [Other Modules](stdlib/other.md)
+- [API Reference (auto-generated)](api/reference.md)
 
 # Containers
 
@@ -99,6 +116,10 @@
 - [Keychain](system/keychain.md)
 - [Notifications](system/notifications.md)
 - [Audio Capture](system/audio.md)
+- [Audio Playback](system/audio_module.md)
+- [Media Playback](system/media.md)
+- [Geolocation & Image Picker](system/geolocation.md)
+- [Background Tasks](system/background.md)
 - [Other](system/other.md)
 
 # Widgets
@@ -128,9 +149,24 @@
 
 - [Commands](cli/commands.md)
 - [Compiler Flags](cli/flags.md)
+- [Fast-math (`--fast-math`)](cli/fast-math.md)
+- [Dynamic Stdlib Dispatch](cli/dynamic-dispatch.md)
+- [JS Runtime Opt-In](cli/allow-js-runtime.md)
+- [`PERRY_SANDBOX_BUILDRS`](cli/sandbox-buildrs.md)
+- [`--emit-attest` (binary attestation sidecar)](cli/emit-attest.md)
+- [`--emit-sandbox`](cli/emit-sandbox.md)
+- [`--lockdown`](cli/lockdown.md)
+- [Egress Allowlist (`allowedHosts`)](cli/allowed-hosts.md)
+- [Per-Package Capabilities (`perry.permissions`)](cli/capabilities.md)
+- [`perry audit --sbom`](cli/perry-audit-sbom.md)
+- [Host Allowlist (nativeLibrary, compilePackages)](cli/allow-perry-features.md)
 - [perry.toml Reference](cli/perry-toml.md)
 
 ---
+
+# Internals
+
+- [Memory Model](internals/memory-model.md)
 
 # Contributing
 

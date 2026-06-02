@@ -14,10 +14,94 @@
 //! 3. The conversion callbacks run on the main thread during js_stdlib_process_pending
 
 use std::future::Future;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use once_cell::sync::Lazy;
 use tokio::runtime::Runtime;
+
+/// Issue #859: pin a Promise so the GC can't sweep it while a tokio
+/// worker is computing its eventual resolution.
+///
+/// Without pinning, the await chain has no path back to the Promise:
+/// `P.next = N` is a forward edge, and after the user code yields, all
+/// JS-side roots reach only `N`. The tokio future holds `promise_ptr`
+/// as `usize`, invisible to the GC. So `js_promise_new()` in a native
+/// binding + `spawn_for_promise(...)` opens a window where `P` is
+/// unreachable; if GC fires during that window, `P` is swept, and
+/// when the worker finally calls `js_promise_resolve(P, ...)` it
+/// dereferences freed (and possibly OS-reclaimed) memory → SIGBUS.
+///
+/// Pin/unpin must run on the main thread. The bit is set here (right
+/// before crossing the worker boundary) and cleared in
+/// [`js_stdlib_process_pending`] after the queued resolution drains.
+///
+/// # Safety
+/// `promise_ptr` must point to a live Promise allocated by
+/// `js_promise_new()` — i.e. an `8-byte GcHeader`-prefixed allocation
+/// in the GC arena. Callers in `spawn_for_promise[_deferred]` satisfy
+/// this trivially; direct callers of [`queue_promise_resolution`] /
+/// [`queue_deferred_resolution`] (fetch, zlib, etc.) must also pin
+/// before handing the pointer to a worker future.
+#[inline]
+pub unsafe fn pin_promise_for_native_resolution(promise_ptr: usize) {
+    if promise_ptr == 0 {
+        return;
+    }
+    let header = (promise_ptr as *mut u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
+        as *mut perry_runtime::gc::GcHeader;
+    (*header).gc_flags |= perry_runtime::gc::GC_FLAG_PINNED;
+}
+
+/// Inverse of [`pin_promise_for_native_resolution`]; called from
+/// `js_stdlib_process_pending` immediately before the queued
+/// resolve/reject so the next GC cycle can reclaim the (now-settled)
+/// promise on its normal schedule.
+#[inline]
+unsafe fn unpin_promise_after_native_resolution(promise_ptr: usize) {
+    if promise_ptr == 0 {
+        return;
+    }
+    let header = (promise_ptr as *mut u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
+        as *mut perry_runtime::gc::GcHeader;
+    (*header).gc_flags &= !perry_runtime::gc::GC_FLAG_PINNED;
+}
+
+/// Allocate a fresh Promise and pin it for cross-thread resolution.
+/// Convenience wrapper for direct callers of [`queue_promise_resolution`]
+/// / [`queue_deferred_resolution`] (fetch, zlib, bcrypt, ioredis, ws,
+/// etc.) — modules that bypass `spawn_for_promise[_deferred]` because
+/// their own future setup is custom. Equivalent to
+/// `js_promise_new()` followed by [`pin_promise_for_native_resolution`].
+///
+/// # Safety
+/// Same as `js_promise_new()`; the pinning has no preconditions of
+/// its own. The matching unpin runs automatically in
+/// `js_stdlib_process_pending`.
+#[inline]
+pub unsafe fn js_promise_new_for_native_resolution() -> *mut perry_runtime::Promise {
+    ensure_gc_scanner_registered();
+    let p = perry_runtime::js_promise_new();
+    pin_promise_for_native_resolution(p as usize);
+    p
+}
+
+/// Count of in-flight `perry_ffi_spawn_blocking[_with_reactor]` tasks
+/// dispatched by external native bindings (perry-ext-argon2 /
+/// -bcrypt / etc. via perry-ffi). Each spawn `fetch_add(1)`s before
+/// the closure runs; the closure-trampoline `fetch_sub(1)`s after it
+/// returns. `js_stdlib_has_active_handles` returns 1 while this
+/// counter is nonzero so the runtime's event loop keeps draining
+/// PENDING_RESOLUTIONS / PENDING_DEFERRED until the closure has
+/// queued its result.
+///
+/// Issue #591: without this counter, `await argon2.hash(pw)` returns
+/// a Promise whose resolution is queued from a tokio worker AFTER
+/// `main()` returns. The runtime saw zero active handles (no WS,
+/// net, readline) and exited before the resolution drained, so the
+/// `.then` / `await` never fired and the program ran past the await
+/// returning undefined.
+pub static EXT_BLOCKING_TASKS_INFLIGHT: AtomicUsize = AtomicUsize::new(0);
 
 /// Global tokio runtime for all async stdlib operations.
 /// Falls back to current-thread runtime if multi-thread fails (e.g. on iOS).
@@ -44,6 +128,23 @@ static PENDING_RESOLUTIONS: Lazy<Mutex<Vec<PendingResolution>>> =
 static PENDING_DEFERRED: Lazy<Mutex<Vec<DeferredResolution>>> =
     Lazy::new(|| Mutex::new(Vec::new()));
 
+thread_local! {
+    static GC_SCANNER_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn ensure_gc_scanner_registered() {
+    GC_SCANNER_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
+        perry_runtime::gc::gc_register_mutable_root_scanner_named(
+            "stdlib:async_bridge",
+            scan_pending_native_async_resolution_roots_mut,
+        );
+        registered.set(true);
+    });
+}
+
 /// A pending promise resolution (for simple values that don't need conversion)
 struct PendingResolution {
     /// Pointer to the Promise object (as usize for Send)
@@ -66,18 +167,82 @@ struct DeferredResolution {
     converter: Box<dyn FnOnce() -> u64 + Send>,
 }
 
+/// Mutable GC scanner for native async completions waiting in stdlib's
+/// main-thread pump. Promise pointers are raw heap pointers; simple
+/// result bits may be NaN-boxed heap values.
+pub fn scan_pending_native_async_resolution_roots_mut(
+    visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>,
+) {
+    {
+        let mut pending = PENDING_RESOLUTIONS.lock().unwrap();
+        for resolution in pending.iter_mut() {
+            visitor.visit_usize_slot(&mut resolution.promise_ptr);
+            visitor.visit_nanbox_u64_slot(&mut resolution.result_bits);
+        }
+    }
+    {
+        let mut pending = PENDING_DEFERRED.lock().unwrap();
+        for resolution in pending.iter_mut() {
+            visitor.visit_usize_slot(&mut resolution.promise_ptr);
+        }
+    }
+}
+
 /// Get a reference to the global runtime
 pub fn runtime() -> &'static Runtime {
     &RUNTIME
 }
 
-/// Spawn an async task on the global runtime
+/// Spawn an async task on the global runtime.
+///
+/// Issue #921: bump `EXT_BLOCKING_TASKS_INFLIGHT` for the lifetime of
+/// the future so `js_stdlib_has_active_handles()` keeps the codegen-
+/// emitted event loop alive while the task is running.
+///
+/// Without the bump, the race window is:
+///
+/// 1. `main()` is async, calls `await fetch(...)` (or any other
+///    `spawn(...)`-backed binding) — `js_fetch_*` returns a fresh
+///    Promise and `spawn(future)` schedules the network roundtrip
+///    on a tokio worker.
+/// 2. Codegen's async lowering returns from the current step,
+///    yielding control back to the entry-module init.
+/// 3. The entry-module init finishes (top-level `main()` was
+///    fire-and-forget), so codegen drops into its event-loop
+///    bootstrap.
+/// 4. The event loop's `js_stdlib_has_active_handles()` check sees
+///    `PENDING_RESOLUTIONS` empty, no WS / NET / HTTP / readline,
+///    no `EXT_BLOCKING_TASKS_INFLIGHT` increment from `spawn(...)`,
+///    so it returns 0.
+/// 5. The loop exits cleanly (exit code 0). The tokio worker
+///    eventually queues its resolution, but no one is listening
+///    anymore.
+///
+/// User-visible symptom: `await fetch(...)` silently exits the
+/// process with no JS error and no stderr from the network
+/// callback. Production hosts (PM2, systemd) interpret the clean
+/// exit as a crash and restart the binary.
+///
+/// Bumping INFLIGHT around the spawned future fixes this by making
+/// the event-loop active-handle check pessimistically wait for the
+/// future to finish (or queue its resolution and decrement INFLIGHT).
+/// Same mechanism `perry_ffi_spawn_blocking` already uses for
+/// external wrapper crates (#591); fetch / ioredis / zlib / etc.
+/// just hadn't been wired through it yet.
 pub fn spawn<F>(future: F)
 where
     F: Future<Output = ()> + Send + 'static,
 {
     ensure_pump_registered();
-    RUNTIME.spawn(future);
+    EXT_BLOCKING_TASKS_INFLIGHT.fetch_add(1, Ordering::AcqRel);
+    RUNTIME.spawn(async move {
+        future.await;
+        EXT_BLOCKING_TASKS_INFLIGHT.fetch_sub(1, Ordering::AcqRel);
+        // Notify in case the future resolved without going through
+        // `queue_promise_resolution` — flip the active-handle gate
+        // so the loop re-evaluates.
+        perry_runtime::event_pump::js_notify_main_thread();
+    });
 }
 
 /// Block on an async task (use sparingly, mainly for initialization)
@@ -93,6 +258,7 @@ where
 /// that don't involve pointer allocations. For complex values like arrays,
 /// objects, or strings, use queue_deferred_resolution instead.
 pub fn queue_promise_resolution(promise_ptr: usize, is_success: bool, result_bits: u64) {
+    ensure_gc_scanner_registered();
     {
         let mut pending = PENDING_RESOLUTIONS.lock().unwrap();
         pending.push(PendingResolution {
@@ -116,6 +282,7 @@ pub fn queue_deferred_resolution<F>(promise_ptr: usize, is_success: bool, conver
 where
     F: FnOnce() -> u64 + Send + 'static,
 {
+    ensure_gc_scanner_registered();
     {
         let mut pending = PENDING_DEFERRED.lock().unwrap();
         pending.push(DeferredResolution {
@@ -131,7 +298,14 @@ where
 
 /// Register js_stdlib_process_pending with perry-runtime's pump so that
 /// perry-ui-macos can call it without a hard link dependency on perry-stdlib.
-fn ensure_pump_registered() {
+///
+/// Public because non-await modules that nonetheless need the event loop
+/// to keep ticking — readline (#347), and any future TUI-shaped module
+/// that uses thread-local pending queues without ever calling
+/// `spawn_for_promise` — must register the pump explicitly the first time
+/// they're touched. Otherwise the runtime exits immediately when `main`
+/// returns and the close/line callbacks never fire.
+pub fn ensure_pump_registered() {
     use std::sync::Once;
     static REGISTER: Once = Once::new();
     REGISTER.call_once(|| {
@@ -140,6 +314,7 @@ fn ensure_pump_registered() {
             fn js_register_stdlib_has_active(f: extern "C" fn() -> i32);
             fn js_stdlib_init_dispatch();
         }
+        ensure_gc_scanner_registered();
         unsafe {
             js_register_stdlib_pump(js_stdlib_process_pending);
             js_register_stdlib_has_active(js_stdlib_has_active_handles);
@@ -164,47 +339,85 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
     let mut count = 0i32;
 
     // Process simple resolutions first
-    {
+    let simple_resolutions: Vec<PendingResolution> = {
         let mut pending = PENDING_RESOLUTIONS.lock().unwrap();
-        count += pending.len() as i32;
+        let n = pending.len();
+        count += n as i32;
+        pending.drain(..).collect()
+    };
 
-        for resolution in pending.drain(..) {
-            let promise_ptr = resolution.promise_ptr as *mut perry_runtime::Promise;
-            if resolution.is_success {
-                perry_runtime::js_promise_resolve(
-                    promise_ptr,
-                    f64::from_bits(resolution.result_bits),
-                );
-            } else {
-                perry_runtime::js_promise_reject(
-                    promise_ptr,
-                    f64::from_bits(resolution.result_bits),
-                );
-            }
+    for resolution in simple_resolutions {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let promise_ptr_usize = resolution.promise_ptr;
+        let promise_handle =
+            scope.root_raw_mut_ptr(promise_ptr_usize as *mut perry_runtime::Promise);
+        let result_handle = scope.root_nanbox_u64(resolution.result_bits);
+        // Issue #859: unpin BEFORE resolve so the just-settled promise
+        // can be reclaimed by the next GC. Resolve doesn't trigger GC
+        // mid-call, so ordering here is purely about leaving a clean
+        // GC state after the loop.
+        unsafe {
+            unpin_promise_after_native_resolution(
+                promise_handle.get_raw_mut_ptr::<perry_runtime::Promise>() as usize,
+            )
+        };
+        if resolution.is_success {
+            perry_runtime::js_promise_resolve(
+                promise_handle.get_raw_mut_ptr(),
+                f64::from_bits(result_handle.get_nanbox_u64()),
+            );
+        } else {
+            perry_runtime::js_promise_reject(
+                promise_handle.get_raw_mut_ptr(),
+                f64::from_bits(result_handle.get_nanbox_u64()),
+            );
         }
     }
 
     // Process deferred resolutions - these run converter functions on the main thread
-    {
+    let deferred_resolutions: Vec<DeferredResolution> = {
         let mut pending = PENDING_DEFERRED.lock().unwrap();
-        let deferred_count = pending.len();
-        count += deferred_count as i32;
+        let n = pending.len();
+        count += n as i32;
+        pending.drain(..).collect()
+    };
 
-        for resolution in pending.drain(..) {
-            let promise_ptr = resolution.promise_ptr as *mut perry_runtime::Promise;
-            // Run the converter on the main thread to create JSValues safely
-            let result_bits = (resolution.converter)();
+    for resolution in deferred_resolutions {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let promise_ptr_usize = resolution.promise_ptr;
+        let promise_handle =
+            scope.root_raw_mut_ptr(promise_ptr_usize as *mut perry_runtime::Promise);
+        // Run the converter on the main thread to create JSValues safely
+        let result_bits = (resolution.converter)();
+        let result_handle = scope.root_nanbox_u64(result_bits);
 
-            if resolution.is_success {
-                perry_runtime::js_promise_resolve(promise_ptr, f64::from_bits(result_bits));
-            } else {
-                perry_runtime::js_promise_reject(promise_ptr, f64::from_bits(result_bits));
-            }
+        // Issue #859: unpin BEFORE resolve. The converter ran first
+        // and may itself have allocated (creating the result string,
+        // etc.), but the promise stayed pinned across that work — so
+        // even if the converter triggered GC, the promise survived.
+        unsafe {
+            unpin_promise_after_native_resolution(
+                promise_handle.get_raw_mut_ptr::<perry_runtime::Promise>() as usize,
+            )
+        };
+        if resolution.is_success {
+            perry_runtime::js_promise_resolve(
+                promise_handle.get_raw_mut_ptr(),
+                f64::from_bits(result_handle.get_nanbox_u64()),
+            );
+        } else {
+            perry_runtime::js_promise_reject(
+                promise_handle.get_raw_mut_ptr(),
+                f64::from_bits(result_handle.get_nanbox_u64()),
+            );
         }
     }
 
-    // Process pending WebSocket events (server/client listener callbacks)
-    #[cfg(feature = "websocket")]
+    // Process pending WebSocket events (server/client listener callbacks).
+    // Gate fires for either `bundled-ws` (perry-stdlib's own impl) or
+    // `external-ws-pump` (well-known flip → perry-ext-ws provides the
+    // symbol). Mirrors net's gate above. Closes #606 follow-up.
+    #[cfg(any(feature = "websocket", feature = "external-ws-pump"))]
     {
         extern "C" {
             fn js_ws_process_pending() -> i32;
@@ -220,8 +433,25 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
         count += http_count;
     }
 
-    // Process pending raw TCP socket events (net.Socket)
-    #[cfg(all(feature = "net", not(target_os = "ios"), not(target_os = "android")))]
+    // Process pending raw TCP socket events (net.Socket).
+    // v0.5.579 — gate now fires for `bundled-net` (perry-stdlib's
+    // own implementation) AND `external-net-pump` (which the
+    // well-known flip in `optimized_libs.rs` enables when routing
+    // `import 'net'` to perry-ext-net). The fallback no-op stub
+    // pattern (e.g. cron's) doesn't work for net because the
+    // perry-ext-net wrapper's symbol can't be reliably preferred
+    // over perry-stdlib's stub on Mach-O.
+    // v0.5.579: gate on `bundled-net` (perry-stdlib has its own net
+    // module compiled in) OR `external-net-pump` (well-known flip
+    // activated → perry-ext-net is linked, provides the symbol).
+    // Without this gate, the cfg `feature = "net"` from v0.5.572's
+    // umbrella renaming was always FALSE under the well-known flip,
+    // and tokio events queued by perry-ext-net never got drained.
+    #[cfg(all(
+        any(feature = "bundled-net", feature = "external-net-pump"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    ))]
     {
         extern "C" {
             fn js_net_process_pending() -> i32;
@@ -230,8 +460,92 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
         count += net_count;
     }
 
+    // Process pending HTTP server requests + WS upgrades (perry-ext-http-server).
+    // Closes #604 — pre-fix `js_node_http_server_listen` blocked the
+    // main TS thread inside an inner event_loop, so axios.get/etc.
+    // after a `server.listen(port, () => resolve())` callback never
+    // ran. Now `listen()` returns immediately and pending requests
+    // are drained from the unified pump on every tick. Mirrors the
+    // `external-net-pump` / `external-ws-pump` patterns above.
+    #[cfg(feature = "external-http-server-pump")]
+    {
+        extern "C" {
+            fn js_node_http_server_process_pending() -> i32;
+        }
+        let n = unsafe { js_node_http_server_process_pending() };
+        count += n;
+    }
+
+    // Issue #769 — when the well-known flip routes `node:http` /
+    // `node:https` client (`http.request` / `http.get`) to
+    // perry-ext-http, drain its response/error queue on every tick.
+    // Mirrors the server-side `external-http-server-pump` arm above.
+    #[cfg(feature = "external-http-client-pump")]
+    {
+        extern "C" {
+            fn js_http_process_pending() -> i32;
+        }
+        let n = unsafe { js_http_process_pending() };
+        count += n;
+    }
+
     // Process pending worker_threads messages (stdin reader)
     count += crate::worker_threads::js_worker_threads_process_pending();
+
+    // Drain same-process MessageChannel port inboxes (#3157) — dispatch queued
+    // `port.postMessage(v)` payloads to `port.on('message', cb)` listeners and
+    // fire `close` events for closed ports.
+    count += crate::worker_threads::js_worker_threads_channels_process_pending();
+
+    // Process pending readline lines (#347 Phase 1) — drains the stdin
+    // reader's queue and dispatches to question/line/close callbacks.
+    count += crate::readline::js_readline_process_pending();
+
+    // Process pending zlib stream events (#1843) — `createGzip()` etc.
+    // buffer input across `.write()` and queue 'data'/'end' on `.end()`;
+    // drained + dispatched to listeners (and forwarded to `.pipe()` dests)
+    // here on the main thread. Bundled path (perry-stdlib's own zlib mod):
+    #[cfg(feature = "compression")]
+    {
+        count += unsafe { crate::zlib::js_zlib_process_pending() };
+    }
+    // External path: the well-known flip routed `node:zlib` to perry-ext-zlib
+    // and stripped `compression`. Drain perry-ext-zlib's queue via its extern.
+    #[cfg(all(feature = "external-zlib-pump", not(feature = "compression")))]
+    {
+        extern "C" {
+            fn js_ext_zlib_process_pending() -> i32;
+        }
+        count += unsafe { js_ext_zlib_process_pending() };
+    }
+
+    // Process pending fastify requests. With the bundled-fastify
+    // adapter, `app.listen()` used to block the main TS thread inside
+    // its own inner event loop forever, so an `await app.listen(...)`
+    // never returned and no subsequent user code (in-process `fetch`,
+    // `app.close()`, etc.) ever ran. The pump now mirrors how
+    // perry-ext-http-server handles dispatch (#604): `listen()` returns
+    // immediately and the per-server mpsc is drained here on each tick.
+    //
+    // Two activation paths:
+    //   * `http-server` — the bundled adapter (`perry-stdlib::fastify`)
+    //     is compiled in. Call its pump directly.
+    //   * `external-fastify-pump` — the well-known flip routed
+    //     `import 'fastify'` to perry-ext-fastify and stripped
+    //     `bundled-fastify`. The symbol is provided by the external
+    //     crate; declare and call it via extern. Mirrors how
+    //     `external-net-pump` and `external-ws-pump` work.
+    #[cfg(feature = "http-server")]
+    {
+        count += crate::fastify::js_fastify_process_pending();
+    }
+    #[cfg(all(feature = "external-fastify-pump", not(feature = "http-server")))]
+    {
+        extern "C" {
+            fn js_fastify_process_pending() -> i32;
+        }
+        count += unsafe { js_fastify_process_pending() };
+    }
 
     count
 }
@@ -241,6 +555,14 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
 /// Registered with perry-runtime via js_register_stdlib_has_active()
 /// so the runtime's trampoline calls this when perry-stdlib is linked.
 pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
+    // External wrapper crates (perry-ext-argon2, -bcrypt, …) dispatch
+    // their CPU-bound work through `perry_ffi_spawn_blocking`. Until
+    // the closure has run + queued its result, the awaiter's Promise
+    // is pending but invisible to the rest of the gate (no entry in
+    // PENDING_RESOLUTIONS yet). Issue #591.
+    if EXT_BLOCKING_TASKS_INFLIGHT.load(Ordering::Acquire) != 0 {
+        return 1;
+    }
     // Check for pending stdlib resolutions
     {
         let pending = PENDING_RESOLUTIONS.lock().unwrap();
@@ -257,9 +579,9 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
     // Check for active WebSocket servers/connections
     #[cfg(feature = "websocket")]
     {
-        extern "C" {
-            fn js_ws_process_pending() -> i32;
-        }
+        // #854: removed an unused `js_ws_process_pending` extern decl here —
+        // this block only checks for active handles; the drain path with its
+        // own extra decl lives earlier in the pump.
         // If there are pending WS events, keep running
         // (we don't drain here — just check)
         let has_ws = crate::ws::js_ws_has_active_handles();
@@ -267,14 +589,146 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
             return 1;
         }
     }
+    // External (perry-ext-ws) path — when the well-known flip strips
+    // `bundled-ws` and routes `import 'ws'` to perry-ext-ws, the
+    // wrapper's `js_ws_has_pending` reports active servers / open
+    // connections / queued events. Without this gate, a TS program
+    // running an in-process WebSocketServer would have its event loop
+    // exit before the listener task can dispatch any event. Closes
+    // #606 follow-up. Mirrors the `external-net-pump` arm above.
+    #[cfg(all(feature = "external-ws-pump", not(feature = "websocket")))]
+    {
+        extern "C" {
+            fn js_ws_has_pending() -> i32;
+        }
+        if unsafe { js_ws_has_pending() } != 0 {
+            return 1;
+        }
+    }
     // Check for active raw TCP sockets (net.Socket / tls.connect / upgrade).
     // Without this, an `await net.connect(...)` returns a Promise that the
     // runtime can't see is pending, so the event loop exits before the
     // socket's 'connect' event ever fires through the pump.
-    #[cfg(all(feature = "net", not(target_os = "ios"), not(target_os = "android")))]
+    //
+    // Two paths: `bundled-net` (perry-stdlib's own net implementation
+    // is compiled in) calls `crate::net::js_net_has_active_handles`
+    // directly; `external-net-pump` (the well-known flip routes
+    // `import 'net'` to perry-ext-net) calls perry-ext-net's
+    // `js_ext_net_has_active_handles` extern. Pre-fix only the
+    // bundled-net gate fired, so programs using TS-source drivers
+    // like `@perryts/mysql` that route through perry-ext-net saw
+    // `await new Promise(r => sock.on('connect', r))` exit early
+    // because perry-stdlib's empty NET_SOCKETS map reported no
+    // active handles. Issue #536.
+    #[cfg(all(
+        feature = "bundled-net",
+        not(target_os = "ios"),
+        not(target_os = "android")
+    ))]
     {
         let has_net = crate::net::js_net_has_active_handles();
         if has_net != 0 {
+            return 1;
+        }
+    }
+    #[cfg(all(
+        feature = "external-net-pump",
+        not(feature = "bundled-net"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    ))]
+    {
+        extern "C" {
+            fn js_ext_net_has_active_handles() -> i32;
+        }
+        if unsafe { js_ext_net_has_active_handles() } != 0 {
+            return 1;
+        }
+    }
+    // Active HTTP/HTTPS/HTTP2 servers — keep the event loop alive
+    // for the lifetime of any listening server (until the user calls
+    // `server.close()`). Without this gate, the codegen-emitted main
+    // loop sees no active sources and exits before the first request
+    // ever arrives. Closes #604 — paired with the
+    // `js_node_http_server_process_pending` arm in
+    // `js_stdlib_process_pending` above.
+    #[cfg(feature = "external-http-server-pump")]
+    {
+        extern "C" {
+            fn js_node_http_server_has_active() -> i32;
+        }
+        if unsafe { js_node_http_server_has_active() } != 0 {
+            return 1;
+        }
+    }
+    // Issue #769 — keep the event loop alive while an in-flight
+    // `http.request` / `http.get` (perry-ext-http) hasn't received its
+    // response or error event yet.
+    #[cfg(feature = "external-http-client-pump")]
+    {
+        extern "C" {
+            fn js_http_has_pending() -> i32;
+        }
+        if unsafe { js_http_has_pending() } != 0 {
+            return 1;
+        }
+    }
+    // readline (#347 Phase 1) — keep the loop alive while a stdin
+    // reader is started and EOF hasn't been observed, so `rl.on('line')`
+    // / `rl.question()` programs don't exit before the user types.
+    if crate::readline::js_readline_has_active() != 0 {
+        return 1;
+    }
+    // Same-process MessageChannel ports (#3157) — keep the loop alive while a
+    // started port still has queued messages or a pending `close` event.
+    if crate::worker_threads::js_worker_threads_channels_has_pending() != 0 {
+        return 1;
+    }
+    if crate::worker_threads::js_worker_threads_has_pending() != 0 {
+        return 1;
+    }
+    // Bundled-fastify — keep the loop alive while any FastifyServerHandle
+    // is in the "listening" state. Paired with
+    // `js_fastify_process_pending` in `js_stdlib_process_pending` above
+    // (closes the compat-sweep timeout for `await app.listen(...)` +
+    // in-process `fetch`).
+    #[cfg(feature = "http-server")]
+    {
+        if crate::fastify::js_fastify_has_active_handles() != 0 {
+            return 1;
+        }
+    }
+    // External fastify (perry-ext-fastify) — when the well-known flip
+    // routes `import 'fastify'` to perry-ext-fastify and strips
+    // `bundled-fastify`, the symbol below is provided by the external
+    // crate at link time. Mirrors the `external-{net,ws,http-server}-pump`
+    // arms above.
+    #[cfg(all(feature = "external-fastify-pump", not(feature = "http-server")))]
+    {
+        extern "C" {
+            fn js_fastify_has_active() -> i32;
+        }
+        if unsafe { js_fastify_has_active() } != 0 {
+            return 1;
+        }
+    }
+    // zlib streams (#1843) — keep the loop alive while `.end()`-queued
+    // 'data'/'end' events are still waiting to be drained, so a purely-
+    // synchronous `createGzip().write(x).end()` program doesn't exit before
+    // its listeners fire. Bundled path:
+    #[cfg(feature = "compression")]
+    {
+        if crate::zlib::js_zlib_has_active_handles() != 0 {
+            return 1;
+        }
+    }
+    // External (perry-ext-zlib) path:
+    #[cfg(all(feature = "external-zlib-pump", not(feature = "compression")))]
+    {
+        extern "C" {
+            fn js_ext_zlib_has_active_handles() -> i32;
+        }
+        if unsafe { js_ext_zlib_has_active_handles() } != 0 {
             return 1;
         }
     }
@@ -294,8 +748,18 @@ where
     F: Future<Output = Result<u64, String>> + Send + 'static,
 {
     ensure_pump_registered();
-    let ptr = promise_ptr as usize; // Convert to usize for Send
+    ensure_gc_scanner_registered();
+    // Convert to usize for Send.
+    let ptr = promise_ptr as usize;
+    // Issue #859: pin the promise BEFORE crossing the tokio boundary.
+    // See `pin_promise_for_native_resolution` for the full rationale.
+    pin_promise_for_native_resolution(ptr);
 
+    // Issue #921: same race-window mitigation as the plain
+    // `spawn()` above — bump INFLIGHT for the lifetime of the
+    // future so the event loop's `js_stdlib_has_active_handles`
+    // check stays truthy until the resolution is queued.
+    EXT_BLOCKING_TASKS_INFLIGHT.fetch_add(1, Ordering::AcqRel);
     RUNTIME.spawn(async move {
         match future.await {
             Ok(result_bits) => {
@@ -313,6 +777,8 @@ where
                 });
             }
         }
+        EXT_BLOCKING_TASKS_INFLIGHT.fetch_sub(1, Ordering::AcqRel);
+        perry_runtime::event_pump::js_notify_main_thread();
     });
 }
 
@@ -341,8 +807,14 @@ where
     C: FnOnce(T) -> u64 + Send + 'static,
 {
     ensure_pump_registered();
+    ensure_gc_scanner_registered();
     let ptr = promise_ptr as usize;
+    // Issue #859: pin the promise BEFORE crossing the tokio boundary.
+    pin_promise_for_native_resolution(ptr);
 
+    // Issue #921: same race-window mitigation as `spawn_for_promise`
+    // above — bump INFLIGHT for the lifetime of the future.
+    EXT_BLOCKING_TASKS_INFLIGHT.fetch_add(1, Ordering::AcqRel);
     RUNTIME.spawn(async move {
         match future.await {
             Ok(data) => {
@@ -361,14 +833,47 @@ where
                 });
             }
         }
+        EXT_BLOCKING_TASKS_INFLIGHT.fetch_sub(1, Ordering::AcqRel);
+        perry_runtime::event_pump::js_notify_main_thread();
     });
 }
 
-/// Create a JSValue representing an error from a string message
-/// NOTE: This must only be called from the main thread!
-fn create_error_value(msg: &str) -> u64 {
-    let str_ptr = perry_runtime::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    // Return the string as bits - use string_ptr for proper type identification
-    // In a full implementation, we'd wrap this in an Error object
-    perry_runtime::JSValue::string_ptr(str_ptr).bits()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn clear_pending() {
+        PENDING_RESOLUTIONS.lock().unwrap().clear();
+        PENDING_DEFERRED.lock().unwrap().clear();
+    }
+
+    #[test]
+    fn async_bridge_pending_resolution_scanner_emits_promise_and_result_roots() {
+        clear_pending();
+        let promise_ptr = 0x1234_5000usize;
+        let deferred_promise_ptr = 0x1234_6000usize;
+        let result_bits = 0x7FFD_0000_1234_7000u64;
+        PENDING_RESOLUTIONS.lock().unwrap().push(PendingResolution {
+            promise_ptr,
+            is_success: true,
+            result_bits,
+        });
+        PENDING_DEFERRED.lock().unwrap().push(DeferredResolution {
+            promise_ptr: deferred_promise_ptr,
+            is_success: true,
+            converter: Box::new(|| 0),
+        });
+
+        let mut emitted = Vec::new();
+        {
+            let mut mark = |value: f64| emitted.push(value.to_bits());
+            let mut visitor = perry_runtime::gc::RuntimeRootVisitor::for_copy(&mut mark);
+            scan_pending_native_async_resolution_roots_mut(&mut visitor);
+        }
+
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | promise_ptr as u64)));
+        assert!(emitted.contains(&result_bits));
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | deferred_promise_ptr as u64)));
+        clear_pending();
+    }
 }

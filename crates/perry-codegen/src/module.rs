@@ -12,7 +12,9 @@
 
 use std::collections::HashSet;
 
+use crate::block::FpFlags;
 use crate::function::LlFunction;
+use crate::native_value::NativeRepRecord;
 use crate::types::LlvmType;
 
 pub struct LlModule {
@@ -39,10 +41,16 @@ pub struct LlModule {
     /// emitted on loads/stores match the metadata nodes emitted once
     /// at the end of `compile_module` (closes #71).
     pub buffer_alias_counter: u32,
+    pub(crate) native_rep_records: Vec<NativeRepRecord>,
+    fp_flags: FpFlags,
 }
 
 impl LlModule {
     pub fn new(target_triple: impl Into<String>) -> Self {
+        Self::new_with_fp_flags(target_triple, FpFlags::default())
+    }
+
+    pub fn new_with_fp_flags(target_triple: impl Into<String>, fp_flags: FpFlags) -> Self {
         Self {
             target_triple: target_triple.into(),
             declarations: Vec::new(),
@@ -54,6 +62,8 @@ impl LlModule {
             metadata_lines: Vec::new(),
             ic_counter: 0,
             buffer_alias_counter: 0,
+            native_rep_records: Vec::new(),
+            fp_flags,
         }
     }
 
@@ -106,13 +116,21 @@ impl LlModule {
         return_type: LlvmType,
         params: Vec<(LlvmType, String)>,
     ) -> &mut LlFunction {
-        let func = LlFunction::new(name, return_type, params);
+        let func = LlFunction::new_with_fp_flags(name, return_type, params, self.fp_flags);
         self.functions.push(func);
         self.functions.last_mut().unwrap()
     }
 
     pub fn function_mut(&mut self, idx: usize) -> Option<&mut LlFunction> {
         self.functions.get_mut(idx)
+    }
+
+    /// True if a function with the given name has already been *defined*
+    /// in this module. Used by the #461 export-stub pass to avoid
+    /// redefining a symbol that an earlier emission path (function body,
+    /// value-getter, #460 forwarding wrapper) already claimed.
+    pub fn has_function(&self, name: &str) -> bool {
+        self.functions.iter().any(|f| f.name == name)
     }
 
     pub fn add_global(&mut self, name: &str, ty: LlvmType, init: &str) {
@@ -232,8 +250,12 @@ impl LlModule {
         }
 
         // Attribute group for setjmp's `returns_twice` marker.
-        // Only emit if setjmp was actually declared in this module.
-        if self.declared_names.contains("setjmp") {
+        // Only emit if setjmp (any variant) was actually declared in
+        // this module. Apple targets declare `_setjmp` (fast variant
+        // without signal-mask save), Windows declares `_setjmp`
+        // (2-arg ABI), Linux declares `setjmp` — all three need
+        // `returns_twice` on the call site.
+        if self.declared_names.contains("setjmp") || self.declared_names.contains("_setjmp") {
             ir.push_str("\nattributes #0 = { returns_twice }\n");
             // Functions that contain a `try` statement are marked with `#1`.
             // `optnone` forces LLVM to skip mem2reg/SROA inside the function,

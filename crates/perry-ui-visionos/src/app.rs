@@ -237,7 +237,12 @@ fn register_view_controller() {
 /// `perry_visionos_root_view()` to embed the UIKit tree.
 pub fn app_run(_app_handle: i64) {
     crate::crash_log::install_crash_hooks();
+    register_cross_platform_text_handlers();
     register_view_controller();
+    // Drain pending BGTaskScheduler registrations from `registerTask`
+    // calls during module init (#538). Runs before the SwiftUI host
+    // takes over UIApplicationMain.
+    crate::background::flush_pending_registrations();
 
     // Register UI function pointers for geisterhand dispatch
     #[cfg(feature = "geisterhand")]
@@ -301,6 +306,7 @@ extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
     fn js_callback_timer_tick() -> i32;
     fn js_interval_timer_tick() -> i32;
+    fn js_frame_pump_default() -> i32;
 }
 
 // ============================================
@@ -322,6 +328,8 @@ define_class!(
                 unsafe {
                     js_callback_timer_tick();
                     js_interval_timer_tick();
+                    // Issue #1865: perry/ui `onFrame` display-link callbacks.
+                    js_frame_pump_default();
                     js_promise_run_microtasks();
                     #[cfg(feature = "geisterhand")]
                     {
@@ -631,5 +639,32 @@ pub fn set_timer(interval_ms: f64, callback: f64) {
 
         // Keep the target alive
         std::mem::forget(target);
+    }
+}
+
+extern "C" {
+    fn js_register_show_toast_handler(f: extern "C" fn(msg_ptr: *const u8, msg_len: usize));
+    fn js_register_set_text_handler(
+        f: extern "C" fn(id_ptr: *const u8, id_len: usize, val_ptr: *const u8, val_len: usize),
+    );
+    fn js_register_text_id_handler(
+        f: extern "C" fn(widget_handle: i64, id_ptr: *const u8, id_len: usize),
+    );
+    /// Issue #535 Layer 2 — `js_state_set` calls this for every NavStack
+    /// route bound to the changed state's synth id. Defined in
+    /// `perry-runtime/src/ui_text_registry.rs`'s `NAVSTACK_REGISTRY` block.
+    fn js_register_widget_hidden_handler(f: extern "C" fn(widget_handle: i64, hidden: i32));
+}
+
+extern "C" fn navstack_set_widget_hidden(widget_handle: i64, hidden: i32) {
+    crate::widgets::set_hidden(widget_handle, hidden != 0);
+}
+
+fn register_cross_platform_text_handlers() {
+    unsafe {
+        js_register_show_toast_handler(widgets::toast::show_toast_handler);
+        js_register_set_text_handler(widgets::text_registry::set_text_handler);
+        js_register_text_id_handler(widgets::text_registry::register_text_id_handler);
+        js_register_widget_hidden_handler(navstack_set_widget_hidden);
     }
 }

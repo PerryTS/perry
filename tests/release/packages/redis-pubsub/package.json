@@ -1,0 +1,16 @@
+{
+  "name": "perry-release-fixture-redis-pubsub",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tier-3 fixture: redis pub/sub via the `redis` npm package against a locally-spawned redis-server binary. Backend started/stopped by fixture.sh — no Docker, no system service. SKIPs cleanly if redis-server is not on PATH.",
+  "dependencies": {
+    "redis": "^4.7.0"
+  },
+  "perry": {
+    "compilePackages": ["redis"],
+    "allow": {
+      "compilePackages": ["redis"]
+    }
+  }
+}

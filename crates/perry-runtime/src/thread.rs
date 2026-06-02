@@ -139,6 +139,7 @@
 //! ```
 
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::bigint::{self, BigIntHeader, BIGINT_LIMBS};
 use crate::closure::{self, real_capture_count, ClosureHeader};
@@ -216,7 +217,7 @@ fn is_truthy_bits(bits: u64) -> bool {
 /// or malloc memory. These are read from the source thread's memory and stored
 /// as owned Rust data (`Vec<u8>`, `Vec<SerializedValue>`, etc.).
 #[derive(Debug)]
-enum SerializedValue {
+pub enum SerializedValue {
     /// A raw 64-bit value that needs no pointer fixup.
     /// Covers: f64 numbers, TAG_UNDEFINED, TAG_NULL, TAG_TRUE, TAG_FALSE, INT32_TAG.
     Inline(u64),
@@ -247,6 +248,17 @@ enum SerializedValue {
 
     /// A BigInt: 16 x u64 limbs in little-endian order.
     BigInt([u64; BIGINT_LIMBS]),
+
+    /// A Date: its millisecond timestamp (may be NaN for an Invalid Date).
+    /// Re-allocated as a fresh `DateCell` on the receiving thread (#2089) —
+    /// deep-copy semantics, since the source cell's pointer is meaningless in
+    /// another thread's arena.
+    Date(f64),
+
+    /// An `fs.promises.FileHandle` crossing a `perry/thread` boundary.
+    /// Perry's fd registry is thread-local, so handles are not transferable;
+    /// deserialize as a FileHandle-shaped object with `fd === -1`.
+    DetachedFileHandle,
 }
 
 // Safety: SerializedValue contains no raw pointers to arena memory.
@@ -267,7 +279,7 @@ unsafe impl Sync for SerializedValue {}
 /// # Safety
 /// The `bits` must be a valid NaN-boxed JSValue. Pointer-tagged values must
 /// point to valid, live objects in the current thread's arena or malloc heap.
-unsafe fn serialize_jsvalue(bits: u64) -> SerializedValue {
+pub unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
     let tag = bits & TAG_MASK;
 
     // Fast path: values that are just bit patterns (no pointers)
@@ -321,10 +333,21 @@ unsafe fn serialize_jsvalue(bits: u64) -> SerializedValue {
                 return serialize_array(raw_ptr as *const crate::array::ArrayHeader);
             }
             gc::GC_TYPE_OBJECT => {
+                let value = f64::from_bits(bits);
+                if crate::fs::is_fs_filehandle_value(value)
+                    || crate::fs::filehandle_object_fd(value).is_some()
+                {
+                    return SerializedValue::DetachedFileHandle;
+                }
                 return serialize_object(raw_ptr as *const crate::object::ObjectHeader);
             }
             gc::GC_TYPE_CLOSURE => {
                 return serialize_closure(raw_ptr as *const ClosureHeader);
+            }
+            gc::GC_TYPE_DATE_CELL => {
+                // #2089: copy the timestamp; the receiving thread re-allocates
+                // a fresh cell (deep-copy, like every other crossed value).
+                return SerializedValue::Date((*(raw_ptr as *const crate::date::DateCell)).ts);
             }
             _ => {
                 // Unknown pointer type — treat as undefined
@@ -349,7 +372,7 @@ unsafe fn serialize_array(arr: *const crate::array::ArrayHeader) -> SerializedVa
     let mut elements = Vec::with_capacity(len);
     for i in 0..len {
         let elem_bits = (*elements_ptr.add(i)).to_bits();
-        elements.push(serialize_jsvalue(elem_bits));
+        elements.push(serialize_nanbox_for_thread(elem_bits));
     }
     SerializedValue::Array(elements)
 }
@@ -375,7 +398,7 @@ unsafe fn serialize_object(obj: *const crate::object::ObjectHeader) -> Serialize
     let mut fields = Vec::with_capacity(field_count);
     for i in 0..field_count {
         let field_bits = (*fields_ptr.add(i)).to_bits();
-        fields.push(serialize_jsvalue(field_bits));
+        fields.push(serialize_nanbox_for_thread(field_bits));
     }
 
     // Serialize keys array if present (plain objects have keys, class instances don't)
@@ -431,7 +454,7 @@ unsafe fn serialize_closure(closure: *const ClosureHeader) -> SerializedValue {
     let mut captures = Vec::with_capacity(actual_count);
     for i in 0..actual_count {
         let cap_bits = (*captures_base.add(i)).to_bits();
-        captures.push(serialize_jsvalue(cap_bits));
+        captures.push(serialize_nanbox_for_thread(cap_bits));
     }
 
     SerializedValue::Closure {
@@ -445,6 +468,39 @@ unsafe fn serialize_closure(closure: *const ClosureHeader) -> SerializedValue {
 // Deserialization: SerializedValue → JSValue (into current thread's arena)
 // ============================================================================
 
+#[inline]
+unsafe fn store_thread_array_slot(arr: *mut crate::array::ArrayHeader, index: usize, bits: u64) {
+    crate::array::store_array_slot(arr, index, bits);
+    (*arr).length = (index + 1) as u32;
+}
+
+#[inline]
+unsafe fn store_thread_object_field(
+    obj: *mut crate::object::ObjectHeader,
+    index: usize,
+    bits: u64,
+) {
+    crate::object::store_object_field_slot(obj, index, bits);
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn test_store_thread_array_slot(
+    arr: *mut crate::array::ArrayHeader,
+    index: usize,
+    bits: u64,
+) {
+    store_thread_array_slot(arr, index, bits);
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn test_store_thread_object_field(
+    obj: *mut crate::object::ObjectHeader,
+    index: usize,
+    bits: u64,
+) {
+    store_thread_object_field(obj, index, bits);
+}
+
 /// Deserialize a SerializedValue into a NaN-boxed JSValue.
 ///
 /// Allocates any needed objects (strings, arrays, objects, closures) in the
@@ -454,7 +510,7 @@ unsafe fn serialize_closure(closure: *const ClosureHeader) -> SerializedValue {
 ///
 /// # Returns
 /// The raw u64 bits of the NaN-boxed JSValue.
-unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
+pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 {
     match sv {
         SerializedValue::Inline(bits) => *bits,
 
@@ -472,12 +528,15 @@ unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
 
         SerializedValue::Array(elements) => {
             let arr = crate::array::js_array_alloc(elements.len() as u32);
-            let arr_elements =
-                (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let arr_handle = scope.root_raw_mut_ptr(arr);
             for (i, elem) in elements.iter().enumerate() {
-                let bits = deserialize_jsvalue(elem);
-                *arr_elements.add(i) = f64::from_bits(bits);
+                let bits = deserialize_nanbox_on_current_thread(elem);
+                let arr = arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+                // GC_STORE_AUDIT(BARRIERED): deserialized thread array slot uses the shared array slot-store helper.
+                store_thread_array_slot(arr, i, bits);
             }
+            let arr = arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
             (*arr).length = elements.len() as u32;
             JSValue::pointer(arr as *const u8).bits()
         }
@@ -493,22 +552,21 @@ unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
                 *parent_class_id,
                 fields.len() as u32,
             );
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_raw_mut_ptr(obj);
 
             // Set field values
-            let fields_ptr = (obj as *mut u8)
-                .add(std::mem::size_of::<crate::object::ObjectHeader>())
-                as *mut f64;
             for (i, field) in fields.iter().enumerate() {
-                let bits = deserialize_jsvalue(field);
-                *fields_ptr.add(i) = f64::from_bits(bits);
+                let bits = deserialize_nanbox_on_current_thread(field);
+                let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+                // GC_STORE_AUDIT(BARRIERED): deserialized thread object field uses the shared object slot-store helper.
+                store_thread_object_field(obj, i, bits);
             }
 
             // Reconstruct keys array if present
             if let Some(key_strings) = keys {
                 let keys_arr = crate::array::js_array_alloc(key_strings.len() as u32);
-                let keys_elements = (keys_arr as *mut u8)
-                    .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                    as *mut f64;
+                let keys_handle = scope.root_raw_mut_ptr(keys_arr);
                 for (i, key_bytes) in key_strings.iter().enumerate() {
                     let str_ptr = crate::string::js_string_from_bytes(
                         if key_bytes.is_empty() {
@@ -519,12 +577,17 @@ unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
                         key_bytes.len() as u32,
                     );
                     let key_val = JSValue::string_ptr(str_ptr);
-                    *keys_elements.add(i) = f64::from_bits(key_val.bits());
+                    let keys_arr = keys_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+                    // GC_STORE_AUDIT(BARRIERED): deserialized key array slot uses the shared array slot-store helper.
+                    store_thread_array_slot(keys_arr, i, key_val.bits());
                 }
+                let keys_arr = keys_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
                 (*keys_arr).length = key_strings.len() as u32;
-                (*obj).keys_array = keys_arr;
+                let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+                crate::object::js_object_set_keys(obj, keys_arr);
             }
 
+            let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
             JSValue::pointer(obj as *const u8).bits()
         }
 
@@ -534,23 +597,33 @@ unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
             captures,
         } => {
             let closure = closure::js_closure_alloc(*func_ptr as *const u8, *capture_count);
-            let captures_base =
-                (closure as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
             for (i, cap) in captures.iter().enumerate() {
-                let bits = deserialize_jsvalue(cap);
-                *captures_base.add(i) = f64::from_bits(bits);
+                let bits = deserialize_nanbox_on_current_thread(cap);
+                crate::closure::js_closure_set_capture_f64(closure, i as u32, f64::from_bits(bits));
             }
             JSValue::pointer(closure as *const u8).bits()
         }
 
         SerializedValue::BigInt(limbs) => {
-            let ptr = gc::gc_malloc(std::mem::size_of::<BigIntHeader>(), gc::GC_TYPE_BIGINT)
-                as *mut BigIntHeader;
-            (*ptr).limbs = *limbs;
+            let ptr = bigint::bigint_alloc_with_limbs(*limbs);
             // NaN-box with BIGINT_TAG
             BIGINT_TAG | (ptr as u64 & POINTER_MASK)
         }
+
+        SerializedValue::Date(ts) => {
+            // #2089: allocate a fresh DateCell in THIS thread's arena.
+            crate::date::alloc_date_cell(*ts).to_bits()
+        }
+
+        SerializedValue::DetachedFileHandle => {
+            crate::fs::build_detached_filehandle_object().to_bits()
+        }
     }
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn test_deserialize_bigint_limbs(limbs: [u64; BIGINT_LIMBS]) -> u64 {
+    deserialize_nanbox_on_current_thread(&SerializedValue::BigInt(limbs))
 }
 
 // ============================================================================
@@ -642,7 +715,7 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
     let mut serialized_elements = Vec::with_capacity(len);
     for i in 0..len {
         let bits = (*elements_ptr.add(i)).to_bits();
-        serialized_elements.push(serialize_jsvalue(bits));
+        serialized_elements.push(serialize_nanbox_for_thread(bits));
     }
 
     // ── 5. Serialize closure captures (shared across all threads) ────
@@ -655,7 +728,7 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
                 (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
             let mut caps = Vec::with_capacity(actual);
             for i in 0..actual {
-                caps.push(serialize_jsvalue((*base.add(i)).to_bits()));
+                caps.push(serialize_nanbox_for_thread((*base.add(i)).to_bits()));
             }
             Some((fp, cc, caps))
         } else {
@@ -707,9 +780,13 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
                 let local_closure: *const ClosureHeader = if let Some(ref caps) = captures_ref {
                     let (fp, cc, ref cap_vals) = **caps;
                     let c = closure::js_closure_alloc(fp as *const u8, cc);
-                    let base = (c as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
                     for (i, cap) in cap_vals.iter().enumerate() {
-                        *base.add(i) = f64::from_bits(deserialize_jsvalue(cap));
+                        let bits = deserialize_nanbox_on_current_thread(cap);
+                        crate::closure::js_closure_set_capture_f64(
+                            c,
+                            i as u32,
+                            f64::from_bits(bits),
+                        );
                     }
                     c as *const ClosureHeader
                 } else {
@@ -719,9 +796,9 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
                 let call_fn: ClosureCallFn = std::mem::transmute(func_usize);
 
                 for elem_sv in &chunk {
-                    let arg = f64::from_bits(deserialize_jsvalue(elem_sv));
+                    let arg = f64::from_bits(deserialize_nanbox_on_current_thread(elem_sv));
                     let result = call_fn(local_closure, arg);
-                    results.push(serialize_jsvalue(result.to_bits()));
+                    results.push(serialize_nanbox_for_thread(result.to_bits()));
                 }
 
                 (idx, results)
@@ -740,17 +817,20 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
     // ── 7. Deserialize results into main thread's arena ──────────────
     let total_results: usize = all_results.iter().map(|r| r.len()).sum();
     let result_arr = crate::array::js_array_alloc(total_results as u32);
-    let result_elements =
-        (result_arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result_handle = scope.root_raw_mut_ptr(result_arr);
 
     let mut write_idx = 0;
     for chunk_results in &all_results {
         for sv in chunk_results {
-            let bits = deserialize_jsvalue(sv);
-            *result_elements.add(write_idx) = f64::from_bits(bits);
+            let bits = deserialize_nanbox_on_current_thread(sv);
+            let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            // GC_STORE_AUDIT(BARRIERED): parallelMap result slot uses the shared array slot-store helper.
+            store_thread_array_slot(result_arr, write_idx, bits);
             write_idx += 1;
         }
     }
+    let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
     (*result_arr).length = total_results as u32;
 
     result_arr as i64
@@ -766,8 +846,8 @@ unsafe fn single_thread_map(
     let elements_ptr =
         (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
     let result_arr = crate::array::js_array_alloc(len as u32);
-    let result_elements =
-        (result_arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result_handle = scope.root_raw_mut_ptr(result_arr);
 
     let closure = if closure_ptr != 0 {
         closure_ptr as *const ClosureHeader
@@ -780,8 +860,11 @@ unsafe fn single_thread_map(
     for i in 0..len {
         let arg = *elements_ptr.add(i);
         let result = call_fn(closure, arg);
-        *result_elements.add(i) = result;
+        let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+        // GC_STORE_AUDIT(BARRIERED): single-thread map result slot uses the shared array slot-store helper.
+        store_thread_array_slot(result_arr, i, result.to_bits());
     }
+    let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
     (*result_arr).length = len as u32;
 
     result_arr as i64
@@ -841,7 +924,7 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
     let mut serialized_elements = Vec::with_capacity(len);
     for i in 0..len {
         let bits = (*elements_ptr.add(i)).to_bits();
-        serialized_elements.push(serialize_jsvalue(bits));
+        serialized_elements.push(serialize_nanbox_for_thread(bits));
     }
 
     // Serialize closure captures
@@ -852,7 +935,7 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
         let base = (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
         let mut caps = Vec::with_capacity(actual);
         for i in 0..actual {
-            caps.push(serialize_jsvalue((*base.add(i)).to_bits()));
+            caps.push(serialize_nanbox_for_thread((*base.add(i)).to_bits()));
         }
         Some((fp, cc, caps))
     };
@@ -895,9 +978,13 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
                 let local_closure: *const ClosureHeader = if let Some(ref caps) = captures_ref {
                     let (fp, cc, ref cap_vals) = **caps;
                     let c = closure::js_closure_alloc(fp as *const u8, cc);
-                    let base = (c as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
                     for (i, cap) in cap_vals.iter().enumerate() {
-                        *base.add(i) = f64::from_bits(deserialize_jsvalue(cap));
+                        let bits = deserialize_nanbox_on_current_thread(cap);
+                        crate::closure::js_closure_set_capture_f64(
+                            c,
+                            i as u32,
+                            f64::from_bits(bits),
+                        );
                     }
                     c as *const ClosureHeader
                 } else {
@@ -907,11 +994,11 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
                 let call_fn: ClosureCallFn = std::mem::transmute(func_usize);
 
                 for elem_sv in &chunk {
-                    let arg = f64::from_bits(deserialize_jsvalue(elem_sv));
+                    let arg = f64::from_bits(deserialize_nanbox_on_current_thread(elem_sv));
                     let result = call_fn(local_closure, arg);
                     let keep = is_truthy_bits(result.to_bits());
                     if keep {
-                        kept.push(serialize_jsvalue(arg.to_bits()));
+                        kept.push(serialize_nanbox_for_thread(arg.to_bits()));
                     }
                 }
 
@@ -930,17 +1017,20 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
     // Deserialize kept elements into main thread's arena (preserving order)
     let total: usize = all_results.iter().map(|r| r.len()).sum();
     let result_arr = crate::array::js_array_alloc(total as u32);
-    let result_elements =
-        (result_arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result_handle = scope.root_raw_mut_ptr(result_arr);
 
     let mut write_idx = 0;
     for chunk_kept in &all_results {
         for sv in chunk_kept {
-            let bits = deserialize_jsvalue(sv);
-            *result_elements.add(write_idx) = f64::from_bits(bits);
+            let bits = deserialize_nanbox_on_current_thread(sv);
+            let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            // GC_STORE_AUDIT(BARRIERED): parallelFilter result slot uses the shared array slot-store helper.
+            store_thread_array_slot(result_arr, write_idx, bits);
             write_idx += 1;
         }
     }
+    let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
     (*result_arr).length = total as u32;
 
     result_arr as i64
@@ -956,8 +1046,8 @@ unsafe fn single_thread_filter(
     let elements_ptr =
         (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
     let result_arr = crate::array::js_array_alloc(len as u32);
-    let result_elements =
-        (result_arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result_handle = scope.root_raw_mut_ptr(result_arr);
 
     let call_fn: ClosureCallFn = std::mem::transmute(func as usize);
     let mut count = 0u32;
@@ -967,10 +1057,13 @@ unsafe fn single_thread_filter(
         let result = call_fn(closure, arg);
         let keep = is_truthy_bits(result.to_bits());
         if keep {
-            *result_elements.add(count as usize) = arg;
+            let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            // GC_STORE_AUDIT(BARRIERED): single-thread filter result slot uses the shared array slot-store helper.
+            store_thread_array_slot(result_arr, count as usize, arg.to_bits());
             count += 1;
         }
     }
+    let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
     (*result_arr).length = count;
 
     result_arr as i64
@@ -979,6 +1072,8 @@ unsafe fn single_thread_filter(
 // ============================================================================
 // spawn — background thread execution
 // ============================================================================
+
+static ACTIVE_THREAD_JOBS: AtomicUsize = AtomicUsize::new(0);
 
 /// The compiled closure function signature for zero-argument closures.
 /// Takes only the closure header pointer, returns f64 result.
@@ -1026,7 +1121,7 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
                 (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
             let mut caps = Vec::with_capacity(actual);
             for i in 0..actual {
-                caps.push(serialize_jsvalue((*base.add(i)).to_bits()));
+                caps.push(serialize_nanbox_for_thread((*base.add(i)).to_bits()));
             }
             Some((cc, caps))
         } else {
@@ -1035,22 +1130,24 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
     };
 
     // ── 3. Spawn background thread ───────────────────────────────────
+    ACTIVE_THREAD_JOBS.fetch_add(1, Ordering::SeqCst);
     std::thread::spawn(move || {
         // Reconstruct closure in this thread's arena
-        let local_closure: *const ClosureHeader =
-            if let Some((cc, ref cap_vals)) = serialized_captures {
-                let c = closure::js_closure_alloc(func_usize as *const u8, cc);
-                let base = (c as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
-                for (i, cap) in cap_vals.iter().enumerate() {
-                    unsafe {
-                        *base.add(i) = f64::from_bits(deserialize_jsvalue(cap));
-                    }
+        let local_closure: *const ClosureHeader = if let Some((cc, ref cap_vals)) =
+            serialized_captures
+        {
+            let c = closure::js_closure_alloc(func_usize as *const u8, cc);
+            for (i, cap) in cap_vals.iter().enumerate() {
+                unsafe {
+                    let bits = deserialize_nanbox_on_current_thread(cap);
+                    crate::closure::js_closure_set_capture_f64(c, i as u32, f64::from_bits(bits));
                 }
-                c as *const ClosureHeader
-            } else {
-                // No captures — create a minimal closure header
-                closure::js_closure_alloc(func_usize as *const u8, 0) as *const ClosureHeader
-            };
+            }
+            c as *const ClosureHeader
+        } else {
+            // No captures — create a minimal closure header
+            closure::js_closure_alloc(func_usize as *const u8, 0) as *const ClosureHeader
+        };
 
         // Call the function — catch panics to avoid aborting across FFI boundary
         let call_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1061,7 +1158,7 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
         match call_result {
             Ok(result) => {
                 // Serialize result for transfer back to main thread
-                let serialized_result = unsafe { serialize_jsvalue(result.to_bits()) };
+                let serialized_result = unsafe { serialize_nanbox_for_thread(result.to_bits()) };
                 queue_thread_result(promise_usize, serialized_result);
             }
             Err(_) => {
@@ -1097,6 +1194,7 @@ fn queue_thread_result(promise_usize: usize, result: SerializedValue) {
             result,
         });
     }
+    ACTIVE_THREAD_JOBS.fetch_sub(1, Ordering::SeqCst);
     // Issue #84: wake the main thread so spawn()-returned promises
     // resolve as soon as the OS thread finishes, not at the next
     // event-loop quantum.
@@ -1137,7 +1235,7 @@ pub extern "C" fn js_thread_process_pending() -> i32 {
             let promise = item.promise_ptr as *mut crate::promise::Promise;
 
             // Deserialize the result into the main thread's arena
-            let result_bits = deserialize_jsvalue(&item.result);
+            let result_bits = deserialize_nanbox_on_current_thread(&item.result);
 
             // Unpin the promise now that we're resolving it
             let promise_header = (promise as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
@@ -1155,6 +1253,9 @@ pub extern "C" fn js_thread_process_pending() -> i32 {
 /// Used by the event loop to know whether to keep spinning.
 #[no_mangle]
 pub extern "C" fn js_thread_has_pending() -> i32 {
+    if ACTIVE_THREAD_JOBS.load(Ordering::SeqCst) != 0 {
+        return 1;
+    }
     let pending = PENDING_THREAD_RESULTS.lock().unwrap();
     if pending.is_empty() {
         0

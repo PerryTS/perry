@@ -11,6 +11,7 @@
 const handles = new Map();   // handle int → DOM element
 const states = new Map();    // handle int → { _value, subscribers[] }
 let nextHandle = 1;
+const perryImageCache = new Map();
 
 function allocHandle(el) {
     const h = nextHandle++;
@@ -69,6 +70,7 @@ function wrapWidget(h) {
         setLineWidth(w) { perry_ui_canvas_set_line_width(h, w); },
         fillText(t, x, y) { perry_ui_canvas_fill_text(h, t, x, y); },
         setFont(f) { perry_ui_canvas_set_font(h, f); },
+        drawImage(image, ...args) { perry_ui_canvas_draw_image(h, image, ...args); },
     };
     return w;
 }
@@ -220,10 +222,15 @@ function perry_ui_zstack_create(children) {
     return wrapWidget(h);
 }
 
-function perry_ui_text_create(text) {
+function perry_ui_text_create(text, id) {
     const el = document.createElement("span");
-    el.textContent = text;
-    return wrapWidget(allocHandle(el));
+    el.textContent = (text !== undefined && text !== null) ? String(text) : "";
+    const h = allocHandle(el);
+    // Issue #1392 — 2-arg `Text(content, id)` form. state_desugar emits
+    // `count.text()` as `Text("<initial>", "__state_N")`, reusing the synth
+    // id as both state key and setText id so a write fans out to the widget.
+    if (typeof id === "string" && id.length > 0) uiTextRegister(h, id);
+    return wrapWidget(h);
 }
 
 function perry_ui_button_create(label, callback) {
@@ -570,6 +577,83 @@ function perry_ui_state_on_change(stateH, callback) {
     }
 }
 
+// --- Issue #1392: keyed state + setText registry ---
+// The state_desugar pass (crates/perry-transform/src/state_desugar.rs) lowers
+// `state<T>` to a synthetic, string-keyed registry API rather than the
+// handle-based `perry_ui_state_create` surface above:
+//   let c = state(0)   -> __state_init("__state_0", 0)
+//   c.value / c.get()  -> __state_get("__state_0")
+//   c.set(v)           -> __state_set("__state_0", v)
+//   c.text()           -> Text("0", "__state_0")   (registers via uiTextRegister)
+// The synth id is reused as both the state key and the Text widget's setText
+// id, so a write fans out to every bound widget. Mirrors the native runtime
+// (perry-runtime/src/ui_text_registry.rs: js_state_init / js_state_get /
+// js_state_set + perry_arkts_set_text).
+const keyedStates = new Map();    // synth id -> current value
+const uiTextIds = new Map();      // text id  -> [DOM element handle, ...]
+const keyedNavstack = new Map();  // synth id -> [{ name, widget }, ...]
+const keyedForeach = new Map();   // synth id -> [{ host, render }, ...]
+
+function uiTextRegister(handle, id) {
+    let list = uiTextIds.get(id);
+    if (!list) { list = []; uiTextIds.set(id, list); }
+    list.push(handle);
+}
+
+function perry_ui_set_text(id, value) {
+    const list = uiTextIds.get(id);
+    if (!list) return;
+    const str = (value === undefined || value === null) ? "" : String(value);
+    for (const h of list) { const el = getHandle(h); if (el) el.textContent = str; }
+}
+
+function perry_ui_state_init(id, initial) { keyedStates.set(id, initial); }
+function perry_ui_state_get_keyed(id) {
+    return keyedStates.has(id) ? keyedStates.get(id) : undefined;
+}
+function perry_ui_state_set_keyed(id, value) {
+    keyedStates.set(id, value);
+    perry_ui_set_text(id, value);          // reactive Text re-render
+    navstackDispatchKeyed(id, value);      // route visibility
+    foreachDispatchKeyed(id, value);       // dynamic-list re-render
+}
+
+function foreachRenderKeyed(host, render, value) {
+    const p = getHandle(host); if (!p) return;
+    while (p.firstChild) p.removeChild(p.firstChild);
+    const count = typeof value === "number" ? value : (Array.isArray(value) ? value.length : 0);
+    for (let i = 0; i < count; i++) {
+        const child = (typeof render === "function") ? render(i) : undefined;
+        const childEl = getHandle(child);
+        if (childEl) p.appendChild(childEl);
+    }
+}
+function foreachDispatchKeyed(id, value) {
+    const binds = keyedForeach.get(id); if (!binds) return;
+    for (const b of binds) foreachRenderKeyed(b.host, b.render, value);
+}
+function perry_ui_foreach_register(id, host, render) {
+    let list = keyedForeach.get(id);
+    if (!list) { list = []; keyedForeach.set(id, list); }
+    list.push({ host, render });
+    if (keyedStates.has(id)) foreachRenderKeyed(host, render, keyedStates.get(id));
+}
+
+function navstackDispatchKeyed(id, value) {
+    const routes = keyedNavstack.get(id); if (!routes) return;
+    const cur = (value === undefined || value === null) ? "" : String(value);
+    for (const r of routes) { const el = getHandle(r.widget); if (el) el.style.display = (r.name === cur) ? "" : "none"; }
+}
+function perry_ui_navstack_register_route(id, name, body) {
+    let list = keyedNavstack.get(id);
+    if (!list) { list = []; keyedNavstack.set(id, list); }
+    list.push({ name, widget: body });
+    if (keyedStates.has(id)) {
+        const cur = String(keyedStates.get(id));
+        const el = getHandle(body); if (el && name !== cur) el.style.display = "none";
+    }
+}
+
 // --- System APIs ---
 function perry_system_open_url(url) {
     window.open(url, "_blank");
@@ -685,6 +769,53 @@ function perry_system_audio_get_waveform(count) {
 
 function perry_system_get_device_model() {
     return navigator.userAgent || "Web";
+}
+
+// Web audio recording to WAV file (stub for now, but structure added)
+let _perry_audio_recording = false;
+let _perry_audio_output_filename = null;
+let _perry_audio_media_recorder = null;
+let _perry_audio_recorded_chunks = [];
+
+function perry_system_audio_set_output_filename(filename) {
+    _perry_audio_output_filename = filename;
+}
+
+function perry_system_audio_start_recording() {
+    if (_perry_audio_recording) return;
+    if (!_perry_audio_stream) return;
+
+    try {
+        _perry_audio_recorded_chunks = [];
+        _perry_audio_media_recorder = new MediaRecorder(_perry_audio_stream);
+        _perry_audio_media_recorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+                _perry_audio_recorded_chunks.push(event.data);
+            }
+        };
+        _perry_audio_media_recorder.onstop = () => {
+            const blob = new Blob(_perry_audio_recorded_chunks, { type: 'audio/wav' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = _perry_audio_output_filename || 'recording.wav';
+            a.click();
+            URL.revokeObjectURL(url);
+        };
+        _perry_audio_media_recorder.start();
+        _perry_audio_recording = true;
+    } catch (e) {
+        console.error("Failed to start recording:", e);
+    }
+}
+
+function perry_system_audio_stop_recording() {
+    if (!_perry_audio_recording) return;
+    if (_perry_audio_media_recorder) {
+        _perry_audio_media_recorder.stop();
+        _perry_audio_media_recorder = null;
+    }
+    _perry_audio_recording = false;
 }
 
 // --- Canvas Operations ---
@@ -1218,6 +1349,58 @@ function perry_ui_widget_set_background_gradient(h, r1, g1, b1, a1, r2, g2, b2, 
     el.style.background = `linear-gradient(${dir}, ${c1}, ${c2})`;
 }
 
+
+function perry_ui_load_image(url) {
+    const key = String(url || "");
+    if (perryImageCache.has(key)) return perryImageCache.get(key).promise;
+    const img = new Image();
+    const asset = { url: key, element: img, width: 0, height: 0, ready: false, error: null };
+    const promise = new Promise((resolve, reject) => {
+        img.onload = () => {
+            asset.width = img.naturalWidth || img.width || 0;
+            asset.height = img.naturalHeight || img.height || 0;
+            asset.ready = true;
+            resolve(asset);
+        };
+        img.onerror = () => {
+            asset.error = new Error(`Failed to load image: ${key}`);
+            reject(asset.error);
+        };
+        img.src = key;
+        if (img.decode) img.decode().then(() => {
+            if (!asset.ready) {
+                asset.width = img.naturalWidth || img.width || 0;
+                asset.height = img.naturalHeight || img.height || 0;
+                asset.ready = true;
+                resolve(asset);
+            }
+        }).catch(() => { /* onerror covers network/decode failures */ });
+    });
+    asset.promise = promise;
+    perryImageCache.set(key, asset);
+    return promise;
+}
+
+function perry_ui_canvas_draw_image(h, image, ...args) {
+    const el = (typeof getHandle === "function") ? getHandle(h) : uiGet(h);
+    const ctx = el && el._ctx;
+    const asset = image && image.element ? image : null;
+    if (!ctx || !asset || !asset.ready || !asset.element) return;
+    if (args.length === 2) {
+        ctx.drawImage(asset.element, args[0], args[1]);
+    } else if (args.length === 4) {
+        ctx.drawImage(asset.element, args[0], args[1], args[2], args[3]);
+    } else if (args.length >= 8) {
+        const [sx, sy, sw, sh, dx, dy, dw, dh] = args;
+        const srcW = sw > 0 ? sw : asset.width;
+        const srcH = sh > 0 ? sh : asset.height;
+        const dstW = dw > 0 ? dw : srcW;
+        const dstH = dh > 0 ? dh : srcH;
+        if (srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) return;
+        ctx.drawImage(asset.element, sx, sy, srcW, srcH, dx, dy, dstW, dstH);
+    }
+}
+
 function perry_ui_canvas_fill_gradient(h, r1, g1, b1, a1, r2, g2, b2, a2, direction) {
     const el = getHandle(h);
     if (!el || !el._ctx) return;
@@ -1293,6 +1476,15 @@ function perry_ui_image_create_symbol(name) {
     const el = document.createElement("span");
     el.textContent = name; // Use text as placeholder for symbols
     el.style.fontSize = "24px";
+    return wrapWidget(allocHandle(el));
+}
+
+// #635: Image({ url, alt }) — single image by URL.
+function perry_ui_image_create_url(url, alt) {
+    const el = document.createElement("img");
+    el.src = url || "";
+    if (alt) el.alt = alt;
+    el.style.objectFit = "cover";
     return wrapWidget(allocHandle(el));
 }
 
@@ -1537,6 +1729,116 @@ function perry_ui_alert(title, message, buttons, callback) {
     if (typeof callback === "function") callback(result ? 0 : 1);
 }
 
+// --- Continuous keyboard events (issue #1864) ---
+// Mirrors the native macOS contract: one document-level listener routes events
+// to whichever widget owns focus, with a `0`-keyed fallback for app-level
+// handlers. Names are normalised to perry-ui::keys canonical strings.
+const _perryKeyDownCBs = new Map();
+const _perryKeyUpCBs = new Map();
+let _perryFocusedWidget = 0;
+let _perryAppKeyDown = null;
+let _perryAppKeyUp = null;
+const _perryHeldKeys = new Set();
+let _perryCurrentMods = 0;
+let _perryKbdInstalled = false;
+function _perryCodeToKey(code) {
+    if (code.length === 4 && code.startsWith("Key")) {
+        const c = code.charCodeAt(3);
+        if (c >= 65 && c <= 90) return c - 64;
+    }
+    if (code.length === 6 && code.startsWith("Digit")) {
+        const c = code.charCodeAt(5);
+        if (c >= 48 && c <= 57) return c - 21;
+    }
+    if (code.length >= 2 && code.charAt(0) === "F") {
+        const n = parseInt(code.slice(1), 10);
+        if (n >= 1 && n <= 12) return 36 + n;
+        if (n >= 13 && n <= 20) return 62 + n;
+    }
+    if (code.length >= 6 && code.startsWith("Numpad")) {
+        const tail = code.slice(6);
+        if (tail.length === 1) {
+            const c = tail.charCodeAt(0);
+            if (c >= 48 && c <= 57) return 83 + (c - 48);
+        }
+        switch (tail) {
+            case "Decimal": return 93;
+            case "Enter": return 94;
+            case "Add": return 95;
+            case "Subtract": return 96;
+            case "Multiply": return 97;
+            case "Divide": return 98;
+            case "Equal": return 99;
+            case "Clear": return 100;
+        }
+    }
+    switch (code) {
+        case "ArrowUp": return 49;
+        case "ArrowDown": return 50;
+        case "ArrowLeft": return 51;
+        case "ArrowRight": return 52;
+        case "Space": return 53;
+        case "Enter": case "NumpadEnter": return 54;
+        case "Tab": return 55;
+        case "Escape": return 56;
+        case "Backspace": return 57;
+        case "Delete": return 58;
+        case "Home": return 59;
+        case "End": return 60;
+        case "PageUp": return 61;
+        case "PageDown": return 62;
+        case "Insert": return 63;
+        case "Minus": return 64;
+        case "Equal": return 65;
+        case "BracketLeft": return 66;
+        case "BracketRight": return 67;
+        case "Backslash": return 68;
+        case "Semicolon": return 69;
+        case "Quote": return 70;
+        case "Comma": return 71;
+        case "Period": return 72;
+        case "Slash": return 73;
+        case "Backquote": return 74;
+        default: return 0;
+    }
+}
+function _perryEventMods(e) {
+    return (e.metaKey?1:0) | (e.shiftKey?2:0) | (e.altKey?4:0) | (e.ctrlKey?8:0);
+}
+function _perryEnsureKbd() {
+    if (_perryKbdInstalled) return; _perryKbdInstalled = true;
+    document.addEventListener("keydown", (e) => {
+        _perryCurrentMods = _perryEventMods(e);
+        const key = _perryCodeToKey(e.code); if (!key) return;
+        _perryHeldKeys.add(key);
+        const cb = _perryKeyDownCBs.get(_perryFocusedWidget) || _perryAppKeyDown;
+        if (typeof cb === "function") cb(key, _perryCurrentMods, e.repeat);
+    });
+    document.addEventListener("keyup", (e) => {
+        _perryCurrentMods = _perryEventMods(e);
+        const key = _perryCodeToKey(e.code); if (!key) return;
+        _perryHeldKeys.delete(key);
+        const cb = _perryKeyUpCBs.get(_perryFocusedWidget) || _perryAppKeyUp;
+        if (typeof cb === "function") cb(key, _perryCurrentMods);
+    });
+}
+function perry_ui_widget_set_on_key_down(handle, cb) {
+    _perryEnsureKbd();
+    _perryKeyDownCBs.set(Number(handle), cb);
+}
+function perry_ui_widget_set_on_key_up(handle, cb) {
+    _perryEnsureKbd();
+    _perryKeyUpCBs.set(Number(handle), cb);
+}
+function perry_ui_app_set_on_key_down(cb) { _perryEnsureKbd(); _perryAppKeyDown = cb; }
+function perry_ui_app_set_on_key_up(cb) { _perryEnsureKbd(); _perryAppKeyUp = cb; }
+function perry_ui_focus_widget(handle) { _perryFocusedWidget = Number(handle); }
+function perry_ui_blur_widget(handle) {
+    if (_perryFocusedWidget === Number(handle)) _perryFocusedWidget = 0;
+}
+function perry_ui_is_key_down(keyCode) { _perryEnsureKbd(); return _perryHeldKeys.has(Number(keyCode)) ? 1 : 0; }
+function perry_ui_current_modifiers() { _perryEnsureKbd(); return _perryCurrentMods; }
+
 // --- Keyboard Shortcuts ---
 function perry_ui_add_keyboard_shortcut(key, modifiers, callback) {
     if (typeof callback !== "function") return;
@@ -1615,6 +1917,45 @@ function perry_system_keychain_get(key) {
 
 function perry_system_keychain_delete(key) {
     localStorage.removeItem("perry_keychain_" + key);
+}
+
+// --- System: Share Sheet (#917) ---
+// Stub: navigator.share() is the obvious mapping but it's user-gesture-gated,
+// available only over HTTPS, and partially supported. For matrix parity we
+// no-op + log; native impls land per-platform separately.
+function perry_system_share_text(text, _title) {
+    if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+        try { navigator.share({ text: String(text || "") }); return; } catch (_) {}
+    }
+    console.warn("perry/system: share_text not implemented on web (no navigator.share)");
+}
+
+function perry_system_share_url(url, _title) {
+    if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+        try { navigator.share({ url: String(url || "") }); return; } catch (_) {}
+    }
+    console.warn("perry/system: share_url not implemented on web (no navigator.share)");
+}
+
+// --- System: App Group / cross-process shared storage (#675) ---
+// Stub: web has no cross-origin shared storage primitive. Back the API with
+// localStorage under a stable prefix so within-origin reads/writes round-trip.
+function perry_system_app_group_set(key, value) {
+    localStorage.setItem("perry_appgroup_" + key, value);
+}
+
+function perry_system_app_group_get(key) {
+    return localStorage.getItem("perry_appgroup_" + key) || "";
+}
+
+function perry_system_app_group_delete(key) {
+    localStorage.removeItem("perry_appgroup_" + key);
+}
+
+// --- System: OS version (bug-report flow) ---
+function perry_system_get_os_version() {
+    if (typeof navigator !== "undefined" && navigator.userAgent) return navigator.userAgent;
+    return "web";
 }
 
 // --- System: Notifications ---
@@ -2947,6 +3288,251 @@ async function _prefetchAllFiles() {
     }
 }
 
+// --- perry/media — HTML5 <audio> + Media Session API ---
+//
+// Per-process player table. Index 0 is reserved (handles are 1-based to
+// match the dispatch-table contract — `0` means "no player / stub backend").
+// Each entry: { audio, state, duration, hasStarted, ended, onStateChange?, onTimeUpdate? }.
+const PERRY_MEDIA_PLAYERS = [];
+let PERRY_MEDIA_SESSION_WIRED = false;
+
+function _perry_media_get(handle) {
+    if (typeof handle !== "number" || handle < 1) return null;
+    return PERRY_MEDIA_PLAYERS[handle - 1] || null;
+}
+
+function _perry_media_flush_state(handle) {
+    const e = _perry_media_get(handle);
+    if (!e || typeof e.onStateChange !== "function") return;
+    try { e.onStateChange(e.state); } catch (err) { console.warn("perry/media onStateChange threw:", err); }
+}
+
+function _perry_media_flush_time(handle) {
+    const e = _perry_media_get(handle);
+    if (!e || typeof e.onTimeUpdate !== "function") return;
+    const t = isFinite(e.audio.currentTime) ? e.audio.currentTime : 0;
+    const d = isFinite(e.duration) ? e.duration : 0;
+    try { e.onTimeUpdate(t, d); } catch (err) { console.warn("perry/media onTimeUpdate threw:", err); }
+}
+
+function _perry_media_first_live_handle() {
+    for (let i = 0; i < PERRY_MEDIA_PLAYERS.length; i++) {
+        if (PERRY_MEDIA_PLAYERS[i]) return i + 1;
+    }
+    return 0;
+}
+
+function _perry_media_wire_session() {
+    if (PERRY_MEDIA_SESSION_WIRED) return;
+    if (!('mediaSession' in navigator)) return;
+    PERRY_MEDIA_SESSION_WIRED = true;
+    try {
+        navigator.mediaSession.setActionHandler('play', () => {
+            const h = _perry_media_first_live_handle();
+            if (h) perry_media_play(h);
+        });
+        navigator.mediaSession.setActionHandler('pause', () => {
+            const h = _perry_media_first_live_handle();
+            if (h) perry_media_pause(h);
+        });
+        navigator.mediaSession.setActionHandler('seekto', (details) => {
+            const h = _perry_media_first_live_handle();
+            if (h && typeof details.seekTime === "number") perry_media_seek(h, details.seekTime);
+        });
+        navigator.mediaSession.setActionHandler('seekforward', (details) => {
+            const h = _perry_media_first_live_handle();
+            if (!h) return;
+            const e = _perry_media_get(h);
+            if (!e) return;
+            const skip = (details && details.seekOffset) || 10;
+            perry_media_seek(h, (e.audio.currentTime || 0) + skip);
+        });
+        navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+            const h = _perry_media_first_live_handle();
+            if (!h) return;
+            const e = _perry_media_get(h);
+            if (!e) return;
+            const skip = (details && details.seekOffset) || 10;
+            perry_media_seek(h, Math.max(0, (e.audio.currentTime || 0) - skip));
+        });
+    } catch (err) { /* setActionHandler can throw on unsupported actions — ignore */ }
+}
+
+function perry_media_create_player(url) {
+    const audio = new Audio(typeof url === "string" ? url : "");
+    audio.preload = "auto";
+    const entry = { audio, state: "loading", duration: 0, hasStarted: false, ended: false };
+    PERRY_MEDIA_PLAYERS.push(entry);
+    const handle = PERRY_MEDIA_PLAYERS.length; // 1-based
+    audio.addEventListener('loadedmetadata', () => {
+        entry.duration = isFinite(audio.duration) ? audio.duration : 0;
+    });
+    audio.addEventListener('canplay', () => {
+        if (entry.state === 'loading') entry.state = 'ready';
+        _perry_media_flush_state(handle);
+    });
+    audio.addEventListener('play', () => {
+        entry.state = 'playing';
+        _perry_media_flush_state(handle);
+    });
+    audio.addEventListener('playing', () => {
+        entry.state = 'playing';
+        _perry_media_flush_state(handle);
+    });
+    audio.addEventListener('pause', () => {
+        if (entry.ended) return;
+        entry.state = entry.hasStarted ? 'paused' : 'ready';
+        _perry_media_flush_state(handle);
+    });
+    audio.addEventListener('ended', () => {
+        entry.ended = true;
+        entry.state = 'ended';
+        _perry_media_flush_state(handle);
+    });
+    audio.addEventListener('error', () => {
+        entry.state = 'error';
+        _perry_media_flush_state(handle);
+    });
+    audio.addEventListener('waiting', () => {
+        entry.state = 'loading';
+        _perry_media_flush_state(handle);
+    });
+    audio.addEventListener('timeupdate', () => {
+        // Belt-and-braces ended fallback (acroyear #351 comment) — Chromium
+        // / Chromecast have historically dropped the `ended` event.
+        if (entry.hasStarted && entry.duration > 0.25 && audio.currentTime >= entry.duration - 0.25 && !entry.ended) {
+            entry.ended = true;
+            entry.state = 'ended';
+            _perry_media_flush_state(handle);
+        }
+        if (entry.state === 'playing' || entry.state === 'loading') {
+            _perry_media_flush_time(handle);
+        }
+    });
+    return handle;
+}
+
+function perry_media_play(handle) {
+    const e = _perry_media_get(handle);
+    if (!e) return;
+    e.hasStarted = true;
+    e.ended = false;
+    const p = e.audio.play();
+    if (p && typeof p.catch === "function") {
+        p.catch(() => { e.state = 'error'; _perry_media_flush_state(handle); });
+    }
+}
+
+function perry_media_pause(handle) {
+    const e = _perry_media_get(handle);
+    if (!e) return;
+    e.audio.pause();
+}
+
+function perry_media_stop(handle) {
+    const e = _perry_media_get(handle);
+    if (!e) return;
+    e.audio.pause();
+    try { e.audio.currentTime = 0; } catch (_) { /* live stream — currentTime not settable */ }
+    e.hasStarted = false;
+    e.ended = false;
+    e.state = 'ready';
+    _perry_media_flush_state(handle);
+}
+
+function perry_media_seek(handle, seconds) {
+    const e = _perry_media_get(handle);
+    if (!e) return;
+    const d = e.audio.duration;
+    let target = Number(seconds) || 0;
+    if (target < 0) target = 0;
+    if (isFinite(d) && target > d) target = d;
+    try { e.audio.currentTime = target; } catch (_) { /* live stream */ }
+}
+
+function perry_media_set_volume(handle, vol) {
+    const e = _perry_media_get(handle);
+    if (!e) return;
+    let v = Number(vol);
+    if (!isFinite(v)) v = 1;
+    if (v < 0) v = 0;
+    if (v > 1) v = 1;
+    e.audio.volume = v;
+}
+
+function perry_media_set_rate(handle, rate) {
+    const e = _perry_media_get(handle);
+    if (!e) return;
+    const r = Number(rate);
+    if (!isFinite(r) || r <= 0) return;
+    // Browsers clamp to ~[0.0625, 16] internally — passing anything sane is fine.
+    e.audio.playbackRate = r;
+}
+
+function perry_media_get_current_time(handle) {
+    const e = _perry_media_get(handle);
+    if (!e) return 0;
+    return isFinite(e.audio.currentTime) ? e.audio.currentTime : 0;
+}
+
+function perry_media_get_duration(handle) {
+    const e = _perry_media_get(handle);
+    if (!e) return 0;
+    return isFinite(e.duration) ? e.duration : 0;
+}
+
+function perry_media_get_state(handle) {
+    const e = _perry_media_get(handle);
+    return e ? e.state : "error";
+}
+
+function perry_media_is_playing(handle) {
+    const e = _perry_media_get(handle);
+    return (e && e.state === 'playing') ? 1 : 0;
+}
+
+function perry_media_on_state_change(handle, callback) {
+    const e = _perry_media_get(handle);
+    if (!e) return;
+    e.onStateChange = (typeof callback === "function") ? callback : null;
+}
+
+function perry_media_on_time_update(handle, callback) {
+    const e = _perry_media_get(handle);
+    if (!e) return;
+    e.onTimeUpdate = (typeof callback === "function") ? callback : null;
+}
+
+function perry_media_set_now_playing(handle, title, artist, album, artworkUrl) {
+    const e = _perry_media_get(handle);
+    if (!e) return;
+    if (!('mediaSession' in navigator)) return;
+    try {
+        const meta = {
+            title: String(title || ""),
+            artist: String(artist || ""),
+            album: String(album || ""),
+        };
+        if (artworkUrl && typeof MediaMetadata !== "undefined") {
+            meta.artwork = [{ src: String(artworkUrl) }];
+        }
+        navigator.mediaSession.metadata = (typeof MediaMetadata !== "undefined")
+            ? new MediaMetadata(meta)
+            : meta;
+        _perry_media_wire_session();
+    } catch (err) { console.warn("perry/media setNowPlaying:", err); }
+}
+
+function perry_media_destroy(handle) {
+    const e = _perry_media_get(handle);
+    if (!e) return;
+    try { e.audio.pause(); } catch (_) {}
+    try { e.audio.src = ""; } catch (_) {}
+    e.onStateChange = null;
+    e.onTimeUpdate = null;
+    PERRY_MEDIA_PLAYERS[handle - 1] = null;
+}
+
 // --- Expose API ---
 window.__perry = {
     // Handle system
@@ -3023,6 +3609,13 @@ window.__perry = {
     perry_ui_state_bind_visibility,
     perry_ui_state_bind_foreach,
     perry_ui_state_on_change,
+    // Keyed state + setText (issue #1392 — state_desugar synthetic API)
+    perry_ui_set_text,
+    perry_ui_state_init,
+    perry_ui_state_get_keyed,
+    perry_ui_state_set_keyed,
+    perry_ui_foreach_register,
+    perry_ui_navstack_register_route,
     // Text / Button / TextField ops
     perry_ui_text_set_string,
     perry_ui_text_set_selectable,
@@ -3050,6 +3643,8 @@ window.__perry = {
     perry_ui_picker_get_selected,
     // Image
     perry_ui_image_create_symbol,
+    perry_ui_image_create_url,
+    perry_ui_load_image,
     perry_ui_image_set_size,
     perry_ui_image_set_tint,
     // ProgressView
@@ -3070,6 +3665,22 @@ window.__perry = {
     perry_system_audio_get_peak,
     perry_system_audio_get_waveform,
     perry_system_get_device_model,
+    // Media (perry/media — HTML5 audio + Media Session API)
+    perry_media_create_player,
+    perry_media_play,
+    perry_media_pause,
+    perry_media_stop,
+    perry_media_seek,
+    perry_media_set_volume,
+    perry_media_set_rate,
+    perry_media_get_current_time,
+    perry_media_get_duration,
+    perry_media_get_state,
+    perry_media_is_playing,
+    perry_media_on_state_change,
+    perry_media_on_time_update,
+    perry_media_set_now_playing,
+    perry_media_destroy,
     // Canvas
     perry_ui_canvas_fill_rect,
     perry_ui_canvas_stroke_rect,
@@ -3086,6 +3697,7 @@ window.__perry = {
     perry_ui_canvas_set_line_width,
     perry_ui_canvas_fill_text,
     perry_ui_canvas_set_font,
+    perry_ui_canvas_draw_image,
     perry_ui_canvas_fill_gradient,
     // Menu
     perry_ui_menu_create,
@@ -3107,6 +3719,14 @@ window.__perry = {
     perry_ui_alert,
     // Keyboard
     perry_ui_add_keyboard_shortcut,
+    perry_ui_widget_set_on_key_down,
+    perry_ui_widget_set_on_key_up,
+    perry_ui_app_set_on_key_down,
+    perry_ui_app_set_on_key_up,
+    perry_ui_focus_widget,
+    perry_ui_blur_widget,
+    perry_ui_is_key_down,
+    perry_ui_current_modifiers,
     // Sheets
     perry_ui_sheet_create,
     perry_ui_sheet_present,
@@ -3456,3 +4076,25 @@ describe('formatDate', () => {\n\
 })();
 
 })();
+
+// ── perry/system stubs added with the recent perry-ext landings ────
+// These mirror the recently-merged FEATURES matrix entries:
+//   #917 (share sheet), #675 (App Group), #976 (getOSVersion).
+// Web has no native share/group equivalents; stubs are no-ops to
+// satisfy the matrix-drift gate. Real Web Share API integration
+// (navigator.share) is a follow-up.
+
+function perry_system_share_text(_text, _title) {}
+function perry_system_share_url(_url, _title) {}
+function perry_system_app_group_set(key, value) {
+    localStorage.setItem("perry_app_group_" + key, value);
+}
+function perry_system_app_group_get(key) {
+    return localStorage.getItem("perry_app_group_" + key) || "";
+}
+function perry_system_app_group_delete(key) {
+    localStorage.removeItem("perry_app_group_" + key);
+}
+function perry_system_get_os_version() {
+    return (typeof navigator !== "undefined" && navigator.userAgent) || "";
+}

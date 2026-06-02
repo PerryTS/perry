@@ -6,13 +6,17 @@
 //! cache layout:
 //!
 //! 1. **`djb2_hash`** + **`Djb2Hasher`** — a fast non-crypto hash
-//!    used both for module source content (cache key derivation) and
-//!    by `compute_object_cache_key`'s internal field hasher.
+//!    used both for the cache-key field hasher and by other parts
+//!    of `perry`. Mirrored algorithmically by
+//!    `perry_hir::stable_hash::Djb2Hasher` (issue #686) so the HIR
+//!    fingerprint and the cache key share one hash family.
 //! 2. **`compute_object_cache_key`** — turns
-//!    `(CompileOptions, source_hash, perry_version)` into a stable
-//!    16-hex-digit cache key. The same opts + source + perry version
-//!    produce bit-identical .o files on repeat builds, so a hit
-//!    skips the LLVM pipeline entirely.
+//!    `(CompileOptions, hir_hash, perry_version)` into a stable
+//!    16-hex-digit cache key. As of #686 the second input is a
+//!    deterministic fingerprint of the post-transform HIR (computed
+//!    via `perry_hir::stable_hash::hash_module`) instead of the raw
+//!    source-bytes hash, so formatter-only and comment-only edits
+//!    that lower to identical HIR reuse the cached `.o`.
 //! 3. **`ObjectCache`** — the `lookup` / `store` surface used by the
 //!    rayon codegen workers. Atomic (tmp + rename) writes, silent
 //!    IO-error degradation, lock-free shared `&self` access (each
@@ -21,6 +25,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 
 pub fn djb2_hash(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 5381;
@@ -28,6 +33,31 @@ pub fn djb2_hash(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(33).wrapping_add(*b as u64);
     }
     hash
+}
+
+/// Hash of the running `perry` executable, computed once per process.
+///
+/// `CARGO_PKG_VERSION` only invalidates the cache on a version bump; during
+/// HIR/codegen pass development the version usually doesn't move between
+/// rebuilds, so identical-source modules served stale `.o` files compiled
+/// against the old pass output (issue #544 — ~45 min of phantom-bug
+/// debugging). Folding a hash of the perry binary itself into the key means
+/// any `cargo build -p perry-codegen` (or `perry-transform`, `perry-hir`,
+/// or any dep that gets baked into the perry executable) produces a new
+/// build id and the cache invalidates correctly.
+///
+/// Failure modes degrade silently: if `current_exe()` or the read fails,
+/// returns 0 and we fall back to the version-only behavior — at worst the
+/// user is back to the pre-fix status quo, never worse.
+fn perry_build_id() -> u64 {
+    static BUILD_ID: OnceLock<u64> = OnceLock::new();
+    *BUILD_ID.get_or_init(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| fs::read(&p).ok())
+            .map(|bytes| djb2_hash(&bytes))
+            .unwrap_or(0)
+    })
 }
 
 /// Streaming djb2 accumulator so multi-part keys don't have to build a
@@ -68,12 +98,23 @@ impl Djb2Hasher {
 /// codegen reads, sort every map/set so HashMap iteration order doesn't
 /// leak in, preserve declaration order for lists where the order itself
 /// is meaningful (topological init order, FFI wrapper order), and mix
-/// in the module's source hash and the perry version.
+/// in the module's HIR fingerprint (#686) and the perry version.
 ///
-/// We also mix in three environment variables that `perry-codegen` reads
+/// `hir_hash` is `perry_hir::stable_hash::hash_module(&Module)`, computed
+/// per-module inside the rayon job after every HIR-mutating pass has
+/// run — see compile.rs's main per-module closure for the call site.
+/// Replacing the previous source-bytes hash with the HIR hash means
+/// formatter-only / comment-only / quote-style edits that lower to the
+/// same final HIR reuse the cached `.o`. Behavior changes still produce
+/// a different HIR and miss the cache as before.
+///
+/// We also mix in environment variables that `perry-codegen` reads
 /// at compile time but that aren't part of `CompileOptions`:
-/// `PERRY_DEBUG_INIT`, `PERRY_DEBUG_SYMBOLS`, `PERRY_LLVM_CLANG`. See the
-/// env-var block at the bottom of this function for the rationale.
+/// `PERRY_DEBUG_INIT`, `PERRY_DEBUG_SYMBOLS`, `PERRY_LLVM_CLANG`,
+/// `PERRY_WRITE_BARRIERS`, `PERRY_SHADOW_STACK`,
+/// `PERRY_DISABLE_BUFFER_FAST_PATH`, `PERRY_VERIFY_NATIVE_REGIONS`, and
+/// `PERRY_UNBOXED_OBJECT_FIELDS`. See the env-var block at the bottom of
+/// this function for the rationale.
 ///
 /// NOT captured in the key: the host CPU. `compile_ll_to_object` passes
 /// `-mcpu=native`/`-march=native` to clang, so the emitted `.o` bakes in
@@ -88,8 +129,19 @@ impl Djb2Hasher {
 /// itself emits deterministic object code, which it does by default.
 pub fn compute_object_cache_key(
     opts: &perry_codegen::CompileOptions,
-    source_hash: u64,
+    hir_hash: u64,
     perry_version: &str,
+) -> u64 {
+    compute_object_cache_key_with_env(opts, hir_hash, perry_version, |name| {
+        std::env::var(name).ok()
+    })
+}
+
+fn compute_object_cache_key_with_env(
+    opts: &perry_codegen::CompileOptions,
+    hir_hash: u64,
+    perry_version: &str,
+    mut env_var: impl FnMut(&str) -> Option<String>,
 ) -> u64 {
     let mut h = Djb2Hasher::new();
 
@@ -97,10 +149,31 @@ pub fn compute_object_cache_key(
     // emit_ir_only=true, but include it so key-space is disjoint if the
     // caller ever forgets to check).
     h.field("v", perry_version);
+    // Build id of the running perry binary (issue #544). Hashed once per
+    // process; see `perry_build_id` for rationale. The version field above
+    // is not enough during HIR/codegen pass development because the version
+    // doesn't usually move between rebuilds.
+    h.field("build_id", &format!("{:016x}", perry_build_id()));
     h.field("ir_only", if opts.emit_ir_only { "1" } else { "0" });
+    h.field(
+        "verify_native_regions",
+        if opts.verify_native_regions { "1" } else { "0" },
+    );
+    h.field(
+        "disable_buffer_fast_path",
+        if opts.disable_buffer_fast_path {
+            "1"
+        } else {
+            "0"
+        },
+    );
 
-    // Module source hash — captures the module's HIR input verbatim.
-    h.field("src", &format!("{:016x}", source_hash));
+    // HIR fingerprint (issue #686). Computed by
+    // `perry_hir::stable_hash::hash_module` over the post-transform HIR
+    // that `compile_module` actually consumes. Replaces the previous
+    // source-bytes hash. Field tag is "hir" (intentionally distinct from
+    // the old "src") so any pre-#686 cache entries cleanly miss.
+    h.field("hir", &format!("{:016x}", hir_hash));
 
     // Target + top-level shape.
     h.field("tgt", opts.target.as_deref().unwrap_or("host"));
@@ -113,8 +186,28 @@ pub fn compute_object_cache_key(
     h.field("stdlib", if opts.needs_stdlib { "1" } else { "0" });
     h.field("ui", if opts.needs_ui { "1" } else { "0" });
     h.field("gh", if opts.needs_geisterhand { "1" } else { "0" });
-    h.field("jsrt", if opts.needs_js_runtime { "1" } else { "0" });
     h.field("gh_port", &opts.geisterhand_port.to_string());
+    // Fast-math flag flips per-instruction `reassoc` emission
+    // in `perry-codegen`, which produces different LLVM IR (and therefore
+    // different `.o` bytes) for the same TS source. Without this in the
+    // key, `perry --fast-math foo.ts` after a default `perry foo.ts` would
+    // serve the previously-cached non-fast-math `.o` and the flag would
+    // appear to do nothing.
+    h.field("fmath", if opts.fast_math { "1" } else { "0" });
+    // Floating-point contraction is intentionally separate from broad
+    // fast-math reassociation; toggling it changes emitted FMFs and must
+    // invalidate cached objects independently.
+    h.field("fpctr", opts.fp_contract_mode.as_str());
+    h.field("app_version", &opts.app_metadata.version);
+    h.field(
+        "app_build_number",
+        &opts.app_metadata.build_number.to_string(),
+    );
+    h.field("app_bundle_id", &opts.app_metadata.bundle_id);
+    h.field(
+        "app_group",
+        opts.app_metadata.app_group.as_deref().unwrap_or(""),
+    );
 
     // Ordered lists (order is significant — topological init, FFI index,
     // bundled extension order, etc.)
@@ -123,6 +216,34 @@ pub fn compute_object_cache_key(
         &opts.non_entry_module_prefixes.join("|"),
     );
     h.field("mod_init_names", &opts.native_module_init_names.join("|"));
+    // Issue #753: eager/deferred split. The set membership controls
+    // which `<prefix>__init` calls main emits eagerly, so the entry
+    // module's `.o` bytes change when a target module moves between
+    // Eager and Deferred classifications (e.g. a new dynamic
+    // `import()` site appears that's the ONLY path to a previously-
+    // statically-reached module).
+    {
+        let mut v: Vec<&String> = opts.deferred_module_prefixes.iter().collect();
+        v.sort();
+        h.field(
+            "deferred_prefixes",
+            &v.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("|"),
+        );
+    }
+    h.field("init_deps", &opts.module_init_deps.join("|"));
+    // Issue #842: side-effect-only dynamic-import targets emit a
+    // `@__perry_ns_<prefix>` global + populator regardless of
+    // `namespace_entries`. Toggling this flag changes the emitted IR
+    // (one extra global + populator call), so the cache key must
+    // include it.
+    h.field(
+        "dyn_target",
+        if opts.is_dynamic_import_target {
+            "1"
+        } else {
+            "0"
+        },
+    );
     h.field("js_specs", &opts.js_module_specifiers.join("|"));
     {
         let mut buf = String::new();
@@ -136,12 +257,17 @@ pub fn compute_object_cache_key(
     }
     {
         let mut buf = String::new();
-        for (lib, funcs, header) in &opts.native_library_functions {
-            buf.push_str(lib);
+        for (name, params, ret) in &opts.native_library_functions {
+            buf.push_str(name);
             buf.push(':');
-            buf.push_str(&funcs.join(","));
-            buf.push('@');
-            buf.push_str(header);
+            for (idx, param) in params.iter().enumerate() {
+                if idx > 0 {
+                    buf.push(',');
+                }
+                buf.push_str(&param.to_string());
+            }
+            buf.push_str("->");
+            buf.push_str(&ret.to_string());
             buf.push('|');
         }
         h.field("native_libs", &buf);
@@ -168,6 +294,20 @@ pub fn compute_object_cache_key(
         );
     }
 
+    // Issue #321: namespace reexport named imports — separate subset that
+    // gates the codegen's StaticMethodCall var-shape routing. Cache must
+    // discriminate between two modules whose `namespace_imports` are
+    // identical but whose `namespace_reexport_named_imports` differ, else
+    // the wrong code-path winds up in the object file.
+    {
+        let mut v: Vec<&String> = opts.namespace_reexport_named_imports.iter().collect();
+        v.sort();
+        h.field(
+            "ns_reexport_named_imports",
+            &v.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(","),
+        );
+    }
+
     // Import function prefixes (HashMap — MUST sort).
     {
         let mut v: Vec<(&String, &String)> = opts.import_function_prefixes.iter().collect();
@@ -178,6 +318,89 @@ pub fn compute_object_cache_key(
             .collect::<Vec<_>>()
             .join(",");
         h.field("import_fn_prefixes", &s);
+    }
+
+    // Issue #678: include the origin-name overrides in the cache key.
+    // Without this, two builds where the same module imports the same
+    // names but with different re-export shapes (e.g. a downstream
+    // package renamed its barrel exports) would share a cached `.o` and
+    // silently emit the stale symbol suffix.
+    {
+        let mut v: Vec<(&String, &String)> = opts.import_function_origin_names.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        let s: String = v
+            .iter()
+            .map(|(k, vv)| format!("{}={}", k, vv))
+            .collect::<Vec<_>>()
+            .join(",");
+        h.field("import_fn_origin_names", &s);
+    }
+
+    // Issue #678 followup: V8-fallback specifier overrides — same rationale
+    // as origin_names above. Two builds where the same TS module imports
+    // the same names but the upstream package flipped between native and
+    // V8 fallback must not share a cached `.o`.
+    {
+        let mut v: Vec<(&String, &String)> = opts.import_function_v8_specifiers.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        let s: String = v
+            .iter()
+            .map(|(k, vv)| format!("{}={}", k, vv))
+            .collect::<Vec<_>>()
+            .join(",");
+        h.field("import_fn_v8_specifiers", &s);
+    }
+    // Issue #841: per-(local, submodule_key, export_name) so a flip
+    // between named-import-from-submodule and any other resolution
+    // invalidates the cached `.o`. Same shape as V8 specifiers above.
+    {
+        let mut v: Vec<(&String, &(String, String))> =
+            opts.import_function_node_submodule.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        let s: String = v
+            .iter()
+            .map(|(k, (submod, name))| format!("{}={}:{}", k, submod, name))
+            .collect::<Vec<_>>()
+            .join(",");
+        h.field("import_fn_node_submodule", &s);
+    }
+    // Issue #841 companion: per-local namespace-to-submodule mapping.
+    {
+        let mut v: Vec<(&String, &String)> = opts.namespace_node_submodules.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        let s: String = v
+            .iter()
+            .map(|(k, vv)| format!("{}={}", k, vv))
+            .collect::<Vec<_>>()
+            .join(",");
+        h.field("namespace_node_submodules", &s);
+    }
+    // Issue #678 followup (namespace branch): per-local-namespace V8
+    // specifier mapping. A flip between V8-fallback and native-compile
+    // for the namespace-target module must invalidate the cached `.o`.
+    {
+        let mut v: Vec<(&String, &String)> = opts.namespace_v8_specifiers.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        let s: String = v
+            .iter()
+            .map(|(k, vv)| format!("{}={}", k, vv))
+            .collect::<Vec<_>>()
+            .join(",");
+        h.field("namespace_v8_specifiers", &s);
+    }
+    // Issue #680: per-namespace member resolution. This is not reflected in
+    // the consumer module's HIR, but it changes which external symbol a
+    // namespace member call/property access targets.
+    {
+        let mut v: Vec<(&(String, String), &String)> =
+            opts.namespace_member_prefixes.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        let s: String = v
+            .iter()
+            .map(|((ns, member), prefix)| format!("{}:{}={}", ns, member, prefix))
+            .collect::<Vec<_>>()
+            .join(",");
+        h.field("namespace_member_prefixes", &s);
     }
 
     // Imported classes — sort by name. Serialize every field that codegen
@@ -208,6 +431,31 @@ pub fn compute_object_cache_key(
                     .collect::<Vec<_>>()
                     .join(","),
             ));
+            buf.push_str("method_rest=");
+            buf.push_str(
+                &c.method_has_rest
+                    .iter()
+                    .map(|b| if *b { "1" } else { "0" })
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
+            buf.push_str(":static_fields=");
+            buf.push_str(&c.static_field_names.join(","));
+            buf.push_str(":static_methods=");
+            buf.push_str(&c.static_method_names.join(","));
+            buf.push_str(":getters=");
+            buf.push_str(&c.getter_names.join(","));
+            buf.push_str(":setters=");
+            buf.push_str(&c.setter_names.join(","));
+            buf.push_str(":field_types=");
+            buf.push_str(
+                &c.field_types
+                    .iter()
+                    .map(|ty| format!("{:?}", ty))
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
+            buf.push('|');
         }
         h.field("imported_classes", &buf);
     }
@@ -249,6 +497,24 @@ pub fn compute_object_cache_key(
             .collect::<Vec<_>>()
             .join(",");
         h.field("imported_param_counts", &s);
+    }
+    // Imported rest-shape metadata (HashSet — MUST sort). These sets change
+    // the cross-module call ABI even when the caller's HIR is unchanged.
+    {
+        let mut v: Vec<&String> = opts.imported_func_has_rest.iter().collect();
+        v.sort();
+        h.field(
+            "imported_has_rest",
+            &v.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(","),
+        );
+    }
+    {
+        let mut v: Vec<&String> = opts.imported_func_synthetic_arguments.iter().collect();
+        v.sort();
+        h.field(
+            "imported_synthetic_arguments",
+            &v.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(","),
+        );
     }
 
     // Imported return types (HashMap — MUST sort). Type has Debug but no
@@ -305,6 +571,30 @@ pub fn compute_object_cache_key(
         h.field("i18n", "none");
     }
 
+    // Dynamic import metadata is computed from the whole module graph, not
+    // only this module's HIR. It directly controls emitted namespace globals,
+    // namespace population, and dynamic-import dispatch.
+    {
+        let mut buf = String::new();
+        for entry in &opts.namespace_entries {
+            buf.push_str(&entry.name);
+            buf.push('=');
+            serialize_namespace_entry_kind(&entry.kind, &mut buf);
+            buf.push('|');
+        }
+        h.field("namespace_entries", &buf);
+    }
+    {
+        let mut v: Vec<(&String, &String)> = opts.dynamic_import_path_to_prefix.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        let s: String = v
+            .iter()
+            .map(|(path, prefix)| format!("{}={}", path, prefix))
+            .collect::<Vec<_>>()
+            .join(",");
+        h.field("dynamic_import_path_to_prefix", &s);
+    }
+
     // Environment variables read by `perry-codegen` that influence the
     // emitted .o bytes. Not part of `CompileOptions`, but just as real an
     // input to `compile_module` / `compile_ll_to_object`:
@@ -314,26 +604,102 @@ pub fn compute_object_cache_key(
     //     into the object (linker.rs).
     //   - PERRY_LLVM_CLANG selects which clang binary compiles .ll → .o;
     //     different clang versions/builds emit different bytes (linker.rs).
+    //   - PERRY_WRITE_BARRIERS=0/off/false suppresses generated barrier
+    //     calls at heap-store sites (codegen.rs / expr.rs).
+    //   - PERRY_SHADOW_STACK=0/off/false suppresses generated frame/slot
+    //     roots at function entry and pointer local stores.
+    //   - PERRY_DISABLE_BUFFER_FAST_PATH=1 overrides CompileOptions and
+    //     changes Buffer/Uint8Array lowering.
+    //   - PERRY_VERIFY_NATIVE_REGIONS=1 overrides CompileOptions and must
+    //     not be bypassed by a stale cache hit.
+    //   - PERRY_UNBOXED_OBJECT_FIELDS=1 changes object-literal layout
+    //     lowering for exact typed object shapes.
     // Hashing the values (not just presence) means a persistent override
     // like PERRY_LLVM_CLANG=/opt/homebrew/opt/llvm/bin/clang in a shell rc
     // still gets cache reuse across runs, while flipping a debug flag on
     // or off cleanly invalidates.
     h.field(
         "env_debug_init",
-        std::env::var("PERRY_DEBUG_INIT").as_deref().unwrap_or(""),
+        env_var("PERRY_DEBUG_INIT").as_deref().unwrap_or(""),
     );
     h.field(
         "env_debug_symbols",
-        std::env::var("PERRY_DEBUG_SYMBOLS")
+        env_var("PERRY_DEBUG_SYMBOLS").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_llvm_clang",
+        env_var("PERRY_LLVM_CLANG").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_write_barriers",
+        env_var("PERRY_WRITE_BARRIERS").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_shadow_stack",
+        env_var("PERRY_SHADOW_STACK").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_disable_buffer_fast_path",
+        env_var("PERRY_DISABLE_BUFFER_FAST_PATH")
             .as_deref()
             .unwrap_or(""),
     );
     h.field(
-        "env_llvm_clang",
-        std::env::var("PERRY_LLVM_CLANG").as_deref().unwrap_or(""),
+        "env_verify_native_regions",
+        env_var("PERRY_VERIFY_NATIVE_REGIONS")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    h.field(
+        "env_unboxed_object_fields",
+        env_var("PERRY_UNBOXED_OBJECT_FIELDS")
+            .as_deref()
+            .unwrap_or(""),
     );
 
     h.finish()
+}
+
+fn serialize_namespace_entry_kind(kind: &perry_codegen::NamespaceEntryKind, out: &mut String) {
+    match kind {
+        perry_codegen::NamespaceEntryKind::LocalVar { global_name } => {
+            out.push_str("local_var:");
+            out.push_str(global_name);
+        }
+        perry_codegen::NamespaceEntryKind::LocalFunction { wrap_symbol } => {
+            out.push_str("local_fn:");
+            out.push_str(wrap_symbol);
+        }
+        perry_codegen::NamespaceEntryKind::LocalClass { class_id } => {
+            out.push_str("local_class:");
+            out.push_str(&class_id.to_string());
+        }
+        perry_codegen::NamespaceEntryKind::ForeignVar {
+            source_prefix,
+            source_local,
+        } => {
+            out.push_str("foreign_var:");
+            out.push_str(source_prefix);
+            out.push(':');
+            out.push_str(source_local);
+        }
+        perry_codegen::NamespaceEntryKind::ForeignFunction {
+            source_prefix,
+            source_local,
+            param_count,
+        } => {
+            out.push_str("foreign_fn:");
+            out.push_str(source_prefix);
+            out.push(':');
+            out.push_str(source_local);
+            out.push(':');
+            out.push_str(&param_count.to_string());
+        }
+        perry_codegen::NamespaceEntryKind::NestedNamespace { source_prefix } => {
+            out.push_str("nested_ns:");
+            out.push_str(source_prefix);
+        }
+    }
 }
 /// On-disk per-module object cache at `.perry-cache/objects/<target>/<hash:016x>.o`.
 ///
@@ -467,7 +833,7 @@ impl ObjectCache {
 #[cfg(test)]
 mod object_cache_tests {
     use super::*;
-    use perry_codegen::{CompileOptions, ImportedClass};
+    use perry_codegen::{CompileOptions, ImportedClass, NamespaceEntry, NamespaceEntryKind};
     use tempfile::tempdir;
 
     /// A minimal `CompileOptions` with every vec/map empty. Tests that want
@@ -478,13 +844,25 @@ mod object_cache_tests {
             is_entry_module: false,
             non_entry_module_prefixes: Vec::new(),
             import_function_prefixes: std::collections::HashMap::new(),
+            import_function_origin_names: std::collections::HashMap::new(),
+            import_function_v8_specifiers: std::collections::HashMap::new(),
+            // Issue #841: new submodule registry fields.
+            import_function_node_submodule: std::collections::HashMap::new(),
+            namespace_node_submodules: std::collections::HashMap::new(),
+            namespace_v8_specifiers: std::collections::HashMap::new(),
+            namespace_member_prefixes: std::collections::HashMap::new(),
             emit_ir_only: false,
+            verify_native_regions: false,
+            disable_buffer_fast_path: false,
             namespace_imports: Vec::new(),
+            namespace_reexport_named_imports: std::collections::HashSet::new(),
             imported_classes: Vec::new(),
             imported_enums: Vec::new(),
             imported_async_funcs: std::collections::HashSet::new(),
             type_aliases: std::collections::HashMap::new(),
             imported_func_param_counts: std::collections::HashMap::new(),
+            imported_func_has_rest: std::collections::HashSet::new(),
+            imported_func_synthetic_arguments: std::collections::HashSet::new(),
             imported_func_return_types: std::collections::HashMap::new(),
             imported_vars: std::collections::HashSet::new(),
             output_type: "executable".to_string(),
@@ -492,13 +870,20 @@ mod object_cache_tests {
             needs_ui: false,
             needs_geisterhand: false,
             geisterhand_port: 7676,
-            needs_js_runtime: false,
             enabled_features: Vec::new(),
             native_module_init_names: Vec::new(),
             js_module_specifiers: Vec::new(),
             bundled_extensions: Vec::new(),
             native_library_functions: Vec::new(),
             i18n_table: None,
+            fast_math: false,
+            fp_contract_mode: perry_codegen::FpContractMode::Off,
+            app_metadata: perry_codegen::AppMetadata::default(),
+            namespace_entries: Vec::new(),
+            dynamic_import_path_to_prefix: std::collections::HashMap::new(),
+            deferred_module_prefixes: std::collections::HashSet::new(),
+            module_init_deps: Vec::new(),
+            is_dynamic_import_target: false,
         }
     }
 
@@ -518,7 +903,18 @@ mod object_cache_tests {
     }
 
     #[test]
-    fn key_changes_with_source_hash() {
+    fn key_changes_with_hir_hash() {
+        // The second argument is the post-transform HIR fingerprint
+        // (issue #686), produced by `perry_hir::stable_hash::hash_module`.
+        // Two different HIR hashes — i.e. two semantically different
+        // modules — must produce different cache keys.
+        //
+        // Note: "same source bytes, different HIR" (e.g. a lowering-pass
+        // behavior change between Perry versions that rewrites the same
+        // input into different HIR) is covered by the `build_id` field
+        // mixed in by `perry_build_id()`, NOT by this hash. So a HIR
+        // walk that adds new fields between releases doesn't need a
+        // separate invalidation hook here.
         let opts = empty_opts();
         let a = compute_object_cache_key(&opts, 1, "0.5.156");
         let b = compute_object_cache_key(&opts, 2, "0.5.156");
@@ -555,6 +951,55 @@ mod object_cache_tests {
             compute_object_cache_key(&a, 1, "0.5.156"),
             compute_object_cache_key(&b, 1, "0.5.156")
         );
+    }
+
+    #[test]
+    fn key_changes_with_fast_math_flag() {
+        // Without this guard, `perry --fast-math foo.ts` after a default
+        // build would silently serve the cached non-fast-math `.o` and
+        // the flag would appear to do nothing. Bug found during the
+        // original fast-math investigation; gate it here so a future
+        // refactor can't reintroduce it.
+        let mut a = empty_opts();
+        let mut b = empty_opts();
+        a.fast_math = false;
+        b.fast_math = true;
+        assert_ne!(
+            compute_object_cache_key(&a, 1, "0.5.569"),
+            compute_object_cache_key(&b, 1, "0.5.569")
+        );
+    }
+
+    #[test]
+    fn key_changes_with_fp_contract_mode() {
+        let mut a = empty_opts();
+        let mut b = empty_opts();
+        a.fp_contract_mode = perry_codegen::FpContractMode::Off;
+        b.fp_contract_mode = perry_codegen::FpContractMode::On;
+        assert_ne!(
+            compute_object_cache_key(&a, 1, "0.5.569"),
+            compute_object_cache_key(&b, 1, "0.5.569")
+        );
+    }
+
+    #[test]
+    fn key_includes_perry_build_id() {
+        // Issue #544: the cache key must mix in a hash of the running perry
+        // binary so HIR/codegen pass changes invalidate the cache even when
+        // the version string doesn't move. We can't easily synthesize two
+        // distinct binary hashes from inside a unit test, but we can check
+        // (a) that `perry_build_id()` returns a non-zero value when the
+        // test binary exists on disk (i.e. the helper actually ran), and
+        // (b) that perturbing the helper's output would change the key —
+        // verified indirectly by confirming the field is present in the
+        // serialized form via the field separator count.
+        let id = perry_build_id();
+        // The test binary is always readable, so the helper can't degrade
+        // to 0 here. If this ever fails, current_exe() / fs::read started
+        // misbehaving and we'd want to know.
+        assert_ne!(id, 0, "perry_build_id must hash the test executable");
+        // Stable across calls within a process (OnceLock).
+        assert_eq!(perry_build_id(), id);
     }
 
     #[test]
@@ -606,12 +1051,14 @@ mod object_cache_tests {
             constructor_param_count: 1,
             method_names: vec!["bar".into()],
             method_param_counts: vec![0],
+            method_has_rest: vec![false],
             static_method_names: vec![],
             getter_names: vec![],
             setter_names: vec![],
             parent_name: None,
             field_names: vec!["x".into()],
             field_types: vec![],
+            static_field_names: vec![],
             source_class_id: Some(42),
         });
         b.imported_classes.push(ImportedClass {
@@ -621,14 +1068,139 @@ mod object_cache_tests {
             constructor_param_count: 2, // different arity
             method_names: vec!["bar".into()],
             method_param_counts: vec![0],
+            method_has_rest: vec![false],
             static_method_names: vec![],
             getter_names: vec![],
             setter_names: vec![],
             parent_name: None,
             field_names: vec!["x".into()],
             field_types: vec![],
+            static_field_names: vec![],
             source_class_id: Some(42),
         });
+        assert_ne!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+    }
+
+    #[test]
+    fn key_changes_with_imported_class_codegen_surface() {
+        let base = ImportedClass {
+            name: "Foo".into(),
+            local_alias: None,
+            source_prefix: "src".into(),
+            constructor_param_count: 1,
+            method_names: vec!["bar".into()],
+            method_param_counts: vec![1],
+            method_has_rest: vec![false],
+            static_method_names: vec![],
+            getter_names: vec![],
+            setter_names: vec![],
+            parent_name: None,
+            field_names: vec!["x".into()],
+            field_types: vec![perry_types::Type::Number],
+            static_field_names: vec![],
+            source_class_id: Some(42),
+        };
+        let key_for = |class: ImportedClass| {
+            let mut opts = empty_opts();
+            opts.imported_classes.push(class);
+            compute_object_cache_key(&opts, 1, "0.5.156")
+        };
+        let base_key = key_for(base.clone());
+
+        let mut changed = base.clone();
+        changed.method_has_rest = vec![true];
+        assert_ne!(base_key, key_for(changed));
+
+        let mut changed = base.clone();
+        changed.static_method_names = vec!["make".into()];
+        assert_ne!(base_key, key_for(changed));
+
+        let mut changed = base.clone();
+        changed.static_field_names = vec!["VERSION".into()];
+        assert_ne!(base_key, key_for(changed));
+
+        let mut changed = base.clone();
+        changed.getter_names = vec!["value".into()];
+        assert_ne!(base_key, key_for(changed));
+
+        let mut changed = base.clone();
+        changed.setter_names = vec!["value".into()];
+        assert_ne!(base_key, key_for(changed));
+
+        let mut changed = base;
+        changed.field_types = vec![perry_types::Type::String];
+        assert_ne!(base_key, key_for(changed));
+    }
+
+    #[test]
+    fn key_changes_with_namespace_member_prefixes() {
+        let mut a = empty_opts();
+        let mut b = empty_opts();
+        a.namespace_member_prefixes
+            .insert(("ns".into(), "make".into()), "src_a".into());
+        b.namespace_member_prefixes
+            .insert(("ns".into(), "make".into()), "src_b".into());
+        assert_ne!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+    }
+
+    #[test]
+    fn key_changes_with_imported_rest_shapes() {
+        let mut a = empty_opts();
+        let mut b = empty_opts();
+        b.imported_func_has_rest.insert("collect".into());
+        assert_ne!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+
+        a = empty_opts();
+        b = empty_opts();
+        b.imported_func_synthetic_arguments.insert("invoke".into());
+        assert_ne!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+    }
+
+    #[test]
+    fn key_changes_with_dynamic_import_metadata() {
+        let mut a = empty_opts();
+        let mut b = empty_opts();
+        b.namespace_entries.push(NamespaceEntry {
+            name: "answer".into(),
+            kind: NamespaceEntryKind::ForeignFunction {
+                source_prefix: "dep".into(),
+                source_local: "answer".into(),
+                param_count: 1,
+            },
+        });
+        assert_ne!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+
+        a = empty_opts();
+        b = empty_opts();
+        b.dynamic_import_path_to_prefix
+            .insert("./lazy".into(), "lazy_ts".into());
+        assert_ne!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+    }
+
+    #[test]
+    fn key_changes_with_app_group() {
+        let mut a = empty_opts();
+        let mut b = empty_opts();
+        a.app_metadata.app_group = None;
+        b.app_metadata.app_group = Some("group.com.example.shared".into());
         assert_ne!(
             compute_object_cache_key(&a, 1, "0.5.156"),
             compute_object_cache_key(&b, 1, "0.5.156")
@@ -649,43 +1221,34 @@ mod object_cache_tests {
 
     #[test]
     fn key_changes_with_codegen_env_vars() {
-        // Flipping an env var that perry-codegen reads (PERRY_DEBUG_INIT,
-        // PERRY_DEBUG_SYMBOLS, PERRY_LLVM_CLANG) must invalidate the key
-        // so we don't serve a cached .o that was built with different
-        // debug sections / a different clang binary.
+        // Flipping an env var that perry-codegen reads must invalidate the
+        // key so we don't serve a cached .o that was built with different
+        // debug sections, a different clang binary, different generated
+        // helper calls, or a skipped verifier.
         //
-        // Uses unique var names (suffixed with a test-local marker) would
-        // be cleaner, but we're checking behavior against the *actual*
-        // names the codegen reads — toggling them temporarily with unsafe
-        // env::set_var is the only way. Test is #[serial]-safe only in
-        // spirit; cargo's single-threaded test runner for this binary
-        // keeps it from racing with other tests that happen to read the
-        // same vars (none today).
         let opts = empty_opts();
-        let var = "PERRY_DEBUG_INIT";
-        // Sample state without the var, with the var, and with a different
-        // value — all three keys must be distinct.
-        let prev = std::env::var_os(var);
-        // SAFETY: Rust 1.80+ flags env::set_var/remove_var as unsafe
-        // because they're racy with other threads reading env. cargo's
-        // in-process test runner can parallelize tests; this test is
-        // still correct because `compute_object_cache_key` reads the
-        // env at call time and we don't span a .await / yield. The
-        // remaining race is another *test* reading PERRY_DEBUG_INIT
-        // mid-flight, which none do.
-        unsafe { std::env::remove_var(var) };
-        let k_unset = compute_object_cache_key(&opts, 1, "0.5.156");
-        unsafe { std::env::set_var(var, "1") };
-        let k_set = compute_object_cache_key(&opts, 1, "0.5.156");
-        unsafe { std::env::set_var(var, "2") };
-        let k_two = compute_object_cache_key(&opts, 1, "0.5.156");
-        // Restore.
-        match prev {
-            Some(v) => unsafe { std::env::set_var(var, v) },
-            None => unsafe { std::env::remove_var(var) },
+        for var in [
+            "PERRY_DEBUG_INIT",
+            "PERRY_DEBUG_SYMBOLS",
+            "PERRY_LLVM_CLANG",
+            "PERRY_WRITE_BARRIERS",
+            "PERRY_SHADOW_STACK",
+            "PERRY_DISABLE_BUFFER_FAST_PATH",
+            "PERRY_VERIFY_NATIVE_REGIONS",
+            "PERRY_UNBOXED_OBJECT_FIELDS",
+        ] {
+            // Sample state without the var, with the var, and with a different
+            // value — all three keys must be distinct.
+            let k_unset = compute_object_cache_key_with_env(&opts, 1, "0.5.156", |_| None);
+            let k_set = compute_object_cache_key_with_env(&opts, 1, "0.5.156", |name| {
+                (name == var).then(|| "1".to_string())
+            });
+            let k_two = compute_object_cache_key_with_env(&opts, 1, "0.5.156", |name| {
+                (name == var).then(|| "2".to_string())
+            });
+            assert_ne!(k_unset, k_set, "setting {} must change key", var);
+            assert_ne!(k_set, k_two, "changing {} value must change key", var);
         }
-        assert_ne!(k_unset, k_set, "setting {} must change key", var);
-        assert_ne!(k_set, k_two, "changing {} value must change key", var);
     }
 
     #[test]

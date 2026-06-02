@@ -1,0 +1,7 @@
+safe object: 42
+safe array length: 3
+opt-chain on undefined: undefined
+nullish-coalesce: ok
+opt-chain on null: undefined
+about to throw — last line of stdout
+TypeError: Cannot read properties of undefined (reading 'foo')

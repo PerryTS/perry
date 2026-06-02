@@ -64,6 +64,21 @@ pub fn set_string(handle: i64, text_ptr: *const u8) {
 ///                 Button that don't respond to `setTextColor:` and
 ///                 would raise `unrecognized selector` → non-unwinding
 ///                 panic across the FFI boundary → process abort)
+///
+/// Issue #1107 — on iOS 26 devices a partial-alpha UIColor passed to
+/// `setTextColor:` causes UILabel to render zero glyphs (alpha == 1.0
+/// works; iOS 17 simulator works; iOS 26 device fails). The
+/// `AttributedText` widget's path (UIColor as the `NSColor`/
+/// `NSForegroundColorAttributeName` value inside an
+/// `NSAttributedString`'s attributes dict, applied via
+/// `setAttributedText:`) is the one path the reporter confirmed renders
+/// correctly with sub-1.0 alpha. So for the alpha < 1.0 case we mirror
+/// that path: read the label's current `text` + `font`, build an
+/// `NSAttributedString` with `NSFont` + `NSColor` attrs, and call
+/// `setAttributedText:`. `textColor` is still set as well so future
+/// `setText:` calls (which clobber the attributed buffer) still pick up
+/// at least the solid-color approximation rather than reverting to
+/// system default.
 pub fn set_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     let Some(view) = super::get_widget(handle) else {
         return;
@@ -91,7 +106,96 @@ pub fn set_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             alpha: a as objc2_core_foundation::CGFloat
         ];
         let _: () = msg_send![&*view, setTextColor: &*color];
+
+        // iOS 26 partial-alpha workaround (issue #1107).
+        // alpha == 1.0 is unaffected by the bug, keep the simple
+        // setTextColor: path so we don't disturb intrinsic-content sizing.
+        if a < 1.0 {
+            apply_label_color_via_attributed(&view, &color);
+        } else {
+            // Clear any prior attributedText we may have set so the plain
+            // textColor path takes effect again.
+            clear_label_attributed_text(&view);
+        }
     }
+}
+
+/// Issue #1107 / #1122 workaround — mirror `AttributedText::append`'s
+/// code path so a partial-alpha NSColor actually paints glyphs on iOS 26.
+///
+/// PR #1109's first attempt at this read `view.font` and `view.text`
+/// straight off the label and passed them through. That didn't paint on
+/// real device — the borrowed-font reference plus the un-retained
+/// NSAttributedString result both differ from `AttributedText::append`'s
+/// path. This version builds a fresh `[UIFont systemFontOfSize:]` from
+/// the label's current point size and retains the resulting
+/// NSAttributedString, exactly like the AttributedText widget.
+unsafe fn apply_label_color_via_attributed(view: &UIView, color: &objc2::runtime::AnyObject) {
+    use objc2::runtime::AnyObject;
+
+    let current_text: *const objc2_foundation::NSString = msg_send![view, text];
+    if current_text.is_null() {
+        return;
+    }
+    let length: u64 = msg_send![current_text, length];
+    if length == 0 {
+        return;
+    }
+
+    let dict_cls = AnyClass::get(c"NSMutableDictionary").unwrap();
+    let attrs: Retained<AnyObject> = msg_send![dict_cls, new];
+
+    // Build a fresh UIFont rather than re-using the label's borrowed
+    // font pointer — this matches AttributedText's working path. Pull
+    // the size off the existing font (defaulting to UILabel's 17pt
+    // default) so any prior textSetFontSize is preserved.
+    let existing_font: *mut AnyObject = msg_send![view, font];
+    let size: objc2_core_foundation::CGFloat = if !existing_font.is_null() {
+        msg_send![existing_font, pointSize]
+    } else {
+        17.0
+    };
+    let font_cls = AnyClass::get(c"UIFont").unwrap();
+    let fresh_font: Retained<AnyObject> = msg_send![
+        font_cls,
+        systemFontOfSize: size
+    ];
+    let font_key = NSString::from_str("NSFont");
+    let _: () = msg_send![&*attrs, setObject: &*fresh_font, forKey: &*font_key];
+
+    let color_key = NSString::from_str("NSColor");
+    let _: () = msg_send![&*attrs, setObject: color, forKey: &*color_key];
+
+    let attr_cls = AnyClass::get(c"NSAttributedString").unwrap();
+    let alloc: *mut AnyObject = msg_send![attr_cls, alloc];
+    // Retain — initWithString:attributes: returns a +1 retain that we
+    // own. setAttributedText: copies the value, but holding the retain
+    // until after that call avoids a partially-constructed object being
+    // observed by UIKit if the autorelease pool drains unexpectedly.
+    let raw: *mut AnyObject = msg_send![
+        alloc,
+        initWithString: current_text,
+        attributes: &*attrs
+    ];
+    if let Some(attr_str) = Retained::from_raw(raw) {
+        let _: () = msg_send![view, setAttributedText: &*attr_str];
+    }
+}
+
+/// Counterpart to `apply_label_color_via_attributed` — for alpha == 1.0
+/// (or color cleared) we want plain `textColor` rendering to win again,
+/// so explicitly drop the attributedText we may have set earlier by
+/// rebuilding it from the current plain string with no attributes.
+unsafe fn clear_label_attributed_text(view: &UIView) {
+    use objc2::runtime::AnyObject;
+    let current_text: *const objc2_foundation::NSString = msg_send![view, text];
+    if current_text.is_null() {
+        return;
+    }
+    // Re-issuing setText: with the same string forces UILabel to
+    // discard any internal attributedText state. This is cheaper than
+    // building a no-op NSAttributedString.
+    let _: () = msg_send![view, setText: current_text as *const AnyObject];
 }
 
 /// Determine the correct target for font/text operations.
@@ -164,6 +268,58 @@ pub fn set_wraps(handle: i64, max_width: f64) {
 pub fn set_selectable(_handle: i64, _selectable: bool) {
     // UILabel is not selectable by default and making it so requires
     // UITextView instead. No-op for now.
+}
+
+/// Issue #707 — cap the maximum number of visible lines. 0 = unlimited.
+/// Maps directly to UILabel.numberOfLines. Pair with `set_truncation_mode`
+/// to control where the ellipsis appears when content overflows.
+pub fn set_number_of_lines(handle: i64, lines: i64) {
+    if let Some(view) = super::get_widget(handle) {
+        unsafe {
+            if let Some(lbl_cls) = AnyClass::get(c"UILabel") {
+                let is_lbl: bool = msg_send![&*view, isKindOfClass: lbl_cls];
+                if !is_lbl {
+                    return;
+                }
+            }
+            let _: () = msg_send![&*view, setNumberOfLines: lines];
+            // Make sure lineBreakMode allows truncation when capped > 0.
+            // 0=WordWrapping, 1=CharWrapping, 2=Clipping, 3=TruncatingHead,
+            // 4=TruncatingTail, 5=TruncatingMiddle. We leave the existing
+            // mode unless it's the default (0) and we just enabled a cap,
+            // in which case tail-truncation is the natural fallback.
+            if lines > 0 {
+                let current: i64 = msg_send![&*view, lineBreakMode];
+                if current == 0 {
+                    let _: () = msg_send![&*view, setLineBreakMode: 4u64];
+                }
+            }
+        }
+    }
+}
+
+/// Issue #707 — control where the ellipsis appears when text overflows
+/// the line cap. 0=word-wrap (no truncation), 1=head ("…foo"),
+/// 2=middle ("fo…ar"), 3=tail ("foo…"). Tail is the most common.
+pub fn set_truncation_mode(handle: i64, mode: i64) {
+    if let Some(view) = super::get_widget(handle) {
+        unsafe {
+            if let Some(lbl_cls) = AnyClass::get(c"UILabel") {
+                let is_lbl: bool = msg_send![&*view, isKindOfClass: lbl_cls];
+                if !is_lbl {
+                    return;
+                }
+            }
+            // Map our public 0..3 → NSLineBreakMode values.
+            let lbm: u64 = match mode {
+                1 => 3, // head
+                2 => 5, // middle
+                3 => 4, // tail
+                _ => 0, // word-wrap
+            };
+            let _: () = msg_send![&*view, setLineBreakMode: lbm];
+        }
+    }
 }
 
 /// Set text decoration on a UILabel via `NSAttributedString` (issue #185

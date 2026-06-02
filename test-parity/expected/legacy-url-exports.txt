@@ -1,0 +1,14 @@
+keys has Url: true
+keys has resolveObject: true
+Url typeof: function
+Url name: Url
+Url length: 0
+resolveObject typeof: function
+resolveObject name: urlResolveObject
+resolveObject length: 2
+new Url keys first10: ["protocol","slashes","auth","host","port","hostname","hash","search","query","pathname"]
+new Url values first5: [["protocol",null],["slashes",null],["auth",null],["host",null],["port",null]]
+resolveObject href: http://a/c?y=2
+resolveObject pathname: /c
+resolveObject query type: string
+resolveObject keys first8: ["protocol","slashes","auth","host","port","hostname","hash","search"]

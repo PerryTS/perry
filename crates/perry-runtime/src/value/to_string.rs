@@ -1,0 +1,764 @@
+//! NaN-boxed value to-string conversion helpers.
+
+use super::*;
+use std::cell::Cell;
+use std::sync::atomic::Ordering;
+
+thread_local! {
+    /// Re-entrancy guard for `OrdinaryToPrimitive(string)`. A user
+    /// `toString`/`valueOf` whose body coerces `this` back to a string
+    /// (e.g. `toString() { return "" + this; }`) would recurse forever;
+    /// Node throws `RangeError: Maximum call stack size exceeded`. We cap
+    /// the depth and fall back to `[object Object]` instead of overflowing
+    /// the Rust stack (which would SIGSEGV the whole process).
+    static TO_PRIMITIVE_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+/// `OrdinaryToPrimitive(O, "string")` (ES2024 §7.1.1.1) — the fallback
+/// `ToPrimitive` step used by `String(obj)` / template literals / `obj + ""`
+/// when the object has no `[Symbol.toPrimitive]`. For hint "string" the
+/// method order is `toString` then `valueOf`; each is invoked with
+/// `this = obj` and the first call returning a *primitive* (non-object)
+/// value wins.
+///
+/// Returns `Some(primitive_f64)` when a callable `toString`/`valueOf` was
+/// found on the object (own property or anywhere on its prototype chain,
+/// reusing the same `js_object_get_field_by_name` resolution +
+/// `clone_closure_rebind_this` receiver-binding the method-dispatch tower
+/// uses — see #1969/#1982) and produced a primitive. Returns `None` when
+/// neither method exists / is callable / yields a primitive, so the caller
+/// falls back to `"[object Object]"`.
+///
+/// `value` MUST be a NaN-boxed `POINTER_TAG` object whose pointer is a real
+/// heap address (`>= 0x10000`); the caller has already excluded symbols,
+/// buffers, arrays, and JSX nodes (those carry their own coercion rules).
+unsafe fn ordinary_to_primitive_string(value: f64) -> Option<f64> {
+    // Bound recursion: a `toString` that itself string-coerces `this`.
+    let depth = TO_PRIMITIVE_DEPTH.with(|c| c.get());
+    if depth >= 200 {
+        return None;
+    }
+    TO_PRIMITIVE_DEPTH.with(|c| c.set(depth + 1));
+    let result = ordinary_to_primitive_string_inner(value);
+    TO_PRIMITIVE_DEPTH.with(|c| c.set(depth));
+    result
+}
+
+unsafe fn ordinary_to_primitive_string_inner(value: f64) -> Option<f64> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+
+    // Hint "string": method order is `toString` then `valueOf` (ES2024
+    // §7.1.1.1). CRITICAL: in the real spec EVERY ordinary object inherits
+    // `Object.prototype.toString` (callable, returns `"[object Object]"`),
+    // so for the string hint `toString` is *always present* — `valueOf` is
+    // reached ONLY when a custom `toString` returns a non-primitive. Perry's
+    // object model has no discoverable `Object.prototype.toString` field, so
+    // `js_object_get_field_by_name(obj, "toString")` returning undefined
+    // STANDS IN FOR that default `"[object Object]"`. We must therefore stop
+    // and fall back to `"[object Object]"` (return None) rather than
+    // proceeding to `valueOf` — otherwise `String({ valueOf() {…} })`
+    // (string hint) would wrongly use `valueOf` where Node uses the default
+    // `toString`.
+    let to_string_result = call_method_for_primitive(&scope, &value_handle, b"toString");
+    match to_string_result {
+        MethodOutcome::Primitive(p) => return Some(p),
+        // Custom toString returned a non-primitive (object): per spec, fall
+        // through to `valueOf`.
+        MethodOutcome::NonPrimitive => {}
+        // No callable custom toString — this is the default
+        // `Object.prototype.toString` → `"[object Object]"`. Stop here.
+        MethodOutcome::Absent => return None,
+    }
+
+    match call_method_for_primitive(&scope, &value_handle, b"valueOf") {
+        MethodOutcome::Primitive(p) => Some(p),
+        // Both toString and valueOf failed to produce a primitive — Node
+        // throws `TypeError: Cannot convert object to primitive value`. We
+        // approximate by falling back to the default `"[object Object]"`.
+        MethodOutcome::NonPrimitive | MethodOutcome::Absent => None,
+    }
+}
+
+enum MethodOutcome {
+    /// Method was callable and returned a primitive.
+    Primitive(f64),
+    /// Method was callable but returned a non-primitive (object/array).
+    NonPrimitive,
+    /// No own/inherited callable method with that name was found.
+    Absent,
+}
+
+pub(crate) enum OrdinaryToPrimitiveOutcome {
+    Primitive(f64),
+    DefaultString,
+    TypeError,
+}
+
+/// `OrdinaryToPrimitive(O, "number"|"default")` for addition. The method
+/// order is `valueOf` then `toString`; Perry synthesizes the usual inherited
+/// defaults for boxed primitives, arrays, and plain objects because those
+/// built-ins are not stored as ordinary fields on every object.
+pub(crate) unsafe fn ordinary_to_primitive_number_for_add(
+    value: f64,
+) -> OrdinaryToPrimitiveOutcome {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+
+    match call_method_for_primitive(&scope, &value_handle, b"valueOf") {
+        MethodOutcome::Primitive(p) => return OrdinaryToPrimitiveOutcome::Primitive(p),
+        MethodOutcome::NonPrimitive => {}
+        MethodOutcome::Absent => {
+            if let Some((_class_id, payload)) =
+                crate::builtins::boxed_primitive_payload(value_handle.get_nanbox_f64())
+            {
+                return OrdinaryToPrimitiveOutcome::Primitive(payload);
+            }
+        }
+    }
+
+    match call_method_for_primitive(&scope, &value_handle, b"toString") {
+        MethodOutcome::Primitive(p) => OrdinaryToPrimitiveOutcome::Primitive(p),
+        MethodOutcome::NonPrimitive => OrdinaryToPrimitiveOutcome::TypeError,
+        MethodOutcome::Absent => {
+            let value = value_handle.get_nanbox_f64();
+            const TAG_TRUE_BITS: u64 = 0x7FFC_0000_0000_0004;
+            if crate::array::js_array_is_array(value).to_bits() == TAG_TRUE_BITS {
+                let arr_ptr =
+                    JSValue::from_bits(value.to_bits()).as_pointer::<crate::array::ArrayHeader>();
+                let comma = crate::string::js_string_from_bytes(b",".as_ptr(), 1);
+                let joined = crate::array::js_array_join(arr_ptr, comma);
+                return OrdinaryToPrimitiveOutcome::Primitive(crate::value::js_nanbox_string(
+                    joined as i64,
+                ));
+            }
+            OrdinaryToPrimitiveOutcome::DefaultString
+        }
+    }
+}
+
+/// Coerce a NaN-boxed value to a `*const StringHeader` suitable for FFI calls
+/// that expect string/JSON input.
+#[no_mangle]
+pub extern "C" fn js_value_to_str_ptr_for_ffi(value: f64) -> i64 {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_string() {
+        return jsval.as_string_ptr() as i64;
+    }
+    if jsval.is_short_string() {
+        return crate::string::js_string_materialize_to_heap(value) as i64;
+    }
+    unsafe { crate::json::js_json_stringify(value, 0) as i64 }
+}
+
+/// Resolve `obj[method_name]` (own + prototype chain) and, if it is a
+/// callable closure, invoke it with `this = obj` (no args). Returns whether
+/// the result was a primitive, a non-primitive, or whether the method was
+/// absent / non-callable.
+unsafe fn call_method_for_primitive(
+    scope: &crate::gc::RuntimeHandleScope,
+    value_handle: &crate::gc::RuntimeHandle<'_>,
+    method_name: &[u8],
+) -> MethodOutcome {
+    let recv = value_handle.get_nanbox_f64();
+    let obj_ptr = (recv.to_bits() & POINTER_MASK) as *const crate::object::ObjectHeader;
+    if obj_ptr.is_null() || (obj_ptr as usize) < 0x10000 {
+        return MethodOutcome::Absent;
+    }
+    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    let key_handle = scope.root_string_ptr(key);
+    let method = crate::object::js_object_get_field_by_name(
+        obj_ptr,
+        key_handle.get_raw_const_ptr::<crate::string::StringHeader>(),
+    );
+    // Must be a callable closure value (POINTER_TAG + CLOSURE_MAGIC).
+    let method_bits = method.bits();
+    if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
+        return MethodOutcome::Absent;
+    }
+    let method_ptr = (method_bits & POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(method_ptr) {
+        return MethodOutcome::Absent;
+    }
+    // Rebind `this` to the receiver: an INHERITED object-literal method
+    // (`Object.create(proto)`) bakes its reserved `this` slot to the
+    // prototype at construction time, and a bound-method closure carries the
+    // wrong `this` until rebound. For OWN methods the slot already is the
+    // receiver, so rebinding is a correct no-op. Mirrors #1982.
+    let recv = value_handle.get_nanbox_f64();
+    let bound = crate::closure::clone_closure_rebind_this(method_bits, recv);
+    let prev_this = crate::object::js_implicit_this_set(recv);
+    let ret = crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
+    crate::object::js_implicit_this_set(prev_this);
+    let ret_jsv = JSValue::from_bits(ret.to_bits());
+    let is_primitive = ret_jsv.is_any_string()
+        || ret_jsv.is_number()
+        || ret_jsv.is_int32()
+        || ret_jsv.is_bool()
+        || ret_jsv.is_null()
+        || ret_jsv.is_undefined()
+        || ret_jsv.is_bigint();
+    if is_primitive {
+        MethodOutcome::Primitive(ret)
+    } else {
+        MethodOutcome::NonPrimitive
+    }
+}
+
+/// Read an object's own/inherited property by name and coerce it to an owned
+/// `String`, or `None` when the property is absent (undefined/null). Used by
+/// the Error-subclass `toString` path (#2135).
+unsafe fn object_field_to_owned_string(
+    obj: *const crate::object::ObjectHeader,
+    key: &[u8],
+) -> Option<String> {
+    let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    let v = crate::object::js_object_get_field_by_name(obj, key_ptr);
+    if v.is_undefined() || v.is_null() {
+        return None;
+    }
+    let s_ptr = js_jsvalue_to_string(f64::from_bits(v.bits()));
+    if s_ptr.is_null() {
+        return None;
+    }
+    let len = (*s_ptr).byte_len as usize;
+    let data = (s_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+    Some(String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned())
+}
+
+/// Convert a NaN-boxed f64 value to a string pointer.
+/// Handles all value types: strings (extract pointer), numbers (convert), JS handles, etc.
+#[no_mangle]
+pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::StringHeader {
+    // Check for JS handle first - these come from the JS runtime (e.g., process.env values)
+    if is_js_handle(value) {
+        let func_ptr = JS_HANDLE_TO_STRING.load(Ordering::SeqCst);
+        if !func_ptr.is_null() {
+            let func: JsHandleToStringFn = unsafe { std::mem::transmute(func_ptr) };
+            return func(value);
+        }
+        // Fallback if no handler registered
+        return crate::string::js_string_from_bytes(b"[JS Handle]".as_ptr(), 11);
+    }
+
+    let jsval = JSValue::from_bits(value.to_bits());
+
+    if jsval.is_string() {
+        // Already a heap string — return the pointer directly.
+        jsval.as_string_ptr() as *mut crate::string::StringHeader
+    } else if jsval.is_short_string() {
+        // Inline SSO — materialize into a heap StringHeader so the
+        // caller gets a uniform `*mut StringHeader`. This defeats
+        // the SSO benefit for this particular conversion, but it's
+        // a correctness-preserving compatibility shim for the many
+        // call sites that currently expect a heap pointer.
+        crate::string::js_string_materialize_to_heap(value)
+    } else if jsval.is_undefined() {
+        crate::string::js_string_from_bytes(b"undefined".as_ptr(), 9)
+    } else if jsval.is_null() {
+        crate::string::js_string_from_bytes(b"null".as_ptr(), 4)
+    } else if jsval.is_bool() {
+        if jsval.as_bool() {
+            crate::string::js_string_from_bytes(b"true".as_ptr(), 4)
+        } else {
+            crate::string::js_string_from_bytes(b"false".as_ptr(), 5)
+        }
+    } else if jsval.is_int32() {
+        // Convert int32 to string
+        let n = jsval.as_int32();
+        let s = n.to_string();
+        crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
+    } else if jsval.is_bigint() {
+        // BigInt - convert to decimal string
+        let ptr = jsval.as_bigint_ptr();
+        crate::bigint::js_bigint_to_string(ptr)
+    } else if jsval.is_pointer() {
+        // Pointer: could be an array, object, or other heap type. Arrays
+        // stringify via `Array.prototype.join(",")` per JS semantics; other
+        // objects fall back to "[object Object]".
+        let ptr: *const u8 = jsval.as_pointer();
+        if !ptr.is_null() && (ptr as usize) >= 0x10000 {
+            // Symbols: detect via the side-table before any GC header read.
+            if crate::symbol::is_registered_symbol(ptr as usize) {
+                return unsafe {
+                    crate::symbol::js_symbol_to_string(value) as *mut crate::string::StringHeader
+                };
+            }
+            // Consult `[Symbol.toPrimitive]("string")` if the object has a
+            // custom toPrimitive method registered in the symbol side-table.
+            // A changed result means the user-defined method produced a
+            // string-hint primitive — recurse so strings pass through as-is
+            // and numbers get js_number_to_string.
+            let primitive = unsafe { crate::symbol::js_to_primitive(value, 2) };
+            if primitive.to_bits() != value.to_bits() {
+                return js_jsvalue_to_string(primitive);
+            }
+            // Buffers: BufferHeader has no GC header, so we must detect via
+            // BUFFER_REGISTRY before any GC-header probe (which would read
+            // garbage one word before the buffer). `Buffer.toString()` with
+            // no arg defaults to UTF-8 — Node prints the raw bytes.
+            if crate::buffer::is_registered_buffer(ptr as usize) {
+                return crate::buffer::js_buffer_to_string(
+                    ptr as *const crate::buffer::BufferHeader,
+                    0,
+                );
+            }
+            // #2089: a Date is a NaN-boxed `DateCell` pointer. `String(date)`,
+            // `` `${date}` ``, and `date.toString()` produce the full local
+            // date string (or "Invalid Date"), not "[object Object]". Detect
+            // before GC-header object dispatch (the 8-byte cell is smaller
+            // than an ObjectHeader), after non-GC native buffer handles.
+            if crate::date::is_date_cell_addr(ptr as usize) {
+                return crate::date::js_date_to_string(value);
+            }
+            // A RegExp stringifies to `/source/flags` (RegExp.prototype.toString),
+            // not "[object Object]" — covers `String(re)` and `` `${re}` ``.
+            if crate::regex::is_regex_pointer(ptr) {
+                return crate::regex::js_regexp_to_string(ptr as *const crate::regex::RegExpHeader);
+            }
+            unsafe {
+                let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+                    // Use js_array_join with a "," separator to match Array.prototype.toString.
+                    let sep = crate::string::js_string_from_bytes(b",".as_ptr(), 1);
+                    return crate::array::js_array_join(
+                        ptr as *const crate::array::ArrayHeader,
+                        sep as *const crate::string::StringHeader,
+                    );
+                }
+                // #1653: a boxed server-rendered JSX node stringifies to its
+                // stored HTML (field 0), so `String(<div/>)` / `c.html(<X/>)`
+                // emit real markup instead of "[object Object]".
+                let obj = ptr as *const crate::object::ObjectHeader;
+                if (*obj).class_id == crate::jsx::JSX_NODE_CLASS_ID {
+                    let html = crate::object::js_object_get_field(obj, 0);
+                    return js_jsvalue_to_string(f64::from_bits(html.bits()));
+                }
+            }
+            // OrdinaryToPrimitive(obj, "string"): the object has no
+            // `[Symbol.toPrimitive]` (checked above) and is not an
+            // array/buffer/JSX/symbol with its own coercion. Per spec, call
+            // the object's own/inherited `toString` (then `valueOf`) with
+            // `this = obj`. A custom `toString` on a plain object, an
+            // `Object.create(proto)` result, or a class instance resolves
+            // here; a primitive result is re-coerced (strings pass through,
+            // numbers via `js_number_to_string`). A plain `{}` (no callable
+            // toString/valueOf) returns None and falls through to the default
+            // `"[object Object]"`. (Built-in Error/Date prototype `toString`s
+            // are not discoverable as object fields in Perry's model, so they
+            // still hit the fallback — a separate, pre-existing gap.)
+            if let Some(primitive) = unsafe { ordinary_to_primitive_string(value) } {
+                if primitive.to_bits() != value.to_bits() {
+                    return js_jsvalue_to_string(primitive);
+                }
+            }
+            // #2135: a built-in Error with no user-overridden `toString`
+            // resolves here. `Error.prototype.toString` is `name`/`message`/
+            // `"name: message"`, not Object.prototype's `"[object Object]"`.
+            unsafe {
+                let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                if (*gc_header).obj_type == crate::gc::GC_TYPE_ERROR {
+                    return crate::error::js_error_to_string(ptr as *mut crate::error::ErrorHeader);
+                }
+                // #2135: an Error *subclass* (`class X extends Error`) is a
+                // plain class instance, not a `GC_TYPE_ERROR` ErrorHeader, so
+                // it reaches here. `Error.prototype.toString` reads the `name`
+                // and `message` properties (own or inherited) — resolve them
+                // and format `name`/`message`/`"name: message"` rather than
+                // falling through to `"[object Object]"`. `extends_builtin_error`
+                // walks the class-id chain (the same check that backs
+                // `instanceof Error`); its registry lookup never dereferences
+                // `class_id`, so it is safe even for non-class pointers.
+                let obj = ptr as *const crate::object::ObjectHeader;
+                let class_id = (*obj).class_id;
+                if class_id != 0 && crate::object::extends_builtin_error(class_id) {
+                    let name = object_field_to_owned_string(obj, b"name")
+                        .unwrap_or_else(|| "Error".to_string());
+                    let message = object_field_to_owned_string(obj, b"message").unwrap_or_default();
+                    let result = if name.is_empty() {
+                        message
+                    } else if message.is_empty() {
+                        name
+                    } else {
+                        format!("{name}: {message}")
+                    };
+                    return crate::string::js_string_from_bytes(
+                        result.as_ptr(),
+                        result.len() as u32,
+                    );
+                }
+            }
+        }
+        crate::string::js_string_from_bytes(b"[object Object]".as_ptr(), 15)
+    } else {
+        // Regular number - use js_number_to_string
+        crate::string::js_number_to_string(value)
+    }
+}
+
+/// ECMAScript `ToNumber` for a radix argument value (NaN-boxed f64). Numbers
+/// pass through; strings are parsed with `Number()` semantics (trim + full
+/// numeric parse, NOT `parseFloat` prefix parse — `"16px"` → NaN); booleans →
+/// 0/1; null → 0; undefined → NaN (signals "use the default radix 10").
+/// Returns NaN for anything that does not coerce to a finite number.
+unsafe fn radix_arg_to_number(radix_value: f64) -> f64 {
+    let jsval = JSValue::from_bits(radix_value.to_bits());
+    if jsval.is_int32() {
+        jsval.as_int32() as f64
+    } else if jsval.is_bool() {
+        if jsval.as_bool() {
+            1.0
+        } else {
+            0.0
+        }
+    } else if jsval.is_null() {
+        0.0
+    } else if jsval.is_undefined() {
+        // Signals the "no radix supplied" / default path.
+        f64::NAN
+    } else if jsval.is_any_string() {
+        let s_ptr = js_jsvalue_to_string(radix_value);
+        if s_ptr.is_null() {
+            return f64::NAN;
+        }
+        let len = (*s_ptr).byte_len as usize;
+        let data = (s_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let bytes = std::slice::from_raw_parts(data, len);
+        let trimmed = std::str::from_utf8(bytes).unwrap_or("").trim();
+        if trimmed.is_empty() {
+            // `Number("")` === 0
+            0.0
+        } else {
+            trimmed.parse::<f64>().unwrap_or(f64::NAN)
+        }
+    } else {
+        // Plain f64 number (or some other heap pointer that does not coerce
+        // to a finite radix — treat as NaN so it triggers RangeError).
+        if jsval.is_number() {
+            radix_value
+        } else {
+            f64::NAN
+        }
+    }
+}
+
+/// Coerce + validate a radix argument per ECMAScript `Number.prototype.toString`
+/// (and `BigInt.prototype.toString`). Returns the validated integer radix in
+/// `2..=36`, or `None` when the argument was `undefined` (caller uses the
+/// default radix 10). Throws (diverges via `js_throw`) with a `RangeError` for
+/// any other out-of-range / non-coercible value, matching Node.
+pub(crate) unsafe fn coerce_validate_radix(radix_value: f64) -> Option<i32> {
+    let n = radix_arg_to_number(radix_value);
+    if n.is_nan() {
+        // `undefined` → default radix (None); everything else NaN → RangeError.
+        if JSValue::from_bits(radix_value.to_bits()).is_undefined() {
+            return None;
+        }
+        throw_radix_range_error();
+    }
+    // ToInteger: truncate toward zero.
+    let r = n.trunc();
+    if !(2.0..=36.0).contains(&r) {
+        throw_radix_range_error();
+    }
+    Some(r as i32)
+}
+
+fn throw_radix_range_error() -> ! {
+    let message = b"toString() radix must be between 2 and 36";
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_rangeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// V8-style `DoubleToRadixCString`: render a finite, non-integer f64 in
+/// `radix` (2..=36) producing the shortest digit sequence that round-trips
+/// back to the same double. Mirrors ECMAScript `Number::toString` for
+/// non-decimal radices, including the fractional part (`(10.5).toString(2)`
+/// === `"1010.1"`). Assumes `radix` is already validated.
+fn double_to_radix_string(value: f64, radix: u32) -> String {
+    debug_assert!((2..=36).contains(&radix));
+    const CHARS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+
+    let negative = value < 0.0;
+    let abs = value.abs();
+
+    // Split into integer and fractional parts.
+    let mut integer = abs.floor();
+    let mut fraction = abs - integer;
+
+    // `delta` is half the distance to the next representable double, the
+    // tolerance used to decide when enough fractional digits have been
+    // emitted to uniquely identify `value` (shortest round-trip).
+    let mut delta = 0.5 * (next_double(abs) - abs);
+    delta = next_double(0.0).max(delta);
+
+    let mut frac_buf = String::new();
+    if fraction >= delta {
+        frac_buf.push('.');
+        loop {
+            // Shift up by the radix.
+            fraction *= radix as f64;
+            delta *= radix as f64;
+            // Extract the digit.
+            let digit = fraction.floor() as usize;
+            frac_buf.push(CHARS[digit] as char);
+            fraction -= digit as f64;
+            if fraction >= 0.5 && fraction > delta {
+                // Round up: carry into the already-emitted digits.
+                if fraction + delta > 1.0 {
+                    // Propagate the carry through fraction digits, possibly
+                    // into the integer part.
+                    loop {
+                        // Pop the last char; if it was '.', carry into integer.
+                        let last = frac_buf.pop();
+                        match last {
+                            None => {
+                                integer += 1.0;
+                                break;
+                            }
+                            Some('.') => {
+                                frac_buf.push('.');
+                                integer += 1.0;
+                                break;
+                            }
+                            Some(c) => {
+                                let idx = CHARS.iter().position(|&b| b as char == c).unwrap();
+                                if idx + 1 < radix as usize {
+                                    frac_buf.push(CHARS[idx + 1] as char);
+                                    break;
+                                }
+                                // Was the max digit (e.g. 'f' in hex): becomes
+                                // '0' and the carry continues leftward.
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+            if fraction < delta {
+                break;
+            }
+        }
+        // A trailing '.' with no fraction digits (carry consumed all) is junk.
+        if frac_buf == "." {
+            frac_buf.clear();
+        }
+    }
+
+    // Integer part: repeated division. `integer` may have grown via carry.
+    let mut int_buf = String::new();
+    if integer == 0.0 {
+        int_buf.push('0');
+    } else {
+        while integer >= 1.0 {
+            let remainder = (integer % radix as f64) as usize;
+            int_buf.push(CHARS[remainder] as char);
+            integer = (integer / radix as f64).floor();
+        }
+    }
+    let int_part: String = int_buf.chars().rev().collect();
+
+    let mut result = String::new();
+    if negative {
+        result.push('-');
+    }
+    result.push_str(&int_part);
+    result.push_str(&frac_buf);
+    result
+}
+
+/// Smallest representable double strictly greater than `x` (for finite `x`).
+fn next_double(x: f64) -> f64 {
+    if x.is_nan() || x == f64::INFINITY {
+        return x;
+    }
+    let bits = x.to_bits();
+    let next = if x >= 0.0 {
+        bits + 1
+    } else if bits == (1u64 << 63) {
+        // -0.0 → smallest positive subnormal
+        1
+    } else {
+        bits - 1
+    };
+    f64::from_bits(next)
+}
+
+/// Convert a NaN-boxed f64 value to a string with the given radix argument.
+/// `radix_value` is the *raw* NaN-boxed radix argument (number/string/bool/
+/// undefined); it is ToNumber/ToInteger-coerced and validated to `2..=36`
+/// here, throwing `RangeError` for out-of-range values (#2864). Handles
+/// BigInt (uses bigint_to_string_radix), numbers, strings, etc.
+#[no_mangle]
+pub extern "C" fn js_jsvalue_to_string_radix(
+    value: f64,
+    radix_value: f64,
+) -> *mut crate::string::StringHeader {
+    let jsval = JSValue::from_bits(value.to_bits());
+
+    // Coerce + validate the radix once up front. `None` → default radix 10.
+    let radix = match unsafe { coerce_validate_radix(radix_value) } {
+        Some(r) => r,
+        None => 10,
+    };
+
+    if jsval.is_bigint() {
+        let ptr = jsval.as_bigint_ptr();
+        crate::bigint::js_bigint_to_string_radix(ptr, radix)
+    } else if jsval.is_string() {
+        jsval.as_string_ptr() as *mut crate::string::StringHeader
+    } else if jsval.is_int32() {
+        let n = jsval.as_int32();
+        if radix == 10 {
+            let s = n.to_string();
+            return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        }
+        let s = double_to_radix_string(n as f64, radix as u32);
+        crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
+    } else {
+        // Regular f64 number
+        let n = value;
+        if n.is_nan() {
+            return crate::string::js_string_from_bytes(b"NaN".as_ptr(), 3);
+        }
+        if n.is_infinite() {
+            if n > 0.0 {
+                return crate::string::js_string_from_bytes(b"Infinity".as_ptr(), 8);
+            } else {
+                return crate::string::js_string_from_bytes(b"-Infinity".as_ptr(), 9);
+            }
+        }
+        if radix == 10 {
+            return crate::string::js_number_to_string(value);
+        }
+        let s = double_to_radix_string(n, radix as u32);
+        crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
+    }
+}
+
+/// Ensure a value is a native string pointer.
+/// This is specifically for fetch headers where we need to handle:
+/// 1. Raw string pointers (literal strings - f64 bits ARE the pointer)
+/// 2. NaN-boxed strings (STRING_TAG)
+/// 3. JS handle strings (from process.env)
+/// Returns the string pointer as i64.
+#[no_mangle]
+pub extern "C" fn js_ensure_string_ptr(value: f64) -> i64 {
+    let bits = value.to_bits();
+
+    // Check for JS handle first - these need conversion
+    if is_js_handle(value) {
+        let func_ptr = JS_HANDLE_TO_STRING.load(Ordering::SeqCst);
+        if !func_ptr.is_null() {
+            let func: JsHandleToStringFn = unsafe { std::mem::transmute(func_ptr) };
+            return func(value) as i64;
+        }
+        // Fallback - create a placeholder string
+        return crate::string::js_string_from_bytes(b"[JS Handle]".as_ptr(), 11) as i64;
+    }
+
+    // Check for NaN-boxed string (STRING_TAG)
+    if (bits & TAG_MASK) == STRING_TAG {
+        let ptr = (bits & POINTER_MASK) as i64;
+        if ptr != 0 {
+            let str_header = ptr as *const crate::string::StringHeader;
+            unsafe {
+                let length = (*str_header).byte_len;
+                // Make a copy of the string to ensure we have a Perry-allocated string
+                let data_ptr = (str_header as *const u8)
+                    .add(std::mem::size_of::<crate::string::StringHeader>());
+                let copy = crate::string::js_string_from_bytes(data_ptr, length);
+                return copy as i64;
+            }
+        }
+        return ptr;
+    }
+
+    // Otherwise, treat the f64 bits directly as a pointer (raw string literal)
+    bits as i64
+}
+
+#[cfg(test)]
+mod error_subclass_tostring_tests {
+    use super::*;
+
+    #[test]
+    fn object_field_to_owned_string_reads_and_misses() {
+        unsafe {
+            let obj = crate::object::js_object_alloc(0, 2);
+            let key = crate::string::js_string_from_bytes(b"message".as_ptr(), 7);
+            let val = crate::string::js_string_from_bytes(b"hi".as_ptr(), 2);
+            crate::object::js_object_set_field_by_name(
+                obj,
+                key,
+                crate::value::js_nanbox_string(val as i64),
+            );
+            assert_eq!(
+                object_field_to_owned_string(obj, b"message").as_deref(),
+                Some("hi")
+            );
+            assert_eq!(object_field_to_owned_string(obj, b"missing"), None);
+        }
+    }
+}
+
+#[cfg(test)]
+mod radix_tostring_tests {
+    use super::*;
+
+    #[test]
+    fn integer_radix_formatting() {
+        assert_eq!(double_to_radix_string(255.0, 16), "ff");
+        assert_eq!(double_to_radix_string(10.0, 2), "1010");
+        assert_eq!(double_to_radix_string(255.0, 2), "11111111");
+        assert_eq!(double_to_radix_string(-255.0, 16), "-ff");
+        assert_eq!(double_to_radix_string(0.0, 2), "0");
+        assert_eq!(double_to_radix_string(35.0, 36), "z");
+    }
+
+    #[test]
+    fn fractional_radix_formatting_matches_v8() {
+        // Terminating fractions.
+        assert_eq!(double_to_radix_string(10.5, 2), "1010.1");
+        assert_eq!(double_to_radix_string(10.5, 16), "a.8");
+        assert_eq!(double_to_radix_string(10.5, 36), "a.i");
+        assert_eq!(double_to_radix_string(-10.5, 2), "-1010.1");
+        assert_eq!(double_to_radix_string(255.5, 16), "ff.8");
+        assert_eq!(double_to_radix_string(1.5, 2), "1.1");
+        assert_eq!(double_to_radix_string(100.25, 2), "1100100.01");
+        // Repeating fraction — shortest round-trip (matches Node v25).
+        assert_eq!(
+            double_to_radix_string(0.1, 2),
+            "0.0001100110011001100110011001100110011001100110011001101"
+        );
+    }
+
+    #[test]
+    fn coerce_validate_radix_semantics() {
+        unsafe {
+            // undefined → None (default radix path).
+            assert_eq!(
+                coerce_validate_radix(f64::from_bits(crate::value::TAG_UNDEFINED)),
+                None
+            );
+            // Plain number radices.
+            assert_eq!(coerce_validate_radix(16.0), Some(16));
+            assert_eq!(coerce_validate_radix(2.0), Some(2));
+            assert_eq!(coerce_validate_radix(36.0), Some(36));
+            // ToInteger truncation.
+            assert_eq!(coerce_validate_radix(2.9), Some(2));
+            // int32-boxed radix.
+            assert_eq!(
+                coerce_validate_radix(f64::from_bits(JSValue::int32(16).bits())),
+                Some(16)
+            );
+            // String radix coerces via ToNumber.
+            let s = crate::string::js_string_from_bytes(b"16".as_ptr(), 2);
+            assert_eq!(
+                coerce_validate_radix(crate::value::js_nanbox_string(s as i64)),
+                Some(16)
+            );
+        }
+    }
+}

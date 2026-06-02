@@ -1,0 +1,16 @@
+[package]
+name = "perry-ext-events"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for Node's `events` module (EventEmitter pattern) — uses only `perry-ffi`. Phase 5 — first port that exercises the GC-root-scanner surface."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }
+perry-runtime.workspace = true

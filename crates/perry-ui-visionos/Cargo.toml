@@ -15,6 +15,7 @@ geisterhand = []
 perry-ui = { path = "../perry-ui" }
 perry-ui-testkit = { workspace = true }
 perry-runtime = { path = "../perry-runtime", default-features = false }
+base64 = "0.22"
 block2 = "0.6"
 libc = "0.2"
 objc2 = "0.6"

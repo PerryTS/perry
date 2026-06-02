@@ -1,0 +1,37 @@
+{
+  "image_convolution": {
+    "stdout_len": 48,
+    "tokens": {
+      "bytes": "24883200",
+      "checksum": "2ba2e053",
+      "dims": "3840x2160"
+    },
+    "workload": "image_convolution"
+  },
+  "json_pipeline_full": {
+    "output_file_path": "/tmp/out_bun.json",
+    "output_file_sha256": "3c52c67cad92851461164656c1f854f70a4f0f0e718f6d088828d72d8b531c23",
+    "stdout_len": 95,
+    "tokens": {
+      "hash": "b7e8a588",
+      "input_bytes": "112695869",
+      "output_bytes": "68140794",
+      "records_in": "500000",
+      "records_out": "249976"
+    },
+    "workload": "json_pipeline_full"
+  },
+  "json_pipeline_small": {
+    "output_file_path": "/tmp/out_bun.json",
+    "output_file_sha256": "a1d5a65ce397922ea360c95653e8516f56261fe3a59f49813fc2564cfedb519c",
+    "stdout_len": 81,
+    "tokens": {
+      "hash": "7fc66fa8",
+      "input_bytes": "21671",
+      "output_bytes": "14841",
+      "records_in": "100",
+      "records_out": "56"
+    },
+    "workload": "json_pipeline_small"
+  }
+}

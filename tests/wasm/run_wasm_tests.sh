@@ -23,6 +23,13 @@ run_test() {
   local expected_file="$DIR/$name.expected"
   local html_file="/tmp/perry_wasm_test_${name}.html"
 
+  # Multi-module convention (issue #1071): a subdirectory `$name/` with an
+  # `entry.ts` and any helper modules. The compiler walks imports from
+  # entry.ts so siblings can be `import {...} from './helper'`.
+  if [ -d "$DIR/$name" ] && [ -f "$DIR/$name/entry.ts" ]; then
+    ts_file="$DIR/$name/entry.ts"
+  fi
+
   if [ ! -f "$ts_file" ]; then
     echo "SKIP $name (no .ts file)"
     return
@@ -39,6 +46,28 @@ run_test() {
   # Run in Node.js
   local actual
   actual=$(node -e "
+// Minimal DOM polyfill: wasm_runtime.js injects a <style> tag at module load,
+// so 'document' must exist or the require fails before any test code runs.
+globalThis.window = globalThis;
+const _stub = { id: '', appendChild: () => {}, getElementById: () => null, style: {}, textContent: '' };
+const _doc = { createElement: () => Object.assign({}, _stub), getElementById: () => null, title: '' };
+_doc.head = _stub; _doc.body = _stub;
+globalThis.document = _doc;
+let __rafNow = 0;
+const __rafTimers = new Map();
+globalThis.requestAnimationFrame = (cb) => {
+  const id = setTimeout(() => {
+    __rafTimers.delete(id);
+    __rafNow += 16;
+    cb(__rafNow);
+  }, 0);
+  __rafTimers.set(id, id);
+  return id;
+};
+globalThis.cancelAnimationFrame = (id) => {
+  clearTimeout(id);
+  __rafTimers.delete(id);
+};
 const fs = require('fs');
 const html = fs.readFileSync('$html_file', 'utf8');
 const scripts = [];
@@ -91,6 +120,13 @@ echo ""
 for ts_file in "$DIR"/*.ts; do
   name=$(basename "$ts_file" .ts)
   run_test "$name"
+done
+# Multi-module tests live in numbered subdirectories with an `entry.ts`.
+for dir in "$DIR"/*/; do
+  name=$(basename "$dir")
+  if [ -f "$dir/entry.ts" ] && [ ! -f "$DIR/$name.ts" ]; then
+    run_test "$name"
+  fi
 done
 
 echo ""

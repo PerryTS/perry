@@ -13,6 +13,25 @@ Perry compiles a practical subset of TypeScript. Most pure TS/JS packages can be
 | Package's core API is built on `Proxy` (ORMs, validation DSLs, reactive stores) | **Probably not portable.** The surface Perry-users touch is the Proxy. |
 | Package is pure TS/JS but uses lookbehind regex, `Symbol`, `WeakMap`, etc. | **Patchable.** See [Common gaps](#common-gaps) below. |
 
+### Known-working packages
+
+These work end-to-end via `compilePackages` with no patches required:
+
+- **`hono`** — the full hono `app.fetch` surface including middleware
+  (`hono/logger`, `hono/cors`, `hono/jwt`), route groups, JSON responses.
+  Enough for testing and edge-runtime deploys (CF Workers / Vercel Edge /
+  Lambda / Deno Deploy). See [HTTP & Networking → Hono](../stdlib/http.md#hono).
+  Long-lived HTTP server deployment via `@hono/node-server` or hand-rolled
+  `node:http` is currently blocked on [#589](https://github.com/PerryTS/perry/issues/589).
+  Closed via issues #421 / #486 / #487 / #577.
+- **`@bradenmacdonald/s3-lite-client`** — pure-TS AWS S3 / S3-compatible
+  storage client (R2, MinIO, B2, Spaces, Supabase, LocalStack). Full SigV4
+  signing chain (Put/Get/Head/Delete/List + presigned URLs) verified
+  byte-identical to `bun`. See [HTTP & Networking → AWS S3](../stdlib/http.md#aws-s3--s3-compatible-object-storage)
+  for the usage pattern. Closed via [#551](https://github.com/PerryTS/perry/issues/551)
+  + 15 general-purpose stdlib fixes (Web Crypto, Web Streams subclassing,
+  typed-array marshalling, `extends Error`, namespace imports, etc.).
+
 ## The workflow
 
 ### 1. Add it to `compilePackages`

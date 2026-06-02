@@ -9,7 +9,7 @@
 #
 # Captured per run:
 #   workload       — e.g. "image_convolution"
-#   language       — "rust" | "zig" | "perry"
+#   language       — "rust" | "zig" | "perry" | "node" | "bun"
 #   binary         — path
 #   run            — 1..MEASURED
 #   wall_ms        — python time.monotonic_ns() delta, millis
@@ -17,6 +17,13 @@
 #   exit_code
 #   stdout_first   — first 200 chars of stdout (truncated)
 #   stdout_last    — last  200 chars of stdout (truncated)
+#   output_match           — bool|null (#441 — null when no expected entry yet)
+#   output_match_reason    — humanized diff if false; "" if true; descriptor if null
+#
+# Output-correctness gate (#441) is opt-in via env vars:
+#   HONEST_BENCH_EXPECTED_JSON  — path to results/expected.json
+#   HONEST_BENCH_CHECK_OUTPUT   — path to harness/check_output.py
+#   HONEST_BENCH_OUTPUT_FILE    — path the run produces (sha256-compared)
 
 set -euo pipefail
 
@@ -61,10 +68,14 @@ measure_once() {
   stdout_last=$(tail -1  "$tmp_out" 2>/dev/null | head -c 200 || true)
 
   if [[ "$kind" == "measured" ]]; then
-    python3 - "$WORKLOAD" "$LANGUAGE" "$BINARY" "$run" "$wall_ns" "$peak_kb" "$exit_code" "$stdout_first" "$stdout_last" <<'PY'
-import sys, json
-_, workload, lang, binary, run, wall_ns, peak_kb, exit_code, stdout_first, stdout_last = sys.argv
-print(json.dumps({
+    python3 - \
+        "$WORKLOAD" "$LANGUAGE" "$BINARY" "$run" "$wall_ns" "$peak_kb" \
+        "$exit_code" "$stdout_first" "$stdout_last" "$tmp_out" <<'PY'
+import json, os, subprocess, sys
+(_, workload, lang, binary, run, wall_ns, peak_kb,
+ exit_code, stdout_first, stdout_last, stdout_path) = sys.argv
+
+row = {
     "workload": workload,
     "language": lang,
     "binary": binary,
@@ -74,7 +85,33 @@ print(json.dumps({
     "exit_code": int(exit_code),
     "stdout_first": stdout_first,
     "stdout_last": stdout_last,
-}))
+}
+
+# #441: output-correctness gate.
+expected = os.environ.get("HONEST_BENCH_EXPECTED_JSON", "")
+checker  = os.environ.get("HONEST_BENCH_CHECK_OUTPUT", "")
+output_file = os.environ.get("HONEST_BENCH_OUTPUT_FILE", "")
+if expected and checker and os.path.exists(expected) and os.path.exists(checker):
+    cmd = [sys.executable, checker,
+           "--expected-json", expected,
+           "--workload", workload,
+           "--stdout-file", stdout_path]
+    if output_file:
+        cmd += ["--output-file", output_file]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if r.returncode == 0 and r.stdout.strip():
+            check = json.loads(r.stdout.strip())
+            row["output_match"] = check.get("output_match")
+            row["output_match_reason"] = check.get("output_match_reason", "")
+        else:
+            row["output_match"] = None
+            row["output_match_reason"] = f"checker exit {r.returncode}: {r.stderr.strip()[:120]}"
+    except Exception as e:
+        row["output_match"] = None
+        row["output_match_reason"] = f"check error: {type(e).__name__}: {e}"
+
+print(json.dumps(row))
 PY
   fi
   rm -f "$tmp_err" "$tmp_out"

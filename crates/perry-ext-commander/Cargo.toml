@@ -1,0 +1,16 @@
+[package]
+name = "perry-ext-commander"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for npm `commander` — uses only `perry-ffi`. Sync, handle-based fluent CLI parser. Uses GC root scanner to keep .action() closures alive across allocations."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }
+perry-runtime.workspace = true

@@ -7,6 +7,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
@@ -80,7 +81,7 @@ pub fn should_skip_check() -> bool {
     if std::env::var("CI").is_ok_and(|v| v == "true" || v == "1") {
         return true;
     }
-    if !atty::is(atty::Stream::Stderr) {
+    if !std::io::stderr().is_terminal() {
         return true;
     }
     false

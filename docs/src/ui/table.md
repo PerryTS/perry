@@ -55,6 +55,49 @@ Update the number of rows after creation:
 {{#include ../../examples/ui/table/snippets.ts:complete-example}}
 ```
 
+## Sort, filter, multi-select (issue #473)
+
+Since v0.5.636 the macOS `Table` exposes a column-sort callback,
+multi-row selection, and a passive filter-text slot the user wires to
+their own row-hiding logic.
+
+```typescript,no-test
+import {
+  Table,
+  tableSetOnSortChange,
+  tableSetAllowsMultipleSelection,
+  tableGetSelectedRowsCount,
+  tableGetSelectedRowAt,
+  tableSetFilterText,
+  tableGetFilterText,
+} from "perry/ui";
+
+const table = Table(rows.length, cols.length, renderCell);
+
+tableSetAllowsMultipleSelection(table, 1);
+
+tableSetOnSortChange(table, (col, ascending) => {
+  // Re-sort your data array, then call tableReload(table)
+  rows.sort((a, b) =>
+    ascending ? a[col].localeCompare(b[col]) : b[col].localeCompare(a[col]),
+  );
+});
+
+// Multi-select read-back
+const n = tableGetSelectedRowsCount(table);
+for (let i = 0; i < n; i++) {
+  console.log("selected:", tableGetSelectedRowAt(table, i));
+}
+
+// Passive filter slot — your TS code reads it back and adjusts
+// `tableUpdateRowCount(table, filteredRows.length)`.
+tableSetFilterText(table, "alice");
+console.log(tableGetFilterText(table));
+```
+
+These are real impls on macOS via `NSTableView.sortDescriptors` and
+`selectedRowIndexes`; other platforms link safe-default stubs.
+
 ## Next Steps
 
 - [Widgets](widgets.md) — All available widgets

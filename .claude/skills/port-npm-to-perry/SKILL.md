@@ -24,7 +24,7 @@ If `$ARGUMENTS` is a specifier, resolve it to `node_modules/<name>` in the curre
 Read `package.json` at the package root. Note:
 - `main` / `module` / `exports` — the entry points
 - `dependencies` — transitive deps that will also need to port
-- `gypfile: true` or a `binding.gyp` file — **stop**: this package has a native C/C++ addon and cannot be compiled natively. Report this to the user and suggest the QuickJS fallback (`perry/jsruntime`) or an alternative package.
+- `gypfile: true` or a `binding.gyp` file — **stop**: this package has a native C/C++ addon and cannot be compiled natively. Report this to the user and suggest an alternative package (Perry is AOT-only and has no runtime JS/V8 fallback).
 - `prebuilds/` directory or `.node` files anywhere — same as above, native addon.
 
 ### 2. Scan for known gaps

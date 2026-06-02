@@ -1,0 +1,56 @@
+{
+  "name": "@scope/demo-native",
+  "version": "1.0.0",
+  "perry": {
+    "nativeLibrary": {
+      "abiVersion": "0.5.0",
+      "functions": [
+        {
+          "name": "renderFrame",
+          "params": ["string"],
+          "returns": "void"
+        }
+      ],
+      "targets": {
+        "linux": {
+          "crate": "native/linux",
+          "lib": "demo_linux",
+          "resources": ["assets/linux-config.json"],
+          "backends": {
+            "vulkan": {
+              "libs": ["vulkan"],
+              "libDirs": ["vendor/vulkan/lib"],
+              "shaderSources": ["shaders/default.comp"],
+              "shaderOutputs": ["prebuilt/default.spv"],
+              "resources": ["resources/vulkan"],
+              "package": {
+                "name": "demo-vulkan",
+                "version": "1.0.0",
+                "kind": "spirv"
+              }
+            }
+          }
+        },
+        "android": {
+          "available": false,
+          "unavailableReason": "Android native package ships separately"
+        },
+        "windows": {
+          "prebuilt": "./prebuilt/windows/demo.lib",
+          "backends": {
+            "d3d12": {
+              "libs": ["d3d12", "dxgi", "dxguid"],
+              "shaderSources": ["shaders/default.hlsl"],
+              "shaderOutputs": ["prebuilt/default.dxil"],
+              "package": {
+                "name": "demo-d3d12",
+                "version": "1.0.0",
+                "kind": "dxil"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

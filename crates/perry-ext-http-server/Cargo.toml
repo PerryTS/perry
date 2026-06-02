@@ -1,0 +1,33 @@
+[package]
+name = "perry-ext-http-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for Node.js's `node:http`, `node:https`, and `node:http2` server modules — hyper-based HTTP/1.1 + HTTP/2 + TLS via rustls. Issue #577."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+# Phase 4: cross-crate WS upgrade handoff. perry-ext-ws exposes
+# `register_external_ws_stream<S>(WebSocketStream<S>) -> i64`; we
+# call it from upgrade::handle_websocket_upgrade so 'upgrade' event
+# listeners receive a ws_id usable through the rest of the
+# perry-ext-ws FFI surface (`js_ws_send` / `js_ws_close` / `js_ws_on`).
+perry-ext-ws = { path = "../perry-ext-ws" }
+hyper = { version = "1.4", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"] }
+http-body-util = "0.1"
+bytes = "1.5"
+tokio = { workspace = true }
+tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+rustls-pemfile = "2"
+serde_json = "1"
+lazy_static = "1.5"
+tokio-tungstenite = { workspace = true }
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }
+perry-runtime = { workspace = true, features = ["external-ws-symbols"] }

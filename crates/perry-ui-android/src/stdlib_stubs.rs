@@ -1,7 +1,10 @@
 //! No-op stubs for perry-stdlib symbols.
-//! Perry-stdlib can't be cross-compiled for Android (OpenSSL dependency).
-//! These stubs satisfy the linker; the actual functions are never called
-//! because the Pry app doesn't import any stdlib-dependent modules.
+//! perry-stdlib is not bundled into libperry_ui_android.a; this file exists so
+//! the linker can resolve `js_*` references emitted unconditionally by
+//! codegen for stdlib-dependent FFIs that the app doesn't actually call.
+//! Anything that needs a real Android impl gets force-linked from a smaller
+//! standalone crate via `extern crate` in lib.rs (see `extern crate
+//! perry_ext_sharp` for the issue #552 image-compression path).
 
 // Symbols now provided by perry-runtime (removed from here to avoid duplicates):
 // js_stdlib_init_dispatch, js_stdlib_process_pending (perry-runtime/stdlib_stubs.rs)
@@ -306,6 +309,10 @@ pub extern "C" fn js_crypto_random_bytes_hex() -> i64 {
 }
 #[no_mangle]
 pub extern "C" fn js_crypto_random_uuid() -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn js_crypto_random_uuidv7() -> i64 {
     0
 }
 #[no_mangle]
@@ -1403,62 +1410,12 @@ pub extern "C" fn js_runtime_init() -> i64 {
 pub extern "C" fn js_set_property() -> i64 {
     0
 }
-#[no_mangle]
-pub extern "C" fn js_sharp_blur() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_sharp_flip() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_sharp_flop() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_sharp_from_buffer() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_sharp_from_file() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_sharp_grayscale() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_sharp_metadata() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_sharp_negate() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_sharp_quality() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_sharp_resize() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_sharp_rotate() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_sharp_to_buffer() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_sharp_to_file() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_sharp_to_format() -> i64 {
-    0
-}
+// Issue #552: js_sharp_* symbols (blur / flip / flop / from_buffer / from_file
+// / grayscale / metadata / resize / rotate / to_buffer / to_file) now provided
+// by perry-ext-sharp via the `extern crate` reference in lib.rs.
+// js_sharp_negate / js_sharp_quality / js_sharp_to_format remain as no-op
+// stubs in perry-runtime/src/closure.rs (those three FFIs were never wired in
+// either perry-stdlib or perry-ext-sharp).
 #[no_mangle]
 pub extern "C" fn js_slugify() -> i64 {
     0
@@ -1595,6 +1552,69 @@ pub extern "C" fn js_validator_is_url() -> i64 {
 pub extern "C" fn js_validator_is_uuid() -> i64 {
     0
 }
+// readline (#347) — TUI use case isn't relevant on Android, so stubs
+// return inert values (handle 0, no-op for everything). The `_active`
+// stub returns 0 so the host event loop doesn't keep ticking.
+#[no_mangle]
+pub extern "C" fn js_readline_create_interface() -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn js_readline_question() -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn js_readline_on() -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn js_readline_close() -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn js_readline_process_pending() -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn js_readline_has_active() -> i64 {
+    0
+}
+// Phase 2 stubs.
+#[no_mangle]
+pub extern "C" fn js_readline_set_raw_mode(_enabled: f64) -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_on(_event_ptr: i64, _callback: i64) -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_remove_listener(_event_ptr: i64, _callback: i64) -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_pause() -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_resume() -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_unref() -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_ref() -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_destroy() -> i64 {
+    0
+}
+// Phase 3 stubs are NOT here — js_tty_* / js_process_*_isatty /
+// js_process_stdout_columns/rows/on live in perry-runtime/src/tty.rs
+// which is always linked, so no Android stub is needed.
 #[no_mangle]
 pub extern "C" fn js_worker_threads_get_worker_data() -> i64 {
     0

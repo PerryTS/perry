@@ -19,6 +19,14 @@ default = ["full"]
 full = ["dep:hostname", "dep:dirs"]
 # When perry-stdlib is the consumer, exclude no-op stubs to avoid duplicate symbols
 stdlib = []
+# Extension-crate test binaries that link the real perry-ext-ws symbols still
+# need runtime-link for perry-ffi helpers, but must not also export runtime-only
+# js_ws_* stubs.
+external-ws-symbols = []
+# Extension-crate test binaries that link the real perry-ext-fetch symbols need
+# runtime-link for perry-ffi helpers, but must not also export runtime-only
+# js_fetch_* stubs.
+external-fetch-symbols = []
 # Enable geisterhand in-process fuzzer (callback registry + dispatch queue)
 geisterhand = []
 # iOS/tvOS game loop: provides main() that spawns user code on game thread + UIApplicationMain
@@ -30,6 +38,12 @@ watchos-game-loop = []
 # invokes Perry's compiled `main()`. Auto-enabled by the compiler when
 # --target harmonyos[-simulator] is passed (see crates/perry-runtime/src/ohos_napi.rs).
 ohos-napi = []
+# WebAssembly host shims (issue #76). When on, `webassembly.rs` is compiled
+# into libperry_runtime.a, which adds undefined references to `perry_wasm_host_*`
+# (resolved by linking libperry_wasm_host.a). The auto-optimize path turns
+# this on only when the user's program references `WebAssembly.*`, so non-wasm
+# programs don't pay an unresolvable-symbol penalty at link time.
+wasm-host = []
 
 [dependencies]
 thiserror.workspace = true
@@ -37,16 +51,21 @@ anyhow.workspace = true
 libc = "0.2"
 rand = "0.8"
 regex = "1"
-fancy-regex = "0.14"
+# Taffy — flexbox / grid layout engine for the perry/tui module
+# (#358 Phase 3). Same crate Bevy and Dioxus use; pure Rust, no FFI.
+taffy = { version = "0.7", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
+fancy-regex = "0.18"
 itoa = "1"
 ryu = "1"
 base64 = "0.22"
 hostname = { version = "0.4", optional = true }
-dirs = { version = "5", optional = true }
+dirs = { version = "6", optional = true }
 lazy_static = "1.4"
 
 serde_json = "1"
 unicode-normalization = "0.1"
+idna = "1"
+url = "2"
 # Issue #62: mimalloc replaces the system allocator for gc_malloc/arena/etc.
 # macOS `malloc` is ~25-40ns/alloc; mimalloc's per-thread free-list is ~5-10ns.
 # Set as #[global_allocator] in lib.rs, so it covers Rust heap allocations in
@@ -56,3 +75,24 @@ mimalloc = { version = "0.1", default-features = false }
 
 # We'll add GC bindings later
 # For now, use a simple bump allocator or leak memory for MVP
+
+# Windows raw-mode for perry/tui input (#406). The Unix path uses
+# libc tcsetattr; Windows uses SetConsoleMode via windows-sys.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_System_Console",
+    "Win32_Foundation",
+] }
+
+# #855: libc::mach_host_self is deprecated; the mach2 crate is the
+# upstream-recommended replacement. Pulled in only where we actually
+# call host_statistics64 (`js_os_freemem` on macOS / iOS). Need 0.6+
+# because earlier mach2 releases didn't surface mach_host_self.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+mach2 = "0.6"
+
+# build.rs auto-generates no-op `perry_ui_*` FFI stubs for the harmonyos
+# build (cfg(feature = "ohos-napi")) by reading the dispatch tables here.
+# See `build.rs` and issue #395 for the rationale.
+[build-dependencies]
+perry-dispatch = { path = "../perry-dispatch" }

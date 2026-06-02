@@ -88,6 +88,12 @@ define_class!(
             // Fire notification auth prompt once here so notificationSend() doesn't
             // re-prompt on every call (per #94).
             crate::notifications::request_authorization();
+            // Drain pending BGTaskScheduler registrations from `registerTask`
+            // calls during module init (#538). BGTaskScheduler enforces a
+            // "register all handlers during launch" contract — if we miss
+            // this window, late-registered identifiers won't be reachable
+            // for the OS's first wake-up.
+            crate::background::flush_pending_registrations();
             true
         }
 
@@ -152,6 +158,43 @@ define_class!(
                 );
             }
         }
+
+        /// Custom URL scheme delivery (issue #583). Fires when the app is
+        /// already running and the OS hands us a `myapp://…` URL.
+        ///
+        /// On scene-based apps the equivalent path is
+        /// `scene(_:openURLContexts:)`; UIKit calls one or the other,
+        /// never both, so wiring both surfaces is safe.
+        #[unsafe(method(application:openURL:options:))]
+        fn application_open_url(
+            &self,
+            _app: &AnyObject,
+            url: &AnyObject,
+            _options: &AnyObject,
+        ) -> bool {
+            unsafe {
+                crate::deeplinks::dispatch_app_open_url(url as *const AnyObject);
+            }
+            true
+        }
+
+        /// Universal Link delivery (issue #583). The `userActivity` is an
+        /// `NSUserActivity` whose `webpageURL` is the
+        /// `https://yourdomain.com/path?…` link.
+        #[unsafe(method(application:continueUserActivity:restorationHandler:))]
+        fn application_continue_user_activity(
+            &self,
+            _app: &AnyObject,
+            user_activity: &AnyObject,
+            _restoration_handler: *const AnyObject,
+        ) -> bool {
+            unsafe {
+                crate::deeplinks::dispatch_continue_user_activity(
+                    user_activity as *const AnyObject,
+                );
+            }
+            true
+        }
     }
 );
 
@@ -162,8 +205,13 @@ unsafe extern "C" fn scene_will_connect(
     _sel: *const std::ffi::c_void,
     scene: *mut AnyObject,
     _session: *mut AnyObject,
-    _options: *mut AnyObject,
+    options: *mut AnyObject,
 ) {
+    // Issue #583: drain any cold-start URLs / Universal-Link activities
+    // out of the scene-connection options BEFORE the JS module's
+    // `appOnOpenUrl(...)` call has had a chance to register a handler.
+    // The deeplinks module caches the URL until a handler arrives.
+    crate::deeplinks::dispatch_scene_connection_options(options as *const AnyObject);
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     // Create UIWindow attached to the scene (UIWindowScene)
@@ -301,6 +349,28 @@ extern "C" {
     fn objc_getProtocol(name: *const i8) -> *const std::ffi::c_void;
 }
 
+/// SceneDelegate `scene(_:openURLContexts:)` — custom-scheme delivery
+/// while the app is running (issue #583).
+unsafe extern "C" fn scene_open_url_contexts(
+    _this: *mut AnyObject,
+    _sel: *const std::ffi::c_void,
+    _scene: *mut AnyObject,
+    contexts: *mut AnyObject,
+) {
+    crate::deeplinks::dispatch_scene_open_url_contexts(contexts as *const AnyObject);
+}
+
+/// SceneDelegate `scene(_:continueUserActivity:)` — Universal Link
+/// delivery while the app is running (issue #583).
+unsafe extern "C" fn scene_continue_user_activity(
+    _this: *mut AnyObject,
+    _sel: *const std::ffi::c_void,
+    _scene: *mut AnyObject,
+    activity: *mut AnyObject,
+) {
+    crate::deeplinks::dispatch_continue_user_activity(activity as *const AnyObject);
+}
+
 /// Register the PerrySceneDelegate class dynamically at runtime.
 fn register_scene_delegate() {
     unsafe {
@@ -330,6 +400,26 @@ fn register_scene_delegate() {
             sel,
             scene_will_connect as *const std::ffi::c_void,
             c"v@:@@@".as_ptr(),
+        );
+
+        // Issue #583: scene(_:openURLContexts:) — custom-scheme delivery
+        // when the scene is already connected. Type encoding v@:@@.
+        let sel_open = sel_registerName(c"scene:openURLContexts:".as_ptr());
+        class_addMethod(
+            cls,
+            sel_open,
+            scene_open_url_contexts as *const std::ffi::c_void,
+            c"v@:@@".as_ptr(),
+        );
+
+        // Issue #583: scene(_:continueUserActivity:) — Universal Link
+        // delivery when the scene is already connected. Type encoding v@:@@.
+        let sel_continue = sel_registerName(c"scene:continueUserActivity:".as_ptr());
+        class_addMethod(
+            cls,
+            sel_continue,
+            scene_continue_user_activity as *const std::ffi::c_void,
+            c"v@:@@".as_ptr(),
         );
 
         objc_registerClassPair(cls);
@@ -419,6 +509,10 @@ pub fn app_run(_app_handle: i64) {
     // Install crash reporting hooks before anything else
     crate::crash_log::install_crash_hooks();
 
+    // Phase 2 v3.3: register cross-platform showToast / setText handlers
+    // so `showToast("…")` and `setText(id, val)` produce visible UI on iOS.
+    register_cross_platform_text_handlers();
+
     // Force PerryAppDelegate class registration (define_class! registers it lazily)
     let _ = PerryAppDelegate::class();
 
@@ -427,6 +521,12 @@ pub fn app_run(_app_handle: i64) {
 
     // Register PerryViewController (UIViewController + menu bar support)
     register_view_controller();
+
+    // Issue #1864: install continuous keyboard event hooks
+    // (`pressesBegan:`/`pressesEnded:`/`canBecomeFirstResponder`) on the
+    // PerryViewController class. The first onKeyDown/onKeyUp registration
+    // also calls `make_first_responder` so events actually route here.
+    crate::keyboard::install_view_controller_overrides();
 
     // Register UI function pointers for geisterhand dispatch
     #[cfg(feature = "geisterhand")]
@@ -509,6 +609,7 @@ extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
     fn js_callback_timer_tick() -> i32;
     fn js_interval_timer_tick() -> i32;
+    fn js_frame_pump_default() -> i32;
 }
 
 // ============================================
@@ -530,7 +631,14 @@ define_class!(
                 unsafe {
                     js_callback_timer_tick();
                     js_interval_timer_tick();
+                    // Issue #1865: perry/ui `onFrame` display-link callbacks.
+                    js_frame_pump_default();
                     js_promise_run_microtasks();
+                    // Drain deferred promise resolutions from perry-stdlib
+                    // tokio workers (async fetch/network completions). Without
+                    // this, `await fetch(...)` never resolves on iOS — the
+                    // macOS pump has always called it; iOS omitted it.
+                    js_run_stdlib_pump();
                     #[cfg(feature = "geisterhand")]
                     {
                         extern "C" { fn perry_geisterhand_pump(); }
@@ -877,5 +985,36 @@ pub fn set_timer(interval_ms: f64, callback: f64) {
 
         // Keep the target alive
         std::mem::forget(target);
+    }
+}
+
+// =============================================================================
+// Cross-platform showToast / setText handler registration (Phase 2 v3.3)
+// =============================================================================
+
+extern "C" {
+    fn js_register_show_toast_handler(f: extern "C" fn(msg_ptr: *const u8, msg_len: usize));
+    fn js_register_set_text_handler(
+        f: extern "C" fn(id_ptr: *const u8, id_len: usize, val_ptr: *const u8, val_len: usize),
+    );
+    fn js_register_text_id_handler(
+        f: extern "C" fn(widget_handle: i64, id_ptr: *const u8, id_len: usize),
+    );
+    /// Issue #535 Layer 2 — `js_state_set` calls this for every NavStack
+    /// route bound to the changed state's synth id. Defined in
+    /// `perry-runtime/src/ui_text_registry.rs`'s `NAVSTACK_REGISTRY` block.
+    fn js_register_widget_hidden_handler(f: extern "C" fn(widget_handle: i64, hidden: i32));
+}
+
+extern "C" fn navstack_set_widget_hidden(widget_handle: i64, hidden: i32) {
+    crate::widgets::set_hidden(widget_handle, hidden != 0);
+}
+
+fn register_cross_platform_text_handlers() {
+    unsafe {
+        js_register_show_toast_handler(widgets::toast::show_toast_handler);
+        js_register_set_text_handler(widgets::text_registry::set_text_handler);
+        js_register_text_id_handler(widgets::text_registry::register_text_id_handler);
+        js_register_widget_hidden_handler(navstack_set_widget_hidden);
     }
 }

@@ -1,24 +1,37 @@
+pub mod attributed_text;
+pub mod bottom_nav;
 pub mod button;
+pub mod calendar;
 pub mod canvas;
+pub mod chart;
+pub mod combobox;
 pub mod divider;
 pub mod form;
 pub mod hstack;
 pub mod image;
+pub mod image_gallery;
 pub mod lazyvstack;
+pub mod map_view;
 pub mod navstack;
 pub mod picker;
 pub mod progressview;
 pub mod qrcode;
+pub mod rich_text;
+pub mod rich_tooltip;
 pub mod scrollview;
 pub mod securefield;
 pub mod slider;
 pub mod spacer;
 pub mod tabbar;
 pub mod text;
+pub mod text_registry;
 pub mod textarea;
 pub mod textfield;
+pub mod toast;
 pub mod toggle;
+pub mod tree_view;
 pub mod vstack;
+pub mod webview;
 pub mod zstack;
 
 use jni::objects::{GlobalRef, JObject, JValue};
@@ -574,6 +587,10 @@ pub fn set_on_double_click(_handle: i64, _callback: f64) {
     // Would require GestureDetector setup via PerryBridge
     // No-op for now
 }
+
+// Continuous pointer events (issue #1868). Real implementation lives
+// in [`crate::pointer`], which calls into the Kotlin
+// `PerryBridge.setOnPointerCallbacks` to install a `View.OnTouchListener`.
 
 /// Animate opacity. `duration_secs` is in seconds.
 pub fn animate_opacity(handle: i64, target: f64, duration_secs: f64) {

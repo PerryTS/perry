@@ -34,12 +34,25 @@ pub(crate) fn lower_truthy(ctx: &mut FnCtx<'_>, cond_val: &str, cond_expr: &Expr
         return ctx.block().fcmp("one", cond_val, "0.0");
     }
     if is_bool_expr(ctx, cond_expr) {
-        // The lowered cond_val is NaN-boxed TAG_TRUE or TAG_FALSE.
-        // bitcast to i64 and check against TAG_FALSE — equal means
-        // false, not-equal means true. Two ALU ops, no function call.
+        // The lowered cond_val is *normally* NaN-boxed TAG_TRUE or TAG_FALSE,
+        // but for optional `boolean` parameters that the caller didn't pass,
+        // codegen pads the missing arg with TAG_UNDEFINED at the call site
+        // (see `lower_call.rs::pad with TAG_UNDEFINED`). Pre-fix the
+        // `bits != TAG_FALSE` shortcut treated TAG_UNDEFINED as truthy —
+        // `if (optionalFlag)` for `optionalFlag: boolean | undefined`
+        // unconditionally took the truthy branch on `undefined`, even
+        // though JS truthiness says `if (undefined)` is falsy. ECS
+        // sync-hotpath / perf-comprehensive crashed on this because
+        // `world.query([Position])` (single-arg) dispatched into the
+        // `includeComponents=true` overload variant — the function returned
+        // an `Array<{entity, components}>` of length 0 and downstream
+        // assertions on the entity count fired.
+        //
+        // Use `bits == TAG_TRUE` instead, which is also two ALU ops and
+        // correctly reports `false` for both TAG_FALSE and TAG_UNDEFINED.
         let blk = ctx.block();
         let bits = blk.bitcast_double_to_i64(cond_val);
-        return blk.icmp_ne(I64, &bits, crate::nanbox::TAG_FALSE_I64);
+        return blk.icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
     }
     let i32_truthy = ctx.block().call(I32, "js_is_truthy", &[(DOUBLE, cond_val)]);
     ctx.block().icmp_ne(I32, &i32_truthy, "0")

@@ -1,0 +1,16 @@
+[package]
+name = "perry-ext-bcrypt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for the npm `bcrypt` package — uses only `perry-ffi`. First port of an async wrapper under #466 Phase 5; doubles as the acceptance test for perry-ffi's v0.5.1 async surface."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+bcrypt = "0.17"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

@@ -1,0 +1,8 @@
+{
+  "name": "issue-1069-probe",
+  "version": "0.0.1",
+  "perry": {
+    "compilePackages": ["duallib"],
+    "allow": { "compilePackages": ["duallib"] }
+  }
+}

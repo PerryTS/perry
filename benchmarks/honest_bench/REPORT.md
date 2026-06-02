@@ -1,23 +1,23 @@
 # Perry vs Rust vs Zig — honest benchmark results
 
-Numbers are measured against Perry v0.5.81 on five implementations: Rust, Zig, Perry, Node.js, Bun. All three workloads complete on all five implementations — every correctness and scaling bug the bench originally surfaced (`#38`–`#53`, `#62`–`#65`) has landed in Perry mainline. 260 measured runs, zero failures.
+Numbers are measured against Perry v0.5.908 on five implementations: Rust, Zig, Perry, Node.js, Bun. All three workloads complete on all five implementations and every measured run's output matches the Bun reference byte-for-byte (300/300 rows; correctness gate from `#441`). The auto-generated tables below come straight from `results/results.json`; the bottom-line summary tracks the most recent sweep.
 
 ## Bottom line
 
-- **Compute (image convolution, tight loop, minimal heap):** Zig 243 ms.
-  **Perry 268 ms (1.10× Zig) — ahead of Rust's 567 ms**, 3.4× faster than
-  Bun, 4.5× faster than Node. Full arc across the perf sprint:
-  **2261 ms → 268 ms, an 8.4× speedup** (issues #47, #48, #49, #50, #52 plus
-  the v0.5.58–v0.5.68 follow-on).
-- **Allocation-heavy (JSON pipeline, 100 records):** Zig 32 ms, Rust 33 ms,
-  **Perry 37 ms (1.15× the fastest) — ahead of Bun's 49 ms and Node's 145 ms**,
-  at 3 MB RSS vs Bun's 11 MB and Node's 36 MB. Earlier sweep had Perry at
-  210 ms here; v0.5.69–v0.5.75 closed ~6× of that.
-- **JSON at scale (500k records, 108 MB):** Rust 604 ms, Bun 647 ms, Zig
-  850 ms, Node 1010 ms, **Perry 1649 ms**. Perry trails the pack by ~2.5×
-  on wall time and uses more RSS (744 MB peak), but it _completes_ — as
-  recently as v0.5.68 this workload hung >13 min CPU without finishing
-  (`#65`, now closed).
+- **Compute (image convolution, tight loop, minimal heap):** Zig 245 ms.
+  **Perry 354 ms (1.44× Zig) — ahead of Rust's 392 ms**, 2.6× faster
+  than Bun (915 ms), 3.4× faster than Node (1207 ms). Slight improvement
+  vs yesterday's v0.5.891 (365 → 354 ms); the bulk of the original arc
+  (2261 ms → ~377 ms, ~6×) landed during the v0.5.30–v0.5.495 perf sprint.
+- **Allocation-heavy (JSON pipeline, 100 records):** Zig 35 ms, Rust 34 ms,
+  **Perry 39 ms (1.15× the fastest) — ahead of Bun's 51 ms and Node's 144 ms**,
+  at ~3 MB RSS vs Bun's 11 MB and Node's 36 MB. Stable vs v0.5.891.
+- **JSON at scale (500k records, 108 MB):** Rust 608 ms, Bun 650 ms, Zig
+  867 ms, Node 966 ms, **Perry 1098 ms**. Perry trails Rust/Bun by ~1.7×,
+  beats Node by 9%, and uses 731 MB peak RSS. The workload completes
+  reliably — as recently as v0.5.68 this hung >13 min CPU without
+  finishing (`#65`, now closed). Improved from v0.5.891's 1155 ms (-57 ms)
+  thanks in part to the v0.5.900 GC fix for #745.
 - **Binary size:** Zig smallest (~230 KB), Rust next (~300–380 KB), Perry
   (~550–700 KB, including GC + Node-compat shims). Node/Bun don't have
   standalone binaries — they require their runtime installed separately.
@@ -39,10 +39,10 @@ Charts: [image convolution](charts/image_convolution.png),
 | OS  | macOS 26.4 (Darwin) |
 | Rust | `rustc 1.94.1 (e408947bf 2026-03-25)` |
 | Zig | `0.15.2` |
-| Perry | `perry 0.5.81` |
-| Python | `Python 3.14.3` |
+| Perry | `perry 0.5.908` |
+| Python | `Python 3.14.4` |
 | Runs | 5 warmup + 20 measured, median reported |
-| Generated | 2026-04-17T09:12:27.986723+00:00 |
+| Generated | 2026-05-14T07:44:59.755910+00:00 |
 
 ## 3. Image convolution (5×5 Gaussian, 3840×2160 RGB)
 
@@ -50,13 +50,13 @@ _In-memory input + output checksum (no PPM I/O) — see the workload README for 
 
 | Language | Wall median (ms) | Wall σ | Peak RSS | Binary size | Source LoC | Runs OK |
 |---|---:|---:|---:|---:|---:|---:|
-| rust | 393.0 | 6.0 | 48.5 MB | 295.5 KB | 112 | 20/20 |
-| zig | 242.9 | 2.0 | 48.5 MB | 226.9 KB | 113 | 20/20 |
-| perry | 267.7 | 1.2 | 49.3 MB | 633.0 KB | 92 | 20/20 |
-| node | 1,210.6 | 7.0 | 86.2 MB | — | 86 | 20/20 |
-| bun | 914.1 | 31.2 | 60.0 MB | — | 86 | 20/20 |
+| rust | 392.1 | 3.8 | 48.5 MB | 295.5 KB | 112 | 20/20 |
+| zig | 245.4 | 6.2 | 48.5 MB | 227.0 KB | 113 | 20/20 |
+| perry | 354.0 | 2.3 | 49.9 MB | 966.6 KB | 92 | 20/20 |
+| node | 1,206.6 | 22.0 | 86.5 MB | — | 86 | 20/20 |
+| bun | 915.4 | 35.2 | 60.0 MB | — | 86 | 20/20 |
 
-_Ratios vs fastest: rust = 1.62×, zig = 1.00×, perry = 1.10×, node = 4.98×, bun = 3.76×_
+_Ratios vs fastest: rust = 1.60×, zig = 1.00×, perry = 1.44×, node = 4.92×, bun = 3.73×_
 
 ## 1a. JSON pipeline — small fixture (100 records, 21 KB)
 
@@ -64,27 +64,27 @@ _All three languages produce byte-identical output at this scale (hash `7fc66fa8
 
 | Language | Wall median (ms) | Wall σ | Peak RSS | Binary size | Source LoC | Runs OK |
 |---|---:|---:|---:|---:|---:|---:|
-| rust | 36.2 | 3.9 | 1.1 MB | 376.3 KB | 99 | 20/20 |
-| zig | 33.5 | 1.3 | 1.5 MB | 309.0 KB | 112 | 20/20 |
-| perry | 39.1 | 2.3 | 2.5 MB | 748.4 KB | 52 | 20/20 |
-| node | 146.2 | 4.5 | 36.5 MB | — | 40 | 20/20 |
-| bun | 50.2 | 1.2 | 10.6 MB | — | 40 | 20/20 |
+| rust | 34.1 | 1.1 | 1.2 MB | 376.3 KB | 99 | 20/20 |
+| zig | 34.5 | 1.1 | 1.5 MB | 309.1 KB | 112 | 20/20 |
+| perry | 39.2 | 1.2 | 3.5 MB | 1.0 MB | 52 | 20/20 |
+| node | 143.6 | 1.8 | 36.1 MB | — | 40 | 20/20 |
+| bun | 51.1 | 1.4 | 10.6 MB | — | 40 | 20/20 |
 
-_Ratios vs fastest: rust = 1.08×, zig = 1.00×, perry = 1.17×, node = 4.37×, bun = 1.50×_
+_Ratios vs fastest: rust = 1.00×, zig = 1.01×, perry = 1.15×, node = 4.21×, bun = 1.50×_
 
 ## 1b. JSON pipeline — full fixture (500k records, 108 MB)
 
-_All five implementations complete this workload against the same 108 MB fixture and produce the same hash `b7e8a588`. Perry completes in ~1.6 s, ~2.7× the leader (Rust / Bun); as recently as v0.5.68 this workload hung >13 minutes without finishing (`#65`, now closed)._
+_All five implementations complete this workload against the same 108 MB fixture and produce the same hash `b7e8a588`. Perry completes in ~1.1 s, ~1.8× the leader (Rust); as recently as v0.5.68 this workload hung >13 minutes without finishing (`#65`, now closed)._
 
 | Language | Wall median (ms) | Wall σ | Peak RSS | Binary size | Source LoC | Runs OK |
 |---|---:|---:|---:|---:|---:|---:|
-| rust | 607.7 | 17.4 | 432.0 MB | 376.3 KB | 99 | 20/20 |
-| zig | 882.8 | 17.1 | 576.7 MB | 309.0 KB | 112 | 20/20 |
-| perry | 1,638.1 | 75.0 | 744.4 MB | 748.4 KB | 52 | 20/20 |
-| node | 993.9 | 22.0 | 880.1 MB | — | 40 | 20/20 |
-| bun | 661.7 | 9.2 | 593.7 MB | — | 40 | 20/20 |
+| rust | 608.3 | 13.0 | 430.6 MB | 376.3 KB | 99 | 20/20 |
+| zig | 867.4 | 19.4 | 576.8 MB | 309.1 KB | 112 | 20/20 |
+| perry | 1,098.4 | 9.4 | 731.0 MB | 1.0 MB | 52 | 20/20 |
+| node | 966.3 | 9.8 | 880.0 MB | — | 40 | 20/20 |
+| bun | 649.9 | 14.7 | 593.7 MB | — | 40 | 20/20 |
 
-_Ratios vs fastest: rust = 1.00×, zig = 1.45×, perry = 2.70×, node = 1.64×, bun = 1.09×_
+_Ratios vs fastest: rust = 1.00×, zig = 1.43×, perry = 1.81×, node = 1.59×, bun = 1.07×_
 
 ## Honest findings — Perry gaps surfaced by this benchmark
 

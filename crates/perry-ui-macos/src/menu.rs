@@ -84,6 +84,13 @@ pub fn create() -> i64 {
     })
 }
 
+/// Get a menu by handle. Public re-export for the tray module (issue #490)
+/// so `trayAttachMenu` can call `NSStatusItem.setMenu:` with a menu the
+/// user built via `menuCreate`/`menuAddItem`.
+pub fn get_menu_for_tray(handle: i64) -> Option<Retained<NSMenu>> {
+    get_menu(handle)
+}
+
 /// Get a menu by handle.
 fn get_menu(handle: i64) -> Option<Retained<NSMenu>> {
     MENUS.with(|m| {

@@ -113,7 +113,27 @@ pub fn set_content_tint_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     }
 }
 
-/// Reorder image relative to label. GTK4 no-op — button image not yet implemented on this backend.
+/// Set an icon image on the button. `name_ptr` is a StringHeader pointer naming
+/// either an SF-Symbol-style name (which we map to the closest icon-naming-spec
+/// fallback) or a freedesktop icon name (e.g. "document-open-symbolic"). GTK4
+/// renders the icon to the button's child position; a label with `set_title`
+/// remains alongside via the default GtkButton icon-and-label layout.
+pub fn set_image(handle: i64, name_ptr: *const u8) {
+    let name = str_from_header(name_ptr);
+    if name.is_empty() {
+        return;
+    }
+    if let Some(widget) = super::get_widget(handle) {
+        if let Some(button) = widget.downcast_ref::<Button>() {
+            button.set_icon_name(name);
+        }
+    }
+}
+
+/// Reorder image relative to label. GTK4 no-op — GtkButton's child layout when
+/// both icon-name and label are set is fixed (icon then label, horizontal); the
+/// macOS positions (leading/trailing/above/below) don't map without a custom
+/// child Box, which we punt on for now.
 pub fn set_image_position(_handle: i64, _position: i64) {}
 
 /// Set the text color of a button's label via CSS.

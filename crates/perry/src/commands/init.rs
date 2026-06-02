@@ -66,7 +66,7 @@ const DEFAULT_TSCONFIG: &str = r#"{
       "perry/*": ["./.perry/types/perry/*/index.d.ts"]
     }
   },
-  "include": ["src"]
+  "include": ["src", ".perry/types/stdlib/index.d.ts"]
 }
 "#;
 

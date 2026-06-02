@@ -10,20 +10,70 @@ use hyper::{body::Incoming, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::os::raw::c_int;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
 use perry_runtime::{js_string_from_bytes, JSValue, StringHeader};
 
-use super::{ClosurePtr, FastifyApp, FastifyContext};
-use crate::common::{get_handle, register_handle, Handle, RUNTIME};
+use super::context::{extract_buffer_bytes, BodyKind};
+use super::{ClosurePtr, FastifyApp, FastifyContext, RoutePattern};
+use crate::common::{for_each_handle_of, get_handle, register_handle, Handle, RUNTIME};
 
-/// Server handle for managing the running server
+struct ClosureCallResult {
+    value: f64,
+    thrown: Option<f64>,
+}
+
+enum HookOutcome {
+    Continue,
+    Sent,
+    Error(f64),
+}
+
+#[derive(Clone)]
+struct RouteMatcher {
+    method: String,
+    pattern: RoutePattern,
+}
+
+impl RouteMatcher {
+    fn from_route(route: &super::Route) -> Self {
+        Self {
+            method: route.method.clone(),
+            pattern: route.pattern.clone(),
+        }
+    }
+}
+
+/// Server handle for managing the running server.
+///
+/// Closes the in-process fastify timeout from the compat sweep: pre-fix
+/// `js_fastify_listen` entered a blocking `event_loop` and never
+/// returned, so the user's `await app.listen(...)` never resumed and
+/// subsequent code (an in-process `fetch` against itself, `app.close`,
+/// etc.) never ran. The fix mirrors what perry-ext-http-server did in
+/// #604: `listen()` returns immediately after spawning the accept loop,
+/// and a new `js_fastify_process_pending` extern wired into
+/// perry-stdlib's main pump drains the per-server mpsc each tick. To
+/// support that, the receiver lives inside the handle instead of as a
+/// local stack variable of `event_loop`.
 pub struct FastifyServerHandle {
     pub port: u16,
     pub app_handle: Handle,
     pub shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Drained by `js_fastify_process_pending` from the main TS thread
+    /// each tick. `Mutex` because the handle registry hands out `&'static`
+    /// references but the pump needs `&mut` access to `try_recv` and we
+    /// can't statically prove the pump is the only mutator.
+    pub request_rx: Mutex<Option<mpsc::Receiver<FastifyPendingRequest>>>,
+    /// True between `listen()` and `close()`. The
+    /// `js_fastify_has_active` extern returns 1 while any server has
+    /// this set, keeping the runtime's main event loop alive until
+    /// the user explicitly closes the server.
+    pub listening: AtomicBool,
 }
 
 /// Pending request waiting for TypeScript handler
@@ -66,24 +116,28 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
         }
     };
 
-    let (request_tx, mut request_rx) = mpsc::channel::<FastifyPendingRequest>(1024);
+    let (request_tx, request_rx) = mpsc::channel::<FastifyPendingRequest>(1024);
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
     let request_tx = Arc::new(request_tx);
 
-    // Clone app for matching in the server task
+    // Snapshot only match metadata for worker tasks. Handler closure
+    // pointers stay in the FastifyApp handle and are read by the
+    // main-thread pump during dispatch.
     let app_for_server = if let Some(app) = get_handle::<FastifyApp>(app_handle) {
-        app.routes.clone()
+        app.routes
+            .iter()
+            .map(RouteMatcher::from_route)
+            .collect::<Vec<_>>()
     } else {
         Vec::new()
     };
     let routes_arc = Arc::new(app_for_server);
 
-    // Fastify dispatches request callbacks on tokio worker threads whose
-    // stacks the main-thread GC can't scan. Mark GC-unsafe so user-level
-    // `gc()` calls from setInterval don't collect objects still
-    // referenced from worker stacks (issue #31).
-    perry_runtime::gc::js_gc_enter_unsafe_zone();
+    // Tokio workers only match routes and queue raw request data here.
+    // User hooks/handlers run later in `js_fastify_process_pending` on
+    // the main thread, with closure slots covered by the Fastify root
+    // scanner, so this listener lifetime must not suppress GC.
 
     // Spawn the server
     let routes_for_spawn = routes_arc.clone();
@@ -122,7 +176,15 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
                                     .serve_connection(io, service)
                                     .await
                                 {
-                                    eprintln!("Connection error: {}", e);
+                                    // perry#924: hyper surfaces every malformed
+                                    // client read as a per-connection error (HTTP/2
+                                    // prefaces, scanner garbage). The application
+                                    // never sees these requests, so logging them by
+                                    // default just floods PM2 error logs. Gate
+                                    // behind `PERRY_DEBUG=1` for diagnosis.
+                                    if std::env::var_os("PERRY_DEBUG").is_some() {
+                                        eprintln!("Connection error: {}", e);
+                                    }
                                 }
                             });
                         }
@@ -139,12 +201,23 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
         }
     });
 
-    // Store server handle
+    // Store server handle — includes the request receiver so the
+    // main-thread pump (`js_fastify_process_pending`) can drain it.
     let _server_handle = register_handle(FastifyServerHandle {
         port,
         app_handle,
         shutdown_tx: Some(shutdown_tx),
+        request_rx: Mutex::new(Some(request_rx)),
+        listening: AtomicBool::new(true),
     });
+
+    // Make sure the perry-stdlib pump is registered with the runtime
+    // so the main event loop calls `js_stdlib_process_pending` /
+    // `js_stdlib_has_active_handles` each tick. Programs that never
+    // touched another async stdlib feature before `listen()` (the
+    // compat-sweep fixture is exactly this shape) would otherwise sit
+    // idle with the pump unregistered.
+    crate::common::ensure_pump_registered();
 
     // Call callback with (null, address)
     if callback != 0 {
@@ -163,15 +236,20 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
 
     println!("Server listening on http://0.0.0.0:{}", port);
 
-    // Enter the main event loop
-    event_loop(app_handle, &mut request_rx);
+    // `listen()` is now non-blocking — the accept loop is already
+    // spawned above, and `js_fastify_process_pending` drains pending
+    // requests from the registered handle on every tick of the main
+    // event loop. Pre-fix this function called `event_loop(...)` and
+    // never returned, so `await app.listen(...)` in user code never
+    // resumed — every subsequent line (the in-process `fetch` against
+    // itself, `app.close()`, etc.) was unreachable.
 }
 
 /// Handle incoming HTTP request - match route and forward to TypeScript
 async fn handle_request(
     req: Request<Incoming>,
     request_tx: Arc<mpsc::Sender<FastifyPendingRequest>>,
-    routes: Arc<Vec<super::Route>>,
+    routes: Arc<Vec<RouteMatcher>>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let method = req.method().to_string();
     let uri = req.uri();
@@ -189,6 +267,62 @@ async fn handle_request(
         }
     }
 
+    // #1113: detect HTTP Upgrade requests. The user's pattern
+    //
+    //   import { WebSocketServer } from "ws";
+    //   const wss = new WebSocketServer({ noServer: true });
+    //   app.server.on("upgrade", (req, socket, head) => {
+    //     wss.handleUpgrade(req, socket, head, (sock) => { ... });
+    //   });
+    //
+    // expects the fastify accept loop to surface upgrade requests via
+    // `app.server`'s registered `"upgrade"` handler. Today we only
+    // RECORD that the handler list exists (in
+    // `FastifyApp::upgrade_handlers`) — invoking it would need to
+    // bypass hyper's normal response flow, call
+    // `hyper::upgrade::on(req)` to get the raw upgraded IO, and hand
+    // a Node-compatible `req` / `socket` / `head` triple back to
+    // TypeScript so `wss.handleUpgrade(...)` can complete the WS
+    // handshake on the same socket. That's a substantial follow-up;
+    // for now we emit a one-line diagnostic so a user who's wired up
+    // `app.server.on("upgrade", …)` sees clearly that the request
+    // arrived but went unhandled, then return a 501 rather than the
+    // boilerplate 404 (which would lead to confusing client behavior
+    // on the JS side, where ws's handshake retry typically follows
+    // 401/500 but bails on 404).
+    if headers
+        .get("upgrade")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+    {
+        let mut any_handler_registered = false;
+        for_each_handle_of::<FastifyApp, _>(|app| {
+            if !app.upgrade_handlers.is_empty() {
+                any_handler_registered = true;
+            }
+        });
+        if any_handler_registered {
+            eprintln!(
+                "[fastify] HTTP Upgrade requested (Upgrade: {}) — \
+                 `app.server.on(\"upgrade\", …)` handlers are registered \
+                 but bidirectional WebSocket upgrade dispatch through \
+                 hyper isn't yet wired (#1113 follow-up). Use \
+                 perry-ext-ws on a separate port for now.",
+                headers.get("upgrade").map(String::as_str).unwrap_or("?")
+            );
+            return Ok(Response::builder()
+                .status(StatusCode::NOT_IMPLEMENTED)
+                .header("content-type", "application/json")
+                .body(Full::new(Bytes::from(
+                    "{\"error\":\"WebSocket upgrade via fastify.server not yet implemented (perry #1113)\"}",
+                )))
+                .unwrap());
+        }
+        // No handler registered — fall through to normal 404 path
+        // below so unrelated `Upgrade: h2c` probes from misbehaving
+        // clients don't get a confusing 501.
+    }
+
     // Read body
     let body = match req.collect().await {
         Ok(collected) => {
@@ -202,9 +336,14 @@ async fn handle_request(
         Err(_) => None,
     };
 
-    // Match route
+    // Match route: first exact-method, then — for HEAD requests — fall
+    // back to a GET route on the same path. Node fastify auto-handles
+    // HEAD against any registered GET (via `app.head` shadowing). We
+    // rewrite the method to GET so the handler runs normally, then
+    // strip the body on the way out via `head_for_get` below (#1120).
     let mut matched_params = HashMap::new();
     let mut found_route = false;
+    let mut head_for_get = false;
 
     for route in routes.iter() {
         if route.method == method {
@@ -212,6 +351,18 @@ async fn handle_request(
                 matched_params = params;
                 found_route = true;
                 break;
+            }
+        }
+    }
+    if !found_route && method == "HEAD" {
+        for route in routes.iter() {
+            if route.method == "GET" {
+                if let Some(params) = route.pattern.match_path(&path) {
+                    matched_params = params;
+                    found_route = true;
+                    head_for_get = true;
+                    break;
+                }
             }
         }
     }
@@ -228,9 +379,17 @@ async fn handle_request(
     // Create oneshot channel for response
     let (response_tx, response_rx) = tokio::sync::oneshot::channel::<FastifyResponse>();
 
-    // Send request to TypeScript handler
+    // Send request to TypeScript handler. When fronting a GET handler
+    // for an inbound HEAD, surface the method as `GET` to the handler —
+    // matches Node fastify's shadowing semantics. The body-drop happens
+    // below in the hyper response assembly.
+    let dispatch_method = if head_for_get {
+        "GET".to_string()
+    } else {
+        method.clone()
+    };
     let pending = FastifyPendingRequest {
-        method,
+        method: dispatch_method,
         path,
         headers,
         body,
@@ -248,16 +407,33 @@ async fn handle_request(
     // Wait for response
     match response_rx.await {
         Ok(fastify_response) => {
+            let body_len = fastify_response.body.len();
             let mut response = Response::builder()
                 .status(StatusCode::from_u16(fastify_response.status).unwrap_or(StatusCode::OK));
 
+            let mut had_content_length = false;
             for (name, value) in fastify_response.headers {
+                if name.eq_ignore_ascii_case("content-length") {
+                    had_content_length = true;
+                }
                 response = response.header(name, value);
             }
 
-            Ok(response
-                .body(Full::new(Bytes::from(fastify_response.body)))
-                .unwrap())
+            let body_bytes = if head_for_get {
+                // HEAD response: no body on the wire, but expose the
+                // would-have-been size via Content-Length so clients
+                // (curl -I, browsers, monitoring) see what GET would
+                // produce. Mirror of Node fastify's HEAD-on-GET path
+                // (#1120).
+                if !had_content_length {
+                    response = response.header("content-length", body_len.to_string());
+                }
+                Bytes::new()
+            } else {
+                Bytes::from(fastify_response.body)
+            };
+
+            Ok(response.body(Full::new(body_bytes)).unwrap())
         }
         Err(_) => Ok(Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -266,197 +442,677 @@ async fn handle_request(
     }
 }
 
-/// Main event loop - process incoming requests
-fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPendingRequest>) {
-    let app = match unsafe { get_handle::<FastifyApp>(app_handle) } {
+/// Pump entrypoint — drain pending requests from every registered
+/// `FastifyServerHandle` and dispatch each to the user's route handler
+/// + hooks on the main TS thread. Wired into perry-stdlib's
+/// `js_stdlib_process_pending` so the runtime's outer event loop drives
+/// us each tick.
+///
+/// Returns the number of requests processed (matches the convention
+/// other pump arms follow — `js_ws_process_pending`,
+/// `js_node_http_server_process_pending`, etc.).
+pub fn js_fastify_process_pending() -> i32 {
+    // #1824: re-entrancy guard. This pump dispatches each request handler
+    // inside a setjmp try-frame (`call_closure2_catching` → `js_try_push`).
+    // A handler that `await`s pumps the event loop
+    // (`js_async_first_call` → `js_promise_run_microtasks` →
+    // `js_stdlib_process_pending`), which re-enters THIS function while the
+    // outer handler's try-frame is still open on the native stack. If the
+    // re-entrant call starts *another* request handler, that handler's
+    // try-frame nests inside the suspended outer one. Under concurrent load
+    // the nesting grows one level per in-flight request and blows
+    // `MAX_TRY_DEPTH` (128) → "Try block nesting too deep" abort (observed
+    // as a silent SIGSEGV under PM2 on Linux x86_64). Guard against re-entry:
+    // a nested call processes no new requests and returns 0. The pending
+    // requests stay queued in each server's `request_rx` and are picked up
+    // by the next top-level pump tick, once the current handler unwinds its
+    // try-frame. The in-flight handler's own `await` still makes progress —
+    // the awaited resolution drains through `PENDING_RESOLUTIONS` in
+    // `js_stdlib_process_pending`, not through this request loop.
+    thread_local! {
+        static IN_PROGRESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if IN_PROGRESS.with(|f| f.replace(true)) {
+        return 0;
+    }
+    struct ResetReentryGuard;
+    impl Drop for ResetReentryGuard {
+        fn drop(&mut self) {
+            IN_PROGRESS.with(|f| f.set(false));
+        }
+    }
+    let _reentry_guard = ResetReentryGuard;
+
+    // Snapshot handle ids so we don't hold a DashMap iterator across
+    // the dispatch — handler calls may register/drop other handles.
+    //
+    // #1114: this pump runs on EVERY iteration of the generated event
+    // loop AND every iteration of every inline `await` poll loop (it is
+    // called from `js_stdlib_process_pending`). A fresh `Vec<Handle>`
+    // per call is a high-frequency heap alloc/free that surfaces as GC
+    // `madvise` page-churn under sustained async load — the #1114 wedge
+    // signature. Reuse a per-thread scratch buffer so steady state is
+    // allocation-free. The buffer is still moved out (not borrowed) across
+    // `process_fastify_request` as belt-and-suspenders: the #1824 re-entry
+    // guard above means a nested pump call returns before reaching this
+    // point, but moving the buffer out keeps the take/restore sound even if
+    // that guard is ever relaxed.
+    thread_local! {
+        static SCRATCH: std::cell::RefCell<Vec<Handle>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let mut server_handles = SCRATCH.with(|s| std::mem::take(&mut *s.borrow_mut()));
+    server_handles.clear();
+    crate::common::iter_handle_ids_of::<FastifyServerHandle, _>(|id| {
+        server_handles.push(id);
+    });
+
+    let mut count = 0i32;
+    for &h in server_handles.iter() {
+        // Snapshot the app handle inside the borrow scope.
+        let app_handle = match get_handle::<FastifyServerHandle>(h) {
+            Some(s) => s.app_handle,
+            None => continue,
+        };
+        loop {
+            // try_recv against the per-server channel. Holds the
+            // mutex only briefly so concurrent close() (which the
+            // handler chain may invoke) can still take the rx out.
+            let pending = match get_handle::<FastifyServerHandle>(h) {
+                Some(s) => {
+                    let mut guard = s.request_rx.lock().unwrap();
+                    match guard.as_mut() {
+                        Some(rx) => match rx.try_recv() {
+                            Ok(p) => Some(p),
+                            Err(_) => None,
+                        },
+                        None => None,
+                    }
+                }
+                None => None,
+            };
+            let pending = match pending {
+                Some(p) => p,
+                None => break,
+            };
+            process_fastify_request(app_handle, pending);
+            count += 1;
+        }
+    }
+
+    // Return the (capacity-retaining) buffer to the thread-local so the
+    // next tick reuses it. A re-entrant call during dispatch may have
+    // left a grown buffer behind — keep whichever has more capacity.
+    server_handles.clear();
+    SCRATCH.with(|s| {
+        let mut slot = s.borrow_mut();
+        if server_handles.capacity() >= slot.capacity() {
+            *slot = server_handles;
+        }
+    });
+    count
+}
+
+/// Reports whether any registered fastify server is currently in the
+/// "listening" state. Wired into perry-stdlib's
+/// `js_stdlib_has_active_handles` so the runtime's main event loop
+/// keeps running until the user explicitly closes every server. Without
+/// this, the runtime would see no active sources after the user's
+/// `main()` returns control to the loop and exit immediately — the
+/// accept task would be torn down before the first request could be
+/// dispatched.
+pub fn js_fastify_has_active_handles() -> i32 {
+    let mut active = 0i32;
+    for_each_handle_of::<FastifyServerHandle, _>(|s| {
+        if s.listening.load(Ordering::Acquire) {
+            active = 1;
+        }
+    });
+    active
+}
+
+/// Shared dispatch path used by both the (now removed) blocking
+/// event loop and the new pump entrypoint. Extracted into a free
+/// function so the pump can call it without re-binding to a specific
+/// `FastifyServerHandle` row in the registry.
+fn process_fastify_request(app_handle: Handle, pending: FastifyPendingRequest) {
+    let app = match get_handle::<FastifyApp>(app_handle) {
         Some(a) => a,
         None => return,
     };
+    process_fastify_request_with_app(app, pending);
+}
 
-    loop {
-        // Process any pending stdlib operations (promises, etc.)
-        unsafe { crate::common::js_stdlib_process_pending() };
+/// Per-request dispatch — kept as a closure-style block matching the
+/// previous `if let Ok(Some(pending)) = result { ... }` body, with
+/// only the `loop {}` wrapper removed.
+fn process_fastify_request_with_app(app: &FastifyApp, pending: FastifyPendingRequest) {
+    // Process any pending microtasks before dispatching.
+    perry_runtime::js_promise_run_microtasks();
 
-        // Process any pending microtasks
-        perry_runtime::js_promise_run_microtasks();
+    {
+        // Create context
+        let ctx = FastifyContext::new(
+            0, // request_id
+            pending.method.clone(),
+            pending.path.clone(),
+            pending.headers.clone(),
+            pending.body.clone(),
+            pending.params.clone(),
+        );
+        let ctx_handle = register_handle(ctx);
 
-        // Try to receive a request (non-blocking with small timeout)
-        let result = RUNTIME.block_on(async {
-            tokio::time::timeout(std::time::Duration::from_millis(10), request_rx.recv()).await
-        });
+        // Find matching route and call handler
+        let error_handler = app.error_handler;
+        let mut response_sent = false;
 
-        if let Ok(Some(pending)) = result {
-            // Create context
-            let ctx = FastifyContext::new(
-                0, // request_id
-                pending.method.clone(),
-                pending.path.clone(),
-                pending.headers.clone(),
-                pending.body.clone(),
-                pending.params.clone(),
-            );
-            let ctx_handle = unsafe { register_handle(ctx) };
+        // NaN-box the context handle with POINTER_TAG for hook calls
+        let nanboxed_ctx_for_hooks =
+            f64::from_bits(0x7FFD_0000_0000_0000 | (ctx_handle as u64 & 0x0000_FFFF_FFFF_FFFF));
 
-            // Find matching route and call handler
-            let mut response_sent = false;
+        // Collect hook ptrs (copy i64 values to avoid holding borrow on app during hook execution)
+        let on_request_hooks: Vec<ClosurePtr> = app.hooks.on_request.to_vec();
+        let pre_handler_hooks: Vec<ClosurePtr> = app.hooks.pre_handler.to_vec();
 
-            // NaN-box the context handle with POINTER_TAG for hook calls
-            let nanboxed_ctx_for_hooks =
-                f64::from_bits(0x7FFD_0000_0000_0000 | (ctx_handle as u64 & 0x0000_FFFF_FFFF_FFFF));
-
-            // Collect hook ptrs (copy i64 values to avoid holding borrow on app during hook execution)
-            let on_request_hooks: Vec<ClosurePtr> = app.hooks.on_request.to_vec();
-            let pre_handler_hooks: Vec<ClosurePtr> = app.hooks.pre_handler.to_vec();
-
-            // Run onRequest hooks (e.g., auth middleware, rate limiting, CORS)
-            for hook in &on_request_hooks {
-                if unsafe { call_hook_awaiting(*hook, nanboxed_ctx_for_hooks, ctx_handle) } {
+        // Run onRequest hooks (e.g., auth middleware, rate limiting, CORS)
+        for hook in &on_request_hooks {
+            match unsafe { call_hook_awaiting(*hook, nanboxed_ctx_for_hooks, ctx_handle) } {
+                HookOutcome::Continue => {}
+                HookOutcome::Sent => {
+                    response_sent = true;
+                    break;
+                }
+                HookOutcome::Error(reason) => {
+                    handle_error_response(
+                        error_handler,
+                        nanboxed_ctx_for_hooks,
+                        ctx_handle,
+                        reason,
+                    );
                     response_sent = true;
                     break;
                 }
             }
+        }
 
-            // Run preHandler hooks (if no response sent yet)
-            if !response_sent {
-                for hook in &pre_handler_hooks {
-                    if unsafe { call_hook_awaiting(*hook, nanboxed_ctx_for_hooks, ctx_handle) } {
+        // Run preHandler hooks (if no response sent yet)
+        if !response_sent {
+            for hook in &pre_handler_hooks {
+                match unsafe { call_hook_awaiting(*hook, nanboxed_ctx_for_hooks, ctx_handle) } {
+                    HookOutcome::Continue => {}
+                    HookOutcome::Sent => {
+                        response_sent = true;
+                        break;
+                    }
+                    HookOutcome::Error(reason) => {
+                        handle_error_response(
+                            error_handler,
+                            nanboxed_ctx_for_hooks,
+                            ctx_handle,
+                            reason,
+                        );
                         response_sent = true;
                         break;
                     }
                 }
             }
+        }
 
-            // Call route handler (if no hook sent a response)
-            // undefined NaN-box value: tag 0x7FFC, payload 1
-            let undefined_bits: u64 = 0x7FFC_0000_0000_0001;
-            let mut final_result: f64 = f64::from_bits(undefined_bits);
+        // Call route handler (if no hook sent a response)
+        // undefined NaN-box value: tag 0x7FFC, payload 1
+        let undefined_bits: u64 = 0x7FFC_0000_0000_0001;
+        let mut final_result: f64 = f64::from_bits(undefined_bits);
 
-            if !response_sent {
-                if let Some((route, _)) = app.match_route(&pending.method, &pending.path) {
-                    let handler = route.handler;
+        if !response_sent {
+            if let Some((route, _)) = app.match_route(&pending.method, &pending.path) {
+                let handler = route.handler;
 
-                    // NaN-box the context handle with POINTER_TAG so it can be dispatched
-                    // by js_native_call_method when the handler calls request/reply methods
-                    let nanboxed_ctx = nanboxed_ctx_for_hooks; // same value, different name for clarity
+                // NaN-box the context handle with POINTER_TAG so it can be dispatched
+                // by js_native_call_method when the handler calls request/reply methods
+                let nanboxed_ctx = nanboxed_ctx_for_hooks; // same value, different name for clarity
 
-                    // Call handler(request, reply) - both are the context handle
-                    let result = unsafe {
-                        let closure_ptr = handler as *const perry_runtime::ClosureHeader;
-                        perry_runtime::js_closure_call2(closure_ptr, nanboxed_ctx, nanboxed_ctx)
-                    };
+                // Call handler(request, reply) - both are the context handle
+                let call = {
+                    let closure_ptr = handler as *const perry_runtime::ClosureHeader;
+                    unsafe { call_closure2_catching(closure_ptr, nanboxed_ctx, nanboxed_ctx) }
+                };
+                if let Some(reason) = call.thrown {
+                    handle_error_response(error_handler, nanboxed_ctx, ctx_handle, reason);
+                    response_sent = true;
+                }
 
-                    // Process any async operations
-                    unsafe { crate::common::js_stdlib_process_pending() };
-                    perry_runtime::js_promise_run_microtasks();
+                // Process any async operations
+                crate::common::js_stdlib_process_pending();
+                perry_runtime::js_promise_run_microtasks();
 
-                    // Check if handler returned a promise (NaN-boxed pointer to a Promise)
-                    final_result = result;
-                    let jsv = JSValue::from_bits(result.to_bits());
-                    if jsv.is_pointer() {
-                        let ptr = jsv.as_pointer::<perry_runtime::Promise>();
-                        // Try to treat it as a promise and wait for it
-                        if unsafe {
-                            perry_runtime::js_is_promise(ptr as *mut perry_runtime::Promise)
-                        } != 0
-                        {
-                            wait_for_promise(ptr as *mut perry_runtime::Promise);
-                            // Extract the resolved value from the promise
-                            final_result = unsafe {
+                // Check if handler returned a promise (NaN-boxed pointer to a Promise)
+                if !response_sent {
+                    final_result = call.value;
+                }
+                let jsv = JSValue::from_bits(call.value.to_bits());
+                if !response_sent && jsv.is_pointer() {
+                    let ptr = jsv.as_pointer::<perry_runtime::Promise>();
+                    // Try to treat it as a promise and wait for it
+                    if { perry_runtime::js_is_promise(ptr as *mut perry_runtime::Promise) } != 0 {
+                        wait_for_promise(ptr as *mut perry_runtime::Promise);
+                        // Read state AFTER the wait — `js_promise_value`
+                        // returns `(*promise).value` unconditionally and
+                        // that field stays at `0.0` for rejected and
+                        // pending promises (rejection writes `reason`,
+                        // not `value`). Without this branch, an
+                        // unhandled rejection inside a route handler
+                        // would serialize the literal byte `0` as the
+                        // response body — issue #748.
+                        let st =
+                            { perry_runtime::js_promise_state(ptr as *mut perry_runtime::Promise) };
+                        if st == 2 {
+                            let reason = {
+                                perry_runtime::promise::js_promise_reason(
+                                    ptr as *mut perry_runtime::Promise,
+                                )
+                            };
+                            handle_error_response(error_handler, nanboxed_ctx, ctx_handle, reason);
+                            final_result = f64::from_bits(0x7FFC_0000_0000_0001);
+                        } else {
+                            final_result = {
                                 perry_runtime::js_promise_value(ptr as *mut perry_runtime::Promise)
                             };
                         }
                     }
                 }
             }
+        }
 
-            // Always send a response (from hook or route handler)
-            if let Some(ctx) = unsafe { get_handle::<FastifyContext>(ctx_handle) } {
-                let response = FastifyResponse {
-                    status: ctx.status_code,
-                    headers: ctx.response_headers.clone(),
-                    body: ctx.response_body.clone().unwrap_or_else(|| {
-                        // If no explicit body, use handler return value
-                        build_response_body(final_result)
-                    }),
+        // Always send a response (from hook or route handler)
+        if let Some(ctx) = get_handle::<FastifyContext>(ctx_handle) {
+            // If the handler called `reply.send(...)`, the body and
+            // content-type are already pinned on `ctx`. Otherwise the
+            // body comes from the handler's return value, and we use
+            // its `BodyKind` to default the content-type (#1120 —
+            // Buffer / Uint8Array → octet-stream, everything else
+            // → json).
+            let (body, body_kind) = match ctx.response_body.clone() {
+                Some(b) => (b, BodyKind::TextOrJson),
+                None => build_response_body(final_result),
+            };
+            let response = FastifyResponse {
+                status: ctx.status_code,
+                headers: ctx.response_headers.clone(),
+                body,
+            };
+
+            let mut final_response = response;
+            if !final_response
+                .headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+            {
+                let ct = match body_kind {
+                    BodyKind::Binary => "application/octet-stream",
+                    BodyKind::TextOrJson => "application/json",
                 };
-
-                // Ensure content-type is set
-                let mut final_response = response;
-                if !final_response
+                final_response
                     .headers
-                    .iter()
-                    .any(|(k, _)| k.to_lowercase() == "content-type")
-                {
-                    final_response
-                        .headers
-                        .push(("content-type".to_string(), "application/json".to_string()));
-                }
-
-                let _ = pending.response_tx.send(final_response);
-                response_sent = true;
+                    .push(("content-type".to_string(), ct.to_string()));
             }
 
-            let _ = response_sent; // suppress unused warning
+            let _ = pending.response_tx.send(final_response);
+            response_sent = true;
         }
+
+        let _ = response_sent; // suppress unused warning
     }
 }
 
-/// Call a hook closure, await any returned Promise, and return whether ctx.sent is true.
-/// Returns true if the hook sent a response (e.g., 401 from auth middleware).
-unsafe fn call_hook_awaiting(hook: ClosurePtr, ctx_f64: f64, ctx_handle: Handle) -> bool {
+/// Call a hook closure, await any returned Promise, and report whether it
+/// sent a response or threw/rejected.
+unsafe fn call_hook_awaiting(hook: ClosurePtr, ctx_f64: f64, ctx_handle: Handle) -> HookOutcome {
     let closure_ptr = hook as *const perry_runtime::ClosureHeader;
-    let result = perry_runtime::js_closure_call2(closure_ptr, ctx_f64, ctx_f64);
+    let call = call_closure2_catching(closure_ptr, ctx_f64, ctx_f64);
+    if let Some(reason) = call.thrown {
+        return HookOutcome::Error(reason);
+    }
 
     // Process pending async operations
     crate::common::js_stdlib_process_pending();
     perry_runtime::js_promise_run_microtasks();
 
     // If hook returned a Promise, wait for it to resolve/reject
-    let jsv = JSValue::from_bits(result.to_bits());
+    let jsv = JSValue::from_bits(call.value.to_bits());
     if jsv.is_pointer() {
         let ptr = jsv.as_pointer::<perry_runtime::Promise>();
         if perry_runtime::js_is_promise(ptr as *mut perry_runtime::Promise) != 0 {
             wait_for_promise(ptr as *mut perry_runtime::Promise);
+            if perry_runtime::js_promise_state(ptr as *mut perry_runtime::Promise) == 2 {
+                return HookOutcome::Error(perry_runtime::promise::js_promise_reason(
+                    ptr as *mut perry_runtime::Promise,
+                ));
+            }
         }
     }
 
     // Return whether the hook sent a response (e.g., auth middleware sent 401)
     if let Some(ctx) = get_handle::<FastifyContext>(ctx_handle) {
-        ctx.sent
+        if ctx.sent {
+            HookOutcome::Sent
+        } else {
+            HookOutcome::Continue
+        }
     } else {
-        false
+        HookOutcome::Continue
     }
 }
 
-/// Wait for a promise to resolve/reject
-fn wait_for_promise(promise_ptr: *mut perry_runtime::Promise) {
-    // Poll until promise is settled
-    for _ in 0..10000 {
-        // Process pending operations
-        unsafe { crate::common::js_stdlib_process_pending() };
-        perry_runtime::js_promise_run_microtasks();
+unsafe fn call_closure2_catching(
+    closure_ptr: *const perry_runtime::ClosureHeader,
+    arg0: f64,
+    arg1: f64,
+) -> ClosureCallResult {
+    let trap_buf = perry_runtime::exception::js_try_push();
+    let jumped = perry_runtime::ffi::setjmp::setjmp(trap_buf as *mut c_int);
+    if jumped != 0 {
+        let exc = perry_runtime::exception::js_get_exception();
+        perry_runtime::exception::js_clear_exception();
+        perry_runtime::exception::js_try_end();
+        return ClosureCallResult {
+            value: f64::from_bits(0x7FFC_0000_0000_0001),
+            thrown: Some(exc),
+        };
+    }
 
-        // Check if promise is settled (state != 0 means not pending)
-        let state = unsafe { perry_runtime::js_promise_state(promise_ptr) };
-        if state != 0 {
-            break;
+    let value = perry_runtime::js_closure_call2(closure_ptr, arg0, arg1);
+    perry_runtime::exception::js_try_end();
+    ClosureCallResult {
+        value,
+        thrown: None,
+    }
+}
+
+unsafe fn call_closure3_catching(
+    closure_ptr: *const perry_runtime::ClosureHeader,
+    arg0: f64,
+    arg1: f64,
+    arg2: f64,
+) -> ClosureCallResult {
+    let trap_buf = perry_runtime::exception::js_try_push();
+    let jumped = perry_runtime::ffi::setjmp::setjmp(trap_buf as *mut c_int);
+    if jumped != 0 {
+        let exc = perry_runtime::exception::js_get_exception();
+        perry_runtime::exception::js_clear_exception();
+        perry_runtime::exception::js_try_end();
+        return ClosureCallResult {
+            value: f64::from_bits(0x7FFC_0000_0000_0001),
+            thrown: Some(exc),
+        };
+    }
+
+    let value = perry_runtime::js_closure_call3(closure_ptr, arg0, arg1, arg2);
+    perry_runtime::exception::js_try_end();
+    ClosureCallResult {
+        value,
+        thrown: None,
+    }
+}
+
+fn handle_error_response(
+    error_handler: Option<ClosurePtr>,
+    ctx_f64: f64,
+    ctx_handle: Handle,
+    reason: f64,
+) {
+    if let Some(ctx) = crate::common::get_handle_mut::<FastifyContext>(ctx_handle) {
+        ctx.status_code = 500;
+    }
+
+    if let Some(handler) = error_handler {
+        let closure_ptr = handler as *const perry_runtime::ClosureHeader;
+        let call = unsafe { call_closure3_catching(closure_ptr, reason, ctx_f64, ctx_f64) };
+        let mut fallback_reason = call.thrown;
+
+        if fallback_reason.is_none() {
+            crate::common::js_stdlib_process_pending();
+            perry_runtime::js_promise_run_microtasks();
+
+            let mut final_result = call.value;
+            let jsv = JSValue::from_bits(call.value.to_bits());
+            if jsv.is_pointer() {
+                let ptr = jsv.as_pointer::<perry_runtime::Promise>();
+                if perry_runtime::js_is_promise(ptr as *mut perry_runtime::Promise) != 0 {
+                    wait_for_promise(ptr as *mut perry_runtime::Promise);
+                    if perry_runtime::js_promise_state(ptr as *mut perry_runtime::Promise) == 2 {
+                        fallback_reason = Some(perry_runtime::promise::js_promise_reason(
+                            ptr as *mut perry_runtime::Promise,
+                        ));
+                    } else {
+                        final_result =
+                            perry_runtime::js_promise_value(ptr as *mut perry_runtime::Promise);
+                    }
+                }
+            }
+
+            if fallback_reason.is_none() {
+                if let Some(ctx) = crate::common::get_handle_mut::<FastifyContext>(ctx_handle) {
+                    if ctx.response_body.is_none() {
+                        let (bytes, kind) = build_response_body(final_result);
+                        // #1120 — when the body came back binary and no
+                        // content-type was pinned, default to octet-stream
+                        // so the request finalization step doesn't paint
+                        // over it with `application/json`.
+                        if kind == BodyKind::Binary
+                            && !ctx
+                                .response_headers
+                                .iter()
+                                .any(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+                        {
+                            ctx.response_headers.push((
+                                "content-type".to_string(),
+                                "application/octet-stream".to_string(),
+                            ));
+                        }
+                        ctx.response_body = Some(bytes);
+                    }
+                }
+                return;
+            }
         }
 
-        // Small sleep to avoid busy-waiting
-        std::thread::sleep(std::time::Duration::from_micros(100));
+        if let Some(reason) = fallback_reason {
+            apply_default_error_response(ctx_handle, reason);
+        }
+    } else {
+        apply_default_error_response(ctx_handle, reason);
     }
 }
 
-/// Build response body from handler return value
-fn build_response_body(value: f64) -> Vec<u8> {
-    let jsv = JSValue::from_bits(value.to_bits());
+fn apply_default_error_response(ctx_handle: Handle, reason: f64) {
+    if let Some(ctx) = crate::common::get_handle_mut::<FastifyContext>(ctx_handle) {
+        ctx.status_code = 500;
+        ctx.response_body = Some(render_rejection_body(reason));
+    }
+}
 
-    // If undefined/null, return empty object
-    if jsv.is_undefined() || jsv.is_null() {
-        return b"{}".to_vec();
+/// Wait until a promise settles, driving microtasks, the stdlib pump,
+/// and timer ticks every iteration. Blocks on
+/// `perry_runtime::event_pump::js_wait_for_event` (a condvar with a 1 s
+/// idle cap) instead of `thread::sleep`, so the dispatcher wakes the
+/// moment any stdlib worker calls `js_notify_main_thread` — the same
+/// wake `js_promise_resolve` / `js_promise_reject` fire when the
+/// awaited chain advances.
+///
+/// Mirrors the codegen-emitted `await` body in
+/// `crates/perry-codegen/src/expr.rs` (the "=== wait ===" block at
+/// lines ~9645-9665): no fixed iteration limit, condvar-based wait.
+///
+/// ### Why the old polling loop is wrong (issue #748)
+///
+/// The previous implementation looped 10_000 × 100 us = ~1 s and then
+/// returned regardless of whether the promise had settled. Callers
+/// then read `js_promise_value(ptr)` which returns `(*promise).value`
+/// — `0.0` for a still-Pending Promise (it's initialized to zero in
+/// `Promise::new` and only overwritten by `js_promise_resolve`). The
+/// dispatcher serialized that `0.0` as the response body, yielding the
+/// literal ASCII byte `0x30` ("0") with HTTP 200 (default
+/// `status_code` — `reply.code(201)` was never reached because the
+/// handler chain hadn't returned). Routes that do many awaits
+/// (argon2 hashing + multi-step DB writes, etc.) routinely exceed
+/// 1 s on a cold connection pool; every operation after the timeout
+/// silently no-op'd because the dispatcher returned and stopped
+/// pumping microtasks for the orphaned chain.
+fn wait_for_promise(promise_ptr: *mut perry_runtime::Promise) {
+    // First pump synchronously — handles the already-settled case
+    // (e.g. `async () => 42` whose promise is fulfilled before this
+    // function is even called) without entering the wait path.
+    crate::common::js_stdlib_process_pending();
+    perry_runtime::js_promise_run_microtasks();
+    let mut state = perry_runtime::js_promise_state(promise_ptr);
+    if state != 0 {
+        return;
+    }
+    loop {
+        // Drive timers, the stdlib pump, and microtasks every tick
+        // — mirrors the codegen-emitted await body.
+        let _ = perry_runtime::timer::js_timer_tick();
+        let _ = perry_runtime::timer::js_callback_timer_tick();
+        let _ = perry_runtime::timer::js_interval_timer_tick();
+        crate::common::js_stdlib_process_pending();
+        perry_runtime::js_promise_run_microtasks();
+        // Condvar wait: blocks until a notify arrives or the 1 s
+        // idle cap elapses. `js_promise_resolve` / `js_promise_reject`
+        // fire `js_notify_main_thread`, so the wake happens the
+        // instant the chain advances.
+        perry_runtime::event_pump::js_wait_for_event();
+        state = perry_runtime::js_promise_state(promise_ptr);
+        if state != 0 {
+            return;
+        }
+    }
+}
+
+/// Render a Promise rejection reason as a `{ "error": ... }` JSON body
+/// for the 500 response surfaced by the dispatcher on async-handler
+/// rejection (issue #748).
+fn render_rejection_body(reason: f64) -> Vec<u8> {
+    if let Some(message) = error_message(reason) {
+        let mut out =
+            b"{\"statusCode\":500,\"error\":\"Internal Server Error\",\"message\":".to_vec();
+        push_json_string(&mut out, message.as_bytes());
+        out.push(b'}');
+        return out;
     }
 
-    // If string, return as-is
+    let jsv = JSValue::from_bits(reason.to_bits());
+    if jsv.is_string() {
+        let (s, _) = build_response_body(reason);
+        let mut out = b"{\"error\":".to_vec();
+        out.push(b'"');
+        for b in s {
+            match b {
+                b'"' => out.extend_from_slice(b"\\\""),
+                b'\\' => out.extend_from_slice(b"\\\\"),
+                b'\n' => out.extend_from_slice(b"\\n"),
+                b'\r' => out.extend_from_slice(b"\\r"),
+                b'\t' => out.extend_from_slice(b"\\t"),
+                0x00..=0x1f => out.extend_from_slice(format!("\\u{:04x}", b).as_bytes()),
+                _ => out.push(b),
+            }
+        }
+        out.push(b'"');
+        out.push(b'}');
+        return out;
+    }
+    if jsv.is_pointer() {
+        extern "C" {
+            fn js_json_stringify(value: f64, type_hint: u32) -> *mut StringHeader;
+        }
+        unsafe {
+            let str_ptr = js_json_stringify(reason, 0);
+            if !str_ptr.is_null() {
+                let len = (*str_ptr).byte_len as usize;
+                let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+                let inner = std::slice::from_raw_parts(data_ptr, len).to_vec();
+                let mut out = b"{\"error\":".to_vec();
+                out.extend_from_slice(&inner);
+                out.push(b'}');
+                return out;
+            }
+        }
+    }
+    let (body, _) = build_response_body(reason);
+    let mut out = b"{\"error\":".to_vec();
+    if body.is_empty() {
+        out.extend_from_slice(b"null");
+    } else {
+        out.push(b'"');
+        for b in body {
+            match b {
+                b'"' => out.extend_from_slice(b"\\\""),
+                b'\\' => out.extend_from_slice(b"\\\\"),
+                _ => out.push(b),
+            }
+        }
+        out.push(b'"');
+    }
+    out.push(b'}');
+    out
+}
+
+fn error_message(reason: f64) -> Option<String> {
+    let jsv = JSValue::from_bits(reason.to_bits());
+    if jsv.is_pointer() {
+        let ptr = jsv.as_pointer::<u8>();
+        if unsafe { gc_obj_type(ptr) } == perry_runtime::gc::GC_TYPE_ERROR {
+            let err = ptr as *mut perry_runtime::error::ErrorHeader;
+            let msg = perry_runtime::error::js_error_get_message(err);
+            return unsafe { string_header_to_string(msg) };
+        }
+    }
+    None
+}
+
+unsafe fn gc_obj_type(ptr: *const u8) -> u8 {
+    if ptr.is_null() || (ptr as usize) < 0x1000 {
+        return 0;
+    }
+    *ptr.sub(perry_runtime::gc::GC_HEADER_SIZE)
+}
+
+unsafe fn string_header_to_string(ptr: *const StringHeader) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    let len = (*ptr).byte_len as usize;
+    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let bytes = std::slice::from_raw_parts(data_ptr, len);
+    Some(String::from_utf8_lossy(bytes).to_string())
+}
+
+fn push_json_string(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.push(b'"');
+    for &b in bytes {
+        match b {
+            b'"' => out.extend_from_slice(b"\\\""),
+            b'\\' => out.extend_from_slice(b"\\\\"),
+            b'\n' => out.extend_from_slice(b"\\n"),
+            b'\r' => out.extend_from_slice(b"\\r"),
+            b'\t' => out.extend_from_slice(b"\\t"),
+            0x00..=0x1f => out.extend_from_slice(format!("\\u{:04x}", b).as_bytes()),
+            _ => out.push(b),
+        }
+    }
+    out.push(b'"');
+}
+
+/// Build response body from handler return value. Returns the raw
+/// bytes plus a `BodyKind` so the caller can default `content-type`
+/// to `application/octet-stream` for binary payloads (Buffer /
+/// Uint8Array) instead of `application/json` (#1120).
+fn build_response_body(value: f64) -> (Vec<u8>, BodyKind) {
+    let jsv = JSValue::from_bits(value.to_bits());
+
+    if jsv.is_undefined() || jsv.is_null() {
+        return (b"{}".to_vec(), BodyKind::TextOrJson);
+    }
+
     if jsv.is_string() {
         unsafe {
             let ptr = perry_runtime::js_get_string_pointer_unified(value);
@@ -465,12 +1121,17 @@ fn build_response_body(value: f64) -> Vec<u8> {
                 let len = (*header).byte_len as usize;
                 let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
                 let bytes = std::slice::from_raw_parts(data_ptr, len);
-                return bytes.to_vec();
+                return (bytes.to_vec(), BodyKind::TextOrJson);
             }
         }
     }
 
-    // For objects/arrays (pointers), use js_json_stringify for proper JSON serialization
+    // #1120 — Buffer / Uint8Array ships its raw payload (no
+    // Buffer.toJSON detour through `js_json_stringify`).
+    if let Some(bytes) = unsafe { extract_buffer_bytes(value) } {
+        return (bytes, BodyKind::Binary);
+    }
+
     if jsv.is_pointer() {
         extern "C" {
             fn js_json_stringify(value: f64, type_hint: u32) -> *mut StringHeader;
@@ -481,33 +1142,63 @@ fn build_response_body(value: f64) -> Vec<u8> {
                 let len = (*str_ptr).byte_len as usize;
                 let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
                 let bytes = std::slice::from_raw_parts(data_ptr, len);
-                return bytes.to_vec();
+                return (bytes.to_vec(), BodyKind::TextOrJson);
             }
         }
     }
 
-    // Fallback: convert to string
     unsafe {
         let json_ptr = perry_runtime::js_jsvalue_to_string(value);
         if !json_ptr.is_null() {
             let len = (*json_ptr).byte_len as usize;
             let data_ptr = (json_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
             let bytes = std::slice::from_raw_parts(data_ptr, len);
-            return bytes.to_vec();
+            return (bytes.to_vec(), BodyKind::TextOrJson);
         }
     }
 
-    b"{}".to_vec()
+    (b"{}".to_vec(), BodyKind::TextOrJson)
 }
 
-/// Close the server
+/// Close one specific server by its `FastifyServerHandle` id. Marks
+/// the server as no-longer-listening (so `js_fastify_has_active_handles`
+/// stops reporting it as active), drops the request receiver, and
+/// fires the shutdown oneshot so the accept loop exits. Idempotent —
+/// safe to call multiple times.
 #[no_mangle]
 pub unsafe extern "C" fn js_fastify_close(server_handle: Handle) -> bool {
-    if let Some(_server) = get_handle::<FastifyServerHandle>(server_handle) {
-        // Shutdown will be triggered when the handle is dropped
+    if let Some(server) = crate::common::get_handle_mut::<FastifyServerHandle>(server_handle) {
+        server.listening.store(false, Ordering::Release);
+        // Drop the receiver so `has_active` stops claiming pending
+        // requests as a reason to keep the loop alive.
+        *server.request_rx.lock().unwrap() = None;
+        // Trigger the accept loop's shutdown branch.
+        if let Some(tx) = server.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
         return true;
     }
     false
+}
+
+/// Mark every server bound to `app_handle` as closed. Used by the
+/// `app.close()` dispatch arm — the user gets a single handle (the
+/// FastifyApp) and shouldn't have to track per-server handles to shut
+/// the listener down. Returns void — the codegen-side caller discards
+/// the result.
+#[no_mangle]
+pub unsafe extern "C" fn js_fastify_app_close(app_handle: Handle) {
+    let mut server_ids: Vec<Handle> = Vec::new();
+    crate::common::iter_handle_ids_of::<FastifyServerHandle, _>(|id| {
+        if let Some(s) = get_handle::<FastifyServerHandle>(id) {
+            if s.app_handle == app_handle {
+                server_ids.push(id);
+            }
+        }
+    });
+    for id in server_ids {
+        let _ = js_fastify_close(id);
+    }
 }
 
 #[cfg(test)]
@@ -579,13 +1270,13 @@ mod tests {
     /// Test building response body from different value types
     #[test]
     fn test_build_response_body() {
-        // Test undefined
-        let body = build_response_body(f64::from_bits(JSValue::undefined().bits()));
+        let (body, kind) = build_response_body(f64::from_bits(JSValue::undefined().bits()));
         assert_eq!(body, b"{}");
+        assert_eq!(kind, BodyKind::TextOrJson);
 
-        // Test null
-        let body = build_response_body(f64::from_bits(JSValue::null().bits()));
+        let (body, kind) = build_response_body(f64::from_bits(JSValue::null().bits()));
         assert_eq!(body, b"{}");
+        assert_eq!(kind, BodyKind::TextOrJson);
 
         // Test number (these get converted via js_jsvalue_to_string, which returns "{}" for numbers without proper string conversion)
         // In practice, handler return values would be objects that get JSON serialized

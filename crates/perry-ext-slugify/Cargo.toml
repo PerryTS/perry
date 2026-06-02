@@ -1,0 +1,15 @@
+[package]
+name = "perry-ext-slugify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for the npm `slugify` package — uses only `perry-ffi`. Fourth port under #466 Phase 5."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

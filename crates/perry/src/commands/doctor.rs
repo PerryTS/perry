@@ -14,6 +14,19 @@ pub struct DoctorArgs {
     /// Run checks silently and only report failures
     #[arg(long)]
     pub quiet: bool,
+
+    /// #849: print queued opt-in compatibility reports (the redacted
+    /// payloads that would be sent on next compile) and exit. Lets
+    /// users inspect what compat telemetry would look like before
+    /// opting in.
+    #[arg(long)]
+    pub show_pending_reports: bool,
+
+    /// #849: clear the local 30-day dedup cache at
+    /// `~/.perry/.report-cache`. Next time a previously-suppressed
+    /// gap fires, it'll be reported again.
+    #[arg(long)]
+    pub clear_report_cache: bool,
 }
 
 static CHECK: Emoji<'_, '_> = Emoji("✓ ", "[OK] ");
@@ -222,31 +235,21 @@ fn check_system_linker() -> CheckResult {
 }
 
 fn check_runtime_library() -> CheckResult {
-    #[cfg(target_os = "windows")]
-    let lib_name = "perry_runtime.lib";
-    #[cfg(not(target_os = "windows"))]
-    let lib_name = "libperry_runtime.a";
-
-    let candidates = [
-        PathBuf::from(format!("target/release/{}", lib_name)),
-        PathBuf::from(format!("target/debug/{}", lib_name)),
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|p| p.join(lib_name)))
-            .unwrap_or_default(),
-        PathBuf::from(format!("/usr/local/lib/{}", lib_name)),
-    ];
-
-    for path in &candidates {
-        if path.exists() {
-            return CheckResult {
-                name: "runtime library".to_string(),
-                status: CheckStatus::Ok,
-                details: Some(path.display().to_string()),
-            };
-        }
+    // Delegate to the same search machinery `perry compile` uses, so the
+    // doctor view stays in sync with the linker's actual lookup paths
+    // (env-var overrides, WinGet Packages dir, brew/usr-local, etc).
+    let lib_name = if cfg!(target_os = "windows") {
+        "perry_runtime.lib"
+    } else {
+        "libperry_runtime.a"
+    };
+    if let Some(path) = crate::commands::compile::find_library(lib_name, None) {
+        return CheckResult {
+            name: "runtime library".to_string(),
+            status: CheckStatus::Ok,
+            details: Some(path.display().to_string()),
+        };
     }
-
     CheckResult {
         name: "runtime library".to_string(),
         status: CheckStatus::Warning,
@@ -274,6 +277,29 @@ fn check_update_available() -> CheckResult {
     }
 }
 
+/// #849: surface compatibility-report mode + cumulative counters.
+/// Always `Ok` — the channel is opt-in, so "off" is a valid state, not
+/// an error. The detail line tells the user where to look to flip it.
+fn check_compat_reports() -> CheckResult {
+    let mode = crate::compat_reports::active_mode();
+    let counters = crate::compat_reports::current_counters();
+    let cache_path = crate::compat_reports::cache_path();
+    let cache_exists = cache_path.exists();
+    let details = format!(
+        "mode={} (sent={}, suppressed-by-dedup={}, queued={}, cache={})",
+        mode.as_str(),
+        counters.sent,
+        counters.suppressed_by_dedup,
+        counters.queued,
+        if cache_exists { "present" } else { "empty" },
+    );
+    CheckResult {
+        name: "compatibility reports (#849)".to_string(),
+        status: CheckStatus::Ok,
+        details: Some(details),
+    }
+}
+
 fn check_project_config() -> CheckResult {
     let config_path = PathBuf::from("perry.toml");
     if config_path.exists() {
@@ -292,6 +318,37 @@ fn check_project_config() -> CheckResult {
 }
 
 pub fn run(args: DoctorArgs, format: OutputFormat, use_color: bool) -> Result<()> {
+    // #849: fast-paths that don't need the full environment-checks rundown.
+    if args.clear_report_cache {
+        let cleared = crate::compat_reports::clear_cache();
+        if cleared {
+            println!(
+                "Cleared compatibility-report dedup cache at {}",
+                crate::compat_reports::cache_path().display()
+            );
+        } else {
+            println!("No compatibility-report cache to clear.");
+        }
+        return Ok(());
+    }
+    if args.show_pending_reports {
+        let pending = crate::compat_reports::drain_for_display();
+        if pending.is_empty() {
+            println!("No pending compatibility reports.");
+            println!("Reports are populated during a compile run, not by `perry doctor` itself.");
+            println!(
+                "To exercise the path, run a compile that fires an unsupported-feature diagnostic."
+            );
+        } else {
+            for r in &pending {
+                println!("{}", serde_json::to_string_pretty(r).unwrap_or_default());
+                println!();
+            }
+            println!("Total pending: {} (after redaction)", pending.len());
+        }
+        return Ok(());
+    }
+
     let checks = vec![
         check_perry_version(),
         check_update_available(),
@@ -299,6 +356,7 @@ pub fn run(args: DoctorArgs, format: OutputFormat, use_color: bool) -> Result<()
         check_system_linker(),
         check_runtime_library(),
         check_project_config(),
+        check_compat_reports(),
     ];
 
     let mut has_errors = false;

@@ -45,9 +45,13 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
         let bridge_class =
             jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
         let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
+        // Use the same JNI bridge entrypoint as textfield/textarea —
+        // PerryBridge.setTextChangedCallback. The stale `setTextWatcher`
+        // name didn't exist on the Kotlin side and aborted with
+        // NoSuchMethodError whenever a SecureField was constructed.
         let _ = env.call_static_method(
             bridge_cls,
-            "setTextWatcher",
+            "setTextChangedCallback",
             "(Landroid/widget/EditText;J)V",
             &[JValue::Object(&edit_text), JValue::Long(cb_key)],
         );

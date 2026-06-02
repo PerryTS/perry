@@ -128,6 +128,24 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
             cbs.borrow_mut().insert(observer_addr, (on_change, tf_raw));
         });
 
+        #[cfg(feature = "geisterhand")]
+        {
+            extern "C" {
+                fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+            }
+            // Re-use WIDGET_TEXTFIELD (=1) + CB_ON_CHANGE (=1): NSSecureTextField
+            // is-a NSTextField at the AppKit layer, so the runtime's SetText pump
+            // (`perry_ui_textfield_set_string` + REGISTRY-driven onChange dispatch)
+            // works against secure fields the same way it does against regular
+            // text fields. Without this registration, `/type/<secure_handle>`
+            // would set the string but never fire onChange — issue #640's "Add
+            // Shop" form has at least one password input that suffered exactly
+            // this when the geisterhand smoke harness drove it.
+            unsafe {
+                perry_geisterhand_register(handle, 1, 1, on_change, placeholder_ptr);
+            }
+        }
+
         // Register for NSControlTextDidChangeNotification
         let center = NSNotificationCenter::defaultCenter();
         let notif_name = NSString::from_str("NSControlTextDidChangeNotification");

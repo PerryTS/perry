@@ -112,6 +112,45 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
+/// GC root scanner for Geisterhand callback storage. The widget registry and
+/// pending-action queue are Rust-owned containers, so moved closures and
+/// heap-valued callback args must be rewritten here after copied-minor GC.
+pub fn scan_geisterhand_roots(mark: &mut dyn FnMut(f64)) {
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_geisterhand_roots_mut(&mut visitor);
+}
+
+pub fn scan_geisterhand_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    {
+        let mut reg = crate::gc::lock_gc_root_registry(&REGISTRY);
+        for widget in reg.iter_mut() {
+            visitor.visit_nanbox_f64_slot(&mut widget.closure_f64);
+        }
+    }
+    {
+        let mut actions = crate::gc::lock_gc_root_registry(&PENDING_ACTIONS);
+        for action in actions.iter_mut() {
+            match action {
+                PendingAction::InvokeCallback { closure_f64, args } => {
+                    visitor.visit_nanbox_f64_slot(closure_f64);
+                    for arg in args.iter_mut() {
+                        visitor.visit_nanbox_f64_slot(arg);
+                    }
+                }
+                PendingAction::SetState { value, .. } => {
+                    visitor.visit_nanbox_f64_slot(value);
+                }
+                PendingAction::ApplyStyle { .. } => {}
+                PendingAction::SetText { .. }
+                | PendingAction::ScrollTo { .. }
+                | PendingAction::ReadValue { .. }
+                | PendingAction::QueryWidgetTree
+                | PendingAction::CaptureScreenshot => {}
+            }
+        }
+    }
+}
+
 // Registered function pointers for UI operations. Platform UI crates call the register
 // functions below during initialization. This avoids extern "C" declarations that would
 // create hard linker dependencies on UI crate symbols.
@@ -193,21 +232,7 @@ pub extern "C" fn perry_geisterhand_register(
     closure_f64: f64,
     label_ptr: *const u8,
 ) {
-    let label = if label_ptr.is_null() {
-        String::new()
-    } else {
-        // Read StringHeader: first 8 bytes are header (length at offset 0 as u32),
-        // followed by UTF-8 data bytes
-        unsafe {
-            let len = *(label_ptr as *const u32) as usize;
-            let data = label_ptr.add(std::mem::size_of::<[u64; 1]>()); // skip 8-byte GcHeader+length
-            if len > 0 && len < 10000 {
-                String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
-            } else {
-                String::new()
-            }
-        }
-    };
+    let label = decode_label_from_string_header(label_ptr);
     if let Ok(mut reg) = REGISTRY.lock() {
         reg.push(RegisteredWidget {
             handle,
@@ -217,6 +242,35 @@ pub extern "C" fn perry_geisterhand_register(
             label,
             shortcut: String::new(),
         });
+    }
+}
+
+/// Decode a Perry `StringHeader`-pointed UTF-8 string into an owned `String`.
+///
+/// `label_ptr` is the **user pointer** to the start of the StringHeader (the
+/// GcHeader sits at `label_ptr - 8`, but is irrelevant for this read). The
+/// data payload starts past the 5-`u32` StringHeader at `label_ptr + 20`;
+/// `byte_len` lives at offset 4 (offset 0 is `utf16_len`, which equals
+/// `byte_len` for pure-ASCII strings — relevant because the prior
+/// implementation read offset 0 + a `mem::size_of::<[u64; 1]>()` (8-byte)
+/// data offset, so `data` actually pointed into the `capacity`/`refcount`
+/// fields of the StringHeader rather than the payload. Result: every label
+/// in `/widgets` JSON came back as a few bytes of internal-bookkeeping
+/// noise (often whitespace because `capacity`'s lo-byte typically falls in
+/// the 0x10–0x40 range), masking which widget a handle pointed at when
+/// triaging issues like #640's multi-route TextField repro.
+fn decode_label_from_string_header(label_ptr: *const u8) -> String {
+    if label_ptr.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let header = label_ptr as *const crate::string::StringHeader;
+        let len = (*header).byte_len as usize;
+        if len == 0 || len >= 10000 {
+            return String::new();
+        }
+        let data = label_ptr.add(std::mem::size_of::<crate::string::StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
     }
 }
 
@@ -232,19 +286,7 @@ pub extern "C" fn perry_geisterhand_register_with_shortcut(
     shortcut_ptr: *const u8,
     shortcut_len: usize,
 ) {
-    let label = if label_ptr.is_null() {
-        String::new()
-    } else {
-        unsafe {
-            let len = *(label_ptr as *const u32) as usize;
-            let data = label_ptr.add(std::mem::size_of::<[u64; 1]>());
-            if len > 0 && len < 10000 {
-                String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
-            } else {
-                String::new()
-            }
-        }
-    };
+    let label = decode_label_from_string_header(label_ptr);
     let shortcut = if shortcut_ptr.is_null() || shortcut_len == 0 {
         String::new()
     } else {
@@ -426,17 +468,16 @@ pub extern "C" fn perry_geisterhand_pump() {
                         func(handle, str_ptr as i64);
                     }
                     // Fire onChange callback if registered
-                    if let Ok(reg) = REGISTRY.lock() {
-                        for w in reg.iter() {
-                            if w.handle == handle && w.callback_kind == CB_ON_CHANGE {
-                                let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
-                                let ptr =
-                                    unsafe { js_nanbox_get_pointer(w.closure_f64) } as *const u8;
-                                unsafe {
-                                    js_closure_call1(ptr, nanboxed);
-                                }
-                                break;
-                            }
+                    let callback = REGISTRY.lock().ok().and_then(|reg| {
+                        reg.iter()
+                            .find(|w| w.handle == handle && w.callback_kind == CB_ON_CHANGE)
+                            .map(|w| w.closure_f64)
+                    });
+                    if let Some(closure_f64) = callback {
+                        let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
+                        let ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
+                        unsafe {
+                            js_closure_call1(ptr, nanboxed);
                         }
                     }
                 }
@@ -465,24 +506,41 @@ pub extern "C" fn perry_geisterhand_pump() {
                 }
             }
             PendingAction::ReadValue { handle } => {
+                // Issue #640: distinguish "widget not found / not a
+                // readable widget" from "widget has empty stringValue".
+                // The platform helper returns ptr=null when the lookup
+                // fails or the widget type isn't readable; ptr != null
+                // (even with len=0) when the lookup succeeded and the
+                // value is the bytes 0..len. Pre-fix both cases were
+                // collapsed to `String::new()` and then the HTTP layer
+                // reported `value: null` for both — a real empty
+                // textfield (post `/type/:handle` with `""`) was
+                // indistinguishable from a torn-down widget. The
+                // sentinel `"\u{0}\u{0}NF"` is impossible to receive
+                // from a real NSTextField (control bytes don't survive
+                // typing) so we use it to flag "not found" through the
+                // existing `Mutex<Option<String>>`.
                 let f = UI_READ_VALUE_FN.load(Ordering::Acquire);
-                let result = if !f.is_null() {
+                let result: String = if !f.is_null() {
                     unsafe {
                         let func: extern "C" fn(i64, *mut usize) -> *mut u8 =
                             std::mem::transmute(f);
                         let mut len: usize = 0;
                         let ptr = func(handle, &mut len);
-                        if !ptr.is_null() && len > 0 {
-                            let s = String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len))
-                                .into_owned();
+                        if ptr.is_null() {
+                            "\u{0}\u{0}NF".to_string()
+                        } else {
+                            // Platform handlers allocate ≥ 1 byte even
+                            // for empty values (see #640) so the ptr
+                            // is always libc::free-able when non-null.
+                            let bytes = std::slice::from_raw_parts(ptr, len);
+                            let s = String::from_utf8_lossy(bytes).into_owned();
                             libc::free(ptr as *mut libc::c_void);
                             s
-                        } else {
-                            String::new()
                         }
                     }
                 } else {
-                    String::new()
+                    "\u{0}\u{0}NF".to_string()
                 };
                 if let Ok(mut r) = VALUE_RESULT.lock() {
                     *r = Some(result);
@@ -578,10 +636,15 @@ pub extern "C" fn perry_geisterhand_get_registry_json(out_len: *mut usize) -> *m
     raw as *mut u8
 }
 
-/// Free a string returned by perry_geisterhand_get_registry_json.
+/// Free a string returned by perry_geisterhand_get_registry_json
+/// or `perry_geisterhand_request_value`. The latter can return a
+/// non-null + len=0 pointer for an empty-but-found value (#640) —
+/// `Box::from_raw` on a 0-length slice is a no-op (the underlying
+/// allocation is `Vec::new().into_boxed_slice()`'s dangling pointer)
+/// and is safe to call.
 #[no_mangle]
 pub extern "C" fn perry_geisterhand_free_string(ptr: *mut u8, len: usize) {
-    if !ptr.is_null() && len > 0 {
+    if !ptr.is_null() {
         unsafe {
             let _ = Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len));
         }
@@ -696,17 +759,32 @@ fn request_string_from_main(
     if let Ok(mut r) = requested.lock() {
         *r = false;
     }
+    // Issue #640: treat the `\0\0NF` sentinel from ReadValue as
+    // "not found" → null pointer; everything else (including the
+    // empty string) returns a non-null pointer + len so the HTTP
+    // handler can render `value: ""` distinctly from `value: null`.
+    // Tree / screenshot results never produce the sentinel, so this
+    // handles all current call sites uniformly.
     match string_result {
-        Some(s) if !s.is_empty() => {
+        Some(ref s) if s == "\u{0}\u{0}NF" => {
+            unsafe {
+                *out_len = 0;
+            }
+            std::ptr::null_mut()
+        }
+        Some(s) => {
             let bytes = s.into_bytes();
             let len = bytes.len();
+            // `Vec::new().into_boxed_slice()` returns a non-null
+            // dangling pointer; `Box::from_raw` in
+            // `perry_geisterhand_free_string` drops it as a no-op.
             let raw = Box::into_raw(bytes.into_boxed_slice());
             unsafe {
                 *out_len = len;
             }
             raw as *mut u8
         }
-        _ => {
+        None => {
             unsafe {
                 *out_len = 0;
             }
@@ -753,4 +831,68 @@ pub extern "C" fn perry_geisterhand_get_closure(handle: i64, callback_kind: u8) 
         }
         Err(_) => 0.0,
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_geisterhand_roots() {
+    crate::gc::lock_gc_root_registry(&REGISTRY).clear();
+    crate::gc::lock_gc_root_registry(&PENDING_ACTIONS).clear();
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_geisterhand_roots(closure: f64, arg: f64, state: f64) {
+    {
+        let mut reg = crate::gc::lock_gc_root_registry(&REGISTRY);
+        reg.clear();
+        reg.push(RegisteredWidget {
+            handle: 1,
+            widget_type: WIDGET_BUTTON,
+            callback_kind: CB_ON_CLICK,
+            closure_f64: closure,
+            label: String::new(),
+            shortcut: String::new(),
+        });
+    }
+    {
+        let mut actions = crate::gc::lock_gc_root_registry(&PENDING_ACTIONS);
+        actions.clear();
+        actions.push(PendingAction::InvokeCallback {
+            closure_f64: closure,
+            args: vec![arg],
+        });
+        actions.push(PendingAction::SetState {
+            handle: 1,
+            value: state,
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_geisterhand_roots_snapshot() -> (u64, u64, u64, u64) {
+    let registered = crate::gc::lock_gc_root_registry(&REGISTRY)
+        .first()
+        .map(|widget| widget.closure_f64.to_bits())
+        .unwrap_or(0);
+    let actions = crate::gc::lock_gc_root_registry(&PENDING_ACTIONS);
+    let mut pending_closure = 0;
+    let mut pending_arg = 0;
+    let mut state = 0;
+    for action in actions.iter() {
+        match action {
+            PendingAction::InvokeCallback { closure_f64, args } => {
+                pending_closure = closure_f64.to_bits();
+                pending_arg = args.first().copied().map(f64::to_bits).unwrap_or(0);
+            }
+            PendingAction::SetState { value, .. } => {
+                state = value.to_bits();
+            }
+            PendingAction::ApplyStyle { .. } => {}
+            PendingAction::SetText { .. }
+            | PendingAction::ScrollTo { .. }
+            | PendingAction::ReadValue { .. }
+            | PendingAction::QueryWidgetTree
+            | PendingAction::CaptureScreenshot => {}
+        }
+    }
+    (registered, pending_closure, pending_arg, state)
 }

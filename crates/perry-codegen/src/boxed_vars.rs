@@ -35,7 +35,68 @@ pub(crate) fn collect_boxed_vars(stmts: &[perry_hir::Stmt]) -> HashSet<u32> {
     // mutable captures inside Promise executors, setTimeout callbacks,
     // etc. never get boxed and the outer mutation is lost.
     collect_nested_closure_boxed_vars_in_stmts(stmts, &mut boxed);
+    // Issue #569: HIR's `lower_fn_body_block_stmt` emits `Stmt::Preallocate
+    // Boxes(ids)` at the top of any function body that has hoisted inner
+    // `function`-decls capturing siblings or forward `let`/`const` bindings.
+    // Codegen needs every such id in the boxed set so reads/writes route
+    // through `js_box_get` / `js_box_set` rather than reading the raw slot
+    // (which holds a box pointer, not a usable value).
+    collect_prealloc_box_ids_in_stmts(stmts, &mut boxed);
     boxed
+}
+
+fn collect_prealloc_box_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
+    use perry_hir::Stmt;
+    for s in stmts {
+        match s {
+            Stmt::PreallocateBoxes(ids) => {
+                for id in ids {
+                    out.insert(*id);
+                }
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                collect_prealloc_box_ids_in_stmts(then_branch, out);
+                if let Some(eb) = else_branch {
+                    collect_prealloc_box_ids_in_stmts(eb, out);
+                }
+            }
+            Stmt::For { init, body, .. } => {
+                if let Some(i) = init {
+                    collect_prealloc_box_ids_in_stmts(std::slice::from_ref(i.as_ref()), out);
+                }
+                collect_prealloc_box_ids_in_stmts(body, out);
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_prealloc_box_ids_in_stmts(body, out);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_prealloc_box_ids_in_stmts(body, out);
+                if let Some(c) = catch {
+                    collect_prealloc_box_ids_in_stmts(&c.body, out);
+                }
+                if let Some(f) = finally {
+                    collect_prealloc_box_ids_in_stmts(f, out);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for c in cases {
+                    collect_prealloc_box_ids_in_stmts(&c.body, out);
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_prealloc_box_ids_in_stmts(std::slice::from_ref(body.as_ref()), out);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Boxing analysis for a single lexical scope (does NOT recurse into
@@ -201,6 +262,18 @@ fn collect_nested_closure_boxed_vars_in_stmt(stmt: &perry_hir::Stmt, out: &mut H
                 collect_nested_closure_boxed_vars_in_stmts(&case.body, out);
             }
         }
+        // Issue #1021/#1029 follow-up: the async-step driver wraps its
+        // state-machine body in `Stmt::Labeled { __step_done, body: DoWhile{...} }`.
+        // Without this arm, the recursion stops at the Labeled wrapper and any
+        // nested closure bodies (e.g. an async closure constructed inside one
+        // of the state branches) never get their PreallocateBoxes IDs added to
+        // the module-wide boxed set — `ctx.boxed_vars.contains(id)` returns
+        // false for captures that ARE boxed, so the captured-from-outer box
+        // pointer gets stored as a plain value, and reads from inside the
+        // inner step body load garbage instead of the box.
+        Stmt::Labeled { body, .. } => {
+            collect_nested_closure_boxed_vars_in_stmt(body, out);
+        }
         _ => {}
     }
 }
@@ -211,9 +284,15 @@ fn collect_nested_closure_boxed_vars_in_expr(expr: &perry_hir::Expr, out: &mut H
         Expr::Closure { body, .. } => {
             // Each closure is its own lexical scope — run the scope
             // analysis on the body, then recurse into any closures
-            // that appear inside it.
+            // that appear inside it. Issue #633 followup: also collect
+            // PreallocateBoxes ids from the closure body — without this,
+            // an inner closure body that emits `Stmt::PreallocateBoxes`
+            // (the hoisted-FnDecl path) wouldn't propagate those ids
+            // into the module-wide boxed set, and reads from the boxed
+            // slot would skip `js_box_get`.
             let inner = collect_boxed_vars_scope(body);
             out.extend(inner);
+            collect_prealloc_box_ids_in_stmts(body, out);
             collect_nested_closure_boxed_vars_in_stmts(body, out);
         }
         Expr::Binary { left, right, .. }
@@ -307,7 +386,29 @@ fn collect_nested_closure_boxed_vars_in_expr(expr: &perry_hir::Expr, out: &mut H
                 collect_nested_closure_boxed_vars_in_expr(init, out);
             }
         }
-        _ => {}
+        // Issue #907: fall back to the walker for every other Expr
+        // variant so newly-added shapes inherit traversal automatically.
+        // Pre-fix the catch-all `_ => {}` skipped `Expr::Register
+        // FunctionPrototypeMethod` (the v0.5-era constructor.prototype
+        // assignment lowering), so dayjs's `m.format = function(t){...}`
+        // — whose body holds a `Stmt::PreallocateBoxes([147, 148, 149,
+        // 150, ...])` for `var r,i,s,u,a,...` — never had its boxed-let
+        // ids unioned into `module_boxed_vars`. At codegen time the
+        // inner replace-callback closure then saw `boxed_vars.contains
+        // (150) == false`, took the raw-f64 capture path instead of
+        // `js_box_get(box_ptr)`, and the box-pointer bits leaked through
+        // `typeof` as a tiny denormal `number` — manifesting as
+        // `TypeError: (number).replace is not a function` on the
+        // `i.replace(":","")` zoneStr fallback inside `format`.
+        // `walk_expr_children` is the single source of truth for child
+        // traversal and already handles `Register{,Function}Prototype
+        // Method`, `Await`, `Yield`, `TypeOf`, `Void`, `InstanceOf`,
+        // `Switch` discriminants, etc.
+        _ => {
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                collect_nested_closure_boxed_vars_in_expr(child, out);
+            });
+        }
     }
 }
 
@@ -315,6 +416,42 @@ fn collect_nested_closure_boxed_vars_in_expr(expr: &perry_hir::Expr, out: &mut H
 /// anywhere in the given statements. Used by `collect_boxed_vars` to
 /// exclude loop counters from the boxing set (they follow fresh-
 /// binding-per-iteration semantics under let scoping).
+/// True iff `init_expr` contains (at any depth) a Closure whose body
+/// references `let_id`. Used by `collect_self_recursive_closure_ids` to
+/// detect indirect self-capture shapes like
+/// `const off = ev.on(() => { off(); })` where the closure is wrapped
+/// inside a Call / New / Object / Array — not the simpler
+/// `let f = (n) => f(n-1)` direct-closure-literal init shape (#593).
+///
+/// We walk the init expression looking for any `Expr::Closure`
+/// descendant; when found, we collect every ref id from its body
+/// (including nested-closure refs, since `collect_ref_ids_in_stmts`
+/// recurses into them — see collectors.rs:862). A hit on `let_id`
+/// means the let must be boxed.
+fn init_expr_has_self_capturing_closure(init: &perry_hir::Expr, let_id: u32) -> bool {
+    let mut found = false;
+    walk_for_self_capturing_closure(init, let_id, &mut found);
+    found
+}
+
+fn walk_for_self_capturing_closure(e: &perry_hir::Expr, let_id: u32, found: &mut bool) {
+    use perry_hir::Expr;
+    if *found {
+        return;
+    }
+    if let Expr::Closure { body, .. } = e {
+        let mut refs: HashSet<u32> = HashSet::new();
+        collect_ref_ids_in_stmts(body, &mut refs);
+        if refs.contains(&let_id) {
+            *found = true;
+        }
+        return;
+    }
+    perry_hir::walker::walk_expr_children(e, &mut |child| {
+        walk_for_self_capturing_closure(child, let_id, found);
+    });
+}
+
 /// Detect the self-recursive closure pattern: `let fib = (n) => fib(n-1)`.
 /// When a Stmt::Let's Closure init captures the Let's own id, that id must
 /// be boxed so the closure body can read the live value instead of the
@@ -332,12 +469,30 @@ fn collect_self_recursive_closure_ids(
             ..
         } = s
         {
-            // Check if the init is a Closure whose body references
-            // this same id. We don't need to walk the full body —
-            // just check if the id is in the already-computed
-            // closure_refs set (which includes all ids referenced
-            // from any closure body in these stmts).
-            if matches!(init_expr, perry_hir::Expr::Closure { .. }) && closure_refs.contains(id) {
+            // Detect any closure inside the init expression that
+            // captures this let's own id. The classic case is
+            // `let f = (x) => f(x-1)` — direct closure init — but
+            // the same boxing requirement applies when the closure
+            // is one or more layers down inside the init: e.g.
+            //   `const off = ev.on(() => { off(); })`            (#593)
+            //   `const f = wrap({ cb: () => f() })`              (object literal)
+            //   `const g = builders.map(b => () => g())[0]`      (array literal)
+            // In every shape the closure captures `id` BEFORE the
+            // let's initial assignment runs, so without a box the
+            // capture stores the slot's pre-init value (undefined /
+            // 0) and the inner self-call no-ops at runtime. Boxing
+            // makes the closure capture the box pointer; the let's
+            // initial assignment then `js_box_set`s the value the
+            // closure reads.
+            if init_expr_has_self_capturing_closure(init_expr, *id) {
+                out.insert(*id);
+            } else if matches!(init_expr, perry_hir::Expr::Closure { .. })
+                && closure_refs.contains(id)
+            {
+                // Pre-existing direct-closure-literal arm — kept as a
+                // belt-and-suspenders fallback in case the
+                // walk-the-init detection above misses an edge shape
+                // (e.g. a future HIR variant that holds a Closure).
                 out.insert(*id);
             }
         }
@@ -660,7 +815,21 @@ fn collect_closure_refs_and_writes_in_expr(
                 collect_closure_refs_and_writes_in_expr(init, refs, writes);
             }
         }
-        _ => {}
+        // Fallback: recurse into every child expression. The HIR has
+        // many variants (Await, Yield, TypeOf, Void, InstanceOf, In,
+        // PropertyUpdate, IndexUpdate, ObjectSpread, …) that can carry
+        // a Closure literal as a child. A silent catch-all here would
+        // mark `await Promise.resolve("x").then(() => counter++)`
+        // as not having a closure-captured mutation, leaving `counter`
+        // unboxed — the closure body would write to its own snapshot
+        // and the outer post-await read would see 0. `walk_expr_children`
+        // is the single source of truth for child traversal, so
+        // delegating keeps this resilient to future Expr additions.
+        _ => {
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                collect_closure_refs_and_writes_in_expr(child, refs, writes);
+            });
+        }
     }
 }
 
@@ -848,7 +1017,16 @@ fn collect_outer_writes_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) 
             collect_outer_writes_in_expr(object, out);
             collect_outer_writes_in_expr(value, out);
         }
-        _ => {}
+        // Fallback: recurse into every child. `walk_expr_children` does
+        // NOT descend into `Expr::Closure` bodies (only param defaults),
+        // which matches this walker's "only outer-scope writes" contract.
+        // Resilient against future Expr variants and catches outer
+        // writes hiding inside Await/Yield/TypeOf/etc.
+        _ => {
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                collect_outer_writes_in_expr(child, out);
+            });
+        }
     }
 }
 
@@ -856,7 +1034,7 @@ fn collect_outer_writes_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) 
 /// the given statements, INCLUDING inside nested closures. Used to
 /// detect whether a local is ever mutated — the "is this captured +
 /// mutated" gate for boxing.
-fn collect_write_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
+pub(crate) fn collect_write_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
     for s in stmts {
         collect_write_ids_in_stmt(s, out);
     }
@@ -933,6 +1111,7 @@ fn collect_write_ids_in_stmt(stmt: &perry_hir::Stmt, out: &mut HashSet<u32>) {
                 collect_write_ids_in_stmts(&case.body, out);
             }
         }
+        Stmt::Labeled { body, .. } => collect_write_ids_in_stmt(body, out),
         _ => {}
     }
 }
@@ -1034,7 +1213,17 @@ fn collect_write_ids_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) {
             collect_write_ids_in_expr(object, out);
             collect_write_ids_in_expr(value, out);
         }
-        _ => {}
+        // Fallback: recurse into every child for resilience against new
+        // Expr variants. `walk_expr_children` skips Closure body — that's
+        // handled explicitly above so writes inside nested closures are
+        // still discovered. Other carrying variants (Await, Yield,
+        // TypeOf, Void, InstanceOf, PropertyUpdate, IndexUpdate, …)
+        // get traversed automatically.
+        _ => {
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                collect_write_ids_in_expr(child, out);
+            });
+        }
     }
 }
 
@@ -1208,9 +1397,18 @@ fn refine_type_from_init_simple(init: &perry_hir::Expr) -> Option<perry_types::T
                 6 => "Float32Array",
                 7 => "Float64Array",
                 8 => "Uint8ClampedArray",
+                11 => "Float16Array",
                 _ => return None,
             };
             Some(Type::Named(name.to_string()))
+        }
+        Expr::NativeMethodCall {
+            module,
+            method,
+            object: None,
+            ..
+        } if module == "buffer" && method == "copyBytesFrom" => {
+            Some(Type::Named("Uint8Array".to_string()))
         }
         _ => None,
     }

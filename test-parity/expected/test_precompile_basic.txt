@@ -1,0 +1,3 @@
+addTen(5): 15
+addTen(-3): 7
+greet: Hello, Ada

@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Optional git pre-push hook that gates `git push origin vX.Y.Z` (and
+# `git push origin main`) on a fast local lint+check pass.
+#
+# Activate per-clone with:
+#   git config core.hooksPath .githooks
+#
+# Skips the check for branch pushes that aren't main or a `v0.5.*`
+# tag — feature branches and dev pushes go through unblocked. Pass
+# `--no-verify` to git push to bypass even when the path matches.
+#
+# Reads stdin per the git pre-push protocol: each line is
+# "<local_ref> <local_sha> <remote_ref> <remote_sha>".
+
+set -u
+
+triggered=0
+while read -r local_ref _ remote_ref _; do
+    [[ -z "$local_ref" ]] && continue
+    case "$remote_ref" in
+        refs/heads/main | refs/tags/v0.5.*)
+            triggered=1
+            break
+            ;;
+    esac
+done
+
+if [[ $triggered -eq 0 ]]; then
+    exit 0
+fi
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [[ -z "$REPO_ROOT" || ! -x "$REPO_ROOT/scripts/pre-tag-check.sh" ]]; then
+    exit 0
+fi
+
+echo
+echo "pre-push: running scripts/pre-tag-check.sh (set core.hooksPath= to disable)"
+echo
+"$REPO_ROOT/scripts/pre-tag-check.sh"

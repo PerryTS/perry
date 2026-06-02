@@ -4,19 +4,60 @@ members = [
     "crates/perry",
     "crates/perry-parser",
     "crates/perry-types",
+    "crates/perry-api-manifest",
     "crates/perry-hir",
     "crates/perry-transform",
     "crates/perry-codegen",
     "crates/perry-dispatch",
     "crates/perry-runtime",
-    "crates/perry-jsruntime",
+    "crates/perry-ffi",
+    "crates/perry-ext-dotenv",
+    "crates/perry-ext-nanoid",
+    "crates/perry-ext-uuid",
+    "crates/perry-ext-slugify",
+    "crates/perry-ext-bcrypt",
+    "crates/perry-ext-argon2",
+    "crates/perry-ext-jsonwebtoken",
+    "crates/perry-ext-validator",
+    "crates/perry-ext-lru-cache",
+    "crates/perry-ext-better-sqlite3",
+    "crates/perry-ext-zlib",
+    "crates/perry-ext-exponential-backoff",
+    "crates/perry-ext-axios",
+    "crates/perry-ext-events",
+    "crates/perry-ext-decimal",
+    "crates/perry-ext-dayjs",
+    "crates/perry-ext-moment",
+    "crates/perry-ext-cheerio",
+    "crates/perry-ext-sharp",
+    "crates/perry-ext-ratelimit",
+    "crates/perry-ext-commander",
+    "crates/perry-ext-ethers",
+    "crates/perry-ext-nodemailer",
+    "crates/perry-ext-cron",
+    "crates/perry-ext-ioredis",
+    "crates/perry-ext-pg",
+    "crates/perry-ext-mysql2",
+    "crates/perry-ext-fetch",
+    "crates/perry-ext-mongodb",
+    "crates/perry-ext-ws",
+    "crates/perry-ext-net",
+    "crates/perry-ext-http",
+    "crates/perry-ext-streams",
+    "crates/perry-ext-fastify",
+    "crates/perry-ext-pdf",
+    "crates/perry-ext-ads",
+    "crates/perry-wasm-host",
+    "crates/perry-container-compose",
     "crates/perry-stdlib",
     "crates/perry-diagnostics",
     "crates/perry-ui",
+    "crates/perry-ui-model",
     "crates/perry-ui-macos",
     "crates/perry-ui-ios",
     "crates/perry-ui-visionos",
     "crates/perry-ui-android",
+    "crates/perry-audio-miniaudio",
     "crates/perry-ui-gtk4",
     "crates/perry-ui-windows",
     "crates/perry-ui-watchos",
@@ -32,6 +73,7 @@ members = [
     "crates/perry-ui-testkit",
     "crates/perry-doc-tests",
     "crates/perry-updater",
+    "docs/examples/_fixtures/native-libraries/my-bindings",
 ]
 # Only build platform-independent crates by default.
 # Platform-specific UI crates (perry-ui-macos, perry-ui-ios, etc.) must be built
@@ -40,12 +82,50 @@ default-members = [
     "crates/perry",
     "crates/perry-parser",
     "crates/perry-types",
+    "crates/perry-api-manifest",
     "crates/perry-hir",
     "crates/perry-transform",
     "crates/perry-codegen",
     "crates/perry-dispatch",
     "crates/perry-runtime",
-    "crates/perry-jsruntime",
+    "crates/perry-ffi",
+    "crates/perry-ext-dotenv",
+    "crates/perry-ext-nanoid",
+    "crates/perry-ext-uuid",
+    "crates/perry-ext-slugify",
+    "crates/perry-ext-bcrypt",
+    "crates/perry-ext-argon2",
+    "crates/perry-ext-jsonwebtoken",
+    "crates/perry-ext-validator",
+    "crates/perry-ext-lru-cache",
+    "crates/perry-ext-better-sqlite3",
+    "crates/perry-ext-zlib",
+    "crates/perry-ext-exponential-backoff",
+    "crates/perry-ext-axios",
+    "crates/perry-ext-events",
+    "crates/perry-ext-decimal",
+    "crates/perry-ext-dayjs",
+    "crates/perry-ext-moment",
+    "crates/perry-ext-cheerio",
+    "crates/perry-ext-sharp",
+    "crates/perry-ext-ratelimit",
+    "crates/perry-ext-commander",
+    "crates/perry-ext-ethers",
+    "crates/perry-ext-nodemailer",
+    "crates/perry-ext-cron",
+    "crates/perry-ext-ioredis",
+    "crates/perry-ext-pg",
+    "crates/perry-ext-mysql2",
+    "crates/perry-ext-fetch",
+    "crates/perry-ext-mongodb",
+    "crates/perry-ext-ws",
+    "crates/perry-ext-net",
+    "crates/perry-ext-http",
+    "crates/perry-ext-streams",
+    "crates/perry-ext-fastify",
+    "crates/perry-ext-pdf",
+    "crates/perry-ext-ads",
+    "crates/perry-wasm-host",
     "crates/perry-stdlib",
     "crates/perry-diagnostics",
     "crates/perry-ui",
@@ -111,11 +191,8 @@ codegen-units = 16
 [profile.release.package.perry-stdlib]
 opt-level = "s"       # Optimize for size in stdlib
 
-[profile.release.package.perry-jsruntime]
-opt-level = 3
-
 [workspace.package]
-version = "0.5.411"
+version = "0.5.1100"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/PerryTS/perry"
@@ -140,12 +217,18 @@ clap = { version = "4.5", features = ["derive"] }
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.8"
+toml = "1.1"
+
+# JWT — jsonwebtoken 10.x requires explicitly selecting a crypto backend
+# (`rust_crypto` or `aws_lc_rs`) and opting into PEM parsing for
+# `from_ec_pem` / `from_rsa_pem`. `rust_crypto` keeps the deps tree small
+# relative to `aws_lc_rs`; users who need FIPS validation can fork.
+jsonwebtoken = { version = "10.4", default-features = false, features = ["rust_crypto", "use_pem"] }
 
 # Terminal UI
 indicatif = "0.17"
-console = "0.15"
-dialoguer = "0.11"
+console = "0.16"
+dialoguer = "0.12"
 
 # File system
 walkdir = "2.4"
@@ -153,9 +236,6 @@ notify = "6.1"
 
 # Diff generation
 similar = "2.4"
-
-# Terminal detection
-atty = "0.2"
 
 # HTTP / WebSocket (for publish command)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart", "blocking"] }
@@ -177,14 +257,62 @@ zip = "2"
 # Internal crates
 perry-parser = { path = "crates/perry-parser" }
 perry-types = { path = "crates/perry-types" }
+perry-api-manifest = { path = "crates/perry-api-manifest" }
 perry-hir = { path = "crates/perry-hir" }
 perry-transform = { path = "crates/perry-transform" }
 perry-codegen = { path = "crates/perry-codegen" }
 perry-dispatch = { path = "crates/perry-dispatch" }
-perry-runtime = { path = "crates/perry-runtime" }
+# #1112: `perry-ffi` is published to crates.io so npm-packaged native
+# wrappers (per `perry.nativeLibrary` in package.json) can resolve it
+# without a sibling Perry checkout. perry-ffi's only direct reference
+# to perry-runtime is a `#[cfg(test)]` layout-assertion test which
+# moves perry-runtime to a path-only `[dev-dependencies]` entry —
+# `cargo publish -p perry-ffi` therefore strips it from the published
+# Cargo.toml, and external users never need perry-runtime in their
+# Cargo graph (Perry's compiler driver links `libperry_runtime.a`
+# into the final binary directly).
+perry-runtime = { path = "crates/perry-runtime", version = "0.5.1011" }
+perry-ffi = { path = "crates/perry-ffi", version = "0.5.1011" }
+perry-ext-dotenv = { path = "crates/perry-ext-dotenv" }
+perry-ext-nanoid = { path = "crates/perry-ext-nanoid" }
+perry-ext-uuid = { path = "crates/perry-ext-uuid" }
+perry-ext-slugify = { path = "crates/perry-ext-slugify" }
+perry-ext-bcrypt = { path = "crates/perry-ext-bcrypt" }
+perry-ext-argon2 = { path = "crates/perry-ext-argon2" }
+perry-ext-jsonwebtoken = { path = "crates/perry-ext-jsonwebtoken" }
+perry-ext-validator = { path = "crates/perry-ext-validator" }
+perry-ext-lru-cache = { path = "crates/perry-ext-lru-cache" }
+perry-ext-better-sqlite3 = { path = "crates/perry-ext-better-sqlite3" }
+perry-ext-zlib = { path = "crates/perry-ext-zlib" }
+perry-ext-exponential-backoff = { path = "crates/perry-ext-exponential-backoff" }
+perry-ext-axios = { path = "crates/perry-ext-axios" }
+perry-ext-events = { path = "crates/perry-ext-events" }
+perry-ext-decimal = { path = "crates/perry-ext-decimal" }
+perry-ext-dayjs = { path = "crates/perry-ext-dayjs" }
+perry-ext-moment = { path = "crates/perry-ext-moment" }
+perry-ext-cheerio = { path = "crates/perry-ext-cheerio" }
+perry-ext-sharp = { path = "crates/perry-ext-sharp" }
+perry-ext-ratelimit = { path = "crates/perry-ext-ratelimit" }
+perry-ext-commander = { path = "crates/perry-ext-commander" }
+perry-ext-ethers = { path = "crates/perry-ext-ethers" }
+perry-ext-nodemailer = { path = "crates/perry-ext-nodemailer" }
+perry-ext-cron = { path = "crates/perry-ext-cron" }
+perry-ext-ioredis = { path = "crates/perry-ext-ioredis" }
+perry-ext-pg = { path = "crates/perry-ext-pg" }
+perry-ext-mysql2 = { path = "crates/perry-ext-mysql2" }
+perry-ext-fetch = { path = "crates/perry-ext-fetch" }
+perry-ext-mongodb = { path = "crates/perry-ext-mongodb" }
+perry-ext-ws = { path = "crates/perry-ext-ws" }
+perry-ext-net = { path = "crates/perry-ext-net" }
+perry-ext-http = { path = "crates/perry-ext-http" }
+perry-ext-streams = { path = "crates/perry-ext-streams" }
+perry-ext-fastify = { path = "crates/perry-ext-fastify" }
+perry-ext-pdf = { path = "crates/perry-ext-pdf" }
+perry-ext-ads = { path = "crates/perry-ext-ads" }
 perry-stdlib = { path = "crates/perry-stdlib" }
 perry-diagnostics = { path = "crates/perry-diagnostics" }
-perry-jsruntime = { path = "crates/perry-jsruntime" }
+perry-ui-model = { path = "crates/perry-ui-model" }
+perry-wasm-host = { path = "crates/perry-wasm-host" }
 perry-codegen-js = { path = "crates/perry-codegen-js" }
 perry-codegen-swiftui = { path = "crates/perry-codegen-swiftui" }
 perry-codegen-arkts = { path = "crates/perry-codegen-arkts" }
@@ -192,4 +320,5 @@ perry-codegen-glance = { path = "crates/perry-codegen-glance" }
 perry-codegen-wear-tiles = { path = "crates/perry-codegen-wear-tiles" }
 perry-codegen-wasm = { path = "crates/perry-codegen-wasm" }
 perry-ui-testkit = { path = "crates/perry-ui-testkit" }
+perry-audio-miniaudio = { path = "crates/perry-audio-miniaudio" }
 perry-updater = { path = "crates/perry-updater" }

@@ -1676,4 +1676,4 @@ const app = router()
 serve(app, { port: 3000 });
 ```
 
-See `example-code/http-server/` for working examples.
+See [PerryTS/perry-examples](https://github.com/PerryTS/perry-examples) for working examples.

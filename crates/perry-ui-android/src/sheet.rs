@@ -17,7 +17,11 @@ thread_local! {
     static NEXT_SHEET_ID: RefCell<i64> = RefCell::new(1);
 }
 
-pub fn create(width: f64, height: f64, _title_val: f64) -> i64 {
+/// Create a sheet whose contents are `body_handle`. #1033: signature is
+/// `(body_handle, width, height)` to match perry-dispatch
+/// `[Widget, F64, F64]`. The previous shape `(width, height, title)`
+/// silently dropped the body on every Apple-platform call.
+pub fn create(body_handle: i64, width: f64, height: f64) -> i64 {
     let id = NEXT_SHEET_ID.with(|n| {
         let mut n = n.borrow_mut();
         let id = *n;
@@ -31,7 +35,7 @@ pub fn create(width: f64, height: f64, _title_val: f64) -> i64 {
             SheetState {
                 width,
                 height,
-                body_handle: None,
+                body_handle: Some(body_handle),
                 dialog_ref: None,
             },
         );

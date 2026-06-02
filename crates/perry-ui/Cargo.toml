@@ -7,3 +7,4 @@ edition.workspace = true
 crate-type = ["rlib"]
 
 [dependencies]
+perry-ui-model.workspace = true

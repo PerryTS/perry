@@ -23,6 +23,7 @@ perry main.ts -o app
 | `--no-link` | Produce object file only, skip linking |
 | `--keep-intermediates` | Keep `.o` and `.asm` files |
 | `--enable-js-runtime` | Enable V8 JavaScript runtime fallback |
+| `--enable-wasm-runtime` | Force-link the wasmi WebAssembly host runtime (auto-detected on `WebAssembly.*` use) |
 | `--type-check` | Enable type checking via tsgo |
 | `--minify` | Minify and obfuscate output (auto-enabled for `--target web`) |
 | `--app-bundle-id <ID>` | Bundle ID (required for widget targets) |
@@ -69,6 +70,7 @@ perry run -- --port 3000           # Forward args to your program
 | `--local` | Force local compilation (no remote fallback) |
 | `--remote` | Force remote build via Perry Hub |
 | `--enable-js-runtime` | Enable V8 JavaScript runtime |
+| `--enable-wasm-runtime` | Force-link the wasmi WebAssembly host runtime |
 | `--type-check` | Enable type checking via tsgo |
 | `--` | Separator for program arguments |
 
@@ -316,6 +318,72 @@ perry i18n extract src/main.ts
 Detects string literals in UI component calls (`Button`, `Text`, `Label`, etc.) and `t()` calls. Creates `locales/*.json` files based on the `[i18n]` config in `perry.toml`.
 
 See the [i18n documentation](../i18n/overview.md) for full details.
+
+## native
+
+Tooling for native-bindings packages — Rust crates exporting `extern "C"` symbols that Perry's compiler links into your TypeScript program. See [Native Bindings — Overview](../native-libraries/overview.md) for the architecture this fits into.
+
+### `perry native init <name>`
+
+Scaffold a new native-bindings package:
+
+```bash
+perry native init my-bindings \
+  --description "Native bindings for libfoo" \
+  --upstream-dep 'libfoo = "1.0"' \
+  --github-owner my-handle
+```
+
+Creates a directory with:
+
+- `package.json` (`perry.nativeLibrary` block: `abiVersion` + `functions[]` + per-target build config)
+- `Cargo.toml` (depends on `perry-ffi` via git URL until v0.6.0 publishes it to crates.io)
+- `src/lib.rs` (one example `#[no_mangle] pub extern "C" fn js_<name>_hello`)
+- `src/index.ts` (TypeScript surface user code imports)
+- `README.md`, `LICENSE`, `.gitignore`
+- `.github/workflows/release.yml` — multi-target prebuild matrix (x86_64 + aarch64 macOS / Linux + Windows) on tag, attaches staticlibs to the GitHub release
+
+Pass `--force` to overwrite an existing directory.
+
+See the [Authoring Guide](../native-libraries/authoring-guide.md) for the full walkthrough.
+
+### `perry native validate`
+
+Run from a wrapper's root:
+
+```bash
+cd my-bindings
+perry native validate
+```
+
+Parses `package.json`, runs `cargo build --release`, locates the resulting `.a` / `.lib` / `.dylib`, walks `nm -gP` over its symbols, and diffs against the manifest's `functions[].name` array. Reports:
+
+- ❌ **declared functions with no matching symbol** — broken bindings (typo in `name` field, missing `#[no_mangle]`, etc.); exits 1.
+- ⚠ **`js_*` symbols not in the manifest** — unreachable from user code (forgot to declare them, or named something internal `js_*` accidentally).
+
+Pass `--no-build` to skip the `cargo build` step when you're iterating on the manifest only.
+
+### `perry native list`
+
+Enumerates the well-known bindings shipped with this Perry build:
+
+```bash
+perry native list
+```
+
+Output:
+
+```text
+30 bindings ship with this Perry build:
+
+  argon2                        → perry-ext-argon2                  (#466)
+  axios                         → perry-ext-axios                   (#466)
+  bcrypt                        → perry-ext-bcrypt                  (#466)
+  better-sqlite3                → perry-ext-better-sqlite3          (#466)
+  …
+```
+
+Pass `--format json` for machine-readable output. Resolution order printed at the bottom — bindings discovered via `node_modules/<pkg>/package.json` `perry.nativeLibrary` always win over the well-known set.
 
 ## Next Steps
 

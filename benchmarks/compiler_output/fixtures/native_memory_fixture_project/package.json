@@ -1,0 +1,13 @@
+{
+  "name": "native-memory-fixture-project",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@perry-fixtures/native-memory-fixture": "0.1.0"
+  },
+  "perry": {
+    "allow": {
+      "nativeLibrary": ["@perry-fixtures/native-memory-fixture"]
+    }
+  }
+}

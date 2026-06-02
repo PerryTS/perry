@@ -1,0 +1,16 @@
+{
+  "name": "perry-release-fixture-hono-basic",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tier-3 fixture: minimal Hono app exercising route registration, path params, JSON response, 404 fallback. No port-bind — uses app.fetch directly so output is deterministic.",
+  "dependencies": {
+    "hono": "^4.6.0"
+  },
+  "perry": {
+    "compilePackages": ["hono"],
+    "allow": {
+      "compilePackages": ["hono"]
+    }
+  }
+}

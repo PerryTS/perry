@@ -3,11 +3,13 @@
 //! CLI driver for compiling TypeScript to native executables.
 
 mod commands;
+mod compat_reports;
 mod telemetry;
 mod update_checker;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
+use std::io::IsTerminal;
 
 /// Native TypeScript Compiler
 #[derive(Parser, Debug)]
@@ -33,6 +35,30 @@ struct Cli {
     /// Disable colored output
     #[arg(long, global = true)]
     no_color: bool,
+
+    /// Emit the structured manifest of supported stdlib APIs and exit.
+    /// The same source-of-truth that the unimplemented-API check (#463)
+    /// consults. Three formats:
+    /// - `json` (default): structured machine-readable manifest;
+    /// - `markdown`: Markdown reference page for docs (#465);
+    /// - `dts`: TypeScript declaration file for editor squiggles.
+    /// No subcommand is required — `perry --print-api-manifest` and
+    /// `perry --print-api-manifest=markdown` both work on their own.
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        num_args = 0..=1,
+        default_missing_value = "json"
+    )]
+    print_api_manifest: Option<ApiManifestFormat>,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum ApiManifestFormat {
+    Json,
+    Markdown,
+    Dts,
 }
 
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
@@ -66,6 +92,16 @@ enum Commands {
 
     /// Initialize a new perry project
     Init(commands::init::InitArgs),
+
+    /// Install npm packages with a malware-scan gate.
+    ///
+    /// Wraps `bun install --ignore-scripts` (or `npm install --ignore-scripts`
+    /// as fallback) so no package code executes during install. After
+    /// extraction, scans `node_modules/` with bundled offline rules and
+    /// only then runs lifecycle scripts — and only for packages on a
+    /// curated trust allowlist. Works on any standard npm project; no
+    /// Perry-specific config required.
+    Install(commands::install::InstallArgs),
 
     /// Check environment and dependencies
     Doctor(commands::doctor::DoctorArgs),
@@ -115,6 +151,34 @@ enum Commands {
     /// `perry updater sign`   — sign a binary for a v2 manifest entry.
     /// `perry updater verify` — sanity-check a v2 signature locally.
     Updater(commands::updater::UpdaterArgs),
+
+    /// Native-bindings package tooling (#466 Phase 3).
+    ///
+    /// `perry native init <name>`  — scaffold a new wrapper package.
+    /// `perry native validate`     — diff the manifest vs. the
+    ///                                 staticlib's exported symbols.
+    /// `perry native list`         — list bundled well-known bindings.
+    Native(commands::native::NativeArgs),
+
+    /// WidgetKit / Glance build glue (issue #676).
+    ///
+    /// `perry widget init <name>` — scaffold a SwiftUI WidgetKit source
+    /// tree under `ios-widgets/<name>/` and append a `[[widget]]` entry
+    /// to `perry.toml` so the next `perry compile --target ios` builds
+    /// the widget and embeds the produced `.appex` under
+    /// `<output>.app/Frameworks/`.
+    Widget(commands::widget::WidgetArgs),
+
+    /// Supply-chain lockfile for `perry.nativeLibrary` archives (#498).
+    ///
+    /// `perry lock`                 - verify-and-write the lockfile
+    ///                                 (default mode); equivalent to
+    ///                                 the gate `perry compile` runs.
+    /// `perry lock --update <pkg>`  - refresh `<pkg>`'s hashes after
+    ///                                 a deliberate upgrade.
+    /// `perry lock --frozen`        - CI verification only; refuses to
+    ///                                 extend the lockfile.
+    Lock(commands::lock::LockArgs),
 }
 
 /// Check if the first non-flag argument looks like a TypeScript file
@@ -136,6 +200,7 @@ fn is_legacy_invocation(args: &[String]) -> bool {
                 | "init"
                 | "doctor"
                 | "explain"
+                | "install"
                 | "publish"
                 | "update"
                 | "setup"
@@ -147,6 +212,9 @@ fn is_legacy_invocation(args: &[String]) -> bool {
                 | "types"
                 | "cache"
                 | "updater"
+                | "native"
+                | "widget"
+                | "lock"
                 | "help"
         ) {
             return false;
@@ -165,12 +233,71 @@ fn transform_legacy_args(args: Vec<String>) -> Vec<String> {
 }
 
 fn main() -> Result<()> {
-    // Use a thread with a large stack (64 MB) to avoid stack overflow on large codebases
+    // Install a panic hook that prints a Perry-formatted `Error:` line before
+    // the default backtrace dump. Without this, a panic deep in the compile
+    // pipeline (or a stack overflow that DOES surface as a panic before the
+    // runtime aborts) shows only the raw Rust panic message at the very end
+    // of hundreds of "Warning:" lines — easy to miss, looks like a silent
+    // exit to anyone scanning the tail of the output.
+    //
+    // Note: this hook does NOT fire for `fatal runtime error: stack overflow,
+    // aborting` — that path is a libstd abort() that bypasses the Rust panic
+    // infrastructure entirely. For that case, the join-error branch below
+    // can't help either (abort kills the whole process; the parent thread
+    // never returns). The best we can do for hard aborts is print a hint at
+    // exit time, which we now do via a `Drop` guard in `main_inner`.
+    install_panic_hook();
+
+    // Use a thread with a large stack (128 MB) to avoid stack overflow on
+    // large codebases. Bumped from 64 MB in v0.5.973 — ioredis-via-
+    // compilePackages (~30 transitive CJS modules) overflowed 64 MB in the
+    // collect/lower walk on the perry-main thread.
     let builder = std::thread::Builder::new()
         .name("perry-main".into())
-        .stack_size(64 * 1024 * 1024);
+        .stack_size(128 * 1024 * 1024);
     let handler = builder.spawn(main_inner).unwrap();
-    handler.join().unwrap()
+    match handler.join() {
+        Ok(result) => result,
+        Err(panic_payload) => {
+            // Worker thread panicked. Extract the panic message (if it's a
+            // String/&str) and surface it as a Perry-formatted error. The
+            // panic hook already printed the raw panic location; this gives
+            // the user one final clearly-prefixed line so they don't have to
+            // scroll back through the output to find it.
+            Err(anyhow::anyhow!(
+                "perry compiler panicked: {}",
+                extract_panic_message(&panic_payload)
+            ))
+        }
+    }
+}
+
+/// Extract a human-readable panic message from a payload returned by
+/// `JoinHandle::join`. Rust panics carry either a `&'static str`, a `String`,
+/// or an opaque payload (rare). Tested below.
+fn extract_panic_message(payload: &Box<dyn std::any::Any + Send + 'static>) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "no message — see backtrace above".to_string()
+    }
+}
+
+/// Install a panic hook that prepends an `Error:` line to the default panic
+/// dump. Keeps the existing backtrace behaviour (RUST_BACKTRACE still works)
+/// while making the failure mode obvious in the user's terminal.
+fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        eprintln!();
+        eprintln!("Error: perry crashed unexpectedly.");
+        eprintln!("       Please report this at https://github.com/PerryTS/perry/issues");
+        eprintln!("       with the command line you ran and the output below.");
+        eprintln!();
+        default_hook(info);
+    }));
 }
 
 fn main_inner() -> Result<()> {
@@ -187,7 +314,47 @@ fn main_inner() -> Result<()> {
     let cli = Cli::parse_from(effective_args);
 
     // Determine if colors should be used
-    let use_color = !cli.no_color && !cli.quiet && atty::is(atty::Stream::Stdout);
+    let use_color = !cli.no_color && !cli.quiet && std::io::stdout().is_terminal();
+
+    // `--print-api-manifest[=<format>]` short-circuits before any
+    // subcommand dispatch — emits the manifest in the requested format
+    // and exits 0. Drives docs / .d.ts generation (#465) and lets
+    // editor tooling discover the supported surface without reading
+    // Rust source. Default format is JSON to preserve compatibility
+    // with the bare-flag form added in v0.5.528.
+    if let Some(format) = cli.print_api_manifest {
+        let version = env!("CARGO_PKG_VERSION");
+        match format {
+            ApiManifestFormat::Json => {
+                let entries: Vec<serde_json::Value> = perry_api_manifest::iter_entries()
+                    .map(|entry| {
+                        let mut value = serde_json::to_value(entry)?;
+                        if let Some(object) = value.as_object_mut() {
+                            object.insert(
+                                "module_export".to_string(),
+                                serde_json::json!(
+                                    perry_api_manifest::entry_is_public_named_export(entry)
+                                ),
+                            );
+                        }
+                        Ok::<_, serde_json::Error>(value)
+                    })
+                    .collect::<Result<_, _>>()?;
+                let payload = serde_json::json!({
+                    "version": version,
+                    "entries": entries,
+                });
+                println!("{}", serde_json::to_string_pretty(&payload)?);
+            }
+            ApiManifestFormat::Markdown => {
+                print!("{}", perry_api_manifest::emit_markdown(version));
+            }
+            ApiManifestFormat::Dts => {
+                print!("{}", perry_api_manifest::emit_dts(version));
+            }
+        }
+        return Ok(());
+    }
 
     // Handle no command case
     if cli.command.is_none() {
@@ -203,6 +370,12 @@ fn main_inner() -> Result<()> {
     } else {
         false
     };
+
+    // #849: install the compat-report sink so diagnostic emission sites
+    // can enqueue reports. Honors `compatibility_reports = "off"` (skips
+    // installation entirely) and `PERRY_NO_TELEMETRY=1`/`CI=true` (same
+    // env overrides as the generic telemetry channel).
+    compat_reports::install_sink();
 
     // Spawn background update check (non-blocking, cached for 24h)
     let is_update_cmd = matches!(cli.command, Some(Commands::Update(_)));
@@ -250,6 +423,7 @@ fn main_inner() -> Result<()> {
         Commands::Dev(args) => commands::dev::run(args, cli.format, use_color, cli.verbose),
         Commands::Check(args) => commands::check::run(args, cli.format, use_color, cli.verbose),
         Commands::Init(args) => commands::init::run(args, cli.format, use_color),
+        Commands::Install(args) => commands::install::run(args, cli.format, use_color),
         Commands::Doctor(args) => commands::doctor::run(args, cli.format, use_color),
         Commands::Explain(args) => commands::explain::run(args, cli.format, use_color),
         Commands::Publish(args) => commands::publish::run(args, cli.format, use_color, cli.verbose),
@@ -263,6 +437,9 @@ fn main_inner() -> Result<()> {
         Commands::Types(args) => commands::types::run(args, cli.format, use_color),
         Commands::Cache(args) => commands::cache::run(args, cli.format),
         Commands::Updater(args) => commands::updater::run(args),
+        Commands::Native(args) => commands::native::run(args, cli.format, use_color),
+        Commands::Widget(args) => commands::widget::run(args, cli.format, use_color),
+        Commands::Lock(args) => commands::lock::run(args, cli.format, use_color),
     };
 
     // Send telemetry for non-compile commands (compile is handled above for target/status)
@@ -282,7 +459,7 @@ fn main_inner() -> Result<()> {
 
     // Print update notice if available (to stderr, non-blocking)
     if !cli.quiet && !is_update_cmd {
-        let use_stderr_color = !cli.no_color && atty::is(atty::Stream::Stderr);
+        let use_stderr_color = !cli.no_color && std::io::stderr().is_terminal();
         let status = if let Some(rx) = bg_check {
             rx.recv_timeout(std::time::Duration::from_millis(100)).ok()
         } else if !update_checker::should_skip_check() {
@@ -301,8 +478,60 @@ fn main_inner() -> Result<()> {
         }
     }
 
+    // #849: drain queued compat reports (prompts the user once in `ask`
+    // mode) before flushing generic telemetry. Runs even when the
+    // command succeeded — reports fire on *warnings* too (e.g. NoOpStub).
+    compat_reports::flush();
+
     // Wait for any pending telemetry events to be delivered before exiting
     telemetry::flush();
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: ioredis-via-compilePackages (and any other "worker panics
+    /// deep in the pipeline" shape) used to surface as a stack overflow with
+    /// no Perry-prefixed error message. The join-error branch in `main()`
+    /// now wraps any worker panic in a clear `perry compiler panicked: …`
+    /// anyhow error so the user sees something obvious at exit time, even
+    /// when the panic message itself is buried in thousands of compile
+    /// warnings.
+    #[test]
+    fn extract_panic_message_handles_string_panic() {
+        let handle = std::thread::spawn(|| {
+            panic!("synthetic panic from String");
+        });
+        let err = handle.join().expect_err("thread should panic");
+        let msg = extract_panic_message(&err);
+        assert_eq!(msg, "synthetic panic from String");
+    }
+
+    #[test]
+    fn extract_panic_message_handles_static_str_panic() {
+        let handle = std::thread::spawn(|| {
+            // panic_any with a &'static str payload — the no-format-args path.
+            std::panic::panic_any("a static str");
+        });
+        let err = handle.join().expect_err("thread should panic");
+        let msg = extract_panic_message(&err);
+        assert_eq!(msg, "a static str");
+    }
+
+    #[test]
+    fn extract_panic_message_handles_opaque_payload() {
+        // panic_any with a non-string payload — most panic-hook frameworks
+        // box something weird in here. Confirm we don't crash and emit the
+        // documented fallback so the user at least sees `Error: …` instead
+        // of a silent abort.
+        let handle = std::thread::spawn(|| {
+            std::panic::panic_any(42_i32);
+        });
+        let err = handle.join().expect_err("thread should panic");
+        let msg = extract_panic_message(&err);
+        assert!(msg.contains("no message"), "got {:?}", msg);
+    }
 }

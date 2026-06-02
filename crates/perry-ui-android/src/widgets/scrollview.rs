@@ -204,6 +204,40 @@ pub fn end_refreshing(_scroll_handle: i64) {
     // No-op — see set_refresh_control.
 }
 
+/// Issue #553 — fire `callback` once the user scrolls within `threshold_px`
+/// of the bottom of the inner content. Re-arms when they scroll back up
+/// past the threshold. Implemented via PerryBridge's
+/// `setOnScrollEndCallback` helper (which wraps `View.OnScrollChangeListener`
+/// with the same backpressure logic the macOS / iOS impls use).
+pub fn set_scroll_end_callback(scroll_handle: i64, callback: f64, threshold_px: f32) {
+    let Some(scroll_ref) = super::get_widget(scroll_handle) else {
+        return;
+    };
+    let cb_key = callback::register(callback);
+
+    let mut env = jni_bridge::get_env();
+    let _ = env.push_local_frame(8);
+
+    let bridge_class =
+        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
+    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
+
+    let _ = env.call_static_method(
+        bridge_cls,
+        "setOnScrollEndCallback",
+        "(Landroid/view/View;JF)V",
+        &[
+            JValue::Object(scroll_ref.as_obj()),
+            JValue::Long(cb_key),
+            JValue::Float(threshold_px),
+        ],
+    );
+
+    unsafe {
+        env.pop_local_frame(&jni::objects::JObject::null());
+    }
+}
+
 /// Set the vertical scroll offset.
 pub fn set_offset(scroll_handle: i64, offset: f64) {
     if let Some(scroll_ref) = super::get_widget(scroll_handle) {

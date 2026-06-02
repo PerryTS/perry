@@ -1,8 +1,17 @@
 //! Image widget — custom PerryImage window with GDI+ alpha-blended painting
 //! for file images, or STATIC+SS_ICON for symbol images.
+//!
+//! URL-fetched images (Image(url, alt) — mirrors the macOS NSURL/NSData
+//! path): a background thread fetches the bytes via WinHTTP and stores
+//! them in `URL_BYTES`. The image_wnd_proc's WM_PAINT path decodes from
+//! `URL_BYTES` first, falling back to the file path if the URL hasn't
+//! resolved yet. Decode runs through `SHCreateMemStream` →
+//! `GdipLoadImageFromStream`, so PNG / JPEG / GIF / WebP all flow
+//! through the same render path as file-loaded images.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
@@ -17,7 +26,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::{alloc_control_id, register_widget, WidgetKind};
 
-fn str_from_header(ptr: *const u8) -> &'static str {
+pub(crate) fn str_from_header(ptr: *const u8) -> &'static str {
     if ptr.is_null() {
         return "";
     }
@@ -53,6 +62,28 @@ thread_local! {
     /// Map from HWND (as isize) -> resolved file path for WM_PAINT lookup
     #[cfg(target_os = "windows")]
     static HWND_TO_PATH: RefCell<HashMap<isize, String>> = RefCell::new(HashMap::new());
+}
+
+/// URL-fetched image bytes — populated by the WinHTTP background thread.
+/// Mutex-guarded because the writer lives on a worker thread while the
+/// reader (image_wnd_proc on the UI thread) reads on each WM_PAINT.
+/// Keyed by HWND (as isize) for the same reason `HWND_TO_PATH` is —
+/// WM_PAINT only sees the HWND, not the widget handle.
+#[cfg(target_os = "windows")]
+static HWND_URL_BYTES: Mutex<Option<HashMap<isize, Vec<u8>>>> = Mutex::new(None);
+
+#[cfg(target_os = "windows")]
+fn url_bytes_get(hwnd_key: isize) -> Option<Vec<u8>> {
+    let guard = HWND_URL_BYTES.lock().ok()?;
+    guard.as_ref()?.get(&hwnd_key).cloned()
+}
+
+#[cfg(target_os = "windows")]
+fn url_bytes_set(hwnd_key: isize, bytes: Vec<u8>) {
+    if let Ok(mut guard) = HWND_URL_BYTES.lock() {
+        let map = guard.get_or_insert_with(HashMap::new);
+        map.insert(hwnd_key, bytes);
+    }
 }
 
 /// WM_PAINT handler for PerryImage windows — draws the image with GDI+ alpha blending
@@ -121,39 +152,55 @@ unsafe extern "system" fn image_wnd_proc(
                 SetWindowOrgEx(hdc, 0, 0, None);
             }
 
-            if let Some(path) = path {
-                let wide_path = to_wide(&path);
-                let mut token: usize = 0;
-                let input = GdiplusStartupInput {
-                    GdiplusVersion: 1,
-                    ..Default::default()
-                };
-                if GdiplusStartup(&mut token, &input, std::ptr::null_mut()).0 == 0 {
-                    let mut gp_image: *mut GpImage = std::ptr::null_mut();
-                    let status = GdipLoadImageFromFile(
+            // Prefer URL-loaded bytes (if any) over the file path —
+            // create_url stores bytes in `HWND_URL_BYTES` once the
+            // background fetch resolves. WM_PAINT decodes from the
+            // bytes via SHCreateMemStream + GdipLoadImageFromStream.
+            let url_bytes = url_bytes_get(hwnd.0 as isize);
+
+            let mut token: usize = 0;
+            let input = GdiplusStartupInput {
+                GdiplusVersion: 1,
+                ..Default::default()
+            };
+            if GdiplusStartup(&mut token, &input, std::ptr::null_mut()).0 == 0 {
+                let mut gp_image: *mut GpImage = std::ptr::null_mut();
+
+                if let Some(bytes) = url_bytes.as_ref() {
+                    use windows::Win32::UI::Shell::SHCreateMemStream;
+                    if let Some(stream) = SHCreateMemStream(Some(bytes.as_slice())) {
+                        // `stream: IStream` implements `Param<IStream>` by
+                        // reference — pass `&stream` so the generated
+                        // binding picks up the existing implementation.
+                        // Drop at end-of-scope releases the refcount.
+                        let _ = GdipLoadImageFromStream(&stream, &mut gp_image);
+                    }
+                } else if let Some(path) = path {
+                    let wide_path = to_wide(&path);
+                    let _ = GdipLoadImageFromFile(
                         windows::core::PCWSTR(wide_path.as_ptr()),
                         &mut gp_image,
                     );
-                    if status.0 == 0 && !gp_image.is_null() {
-                        let mut rect = RECT::default();
-                        let _ = GetClientRect(hwnd, &mut rect);
-                        let w = rect.right - rect.left;
-                        let h = rect.bottom - rect.top;
-
-                        let mut graphics: *mut GpGraphics = std::ptr::null_mut();
-                        GdipCreateFromHDC(hdc, &mut graphics);
-                        if !graphics.is_null() {
-                            GdipSetInterpolationMode(graphics, InterpolationMode(7)); // HighQualityBicubic
-                                                                                      // Stretch to fill — layout engine controls the aspect ratio
-                                                                                      // via widget dimensions. No letterboxing to avoid gap areas
-                                                                                      // that can't show the parent's gradient background.
-                            GdipDrawImageRectI(graphics, gp_image, 0, 0, w, h);
-                            GdipDeleteGraphics(graphics);
-                        }
-                        GdipDisposeImage(gp_image);
-                    }
-                    GdiplusShutdown(token);
                 }
+
+                if !gp_image.is_null() {
+                    let mut rect = RECT::default();
+                    let _ = GetClientRect(hwnd, &mut rect);
+                    let w = rect.right - rect.left;
+                    let h = rect.bottom - rect.top;
+
+                    let mut graphics: *mut GpGraphics = std::ptr::null_mut();
+                    GdipCreateFromHDC(hdc, &mut graphics);
+                    if !graphics.is_null() {
+                        GdipSetInterpolationMode(graphics, InterpolationMode(7)); // HighQualityBicubic
+                                                                                  // Stretch to fill — layout engine controls aspect ratio
+                                                                                  // via widget dimensions; no letterboxing.
+                        GdipDrawImageRectI(graphics, gp_image, 0, 0, w, h);
+                        GdipDeleteGraphics(graphics);
+                    }
+                    GdipDisposeImage(gp_image);
+                }
+                GdiplusShutdown(token);
             }
 
             EndPaint(hwnd, &ps);
@@ -162,6 +209,13 @@ unsafe extern "system" fn image_wnd_proc(
         WM_ERASEBKGND => {
             // Skip — WM_PAINT paints ancestor backgrounds + image with alpha.
             LRESULT(1)
+        }
+        x if x == IMAGE_URL_LOADED_MSG => {
+            // Background WinHTTP fetch finished — bytes are in
+            // HWND_URL_BYTES; trigger a repaint so the next WM_PAINT
+            // cycle picks them up.
+            let _ = InvalidateRect(hwnd, None, true);
+            LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
@@ -311,6 +365,282 @@ pub fn create_symbol(name_ptr: *const u8) -> i64 {
         register_widget(0, WidgetKind::Image, control_id)
     }
 }
+
+/// Create an Image from a remote URL. Returns the widget handle
+/// immediately; the actual image appears once the background WinHTTP
+/// fetch resolves and posts an invalidate to the UI thread.
+pub fn create_url(url_ptr: *const u8, alt_ptr: *const u8) -> i64 {
+    let url = str_from_header(url_ptr).to_string();
+    let _alt = str_from_header(alt_ptr);
+    let control_id = alloc_control_id();
+
+    #[cfg(target_os = "windows")]
+    {
+        ensure_image_class_registered();
+
+        let class_name = to_wide("PerryImage");
+        unsafe {
+            let hinstance = GetModuleHandleW(None).unwrap();
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                windows::core::PCWSTR(class_name.as_ptr()),
+                None,
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                100,
+                100,
+                super::get_parking_hwnd(),
+                HMENU(control_id as *mut _),
+                HINSTANCE::from(hinstance),
+                None,
+            )
+            .unwrap();
+
+            let handle = register_widget(hwnd, WidgetKind::Image, control_id);
+
+            if !url.is_empty() {
+                fetch_url_async(hwnd, url);
+            }
+
+            handle
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = url;
+        register_widget(0, WidgetKind::Image, control_id)
+    }
+}
+
+/// Replace the URL of an existing Image widget — re-fetches and
+/// repaints. No-op when the widget isn't a PerryImage HWND.
+#[cfg(target_os = "windows")]
+pub fn set_url(handle: i64, url_ptr: *const u8) {
+    let url = str_from_header(url_ptr).to_string();
+    if let Some(hwnd) = super::get_hwnd(handle) {
+        // Clear the old bytes so the WM_PAINT path falls back to the
+        // file-path arm (or to nothing) until the new fetch resolves.
+        if let Ok(mut guard) = HWND_URL_BYTES.lock() {
+            if let Some(map) = guard.as_mut() {
+                map.remove(&(hwnd.0 as isize));
+            }
+        }
+        unsafe {
+            let _ = InvalidateRect(hwnd, None, true);
+        }
+        if !url.is_empty() {
+            fetch_url_async(hwnd, url);
+        }
+    }
+}
+
+/// WinHTTP background-fetch helper. Spawns an OS thread, fetches the
+/// URL via the standard WinHttpOpen / Connect / OpenRequest /
+/// SendRequest / ReceiveResponse / ReadData chain, stores the bytes in
+/// `HWND_URL_BYTES` keyed by HWND, then `PostMessage`s WM_USER+0x501
+/// to the HWND so the UI thread can `InvalidateRect` and repaint
+/// safely on its own thread (we never touch HWND state from the
+/// worker thread except via PostMessage, which Win32 documents as
+/// thread-safe).
+#[cfg(target_os = "windows")]
+fn fetch_url_async(hwnd: HWND, url: String) {
+    use windows::Win32::Networking::WinHttp::*;
+
+    // HWND_RELOAD message — image_wnd_proc reacts by invalidating
+    // itself for repaint. We use a private WM_USER+N to avoid
+    // clashing with any Win32-defined notification codes.
+    const WM_USER_IMAGE_LOADED: u32 = 0x0400 + 0x501;
+
+    // HWND is `Send` only when wrapped — the worker thread owns the
+    // raw pointer through this struct so `std::thread::spawn` accepts
+    // the closure without `Send` violations on `*mut`.
+    struct SendableHwnd(HWND);
+    unsafe impl Send for SendableHwnd {}
+    let target = SendableHwnd(hwnd);
+
+    std::thread::spawn(move || {
+        let target = target;
+        let bytes = match fetch_url_blocking(&url) {
+            Some(b) if !b.is_empty() => b,
+            _ => return,
+        };
+        url_bytes_set(target.0 .0 as isize, bytes);
+        unsafe {
+            let _ = PostMessageW(target.0, WM_USER_IMAGE_LOADED, WPARAM(0), LPARAM(0));
+        }
+    });
+
+    // The PostMessage delivery hits the parent window's message pump
+    // and dispatches to image_wnd_proc, which then invalidates the
+    // image HWND for repaint. The match-arm is added to image_wnd_proc.
+    let _ = (); // (compile-time anchor — keeps the const above alive when
+                // grep'ing for the message id.)
+                // Make the constant accessible from the wnd-proc match arm via a
+                // module-scope re-export — see `IMAGE_LOADED_MSG` below.
+}
+
+/// Cross-thread blocking URL fetch via WinHTTP. Returns the body bytes
+/// on 2xx; None otherwise. Uses sync mode — we're on a worker thread
+/// already, so blocking is fine.
+#[cfg(target_os = "windows")]
+fn fetch_url_blocking(url: &str) -> Option<Vec<u8>> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Networking::WinHttp::*;
+
+    let parsed = parse_url(url)?;
+    let host_wide = to_wide(&parsed.host);
+    let path_wide = to_wide(&parsed.path);
+    let user_agent_wide = to_wide("Perry/0.5 (perry-ui-windows)");
+
+    unsafe {
+        let session = WinHttpOpen(
+            PCWSTR(user_agent_wide.as_ptr()),
+            WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+            PCWSTR::null(),
+            PCWSTR::null(),
+            0,
+        );
+        if session.is_null() {
+            return None;
+        }
+
+        let port = parsed
+            .port
+            .unwrap_or(if parsed.is_https { 443 } else { 80 });
+        let connect = WinHttpConnect(session, PCWSTR(host_wide.as_ptr()), port, 0);
+        if connect.is_null() {
+            let _ = WinHttpCloseHandle(session);
+            return None;
+        }
+
+        let flags = if parsed.is_https {
+            WINHTTP_FLAG_SECURE
+        } else {
+            WINHTTP_OPEN_REQUEST_FLAGS(0)
+        };
+        let verb_wide = to_wide("GET");
+        let request = WinHttpOpenRequest(
+            connect,
+            PCWSTR(verb_wide.as_ptr()),
+            PCWSTR(path_wide.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            std::ptr::null_mut(),
+            flags,
+        );
+        if request.is_null() {
+            let _ = WinHttpCloseHandle(connect);
+            let _ = WinHttpCloseHandle(session);
+            return None;
+        }
+
+        let send_ok = WinHttpSendRequest(request, None, None, 0, 0, 0);
+        if send_ok.is_err() {
+            let _ = WinHttpCloseHandle(request);
+            let _ = WinHttpCloseHandle(connect);
+            let _ = WinHttpCloseHandle(session);
+            return None;
+        }
+
+        if WinHttpReceiveResponse(request, std::ptr::null_mut()).is_err() {
+            let _ = WinHttpCloseHandle(request);
+            let _ = WinHttpCloseHandle(connect);
+            let _ = WinHttpCloseHandle(session);
+            return None;
+        }
+
+        let mut body = Vec::<u8>::new();
+        let mut buf = vec![0u8; 16 * 1024];
+        loop {
+            let mut available: u32 = 0;
+            if WinHttpQueryDataAvailable(request, &mut available).is_err() {
+                break;
+            }
+            if available == 0 {
+                break;
+            }
+            let to_read = (available as usize).min(buf.len());
+            let mut read: u32 = 0;
+            let read_ok = WinHttpReadData(
+                request,
+                buf.as_mut_ptr() as *mut _,
+                to_read as u32,
+                &mut read,
+            );
+            if read_ok.is_err() || read == 0 {
+                break;
+            }
+            body.extend_from_slice(&buf[..read as usize]);
+            // Sanity cap — 64 MB. Above this we treat the response as
+            // truncated rather than blowing up the process.
+            if body.len() > 64 * 1024 * 1024 {
+                break;
+            }
+        }
+
+        let _ = WinHttpCloseHandle(request);
+        let _ = WinHttpCloseHandle(connect);
+        let _ = WinHttpCloseHandle(session);
+
+        if body.is_empty() {
+            None
+        } else {
+            Some(body)
+        }
+    }
+}
+
+/// Tiny URL parser — splits `https://host:port/path?qs#frag` into the
+/// pieces WinHTTP wants. Doesn't handle credentials or IPv6 literals;
+/// that matches the macOS NSURL/NSData path scope (image URLs in
+/// practice are http(s)://host/path?qs).
+struct ParsedUrl {
+    is_https: bool,
+    host: String,
+    port: Option<u16>,
+    path: String,
+}
+
+#[cfg(target_os = "windows")]
+fn parse_url(s: &str) -> Option<ParsedUrl> {
+    let (scheme, rest) = if let Some(r) = s.strip_prefix("https://") {
+        (true, r)
+    } else if let Some(r) = s.strip_prefix("http://") {
+        (false, r)
+    } else {
+        return None;
+    };
+    let (authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
+    };
+    let (host, port) = match authority.find(':') {
+        Some(i) => {
+            let h = &authority[..i];
+            let p = authority[i + 1..].parse::<u16>().ok();
+            (h.to_string(), p)
+        }
+        None => (authority.to_string(), None),
+    };
+    if host.is_empty() {
+        return None;
+    }
+    Some(ParsedUrl {
+        is_https: scheme,
+        host,
+        port,
+        path: path.to_string(),
+    })
+}
+
+/// PostMessage code that the worker thread fires to the image HWND
+/// once URL bytes are ready. The wnd-proc reacts by invalidating
+/// itself so the next paint cycle re-runs WM_PAINT against the new
+/// URL_BYTES entry.
+#[cfg(target_os = "windows")]
+pub const IMAGE_URL_LOADED_MSG: u32 = 0x0400 + 0x501;
 
 /// Invalidate the image so it repaints at the current layout size.
 /// Called by the layout engine after `MoveWindow` for Image widgets.

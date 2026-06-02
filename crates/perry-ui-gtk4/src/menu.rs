@@ -309,6 +309,60 @@ fn shortcut_to_gtk_accel(s: &str) -> String {
     accel
 }
 
+/// Public snapshot of a menu entry for cross-module reuse (e.g. the
+/// system tray module re-walks the existing menu storage to build a
+/// KSNI menu rather than maintain a parallel system).
+#[cfg(target_os = "linux")]
+pub(crate) enum MenuItemSnapshot {
+    Item {
+        title: String,
+        callback: f64,
+        shortcut: Option<String>,
+    },
+    Separator,
+    Submenu {
+        title: String,
+        submenu_handle: i64,
+    },
+}
+
+/// Snapshot the current menu items for a given menu handle. The tray
+/// rebuilds its KSNI menu on every state-change; we walk MENUS under a
+/// thread_local borrow and clone what's needed so callers can hold the
+/// result without keeping our internal lock.
+#[cfg(target_os = "linux")]
+pub(crate) fn snapshot_menu(menu_handle: i64) -> Vec<MenuItemSnapshot> {
+    MENUS.with(|m| {
+        let menus = m.borrow();
+        let idx = (menu_handle - 1) as usize;
+        if idx >= menus.len() {
+            return Vec::new();
+        }
+        menus[idx]
+            .iter()
+            .map(|entry| match entry {
+                MenuItemEntry::Item {
+                    title,
+                    callback,
+                    shortcut,
+                } => MenuItemSnapshot::Item {
+                    title: title.clone(),
+                    callback: *callback,
+                    shortcut: shortcut.clone(),
+                },
+                MenuItemEntry::Separator => MenuItemSnapshot::Separator,
+                MenuItemEntry::Submenu {
+                    title,
+                    submenu_handle,
+                } => MenuItemSnapshot::Submenu {
+                    title: title.clone(),
+                    submenu_handle: *submenu_handle,
+                },
+            })
+            .collect()
+    })
+}
+
 /// Set a context menu on a widget. Right-click will show this menu.
 pub fn set_context_menu(widget_handle: i64, menu_handle: i64) {
     if let Some(widget) = crate::widgets::get_widget(widget_handle) {

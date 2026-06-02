@@ -1,7 +1,9 @@
 # Polyglot Benchmark Methodology
 
-Last updated: 2026-04-25 — Perry v0.5.283; data in
-[`RESULTS_AUTO.md`](./RESULTS_AUTO.md) was generated at v0.5.249
+Last updated: 2026-05-06 — Perry v0.5.585 (fast-math opt-in flip);
+Perry data in [`RESULTS.md`](./RESULTS.md) refreshed for both modes;
+[`RESULTS_AUTO.md`](./RESULTS_AUTO.md) is the pre-flip auto-generated
+snapshot at v0.5.249 — see its header note
 under RUNS=11.
 
 This document describes how the polyglot benchmark suite is constructed and
@@ -45,7 +47,8 @@ date of the run being reported.
 
 | Runtime       | Version                                      | Invocation                        |
 |---------------|----------------------------------------------|-----------------------------------|
-| Perry         | v0.5.249 (LLVM 22 backend)                   | `perry compile file.ts -o bin`    |
+| Perry default | v0.5.585 (LLVM 22 backend)                   | `perry file.ts -o bin`            |
+| Perry --fast  | v0.5.585 (LLVM 22 backend)                   | `perry --fast-math file.ts -o bin`|
 | Rust          | rustc 1.94.1 stable                          | `rustc -O bench.rs`               |
 | C++           | Apple clang 21.0.0                           | `clang++ -O3 -std=c++17`          |
 | Go            | go 1.21.3                                    | `go build`                        |
@@ -158,34 +161,44 @@ Three specific optimization choices account for every benchmark where Perry
 beats all native compiled languages. These are the thesis of the companion
 article and the reason this suite exists.
 
-### 1. Fast-math reassociation on f64 arithmetic
+### 1. Fast-math reassociation on f64 arithmetic (opt-in since v0.5.585)
 
-`crates/perry-codegen/src/block.rs:132-165`. Perry emits
+`crates/perry-codegen/src/block.rs`. Perry can emit
 `fadd/fsub/fmul/fdiv/frem/fneg` with the `reassoc contract` LLVM fast-math
 flags on every instruction. `reassoc` lets LLVM reorder
 `(a + b) + c → a + (b + c)`, which is what the loop vectorizer needs to
 break a serial accumulator chain into 4–8 parallel accumulators. `contract`
 lets it fuse `x*y + z` into `fma`.
 
+**As of v0.5.585, this is opt-in via `--fast-math`** (also
+`PERRY_FAST_MATH=1`, also `"perry": { "fastMath": true }` in
+package.json). Default OFF — Perry produces bit-exact f64 output with
+Node by default. Through v0.5.584 it was on unconditionally. The flip
+was driven by the credibility argument that ECMAScript specifies
+bit-exact f64 semantics and ~30% of randomly-generated FP programs
+diverged from Node by 1 ULP under the previous default; see
+[`docs/src/cli/fast-math.md`](../../docs/src/cli/fast-math.md) for the
+full rationale and divergence numbers.
+
 Rust, C++, Go, and Swift all default to IEEE 754 strict. Under IEEE rules,
 `(a + b) + c ≠ a + (b + c)` in general — because a single `inf` or `nan` in
 the chain makes reordering observably change the result. The compiler
 must preserve original associativity, so every `fadd` in
 `for (...) sum += 1.0` has a 3-cycle latency dependency on the previous
-`fadd`. That's why Rust/C++/Go/Swift cluster at ~95ms on `loop_overhead`:
-they're hitting the `fadd` latency wall, all running the same IEEE-strict
-serialized loop.
+`fadd`. That's why Rust/C++/Go/Swift cluster at ~95-98 ms on
+`loop_overhead`: they're hitting the `fadd` latency wall, all running
+the same IEEE-strict serialized loop. **Perry default also sits at 95
+ms here**, in the same boat — bit-exact-with-Node by default, no
+reassoc permission. Perry `--fast-math` reaches 12 ms by giving the
+optimizer the same permission `-ffast-math` gives clang.
 
-Perry at 12ms means LLVM broke the chain, ran 4–8 parallel `fadd`s per
-NEON FPU, and probably unrolled 8×. The same C++ with `-ffast-math` reaches
-the same number — phase 2 of this investigation confirms that. Perry's
-advantage here is **default flags**, not compiler capability.
-
-The full rationale is in `block.rs:101-131` — Perry deliberately does not
-emit the full `fast` FMF bundle (which would include `nnan ninf nsz`)
-because JavaScript programs can observe `NaN` and `-0.0` distinctions.
-`reassoc contract` is the minimum set needed for the loop-vectorizer
-unlock without breaking `Math.max(-0, 0)` semantics.
+The full rationale for which FMFs Perry emits even under `--fast-math`
+is in `block.rs:113-160` — Perry deliberately does not emit the full
+`fast` FMF bundle (which would include `nnan ninf nsz arcp afn`) because
+JavaScript programs can observe `NaN` and `-0.0` distinctions, and Perry
+uses NaN bit patterns to box every non-number value. `reassoc contract`
+is the minimum set needed for the loop-vectorizer unlock without
+breaking `Math.max(-0, 0)` semantics or NaN-boxing.
 
 ### 2. Integer-modulo fast path
 
@@ -350,23 +363,25 @@ split, a *FMA-contract* split:
   `sum * a + b`, doing one IEEE-754 rounding instead of two. The
   inner loop becomes 3 instructions: LDR, LDR, FMADDD. Dependency
   chain runs ~4 cycles per iteration.
-- **No-contract pack (229-235 ms median):** Perry, Rust default
-  `-O`, Swift `-O`, Java without `-XX:+UseFMA`, Bun. All emit
-  separate FMUL + FADD with two IEEE roundings. ~6-8 cycles per
-  iteration.
+- **No-contract pack (221-235 ms median):** Perry default AND
+  Perry `--fast-math`, Rust default `-O`, Swift `-O`, Java without
+  `-XX:+UseFMA`, Bun. All emit separate FMUL + FADD with two IEEE
+  roundings. ~6-8 cycles per iteration.
 
-The 1.8× ratio between the packs (235 / 128 ≈ 1.84) is the
-cost of two roundings vs one fused rounding plus the deeper
-dependency chain. **Perry is in the no-contract pack because we
-ship `reassoc contract` fast-math flags but `contract` only enables
-FMA fusion in expressions where the optimizer chooses to fuse —
-which on this kernel it doesn't, because the LLVM 22 cost model
-prefers separate FMUL/FADD on AArch64 unless forced.** Adding
-`-ffp-contract=fast` to LLVM (or compiling with `-Ofast`) would
-produce the FMA pack number; we don't enable that by default
-because some downstream JS code can observe the rounding
-difference (the no-contract two-rounding result is what V8/JSC
-produce, so matching that maintains parity with other JS runtimes).
+The 1.8× ratio between the packs (235 / 128 ≈ 1.84) is the cost of
+two roundings vs one fused rounding plus the deeper dependency
+chain. **Perry is in the no-contract pack in BOTH modes because
+neither `--fast-math`'s `contract` flag nor the absence of it
+changes whether LLVM fuses on this kernel.** The `contract` flag
+permits *intra-statement* FMA contraction, which clang's `-O3`
+already permits by default (`-ffp-contract=on`). Reaching the FMA
+pack would require `-ffp-contract=fast` at the linker step (a
+separate knob `--fast-math` does NOT toggle), which would enable
+*cross-statement* contraction. We don't enable that by default
+because some downstream JS code can observe the rounding difference
+(the no-contract two-rounding result is what V8/JSC produce, so
+matching that maintains parity with other JS runtimes). Tracked as
+a separate followup if the use case ever justifies the divergence.
 
 ### Why Go is in the FMA pack
 
@@ -412,16 +427,32 @@ These five cells are flag-aggressiveness probes, not runtime perf
 comparisons. They measure whether the compiler applied
 **reassoc + IndVarSimplify + autovectorize** to a trivially-foldable
 accumulator, NOT how fast the resulting loop computes under load
-(which the previous section's `loop_data_dependent` answers
-honestly). Perry wins them because TypeScript's `number` semantics
-can't observe `reassoc contract` differences, so LLVM's
-IndVarSimplify rewrites `sum + 1.0 × N` as an integer induction
+(which the previous section's `loop_data_dependent` answers honestly).
+
+**Two Perry columns since v0.5.585:**
+- `Perry default` (no `--fast-math`) sits at 95-50 ms on these probes,
+  next to Rust default / Swift `-O` / Bun. This is the bit-exact-with-
+  Node mode and is the honest "Perry on TypeScript arithmetic" number
+  for code that doesn't opt into fast-math.
+- `Perry --fast-math` reaches 12-33 ms on the FP-foldable probes by
+  giving LLVM the same `reassoc contract` permission that
+  `clang++ -O3 -ffast-math` gives. TypeScript's `number` semantics
+  can't observe the precision difference at the operator level (no
+  signalling NaNs, no fenv), so the optimization is spec-conformant
+  *for the operator* — but produces ~30% bit-divergence vs Node on
+  randomly-generated FP programs at the *program* level (the residual
+  6% in default mode comes from the SLP vectorizer).
+
+LLVM's IndVarSimplify rewrites `sum + 1.0 × N` as an integer induction
 variable and the autovectorizer generates `<2 x double>` parallel-
-accumulator reductions with interleave count 4. **C++ closes every
-one of these gaps with `clang++ -O3 -ffast-math`** — same LLVM
-pipeline, one flag — see [`RESULTS_OPT.md`](./RESULTS_OPT.md). They
-are reported here for diagnostic completeness; treating them as
-runtime-perf wins on real code is a misuse of the data.
+accumulator reductions with interleave count 4 only when `reassoc` is
+on. **C++ closes every one of these gaps with `clang++ -O3
+-ffast-math`** — same LLVM pipeline, one flag — see
+[`RESULTS_OPT.md`](./RESULTS_OPT.md). They are reported here for
+diagnostic completeness; treating Perry's `--fast-math` numbers as
+runtime-perf wins on real code (vs C++ `-O3` rather than vs C++
+`-O3 -ffast-math`) is a misuse of the data, which is why we put both
+Perry columns next to each other.
 
 ## Changelog
 

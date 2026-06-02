@@ -3,6 +3,7 @@
 // and tsc can resolve `import { ... } from "perry/ui"`.
 
 declare const __widget: unique symbol;
+declare const __canvasImage: unique symbol;
 
 /**
  * Instance methods available on every Widget handle. The handle itself is
@@ -50,10 +51,38 @@ export interface CanvasMethods {
     stroke(): void;
     fillText(text: string, x: number, y: number): void;
     setFont(spec: string): void;
+    drawImage(image: Image, dx: number, dy: number): void;
+    drawImage(image: Image, dx: number, dy: number, dWidth: number, dHeight: number): void;
+    drawImage(
+        image: Image,
+        sx: number,
+        sy: number,
+        sWidth: number,
+        sHeight: number,
+        dx: number,
+        dy: number,
+        dWidth: number,
+        dHeight: number,
+    ): void;
 }
 
 /** Opaque handle to a Canvas widget. Extends Widget with 2D drawing methods. */
 export type Canvas = Widget & CanvasMethods;
+
+/** Decoded raster image asset returned by `loadImage` for Canvas blits. */
+export interface Image {
+    readonly [__canvasImage]: void;
+    readonly width: number;
+    readonly height: number;
+    readonly ready: boolean;
+}
+
+/**
+ * Load and decode an image asset for Canvas.drawImage. Repeated calls with the
+ * same URL share the same decoded handle. Relative paths are document-relative
+ * on web and bundle-relative on native.
+ */
+export function loadImage(url: string): Promise<Image>;
 
 /** Reactive state container. Generic over the value type it holds. */
 export interface State<T = number> {
@@ -192,6 +221,16 @@ export function App(config: {
     height: number;
     icon?: string;
     body: Widget;
+    /**
+     * Initial window state. Default is `"normal"` — the window opens at
+     * the requested `width`/`height`. `"maximized"` zooms the window to
+     * fill the working area (taskbar/dock visible). `"fullscreen"` enters
+     * native fullscreen on macOS, removes the title bar and fills the
+     * monitor on Windows, and maps to `gtk_window_fullscreen` on GTK4.
+     *
+     * Issue #1280.
+     */
+    windowState?: "normal" | "maximized" | "fullscreen";
 }): void;
 
 /** Vertical stack layout. */
@@ -202,11 +241,143 @@ export function VStack(spacing: number, children: Widget[]): Widget;
 export function HStack(children: Widget[]): Widget;
 export function HStack(spacing: number, children: Widget[]): Widget;
 
-/** Static text label. */
-export function Text(content: string): Widget;
+/**
+ * Static text label.
+ *
+ * Phase 2 v3 Option 2: passing a second `id` arg makes the Text
+ * reactive — its content is bound to a `@State` field on the page.
+ * Update from inside any closure via `setText(id, newValue)` to
+ * trigger a UI rerender:
+ *
+ *     let count = 0;
+ *     App({ body: VStack([
+ *       Text("Count: 0", "counter"),
+ *       Button("+", () => { count++; setText("counter", `Count: ${count}`); })
+ *     ])});
+ */
+export function Text(content: string, id?: string): Widget;
+
+/**
+ * Issue #710 — empty Text widget that accepts per-range styled appends.
+ * Distinct from #478 (rich-text editor with toolbar/shortcuts) — this is
+ * a static, attributed display surface for inline emphasis inside a
+ * single wrapping paragraph (bold/italic/colored words mixed with
+ * default-styled prose).
+ *
+ * @example
+ *   const w = AttributedText();
+ *   attributedTextAppend(w, "Tap ",   0, 0, 0, 0, 0,    0,    0,    0);
+ *   attributedTextAppend(w, "here",   1, 0, 0, 0, 0.80, 0.07, 0.26, 1);
+ *   attributedTextAppend(w, " to read more.", 0, 0, 0, 0, 0, 0, 0, 0);
+ */
+export function AttributedText(): Widget;
+
+/**
+ * Issue #710 — append one styled run to an AttributedText widget.
+ *
+ * Boolean flags use 0/1. `fontSize = 0` inherits the widget's default
+ * size. Alpha `a = 0` keeps the inherited text color (omits the color
+ * attribute entirely, so theme-aware label colors still apply).
+ *
+ * Maps to NSMutableAttributedString.appendAttributedString: on Apple
+ * platforms; stubbed on GTK4 / Windows / Android / watchOS until the
+ * platform-native attributed surfaces are wired up.
+ */
+export function attributedTextAppend(
+  widget: Widget,
+  text: string,
+  bold: number,
+  italic: number,
+  underline: number,
+  fontSize: number,
+  r: number,
+  g: number,
+  b: number,
+  a: number,
+): void;
+
+/** Issue #710 — reset the buffer to empty. */
+export function attributedTextClear(widget: Widget): void;
 
 /** Clickable button. */
 export function Button(label: string, onPress: () => void): Widget;
+
+/**
+ * Update a reactive `Text(initial, id)` widget's content.
+ *
+ * Routes through the cross-platform setText handler registry on every
+ * UI backend (macOS/iOS/tvOS/visionOS/watchOS/Android/GTK4/Windows);
+ * on `--target harmonyos`, queues a `(id, value)` update that the
+ * auto-emitted .ets onClick drains after the closure returns, assigning
+ * to the matching `@State text_<id>: string` field — ArkUI rerenders.
+ *
+ * `id` must match exactly what was passed as the second arg to the
+ * `Text()` call you want to update. Calls to `setText` for unregistered
+ * ids are silently ignored (no Text widget binds to them).
+ */
+export function setText(id: string, value: string): void;
+
+/**
+ * A reactive state container. Wraps a value of type `T` and provides:
+ *
+ * - `value` / `get()` — read the current value
+ * - `set(v)` — update the value and trigger any bound UI to rerender
+ * - `text()` — return a reactive `Text` widget bound to this state
+ *
+ * Implementation desugars to the existing setText/Text reactive binding
+ * at compile time — each `state(initial)` declaration registers a
+ * synthetic id; `state.text()` emits a reactive
+ * `Text(initial.toString(), "<synth_id>")`, and `state.set(v)` rewrites
+ * to `setText("<synth_id>", String(v))` inside any closure body. On
+ * `--target harmonyos`, perry-codegen-arkts owns the harvest; on every
+ * other native target (macOS/iOS/tvOS/visionOS/watchOS/Android/GTK4/
+ * Windows) the target-agnostic `state_desugar` HIR pass produces the
+ * same shape and `js_state_init` / `js_state_get` / `js_state_set`
+ * drive the bound widget through the registered set-text handler.
+ *
+ * The state value also drives `NavStack(state, routes)` visibility:
+ * `state.set("detail")` flips the visible route on every backend that
+ * registers `js_register_widget_hidden_handler` (currently all native
+ * UI backends).
+ *
+ * Example:
+ *
+ *     import { App, VStack, Button, state } from "perry/ui";
+ *
+ *     const count = state(0);
+ *
+ *     App({ body: VStack([
+ *       count.text(),
+ *       Button("+", () => count.set(count.get() + 1)),
+ *     ])});
+ *
+ * Limitations of the desugar pass: only top-level `state(...)`
+ * declarations are tracked; only the canonical method-call shapes
+ * (`x.set` / `x.get` / `x.value` / `x.text`) are rewritten. State
+ * escaping through a function arg / array / object property won't
+ * trigger UI updates at the escape site. `Text("prefix " + s.get())`
+ * snapshots once at App-build time — use `s.text()` (or assemble a
+ * derived string in `s.set` callers) for reactive concatenation.
+ */
+export interface State<T> {
+    readonly value: T;
+    get(): T;
+    set(value: T): void;
+    text(): Widget;
+}
+
+export function state<T>(initial: T): State<T>;
+
+/**
+ * Show a transient banner/toast on supported platforms.
+ *
+ * On `--target harmonyos`, calls `promptAction.showToast({message})` via
+ * a queue drained after each Button onClick — the message pops at the
+ * bottom of the screen for ~3 seconds. On other platforms this is
+ * currently a no-op (Phase 2 v3 only wires HarmonyOS); follow-ups will
+ * route to NSAlert/UIAlertController/system notifications.
+ */
+export function showToast(message: string): void;
 
 /** Single-line text input. */
 export function TextField(placeholder: string, onChange: (value: string) => void): Widget;
@@ -251,8 +422,75 @@ export function Picker(onChange: (index: number) => void): Widget;
 /** Form section with a title. */
 export function Section(title: string): Widget;
 
-/** Navigation stack for push/pop navigation. */
+/**
+ * Form section with a title and inline children. Convenience overload — emits
+ * a labeled vertical group on HarmonyOS (`Column({space:4}) { Text(title); ... }`)
+ * and falls through to the imperative `Section(title)` + `widgetAddChild`
+ * pattern on every other platform.
+ */
+export function Section(title: string, children: Widget[]): Widget;
+
+/**
+ * Navigation stack for multi-page apps.
+ *
+ * **HarmonyOS Phase 2 v11**: state-driven shape — pass a `state<string>(...)`
+ * holding the active route name, plus an array of `{ name, body }` route
+ * specs. Navigation is just `route.set("detail")` from any closure; the
+ * v6 setText drain queue swaps the visible branch.
+ *
+ * Example:
+ * ```ts
+ * const route = state("home");
+ * App({
+ *   body: NavStack(route, [
+ *     { name: "home", body: VStack([
+ *       Text("Welcome"),
+ *       Button("Go to detail", () => route.set("detail")),
+ *     ]) },
+ *     { name: "detail", body: VStack([
+ *       Text("Detail page"),
+ *       Button("Back", () => route.set("home")),
+ *     ]) },
+ *   ]),
+ * });
+ * ```
+ *
+ * Native ArkUI `Navigation` + `NavPathStack` integration (hardware-back
+ * gesture, `pageStack.pop()`) is the v11.5 follow-up. The state-driven
+ * shape works today on every platform via the existing v6 + v3.2 bridge.
+ *
+ * The no-arg form is the legacy stub from Phase 1 — keep using it on
+ * platforms that haven't shipped the multi-page emission yet.
+ *
+ * **Route shape requirements** (#1135): each route entry must be a 2-field
+ * `{ name, body }` object literal at the call site (no spread, no extra
+ * fields). The `name` value must be either a string literal or a
+ * same-module `const X = "literal"` binding — the desugar pass const-folds
+ * the local back to its initializer so the canonical "factor route names
+ * into a shared constants file" pattern Just Works:
+ *
+ * ```ts
+ * const ROUTE_HOME = "home";
+ * const ROUTE_DETAIL = "detail";
+ * NavStack(route, [
+ *   { name: ROUTE_HOME, body: ... },     // OK — const-folded
+ *   { name: ROUTE_DETAIL, body: ... },   // OK — const-folded
+ * ])
+ * ```
+ *
+ * Imported `const`s from a sibling module (`import { ROUTE_HOME } from
+ * "./routes"`) are NOT resolved across modules today; they must be inlined
+ * to a string literal at the NavStack call site. When the rewrite bails
+ * for any reason, the compiler now emits a `Warning: NavStack(state,
+ * routes) skipped state-driven lowering (…)` line — pre-#1135 the call
+ * fell through silently to the 0-arg `NavStack()` stub and rendered as a
+ * completely blank screen with no diagnostic.
+ */
 export function NavStack(): Widget;
+export function NavStack(
+  active: State<string>,
+  routes: { name: string; body: Widget }[],
+): Widget;
 
 /**
  * Tab bar container.
@@ -289,6 +527,143 @@ export function ImageFile(path: string): Widget;
 /** Image from a system symbol name (SF Symbols). */
 export function ImageSymbol(name: string): Widget;
 
+/**
+ * Image fetched from a remote URL (or `data:` URI). The widget appears
+ * immediately as an empty box; the bytes are fetched on a background
+ * queue and applied on the main thread once the response arrives.
+ * Failed requests leave the widget empty (no crash).
+ *
+ * Real on macOS (NSImageView) + iOS (UIImageView). Other UI platforms
+ * register an empty image placeholder so layout still works.
+ *
+ * `alt`, when provided, is used as the accessibility label.
+ *
+ * Either form is accepted:
+ *
+ * ```ts
+ * Image("https://example.com/avatar.png");
+ * Image({ url: "https://example.com/avatar.png", alt: "Avatar" });
+ * Image({ systemName: "gear" }); // SF Symbol, same as ImageSymbol("gear")
+ * ```
+ *
+ * (#635, #1495)
+ */
+export function Image(url: string, alt?: string): Widget;
+export function Image(options: {
+    url: string;
+    alt?: string;
+}): Widget;
+export function Image(options: {
+    systemName: string;
+}): Widget;
+
+/**
+ * Embedded native WebView for auth flows / payment redirects / bounded HTML
+ * pages. Backed by `WKWebView` on Apple platforms; `WebView2` on Windows
+ * (post-Phase 1); `android.webkit.WebView` on Android (post-Phase 1);
+ * `WebKitGTK 6.0` on Linux (post-Phase 1). Stub on tvOS / watchOS.
+ *
+ * Intentionally narrow scope — this is a "browser tab embedded in your
+ * native widget tree" primitive, NOT a Tauri/Electron-style app shell.
+ * If you need bidirectional native↔JS RPC, use Tauri or Electron.
+ *
+ * Common shape:
+ *
+ * ```ts
+ * WebView({
+ *   url: "https://accounts.google.com/o/oauth2/auth?...",
+ *   allowedDomains: ["accounts.google.com", "myapp.com"],
+ *   onShouldNavigate: (url) => {
+ *     if (url.startsWith("https://myapp.com/oauth/callback?code=")) {
+ *       const code = new URL(url).searchParams.get("code");
+ *       exchangeCodeForToken(code);
+ *       return false;  // don't actually navigate
+ *     }
+ *     return true;
+ *   }
+ * })
+ * ```
+ *
+ * **Post-page-load hooks (cookies, JS values).** Use `webviewEvaluateJs`
+ * to read data from the loaded page after `onLoaded` fires:
+ *
+ * ```ts
+ * const wv = WebView({
+ *   url: "https://example.com/auth/callback",
+ *   onLoaded: (url) => {
+ *     webviewEvaluateJs(wv, "document.cookie", (cookies) => {
+ *       saveAuthSession(parseCookies(cookies));
+ *     });
+ *   }
+ * });
+ * ```
+ *
+ * **Cross-origin messaging (web target).** On the web target the
+ * embedded page can `window.parent.postMessage(payload, "*")` and the
+ * host can `window.addEventListener("message", e => ...)` to receive
+ * frames. This is browser-platform-specific; native targets don't
+ * expose `postMessage` (use `webviewEvaluateJs` to push state IN, and
+ * navigation interception to pull state OUT — that's the Perry contract
+ * across all platforms).
+ *
+ * (#658)
+ */
+export function WebView(options: {
+    /** Initial URL to load. Use `webviewLoadUrl` to navigate later. */
+    url: string;
+    /**
+     * Hard navigation allowlist. URLs whose host doesn't match any entry are
+     * blocked at the native layer (no `onShouldNavigate` round-trip). Match
+     * is exact OR subdomain — `["example.com"]` allows `example.com` and
+     * `*.example.com`. Empty / omitted = no host restriction.
+     */
+    allowedDomains?: string[];
+    /** Custom User-Agent header. Defaults to the platform WebKit UA. */
+    userAgent?: string;
+    /**
+     * Cookie / storage isolation. Default `true` — auth flows reusing a
+     * logged-in browser session is usually a footgun. Set `false` to
+     * persist cookies across WebView dismissals.
+     */
+    ephemeral?: boolean;
+    /**
+     * Sync intercept invoked before each navigation. Return `false` to
+     * cancel the load; return `true` (or omit a return) to allow it.
+     * Most common use: extract OAuth callback `code=` from a known
+     * redirect URL and cancel the actual navigation.
+     */
+    onShouldNavigate?: (url: string) => boolean | void;
+    /** Fired once a page finishes loading. */
+    onLoaded?: (url: string) => void;
+    /** Fired on any load error (DNS, TLS, HTTP, navigation cancel). */
+    onError?: (errorCode: number, message: string) => void;
+    /** Pixel width hint. The widget tree's layout engine still controls final size. */
+    width?: number;
+    /** Pixel height hint. */
+    height?: number;
+}): Widget;
+
+/** Replace the WebView's URL — re-navigates and re-paints. */
+export function webviewLoadUrl(handle: Widget, url: string): void;
+/** Reload the current page. */
+export function webviewReload(handle: Widget): void;
+/** Navigate back through the WebView's session history. */
+export function webviewGoBack(handle: Widget): void;
+/** Navigate forward through the WebView's session history. */
+export function webviewGoForward(handle: Widget): void;
+/** Returns 1 when there's history to go back to, 0 otherwise. */
+export function webviewCanGoBack(handle: Widget): number;
+/**
+ * Run a one-shot JS expression in the WebView's content process. The
+ * callback fires with the stringified result (empty string on null /
+ * undefined / error). Use sparingly — this is for reading
+ * `document.cookie` / `localStorage.getItem(...)` after a redirect, not
+ * for general-purpose RPC. (#658)
+ */
+export function webviewEvaluateJs(handle: Widget, js: string, callback: (result: string) => void): void;
+/** Wipe the WebView's cookies / local storage / IndexedDB. Use after auth. */
+export function webviewClearCookies(handle: Widget): void;
+
 /** VStack with built-in edge insets. */
 export function VStackWithInsets(spacing: number, top: number, left: number, bottom: number, right: number): Widget;
 
@@ -319,6 +694,24 @@ export function textSetFontWeight(widget: Widget, size: number, weight: number):
 export function textSetFontFamily(widget: Widget, family: string): void;
 export function textSetWraps(widget: Widget, maxWidth: number): void;
 export function textSetSelectable(widget: Widget, selectable: number): void;
+/**
+ * Issue #707 — cap visible lines on a Text widget. `lines = 0` means
+ * unlimited (the default). When `lines > 0` and the content overflows,
+ * the runtime picks tail-truncation by default; use
+ * `textSetTruncationMode` to choose head/middle/tail.
+ *
+ * Maps to `UILabel.numberOfLines` on iOS and `NSTextField.maximumNumberOfLines`
+ * (+ cell wrapping/line-break-mode) on macOS. Stubbed on other platforms.
+ */
+export function textSetNumberOfLines(widget: Widget, lines: number): void;
+/**
+ * Issue #707 — control where the ellipsis appears when content overflows
+ * the line cap set via `textSetNumberOfLines`.
+ *
+ * Modes: `0` = word-wrap (no ellipsis), `1` = head ("…foo"),
+ * `2` = middle ("fo…ar"), `3` = tail ("foo…"). Tail is the most common.
+ */
+export function textSetTruncationMode(widget: Widget, mode: number): void;
 /**
  * Set text decoration on a Text widget (issue #185 Phase B).
  * `decoration`: 0 = none, 1 = underline, 2 = strikethrough.
@@ -363,6 +756,173 @@ export function widgetSetBackgroundGradient(
 export function widgetSetOpacity(widget: Widget, opacity: number): void;
 export function widgetSetEnabled(widget: Widget, enabled: number): void;
 export function widgetSetTooltip(widget: Widget, text: string): void;
+/**
+ * Attach a rich (widget-tree) tooltip to `widget`. The `content` widget
+ * is presented in a borderless floating panel after `hoverDelayMs` of
+ * mouse hover (default 500ms when ≤0). Currently wired on macOS via
+ * `NSPanel` + `NSTrackingArea`; iOS/tvOS/visionOS/watchOS/Android/
+ * Windows/GTK4 stub the FFI so calls compile but produce no overlay
+ * yet — track in issue #479. For plain-text tooltips, prefer
+ * `widgetSetTooltip` so the OS handles VoiceOver / a11y correctly.
+ */
+export function widgetSetRichTooltip(widget: Widget, content: Widget, hoverDelayMs: number): void;
+
+// ---------------------------------------------------------------------------
+// Combobox (issue #475) — editable text field with a filterable dropdown of
+// suggestions. macOS uses NSComboBox with `setCompletes:YES` for as-you-type
+// completion; iOS / tvOS / visionOS / watchOS / Android / Windows / GTK4
+// stub the FFI today (text field falls back to a plain editable field).
+// `onChange` fires with the current string value when the user picks from
+// the dropdown or commits free text via Return.
+// ---------------------------------------------------------------------------
+
+export function Combobox(initial: string, onChange: (value: string) => void): Widget;
+export function comboboxAddItem(widget: Widget, value: string): void;
+export function comboboxSetValue(widget: Widget, value: string): void;
+export function comboboxGetValue(widget: Widget): string;
+
+// ---------------------------------------------------------------------------
+// TreeView / outline view (issue #480) — hierarchical disclosure list. Build
+// the topology bottom-up via TreeNode + treeNodeAddChild, then mount it via
+// TreeView(rootNode, onSelect). macOS uses NSOutlineView; iOS/tvOS/visionOS/
+// watchOS/Android/Windows/GTK4 stub the FFI today (selection always returns
+// undefined). Out of scope this iteration: drag-and-drop, lazy children
+// loader, multi-select, inline rename, icons.
+// ---------------------------------------------------------------------------
+
+export function TreeNode(id: string, label: string): Widget;
+export function treeNodeAddChild(parent: Widget, child: Widget): void;
+export function TreeView(rootNode: Widget, onSelect: (id: string) => void): Widget;
+export function treeViewExpandAll(widget: Widget): void;
+export function treeViewCollapseAll(widget: Widget): void;
+export function treeViewGetSelectedId(widget: Widget): string;
+
+// ---------------------------------------------------------------------------
+// Calendar widget (issue #481, v1) — month-grid date picker. macOS uses
+// NSDatePicker in graphical / clock-and-calendar style, elements limited
+// to year-month-day so the clock face is hidden. iOS / tvOS / visionOS /
+// watchOS / Android / Windows / GTK4 stub the FFI today (returns 0 on
+// create, undefined on get-date).
+//
+// Out of scope v1: event blocks / dot indicators, week / day views,
+// drag-to-create / drag-to-resize, overlap layout. The base widget
+// plumbing lands first; richer modes follow in #481 follow-ups.
+//
+// `onChange` receives the selected date as an ISO `yyyy-MM-dd` string
+// (POSIX-locale formatter, stable across user locales).
+// ---------------------------------------------------------------------------
+
+export function Calendar(year: number, month: number, onChange: (isoDate: string) => void): Widget;
+export function calendarSetDate(widget: Widget, year: number, month: number, day: number): void;
+export function calendarGetSelectedDate(widget: Widget): string;
+
+// ---------------------------------------------------------------------------
+// Chart widget (issue #474, v1) — line / bar / pie via CoreGraphics on macOS.
+// `kind` is 0=line, 1=bar, 2=pie. iOS / tvOS / visionOS / watchOS / Android /
+// Windows / GTK4 stub the FFI today (returns 0 on create, no-op on data
+// updates). Apple Charts framework / SwiftUI Charts integration on iOS 16+ is
+// a follow-up.
+//
+// Out of scope v1 (per #474 scope): multi-series line, grouped/stacked bars,
+// donut, area, axis labels, legend, hover/tap tooltips, animated transitions,
+// color theming. The base widget plumbing lands first; richer modes follow
+// once the surface is used in TS apps.
+// ---------------------------------------------------------------------------
+
+export function Chart(kind: number, width: number, height: number): Widget;
+export function chartAddDataPoint(widget: Widget, label: string, value: number): void;
+export function chartClearData(widget: Widget): void;
+export function chartSetTitle(widget: Widget, title: string): void;
+export function chartReload(widget: Widget): void;
+
+// ---------------------------------------------------------------------------
+// Command palette (issue #477, v1) — ⌘K-style fuzzy command launcher.
+// macOS: floating NSPanel with NSSearchField + NSTableView. iOS / tvOS /
+// visionOS / watchOS / Android / Windows / GTK4 stub the FFI today.
+//
+// Out of scope v1: fuzzy ranking (substring match for now), recent /
+// frequently-used boost, async command sources, command groups / section
+// headers, OS-native menu-bar integration. Bind `commandPaletteShow()`
+// to ⌘K via `addKeyboardShortcut` to wire the default hotkey.
+// ---------------------------------------------------------------------------
+
+export function commandPaletteRegister(
+    id: string,
+    label: string,
+    subtitle: string,
+    onRun: () => void,
+): void;
+export function commandPaletteUnregister(id: string): void;
+export function commandPaletteClear(): void;
+export function commandPaletteShow(): void;
+export function commandPaletteHide(): void;
+
+// ---------------------------------------------------------------------------
+// Map widget (issue #517) — MKMapView on macOS / iOS / visionOS, stubs
+// elsewhere. Pin styling is the default red drop-pin (MKPointAnnotation);
+// custom annotation views are a follow-up.
+//
+// `mapType` enum: 0=standard, 1=satellite, 2=hybrid (matches MKMapType).
+// `latSpan`/`lonSpan` are degrees — smaller = more zoomed in. A 0.05 span
+// is roughly city-block scale; 1.0 span is a whole region.
+//
+// Out of scope this iteration: user-location tracking, custom annotation
+// views, polylines/polygons, route directions, region-change callbacks.
+// ---------------------------------------------------------------------------
+
+export function MapView(width: number, height: number): Widget;
+export function mapViewSetRegion(
+    widget: Widget,
+    lat: number,
+    lon: number,
+    latSpan: number,
+    lonSpan: number,
+): void;
+export function mapViewAddPin(widget: Widget, lat: number, lon: number, title: string): void;
+export function mapViewClearPins(widget: Widget): void;
+export function mapViewSetMapType(widget: Widget, style: number): void;
+
+// ---------------------------------------------------------------------------
+// PDF viewer widget (issue #516) — wraps `PDFView` from PDFKit on macOS.
+// `loadFile` returns 1 on success, 0 on failure (couldn't open path or
+// PDFKit unavailable). Scale is a multiplier — 1.0 = 100%.
+//
+// Out of scope this iteration: programmatic PDF generation
+// (`Pdf.create({...}).save(path)` style API), text-search highlighting,
+// annotation editing, print-friendly rendering. Filed back into #516
+// for follow-ups.
+// ---------------------------------------------------------------------------
+
+export function PdfView(width: number, height: number): Widget;
+export function pdfViewLoadFile(widget: Widget, path: string): number;
+export function pdfViewGetPageCount(widget: Widget): number;
+export function pdfViewGoToPage(widget: Widget, pageIndex: number): void;
+export function pdfViewGetCurrentPage(widget: Widget): number;
+export function pdfViewSetScale(widget: Widget, scale: number): void;
+
+// ---------------------------------------------------------------------------
+// Rich text editor (issue #478, v1) — NSTextView with NSAttributedString
+// storage. Plain-text + HTML round-trip cover persistence; bold/italic/
+// underline cover inline formatting via NSResponder actions. Markdown
+// round-trip, block formatting (headings/lists/blockquotes/code blocks),
+// configurable toolbar, paste handling are #478 follow-ups.
+// macOS: native NSTextView. iOS / tvOS / visionOS / watchOS / Android /
+// Windows / GTK4 stub the FFI today.
+// `setHtml` returns 1 on success, 0 on failure (e.g. malformed HTML).
+// ---------------------------------------------------------------------------
+
+export function RichTextEditor(
+    width: number,
+    height: number,
+    onChange: (text: string) => void,
+): Widget;
+export function richTextSetString(widget: Widget, text: string): void;
+export function richTextGetString(widget: Widget): string;
+export function richTextSetHtml(widget: Widget, html: string): number;
+export function richTextGetHtml(widget: Widget): string;
+export function richTextToggleBold(widget: Widget): void;
+export function richTextToggleItalic(widget: Widget): void;
+export function richTextToggleUnderline(widget: Widget): void;
 export function widgetSetControlSize(widget: Widget, size: number): void;
 export function widgetSetEdgeInsets(widget: Widget, top: number, left: number, bottom: number, right: number): void;
 export function widgetSetBorderColor(widget: Widget, r: number, g: number, b: number, a: number): void;
@@ -385,8 +945,64 @@ export function widgetSetContextMenu(widget: Widget, menu: Widget): void;
 export function widgetAddOverlay(widget: Widget, overlay: Widget): void;
 export function widgetSetOverlayFrame(widget: Widget, x: number, y: number, width: number, height: number): void;
 export function widgetSetOnClick(widget: Widget, callback: () => void): void;
-export function widgetSetOnHover(widget: Widget, callback: () => void): void;
+/**
+ * Fired when the pointer enters (`true`) or leaves (`false`) the widget's
+ * bounds. The callback signature changed in issue #1868 to deliver both
+ * states through a single callback; previous code that wrote
+ * `widgetSetOnHover(w, () => ...)` keeps compiling and running — extra
+ * arguments are ignored at the call site — but only fires on enter.
+ */
+export function widgetSetOnHover(widget: Widget, callback: (isHovering: boolean) => void): void;
 export function widgetSetOnDoubleClick(widget: Widget, callback: () => void): void;
+
+/**
+ * Which mouse button fired a pointer event. Values match the web
+ * `MouseEvent.button` spec so the model is portable. On touch
+ * platforms the value is always `MouseButton.Left`.
+ */
+export const enum MouseButton {
+    Left = 0,
+    Middle = 1,
+    Right = 2,
+    Back = 3,
+    Forward = 4,
+}
+
+/**
+ * Which input device fired a pointer event. Mirrors the web
+ * `PointerEvent.pointerType` spec. Multi-touch is not yet surfaced;
+ * stylus is reported as `"pen"` when the platform exposes it.
+ */
+export type PointerType = "mouse" | "touch" | "pen";
+
+/**
+ * Continuous pointer event payload delivered to `onMouseDown`,
+ * `onMouseUp`, `onMouseMove`. Coordinates are widget-local points
+ * (top-left origin). Issue #1868.
+ */
+export interface PointerEvent {
+    x: number;
+    y: number;
+    button: MouseButton;
+    pointerType: PointerType;
+}
+
+/**
+ * Fire when a button is pressed over the widget. Use together with
+ * `widgetSetOnMouseUp` to disambiguate clicks from drags, or with
+ * `widgetSetOnMouseMove` to drive drawing / drag-and-drop. Issue #1868.
+ */
+export function widgetSetOnMouseDown(widget: Widget, callback: (e: PointerEvent) => void): void;
+
+/** Fire when a button is released over the widget. See `widgetSetOnMouseDown`. */
+export function widgetSetOnMouseUp(widget: Widget, callback: (e: PointerEvent) => void): void;
+
+/**
+ * Fire continuously while the pointer is over the widget. On macOS,
+ * duplicate same-position events are coalesced to one call per
+ * (x, y) pair. See `widgetSetOnMouseDown`.
+ */
+export function widgetSetOnMouseMove(widget: Widget, callback: (e: PointerEvent) => void): void;
 /** Animate opacity to `target` over `durationSecs` seconds. */
 export function widgetAnimateOpacity(widget: Widget, target: number, durationSecs: number): void;
 /** Animate position by `(dx, dy)` pixels over `durationSecs` seconds. */
@@ -422,9 +1038,149 @@ export function textareaGetString(widget: Widget): string;
 
 export function scrollviewSetChild(scrollView: Widget, child: Widget): void;
 export function scrollViewSetChild(scrollView: Widget, child: Widget): void;
+// Issue #391: lowercase-v aliases for the remaining ScrollView setters /
+// getter so coverage is consistent across all five functions. The
+// historical `scrollviewSetOffset(scrollView, y)` 1-arg-y form is still
+// dispatched (for back-compat with code targeting older Perry versions),
+// but the type stub only exposes the modern 2-arg `(x, y)` shape — old
+// code calling `scrollviewSetOffset(sv, 100)` will need to migrate to
+// `scrollviewSetOffset(sv, 0, 100)` or `scrollViewScrollTo(sv, 0, 100)`.
+export function scrollviewGetOffset(scrollView: Widget): number;
 export function scrollViewGetOffset(scrollView: Widget): number;
+export function scrollviewSetOffset(scrollView: Widget, x: number, y: number): void;
 export function scrollViewSetOffset(scrollView: Widget, x: number, y: number): void;
+export function scrollviewScrollTo(scrollView: Widget, x: number, y: number): void;
 export function scrollViewScrollTo(scrollView: Widget, x: number, y: number): void;
+
+/**
+ * Issue #390: native pull-to-refresh.
+ *
+ * Attach a refresh control to a ScrollView. The callback fires when the
+ * user pulls down past the threshold; call `scrollviewEndRefreshing` to
+ * dismiss the spinner once the refresh completes.
+ *
+ * Backed by `UIRefreshControl` on iOS / iPadOS / tvOS / visionOS,
+ * `SwipeRefreshLayout` on Android, no-op on macOS / GTK4 / Windows /
+ * watchOS / Web (the OS-provided pull gesture only exists on touch
+ * platforms — desktop apps should add an explicit "Refresh" button).
+ */
+export function scrollviewSetRefreshControl(scrollView: Widget, onPull: () => void): void;
+export function scrollViewSetRefreshControl(scrollView: Widget, onPull: () => void): void;
+export function scrollviewEndRefreshing(scrollView: Widget): void;
+export function scrollViewEndRefreshing(scrollView: Widget): void;
+
+/**
+ * Issue #553 — infinite-scroll callback.
+ *
+ * Fires `onScrollEnd` once when the visible region's bottom edge gets
+ * within `thresholdPx` of the content's bottom (default 200). Re-arms
+ * after the user scrolls back up past the threshold so the callback
+ * can fire repeatedly across pagination loads.
+ *
+ * Real on macOS (NSScrollView clip-view bounds observer) + iOS
+ * (UIScrollViewDelegate.scrollViewDidScroll). No-op on platforms where
+ * `setRefreshControl` is also no-op.
+ */
+export function scrollviewSetScrollEndCallback(scrollView: Widget, onScrollEnd: () => void, thresholdPx: number): void;
+export function scrollViewSetScrollEndCallback(scrollView: Widget, onScrollEnd: () => void, thresholdPx: number): void;
+
+/**
+ * Issue #553 — pull-to-refresh on LazyVStack (parallel to ScrollView).
+ *
+ * Real on iOS (UIRefreshControl on the inner UITableView). No-op on
+ * macOS — AppKit has no native pull-to-refresh idiom; desktop apps
+ * should add an explicit "Refresh" button. Stubs on other platforms.
+ */
+export function lazyvstackSetRefreshControl(view: Widget, onPull: () => void): void;
+export function lazyvstackEndRefreshing(view: Widget): void;
+
+/**
+ * Issue #553 — infinite-scroll callback on LazyVStack.
+ *
+ * Same backpressure contract as `scrollviewSetScrollEndCallback`, but
+ * `thresholdItems` measures rows from the bottom rather than pixels —
+ * works with variable view heights as long as the LazyVStack uses a
+ * uniform row height (which is the only mode currently supported).
+ */
+export function lazyvstackSetScrollEndCallback(view: Widget, onScrollEnd: () => void, thresholdItems: number): void;
+
+// ---------------------------------------------------------------------------
+// Issue #553 — BottomNavigation (5-tab bottom bar with icon + label + badge)
+// ---------------------------------------------------------------------------
+
+/**
+ * Create an empty bottom-navigation bar. Add tabs with `bottomNavAddItem`.
+ * The `onSelect(index)` callback fires whenever the user taps a tab —
+ * after the bar's internal selectedIndex is updated. Use
+ * `bottomNavSetSelected(bar, i)` for programmatic selection (does NOT
+ * fire `onSelect`).
+ *
+ * Real on macOS (custom NSStackView + NSButton strip with SF Symbol
+ * icons) + iOS (UITabBar). Stubs on Android / GTK4 / Windows / tvOS /
+ * watchOS / visionOS — those platforms reach the bar through the
+ * BottomNavigationView / GtkBox / Pivot equivalents in a follow-up.
+ */
+export function BottomNavigation(onSelect: (index: number) => void): Widget;
+
+/** Add a tab item — `icon` is an SF Symbol name on Apple platforms. */
+export function bottomNavAddItem(bar: Widget, icon: string, label: string): void;
+
+/** Set or clear the badge string on a tab. Empty string clears the badge. */
+export function bottomNavSetBadge(bar: Widget, index: number, badge: string): void;
+
+/** Programmatically select a tab. Does NOT fire `onSelect`. */
+export function bottomNavSetSelected(bar: Widget, index: number): void;
+
+/**
+ * Issue #706 — set the active tab's icon/label tint (RGBA 0.0-1.0).
+ * On iOS this maps to `UITabBar.tintColor`. On macOS this overrides the
+ * iOS-default-blue used in the custom NSStackView styling. Stubbed on
+ * GTK4 / Windows / Android / tvOS / watchOS / visionOS.
+ */
+export function bottomNavSetTintColor(
+  bar: Widget,
+  r: number,
+  g: number,
+  b: number,
+  a: number,
+): void;
+
+/**
+ * Issue #706 — set the inactive tabs' icon/label tint (RGBA 0.0-1.0).
+ * On iOS this maps to `UITabBar.unselectedItemTintColor`.
+ */
+export function bottomNavSetUnselectedTintColor(
+  bar: Widget,
+  r: number,
+  g: number,
+  b: number,
+  a: number,
+): void;
+
+// ---------------------------------------------------------------------------
+// Issue #553 — ImageGallery (swipeable carousel)
+// ---------------------------------------------------------------------------
+
+/**
+ * Create an empty image gallery. Add images with `imageGalleryAddImage`.
+ * The `onIndexChange(index)` callback fires when the user pages to a
+ * new image (or `imageGallerySetIndex` is called programmatically and
+ * the index changes).
+ *
+ * Image source is a local file path or http(s) URL; remote images are
+ * fetched on a background queue and applied on the main thread. Local
+ * paths load synchronously.
+ *
+ * Real on macOS (horizontal-paging NSScrollView) + iOS (paging
+ * UIScrollView). Stubs on other platforms.
+ */
+export function ImageGallery(onIndexChange: (index: number) => void): Widget;
+
+/** Add an image to the gallery. `alt` is used as accessibilityLabel. */
+export function imageGalleryAddImage(gallery: Widget, url: string, alt: string): void;
+
+/** Programmatically jump to a given image index (animated). */
+export function imageGallerySetIndex(gallery: Widget, index: number): void;
 
 // ---------------------------------------------------------------------------
 // Stack layout
@@ -475,6 +1231,49 @@ export function menuAddStandardAction(menu: Widget, action: string, title: strin
 export function menuBarCreate(): Widget;
 export function menuBarAddMenu(menuBar: Widget, title: string, menu: Widget): void;
 export function menuBarAttach(menuBar: Widget): void;
+
+// ---------------------------------------------------------------------------
+// Tray icon (system tray / menu-bar / notification area) — issue #490
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a system tray icon. Returns a tray handle.
+ *
+ * Per-platform behaviour:
+ * - **macOS**: `NSStatusItem` in the menu bar (top-right of the screen).
+ * - **Windows**: `Shell_NotifyIconW` in the notification area (bottom-right).
+ * - **Linux/GTK4**: `StatusNotifierItem` (KSNI) over D-Bus — works on KDE,
+ *   GNOME-with-extension, XFCE, Plasma. Logs a warning and no-ops on plain
+ *   Wayland sessions without a status notifier host.
+ * - **iOS / tvOS / visionOS / watchOS / Android / HarmonyOS**: no-op stub
+ *   (these platforms have no tray concept).
+ *
+ * `iconPath` is a filesystem path to a PNG (or `.icns` on macOS, `.ico` on
+ * Windows). Pass `""` to use a default placeholder.
+ */
+export function trayCreate(iconPath: string): Widget;
+
+/** Update the tray icon image. */
+export function traySetIcon(tray: Widget, iconPath: string): void;
+
+/** Set the tooltip text shown when the user hovers the icon. */
+export function traySetTooltip(tray: Widget, tooltip: string): void;
+
+/**
+ * Attach a context menu (built with `menuCreate` / `menuAddItem`) to the
+ * tray icon. Right-click — or left-click on macOS — opens the menu.
+ */
+export function trayAttachMenu(tray: Widget, menu: Widget): void;
+
+/**
+ * Register a callback that fires on left-click of the tray icon. On macOS
+ * the click opens the attached menu directly, so this handler is mostly
+ * useful on Windows and Linux for "show the main window" buttons.
+ */
+export function trayOnClick(tray: Widget, callback: () => void): void;
+
+/** Remove the tray icon. */
+export function trayDestroy(tray: Widget): void;
 
 // ---------------------------------------------------------------------------
 // NavigationStack
@@ -536,6 +1335,40 @@ export function tableSetOnRowSelect(table: Widget, callback: (row: number) => vo
 export function tableGetSelectedRow(table: Widget): number;
 
 // ---------------------------------------------------------------------------
+// Data-table sort + filter + multi-select extensions (issue #473).
+// macOS: NSTableView.sortDescriptors + selectedRowIndexes (real impls);
+// other platforms: stubs returning safe defaults.
+// ---------------------------------------------------------------------------
+
+/**
+ * Register a sort callback fired when the user clicks a column header.
+ * Installing the callback also turns on per-column sort indicators.
+ * `ascending` is `1` for ascending, `0` for descending.
+ */
+export function tableSetOnSortChange(
+    table: Widget,
+    callback: (colIndex: number, ascending: number) => void,
+): void;
+
+/** Toggle multi-row selection (⌘ / ⇧ click). `allow` is `1` to enable. */
+export function tableSetAllowsMultipleSelection(table: Widget, allow: number): void;
+
+/** Number of currently-selected rows in a multi-select table. */
+export function tableGetSelectedRowsCount(table: Widget): number;
+
+/** Index of the n-th selected row (0-based). Returns `-1` for out-of-range. */
+export function tableGetSelectedRowAt(table: Widget, n: number): number;
+
+/**
+ * Store a filter text on the table. Passive — the user's TS code reads
+ * this back via `tableGetFilterText` and adjusts `tableUpdateRowCount`
+ * accordingly. Keeps the active row-hiding logic on the user side so
+ * any reactive store can drive it.
+ */
+export function tableSetFilterText(table: Widget, text: string): void;
+export function tableGetFilterText(table: Widget): string;
+
+// ---------------------------------------------------------------------------
 // Camera (issue #191)
 // ---------------------------------------------------------------------------
 
@@ -585,6 +1418,28 @@ export function cameraSampleColor(x: number, y: number): number;
  * directly to `cameraSampleColor()`.
  */
 export function cameraSetOnTap(camera: Widget, callback: (x: number, y: number) => void): void;
+
+/**
+ * Register a callback invoked for each captured camera frame, enabling
+ * real-time processing such as QR / barcode detection.
+ *
+ * The callback receives the frame as tightly-packed 24-bit RGB
+ * (`width * height * 3` bytes, 3 bytes per pixel), its pixel width and its
+ * pixel height. The buffer is only valid for the duration of the
+ * synchronous call — copy out anything you need to retain.
+ *
+ * Platform support:
+ *   - Linux:   GStreamer `v4l2src` pipeline
+ *   - iOS:     AVFoundation capture session
+ *   - Android: CameraX / Camera2
+ *   - Other:   no-op (the callback never fires)
+ *
+ * Requires camera permission.
+ */
+export function cameraRegisterFrameCallback(camera: Widget, callback: (frameData: Uint8Array, width: number, height: number) => void): void;
+
+/** Unregister a previously-registered camera frame callback. */
+export function cameraUnregisterFrameCallback(camera: Widget): void;
 
 // ---------------------------------------------------------------------------
 // Sheet
@@ -662,6 +1517,118 @@ export function addKeyboardShortcut(
     callback: () => void,
 ): void;
 
+// ---------------------------------------------------------------------------
+// Continuous keyboard events (issue #1864)
+// ---------------------------------------------------------------------------
+
+/**
+ * Bitfield for keyboard modifier state. Shared with `addKeyboardShortcut` /
+ * `registerGlobalHotkey`. On Linux/Windows, `Cmd` maps to the Ctrl key.
+ *
+ * Use bitwise-or to combine: `Modifier.Cmd | Modifier.Shift`.
+ */
+export const enum Modifier {
+    None = 0,
+    Cmd = 1,
+    Shift = 2,
+    Alt = 4,
+    Ctrl = 8,
+}
+
+/**
+ * Canonical numeric key identifiers. Stable across releases. Values match the
+ * native `KeyCode` table in `perry-ui::keys` — the runtime passes the raw `u16`
+ * directly, so comparisons against `Key.*` compile to integer equality with
+ * zero string allocation per event.
+ *
+ * Letters are lowercase (`Key.A`/`Key.B`/…). Use `onTextInput` (future API)
+ * for IME-aware composed text — these `Key` values are *physical* keys.
+ */
+export const enum Key {
+    Unknown = 0,
+    A = 1, B = 2, C = 3, D = 4, E = 5, F = 6, G = 7, H = 8, I = 9, J = 10,
+    K = 11, L = 12, M = 13, N = 14, O = 15, P = 16, Q = 17, R = 18, S = 19,
+    T = 20, U = 21, V = 22, W = 23, X = 24, Y = 25, Z = 26,
+
+    Digit0 = 27, Digit1 = 28, Digit2 = 29, Digit3 = 30, Digit4 = 31,
+    Digit5 = 32, Digit6 = 33, Digit7 = 34, Digit8 = 35, Digit9 = 36,
+
+    F1 = 37, F2 = 38, F3 = 39, F4 = 40, F5 = 41, F6 = 42,
+    F7 = 43, F8 = 44, F9 = 45, F10 = 46, F11 = 47, F12 = 48,
+
+    ArrowUp = 49, ArrowDown = 50, ArrowLeft = 51, ArrowRight = 52,
+    Space = 53, Enter = 54, Tab = 55, Escape = 56,
+    Backspace = 57, Delete = 58,
+
+    Home = 59, End = 60, PageUp = 61, PageDown = 62, Insert = 63,
+
+    Minus = 64, Equal = 65, BracketLeft = 66, BracketRight = 67,
+    Backslash = 68, Semicolon = 69, Quote = 70, Comma = 71,
+    Period = 72, Slash = 73, Backquote = 74,
+
+    F13 = 75, F14 = 76, F15 = 77, F16 = 78,
+    F17 = 79, F18 = 80, F19 = 81, F20 = 82,
+
+    Numpad0 = 83, Numpad1 = 84, Numpad2 = 85, Numpad3 = 86, Numpad4 = 87,
+    Numpad5 = 88, Numpad6 = 89, Numpad7 = 90, Numpad8 = 91, Numpad9 = 92,
+    NumpadDecimal = 93, NumpadEnter = 94, NumpadAdd = 95, NumpadSubtract = 96,
+    NumpadMultiply = 97, NumpadDivide = 98, NumpadEqual = 99, NumpadClear = 100,
+}
+
+/**
+ * Subscribe to key-down events on a widget. Fires only while that widget owns
+ * logical focus (set via `focus(widget)`). Use `onAppKeyDown` for events that
+ * should fire regardless of which widget is focused.
+ *
+ * `repeat` is `true` when the OS auto-repeats the key while held. Filter it
+ * out for edge-only detection.
+ */
+export function onKeyDown(
+    widget: Widget,
+    handler: (key: Key, modifiers: number, repeat: boolean) => void,
+): void;
+
+/** Subscribe to key-up events on a widget. Same focus semantics as `onKeyDown`. */
+export function onKeyUp(
+    widget: Widget,
+    handler: (key: Key, modifiers: number) => void,
+): void;
+
+/**
+ * App-level key-down handler. Fires whenever no widget currently owns focus.
+ * Use this for games, modal HUDs, or any "I don't care which widget is
+ * focused" capture.
+ */
+export function onAppKeyDown(
+    handler: (key: Key, modifiers: number, repeat: boolean) => void,
+): void;
+
+/** App-level key-up handler. Same semantics as `onAppKeyDown`. */
+export function onAppKeyUp(
+    handler: (key: Key, modifiers: number) => void,
+): void;
+
+/** Route subsequent keyboard events to this widget. Pair with `style: { focusable: true }`. */
+export function focus(widget: Widget): void;
+
+/** Clear focus if `widget` currently owns it. */
+export function blur(widget: Widget): void;
+
+/**
+ * O(1), branchless poll. Returns `1` while `key` is currently held, `0`
+ * otherwise — use a truthy check: `if (isKeyDown(Key.Space)) { … }`.
+ */
+export function isKeyDown(key: Key): number;
+
+/**
+ * Snapshot of the currently-held modifier keys as a `Modifier` bitfield.
+ * Updated continuously by the OS — accurate even outside of a key event
+ * (e.g. while dragging the mouse with Shift held).
+ *
+ * Example: `if (currentModifiers() & Modifier.Shift) snapToGrid();`
+ */
+export function currentModifiers(): number;
+
 /**
  * Register a system-wide hotkey that fires even when the app is backgrounded.
  *
@@ -702,6 +1669,18 @@ export function onActivate(callback: () => void): void;
 // Timer
 // ---------------------------------------------------------------------------
 
+/**
+ * Schedule a recurring callback on the UI main thread (#389).
+ *
+ * Two forms:
+ *  - `appSetTimer(intervalMs, callback)` — preferred, runs the callback on
+ *    the platform's UI thread (NSTimer / Handler / etc.)
+ *  - `appSetTimer(app, intervalMs, callback)` — historical 3-arg form. The
+ *    `app` arg is ignored at runtime (the platform-specific implementation
+ *    schedules against the running app instance, not the handle). Kept as
+ *    an overload so older code that passed an app handle still typechecks.
+ */
+export function appSetTimer(intervalMs: number, callback: () => void): void;
 export function appSetTimer(app: Widget, intervalMs: number, callback: () => void): void;
 
 // ---------------------------------------------------------------------------

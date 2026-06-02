@@ -15,6 +15,16 @@ pub fn is_zstack(handle: i64) -> bool {
     ZSTACK_HANDLES.with(|h| h.borrow().contains(&handle))
 }
 
+/// Register an existing widget handle so that `widgets::add_child(handle, ...)`
+/// routes through `zstack::add_child`'s "pin to fill parent" pinning. Used
+/// by `navstack::create` to opt the NavStack container into z-stack
+/// semantics without making it an actual `NSStackView`. (#612)
+pub fn register_as_zstack(handle: i64) {
+    ZSTACK_HANDLES.with(|h| {
+        h.borrow_mut().insert(handle);
+    });
+}
+
 /// Create an overlay (ZStack) container — a plain NSView where children are stacked on top.
 /// Returns widget handle.
 pub fn create() -> i64 {

@@ -1,12 +1,14 @@
 use objc2::msg_send;
 use objc2::rc::Retained;
-use objc2::runtime::{AnyClass, AnyObject};
+use objc2::runtime::{AnyClass, AnyObject, Sel};
 use objc2::{define_class, AnyThread, DefinedClass};
 use objc2_app_kit::NSView;
-use objc2_foundation::{MainThreadMarker, NSObject};
+use objc2_foundation::{MainThreadMarker, NSObject, NSString};
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 extern "C" {
+    fn js_closure_call0(closure: *const u8) -> f64;
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
@@ -207,4 +209,193 @@ pub fn set_row_height(handle: i64, height: f64) {
 #[allow(dead_code)]
 fn _touch(entry: &LazyVStackEntry) -> *const AnyObject {
     Retained::as_ptr(&entry.scroll_view) as *const AnyObject
+}
+
+// =============================================================================
+// Issue #553 — pull-to-refresh + onScrollEnd hooks
+// =============================================================================
+//
+// macOS has no native pull-to-refresh idiom on NSScrollView, so the pull
+// helpers are no-ops here (the FFI exists so cross-platform code can call
+// the same symbol on macOS without a fallback branch). The onScrollEnd
+// hook IS implementable on macOS: NSScrollView's clip view posts
+// `NSViewBoundsDidChangeNotification` whenever the user scrolls; we
+// observe that and fire the user's callback when the visible-rect's
+// bottom edge gets within `threshold_items * row_height` of the content
+// height. Backpressure: only fire once per threshold-cross — the next
+// fire is gated until the user scrolls back up past the threshold.
+
+struct ScrollEndState {
+    closure: f64,
+    threshold_items: i64,
+    armed: bool, // true once user has scrolled away from the threshold zone
+}
+
+thread_local! {
+    static SCROLL_END_STATES: RefCell<HashMap<i64, ScrollEndState>> = RefCell::new(HashMap::new());
+    static SCROLL_END_OBSERVER_TO_HANDLE: RefCell<HashMap<usize, i64>> = RefCell::new(HashMap::new());
+}
+
+pub struct PerryLazyVStackScrollObserverIvars {
+    key: std::cell::Cell<usize>,
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[name = "PerryLazyVStackScrollObserver"]
+    #[ivars = PerryLazyVStackScrollObserverIvars]
+    pub struct PerryLazyVStackScrollObserver;
+
+    impl PerryLazyVStackScrollObserver {
+        #[unsafe(method(boundsDidChange:))]
+        fn bounds_did_change(&self, _notification: &AnyObject) {
+            let key = self.ivars().key.get();
+            let handle = SCROLL_END_OBSERVER_TO_HANDLE.with(|m| {
+                m.borrow().get(&key).copied().unwrap_or(0)
+            });
+            if handle == 0 {
+                return;
+            }
+            check_scroll_end(handle);
+        }
+    }
+);
+
+impl PerryLazyVStackScrollObserver {
+    fn new(key: usize) -> Retained<Self> {
+        let this = Self::alloc().set_ivars(PerryLazyVStackScrollObserverIvars {
+            key: std::cell::Cell::new(key),
+        });
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
+fn check_scroll_end(handle: i64) {
+    let Some(idx) = find_entry_idx(handle) else {
+        return;
+    };
+    let (closure, in_zone) = LAZY_VSTACKS.with(|l| {
+        let stacks = l.borrow();
+        let Some(entry) = stacks.get(idx) else {
+            return (0.0, false);
+        };
+        unsafe {
+            let scroll = &entry.scroll_view;
+            let clip: Retained<AnyObject> = msg_send![&**scroll, contentView];
+            let bounds: objc2_core_foundation::CGRect = msg_send![&*clip, bounds];
+            let doc: Retained<AnyObject> = msg_send![&**scroll, documentView];
+            let doc_frame: objc2_core_foundation::CGRect = msg_send![&*doc, frame];
+
+            let threshold = SCROLL_END_STATES.with(|s| {
+                s.borrow()
+                    .get(&handle)
+                    .map(|st| st.threshold_items)
+                    .unwrap_or(5)
+            });
+            let threshold_px = (threshold as f64) * entry.row_height;
+            let visible_bottom = bounds.origin.y + bounds.size.height;
+            let in_zone = visible_bottom >= doc_frame.size.height - threshold_px;
+            let closure = SCROLL_END_STATES
+                .with(|s| s.borrow().get(&handle).map(|st| st.closure).unwrap_or(0.0));
+            (closure, in_zone)
+        }
+    });
+    if closure == 0.0 {
+        return;
+    }
+    let should_fire = SCROLL_END_STATES.with(|s| {
+        let mut states = s.borrow_mut();
+        let Some(state) = states.get_mut(&handle) else {
+            return false;
+        };
+        if in_zone && state.armed {
+            state.armed = false;
+            true
+        } else if !in_zone && !state.armed {
+            state.armed = true;
+            false
+        } else {
+            false
+        }
+    });
+    if should_fire {
+        unsafe {
+            let ptr = js_nanbox_get_pointer(closure) as *const u8;
+            js_closure_call0(ptr);
+        }
+    }
+}
+
+/// macOS no-op: NSScrollView has no native pull-to-refresh. Symbol exists
+/// so cross-platform code compiles without conditional branching.
+pub fn set_refresh_control(_handle: i64, _callback: f64) {
+    // Intentionally empty.
+}
+
+/// macOS no-op (matches `set_refresh_control`).
+pub fn end_refreshing(_handle: i64) {
+    // Intentionally empty.
+}
+
+/// Fire `callback` once when the user scrolls within `threshold_items`
+/// rows of the bottom. Re-arms when the user scrolls back up past the
+/// threshold; the runtime's `lazyvstackUpdate` (count change) does NOT
+/// auto-rearm — callers should chain a manual `scroll-end-rearm` if
+/// they implement non-Promise loaders, but the standard pattern is to
+/// resolve the user's `Promise` after `lazyvstackUpdate` is called and
+/// the callback's await completes naturally.
+pub fn set_scroll_end_callback(handle: i64, callback: f64, threshold_items: i64) {
+    let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
+    let Some(idx) = find_entry_idx(handle) else {
+        return;
+    };
+    let scroll_ptr = LAZY_VSTACKS.with(|l| {
+        let stacks = l.borrow();
+        stacks
+            .get(idx)
+            .map(|e| Retained::as_ptr(&e.scroll_view) as usize)
+            .unwrap_or(0)
+    });
+    if scroll_ptr == 0 {
+        return;
+    }
+    SCROLL_END_STATES.with(|s| {
+        s.borrow_mut().insert(
+            handle,
+            ScrollEndState {
+                closure: callback,
+                threshold_items: if threshold_items > 0 {
+                    threshold_items
+                } else {
+                    5
+                },
+                armed: true,
+            },
+        );
+    });
+    unsafe {
+        let scroll = scroll_ptr as *const AnyObject;
+        let clip: Retained<AnyObject> = msg_send![scroll, contentView];
+        let _: () = msg_send![&*clip, setPostsBoundsChangedNotifications: true];
+
+        let observer = PerryLazyVStackScrollObserver::new(0);
+        let observer_addr = Retained::as_ptr(&observer) as usize;
+        observer.ivars().key.set(observer_addr);
+        SCROLL_END_OBSERVER_TO_HANDLE.with(|m| {
+            m.borrow_mut().insert(observer_addr, handle);
+        });
+
+        let nc_cls = AnyClass::get(c"NSNotificationCenter").unwrap();
+        let nc: Retained<AnyObject> = msg_send![nc_cls, defaultCenter];
+        let name = NSString::from_str("NSViewBoundsDidChangeNotification");
+        let sel = Sel::register(c"boundsDidChange:");
+        let _: () = msg_send![
+            &*nc,
+            addObserver: &*observer,
+            selector: sel,
+            name: &*name,
+            object: &*clip,
+        ];
+        std::mem::forget(observer);
+    }
 }

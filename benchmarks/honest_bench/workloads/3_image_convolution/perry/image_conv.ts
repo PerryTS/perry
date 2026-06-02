@@ -13,7 +13,7 @@
 const W = 3840;
 const H = 2160;
 const N = W * H * 3;
-const SEED = 0x9E3779B9;
+const SEED = 0x9E3779B9 >>> 0;
 
 const KERNEL: number[][] = [
   [1, 4, 7, 4, 1],

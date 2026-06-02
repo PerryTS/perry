@@ -11,21 +11,17 @@ thread_local! {
     static SHEETS: RefCell<Vec<Retained<NSWindow>>> = const { RefCell::new(Vec::new()) };
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const crate::string_header::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
-
-/// Create a sheet (NSPanel). Returns 1-based handle.
-pub fn create(width: f64, height: f64, title_ptr: *const u8) -> i64 {
-    let title = str_from_header(title_ptr);
+/// Create a sheet (NSPanel) and install `body_handle` as its content view.
+/// Returns the 1-based sheet handle.
+///
+/// #1033: the TS surface is `sheetCreate(body, width, height): Widget` and
+/// the perry-dispatch row matches (`[Widget, F64, F64]`), but the FFI
+/// previously took `(width, height, title_ptr)`. On AArch64 the dispatch
+/// passed the body handle in X0 and the dimensions in D0/D1, so the
+/// dimensions landed in the right registers by luck and the body handle
+/// was silently dropped — producing a blank sheet at the requested size.
+/// Aligning the FFI signature with the dispatch closes the gap.
+pub fn create(body_handle: i64, width: f64, height: f64) -> i64 {
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     unsafe {
@@ -39,8 +35,15 @@ pub fn create(width: f64, height: f64, title_ptr: *const u8) -> i64 {
             NSBackingStoreType::Buffered,
             false,
         );
-        let ns_title = NSString::from_str(title);
+        // Sheets in the TS surface take no title arg; AppKit still
+        // requires an NSString, so set the empty string — modern macOS
+        // sheets typically render without titlebar text anyway.
+        let ns_title = NSString::from_str("");
         panel.setTitle(&ns_title);
+
+        if let Some(view) = super::get_widget(body_handle) {
+            panel.setContentView(Some(&view));
+        }
 
         SHEETS.with(|s| {
             let mut sheets = s.borrow_mut();

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Perry Test Coverage Audit
 #
-# Scans all #[no_mangle] pub extern "C" fn declarations in perry-runtime
-# and perry-stdlib, cross-references against test files, and generates
-# a coverage report.
+# Scans all pub extern "C" functions in perry-runtime and perry-stdlib,
+# cross-references them against TypeScript fixtures and Rust tests, and
+# generates a coverage report.
 #
 # Usage:
 #   ./test-coverage/audit.sh              # Print report to stdout
@@ -13,182 +13,144 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-RUNTIME_DIR="$ROOT/crates/perry-runtime/src"
-STDLIB_DIR="$ROOT/crates/perry-stdlib/src"
-TEST_DIR="$ROOT/test-files"
-CRATES_DIR="$ROOT/crates"
-
 MARKDOWN_MODE=0
 if [[ "${1:-}" == "--markdown" ]]; then
   MARKDOWN_MODE=1
 fi
 
-# ---------------------------------------------------------------------------
-# 1. Collect all #[no_mangle] pub extern "C" fn names from runtime + stdlib
-# ---------------------------------------------------------------------------
-collect_ffi_functions() {
-  local dir="$1"
-  local label="$2"
-  # Match patterns like:
-  #   pub extern "C" fn js_foo_bar(
-  #   pub unsafe extern "C" fn js_foo_bar(
-  grep -rn 'pub\s\+\(unsafe\s\+\)\?extern\s\+"C"\s\+fn\s\+' "$dir" --include="*.rs" 2>/dev/null | \
-    sed -E 's/.*fn ([a-zA-Z_][a-zA-Z0-9_]*)\(.*/\1/' | \
-    while read -r fn_name; do
-      # Find which file it's in
-      local file
-      file=$(grep -rl "fn ${fn_name}(" "$dir" --include="*.rs" 2>/dev/null | head -1 | sed "s|$ROOT/||")
-      echo "${label}|${fn_name}|${file:-unknown}"
-    done
-}
+python3 - "$ROOT" "$SCRIPT_DIR/COVERAGE.md" "$MARKDOWN_MODE" <<'PYEOF'
+from __future__ import annotations
 
-echo "Scanning FFI functions..." >&2
-
-# Collect all functions
-ALL_FUNCS=$(mktemp)
-collect_ffi_functions "$RUNTIME_DIR" "runtime" >> "$ALL_FUNCS"
-collect_ffi_functions "$STDLIB_DIR" "stdlib" >> "$ALL_FUNCS"
-
-TOTAL=$(wc -l < "$ALL_FUNCS" | tr -d ' ')
-echo "Found $TOTAL FFI functions" >&2
-
-# ---------------------------------------------------------------------------
-# 2. Check each function against test files and Rust #[test] blocks
-# ---------------------------------------------------------------------------
-COVERED=0
-UNCOVERED=0
-RESULTS=$(mktemp)
-
-while IFS='|' read -r crate fn_name source_file; do
-  # Check TypeScript test files
-  ts_hits=""
-  if grep -rl "$fn_name" "$TEST_DIR"/*.ts 2>/dev/null | head -3 | grep -q .; then
-    ts_hits=$(grep -rl "$fn_name" "$TEST_DIR"/*.ts 2>/dev/null | head -3 | xargs -I{} basename {} .ts | paste -sd, -)
-  fi
-
-  # Check for the function name mentioned in any #[test] block (heuristic:
-  # search for the fn name in test modules across all crates)
-  rust_hits=""
-  if grep -rl "$fn_name" "$CRATES_DIR" --include="*.rs" 2>/dev/null | \
-     xargs grep -l '#\[test\]' 2>/dev/null | head -3 | grep -q .; then
-    rust_hits="yes"
-  fi
-
-  # Also check if the function's JS name appears in test files
-  # e.g., js_array_push_f64 → search for "push" in test files
-  js_method=""
-  if [[ "$fn_name" =~ ^js_(.+)$ ]]; then
-    # Extract a plausible JS method name from the last segment
-    local_name="${BASH_REMATCH[1]}"
-    # Get the last meaningful segment (e.g., js_array_push_f64 → push)
-    method=$(echo "$local_name" | sed -E 's/.*_([a-z]+)(_f64|_i64|_ptr|_str)?$/\1/')
-    if [[ "$method" != "$local_name" && ${#method} -gt 2 ]]; then
-      js_method="$method"
-    fi
-  fi
-
-  if [[ -n "$ts_hits" || -n "$rust_hits" ]]; then
-    status="COVERED"
-    ((COVERED++))
-    coverage_detail="${ts_hits:+ts:$ts_hits}${rust_hits:+ rust:yes}"
-  else
-    status="UNCOVERED"
-    ((UNCOVERED++))
-    coverage_detail=""
-  fi
-
-  echo "${status}|${crate}|${fn_name}|${source_file}|${coverage_detail}" >> "$RESULTS"
-done < "$ALL_FUNCS"
-
-# ---------------------------------------------------------------------------
-# 3. Generate report
-# ---------------------------------------------------------------------------
-
-# Use python3 for report generation (avoids bash 4+ associative array requirement)
-if [[ $MARKDOWN_MODE -eq 1 ]]; then
-  OUTPUT="$SCRIPT_DIR/COVERAGE.md"
-  python3 - "$RESULTS" "$OUTPUT" "$TOTAL" "$COVERED" "$UNCOVERED" <<'PYEOF'
-import sys, collections
-results_file, output_file = sys.argv[1], sys.argv[2]
-total, covered, uncovered = int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
+import collections
+import re
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
-file_total = collections.Counter()
-file_covered = collections.Counter()
-uncovered_fns = []
+root = Path(sys.argv[1])
+output_file = Path(sys.argv[2])
+markdown_mode = sys.argv[3] == "1"
 
-with open(results_file) as f:
-    for line in f:
-        parts = line.strip().split('|')
-        if len(parts) < 4: continue
-        status, crate, fn_name, source_file = parts[0], parts[1], parts[2], parts[3]
-        file_total[source_file] += 1
-        if status == "COVERED":
-            file_covered[source_file] += 1
-        else:
-            uncovered_fns.append((fn_name, source_file))
+ffi_re = re.compile(
+    r'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\('
+)
 
-pct = f"{covered * 100 / total:.1f}" if total > 0 else "0.0"
+ffi_functions: list[tuple[str, str, str]] = []
+for crate, rel in (
+    ("runtime", "crates/perry-runtime/src"),
+    ("stdlib", "crates/perry-stdlib/src"),
+):
+    for path in sorted((root / rel).rglob("*.rs")):
+        text = path.read_text(errors="ignore")
+        source = str(path.relative_to(root))
+        for match in ffi_re.finditer(text):
+            ffi_functions.append((crate, match.group(1), source))
 
-with open(output_file, 'w') as out:
-    out.write(f"# Perry FFI Test Coverage\n\n")
-    out.write(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n\n")
-    out.write(f"## Summary\n\n")
-    out.write(f"- **Total FFI functions:** {total}\n")
-    out.write(f"- **Covered (referenced in tests):** {covered}\n")
-    out.write(f"- **Uncovered:** {uncovered}\n")
-    out.write(f"- **Coverage:** {pct}%\n\n")
-    out.write(f"## Coverage by File\n\n")
-    out.write(f"| File | Total | Covered | Coverage |\n")
-    out.write(f"|------|-------|---------|----------|\n")
-    for f in sorted(file_total.keys()):
-        t = file_total[f]
-        c = file_covered[f]
-        p = int(c * 100 / t) if t > 0 else 0
-        out.write(f"| `{f}` | {t} | {c} | {p}% |\n")
-    out.write(f"\n## Uncovered Functions\n\n")
-    for fn, sf in sorted(uncovered_fns, key=lambda x: x[1]):
-        out.write(f"- `{fn}` ({sf})\n")
+print("Scanning FFI functions...", file=sys.stderr)
+print(f"Found {len(ffi_functions)} FFI functions", file=sys.stderr)
 
-print(f"Coverage: {covered}/{total} ({pct}%)", file=sys.stderr)
-print(f"Report written to: {output_file}", file=sys.stderr)
+ts_fixture_text = []
+for pattern in ("*.ts", "*.tsx"):
+    for path in sorted((root / "test-files").glob(pattern)):
+        ts_fixture_text.append(path.read_text(errors="ignore"))
+ts_text = "\n".join(ts_fixture_text)
+
+rust_test_texts = []
+for path in sorted((root / "crates").rglob("*.rs")):
+    text = path.read_text(errors="ignore")
+    if "#[test]" in text or "#[tokio::test]" in text:
+        rust_test_texts.append(text)
+
+rows = []
+for crate, fn_name, source_file in ffi_functions:
+    ts_covered = fn_name in ts_text
+    rust_covered = any(fn_name in text for text in rust_test_texts)
+    rows.append(
+        {
+            "crate": crate,
+            "fn": fn_name,
+            "source": source_file,
+            "ts": ts_covered,
+            "rust": rust_covered,
+            "combined": ts_covered or rust_covered,
+        }
+    )
+
+total = len(rows)
+ts_covered = sum(1 for row in rows if row["ts"])
+rust_covered = sum(1 for row in rows if row["rust"])
+combined_covered = sum(1 for row in rows if row["combined"])
+combined_uncovered = total - combined_covered
+
+def pct(count: int) -> str:
+    return f"{count * 100 / total:.1f}" if total else "0.0"
+
+file_total = collections.Counter(row["source"] for row in rows)
+file_ts = collections.Counter(row["source"] for row in rows if row["ts"])
+file_rust = collections.Counter(row["source"] for row in rows if row["rust"])
+file_combined = collections.Counter(row["source"] for row in rows if row["combined"])
+
+combined_uncovered_rows = [row for row in rows if not row["combined"]]
+ts_uncovered_rows = [row for row in rows if not row["ts"]]
+
+if markdown_mode:
+    with output_file.open("w") as out:
+        out.write("# Perry FFI Test Coverage\n\n")
+        out.write(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n\n")
+        out.write("## Summary\n\n")
+        out.write(f"- **Total FFI functions:** {total}\n")
+        out.write(f"- **Covered by TypeScript fixtures:** {ts_covered} ({pct(ts_covered)}%)\n")
+        out.write(f"- **Covered by Rust tests:** {rust_covered} ({pct(rust_covered)}%)\n")
+        out.write(f"- **Covered by either TS or Rust:** {combined_covered} ({pct(combined_covered)}%)\n")
+        out.write(f"- **Uncovered by either TS or Rust:** {combined_uncovered}\n\n")
+        out.write("## Coverage by File\n\n")
+        out.write("| File | Total | TS Covered | Rust Covered | Combined | TS Coverage | Combined Coverage |\n")
+        out.write("|------|-------|------------|--------------|----------|-------------|-------------------|\n")
+        for source in sorted(file_total):
+            total_for_file = file_total[source]
+            ts_for_file = file_ts[source]
+            rust_for_file = file_rust[source]
+            combined_for_file = file_combined[source]
+            out.write(
+                f"| `{source}` | {total_for_file} | {ts_for_file} | {rust_for_file} | "
+                f"{combined_for_file} | {ts_for_file * 100 / total_for_file:.0f}% | "
+                f"{combined_for_file * 100 / total_for_file:.0f}% |\n"
+            )
+
+        if combined_uncovered_rows:
+            out.write("\n## Combined Uncovered Functions\n\n")
+            for row in sorted(combined_uncovered_rows, key=lambda item: (item["source"], item["fn"])):
+                out.write(f"- `{row['fn']}` ({row['source']})\n")
+
+        if ts_uncovered_rows:
+            out.write("\n## TypeScript Uncovered Functions\n\n")
+            for row in sorted(ts_uncovered_rows, key=lambda item: (item["source"], item["fn"])):
+                out.write(f"- `{row['fn']}` ({row['source']})\n")
+
+    print(f"TS coverage: {ts_covered}/{total} ({pct(ts_covered)}%)", file=sys.stderr)
+    print(
+        f"Combined coverage: {combined_covered}/{total} ({pct(combined_covered)}%)",
+        file=sys.stderr,
+    )
+    print(f"Report written to: {output_file}", file=sys.stderr)
+else:
+    print("\n=== Perry FFI Test Coverage ===")
+    print(f"Total:              {total}")
+    print(f"TS covered:         {ts_covered} ({pct(ts_covered)}%)")
+    print(f"Rust covered:       {rust_covered} ({pct(rust_covered)}%)")
+    print(f"Combined covered:   {combined_covered} ({pct(combined_covered)}%)")
+    print(f"Combined uncovered: {combined_uncovered}\n")
+    print("--- Coverage by File ---")
+    for source in sorted(file_total):
+        total_for_file = file_total[source]
+        ts_for_file = file_ts[source]
+        combined_for_file = file_combined[source]
+        print(
+            f"  {source:<58s} "
+            f"TS {ts_for_file:3d}/{total_for_file:<3d} "
+            f"Combined {combined_for_file:3d}/{total_for_file:<3d}"
+        )
+    print(f"\n--- Combined Uncovered Functions ({len(combined_uncovered_rows)} total) ---")
+    for row in sorted(combined_uncovered_rows, key=lambda item: (item["source"], item["fn"])):
+        print(f"  {row['fn']:<45s} {row['source']}")
 PYEOF
-
-else
-  python3 - "$RESULTS" "$TOTAL" "$COVERED" "$UNCOVERED" <<'PYEOF'
-import sys, collections
-results_file = sys.argv[1]
-total, covered, uncovered = int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
-
-file_total = collections.Counter()
-file_covered = collections.Counter()
-uncovered_fns = []
-
-with open(results_file) as f:
-    for line in f:
-        parts = line.strip().split('|')
-        if len(parts) < 4: continue
-        status, crate, fn_name, source_file = parts[0], parts[1], parts[2], parts[3]
-        file_total[source_file] += 1
-        if status == "COVERED":
-            file_covered[source_file] += 1
-        else:
-            uncovered_fns.append((fn_name, source_file))
-
-pct = f"{covered * 100 / total:.1f}" if total > 0 else "0.0"
-print(f"\n=== Perry FFI Test Coverage ===")
-print(f"Total: {total} | Covered: {covered} | Uncovered: {uncovered} | Coverage: {pct}%\n")
-print(f"--- Coverage by File ---")
-for f in sorted(file_total.keys()):
-    t = file_total[f]
-    c = file_covered[f]
-    p = int(c * 100 / t) if t > 0 else 0
-    print(f"  {f:<50s} {c:3d}/{t:3d}  ({p:2d}%)")
-print(f"\n--- Uncovered Functions ({uncovered} total) ---")
-for fn, sf in sorted(uncovered_fns, key=lambda x: x[1]):
-    print(f"  {fn:<40s} {sf}")
-PYEOF
-fi
-
-# Cleanup
-rm -f "$ALL_FUNCS" "$RESULTS"

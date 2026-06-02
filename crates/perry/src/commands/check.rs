@@ -17,6 +17,7 @@ use super::deps::{
 };
 use super::fix_applier::FixApplier;
 use super::fixer::{Confidence, Fixer};
+use super::progress::{ProgressSnapshot, VerboseProgress};
 use crate::OutputFormat;
 
 #[derive(Args, Debug)]
@@ -52,6 +53,16 @@ pub struct CheckArgs {
     /// Include medium-confidence fixes (inferred types)
     #[arg(long)]
     pub fix_unsafe: bool,
+
+    /// Compile target the check is being run for (`harmonyos`,
+    /// `ios`, `android`, …). When set, imports of `perry/ui` /
+    /// `perry/system` / `perry/updater` symbols that the runtime
+    /// stubs out for that target produce a `NoOpStub` warning so
+    /// the user finds out before running the binary (#464).
+    /// Defaults to native host — the stub scan is skipped because
+    /// host UI crates own those symbols with real impls.
+    #[arg(long)]
+    pub target: Option<String>,
 }
 
 /// Collect all TypeScript files in a directory
@@ -138,6 +149,7 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
     let mut visited = HashSet::new();
     let mut dep_resolver = DependencyResolver::new(project_root.clone());
     let mut fix_applier = FixApplier::new();
+    let progress = VerboseProgress::new(format, verbose);
     let min_confidence = if args.fix_unsafe {
         Confidence::Medium
     } else {
@@ -168,6 +180,13 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
         let filename = canonical.to_string_lossy().to_string();
 
         // Parse with diagnostics
+        progress.record(ProgressSnapshot {
+            stage: "check-parse",
+            module_path: Some(&canonical),
+            visited: Some(checked_files + 1),
+            total: Some(files.len()),
+            ..Default::default()
+        });
         let parse_result = match perry_parser::parse_typescript_with_cache(
             &source,
             &filename,
@@ -212,7 +231,26 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
 
         // Extract imports from AST even before lowering (for dependency checking)
         if args.check_deps {
-            extract_imports_from_ast(&parse_result.module, &canonical, &mut dep_resolver);
+            extract_imports_from_ast(
+                &parse_result.module,
+                &canonical,
+                &mut dep_resolver,
+                &progress,
+                checked_files + 1,
+                files.len(),
+            );
+        }
+
+        // Stub scan (#464): warn on imports of `perry/ui` /
+        // `perry/system` / `perry/updater` symbols that the runtime
+        // stubs out for the requested target. Skipped when no target
+        // is specified — the host UI crate owns those symbols.
+        if target_stubs_out_symbols(args.target.as_deref()) {
+            scan_imports_for_stubs(
+                &parse_result.module,
+                parse_result.file_id,
+                &mut all_diagnostics,
+            );
         }
 
         // Scan source for dynamic patterns (eval, new Function, etc.)
@@ -226,7 +264,20 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
 
         // Try to lower to HIR to catch more errors
         let file_id = parse_result.file_id;
-        match perry_hir::lower_module(&parse_result.module, &filename, &filename) {
+        // #503: stash the source text so the dynamic-dispatch check can
+        // resolve `// @perry-allow-dynamic` annotations during `perry check`
+        // the same way it does during a real build.
+        progress.record(ProgressSnapshot {
+            stage: "check-lower",
+            module_path: Some(&canonical),
+            visited: Some(checked_files + 1),
+            total: Some(files.len()),
+            ..Default::default()
+        });
+        perry_hir::set_current_module_source(source.clone());
+        let lower_outcome = perry_hir::lower_module(&parse_result.module, &filename, &filename);
+        perry_hir::clear_current_module_source();
+        match lower_outcome {
             Ok(_hir_module) => {
                 // Successfully lowered
             }
@@ -260,14 +311,15 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
         checked_files += 1;
     }
 
-    // Check dependencies if requested
-    let mut dep_issues_count = 0;
+    // Check dependencies if requested. #854: a `dep_issues_count` local
+    // used to track errors-from-deps separately but it was never read —
+    // the summary path below reads `all_diagnostics.error_count()` which
+    // already folds in everything we extend into the diagnostic stream.
     if args.check_deps {
         // Check for unresolved imports
         let unresolved = dep_resolver.get_unresolved_imports();
         if !unresolved.is_empty() {
             let unresolved_diags = unresolved_imports_to_diagnostics(unresolved, &source_cache);
-            dep_issues_count += unresolved_diags.error_count();
             all_diagnostics.extend(unresolved_diags);
         }
 
@@ -277,7 +329,6 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
             dep_resolver.get_import_locations(),
         );
         if builtin_diags.has_errors() {
-            dep_issues_count += builtin_diags.error_count();
             all_diagnostics.extend(builtin_diags);
         }
 
@@ -305,7 +356,6 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
                 }
 
                 let compat_diags = compatibility_to_diagnostics(&packages);
-                dep_issues_count += compat_diags.error_count();
                 all_diagnostics.extend(compat_diags);
             }
             Err(e) => {
@@ -506,6 +556,9 @@ fn extract_imports_from_ast(
     module: &perry_parser::swc_ecma_ast::Module,
     file_path: &PathBuf,
     dep_resolver: &mut DependencyResolver,
+    progress: &VerboseProgress,
+    visited: usize,
+    total: usize,
 ) {
     use perry_parser::swc_ecma_ast::{ModuleDecl, ModuleItem};
 
@@ -515,16 +568,40 @@ fn extract_imports_from_ast(
                 ModuleDecl::Import(import) => {
                     // Use as_str() to get &str from the Wtf8Atom
                     let source = import.src.value.as_str().unwrap_or("");
+                    progress.record(ProgressSnapshot {
+                        stage: "check-resolve-import",
+                        module_path: Some(file_path),
+                        import_specifier: Some(source),
+                        visited: Some(visited),
+                        total: Some(total),
+                        ..Default::default()
+                    });
                     dep_resolver.record_import(source, file_path);
                 }
                 ModuleDecl::ExportNamed(export) => {
                     if let Some(src) = &export.src {
                         let source = src.value.as_str().unwrap_or("");
+                        progress.record(ProgressSnapshot {
+                            stage: "check-resolve-import",
+                            module_path: Some(file_path),
+                            import_specifier: Some(source),
+                            visited: Some(visited),
+                            total: Some(total),
+                            ..Default::default()
+                        });
                         dep_resolver.record_import(source, file_path);
                     }
                 }
                 ModuleDecl::ExportAll(export) => {
                     let source = export.src.value.as_str().unwrap_or("");
+                    progress.record(ProgressSnapshot {
+                        stage: "check-resolve-import",
+                        module_path: Some(file_path),
+                        import_specifier: Some(source),
+                        visited: Some(visited),
+                        total: Some(total),
+                        ..Default::default()
+                    });
                     dep_resolver.record_import(source, file_path);
                 }
                 _ => {}
@@ -545,6 +622,86 @@ fn extract_requires_from_stmt(
 ) {
     // For now, we focus on ES module imports
     // require() support can be added later if needed
+}
+
+/// Returns true when the requested compile target stubs out
+/// `perry/ui` / `perry/system` / `perry/updater` symbols at runtime —
+/// currently only harmonyos. This is what gates the static stub scan
+/// (#464); other targets resolve those modules to real platform UI
+/// crates so a warning would be a false positive.
+fn target_stubs_out_symbols(target: Option<&str>) -> bool {
+    matches!(target, Some("harmonyos") | Some("harmonyos-simulator"))
+}
+
+/// Walk a parsed module's named imports against `STUB_MANIFEST` and
+/// emit a `NoOpStub` warning for each one that maps to a stubbed
+/// symbol on the requested target.
+fn scan_imports_for_stubs(
+    module: &perry_parser::swc_ecma_ast::Module,
+    file_id: perry_diagnostics::FileId,
+    diagnostics: &mut Diagnostics,
+) {
+    use perry_parser::swc_ecma_ast::{ImportSpecifier, ModuleDecl, ModuleExportName, ModuleItem};
+    use perry_runtime::stub_diag::STUB_MANIFEST;
+
+    for item in &module.body {
+        let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item else {
+            continue;
+        };
+        let source = match import.src.value.as_str() {
+            Some(s) => s,
+            None => continue,
+        };
+        // Only `perry/ui` / `perry/system` / `perry/updater` /
+        // `perry/background` imports can resolve to stubbed symbols.
+        // Cheap pre-filter avoids walking the manifest for every import.
+        if !matches!(
+            source,
+            "perry/ui" | "perry/system" | "perry/updater" | "perry/background"
+        ) {
+            continue;
+        }
+
+        for spec in &import.specifiers {
+            let (local_name, span) = match spec {
+                ImportSpecifier::Named(named) => {
+                    let imported_name = match &named.imported {
+                        Some(ModuleExportName::Ident(id)) => id.sym.as_str(),
+                        Some(ModuleExportName::Str(s)) => s.value.as_str().unwrap_or(""),
+                        None => named.local.sym.as_str(),
+                    };
+                    (imported_name.to_string(), named.span)
+                }
+                // `import * as X` and `import X` (default) bring the
+                // whole module — we don't know which symbols the user
+                // actually calls, so skip rather than warn for every
+                // entry in the module's stub list.
+                ImportSpecifier::Namespace(_) | ImportSpecifier::Default(_) => continue,
+            };
+
+            for entry in STUB_MANIFEST {
+                if entry.module != source {
+                    continue;
+                }
+                if entry.ts_name != Some(local_name.as_str()) {
+                    continue;
+                }
+                let issue_tag = entry
+                    .issue
+                    .map(|t| format!(" (tracking: {})", t))
+                    .unwrap_or_default();
+                let msg = format!(
+                    "`{}` from `{}` is a no-op stub on this target — {}{}",
+                    local_name, source, entry.reason, issue_tag,
+                );
+                let diag = Diagnostic::warning(DiagnosticCode::NoOpStub, msg)
+                    .with_span(Span::new(file_id, span.lo.0, span.hi.0))
+                    .build();
+                diagnostics.push(diag);
+                break;
+            }
+        }
+    }
 }
 
 /// Convert a CompatibilityIssue to a Diagnostic

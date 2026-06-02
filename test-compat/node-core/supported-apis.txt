@@ -1,0 +1,31 @@
+# node:* APIs perry-stdlib claims to support (#800).
+#
+# Each line maps to `test/parallel/test-<api>-*.js` in the Node tree.
+# An API is "supported" only if every test that's not on the skiplist
+# passes under Perry.
+#
+# Lines beginning with `#` are comments.
+
+assert
+buffer
+events
+fs
+path
+os
+url
+util
+querystring
+string_decoder
+stream
+tty
+console
+crypto
+http
+https
+net
+zlib
+async_hooks
+worker_threads
+child_process
+process
+timers

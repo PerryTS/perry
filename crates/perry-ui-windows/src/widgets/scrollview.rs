@@ -33,6 +33,72 @@ struct ScrollState {
 
 thread_local! {
     static SCROLL_STATES: RefCell<HashMap<i64, ScrollState>> = RefCell::new(HashMap::new());
+    /// Issue #553 — registered scroll-end callbacks keyed by scroll handle.
+    static SCROLL_END_STATES: RefCell<HashMap<i64, ScrollEndEntry>> = RefCell::new(HashMap::new());
+}
+
+struct ScrollEndEntry {
+    closure: f64,
+    threshold_px: i32,
+    armed: bool,
+}
+
+extern "C" {
+    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_nanbox_get_pointer(value: f64) -> i64;
+}
+
+fn check_scroll_end(handle: i64) {
+    let (closure_to_fire, _) = SCROLL_END_STATES.with(|s| {
+        let mut states = s.borrow_mut();
+        let Some(entry) = states.get_mut(&handle) else {
+            return (0.0, false);
+        };
+        let (offset, content_height, viewport_height) = SCROLL_STATES.with(|ss| {
+            let states = ss.borrow();
+            states
+                .get(&handle)
+                .map(|st| (st.scroll_offset, st.content_height, st.viewport_height))
+                .unwrap_or((0, 0, 0))
+        });
+        let visible_bottom = offset + viewport_height;
+        let in_zone = visible_bottom >= content_height - entry.threshold_px;
+        if in_zone && entry.armed {
+            entry.armed = false;
+            (entry.closure, true)
+        } else if !in_zone && !entry.armed {
+            entry.armed = true;
+            (0.0, false)
+        } else {
+            (0.0, false)
+        }
+    });
+    if closure_to_fire != 0.0 {
+        unsafe {
+            let ptr = js_nanbox_get_pointer(closure_to_fire) as *const u8;
+            js_closure_call0(ptr);
+        }
+    }
+}
+
+/// Issue #553 — register a scroll-end callback. The check fires from
+/// inside the existing WM_VSCROLL / WM_MOUSEWHEEL handlers via
+/// `check_scroll_end(handle)` after the scroll offset is updated.
+pub fn set_scroll_end_callback(scroll_handle: i64, callback: f64, threshold_px: f64) {
+    SCROLL_END_STATES.with(|s| {
+        s.borrow_mut().insert(
+            scroll_handle,
+            ScrollEndEntry {
+                closure: callback,
+                threshold_px: if threshold_px > 0.0 {
+                    threshold_px as i32
+                } else {
+                    200
+                },
+                armed: true,
+            },
+        );
+    });
 }
 
 #[cfg(target_os = "windows")]
@@ -397,6 +463,7 @@ fn handle_vscroll(handle: i64, hwnd: HWND, wparam: WPARAM) {
         };
 
         set_offset(handle, new_offset as f64);
+        check_scroll_end(handle);
     }
 }
 
@@ -404,4 +471,5 @@ fn handle_vscroll(handle: i64, hwnd: HWND, wparam: WPARAM) {
 fn scroll_by(handle: i64, _hwnd: HWND, delta: i32) {
     let current = get_offset(handle) as i32;
     set_offset(handle, (current + delta) as f64);
+    check_scroll_end(handle);
 }

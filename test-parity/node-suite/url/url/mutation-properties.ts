@@ -1,0 +1,10 @@
+const u = new URL("https://user:pass@example.com:8080/a/b?x=1#h");
+u.username = "u s";
+u.password = "p@";
+u.hostname = "mañana.com";
+u.pathname = "/c d";
+u.searchParams.set("x", "2 3");
+u.hash = "frag ment";
+console.log("href:", u.href);
+console.log("origin:", u.origin);
+console.log("auth:", u.username, u.password);

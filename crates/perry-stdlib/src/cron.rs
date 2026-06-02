@@ -14,9 +14,9 @@
 //! Tick fires expired callbacks **on the main thread** via `js_closure_call0`,
 //! then re-arms the deadline from the schedule's next upcoming time.
 //!
-//! Closure pointers stored in the timer queue are registered as GC roots via
-//! a lazy `gc_register_root_scanner` call on first schedule, mirroring how
-//! `INTERVAL_TIMERS` is scanned in `perry-runtime/src/timer.rs`.
+//! Closure pointers stored in the timer queue are registered as mutable GC
+//! roots on first schedule, mirroring how `INTERVAL_TIMERS` is scanned in
+//! `perry-runtime/src/timer.rs`.
 //!
 //! The previous implementation spawned a tokio task per schedule and only
 //! noted "we'd invoke js_callback_invoke(callback_id) here" — callbacks
@@ -25,7 +25,7 @@
 use crate::common::{get_handle, register_handle, Handle, RUNTIME};
 use cron::Schedule;
 use perry_runtime::closure::{js_closure_call0, ClosureHeader};
-use perry_runtime::gc::gc_register_root_scanner;
+use perry_runtime::gc::{gc_register_mutable_root_scanner_named, RuntimeRootVisitor};
 use perry_runtime::{js_string_from_bytes, StringHeader};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -59,6 +59,9 @@ pub struct CronJobHandle {
 }
 
 // Global callback counter
+// #854: reserved for cron callback-id allocation; not wired into the current
+// CRON_TIMERS path (callbacks are keyed by timer_id) but kept for that use.
+#[allow(dead_code)]
 static CALLBACK_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 // ============================================================================
@@ -108,7 +111,7 @@ fn next_cron_instant(schedule: &Schedule) -> Option<Instant> {
 /// `js_cron_*` entry point on the main thread.
 fn ensure_gc_scanner_registered() {
     CRON_GC_REGISTERED.call_once(|| {
-        gc_register_root_scanner(scan_cron_roots);
+        gc_register_mutable_root_scanner_named("stdlib:cron", scan_cron_roots_mut);
     });
 }
 
@@ -117,16 +120,17 @@ fn ensure_gc_scanner_registered() {
 /// Called from `gc.rs` during the mark phase, mirroring
 /// `timer::scan_timer_roots`. Each non-cleared cron timer's callback pointer
 /// must be marked or the closure could be freed between cron ticks.
+#[allow(dead_code)]
 fn scan_cron_roots(mark: &mut dyn FnMut(f64)) {
-    if let Ok(q) = CRON_TIMERS.lock() {
-        for timer in q.iter() {
-            if !timer.cleared && timer.callback != 0 {
-                // Re-NaN-box with POINTER_TAG so the conservative scanner
-                // recognises it as a pointer (matches the timer.rs pattern).
-                let boxed = f64::from_bits(
-                    0x7FFD_0000_0000_0000 | (timer.callback as u64 & 0x0000_FFFF_FFFF_FFFF),
-                );
-                mark(boxed);
+    let mut visitor = RuntimeRootVisitor::for_copy(mark);
+    scan_cron_roots_mut(&mut visitor);
+}
+
+fn scan_cron_roots_mut(visitor: &mut RuntimeRootVisitor<'_>) {
+    if let Ok(mut q) = CRON_TIMERS.lock() {
+        for timer in q.iter_mut() {
+            if !timer.cleared {
+                visitor.visit_i64_slot(&mut timer.callback);
             }
         }
     }
@@ -464,6 +468,9 @@ pub extern "C" fn js_cron_set_interval(_callback_id: f64, interval_ms: f64) -> H
 
     // Store running flag in a handle
     struct IntervalHandle {
+        // #854: the spawned task owns `running_clone`; this handle copy keeps
+        // the Arc alive for the handle's lifetime but isn't read back.
+        #[allow(dead_code)]
         running: Arc<AtomicBool>,
     }
 
@@ -497,6 +504,9 @@ pub extern "C" fn js_cron_set_timeout(_callback_id: f64, timeout_ms: f64) -> Han
     });
 
     struct TimeoutHandle {
+        // #854: the spawned task owns `cancelled_clone`; this handle copy keeps
+        // the Arc alive for the handle's lifetime but isn't read back.
+        #[allow(dead_code)]
         cancelled: Arc<AtomicBool>,
     }
 
@@ -512,5 +522,34 @@ pub unsafe extern "C" fn js_cron_clear_timeout(handle: Handle) {
 
     if let Some(timeout) = get_handle::<TimeoutHandle>(handle) {
         timeout.cancelled.store(true, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_scanner_emits_active_timer_callback() {
+        let schedule = Schedule::from_str("0 * * * * *").unwrap();
+        let running = Arc::new(AtomicBool::new(true));
+        {
+            let mut timers = CRON_TIMERS.lock().unwrap();
+            timers.clear();
+            timers.push(CronTimer {
+                id: 1,
+                schedule,
+                callback: 0x1234_5678,
+                next_deadline: Instant::now(),
+                running,
+                cleared: false,
+            });
+        }
+
+        let mut emitted = Vec::new();
+        scan_cron_roots(&mut |value| emitted.push(value.to_bits()));
+
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x1234_5678)));
+        CRON_TIMERS.lock().unwrap().clear();
     }
 }

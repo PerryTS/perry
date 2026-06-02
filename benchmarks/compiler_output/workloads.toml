@@ -1,0 +1,1522 @@
+schema_version = 1
+
+[workloads.image_convolution]
+source = "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv.ts"
+kind = "image_convolution"
+allow_hot_loop_conversions = true
+
+[workloads.image_convolution.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: current image fixture still has scalar loops"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_reduction",
+]
+
+[workloads.image_convolution.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.image_convolution.ir_checks]]
+name = "direct_gep_inbounds"
+contains = "getelementptr inbounds"
+detail = "optimized IR contains direct inbounds GEPs"
+
+[[workloads.image_convolution.ir_checks]]
+name = "invariant_loads"
+contains = "!invariant.load"
+detail = "optimized IR includes invariant-load metadata"
+
+[[workloads.image_convolution.ir_checks]]
+name = "alias_metadata"
+contains_all = ["!alias.scope", "!noalias"]
+detail = "optimized IR includes alias.scope and noalias metadata"
+
+[[workloads.image_convolution.ir_checks]]
+name = "fnv_imul_stays_i32"
+regex_all = ["\\bmul i32\\b[^\\n]*16777619", "\\bxor i32\\b"]
+detail = "FNV checksum lowers to i32 xor/mul by 16777619"
+
+[[workloads.image_convolution.ir_checks]]
+name = "byte_load_store_fast_path"
+regex_all = ["\\bload (?:i8|<\\d+ x i8>), ptr\\b", "\\bstore (?:i8\\b|<\\d+ x i8>)"]
+detail = "image loops use byte loads and stores"
+
+[[workloads.image_convolution.ir_checks]]
+name = "kernel_coefficients_constant_folded"
+regex_none = ["\\bload double\\b[^\\n]*KERNEL", "@js_array_get|@js_handle_array_get"]
+detail = "blur kernel coefficients are not loaded through dynamic array helpers"
+
+[[workloads.image_convolution.hot_loop_checks]]
+name = "hot_loops_no_inttoptr_buffer_fallback"
+counter = "inttoptr"
+equals = 0
+detail = "hot loop inttoptr counts"
+
+[[workloads.image_convolution.assembly_checks]]
+name = "assembly_contains_imul_constant"
+regex_any = [
+  "16777619|01000193|0x1000193",
+  "mov\\s+w\\d+, #0x193[\\s\\S]*movk\\s+w\\d+, #0x100, lsl #16[\\s\\S]*mul\\s+w",
+]
+detail = "object disassembly contains the FNV multiply constant"
+
+[[workloads.image_convolution.named_regions]]
+name = "input_generation"
+required = true
+no_runtime_calls = true
+
+[[workloads.image_convolution.named_regions.selectors]]
+label_prefix_any = ["for.body.20", "for.body.24", "while.body.28"]
+
+[[workloads.image_convolution.named_regions.checks]]
+name = "named_region_input_generation_byte_writes"
+min = { store_i8 = 1, xor_i32 = 1 }
+detail = "input_generation byte writes and xor shape"
+
+[[workloads.image_convolution.named_regions.checks]]
+name = "named_region_input_generation_to_int32_conversion_budget"
+max = { fptosi = 1, sitofp = 1, inttoptr = 0, ptrtoint = 0 }
+detail = "input_generation JS division ToInt32 conversion budget"
+
+[[workloads.image_convolution.named_regions]]
+name = "blur"
+required = true
+no_runtime_calls = true
+
+[[workloads.image_convolution.named_regions.selectors]]
+counter_min = { load_i8 = 3, store_i8 = 1 }
+
+[[workloads.image_convolution.named_regions.checks]]
+name = "named_region_blur_byte_load_store"
+min = { load_i8 = 3, store_i8 = 1 }
+detail = "blur byte load/store shape"
+
+[[workloads.image_convolution.named_regions.checks]]
+name = "named_region_blur_to_int32_conversion_budget"
+max = { fptosi = 6, sitofp = 6, inttoptr = 0, ptrtoint = 0 }
+detail = "blur JS division ToInt32 conversion budget"
+
+[[workloads.image_convolution.named_regions]]
+name = "fnv_hash"
+required = true
+no_runtime_calls = true
+no_conversions = true
+
+[[workloads.image_convolution.named_regions.selectors]]
+label_prefix_any = ["for.body.42"]
+
+[[workloads.image_convolution.named_regions.selectors]]
+counter_min = { load_i8 = 1, xor_i32 = 1, mul_i32 = 1 }
+counter_equals = { store_i8 = 0 }
+
+[[workloads.image_convolution.named_regions.checks]]
+name = "named_region_fnv_i32_hash_shape"
+min = { load_i8 = 1, xor_i32 = 1, mul_i32 = 1 }
+equals = { store_i8 = 0 }
+detail = "fnv hash i32 xor/mul shape"
+
+[workloads.image_convolution.native_rep_checks]
+allow_materialization_reasons = ["function_abi"]
+
+[[workloads.image_convolution.native_rep_checks.require_records]]
+name = "image_input_generation_buffer_view"
+block_label = "for.body.24"
+expr_kind = "Uint8ArraySet.array"
+consumer = "Uint8ArraySet.BufferView"
+native_rep_name = "buffer_view"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+min = 3
+
+[[workloads.image_convolution.native_rep_checks.require_records]]
+name = "image_input_generation_byte_store"
+block_label = "for.body.24"
+expr_kind = "Uint8ArraySet"
+consumer = "u8_store_trunc_i32"
+native_rep_name = "u8"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+min = 3
+
+[[workloads.image_convolution.native_rep_checks.require_records]]
+name = "image_noise_byte_load"
+block_label = "while.body.28"
+expr_kind = "Uint8ArrayGet"
+consumer = "u8_load_zext_i32"
+native_rep_name = "u8"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.image_convolution.native_rep_checks.require_records]]
+name = "image_noise_byte_store"
+block_label = "while.body.28"
+expr_kind = "Uint8ArraySet"
+consumer = "u8_store_trunc_i32"
+native_rep_name = "u8"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.image_convolution.native_rep_checks.require_records]]
+name = "image_blur_byte_load"
+block_label = "for.body.38"
+expr_kind = "Uint8ArrayGet"
+consumer = "u8_load_zext_i32"
+native_rep_name = "u8"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+min = 3
+
+[[workloads.image_convolution.native_rep_checks.require_records]]
+name = "image_blur_byte_store"
+block_label = "for.body.38"
+expr_kind = "Uint8ArraySet"
+consumer = "u8_store_trunc_i32"
+native_rep_name = "u8"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+
+[[workloads.image_convolution.native_rep_checks.require_records]]
+name = "image_fnv_byte_load"
+block_label = "for.body.42"
+expr_kind = "Uint8ArrayGet"
+consumer = "u8_load_zext_i32"
+native_rep_name = "u8"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+
+[[workloads.image_convolution.native_rep_checks.require_records]]
+name = "image_fnv_i32_hash"
+block_label = "for.body.42"
+expr_kind = "MathImul"
+consumer = "lower_expr_native_i32"
+native_rep_name = "i32"
+access_mode = "none"
+
+[workloads.loop_data_dependent]
+source = "benchmarks/suite/17_loop_data_dependent.ts"
+kind = "numeric_loop"
+allow_hot_loop_conversions = true
+allowed_hot_loop_runtime_calls = [
+  "js_typed_feedback_numeric_array_index_get_guard",
+  "js_typed_feedback_numeric_array_push_guard",
+]
+
+[workloads.loop_data_dependent.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: data-dependent control flow is intentionally scalar"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.loop_data_dependent.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 1
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.loop_data_dependent.ir_checks]]
+name = "numeric_loop_has_fp_ops"
+contains_any = [" fmul ", " fadd "]
+detail = "numeric loop optimized IR still contains FP arithmetic"
+
+[[workloads.loop_data_dependent.named_regions]]
+name = "numeric_loop_body"
+required = true
+no_runtime_calls = true
+
+[[workloads.loop_data_dependent.named_regions.selectors]]
+label_prefix_any = ["for.body.11", "arr.merge."]
+counter_any_min = { fmul = 1, fadd = 1 }
+
+[[workloads.loop_data_dependent.named_regions.checks]]
+name = "named_region_numeric_loop_no_fp_int_conversions"
+equals = { fptosi = 0, sitofp = 0 }
+detail = "numeric loop FP/int conversion shape"
+
+[[workloads.loop_data_dependent.named_regions.checks]]
+name = "named_region_numeric_loop_has_fp_ops"
+min = { fmul = 1, fadd = 1 }
+detail = "numeric loop FP multiply/add shape"
+
+[workloads.loop_data_dependent.native_rep_checks]
+allow_materialization_reasons = ["runtime_api"]
+
+[workloads.fma_contract]
+source = "benchmarks/compiler_output/fixtures/fma_contract.ts"
+kind = "fma_contract"
+
+[workloads.fma_contract.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: this fixture exists to prove scalar FP contraction"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.fma_contract.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[workloads.fma_contract.fma_gate]
+enabled = true
+expected_check_name = "fma_instruction_when_contraction_expected"
+forbidden_check_name = "no_fma_instruction_when_fp_contract_off"
+
+[[workloads.fma_contract.ir_checks]]
+name = "numeric_loop_has_fp_ops"
+contains_any = [" fmul ", " fadd "]
+detail = "FMA fixture optimized IR still contains FP arithmetic"
+
+[[workloads.fma_contract.named_regions]]
+name = "numeric_loop_body"
+required = true
+no_runtime_calls = true
+
+[[workloads.fma_contract.named_regions.selectors]]
+label_prefix_any = ["for.body", "vector.body"]
+counter_any_min = { fmul = 1, fadd = 1 }
+
+[[workloads.fma_contract.named_regions.checks]]
+name = "named_region_numeric_loop_has_fp_ops"
+min = { fmul = 1, fadd = 1 }
+detail = "numeric loop FP multiply/add shape"
+
+[workloads.vectorized_buffer_transform]
+source = "benchmarks/compiler_output/fixtures/vectorized_buffer_transform.ts"
+kind = "vectorized_buffer_transform"
+
+[workloads.vectorized_buffer_transform.vectorization]
+min_vectorized_loops = 1
+scalar_baseline = ""
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.vectorized_buffer_transform.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[workloads.hir_fact_rewrite]
+source = "benchmarks/compiler_output/fixtures/hir_fact_rewrite.ts"
+kind = "hir_fact_rewrite"
+
+[workloads.hir_fact_rewrite.vectorization]
+min_vectorized_loops = 1
+scalar_baseline = ""
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.hir_fact_rewrite.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.hir_fact_rewrite.ir_checks]]
+name = "hir_fact_rewrite_direct_gep_inbounds"
+contains = "getelementptr inbounds"
+detail = "rewrite-insensitive buffer index lowering uses direct inbounds GEPs"
+
+[[workloads.hir_fact_rewrite.ir_checks]]
+name = "hir_fact_rewrite_assume_bounds"
+contains = "@llvm.assume"
+detail = "rewrite-insensitive buffer index lowering preserves bounds assumptions"
+
+[[workloads.hir_fact_rewrite.ir_checks]]
+name = "hir_fact_rewrite_alias_metadata"
+contains_all = ["!alias.scope", "!noalias"]
+detail = "rewrite-insensitive buffer index lowering keeps buffer alias metadata"
+
+[[workloads.hir_fact_rewrite.counter_checks]]
+name = "hir_fact_rewrite_no_buffer_slow_path"
+section = "llvm_after"
+counter = "buffer_slow_path_calls"
+equals = 0
+detail = "buffer_slow_path_calls"
+
+[workloads.h1_native_rep_equivalence]
+source = "benchmarks/compiler_output/fixtures/h1_native_rep_equivalence.ts"
+kind = "native_rep"
+
+[workloads.h1_native_rep_equivalence.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: H1 gates native representation shape, not vector width"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.h1_native_rep_equivalence.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.h1_native_rep_equivalence.ir_checks]]
+name = "h1_i32_phi_path"
+section = "llvm_before"
+regex_all = ["\\bicmp\\b[^\\n]*\\bi32\\b", "\\bload i32, ptr\\b", "\\bstore i32\\b"]
+detail = "pre-opt codegen keeps loop/index state in i32 slots and i32 comparisons before LLVM may widen the IV"
+
+[[workloads.h1_native_rep_equivalence.ir_checks]]
+name = "h1_direct_raw_buffer_access"
+regex_all = ["getelementptr", "\\bload (?:i8|<\\d+ x i8>), ptr\\b", "\\bstore (?:i8\\b|<\\d+ x i8>)"]
+detail = "optimized IR has raw GEP/load/store buffer access"
+
+[[workloads.h1_native_rep_equivalence.ir_checks]]
+name = "h1_zero_buffer_helpers"
+regex_none = ["@js_buffer_get", "@js_buffer_set"]
+detail = "positive H1 fixture has no generic JS buffer helpers"
+
+[[workloads.h1_native_rep_equivalence.counter_checks]]
+name = "h1_no_buffer_slow_path"
+section = "llvm_after"
+counter = "buffer_slow_path_calls"
+equals = 0
+detail = "buffer_slow_path_calls"
+
+[[workloads.h1_native_rep_equivalence.named_regions]]
+name = "direct_bounded"
+native_region_id = "h1_native_rep_equivalence_ts.module_init.direct_bounded"
+required = true
+no_runtime_calls = true
+no_conversions = true
+
+[[workloads.h1_native_rep_equivalence.named_regions.selectors]]
+function_contains = "main"
+label_any = ["for.body.2"]
+counter_min = { load_i8 = 1, store_i8 = 1 }
+
+[[workloads.h1_native_rep_equivalence.named_regions]]
+name = "local_cast"
+native_region_id = "h1_native_rep_equivalence_ts.module_init.local_cast"
+required = true
+no_runtime_calls = true
+no_conversions = true
+
+[[workloads.h1_native_rep_equivalence.named_regions.selectors]]
+function_contains = "main"
+label_any = ["for.body.6"]
+counter_min = { load_i8 = 1, store_i8 = 1 }
+
+[[workloads.h1_native_rep_equivalence.named_regions]]
+name = "helper_index"
+native_region_id = "h1_native_rep_equivalence_ts.module_init.helper_index"
+required = true
+no_runtime_calls = true
+no_conversions = true
+
+[[workloads.h1_native_rep_equivalence.named_regions.selectors]]
+function_contains = "main"
+label_any = ["for.body.10"]
+counter_min = { load_i8 = 1, store_i8 = 1 }
+
+[[workloads.h1_native_rep_equivalence.named_regions]]
+name = "same_buffer"
+native_region_id = "h1_native_rep_equivalence_ts.incinplace.same_buffer"
+required = true
+no_runtime_calls = true
+no_conversions = true
+
+[[workloads.h1_native_rep_equivalence.named_regions.selectors]]
+function_contains = "main"
+label_any = ["for.body.2.i"]
+counter_min = { load_i8 = 1, store_i8 = 1 }
+
+[workloads.h1_buffer_fastpath_bench]
+source = "benchmarks/compiler_output/fixtures/h1_buffer_fastpath_bench.ts"
+kind = "native_rep_benchmark"
+allow_hot_loop_conversions = true
+allowed_hot_loop_runtime_calls = [
+  "js_buffer_get",
+  "js_buffer_set",
+  "js_shadow_slot_set",
+]
+
+[workloads.h1_buffer_fastpath_bench.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: benchmark is used for fast-path on/off wall-time comparison"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.h1_buffer_fastpath_bench.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 16
+
+[workloads.h1_buffer_alias_negative]
+source = "benchmarks/compiler_output/fixtures/h1_buffer_alias_negative.ts"
+kind = "native_rep_negative"
+allow_dynamic_property_runtime = true
+allow_hot_loop_conversions = true
+allowed_hot_loop_runtime_calls = [
+  "js_buffer_get",
+  "js_buffer_set",
+  "js_closure_call1",
+  "js_dyn_index_get",
+  "js_dynamic_string_or_number_add",
+  "js_number_coerce",
+  "js_uint8array_get",
+  "js_uint8array_set",
+]
+
+[workloads.h1_buffer_alias_negative.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: negative fixture proves denied claims"
+allowed_missed_reason_kinds = [
+  "aliasing",
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.h1_buffer_alias_negative.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 100
+
+[[workloads.h1_buffer_alias_negative.named_regions]]
+name = "alias_local"
+native_region_id = "h1_buffer_alias_negative_ts.aliaslocal.alias_local"
+
+[[workloads.h1_buffer_alias_negative.named_regions]]
+name = "reassignment_region"
+native_region_id = "h1_buffer_alias_negative_ts.reassignment.reassignment_region"
+
+[[workloads.h1_buffer_alias_negative.named_regions]]
+name = "unknown_call_escape"
+native_region_id = "h1_buffer_alias_negative_ts.unknowncallescape.unknown_call_escape"
+
+[[workloads.h1_buffer_alias_negative.named_regions]]
+name = "length_mismatch"
+native_region_id = "h1_buffer_alias_negative_ts.lengthmismatch.length_mismatch"
+
+[[workloads.h1_buffer_alias_negative.named_regions]]
+name = "mutated_for_index"
+native_region_id = "h1_buffer_alias_negative_ts.mutatedforindex.mutated_for_index"
+
+[[workloads.h1_buffer_alias_negative.named_regions]]
+name = "mutated_while_index"
+native_region_id = "h1_buffer_alias_negative_ts.mutatedwhileindex.mutated_while_index"
+
+[[workloads.h1_buffer_alias_negative.named_regions]]
+name = "stale_native_alias"
+native_region_id = "h1_buffer_alias_negative_ts.stalenativealias.stale_native_alias"
+
+[[workloads.h1_buffer_alias_negative.named_regions]]
+name = "stale_allocation_length"
+native_region_id = "h1_buffer_alias_negative_ts.staleallocationlength.stale_allocation_length"
+
+[[workloads.h1_buffer_alias_negative.named_regions]]
+name = "array_buffer_views"
+native_region_id = "h1_buffer_alias_negative_ts.arraybufferviews.array_buffer_views"
+
+[workloads.numeric_arrays]
+source = "benchmarks/compiler_output/fixtures/numeric_arrays.ts"
+kind = "numeric_arrays"
+allow_hot_loop_conversions = true
+allowed_hot_loop_runtime_calls = [
+  "js_typed_feedback_numeric_array_index_get_guard",
+  "js_typed_feedback_numeric_array_push_guard",
+  "js_typed_feedback_numeric_array_index_set_guard",
+]
+
+[workloads.numeric_arrays.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: this fixture gates numeric-array native rep shape"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.numeric_arrays.runtime_budgets]
+allocations_traced = 100
+gc_collections_traced = 0
+write_barriers_static = 16
+write_barriers_traced = 16
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.numeric_arrays.ir_checks]]
+name = "numeric_array_uses_unboxed_push"
+contains = "js_array_numeric_push_f64_unboxed"
+detail = "numeric Array.push uses the guarded raw-f64 helper"
+
+[[workloads.numeric_arrays.ir_checks]]
+name = "numeric_array_uses_unboxed_get"
+contains = "js_array_numeric_get_f64_unboxed"
+detail = "numeric indexed read uses the guarded raw-f64 helper"
+
+[[workloads.numeric_arrays.ir_checks]]
+name = "numeric_array_uses_unboxed_set"
+contains = "js_array_numeric_set_f64_unboxed"
+detail = "numeric indexed write uses the guarded raw-f64 helper"
+
+[[workloads.numeric_arrays.stdout_checks]]
+name = "numeric_arrays_checksum"
+contains = "25"
+detail = "numeric-array fixture stdout checksum"
+
+[workloads.numeric_arrays.native_rep_checks]
+allow_materialization_reasons = ["runtime_api"]
+
+[[workloads.numeric_arrays.native_rep_checks.require_records]]
+name = "numeric_array_push_fast_f64"
+expr_kind = "NumericArrayPush"
+consumer = "js_array_numeric_push_f64_unboxed"
+native_rep_name = "f64"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+consumed_fact_kind = "raw_f64_layout"
+consumed_fact_state = "consumed"
+
+[[workloads.numeric_arrays.native_rep_checks.require_records]]
+name = "numeric_array_push_dynamic_fallback"
+expr_kind = "NumericArrayPush"
+consumer = "js_array_push_f64"
+access_mode = "dynamic_fallback"
+materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "rejected"
+
+[[workloads.numeric_arrays.native_rep_checks.require_records]]
+name = "numeric_array_push_dynamic_fallback_invalidates_layout"
+expr_kind = "NumericArrayPush"
+consumer = "js_array_push_f64"
+access_mode = "dynamic_fallback"
+materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "invalidated"
+
+[[workloads.numeric_arrays.native_rep_checks.require_records]]
+name = "numeric_array_get_fast_f64"
+expr_kind = "NumericArrayIndexGet"
+consumer = "js_array_numeric_get_f64_unboxed"
+native_rep_name = "f64"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+consumed_fact_kind = "raw_f64_layout"
+consumed_fact_state = "consumed"
+
+[[workloads.numeric_arrays.native_rep_checks.require_records]]
+name = "numeric_array_get_dynamic_fallback"
+expr_kind = "NumericArrayIndexGet"
+consumer = "js_typed_feedback_array_index_get_fallback_boxed"
+access_mode = "dynamic_fallback"
+materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "rejected"
+
+[[workloads.numeric_arrays.native_rep_checks.require_records]]
+name = "numeric_array_get_dynamic_fallback_invalidates_layout"
+expr_kind = "NumericArrayIndexGet"
+consumer = "js_typed_feedback_array_index_get_fallback_boxed"
+access_mode = "dynamic_fallback"
+materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "invalidated"
+
+[[workloads.numeric_arrays.native_rep_checks.require_records]]
+name = "numeric_array_set_fast_f64"
+expr_kind = "NumericArrayIndexSet"
+consumer = "js_array_numeric_set_f64_unboxed"
+native_rep_name = "f64"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+consumed_fact_kind = "raw_f64_layout"
+consumed_fact_state = "consumed"
+
+[[workloads.numeric_arrays.native_rep_checks.require_records]]
+name = "numeric_array_set_dynamic_fallback"
+expr_kind = "NumericArrayIndexSet"
+consumer_contains = "fallback"
+access_mode = "dynamic_fallback"
+materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "rejected"
+
+[[workloads.numeric_arrays.native_rep_checks.require_records]]
+name = "numeric_array_set_dynamic_fallback_invalidates_layout"
+expr_kind = "NumericArrayIndexSet"
+consumer_contains = "fallback"
+access_mode = "dynamic_fallback"
+materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "invalidated"
+
+[workloads.raw_numeric_object_fields]
+source = "tests/raw_numeric_object_fields.ts"
+kind = "raw_numeric_object_fields"
+allow_dynamic_property_runtime = true
+allow_hot_loop_conversions = true
+allowed_hot_loop_runtime_calls = [
+  "js_object_get_field_by_name_f64",
+  "js_object_set_field_by_name",
+]
+
+[workloads.raw_numeric_object_fields.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: this fixture gates raw numeric field structure"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.raw_numeric_object_fields.runtime_budgets]
+allocations_traced = 200
+gc_collections_traced = 0
+write_barriers_static = 64
+write_barriers_traced = 64
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.raw_numeric_object_fields.ir_checks]]
+name = "raw_numeric_field_get_guard"
+contains = "js_typed_feedback_class_field_get_guard"
+detail = "class numeric field reads are guarded before raw slot loads"
+
+[[workloads.raw_numeric_object_fields.ir_checks]]
+name = "raw_numeric_field_set_guard"
+contains = "js_typed_feedback_class_field_set_guard"
+detail = "class numeric field writes are guarded before raw slot stores"
+
+[workloads.raw_numeric_object_fields.native_rep_checks]
+allow_materialization_reasons = ["runtime_api"]
+
+[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
+name = "raw_class_field_get_fast_f64"
+expr_kind = "ClassFieldGet"
+consumer = "class_field_get.raw_f64_load"
+native_rep_name = "f64"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+consumed_fact_kind = "raw_f64_layout"
+consumed_fact_state = "consumed"
+
+[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
+name = "raw_class_field_get_dynamic_fallback"
+expr_kind = "ClassFieldGet"
+consumer = "js_object_get_field_by_name_f64"
+access_mode = "dynamic_fallback"
+materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "rejected"
+
+[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
+name = "raw_class_field_get_dynamic_fallback_invalidates_layout"
+expr_kind = "ClassFieldGet"
+consumer = "js_object_get_field_by_name_f64"
+access_mode = "dynamic_fallback"
+materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "invalidated"
+
+[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
+name = "raw_class_field_set_fast_f64"
+expr_kind = "ClassFieldSet"
+consumer = "class_field_set.raw_f64_store"
+native_rep_name = "f64"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+consumed_fact_kind = "raw_f64_layout"
+consumed_fact_state = "consumed"
+
+[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
+name = "raw_class_field_set_dynamic_fallback"
+expr_kind = "ClassFieldSet"
+consumer = "js_object_set_field_by_name"
+access_mode = "dynamic_fallback"
+materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "rejected"
+
+[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
+name = "raw_class_field_set_dynamic_fallback_invalidates_layout"
+expr_kind = "ClassFieldSet"
+consumer = "js_object_set_field_by_name"
+access_mode = "dynamic_fallback"
+materialization_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "invalidated"
+
+[workloads.scalar_replacement_literals]
+source = "benchmarks/compiler_output/fixtures/scalar_replacement_literals.ts"
+kind = "scalar_replacement_literals"
+allow_dynamic_property_runtime = true
+allow_hot_loop_conversions = true
+
+[workloads.scalar_replacement_literals.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: scalar replacement proof is stack-shape based"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.scalar_replacement_literals.runtime_budgets]
+allocations_traced = 100
+gc_collections_traced = 0
+write_barriers_static = 8
+write_barriers_traced = 8
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.scalar_replacement_literals.ir_checks]]
+name = "scalar_replacement_no_object_or_array_heap_alloc"
+function_contains = "scalarReplacementChecksum"
+regex_none = ["@js_object_alloc", "@js_object_alloc_with_shape", "@js_array_alloc"]
+detail = "scalar-replaced literals do not lower to heap object/array allocation helpers"
+
+[[workloads.scalar_replacement_literals.ir_checks]]
+name = "scalar_replacement_no_property_or_array_runtime_access"
+function_contains = "scalarReplacementChecksum"
+regex_none = ["@js_object_get_field", "@js_object_set_field", "@js_array_get", "@js_array_set"]
+detail = "scalar-replaced literals do not use runtime property or array access helpers"
+
+[[workloads.scalar_replacement_literals.stdout_checks]]
+name = "scalar_replacement_checksum"
+contains = "17"
+detail = "scalar-replacement fixture stdout checksum"
+
+[workloads.scalar_replacement_literals.native_rep_checks]
+function_contains = "scalarReplacementChecksum"
+allow_materialization_reasons = []
+
+[[workloads.scalar_replacement_literals.native_rep_checks.require_records]]
+name = "scalar_object_literal_store"
+expr_kind = "ScalarObjectLiteralInit"
+consumer = "scalar_object_field_store"
+native_rep_name = "js_value"
+access_mode = "none"
+
+[[workloads.scalar_replacement_literals.native_rep_checks.require_records]]
+name = "scalar_object_field_get"
+expr_kind = "ScalarObjectFieldGet"
+consumer = "scalar_object_field_load"
+native_rep_name = "js_value"
+access_mode = "none"
+
+[[workloads.scalar_replacement_literals.native_rep_checks.require_records]]
+name = "scalar_object_field_set"
+expr_kind = "ScalarObjectFieldSet"
+consumer = "scalar_object_field_store"
+native_rep_name = "js_value"
+access_mode = "none"
+
+[[workloads.scalar_replacement_literals.native_rep_checks.require_records]]
+name = "scalar_array_literal_store"
+expr_kind = "ScalarArrayLiteralInit"
+consumer = "scalar_array_element_store"
+native_rep_name = "js_value"
+access_mode = "none"
+
+[[workloads.scalar_replacement_literals.native_rep_checks.require_records]]
+name = "scalar_array_index_get"
+expr_kind = "ScalarArrayIndexGet"
+consumer = "scalar_array_element_load"
+native_rep_name = "js_value"
+access_mode = "none"
+
+[workloads.width_aware_buffer_kernels]
+source = "benchmarks/compiler_output/fixtures/width_aware_buffer_kernels.ts"
+kind = "width_aware_buffer_kernels"
+allow_hot_loop_conversions = true
+allow_dynamic_property_runtime = true
+
+[workloads.width_aware_buffer_kernels.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: mixed endian and floating-point parsing loops are scalar"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.width_aware_buffer_kernels.runtime_budgets]
+allocations_traced = 5
+gc_collections_traced = 0
+write_barriers_static = 5
+write_barriers_traced = 5
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 18
+
+[[workloads.width_aware_buffer_kernels.ir_checks]]
+name = "wide_buffer_reads_have_bswap"
+contains_any = ["@llvm.bswap.i32", "@llvm.bswap.i64"]
+detail = "big-endian fixed-width Buffer reads lower through native bswap"
+
+[[workloads.width_aware_buffer_kernels.ir_checks]]
+name = "no_buffer_get_set_helpers_in_hot_kernel"
+regex_none = ["@js_buffer_get", "@js_buffer_set"]
+detail = "width-aware hot loops avoid byte Buffer runtime helpers"
+
+[[workloads.width_aware_buffer_kernels.ir_checks]]
+name = "typed_array_native_load_widths"
+regex_all = ["\\bload i16, ptr\\b", "\\bload i32, ptr\\b", "\\bload float, ptr\\b", "\\bload double, ptr\\b"]
+detail = "tracked typed arrays use native element-width loads"
+
+[[workloads.width_aware_buffer_kernels.stdout_checks]]
+name = "width_aware_buffer_kernels_checksum"
+contains = "width_aware_buffer_kernels:38314632556"
+detail = "width-aware buffer and typed-array semantic checksum"
+
+[workloads.width_aware_buffer_kernels.native_rep_checks]
+allow_materialization_reasons = ["function_abi", "runtime_api", "unknown_alias", "unknown_bounds"]
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "buffer_read_u32_be"
+expr_kind = "BufferNumericRead"
+consumer = "BufferNumericRead.native_u32"
+native_rep_name = "u32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+notes_contains = "method=readUInt32BE"
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "buffer_read_i32_le"
+expr_kind = "BufferNumericRead"
+consumer = "BufferNumericRead.native_i32"
+native_rep_name = "i32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+notes_contains = "method=readInt32LE"
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "buffer_read_f32_be"
+expr_kind = "BufferNumericRead"
+consumer = "BufferNumericRead.native_f32"
+native_rep_name = "f32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+notes_contains = "method=readFloatBE"
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "buffer_read_f64_le"
+expr_kind = "BufferNumericRead"
+consumer = "BufferNumericRead.native_f64"
+native_rep_name = "f64"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+notes_contains = "method=readDoubleLE"
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "typed_array_u16_read"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.native_u32"
+native_rep_name = "u32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+min = 2
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "typed_array_i32_read"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.native_i32"
+native_rep_name = "i32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "typed_array_f32_read"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.native_f32"
+native_rep_name = "f32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "typed_array_f64_read"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.native_f64"
+native_rep_name = "f64"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "typed_array_alias_get_fallback"
+source_function = "typedArrayHazards"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.slow_path"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+bounds_state = "unknown"
+materialization_reason = "unknown_alias"
+notes_contains = "typed_array_fallback=untracked_or_unproven"
+min = 2
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "typed_array_bounds_get_fallback"
+source_function = "typedArrayHazards"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.slow_path"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+bounds_state = "unknown"
+materialization_reason = "unknown_bounds"
+notes_contains = "typed_array_fallback=untracked_or_unproven"
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "typed_array_alias_set_fallback"
+source_function = "typedArrayHazards"
+expr_kind = "TypedArraySet"
+consumer = "TypedArraySet.slow_path"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+bounds_state = "unknown"
+materialization_reason = "unknown_alias"
+notes_contains = "typed_array_fallback=untracked_or_unproven"
+min = 2
+
+[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
+name = "typed_array_bounds_set_fallback"
+source_function = "typedArrayHazards"
+expr_kind = "TypedArraySet"
+consumer = "TypedArraySet.slow_path"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+bounds_state = "unknown"
+materialization_reason = "unknown_bounds"
+notes_contains = "typed_array_fallback=untracked_or_unproven"
+
+[workloads.native_owned_typed_views]
+source = "benchmarks/compiler_output/fixtures/native_owned_typed_views.ts"
+kind = "native_owned_typed_views"
+allow_hot_loop_conversions = true
+
+[workloads.native_owned_typed_views.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: native-owned typed view fixture gates proof records and fallback reasons"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_reduction",
+]
+
+[workloads.native_owned_typed_views.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 16
+
+[[workloads.native_owned_typed_views.stdout_checks]]
+name = "native_owned_typed_views_checksum"
+contains = "native_owned_typed_views:1383.25"
+detail = "native-owned typed view checksum"
+
+[workloads.native_owned_typed_views.native_rep_checks]
+allow_materialization_reasons = [
+  "runtime_api",
+  "function_abi",
+  "use_after_dispose",
+  "stale_view_length",
+  "mutable_alias",
+  "missing_owner_root",
+  "escaping_unowned_pointer",
+]
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_f64_read"
+source_function = "nativeOwnedPositive"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.native_f64"
+native_rep_name = "f64"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_f64_store"
+source_function = "nativeOwnedPositive"
+expr_kind = "TypedArraySet"
+consumer = "f64_store"
+native_rep_name = "f64"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_u8_store"
+source_function = "nativeOwnedKinds"
+expr_kind = "Uint8ArraySet"
+consumer = "u8_store_trunc_i32"
+native_rep_name = "u8"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_i16_read"
+source_function = "nativeOwnedKinds"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.native_i32"
+native_rep_name = "i32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_u32_read"
+source_function = "nativeOwnedKinds"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.native_u32"
+native_rep_name = "u32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_f32_read"
+source_function = "nativeOwnedKinds"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.native_f32"
+native_rep_name = "f32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_f64_kind_read"
+source_function = "nativeOwnedKinds"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.native_f64"
+native_rep_name = "f64"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+alias_state = "no_alias_proven_or_guarded"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_disposed_fallback"
+source_function = "disposedFallback"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.slow_path"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+materialization_reason = "use_after_dispose"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_stale_length_fallback"
+source_function = "staleLengthFallback"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.slow_path"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+materialization_reason = "stale_view_length"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_mutable_alias_fallback"
+source_function = "mutableAliasFallback"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.slow_path"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+materialization_reason = "mutable_alias"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_missing_owner_root_fallback"
+source_function = "missingOwnerRootFallback"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.slow_path"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+materialization_reason = "missing_owner_root"
+
+[[workloads.native_owned_typed_views.native_rep_checks.require_records]]
+name = "native_owned_escaping_pointer_fallback"
+source_function = "escapingUnownedPointerFallback"
+expr_kind = "TypedArrayGet"
+consumer = "TypedArrayGet.slow_path"
+native_rep_name = "js_value"
+access_mode = "dynamic_fallback"
+materialization_reason = "escaping_unowned_pointer"
+
+[workloads.native_pod_layout_constants]
+source = "benchmarks/compiler_output/fixtures/native_pod_layout_constants.ts"
+kind = "native_pod_layout_constants"
+allow_hot_loop_conversions = true
+
+[workloads.native_pod_layout_constants.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: layout-constant fixture gates compile-time POD byte math, not vectorization"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_reduction",
+]
+
+[workloads.native_pod_layout_constants.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.native_pod_layout_constants.stdout_checks]]
+name = "native_pod_layout_constants_checksum"
+contains = "native_pod_layout_constants:55"
+detail = "POD layout constants preserve native-arena packet checksum"
+
+[workloads.native_memory_bulk_fill]
+source = "benchmarks/compiler_output/fixtures/native_memory_bulk_fill.ts"
+kind = "native_memory_bulk_fill"
+allow_hot_loop_conversions = true
+
+[workloads.native_memory_bulk_fill.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: bulk NativeMemory fixture gates memset/memmove codegen, not vectorization"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.native_memory_bulk_fill.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.native_memory_bulk_fill.stdout_checks]]
+name = "native_memory_bulk_fill_checksum"
+contains = "native_memory_bulk_fill:471"
+detail = "NativeMemory.fillU32 and copy preserve packet checksum"
+
+[workloads.native_memory_bulk_fill.native_rep_checks]
+allow_materialization_reasons = ["function_abi", "runtime_api", "unknown_bounds"]
+
+[[workloads.native_memory_bulk_fill.native_rep_checks.require_records]]
+name = "native_memory_fill_u32_memset"
+source_function = "nativeMemoryBulkFill"
+expr_kind = "NativeMemoryFillU32"
+consumer = "NativeMemoryFillU32.memset_zero"
+native_rep_name = "buffer_view"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.native_memory_bulk_fill.native_rep_checks.require_records]]
+name = "native_memory_copy_dst_memmove"
+source_function = "nativeMemoryBulkFill"
+expr_kind = "NativeMemoryCopy"
+consumer = "NativeMemoryCopy.dst.memmove"
+native_rep_name = "buffer_view"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.native_memory_bulk_fill.native_rep_checks.require_records]]
+name = "native_memory_copy_src_memmove"
+source_function = "nativeMemoryBulkFill"
+expr_kind = "NativeMemoryCopy"
+consumer = "NativeMemoryCopy.src.memmove"
+native_rep_name = "buffer_view"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+
+[workloads.native_memory_fixture]
+source = "benchmarks/compiler_output/fixtures/native_memory_fixture_project/main.ts"
+kind = "native_memory_fixture"
+allow_hot_loop_conversions = true
+
+[workloads.native_memory_fixture.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: end-to-end native memory fixture gates public arena, bulk memory, POD view, and native-library lowering"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.native_memory_fixture.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.native_memory_fixture.stdout_checks]]
+name = "native_memory_fixture_checksum"
+contains = "native_memory_fixture:1701"
+detail = "native arenas, bulk fill/copy, POD view lowering, and native pod+count call preserve checksum"
+
+[workloads.native_memory_fixture.native_rep_checks]
+allow_materialization_reasons = ["function_abi", "return_abi", "runtime_api", "unknown_bounds"]
+
+[[workloads.native_memory_fixture.native_rep_checks.require_records]]
+name = "native_memory_fixture_fill_u32_memset"
+source_function = "nativeMemoryFixture"
+expr_kind = "NativeMemoryFillU32"
+consumer = "NativeMemoryFillU32.memset_zero"
+native_rep_name = "buffer_view"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.native_memory_fixture.native_rep_checks.require_records]]
+name = "native_memory_fixture_copy_dst_memmove"
+source_function = "nativeMemoryFixture"
+expr_kind = "NativeMemoryCopy"
+consumer = "NativeMemoryCopy.dst.memmove"
+native_rep_name = "buffer_view"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.native_memory_fixture.native_rep_checks.require_records]]
+name = "native_memory_fixture_copy_src_memmove"
+source_function = "nativeMemoryFixture"
+expr_kind = "NativeMemoryCopy"
+consumer = "NativeMemoryCopy.src.memmove"
+native_rep_name = "buffer_view"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.native_memory_fixture.native_rep_checks.require_records]]
+name = "native_memory_fixture_pod_count_data_ptr"
+source_function = "nativeMemoryFixture"
+expr_kind = "NativeLibraryParam"
+consumer = "native_library.param.pod+count.data_ptr"
+native_rep_name = "pod_record_view"
+
+[[workloads.native_memory_fixture.native_rep_checks.require_records]]
+name = "native_memory_fixture_pod_count_record_count"
+source_function = "nativeMemoryFixture"
+expr_kind = "NativeLibraryParam"
+consumer = "native_library.param.pod+count.record_count"
+native_rep_name = "usize"
+
+[workloads.native_abi_packet_typed]
+source = "benchmarks/compiler_output/fixtures/native_abi_packet_typed.ts"
+kind = "native_abi_packet_typed"
+allow_hot_loop_conversions = true
+allow_dynamic_property_runtime = true
+allowed_hot_loop_runtime_calls = [
+  "js_shadow_frame_push",
+  "js_shadow_slot_bind",
+]
+
+[workloads.native_abi_packet_typed.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: packet evidence compares typed ABI shape against the boxed/control packet"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.native_abi_packet_typed.runtime_budgets]
+allocations_traced = 5
+gc_collections_traced = 5
+write_barriers_static = 8
+write_barriers_traced = 8
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.native_abi_packet_typed.stdout_checks]]
+name = "native_abi_packet_typed_checksum"
+contains = "native_abi_packet_typed:"
+detail = "typed packet fixture emits a semantic checksum"
+
+[workloads.native_abi_packet_typed.native_rep_checks]
+allow_materialization_reasons = ["function_abi", "runtime_api", "unknown_bounds"]
+
+[[workloads.native_abi_packet_typed.native_rep_checks.require_records]]
+name = "packet_typed_buffer_view"
+consumer_contains = "BufferView"
+native_rep_name = "buffer_view"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.native_abi_packet_typed.native_rep_checks.require_records]]
+name = "packet_typed_u8_load_or_store"
+consumer_contains = "u8_"
+native_rep_name = "u8"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+
+[workloads.native_abi_packet_control]
+source = "benchmarks/compiler_output/fixtures/native_abi_packet_control.ts"
+kind = "native_abi_packet_control"
+allow_dynamic_property_runtime = true
+allow_hot_loop_conversions = true
+allow_boxed_number_allocations = true
+allowed_hot_loop_runtime_calls = [
+  "js_array_length",
+  "js_array_push_f64",
+  "js_buffer_get",
+  "js_buffer_set",
+  "js_handle_object_get_property",
+  "js_boxed_number_new",
+  "js_native_call_method",
+  "js_native_arena_alloc",
+  "js_native_arena_dispose",
+  "js_native_arena_view",
+  "js_object_get",
+  "js_object_set",
+  "js_get_property",
+  "js_set_property",
+  "js_dyn_index_get",
+  "js_shadow_frame_push",
+  "js_shadow_slot_bind",
+  "js_shadow_slot_set",
+  "js_uint8array_get",
+  "js_uint8array_set",
+  "js_write_barrier_root_nanbox",
+]
+
+[workloads.native_abi_packet_control.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: boxed/control packet intentionally keeps dynamic calls for delta reporting"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.native_abi_packet_control.runtime_budgets]
+allocations_traced = 640
+gc_collections_traced = 5
+write_barriers_static = 64
+write_barriers_traced = 360
+boxed_number_allocations_static = 64
+buffer_slow_path_accesses_static = 128
+
+[[workloads.native_abi_packet_control.stdout_checks]]
+name = "native_abi_packet_control_checksum"
+contains = "native_abi_packet_control:"
+detail = "control packet fixture emits a semantic checksum"
+
+[workloads.native_abi_packet_control.native_rep_checks]
+allow_materialization_reasons = [
+  "function_abi",
+  "runtime_api",
+  "unknown_alias",
+  "unknown_bounds",
+  "dynamic_escape",
+]

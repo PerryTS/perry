@@ -1,0 +1,16 @@
+[package]
+name = "{{rust_crate_name}}"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "{{description}}"
+repository = "https://github.com/{{github_owner}}/{{repo_name}}"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# Tracks the perry-ffi v0.5 ABI surface. Pinned to a git rev rather
+# than a crates.io release until perry-ffi is published.
+perry-ffi = { git = "https://github.com/PerryTS/perry", branch = "main" }
+{{upstream_dep_line}}

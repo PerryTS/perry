@@ -1,0 +1,6 @@
+worker saw main subscriber: true
+worker subscribe rejected: true
+worker subscribe error mentions main thread: true
+worker bindStore rejected: true
+worker bindStore error mentions main thread: true
+main hits: 1

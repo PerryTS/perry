@@ -1,23 +1,31 @@
 #!/usr/bin/env bash
-# Tier-2: run UI doc-examples inside the iOS Simulator via xcrun simctl.
+# Run UI doc-examples inside an Apple Simulator (iOS / tvOS / visionOS /
+# watchOS) via xcrun simctl. Originally iOS-only; PLATFORM env var
+# generalizes to the other Apple sims for release_sweep.sh tiers 8 and 9.
 #
-# Requires Xcode + iOS SDK. Each UI example that lists `ios-simulator` in its
-# banner `targets:` line gets compiled with `perry compile --target
-# ios-simulator`, installed on the booted simulator, and launched with
-# `PERRY_UI_TEST_MODE=1 PERRY_UI_TEST_EXIT_AFTER_MS=500`. perry-ui-ios'
+# Requires Xcode + the relevant SDK. Each UI example that lists
+# `${PLATFORM}-simulator` in its banner `targets:` line gets compiled with
+# `perry compile --target ${PLATFORM}-simulator`, installed on the booted
+# simulator, and launched with `PERRY_UI_TEST_MODE=1
+# PERRY_UI_TEST_EXIT_AFTER_MS=500`. perry-ui-<platform>'s
 # install_test_mode_exit_timer() exits(0) after the first frame; a timeout
 # wrapper kills the process if the exit never fires.
 #
 # Usage:
-#   DEVICE="iPhone 15" ./scripts/run_simctl_tests.sh
-#   ./scripts/run_simctl_tests.sh --filter ui/counter
+#   DEVICE="iPhone 15" ./scripts/run_simctl_tests.sh                    # iOS (default)
+#   PLATFORM=tvos ./scripts/run_simctl_tests.sh                         # tvOS
+#   PLATFORM=visionos ./scripts/run_simctl_tests.sh                     # visionOS
+#   PLATFORM=watchos ./scripts/run_simctl_tests.sh                      # watchOS
+#   ./scripts/run_simctl_tests.sh --filter ui/counter                   # subset
 #
 # Env:
-#   DEVICE              — simulator device name (default: "iPhone 15")
+#   PLATFORM            — ios | tvos | visionos | watchos (default: ios)
+#   DEVICE              — simulator device name (default: per-platform; see below)
 #   PERRY_BIN           — path to perry (default: target/release/perry)
 #   BUNDLE_ID_PREFIX    — bundle-id prefix (default: com.perry.doctests)
 #   KEEP_BOOTED         — if "1", don't shut the simulator down after run
 #   LAUNCH_TIMEOUT      — per-example launch timeout in seconds (default: 30)
+#   PERRY_TEST_SUMMARY_OUT — release_sweep.sh hook (see comment in run_parity_tests.sh)
 
 set -euo pipefail
 
@@ -25,10 +33,26 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-DEVICE="${DEVICE:-iPhone 15}"
+PLATFORM="${PLATFORM:-ios}"
+case "$PLATFORM" in
+    ios)      DEVICE_DEFAULT="iPhone 15" ; SIM_FILTER='iPhone|iPad' ;;
+    tvos)     DEVICE_DEFAULT="Apple TV 4K (3rd generation)" ; SIM_FILTER='Apple TV' ;;
+    visionos) DEVICE_DEFAULT="Apple Vision Pro" ; SIM_FILTER='Vision' ;;
+    watchos)  DEVICE_DEFAULT="Apple Watch Ultra 2 (49mm)" ; SIM_FILTER='Apple Watch' ;;
+    *) echo "unknown PLATFORM=$PLATFORM (expected ios|tvos|visionos|watchos)" >&2; exit 2 ;;
+esac
+SIM_TARGET="${PLATFORM}-simulator"
+
+DEVICE="${DEVICE:-$DEVICE_DEFAULT}"
 PERRY_BIN="${PERRY_BIN:-$REPO_ROOT/target/release/perry}"
 BUNDLE_ID_PREFIX="${BUNDLE_ID_PREFIX:-com.perry.doctests}"
 LAUNCH_TIMEOUT="${LAUNCH_TIMEOUT:-30}"
+
+# Export so the inline `python3 -c '...'` UDID lookup below sees DEVICE.
+# Without this export, callers that set DEVICE via assignment-then-call
+# (rather than `DEVICE=... ./script`) leak through to a python subprocess
+# with DEVICE unset and a KeyError aborts the whole script.
+export DEVICE
 
 # macOS doesn't ship GNU `timeout`. Homebrew's coreutils provides it as
 # `gtimeout`. Fall back to a pure-bash `&+sleep+kill` watchdog if neither
@@ -102,12 +126,12 @@ for rt, devs in data['devices'].items():
 ")
 
 if [ -z "$UDID" ]; then
-    echo "No available simulator device named '$DEVICE'. Try:" >&2
-    xcrun simctl list devices available | grep -E "iPhone|iPad" | head -10
+    echo "No available simulator device named '$DEVICE' for platform $PLATFORM. Try:" >&2
+    xcrun simctl list devices available | grep -E "$SIM_FILTER" | head -10
     exit 1
 fi
 
-echo "Using $DEVICE ($UDID)"
+echo "Using $PLATFORM device $DEVICE ($UDID)"
 
 # Boot if not already.
 STATE=$(xcrun simctl list devices | grep "$UDID" | grep -oE "\((Booted|Shutdown)\)" || true)
@@ -124,8 +148,8 @@ FAILURES=()
 while IFS= read -r -d '' src; do
     rel="${src#$REPO_ROOT/}"
     if [ -n "$FILTER" ] && [[ "$rel" != *"$FILTER"* ]]; then continue; fi
-    # Require `ios-simulator` in the targets banner.
-    if ! head -15 "$src" | grep -qE "^// *targets:.*ios-simulator"; then continue; fi
+    # Require `<platform>-simulator` in the targets banner.
+    if ! head -15 "$src" | grep -qE "^// *targets:.*${SIM_TARGET}"; then continue; fi
 
     TOTAL=$((TOTAL+1))
     stem=$(basename "${src%.ts}")
@@ -137,7 +161,7 @@ while IFS= read -r -d '' src; do
 
     echo "=== $rel ==="
     echo "  [+] compile start $(date +%T)"
-    if ! "$PERRY_BIN" compile --target ios-simulator --app-bundle-id "$bundle_id" "$src" -o "$bin_out" >"$OUT_DIR/$stem.compile.log" 2>&1; then
+    if ! "$PERRY_BIN" compile --target "$SIM_TARGET" --app-bundle-id "$bundle_id" "$src" -o "$bin_out" >"$OUT_DIR/$stem.compile.log" 2>&1; then
         echo "  COMPILE_FAIL (see $OUT_DIR/$stem.compile.log)"
         FAIL=$((FAIL+1)); FAILURES+=("$rel COMPILE_FAIL"); continue
     fi
@@ -212,6 +236,13 @@ echo
 echo "simctl-tests: $PASS/$TOTAL passed, $FAIL failed"
 if [ "$FAIL" -gt 0 ]; then
     printf '%s\n' "${FAILURES[@]}"
+fi
+
+# release_sweep.sh hook — see comment in run_parity_tests.sh.
+if [ -n "${PERRY_TEST_SUMMARY_OUT:-}" ]; then
+    cat > "$PERRY_TEST_SUMMARY_OUT" <<EOF
+{"script": "run_simctl_tests.sh", "passed": $PASS, "failed": $FAIL, "skipped": 0, "total": $TOTAL, "platform": "$PLATFORM"}
+EOF
 fi
 
 if [ "${KEEP_BOOTED:-0}" != "1" ]; then

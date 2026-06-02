@@ -284,3 +284,86 @@ unsafe fn extract_jsvalue_string(value: f64) -> Option<String> {
     let bytes = std::slice::from_raw_parts(data_ptr, len);
     Some(String::from_utf8_lossy(bytes).to_string())
 }
+
+/// #1113: `app.server` — Node-compatible getter that returns an
+/// object-shaped value supporting `.on("upgrade", cb)` etc.
+///
+/// In Node, `app.server` is the underlying `http.Server` (or
+/// `http2.Http2Server`) which `extends EventEmitter`. The canonical
+/// pattern for attaching a WebSocket server without opening a second
+/// port is:
+///
+/// ```ts
+/// import { WebSocketServer } from "ws";
+/// const wss = new WebSocketServer({ noServer: true });
+/// app.server.on("upgrade", (req, socket, head) => {
+///   wss.handleUpgrade(req, socket, head, (sock) => { … });
+/// });
+/// ```
+///
+/// Pre-fix `app.server` fell through to the generic property getter on
+/// the FastifyApp handle and returned the raw handle id as a JS
+/// number — so `typeof app.server` was `"number"` and `app.server.on`
+/// was `undefined`. The user-side `.on("upgrade", …)` call then threw
+/// `(number).on is not a function` and the program's boot `catch`
+/// arm logged `fatal:` and exited.
+///
+/// The minimum fix is to expose `app.server` as a value that
+/// supports `.on(eventName, cb)`. Storing the upgrade handler list
+/// inside the FastifyApp itself lets us reuse the existing handle
+/// dispatch — `app.server` returns the same handle id pointer-tagged
+/// so `typeof` resolves to `"object"`, `.on` routes through
+/// `js_handle_method_dispatch` -> `dispatch_fastify_app` -> the new
+/// `"on"` arm, and `.on("upgrade", cb)` pushes the closure into
+/// `app.upgrade_handlers`. See the corresponding doc comment on
+/// `FastifyApp::upgrade_handlers` for the follow-up still owed:
+/// the hyper accept loop doesn't yet route incoming `Upgrade:`
+/// requests through `hyper::upgrade::on(req)` and hand the raw socket
+/// + head bytes back to TS — so today registered handlers never
+/// actually fire. The diagnostic at the request-dispatch site in
+/// `server.rs` makes the gap visible at runtime; full bidirectional
+/// upgrade dispatch through `perry-ext-ws`'s `noServer` mode is
+/// the tracked follow-up.
+#[no_mangle]
+pub unsafe extern "C" fn js_fastify_app_server(app_handle: Handle) -> Handle {
+    // Return the same FastifyApp handle id. The codegen-side
+    // `NativeModSig.ret = NR_PTR` arm in `NATIVE_MODULE_TABLE` (see
+    // `lower_call.rs`) NaN-boxes the i64 with POINTER_TAG before
+    // it reaches the JS world. Perry's typeof against POINTER_TAG
+    // returns `"object"` (matches Node's
+    // `typeof http.Server === "object"`); `.on(…)` then dispatches
+    // through HANDLE_METHOD_DISPATCH which sees the FastifyApp at
+    // this handle id and routes into the `"on"` arm in
+    // `dispatch_fastify_app`.
+    app_handle
+}
+
+/// #1113: register an event handler on the fastify app's underlying
+/// "server" surface (`app.server.on(event, cb)` — see
+/// `js_fastify_app_server` above for why `app.server` shares the
+/// FastifyApp handle).
+///
+/// Only `"upgrade"` is meaningful today — handlers for other event
+/// names ("connection", "error", "listening", …) are silently
+/// accepted so user code paths that register them at boot don't
+/// crash, but the hyper accept loop doesn't currently fire them.
+/// Same diagnostic gap as `upgrade` itself — full EventEmitter
+/// parity for `app.server` is a follow-up.
+#[no_mangle]
+pub unsafe extern "C" fn js_fastify_app_on(app_handle: Handle, event_ptr: i64, callback: i64) {
+    if event_ptr == 0 || callback == 0 {
+        return;
+    }
+    let header = event_ptr as *const StringHeader;
+    let len = (*header).byte_len as usize;
+    let data = (event_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let event = std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap_or("");
+
+    if event == "upgrade" {
+        if let Some(app) = get_handle_mut::<FastifyApp>(app_handle) {
+            app.upgrade_handlers.push(callback);
+        }
+    }
+    // Other event names (e.g. "connection", "error", "listening") are
+    // silently accepted — see the function-level comment.
+}

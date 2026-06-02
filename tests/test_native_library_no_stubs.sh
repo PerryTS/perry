@@ -75,6 +75,11 @@ cat > "$TMPDIR/package.json" << 'APPPKG'
 {
   "name": "test-app",
   "version": "0.1.0",
+  "perry": {
+    "allow": {
+      "nativeLibrary": ["test-native-lib/src/index"]
+    }
+  },
   "dependencies": {
     "test-native-lib": "0.1.0"
   }

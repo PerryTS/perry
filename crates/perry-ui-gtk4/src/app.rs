@@ -31,8 +31,12 @@ thread_local! {
     pub(crate) static GTK_APP: RefCell<Option<Application>> = RefCell::new(None);
     /// Reference to the main ApplicationWindow (public for screenshot capture).
     pub(crate) static APP_WINDOW: RefCell<Option<ApplicationWindow>> = RefCell::new(None);
-    /// Timer callbacks (interval_ms, callback f64)
+    /// Timer callbacks queued before the app activates (interval_ms, callback f64).
+    /// After activation, set_timer schedules directly via install_timer().
     static TIMER_CALLBACKS: RefCell<Vec<(f64, f64)>> = RefCell::new(Vec::new());
+    /// True once connect_activate has fired — set_timer can then call glib::timeout_add_local
+    /// directly instead of buffering.
+    static APP_ACTIVATED: RefCell<bool> = RefCell::new(false);
     /// App lifecycle callbacks
     static ON_ACTIVATE_CALLBACK: RefCell<Option<f64>> = RefCell::new(None);
     static ON_TERMINATE_CALLBACK: RefCell<Option<f64>> = RefCell::new(None);
@@ -60,6 +64,8 @@ struct AppEntry {
     transparent: bool,
     vibrancy: Option<String>,
     activation_policy: Option<String>,
+    /// Issue #1280 — "maximized" | "fullscreen" | None (= "normal").
+    window_state: Option<String>,
 }
 
 extern "C" {
@@ -67,6 +73,10 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_run_stdlib_pump();
     fn js_promise_run_microtasks() -> i32;
+    fn js_callback_timer_tick() -> i32;
+    fn js_interval_timer_tick() -> i32;
+    fn js_run_ext_pump();
+    fn js_frame_pump_default() -> i32;
 }
 
 /// Extract a &str from a *const StringHeader pointer.
@@ -109,6 +119,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
             transparent: false,
             vibrancy: None,
             activation_policy: None,
+            window_state: None,
         });
         apps.len() as i64 // 1-based handle
     })
@@ -248,49 +259,70 @@ pub fn app_run(_app_handle: i64) {
                         widget.set_vexpand(true);
                         widget.set_halign(gtk4::Align::Fill);
                         widget.set_valign(gtk4::Align::Fill);
-                        window.set_child(Some(&widget));
+                        // Wrap in an Overlay so toast banners can be layered on
+                        // top without altering the user's widget tree.
+                        let overlay = gtk4::Overlay::new();
+                        overlay.set_child(Some(&widget));
+                        overlay.set_hexpand(true);
+                        overlay.set_vexpand(true);
+                        overlay.set_halign(gtk4::Align::Fill);
+                        overlay.set_valign(gtk4::Align::Fill);
+                        window.set_child(Some(&overlay));
+                        crate::widgets::toast::set_toast_overlay(&overlay);
                     }
                 }
 
                 // Install keyboard shortcuts on this window
                 install_shortcuts_on_window(&window);
 
+                // Issue #1864: continuous onKeyDown/onKeyUp via a second
+                // EventControllerKey routed through the shared dispatcher.
+                crate::keyboard::install_on_window(&window);
+
                 // Enable the menu bar on this window before presenting it
                 if has_menubar {
                     window.set_show_menubar(true);
+                }
+
+                // Issue #1280 — initial window state. GTK4 needs maximize() /
+                // fullscreen() called before `present()` so the window appears
+                // already in the requested state rather than flickering.
+                if let Some(ref state) = entry.window_state {
+                    match state.as_str() {
+                        "maximized" => window.maximize(),
+                        "fullscreen" => window.fullscreen(),
+                        _ => {}
+                    }
                 }
 
                 window.present();
             }
         });
 
-        // Install timers
+        // Mark the app as activated so set_timer can schedule directly from here on,
+        // then install any timers that were queued before activate fired.
+        APP_ACTIVATED.with(|a| *a.borrow_mut() = true);
         TIMER_CALLBACKS.with(|tc| {
-            for (interval_ms, callback) in tc.borrow().iter() {
-                let cb = *callback;
-                let ms = *interval_ms as u64;
-                glib::timeout_add_local(std::time::Duration::from_millis(ms), move || {
-                    // Drain resolved promises, then run microtasks (.then callbacks)
-                    unsafe {
-                        js_run_stdlib_pump();
-                        js_promise_run_microtasks();
-                    }
-                    let ptr = unsafe { js_nanbox_get_pointer(cb) } as *const u8;
-                    unsafe {
-                        js_closure_call0(ptr);
-                    }
-                    #[cfg(feature = "geisterhand")]
-                    {
-                        extern "C" {
-                            fn perry_geisterhand_pump();
-                        }
-                        unsafe {
-                            perry_geisterhand_pump();
-                        }
-                    }
-                    glib::ControlFlow::Continue
-                });
+            let queued: Vec<(f64, f64)> = tc.borrow_mut().drain(..).collect();
+            for (interval_ms, callback) in queued {
+                install_timer(interval_ms, callback);
             }
+        });
+
+        // Start the timer pump to drive setInterval/setTimeout callbacks (~120Hz)
+        // This mirrors the implementation on other platforms (macOS, Windows, etc.)
+        glib::timeout_add_local(std::time::Duration::from_millis(8), move || {
+            unsafe {
+                js_callback_timer_tick();
+                js_interval_timer_tick();
+                // Issue #1865: perry/ui `onFrame` display-link callbacks.
+                // Real gtk_widget_add_tick_callback wiring is a follow-up.
+                js_frame_pump_default();
+                js_run_ext_pump();
+                js_run_stdlib_pump();
+                js_promise_run_microtasks();
+            }
+            glib::ControlFlow::Continue
         });
 
         // Call on_activate callback
@@ -360,10 +392,45 @@ pub fn app_run(_app_handle: i64) {
         }
     }
 
+    register_cross_platform_text_handlers();
+
     // GTK Application::run() blocks like NSApplication.run()
     // Pass empty args since we handle our own argument parsing
     let empty: Vec<String> = vec![];
     app.run_with_args(&empty);
+}
+
+// =============================================================================
+// Cross-platform showToast / setText / NavStack-hidden handler registration.
+// Issue #535: routes runtime-side state writes (`js_state_set`,
+// `perry_arkts_set_text`, `perry_arkts_show_toast`) to GTK4 widget mutations.
+// =============================================================================
+
+extern "C" {
+    fn js_register_show_toast_handler(f: extern "C" fn(msg_ptr: *const u8, msg_len: usize));
+    fn js_register_set_text_handler(
+        f: extern "C" fn(id_ptr: *const u8, id_len: usize, val_ptr: *const u8, val_len: usize),
+    );
+    fn js_register_text_id_handler(
+        f: extern "C" fn(widget_handle: i64, id_ptr: *const u8, id_len: usize),
+    );
+    /// Issue #535 Layer 2 — `js_state_set` calls this for every NavStack
+    /// route bound to the changed state's synth id. Defined in
+    /// `perry-runtime/src/ui_text_registry.rs`'s `NAVSTACK_REGISTRY` block.
+    fn js_register_widget_hidden_handler(f: extern "C" fn(widget_handle: i64, hidden: i32));
+}
+
+extern "C" fn navstack_set_widget_hidden(widget_handle: i64, hidden: i32) {
+    crate::widgets::set_hidden(widget_handle, hidden != 0);
+}
+
+fn register_cross_platform_text_handlers() {
+    unsafe {
+        js_register_show_toast_handler(crate::widgets::toast::show_toast_handler);
+        js_register_set_text_handler(crate::widgets::text_registry::set_text_handler);
+        js_register_text_id_handler(crate::widgets::text_registry::register_text_id_handler);
+        js_register_widget_hidden_handler(navstack_set_widget_hidden);
+    }
 }
 
 /// Set the minimum window size.
@@ -491,6 +558,26 @@ pub fn app_set_activation_policy(app_handle: i64, value_ptr: *const u8) {
     });
 }
 
+/// Issue #1280 — initial window state. value_ptr points at a StringHeader
+/// for one of "normal" | "maximized" | "fullscreen". Anything else is
+/// silently ignored; the state is applied just before `window.present()`.
+pub fn app_set_window_state(app_handle: i64, value_ptr: *const u8) {
+    let state_str = str_from_header(value_ptr);
+    if state_str.is_empty() {
+        return;
+    }
+    APPS.with(|a| {
+        let mut apps = a.borrow_mut();
+        let idx = (app_handle - 1) as usize;
+        if idx < apps.len() {
+            apps[idx].window_state = match state_str {
+                "maximized" | "fullscreen" => Some(state_str.to_string()),
+                _ => None,
+            };
+        }
+    });
+}
+
 /// Install keyboard shortcuts on a window using EventControllerKey.
 fn install_shortcuts_on_window(window: &ApplicationWindow) {
     let controller = EventControllerKey::new();
@@ -568,11 +655,45 @@ pub fn add_keyboard_shortcut(key_ptr: *const u8, modifiers: f64, callback: f64) 
     });
 }
 
-/// Set a repeating timer. interval_ms = milliseconds between ticks.
-pub fn set_timer(interval_ms: f64, callback: f64) {
-    TIMER_CALLBACKS.with(|tc| {
-        tc.borrow_mut().push((interval_ms, callback));
+/// Install a recurring glib timeout that drains the stdlib pump + microtasks, invokes
+/// the JS callback, and (with `geisterhand`) ticks the geisterhand pump. Must run on
+/// the GTK main thread after the GLib MainContext is active.
+fn install_timer(interval_ms: f64, callback: f64) {
+    let ms = interval_ms as u64;
+    glib::timeout_add_local(std::time::Duration::from_millis(ms), move || {
+        unsafe {
+            js_run_stdlib_pump();
+            js_promise_run_microtasks();
+        }
+        let ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
+        unsafe {
+            js_closure_call0(ptr);
+        }
+        #[cfg(feature = "geisterhand")]
+        {
+            extern "C" {
+                fn perry_geisterhand_pump();
+            }
+            unsafe {
+                perry_geisterhand_pump();
+            }
+        }
+        glib::ControlFlow::Continue
     });
+}
+
+/// Set a repeating timer. interval_ms = milliseconds between ticks.
+/// Queues the timer until `connect_activate` fires; after that, schedules immediately
+/// so callers from button handlers or other timer callbacks (#429) actually run.
+pub fn set_timer(interval_ms: f64, callback: f64) {
+    let activated = APP_ACTIVATED.with(|a| *a.borrow());
+    if activated {
+        install_timer(interval_ms, callback);
+    } else {
+        TIMER_CALLBACKS.with(|tc| {
+            tc.borrow_mut().push((interval_ms, callback));
+        });
+    }
 }
 
 /// Register an on_activate callback (called when the app becomes active).

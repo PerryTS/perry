@@ -1,0 +1,16 @@
+[package]
+name = "perry-ext-cheerio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for npm `cheerio` — uses only `perry-ffi`. Sync, jQuery-like HTML parsing via `scraper`."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+scraper = "0.27"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

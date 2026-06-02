@@ -9,10 +9,47 @@ crate-type = ["rlib", "staticlib"]
 [dependencies]
 perry-ui = { path = "../perry-ui" }
 perry-ui-testkit = { workspace = true }
+perry-audio-miniaudio = { workspace = true }
 perry-runtime = { path = "../perry-runtime" }
+perry-ffi = { path = "../perry-ffi" }
+base64 = "0.22"
 libc = "0.2"
 gtk4 = { version = "0.9", features = ["v4_6"] }
 cairo-rs = "0.20"
+# perry/ui MapView (#517). libshumate is GNOME's GTK4-native vector-tile
+# map widget. 0.6.x tracks gtk4-rs 0.9 (0.5 wants gtk4 0.8, 0.7 wants
+# gtk4 0.10 — both conflict on the gtk-4 `links =` value). OSM tiles by
+# default; no API key required. Pure GtkWidget — no webview.
+libshumate = "0.6"
+# WebView component (#658 Phase 4). webkit6 0.4.x is the last release
+# pinned to gtk4 0.9 matching the rest of perry-ui-gtk4; 0.5+ moved
+# to gtk4 0.10. WebKitGTK 6.0 requires libwebkitgtk-6.0-dev at build
+# time (Ubuntu 22.10+, Debian 12+). The `decide-policy::navigation-action`
+# signal gives the same sync-intercept semantics as WKWebView's
+# decidePolicyForNavigationAction on macOS.
+webkit6 = "=0.4"
+# Persistent WebView userDataFolder (#658 v2-B) — XDG-aware data/cache
+# dir resolution for `ephemeral: false`. Pure-Rust crate, no system deps.
+dirs = "6"
+# perry/media — GStreamer playbin for streaming audio playback (#351).
+gstreamer = "0.25"
+# perry/ui CameraView — appsink frame pull for the v4l2 live-preview /
+# frame-callback pipeline (#191).
+gstreamer-app = "0.25"
+# perry/media — MPRIS D-Bus exposure for GNOME / KDE / playerctl /
+# Bluetooth headphones (#366). Linux-only; zbus has Linux-specific
+# system deps that don't build on macOS / Windows hosts, so the crate
+# stays gated behind cfg(target_os = "linux") in the source.
+[target.'cfg(target_os = "linux")'.dependencies]
+mpris-server = { version = "0.10", features = ["tokio"] }
+tokio = { version = "1", features = ["rt", "sync", "time", "net", "io-util"] }
+# perry/ui — system tray icon support via the StatusNotifierItem
+# (KSNI / KDE / GNOME-with-extension / XFCE / Plasma / Cinnamon)
+# DBus protocol (#490). Pure-Rust — no native systray library
+# dependency. Linux-only because the SNI protocol IS the Linux
+# tray protocol; macOS / Windows have native equivalents handled
+# in their respective UI crates.
+ksni = { version = "0.3", features = ["tokio"] }
 
 [features]
 geisterhand = []

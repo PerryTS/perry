@@ -161,6 +161,7 @@ extern "C" {
     fn js_callback_timer_tick() -> i32;
     fn js_interval_timer_tick() -> i32;
     fn js_promise_run_microtasks() -> i32;
+    fn js_frame_pump_default() -> i32;
 }
 
 /// Start the timer pump that drives setInterval/setTimeout/Promise callbacks.
@@ -222,8 +223,16 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativePumpTick(
         js_stdlib_process_pending();
         js_callback_timer_tick();
         js_interval_timer_tick();
+        // Issue #1865: perry/ui `onFrame` display-link callbacks. Real
+        // Choreographer.postFrameCallback wiring is a follow-up; for now
+        // the same 8ms pump drives one-shot frame callbacks.
+        js_frame_pump_default();
         js_promise_run_microtasks();
     }
+    // perry/media (#351) — drive state polling on the UI thread so the
+    // PLAYERS thread_local stays consistent with where create_player
+    // stored entries. Internally throttled to ~10 Hz.
+    crate::media_playback::pump_tick();
     #[cfg(feature = "geisterhand")]
     {
         extern "C" {
@@ -243,6 +252,12 @@ pub fn app_run(_app_handle: i64) {
     unsafe {
         __android_log_print(3, b"PerryApp\0".as_ptr(), b"app_run: called\0".as_ptr());
     }
+
+    // Phase 2 v3.3: register cross-platform showToast / setText handlers.
+    // Forwards perry_arkts_show_toast → PerryBridge.showToast (UI-thread
+    // Toast.makeText) and perry_arkts_set_text → TextView.setText via JNI.
+    register_cross_platform_text_handlers();
+
     // Attach the root widget to the Activity
     attach_root_to_activity();
 
@@ -260,6 +275,9 @@ pub fn app_run(_app_handle: i64) {
                 f: extern "C" fn(*mut usize) -> *mut u8,
             );
             fn perry_geisterhand_register_textfield_set_string(f: extern "C" fn(i64, i64));
+            fn perry_geisterhand_register_apply_style(
+                f: extern "C" fn(i64, u32, f64, f64, f64, f64),
+            );
         }
         unsafe {
             perry_geisterhand_register_state_set(crate::perry_ui_state_set);
@@ -267,10 +285,42 @@ pub fn app_run(_app_handle: i64) {
                 crate::screenshot::perry_ui_screenshot_capture,
             );
             perry_geisterhand_register_textfield_set_string(crate::perry_ui_textfield_set_string);
+            perry_geisterhand_register_apply_style(crate::geisterhand_style::apply_style);
         }
     }
 
     // On Android we must NOT block — the Activity lifecycle IS the event loop.
+}
+
+// ============================================================================
+// Phase 2 v3.3: cross-platform showToast / setText wiring.
+// ============================================================================
+
+extern "C" {
+    fn js_register_show_toast_handler(f: extern "C" fn(msg_ptr: *const u8, msg_len: usize));
+    fn js_register_set_text_handler(
+        f: extern "C" fn(id_ptr: *const u8, id_len: usize, val_ptr: *const u8, val_len: usize),
+    );
+    fn js_register_text_id_handler(
+        f: extern "C" fn(widget_handle: i64, id_ptr: *const u8, id_len: usize),
+    );
+    /// Issue #535 Layer 2 — `js_state_set` calls this for every NavStack
+    /// route bound to the changed state's synth id. Defined in
+    /// `perry-runtime/src/ui_text_registry.rs`'s `NAVSTACK_REGISTRY` block.
+    fn js_register_widget_hidden_handler(f: extern "C" fn(widget_handle: i64, hidden: i32));
+}
+
+extern "C" fn navstack_set_widget_hidden(widget_handle: i64, hidden: i32) {
+    crate::widgets::set_hidden(widget_handle, hidden != 0);
+}
+
+fn register_cross_platform_text_handlers() {
+    unsafe {
+        js_register_show_toast_handler(widgets::toast::show_toast_handler);
+        js_register_set_text_handler(widgets::text_registry::set_text_handler);
+        js_register_text_id_handler(widgets::text_registry::register_text_id_handler);
+        js_register_widget_hidden_handler(navstack_set_widget_hidden);
+    }
 }
 
 /// Called when the Activity is destroyed. No-op since App() doesn't block on Android.

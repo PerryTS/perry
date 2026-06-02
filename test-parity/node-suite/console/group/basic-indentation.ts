@@ -1,0 +1,9 @@
+console.log("outer");
+console.group();
+console.log("level2");
+console.group();
+console.log("level3");
+console.groupEnd();
+console.log("back2");
+console.groupEnd();
+console.log("outer-again");

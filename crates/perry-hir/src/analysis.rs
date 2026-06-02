@@ -8,6 +8,15 @@ use perry_types::LocalId;
 use crate::ir::*;
 use crate::walker::{walk_expr_children, walk_expr_children_mut};
 
+mod builtins;
+pub(crate) use builtins::{
+    builtin_constructor_length, builtin_static_function_length, is_builtin_function,
+    is_builtin_global_value_name, is_builtin_static_function_member,
+};
+
+mod uses_this;
+pub(crate) use uses_this::{closure_uses_this, uses_this_expr, uses_this_stmt};
+
 /// Collect every `LocalId` referenced by `expr` (and its sub-expressions).
 ///
 /// Per-variant work focuses on the LocalId-bearing variants (LocalGet,
@@ -190,6 +199,9 @@ pub fn collect_local_refs_stmt(
         Stmt::Throw(expr) => {
             collect_local_refs_expr(expr, refs, visited);
         }
+        Stmt::PreallocateBoxes(_) => {
+            // Pre-allocates slot+box; no expression sub-tree to visit.
+        }
     }
 }
 
@@ -292,6 +304,9 @@ pub(crate) fn collect_assigned_locals_stmt(stmt: &Stmt, assigned: &mut Vec<Local
         }
         Stmt::Throw(expr) => {
             collect_assigned_locals_expr(expr, assigned);
+        }
+        Stmt::PreallocateBoxes(_) => {
+            // Slot+box allocation; no assignment to an outer variable.
         }
     }
 }
@@ -436,7 +451,10 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(h, assigned);
         }
         // Path operations
-        Expr::PathJoin(a, b) => {
+        Expr::PathJoin(a, b)
+        | Expr::PathMatchesGlob(a, b)
+        | Expr::PathResolveJoin(a, b)
+        | Expr::PathWin32Join(a, b) => {
             collect_assigned_locals_expr(a, assigned);
             collect_assigned_locals_expr(b, assigned);
         }
@@ -445,8 +463,14 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::PathExtname(path)
         | Expr::PathResolve(path)
         | Expr::PathIsAbsolute(path)
+        | Expr::PathToNamespacedPath(path)
         | Expr::FileURLToPath(path) => {
             collect_assigned_locals_expr(path, assigned);
+        }
+        Expr::PathWin32 { args, .. } => {
+            for e in args {
+                collect_assigned_locals_expr(e, assigned);
+            }
         }
         // Array methods - push/unshift may reassign the array pointer
         Expr::ArrayPush { array_id, value }
@@ -461,7 +485,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         Expr::ArrayPop(_array_id) | Expr::ArrayShift(_array_id) => {
             // These modify the array but don't reallocate
         }
-        Expr::ArrayIndexOf { array, value } | Expr::ArrayIncludes { array, value } => {
+        Expr::ArrayIndexOf { array, value, .. } | Expr::ArrayIncludes { array, value, .. } => {
             collect_assigned_locals_expr(array, assigned);
             collect_assigned_locals_expr(value, assigned);
         }
@@ -636,7 +660,10 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(set, assigned);
         }
         // JSON operations
-        Expr::JsonParse(expr) | Expr::JsonStringify(expr) => {
+        Expr::JsonParse(expr)
+        | Expr::JsonStringify(expr)
+        | Expr::JsonRawJson(expr)
+        | Expr::JsonIsRawJson(expr) => {
             collect_assigned_locals_expr(expr, assigned);
         }
         // Math operations
@@ -668,6 +695,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(expr, assigned);
         }
         Expr::CryptoRandomUUID => {}
+        Expr::CryptoRandomUUIDv7 => {}
         // OS operations (no assignments)
         Expr::OsPlatform
         | Expr::OsArch
@@ -682,7 +710,14 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::OsCpus
         | Expr::OsNetworkInterfaces
         | Expr::OsUserInfo
-        | Expr::OsEOL => {}
+        | Expr::OsUserInfoBuffer
+        | Expr::OsEOL
+        | Expr::OsDevNull
+        | Expr::OsAvailableParallelism
+        | Expr::OsEndianness
+        | Expr::OsLoadavg
+        | Expr::OsMachine
+        | Expr::OsVersion => {}
         // Buffer operations
         Expr::BufferFrom { data, encoding } => {
             collect_assigned_locals_expr(data, assigned);
@@ -690,18 +725,46 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
                 collect_assigned_locals_expr(enc, assigned);
             }
         }
-        Expr::BufferAlloc { size, fill } => {
+        Expr::BufferFromArrayBuffer {
+            data,
+            byte_offset,
+            length,
+        } => {
+            collect_assigned_locals_expr(data, assigned);
+            collect_assigned_locals_expr(byte_offset, assigned);
+            if let Some(len) = length {
+                collect_assigned_locals_expr(len, assigned);
+            }
+        }
+        Expr::BufferAlloc {
+            size,
+            fill,
+            encoding,
+        } => {
             collect_assigned_locals_expr(size, assigned);
             if let Some(f) = fill {
                 collect_assigned_locals_expr(f, assigned);
+            }
+            if let Some(e) = encoding {
+                collect_assigned_locals_expr(e, assigned);
             }
         }
         Expr::BufferAllocUnsafe(expr)
         | Expr::BufferConcat(expr)
         | Expr::BufferIsBuffer(expr)
-        | Expr::BufferByteLength(expr)
+        | Expr::BufferIsEncoding(expr)
         | Expr::BufferLength(expr) => {
             collect_assigned_locals_expr(expr, assigned);
+        }
+        Expr::BufferConcatWithLength { list, total_length } => {
+            collect_assigned_locals_expr(list, assigned);
+            collect_assigned_locals_expr(total_length, assigned);
+        }
+        Expr::BufferByteLength { data, encoding } => {
+            collect_assigned_locals_expr(data, assigned);
+            if let Some(enc) = encoding {
+                collect_assigned_locals_expr(enc, assigned);
+            }
         }
         Expr::BufferToString { buffer, encoding } => {
             collect_assigned_locals_expr(buffer, assigned);
@@ -798,6 +861,19 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
                 collect_assigned_locals_expr(opts, assigned);
             }
         }
+        Expr::ChildProcessFork {
+            module,
+            args,
+            options,
+        } => {
+            collect_assigned_locals_expr(module, assigned);
+            if let Some(a) = args {
+                collect_assigned_locals_expr(a, assigned);
+            }
+            if let Some(opts) = options {
+                collect_assigned_locals_expr(opts, assigned);
+            }
+        }
         Expr::ChildProcessExec {
             command,
             options,
@@ -843,9 +919,9 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         }
         // Date operations
         Expr::DateNow => {}
-        Expr::DateNew(timestamp) => {
-            if let Some(ts) = timestamp {
-                collect_assigned_locals_expr(ts, assigned);
+        Expr::DateNew(args) => {
+            for a in args {
+                collect_assigned_locals_expr(a, assigned);
             }
         }
         Expr::DateGetTime(date)
@@ -853,6 +929,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::DateGetFullYear(date)
         | Expr::DateGetMonth(date)
         | Expr::DateGetDate(date)
+        | Expr::DateGetDay(date)
         | Expr::DateGetHours(date)
         | Expr::DateGetMinutes(date)
         | Expr::DateGetSeconds(date)
@@ -875,8 +952,22 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::UrlGetSearch(url)
         | Expr::UrlGetHash(url)
         | Expr::UrlGetOrigin(url)
-        | Expr::UrlGetSearchParams(url) => {
+        | Expr::UrlGetSearchParams(url)
+        | Expr::UrlParse(url)
+        | Expr::UrlInstanceToString(url)
+        | Expr::UrlInstanceToJSON(url) => {
             collect_assigned_locals_expr(url, assigned);
+        }
+        Expr::UrlCanParse(url) => {
+            collect_assigned_locals_expr(url, assigned);
+        }
+        Expr::UrlCanParseWithBase { input, base } => {
+            collect_assigned_locals_expr(input, assigned);
+            collect_assigned_locals_expr(base, assigned);
+        }
+        Expr::UrlParseWithBase { input, base } => {
+            collect_assigned_locals_expr(input, assigned);
+            collect_assigned_locals_expr(base, assigned);
         }
         // URLSearchParams operations
         Expr::UrlSearchParamsNew(init) => {
@@ -884,12 +975,32 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
                 collect_assigned_locals_expr(init_expr, assigned);
             }
         }
+        Expr::UrlSearchParamsMissingArgs { params, args, .. } => {
+            collect_assigned_locals_expr(params, assigned);
+            for arg in args {
+                collect_assigned_locals_expr(arg, assigned);
+            }
+        }
         Expr::UrlSearchParamsGet { params, name }
-        | Expr::UrlSearchParamsHas { params, name }
-        | Expr::UrlSearchParamsDelete { params, name }
         | Expr::UrlSearchParamsGetAll { params, name } => {
             collect_assigned_locals_expr(params, assigned);
             collect_assigned_locals_expr(name, assigned);
+        }
+        Expr::UrlSearchParamsHas {
+            params,
+            name,
+            value,
+        }
+        | Expr::UrlSearchParamsDelete {
+            params,
+            name,
+            value,
+        } => {
+            collect_assigned_locals_expr(params, assigned);
+            collect_assigned_locals_expr(name, assigned);
+            if let Some(v) = value {
+                collect_assigned_locals_expr(v, assigned);
+            }
         }
         Expr::UrlSearchParamsSet {
             params,
@@ -905,7 +1016,22 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(name, assigned);
             collect_assigned_locals_expr(value, assigned);
         }
-        Expr::UrlSearchParamsToString(params) => {
+        Expr::UrlSearchParamsForEach {
+            params,
+            callback,
+            this_arg,
+        } => {
+            collect_assigned_locals_expr(params, assigned);
+            collect_assigned_locals_expr(callback, assigned);
+            if let Some(this_arg) = this_arg {
+                collect_assigned_locals_expr(this_arg, assigned);
+            }
+        }
+        Expr::UrlSearchParamsToString(params)
+        | Expr::UrlSearchParamsEntries(params)
+        | Expr::UrlSearchParamsKeys(params)
+        | Expr::UrlSearchParamsValues(params)
+        | Expr::UrlSearchParamsSort(params) => {
             collect_assigned_locals_expr(params, assigned);
         }
         Expr::GlobalSet(_, value) => {
@@ -916,6 +1042,9 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::GlobalGet(_)
         | Expr::FuncRef(_)
         | Expr::ExternFuncRef { .. }
+        | Expr::PodLayoutSizeOf { .. }
+        | Expr::PodLayoutAlignOf { .. }
+        | Expr::PodLayoutOffsetOf { .. }
         | Expr::ClassRef(_)
         | Expr::Number(_)
         | Expr::Integer(_)
@@ -934,25 +1063,39 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::ProcessCwd
         | Expr::ProcessMemoryUsage
         | Expr::ProcessEnv
+        | Expr::GlobalThisExpr
         | Expr::NativeModuleRef(_)
         | Expr::RegExp { .. } => {}
         Expr::ObjectKeys(obj) | Expr::ObjectValues(obj) | Expr::ObjectEntries(obj) => {
             collect_assigned_locals_expr(obj, assigned);
         }
-        Expr::ObjectGroupBy { items, key_fn } => {
+        Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn } => {
             collect_assigned_locals_expr(items, assigned);
             collect_assigned_locals_expr(key_fn, assigned);
         }
         Expr::ArrayIsArray(value) | Expr::ArrayFrom(value) => {
             collect_assigned_locals_expr(value, assigned);
         }
-        Expr::ArrayFromMapped { iterable, map_fn } => {
+        Expr::ArrayFromMapped {
+            iterable,
+            map_fn,
+            this_arg,
+        } => {
             collect_assigned_locals_expr(iterable, assigned);
             collect_assigned_locals_expr(map_fn, assigned);
+            if let Some(t) = this_arg {
+                collect_assigned_locals_expr(t, assigned);
+            }
         }
         Expr::RegExpTest { regex, string } => {
             collect_assigned_locals_expr(regex, assigned);
             collect_assigned_locals_expr(string, assigned);
+        }
+        Expr::RegExpDynamic { pattern, flags } => {
+            collect_assigned_locals_expr(pattern, assigned);
+            if let Some(f) = flags {
+                collect_assigned_locals_expr(f, assigned);
+            }
         }
         Expr::StringMatch { string, regex } => {
             collect_assigned_locals_expr(string, assigned);
@@ -983,6 +1126,9 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(value, assigned);
         }
         Expr::StringCoerce(value) => {
+            collect_assigned_locals_expr(value, assigned);
+        }
+        Expr::ObjectCoerce(value) => {
             collect_assigned_locals_expr(value, assigned);
         }
         Expr::BooleanCoerce(value) => {
@@ -1021,17 +1167,9 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
                 collect_assigned_locals_expr(arg, assigned);
             }
         }
-        // OS module expressions (no local refs or assignments)
-        Expr::OsPlatform
-        | Expr::OsArch
-        | Expr::OsHostname
-        | Expr::OsType
-        | Expr::OsRelease
-        | Expr::OsHomedir
-        | Expr::OsTmpdir
-        | Expr::OsTotalmem
-        | Expr::OsFreemem
-        | Expr::OsCpus => {}
+        // #853: an earlier arm in this match (lines 682-695) already
+        // covers every Expr::Os* variant. The duplicate arm here was
+        // dead — removed.
         // Delete operator
         Expr::Delete(inner) => {
             collect_assigned_locals_expr(inner, assigned);
@@ -1045,9 +1183,14 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         Expr::ErrorMessage(err) => {
             collect_assigned_locals_expr(err, assigned);
         }
-        Expr::ErrorNewWithCause { message, cause } => {
+        Expr::ErrorNewWithCause { message, cause: b }
+        | Expr::ErrorNewWithOptions {
+            message,
+            options: b,
+            ..
+        } => {
             collect_assigned_locals_expr(message, assigned);
-            collect_assigned_locals_expr(cause, assigned);
+            collect_assigned_locals_expr(b, assigned);
         }
         Expr::TypeErrorNew(m)
         | Expr::RangeErrorNew(m)
@@ -1055,9 +1198,16 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::SyntaxErrorNew(m) => {
             collect_assigned_locals_expr(m, assigned);
         }
-        Expr::AggregateErrorNew { errors, message } => {
+        Expr::AggregateErrorNew {
+            errors,
+            message,
+            options,
+        } => {
             collect_assigned_locals_expr(errors, assigned);
             collect_assigned_locals_expr(message, assigned);
+            options
+                .iter()
+                .for_each(|o| collect_assigned_locals_expr(o, assigned));
         }
         // Uint8Array operations
         Expr::Uint8ArrayNew(size) => {
@@ -1085,6 +1235,37 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             if let Some(a) = arg {
                 collect_assigned_locals_expr(a, assigned);
             }
+        }
+        Expr::NativeArenaAlloc(byte_length) | Expr::NativeArenaDispose(byte_length) => {
+            collect_assigned_locals_expr(byte_length, assigned);
+        }
+        Expr::NativeArenaView {
+            owner,
+            byte_offset,
+            length,
+            ..
+        } => {
+            collect_assigned_locals_expr(owner, assigned);
+            collect_assigned_locals_expr(byte_offset, assigned);
+            collect_assigned_locals_expr(length, assigned);
+        }
+        Expr::NativePodView {
+            owner,
+            byte_offset,
+            count,
+            ..
+        } => {
+            collect_assigned_locals_expr(owner, assigned);
+            collect_assigned_locals_expr(byte_offset, assigned);
+            collect_assigned_locals_expr(count, assigned);
+        }
+        Expr::NativeMemoryFillU32 { view, value } => {
+            collect_assigned_locals_expr(view, assigned);
+            collect_assigned_locals_expr(value, assigned);
+        }
+        Expr::NativeMemoryCopy { dst, src } => {
+            collect_assigned_locals_expr(dst, assigned);
+            collect_assigned_locals_expr(src, assigned);
         }
         // Dynamic env access
         Expr::EnvGetDynamic(key) => {
@@ -1179,135 +1360,6 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         // Catch-all for any other terminal expressions
         _ => {}
     }
-}
-
-/// Check if an expression or its children use `this`
-pub(crate) fn uses_this_expr(expr: &Expr) -> bool {
-    match expr {
-        Expr::This => true,
-        Expr::Binary { left, right, .. }
-        | Expr::Compare { left, right, .. }
-        | Expr::Logical { left, right, .. } => uses_this_expr(left) || uses_this_expr(right),
-        Expr::Unary { operand, .. } => uses_this_expr(operand),
-        Expr::Call { callee, args, .. } => {
-            uses_this_expr(callee) || args.iter().any(uses_this_expr)
-        }
-        Expr::PropertyGet { object, .. } | Expr::PropertyUpdate { object, .. } => {
-            uses_this_expr(object)
-        }
-        Expr::PropertySet { object, value, .. } => uses_this_expr(object) || uses_this_expr(value),
-        Expr::IndexGet { object, index } => uses_this_expr(object) || uses_this_expr(index),
-        Expr::IndexSet {
-            object,
-            index,
-            value,
-        } => uses_this_expr(object) || uses_this_expr(index) || uses_this_expr(value),
-        Expr::LocalSet(_, value) => uses_this_expr(value),
-        Expr::New { args, .. } => args.iter().any(uses_this_expr),
-        Expr::Array(elements) => elements.iter().any(uses_this_expr),
-        Expr::ArraySpread(elements) => elements.iter().any(|e| match e {
-            ArrayElement::Expr(e) | ArrayElement::Spread(e) => uses_this_expr(e),
-        }),
-        Expr::Object(fields) => fields.iter().any(|(_, e)| uses_this_expr(e)),
-        Expr::ObjectSpread { parts } => parts.iter().any(|(_, e)| uses_this_expr(e)),
-        Expr::Conditional {
-            condition,
-            then_expr,
-            else_expr,
-        } => uses_this_expr(condition) || uses_this_expr(then_expr) || uses_this_expr(else_expr),
-        Expr::Await(inner) => uses_this_expr(inner),
-        Expr::Sequence(exprs) => exprs.iter().any(uses_this_expr),
-        Expr::NativeMethodCall { object, args, .. } => {
-            object.as_ref().map(|o| uses_this_expr(o)).unwrap_or(false)
-                || args.iter().any(uses_this_expr)
-        }
-        Expr::SuperCall(args) | Expr::SuperMethodCall { args, .. } => {
-            args.iter().any(uses_this_expr)
-        }
-        Expr::Closure { .. } => {
-            // Don't recurse into nested closures - they have their own `this` handling
-            false
-        }
-        // Terminal expressions that don't use `this`
-        _ => false,
-    }
-}
-
-/// Check if a statement or its children use `this`
-pub(crate) fn uses_this_stmt(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Let {
-            init: Some(expr), ..
-        } => uses_this_expr(expr),
-        Stmt::Expr(expr) => uses_this_expr(expr),
-        Stmt::Return(Some(expr)) => uses_this_expr(expr),
-        Stmt::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            uses_this_expr(condition)
-                || then_branch.iter().any(uses_this_stmt)
-                || else_branch
-                    .as_ref()
-                    .map(|b| b.iter().any(uses_this_stmt))
-                    .unwrap_or(false)
-        }
-        Stmt::While { condition, body } => {
-            uses_this_expr(condition) || body.iter().any(uses_this_stmt)
-        }
-        Stmt::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            init.as_ref().map(|s| uses_this_stmt(s)).unwrap_or(false)
-                || condition.as_ref().map(uses_this_expr).unwrap_or(false)
-                || update.as_ref().map(uses_this_expr).unwrap_or(false)
-                || body.iter().any(uses_this_stmt)
-        }
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            body.iter().any(uses_this_stmt)
-                || catch
-                    .as_ref()
-                    .map(|c| c.body.iter().any(uses_this_stmt))
-                    .unwrap_or(false)
-                || finally
-                    .as_ref()
-                    .map(|f| f.iter().any(uses_this_stmt))
-                    .unwrap_or(false)
-        }
-        Stmt::Throw(expr) => uses_this_expr(expr),
-        Stmt::Switch {
-            discriminant,
-            cases,
-        } => {
-            uses_this_expr(discriminant)
-                || cases.iter().any(|c| {
-                    c.test.as_ref().map(uses_this_expr).unwrap_or(false)
-                        || c.body.iter().any(uses_this_stmt)
-                })
-        }
-        _ => false,
-    }
-}
-
-/// Check if a closure body uses `this`
-pub(crate) fn closure_uses_this(body: &[Stmt]) -> bool {
-    body.iter().any(uses_this_stmt)
-}
-
-/// Check if a name is a built-in global function provided by the runtime
-pub(crate) fn is_builtin_function(name: &str) -> bool {
-    matches!(
-        name,
-        "setTimeout" | "setInterval" | "clearTimeout" | "clearInterval" | "fetch" | "gc"
-    )
 }
 
 /// Rewrite all `Expr::This` references inside a block of statements to
@@ -1579,7 +1631,7 @@ fn remap_local_ids_in_stmt(stmt: &mut Stmt, map: &std::collections::HashMap<Loca
 /// `perry_hir::walker`. Pre-refactor this fn carried its own ad-hoc walker
 /// with a `_ => {}` catch-all that silently skipped any new variant added to
 /// `Expr` (issue #212 partial-fix lineage).
-fn remap_local_ids_in_expr(expr: &mut Expr, map: &std::collections::HashMap<LocalId, LocalId>) {
+pub fn remap_local_ids_in_expr(expr: &mut Expr, map: &std::collections::HashMap<LocalId, LocalId>) {
     match expr {
         Expr::LocalGet(id) => {
             if let Some(&new_id) = map.get(id) {

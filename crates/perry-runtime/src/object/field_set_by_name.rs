@@ -1,0 +1,972 @@
+//! Dynamic `obj[key] = value` write path
+//! (`js_object_set_field_by_name`) plus its diagnostic helper.
+//!
+//! Split out of `object/field_get_set.rs` (issue #1103). Pure relocation
+//! — no logic changes.
+
+use super::*;
+
+/// Fast transition-cache-backed dynamic property write.
+///
+/// This is intentionally narrower than `js_object_set_field_by_name`: it only
+/// handles plain object-shape transitions that have already been learned by
+/// the runtime transition cache. Accessors/descriptors, frozen/sealed objects,
+/// class/prototype receivers, closures, native handles, arrays, strings, and
+/// cache misses return 0 so callers preserve the full setter semantics by
+/// falling back to `js_object_set_field_by_name`.
+#[no_mangle]
+pub extern "C" fn js_object_set_field_by_name_transition_fast(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+) -> i32 {
+    if key.is_null() || (key as usize) < 0x10000 {
+        return 0;
+    }
+
+    let obj = {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        if top16 >= 0x7FF8 {
+            if top16 == 0x7FFC {
+                return 0;
+            }
+            let raw = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
+            if raw.is_null() || (raw as usize) < 0x10000 {
+                return 0;
+            }
+            raw
+        } else {
+            obj
+        }
+    };
+
+    if obj.is_null() || (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return 0;
+    }
+    if GLOBAL_DESCRIPTORS_IN_USE.load(Ordering::Relaxed) {
+        return 0;
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let key_handle = scope.root_string_ptr(key);
+    let value_handle = scope.root_nanbox_f64(value);
+
+    unsafe {
+        let mut obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+
+        if !is_valid_obj_ptr(obj as *const u8) {
+            return 0;
+        }
+        let gc_header =
+            (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
+            || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return 0;
+        }
+        let object_flags = (*gc_header)._reserved;
+        if object_flags
+            & (crate::gc::OBJ_FLAG_FROZEN
+                | crate::gc::OBJ_FLAG_SEALED
+                | crate::gc::OBJ_FLAG_NO_EXTEND)
+            != 0
+        {
+            return 0;
+        }
+        if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR || (*obj).class_id != 0 {
+            return 0;
+        }
+
+        let key_gc =
+            (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*key_gc).obj_type != crate::gc::GC_TYPE_STRING {
+            return 0;
+        }
+        let interned_key = if (*key_gc).gc_flags & crate::gc::GC_FLAG_INTERNED != 0 {
+            key
+        } else {
+            let hash = key_content_hash(key);
+            crate::string::js_string_intern(key, hash)
+        };
+        if interned_key.is_null() {
+            return 0;
+        }
+
+        obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let value = value_handle.get_nanbox_f64();
+
+        let keys = (*obj).keys_array;
+        let prev_keys = keys as usize;
+        if !keys.is_null() {
+            let keys_ptr = keys as usize;
+            if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 {
+                return 0;
+            }
+        }
+
+        let Some((next_keys, slot_idx)) = transition_cache_lookup(prev_keys, interned_key) else {
+            return 0;
+        };
+        if next_keys == 0 {
+            return 0;
+        }
+
+        set_object_keys_array(obj, next_keys as *mut ArrayHeader);
+        super::mark_object_dynamic_shape_unknown(obj);
+
+        let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
+        let slot_usize = slot_idx as usize;
+        let vbits = value.to_bits();
+        let vbits = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
+            crate::value::TAG_UNDEFINED
+        } else {
+            vbits
+        };
+
+        if slot_usize < alloc_limit {
+            store_object_field_slot(obj, slot_usize, vbits);
+            if slot_idx >= (*obj).field_count {
+                (*obj).field_count = slot_idx + 1;
+            }
+        } else {
+            overflow_set(obj as usize, slot_usize, vbits);
+        }
+    }
+
+    1
+}
+
+/// Issue #615 helper — read a `*const StringHeader` as a Rust `String`
+/// for inclusion in TypeError diagnostic messages. Returns `"<unknown>"`
+/// for null / non-UTF-8 / corrupt headers so the throw still fires
+/// rather than panicking on the slow-path edge case.
+unsafe fn key_to_str_for_diag(key: *const crate::StringHeader) -> String {
+    if key.is_null() {
+        return "<unknown>".to_string();
+    }
+    let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let name_len = (*key).byte_len as usize;
+    if name_len == 0 {
+        return String::new();
+    }
+    let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+    std::str::from_utf8(name_bytes)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|_| "<unknown>".to_string())
+}
+
+/// Set a field value by its string key name (dynamic property access)
+/// This searches the keys array for a match and sets the corresponding value.
+/// If the key doesn't exist, it adds it to the object.
+#[allow(unused_assignments)]
+#[no_mangle]
+pub extern "C" fn js_object_set_field_by_name(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+) {
+    // Issue #618-followup: detect INT32-tagged class ref (top16 == 0x7FFE).
+    // Drizzle's `((SQL2) => { SQL2.Aliased = Aliased; })(SQL)` pattern sets
+    // a static property on an imported class — Perry stores classes as
+    // INT32-tagged class ids, so the receiver here is e.g. 0x7FFE_0000_0000_002A
+    // not a real ObjectHeader. Route to the CLASS_DYNAMIC_PROPS side-table
+    // so a later `SQL.Aliased` read can find it.
+    {
+        let bits = obj as u64;
+        if (bits >> 48) == 0x7FFE && !key.is_null() {
+            let class_id = (bits & 0xFFFF_FFFF) as u32;
+            unsafe {
+                let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_len = (*key).byte_len as usize;
+                let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
+                    .unwrap_or("")
+                    .to_string();
+                if !name.is_empty() {
+                    class_dynamic_prop_root_store(class_id, name, value);
+                }
+            }
+            return;
+        }
+    }
+    // Property writes to primitive values operate on temporary wrapper objects
+    // and do not persist. More importantly for Perry's raw-f64 numbers, they
+    // must never fall through to the ObjectHeader dereference path below.
+    {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        let jv = JSValue::from_bits(bits);
+        if (jv.is_number() && top16 != 0)
+            || jv.is_bool()
+            || jv.is_any_string()
+            || jv.is_undefined()
+            || jv.is_null()
+            || jv.is_bigint()
+        {
+            return;
+        }
+    }
+    // #2089: a `Date` is a NaN-boxed pointer to an 8-byte `DateCell`. Setting
+    // an arbitrary property on it (`date.foo = x`) must NOT deref the small
+    // cell as an `ObjectHeader` below (memory corruption). Perry doesn't model
+    // expando properties on Date objects, so treat it as a no-op — the same
+    // observable result as the old value-type representation (a property set
+    // on a primitive number).
+    {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        let addr = if top16 == 0x7FFD {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else if top16 == 0 {
+            bits as usize
+        } else {
+            0
+        };
+        if addr != 0 && crate::date::is_date_cell_addr(addr) {
+            return;
+        }
+    }
+    // Strip NaN-boxing tags if present (defensive: handle POINTER_TAG, UNDEFINED, NULL, etc.)
+    let obj = {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        if top16 >= 0x7FF8 {
+            // NaN-boxed value — extract lower 48 bits as pointer
+            let raw = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
+            if raw.is_null() || top16 == 0x7FFC {
+                return;
+            }
+            if (raw as usize) < 0x10000 {
+                // Small handle — dispatch to handle property set if registered
+                if let Some(dispatch) = handle_property_set_dispatch() {
+                    if !key.is_null() {
+                        unsafe {
+                            let name_ptr =
+                                (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                            let name_len = (*key).byte_len as usize;
+                            dispatch(raw as i64, name_ptr, name_len, value);
+                        }
+                    }
+                }
+                return;
+            }
+            raw
+        } else {
+            obj
+        }
+    };
+    if obj.is_null() || (obj as usize) < 0x10000 {
+        // Small non-null value — could be a stripped handle (after ensure_i64 stripped NaN-box tag)
+        if !obj.is_null() && (obj as usize) > 0 {
+            if let Some(dispatch) = handle_property_set_dispatch() {
+                if !key.is_null() {
+                    unsafe {
+                        let name_ptr =
+                            (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                        let name_len = (*key).byte_len as usize;
+                        dispatch(obj as i64, name_ptr, name_len, value);
+                    }
+                }
+            }
+        }
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let key_handle = scope.root_string_ptr(key);
+    let value_handle = scope.root_nanbox_f64(value);
+    let mut obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+    let mut key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+    let mut value = value_handle.get_nanbox_f64();
+    // Safety: obj is a valid heap pointer (> 0x10000) at this point
+    unsafe {
+        // Validate this is an ObjectHeader, not some other heap type.
+        // Check GcHeader first (reliable for heap objects), then fallback to ObjectHeader.object_type
+        // for static/const objects that don't have GcHeaders.
+        // Guard: ensure we can safely read GC_HEADER_SIZE bytes before obj
+        if (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+            return;
+        }
+        let gc_header =
+            (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        let gc_type = (*gc_header).obj_type;
+        if gc_type == crate::gc::GC_TYPE_ARRAY {
+            if key.is_null() {
+                return;
+            }
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+            let name = match std::str::from_utf8(key_bytes) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            let arr = obj as *mut crate::array::ArrayHeader;
+            if name == "length" {
+                crate::array::js_array_set_length(arr, value);
+                return;
+            }
+            if let Some(index) = super::canonical_array_index(name) {
+                crate::array::js_array_set_f64_extend(arr, index, value);
+                return;
+            }
+            if let Some(attrs) = super::get_property_attrs(obj as usize, name) {
+                if !attrs.writable() {
+                    return;
+                }
+            }
+            crate::array::array_named_property_set(arr, key, value);
+            return;
+        }
+        // Error objects have a fixed `#[repr(C)]` layout with no field-storage
+        // region (`message`/`name`/`stack`/`cause`/`errors` are dedicated
+        // slots), so a user assignment like `err.code = "X"` or
+        // `err.errno = -2` has nowhere to land in the header. Route it to the
+        // per-error user-property side table so the matching getter — and
+        // `assert.throws(fn, { code })` (#2014) — can read it back. The getter
+        // checks this table first, so this also lets a user override the
+        // built-in message/name accessors, matching Node.
+        if gc_type == crate::gc::GC_TYPE_ERROR {
+            if !key.is_null() {
+                let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_len = (*key).byte_len as usize;
+                if let Ok(name_str) =
+                    std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
+                {
+                    crate::node_submodules::set_error_user_prop(obj as usize, name_str, value);
+                }
+            }
+            return;
+        }
+        if gc_type != crate::gc::GC_TYPE_OBJECT && gc_type != crate::gc::GC_TYPE_CLOSURE {
+            if !is_valid_obj_ptr(obj as *const u8) {
+                return;
+            }
+            // Not a heap object/closure — only accept object_type == 1 (OBJECT_TYPE_REGULAR)
+            let object_type = (*obj).object_type;
+            if object_type != crate::error::OBJECT_TYPE_REGULAR {
+                return;
+            }
+        }
+
+        // Check if this is a ClosureHeader — closures support dynamic props via separate storage.
+        // ClosureHeader has CLOSURE_MAGIC (0x434C4F53) at offset 12.
+        // Without this check, (*obj).keys_array reads capture[0] → corruption/crash.
+        let type_tag_at_12 = *((obj as *const u8).add(12) as *const u32);
+        if type_tag_at_12 == crate::closure::CLOSURE_MAGIC {
+            if !key.is_null() {
+                let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_len = (*key).byte_len as usize;
+                let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+                if let Ok(name_str) = std::str::from_utf8(name_bytes) {
+                    // #3143: honor a non-writable registered descriptor — a
+                    // built-in method's `.name`/`.length` are spec'd
+                    // `writable: false`, so a sloppy-mode write must be a silent
+                    // no-op (this is what Test262's `verifyProperty` checks).
+                    // Only fires when a descriptor was actually recorded for
+                    // this closure+key (built-in proto methods, or a user
+                    // `Object.defineProperty`); plain `fn.x = 1` finds none and
+                    // proceeds. Closure writes are not the object hot path.
+                    if let Some(attrs) = super::get_property_attrs(obj as usize, name_str) {
+                        if !attrs.writable() {
+                            return;
+                        }
+                    }
+                    crate::closure::closure_set_dynamic_prop(obj as usize, name_str, value);
+                }
+            }
+            return;
+        }
+
+        if (*obj).class_id == NATIVE_MODULE_CLASS_ID && !key.is_null() {
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            let property_name =
+                std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
+            let module_name =
+                get_module_name_from_namespace(crate::value::js_nanbox_pointer(obj as i64));
+            if module_name == "buffer.Buffer" && property_name == "poolSize" {
+                super::set_buffer_pool_size(value);
+                return;
+            }
+        }
+
+        // Refs #486 (hono): class setter dispatch. JS spec: a `set X(...)`
+        // accessor on the prototype intercepts `obj.X = value` writes
+        // before they hit the instance's data slots. Hono's `set res(_res)
+        // { …; this.#res = _res; this.finalized = true; }` is the canonical
+        // example — without setter dispatch, `c.res = response` from inside
+        // compose stored the response into a regular field slot but never
+        // ran the body, so `this.finalized = true` never executed and
+        // hono-base's `if (!context.finalized) throw` fired on every
+        // request. Walk the class -> parent chain mirroring the getter
+        // dispatch in `js_object_get_field_by_name`.
+        if !key.is_null() && (key as usize) > 0x10000 {
+            let class_id = (*obj).class_id;
+            if class_id != 0 {
+                if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
+                    if let Some(ref reg) = *registry {
+                        let key_bytes = {
+                            let name_ptr =
+                                (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                            let name_len = (*key).byte_len as usize;
+                            std::slice::from_raw_parts(name_ptr, name_len)
+                        };
+                        let mut cid = class_id;
+                        let mut depth = 0usize;
+                        while depth < 32 {
+                            if let Some(vtable) = reg.get(&cid) {
+                                if let Ok(name) = std::str::from_utf8(key_bytes) {
+                                    if let Some(&setter_ptr) = vtable.setters.get(name) {
+                                        // Setters take `(this_f64, value_f64)`
+                                        // matching the codegen calling
+                                        // convention for class methods (this
+                                        // = NaN-boxed POINTER_TAG of the
+                                        // receiver).
+                                        let this_f64: f64 = f64::from_bits(
+                                            crate::value::js_nanbox_pointer(obj as i64).to_bits(),
+                                        );
+                                        let f: extern "C" fn(f64, f64) -> f64 =
+                                            std::mem::transmute(setter_ptr);
+                                        let _ = f(this_f64, value);
+                                        return;
+                                    }
+                                }
+                            }
+                            match get_parent_class_id(cid) {
+                                Some(p) if p != 0 && p != cid => {
+                                    cid = p;
+                                    depth += 1;
+                                }
+                                _ => break,
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !key.is_null() && (key as usize) > 0x10000 && crate::url::is_url_object_shape(obj) {
+            let key_str = key_to_str_for_diag(key);
+            let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+            let value = value_handle.get_nanbox_f64();
+            match key_str.as_str() {
+                "pathname" => {
+                    crate::url::js_url_set_pathname(obj, value);
+                    return;
+                }
+                "search" => {
+                    crate::url::js_url_set_search(obj, value);
+                    return;
+                }
+                "hash" => {
+                    crate::url::js_url_set_hash(obj, value);
+                    return;
+                }
+                "protocol" => {
+                    crate::url::js_url_set_protocol(obj, value);
+                    return;
+                }
+                "hostname" => {
+                    crate::url::js_url_set_hostname(obj, value);
+                    return;
+                }
+                "port" => {
+                    crate::url::js_url_set_port(obj, value);
+                    return;
+                }
+                "username" => {
+                    crate::url::js_url_set_username(obj, value);
+                    return;
+                }
+                "password" => {
+                    crate::url::js_url_set_password(obj, value);
+                    return;
+                }
+                "href" => {
+                    crate::url::js_url_set_href(obj, value);
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        // Check Object.freeze/seal/preventExtensions flags
+        let obj_flags = (*gc_header)._reserved;
+        let is_frozen = obj_flags & crate::gc::OBJ_FLAG_FROZEN != 0;
+        let is_sealed_or_no_extend =
+            obj_flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0;
+
+        let keys = (*obj).keys_array;
+
+        // Validate keys_array is a real heap pointer or null.
+        if !keys.is_null() {
+            let keys_ptr = keys as usize;
+            if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 {
+                return;
+            }
+        }
+
+        let mut prev_keys_usize = keys as usize;
+
+        // Resolve to interned pointer for transition cache (pointer identity).
+        // If the key is already interned (GC_FLAG_INTERNED set — e.g. from
+        // js_string_concat intern hit), skip the FNV-1a hash entirely.
+        let mut interned_key = if !key.is_null() && (key as usize) > 0x10000 {
+            let gc_hdr =
+                (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*gc_hdr).gc_flags & crate::gc::GC_FLAG_INTERNED != 0 {
+                key // already interned
+            } else {
+                let kh = key_content_hash(key);
+                crate::string::js_string_intern(key, kh)
+            }
+        } else {
+            key
+        };
+        let interned_key_handle = scope.root_string_ptr(interned_key);
+        interned_key = interned_key_handle.get_raw_const_ptr::<crate::StringHeader>();
+        macro_rules! refresh_roots_after_alloc {
+            () => {{
+                obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+                key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+                value = value_handle.get_nanbox_f64();
+                interned_key = interned_key_handle.get_raw_const_ptr::<crate::StringHeader>();
+            }};
+        }
+
+        // FAST PATH: shape-transition cache with interned string pointer identity.
+        if !key.is_null()
+            && !is_frozen
+            && !is_sealed_or_no_extend
+            && !GLOBAL_DESCRIPTORS_IN_USE.load(Ordering::Relaxed)
+        {
+            if let Some((next_keys, slot_idx)) =
+                transition_cache_lookup(prev_keys_usize, interned_key)
+            {
+                // Defensive: strip a raw-null POINTER_TAG value the same
+                // way the slow overflow path below does, so a bogus
+                // 0x7FFD_0000_0000_0000 store doesn't leak into an
+                // overflow map.
+                let vbits = value.to_bits();
+                let vbits = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
+                    crate::value::TAG_UNDEFINED
+                } else {
+                    vbits
+                };
+                set_object_keys_array(obj, next_keys as *mut ArrayHeader);
+                super::mark_object_dynamic_shape_unknown(obj);
+                let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
+                if (slot_idx as usize) < alloc_limit {
+                    // Inline the field write — `obj` has already been
+                    // validated (GC header read, type check, closure
+                    // check) by the prelude above, and `vbits` has had
+                    // the null-POINTER-TAG replacement applied. No
+                    // point re-doing it in `js_object_set_field`.
+                    let fields_ptr =
+                        (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
+                    let slot = fields_ptr.add(slot_idx as usize);
+                    crate::gc::runtime_store_jsvalue_slot(
+                        obj as usize,
+                        slot as usize,
+                        slot_idx as usize,
+                        vbits,
+                    );
+                    // Bump field_count only for inline slots — leaving
+                    // it at the physical capacity is what steers
+                    // `js_object_get_field_by_name`'s reads to the
+                    // overflow map for slots ≥ alloc_limit. Bumping it
+                    // past capacity would make reads dereference past
+                    // the object's inline field array into adjacent
+                    // arena data.
+                    if slot_idx >= (*obj).field_count {
+                        (*obj).field_count = slot_idx + 1;
+                    }
+                } else {
+                    // Cached slot is past the object's inline capacity —
+                    // store in the overflow map (same as the slow path's
+                    // `new_index >= alloc_limit` branch).
+                    overflow_set(obj as usize, slot_idx as usize, vbits);
+                    // Deliberately do NOT bump field_count here — see
+                    // above.
+                }
+                return;
+            }
+        }
+
+        // If no keys array exists, create one (adding new key)
+        if keys.is_null() {
+            // Frozen or sealed/non-extensible objects reject new keys.
+            // Issue #615 — strict-mode throw instead of silent return.
+            if is_frozen || is_sealed_or_no_extend {
+                let key_str = key_to_str_for_diag(key);
+                crate::error::throw_immutable_write(1, &key_str);
+            }
+            // Create a new keys array with the key
+            let new_keys = crate::array::js_array_alloc(4);
+            refresh_roots_after_alloc!();
+            let new_keys =
+                crate::array::js_array_push(new_keys, JSValue::string_ptr(key as *mut _));
+            refresh_roots_after_alloc!();
+            set_object_keys_array(obj, new_keys);
+            super::mark_object_dynamic_shape_unknown(obj);
+
+            // Reallocate fields to hold at least one value
+            // Note: We assume the object has enough field slots pre-allocated
+            js_object_set_field(obj, 0, JSValue::from_bits(value.to_bits()));
+            // Bump field_count so Object.keys()/values()/entries() see the new property.
+            if (*obj).field_count == 0 {
+                (*obj).field_count = 1;
+            }
+            // Record the null→single-key transition so the next object
+            // that starts with `{}` and sets the same first key hits the
+            // fast path above instead of allocating a fresh 4-elem
+            // keys_array here.
+            transition_cache_insert(0, interned_key, new_keys as usize, 0);
+            return;
+        }
+
+        // Defer the Rust-String allocation for the incoming key: we only
+        // need it if an accessor descriptor or per-property writable
+        // attribute has been installed on this object. Both paths are
+        // guarded by process-wide flags (`ACCESSORS_IN_USE` and
+        // `PROPERTY_ATTRS_IN_USE`) so the common case — plain data
+        // properties on a normal object — avoids the `.to_string()`
+        // entirely. A 20-property row object written at 10k rows saw
+        // 200k of those allocations per query; with this guard the
+        // count drops to zero unless userland actually defined a
+        // descriptor.
+        let needs_descriptor_key =
+            ACCESSORS_IN_USE.with(|c| c.get()) || PROPERTY_ATTRS_IN_USE.with(|c| c.get());
+        let incoming_key_str: Option<String> = if needs_descriptor_key && !key.is_null() {
+            let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let name_len = (*key).byte_len as usize;
+            let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+            std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
+        } else {
+            None
+        };
+
+        // Search through the keys array for a match
+        let key_count = crate::array::js_array_length(keys) as usize;
+        let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
+
+        // Sidecar O(1) lookup when keys_array has grown past the
+        // linear-scan break-even. Without this, the build-then-fill
+        // pattern (`for i in 0..N { obj["k_"+i] = i; }`) is O(N²)
+        // because every insert does a linear scan that grows by one
+        // each iteration. With the sidecar, the per-insert cost is
+        // O(1) amortized (rebuild after a `js_array_push` realloc is
+        // bounded by the doubling growth pattern).
+        if !key.is_null() && (key as usize) > 0x10000 && key_count >= KEYS_INDEX_THRESHOLD as usize
+        {
+            let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let name_len = (*key).byte_len as usize;
+            let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+            let key_hash = key_bytes_hash(name_ptr, name_len);
+            if let Some(i) = keys_index_lookup(obj, keys, name_bytes, key_hash) {
+                let i = i as usize;
+                if is_frozen {
+                    let key_str = key_to_str_for_diag(key);
+                    crate::error::throw_immutable_write(0, &key_str);
+                }
+                if i < alloc_limit {
+                    js_object_set_field(obj, i as u32, JSValue::from_bits(value.to_bits()));
+                } else {
+                    let vbits = value.to_bits();
+                    let vbits = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
+                        crate::value::TAG_UNDEFINED
+                    } else {
+                        vbits
+                    };
+                    overflow_set(obj as usize, i, vbits);
+                }
+                return;
+            }
+            // Miss path: the linear scan below will confirm and then
+            // append. We skip the scan entirely and just append the
+            // key (the sidecar would have found it if it existed).
+            // Same effect as scanning all N entries with no match.
+            if is_frozen || is_sealed_or_no_extend {
+                let key_str = key_to_str_for_diag(key);
+                crate::error::throw_immutable_write(1, &key_str);
+            }
+            // Skip the linear-scan loop by jumping past it via a
+            // labeled-block break. The append code that follows the
+            // scan is shared.
+            // We achieve this by setting a marker, then the linear
+            // scan checks it and skips.
+            let keys_gc_header =
+                (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            let keys_shared = if (keys as usize) >= crate::gc::GC_HEADER_SIZE
+                && (*keys_gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
+            {
+                (*keys_gc_header).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0
+            } else {
+                true
+            };
+            let owned_keys = if keys_shared {
+                let cloned = crate::array::js_array_alloc(key_count as u32 + 4);
+                refresh_roots_after_alloc!();
+                let keys = (*obj).keys_array;
+                prev_keys_usize = keys as usize;
+                let src_data = (keys as *const u8).add(8) as *const f64;
+                let dst_data = (cloned as *mut u8).add(8) as *mut f64;
+                for i in 0..key_count {
+                    // GC_STORE_AUDIT(INIT): cloned keys array is unpublished; layout is rebuilt before publication.
+                    *dst_data.add(i) = *src_data.add(i);
+                }
+                (*cloned).length = key_count as u32;
+                super::rebuild_array_layout_from_slots(cloned);
+                set_object_keys_array(obj, cloned);
+                cloned
+            } else {
+                keys
+            };
+            let new_index = key_count;
+            if new_index >= alloc_limit {
+                let vbits = value.to_bits();
+                let vbits = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
+                    crate::value::TAG_UNDEFINED
+                } else {
+                    vbits
+                };
+                let owned_keys_handle = scope.root_raw_mut_ptr(owned_keys);
+                let new_keys =
+                    crate::array::js_array_push(owned_keys, JSValue::string_ptr(key as *mut _));
+                prev_keys_usize = if keys_shared {
+                    prev_keys_usize
+                } else {
+                    owned_keys_handle.get_raw_mut_ptr::<ArrayHeader>() as usize
+                };
+                refresh_roots_after_alloc!();
+                set_object_keys_array(obj, new_keys);
+                super::mark_object_dynamic_shape_unknown(obj);
+                overflow_set(obj as usize, new_index, vbits);
+                transition_cache_insert(
+                    prev_keys_usize,
+                    interned_key,
+                    new_keys as usize,
+                    new_index as u32,
+                );
+                keys_index_insert(
+                    obj as usize,
+                    (new_index + 1) as u32,
+                    key_hash,
+                    new_index as u32,
+                );
+                return;
+            }
+            let owned_keys_handle = scope.root_raw_mut_ptr(owned_keys);
+            let new_keys =
+                crate::array::js_array_push(owned_keys, JSValue::string_ptr(key as *mut _));
+            prev_keys_usize = if keys_shared {
+                prev_keys_usize
+            } else {
+                owned_keys_handle.get_raw_mut_ptr::<ArrayHeader>() as usize
+            };
+            refresh_roots_after_alloc!();
+            set_object_keys_array(obj, new_keys);
+            super::mark_object_dynamic_shape_unknown(obj);
+            js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
+            if new_index as u32 >= (*obj).field_count {
+                (*obj).field_count = new_index as u32 + 1;
+            }
+            transition_cache_insert(
+                prev_keys_usize,
+                interned_key,
+                new_keys as usize,
+                new_index as u32,
+            );
+            keys_index_insert(
+                new_keys as usize,
+                (new_index + 1) as u32,
+                key_hash,
+                new_index as u32,
+            );
+            return;
+        }
+
+        for i in 0..key_count {
+            let key_val = crate::array::js_array_get(keys, i as u32);
+            // #1781: SSO-aware match — keys are stored as either a
+            // STRING_TAG pointer OR a SHORT_STRING_TAG inline value for
+            // ≤5-byte names. Pre-fix the assignment `obj.id = v` would
+            // append a duplicate `id` key instead of updating the slot
+            // when the original `id` was stored inline as SSO.
+            if crate::string::js_string_key_matches(key_val, key) {
+                // Found it - update the field. Frozen objects must
+                // throw a TypeError on writes to existing keys
+                // (issue #615 — strict-mode behavior, default for TS).
+                if is_frozen {
+                    let key_str = key_to_str_for_diag(key);
+                    crate::error::throw_immutable_write(0, &key_str);
+                }
+                // Accessor short-circuit: if a setter is registered, invoke
+                // it instead of writing the slot. A getter-only accessor is
+                // read-only under Perry's strict-by-default TS semantics.
+                if ACCESSORS_IN_USE.with(|c| c.get()) {
+                    if let Some(ref k) = incoming_key_str {
+                        if let Some(acc) = get_accessor_descriptor(obj as usize, k) {
+                            if acc.set != 0 {
+                                let closure = (acc.set & crate::value::POINTER_MASK)
+                                    as *const crate::closure::ClosureHeader;
+                                if !closure.is_null() {
+                                    crate::closure::js_closure_call1(closure, value);
+                                }
+                            } else {
+                                crate::error::throw_immutable_write(0, k);
+                            }
+                            return;
+                        }
+                    }
+                }
+                // Per-property writable check (set by Object.defineProperty / freeze).
+                // Issue #615 — strict-mode throw on read-only assign.
+                if PROPERTY_ATTRS_IN_USE.with(|c| c.get()) {
+                    if let Some(ref k) = incoming_key_str {
+                        if let Some(attrs) = get_property_attrs(obj as usize, k) {
+                            if !attrs.writable() {
+                                crate::error::throw_immutable_write(0, k);
+                            }
+                        }
+                    }
+                }
+                if i < alloc_limit {
+                    js_object_set_field(obj, i as u32, JSValue::from_bits(value.to_bits()));
+                } else {
+                    // This key was previously stored in the overflow map — update it there
+                    let vbits = value.to_bits();
+                    let vbits = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
+                        crate::value::TAG_UNDEFINED
+                    } else {
+                        vbits
+                    };
+                    overflow_set(obj as usize, i, vbits);
+                }
+                return;
+            }
+        }
+
+        // Key not found - add it to the object.
+        // Frozen/sealed/non-extensible objects reject new keys.
+        // Issue #615 — strict-mode throw.
+        if is_frozen || is_sealed_or_no_extend {
+            let key_str = key_to_str_for_diag(key);
+            crate::error::throw_immutable_write(1, &key_str);
+        }
+        // CRITICAL: The keys_array may be SHARED via SHAPE_CACHE (multiple objects with
+        // the same shape hash share the same keys array). We must clone it before mutating
+        // to avoid corrupting other objects' keys.
+        //
+        // We detect sharing via the `GC_FLAG_SHAPE_SHARED` bit that
+        // `shape_cache_insert` stamps onto the array's GC header —
+        // arrays allocated in the `keys.is_null()` branch above are
+        // exclusively owned and don't have the flag, so we skip the
+        // clone entirely. This saves ~19 clones of growing size per
+        // 20-property plain-object literal.
+        //
+        // Validate the GC header before reading it. `keys_array` has
+        // already been range-checked for user address space but may
+        // still point at something other than a GC-allocated array
+        // in rare cases (static data, buffers re-interpreted as keys
+        // arrays). If the header doesn't identify as GC_TYPE_ARRAY,
+        // assume shared and clone (the previous, always-safe behaviour).
+        let keys_gc_header =
+            (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        let keys_shared = if (keys as usize) >= crate::gc::GC_HEADER_SIZE
+            && (*keys_gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
+        {
+            (*keys_gc_header).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0
+        } else {
+            // Unknown provenance — take the safe side.
+            true
+        };
+        let owned_keys = if keys_shared {
+            let cloned = crate::array::js_array_alloc(key_count as u32 + 4);
+            refresh_roots_after_alloc!();
+            let keys = (*obj).keys_array;
+            prev_keys_usize = keys as usize;
+            let src_data = (keys as *const u8).add(8) as *const f64;
+            let dst_data = (cloned as *mut u8).add(8) as *mut f64;
+            for i in 0..key_count {
+                // GC_STORE_AUDIT(INIT): cloned keys array is unpublished; layout is rebuilt before publication.
+                *dst_data.add(i) = *src_data.add(i);
+            }
+            (*cloned).length = key_count as u32;
+            super::rebuild_array_layout_from_slots(cloned);
+            set_object_keys_array(obj, cloned);
+            cloned
+        } else {
+            keys
+        };
+
+        // Check if we have a spare physical slot (js_object_alloc_with_shape allocates max(N,8) slots).
+        // Class objects (js_object_alloc_class_with_keys) have only exactly field_count slots;
+        // attempting to write to new_index = key_count would overflow into the next heap allocation.
+        let new_index = key_count;
+        if new_index >= alloc_limit {
+            // No inline room — store in the overflow HashMap so the value is not lost.
+            // Also add the key to keys_array so Object.keys() sees it.
+            let vbits = value.to_bits();
+            let vbits = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
+                eprintln!("[WARN_NULL_PTR] overflow new store: null POINTER_TAG at obj={:p} new_index={} — replacing with undefined", obj, new_index);
+                crate::value::TAG_UNDEFINED
+            } else {
+                vbits
+            };
+            let owned_keys_handle = scope.root_raw_mut_ptr(owned_keys);
+            let new_keys =
+                crate::array::js_array_push(owned_keys, JSValue::string_ptr(key as *mut _));
+            prev_keys_usize = if keys_shared {
+                prev_keys_usize
+            } else {
+                owned_keys_handle.get_raw_mut_ptr::<ArrayHeader>() as usize
+            };
+            refresh_roots_after_alloc!();
+            set_object_keys_array(obj, new_keys);
+            super::mark_object_dynamic_shape_unknown(obj);
+            overflow_set(obj as usize, new_index, vbits);
+            // Record the shape transition so the next object sharing
+            // `prev_keys` that adds the same key hits the fast path.
+            // The cached target is stamped `GC_FLAG_SHAPE_SHARED` by
+            // `transition_cache_insert`, which triggers clone-on-extend
+            // on either object if someone later appends past this key.
+            transition_cache_insert(
+                prev_keys_usize,
+                interned_key,
+                new_keys as usize,
+                new_index as u32,
+            );
+            return;
+        }
+        // First, add the key to the keys array (may reallocate)
+        let owned_keys_handle = scope.root_raw_mut_ptr(owned_keys);
+        let new_keys = crate::array::js_array_push(owned_keys, JSValue::string_ptr(key as *mut _));
+        prev_keys_usize = if keys_shared {
+            prev_keys_usize
+        } else {
+            owned_keys_handle.get_raw_mut_ptr::<ArrayHeader>() as usize
+        };
+        refresh_roots_after_alloc!();
+        // Update the object's keys_array pointer in case js_array_push reallocated
+        set_object_keys_array(obj, new_keys);
+        super::mark_object_dynamic_shape_unknown(obj);
+
+        // Set the field at the new index and update logical field_count
+        js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
+        // Bump field_count to reflect the newly added property
+        if new_index as u32 >= (*obj).field_count {
+            (*obj).field_count = new_index as u32 + 1;
+        }
+        // Record the shape transition — see above for semantics.
+        transition_cache_insert(
+            prev_keys_usize,
+            interned_key,
+            new_keys as usize,
+            new_index as u32,
+        );
+    }
+}

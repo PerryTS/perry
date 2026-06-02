@@ -1,0 +1,6 @@
+property dep repo true
+design type true
+has own true
+keys design:type
+ctor inject 0 manual
+delete true false

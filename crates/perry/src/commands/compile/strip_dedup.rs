@@ -446,8 +446,9 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
         );
     }
 
-    // Extract UI-only deps from staticlib
-    let mut extract_ok = 0usize;
+    // Extract UI-only deps from staticlib. #854: only `extract_fail`
+    // is read (the warning below); the parallel `extract_ok` counter
+    // was incremented but never reported. Dropped.
     let mut extract_fail = 0usize;
     for member in &ui_only_deps {
         let out = Command::new(&llvm_ar)
@@ -460,7 +461,6 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
             let p = extract_dir.join(member.as_str());
             if p.exists() {
                 all_objects.push(p);
-                extract_ok += 1;
             }
         } else {
             extract_fail += 1;

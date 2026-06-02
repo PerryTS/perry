@@ -6,7 +6,7 @@
 
 use std::rc::Rc;
 
-use crate::block::{LlBlock, RegCounter};
+use crate::block::{FpFlags, LlBlock, RegCounter};
 use crate::types::LlvmType;
 
 pub struct LlFunction {
@@ -30,6 +30,7 @@ pub struct LlFunction {
     blocks: Vec<LlBlock>,
     block_counter: u32,
     reg_counter: Rc<RegCounter>,
+    fp_flags: FpFlags,
     /// Allocas hoisted to the function entry block. These are emitted at
     /// the very top of block 0 at IR-serialization time, so they dominate
     /// every use everywhere in the function.
@@ -72,15 +73,19 @@ pub struct LlFunction {
     /// Shadow-stack frame slot (gen-GC Phase A sub-phase 2). When
     /// `Some(slot_reg)`, `to_ir()` rewrites every `ret` in the
     /// function body to call `js_shadow_frame_pop` first, reading
-    /// the frame handle stored at `slot_reg`. The push is emitted
-    /// into `entry_allocas` by `enable_shadow_frame` — runs at the
-    /// very top of block 0, before any user code.
+    /// the frame handle stored at `slot_reg`. The push is emitted by
+    /// either `enable_shadow_frame` (top of entry) or
+    /// `enable_post_init_shadow_frame` (after the entry init prelude).
     ///
     /// `None` means no shadow frame — `ret` instructions pass
     /// through unchanged. Currently gated per-function so we can
     /// land wiring incrementally (e.g. just `main`) before
     /// flipping the default across every user function.
     shadow_frame_slot: Option<String>,
+    /// Runtime hooks emitted immediately before each non-pointer `ret`.
+    /// Entry/module-init functions use this for process-level diagnostics
+    /// that must run regardless of which block reaches the normal epilogue.
+    pre_return_void_calls: Vec<String>,
 }
 
 impl LlFunction {
@@ -88,6 +93,15 @@ impl LlFunction {
         name: impl Into<String>,
         return_type: LlvmType,
         params: Vec<(LlvmType, String)>,
+    ) -> Self {
+        Self::new_with_fp_flags(name, return_type, params, FpFlags::default())
+    }
+
+    pub fn new_with_fp_flags(
+        name: impl Into<String>,
+        return_type: LlvmType,
+        params: Vec<(LlvmType, String)>,
+        fp_flags: FpFlags,
     ) -> Self {
         Self {
             name: name.into(),
@@ -99,10 +113,12 @@ impl LlFunction {
             blocks: Vec::new(),
             block_counter: 0,
             reg_counter: Rc::new(RegCounter::new()),
+            fp_flags,
             entry_allocas: Vec::new(),
             entry_post_init_setup: Vec::new(),
             entry_init_boundary: None,
             shadow_frame_slot: None,
+            pre_return_void_calls: Vec::new(),
         }
     }
 
@@ -118,24 +134,51 @@ impl LlFunction {
     /// the function body, regardless of which codegen path emitted
     /// the ret. Frame balance is preserved automatically.
     ///
-    /// Passing `slot_count = 0` is legal — the frame just holds
-    /// a header and zero data slots. Useful for sub-phase 2 where
-    /// no pointer-typed locals are materialized yet; the goal is
-    /// just to prove push/pop wiring works without touching every
-    /// slot-store site.
+    /// Passing `slot_count = 0` is a no-op: the frame would only carry
+    /// a (prev_top, slot_count) header with no GC-root slots — that is
+    /// pure overhead, an extra TLS-touching call per function entry +
+    /// per ret. Today every leaf function with no pointer-typed locals
+    /// (clampIdx, clampU8, imul32, …) hits this case, and when the
+    /// function is `alwaysinline` the push/pop pair gets duplicated
+    /// into every caller's hot loop. Skip the frame entirely; the
+    /// to_ir() rewrite pass keys off `shadow_frame_slot.is_some()`,
+    /// so no matching pop is emitted either.
     pub fn enable_shadow_frame(&mut self, slot_count: u32) {
+        self.enable_shadow_frame_inner(slot_count, false);
+    }
+
+    /// Enable shadow-stack frame emission for entry/module-init functions
+    /// whose first block contains runtime init prelude calls. The handle slot
+    /// still lives in `entry_allocas` so it dominates all returns, but the
+    /// `js_shadow_frame_push` call runs through `entry_post_init_setup`, after
+    /// `mark_entry_init_boundary()` has marked `js_gc_init` / string-init
+    /// completion and before any top-level user code is lowered.
+    pub fn enable_post_init_shadow_frame(&mut self, slot_count: u32) {
+        self.enable_shadow_frame_inner(slot_count, true);
+    }
+
+    fn enable_shadow_frame_inner(&mut self, slot_count: u32, post_init: bool) {
         use crate::types::I64;
         if self.shadow_frame_slot.is_some() {
             return;
         }
+        if slot_count == 0 {
+            return;
+        }
         let handle_slot = self.alloca_entry(I64);
         let handle_reg = format!("%r{}", self.reg_counter.next());
-        self.entry_allocas.push(format!(
+        let push_line = format!(
             "  {} = call i64 @js_shadow_frame_push(i32 {})",
             handle_reg, slot_count
-        ));
-        self.entry_allocas
-            .push(format!("  store i64 {}, ptr {}", handle_reg, handle_slot));
+        );
+        let store_line = format!("  store i64 {}, ptr {}", handle_reg, handle_slot);
+        if post_init {
+            self.entry_post_init_setup.push(push_line);
+            self.entry_post_init_setup.push(store_line);
+        } else {
+            self.entry_allocas.push(push_line);
+            self.entry_allocas.push(store_line);
+        }
         self.shadow_frame_slot = Some(handle_slot);
     }
 
@@ -152,6 +195,10 @@ impl LlFunction {
         } else {
             self.entry_init_boundary = Some(0);
         }
+    }
+
+    pub fn add_pre_return_void_call(&mut self, func_name: impl Into<String>) {
+        self.pre_return_void_calls.push(func_name.into());
     }
 
     /// Allocate a fresh stack slot in the function entry block. Returns
@@ -182,6 +229,18 @@ impl LlFunction {
         let r = format!("%r{}", self.reg_counter.next());
         self.entry_allocas
             .push(format!("  {} = alloca [{} x {}]", r, count, elem_ty));
+        r
+    }
+
+    /// Allocate a byte buffer in the entry block with an explicit ABI
+    /// alignment. Used for C-layout POD records where field GEPs must rest on
+    /// a verifier-checked stack object, not JS object storage.
+    pub fn alloca_entry_bytes_aligned(&mut self, size: u32, alignment: u32) -> String {
+        let r = format!("%r{}", self.reg_counter.next());
+        self.entry_allocas.push(format!(
+            "  {} = alloca [{} x i8], align {}",
+            r, size, alignment
+        ));
         r
     }
 
@@ -256,7 +315,7 @@ impl LlFunction {
     pub fn create_block(&mut self, name: &str) -> &mut LlBlock {
         let label = format!("{}.{}", name, self.block_counter);
         self.block_counter += 1;
-        let block = LlBlock::new(label, self.reg_counter.clone());
+        let block = LlBlock::new_with_fp_flags(label, self.reg_counter.clone(), self.fp_flags);
         self.blocks.push(block);
         // Safe unwrap: we just pushed.
         self.blocks.last_mut().unwrap()
@@ -370,21 +429,14 @@ impl LlFunction {
 
         ir.push_str("}\n");
 
-        // Shadow-stack pop rewrite (gen-GC Phase A sub-phase 2).
-        // When `shadow_frame_slot` is set, every `  ret <ty> <val>`
-        // line in the IR must be prefixed with a load of the frame
-        // handle and a call to `js_shadow_frame_pop`. Textual
-        // rewrite on the full IR is the simplest way to intercept
-        // every ret site regardless of which codegen path emitted
-        // it (Stmt::Return, implicit return, error-handling early
-        // return, generator-transform machinery, etc.) — passing
-        // through the normal `LlBlock::ret` emit hook would miss
-        // any hand-emitted ret via `emit("ret ...")`.
+        // Return-site rewrite hooks.
         //
-        // Unique SSA names: `%shadow_pop_<seq>` where `<seq>` is a
-        // monotonic counter over the function's ret sites. No
-        // collision with codegen's `%r<N>` namespace.
-        if let Some(handle_slot) = &self.shadow_frame_slot {
+        // Shadow-stack pop (gen-GC Phase A sub-phase 2) and entry
+        // diagnostics both need to run before every normal return,
+        // regardless of which lowering path emitted it. Textual rewrite
+        // on the full IR catches implicit returns, Stmt::Return, and any
+        // hand-emitted `ret`.
+        if self.shadow_frame_slot.is_some() || !self.pre_return_void_calls.is_empty() {
             let mut out = String::with_capacity(ir.len() + 512);
             let mut seq: u32 = 0;
             for line in ir.lines() {
@@ -393,13 +445,18 @@ impl LlFunction {
                     && !trimmed.starts_with("ret ptr ")
                 // skip rare ptr rets
                 {
-                    let load_reg = format!("%shadow_pop_l_{}", seq);
-                    seq += 1;
-                    out.push_str(&format!("  {} = load i64, ptr {}\n", load_reg, handle_slot));
-                    out.push_str(&format!(
-                        "  call void @js_shadow_frame_pop(i64 {})\n",
-                        load_reg
-                    ));
+                    for func_name in &self.pre_return_void_calls {
+                        out.push_str(&format!("  call void @{}()\n", func_name));
+                    }
+                    if let Some(handle_slot) = &self.shadow_frame_slot {
+                        let load_reg = format!("%shadow_pop_l_{}", seq);
+                        seq += 1;
+                        out.push_str(&format!("  {} = load i64, ptr {}\n", load_reg, handle_slot));
+                        out.push_str(&format!(
+                            "  call void @js_shadow_frame_pop(i64 {})\n",
+                            load_reg
+                        ));
+                    }
                 }
                 out.push_str(line);
                 out.push('\n');

@@ -18,7 +18,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 #[cfg(not(target_os = "ios"))]
 use crate::common::async_bridge::{queue_promise_resolution, spawn};
-use crate::common::{for_each_handle_of, get_handle_mut, register_handle, Handle};
+use crate::common::{for_each_handle_mut_of, get_handle_mut, register_handle, Handle};
 
 fn ws_file_log(msg: &str) {
     use std::io::Write;
@@ -72,7 +72,7 @@ static WS_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 #[cfg(not(target_os = "ios"))]
 fn ensure_gc_scanner_registered() {
     WS_GC_REGISTERED.call_once(|| {
-        perry_runtime::gc::gc_register_root_scanner(scan_ws_roots);
+        perry_runtime::gc::gc_register_mutable_root_scanner_named("stdlib:ws", scan_ws_roots_mut);
     });
 }
 
@@ -81,28 +81,28 @@ fn ensure_gc_scanner_registered() {
 /// every `WsServerHandle` currently in the handle registry (for
 /// `WebSocketServer` instances).
 #[cfg(not(target_os = "ios"))]
+#[allow(dead_code)]
 fn scan_ws_roots(mark: &mut dyn FnMut(f64)) {
-    let mark_cb = |cb: i64, mark: &mut dyn FnMut(f64)| {
-        if cb != 0 {
-            let boxed = f64::from_bits(0x7FFD_0000_0000_0000 | (cb as u64 & 0x0000_FFFF_FFFF_FFFF));
-            mark(boxed);
-        }
-    };
+    let mut visitor = perry_runtime::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_ws_roots_mut(&mut visitor);
+}
 
-    if let Ok(per_client) = WS_CLIENT_LISTENERS.lock() {
-        for client in per_client.values() {
-            for cb_vec in client.listeners.values() {
-                for &cb in cb_vec.iter() {
-                    mark_cb(cb, mark);
+#[cfg(not(target_os = "ios"))]
+fn scan_ws_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
+    if let Ok(mut per_client) = WS_CLIENT_LISTENERS.lock() {
+        for client in per_client.values_mut() {
+            for cb_vec in client.listeners.values_mut() {
+                for cb in cb_vec.iter_mut() {
+                    visitor.visit_i64_slot(cb);
                 }
             }
         }
     }
 
-    for_each_handle_of::<WsServerHandle, _>(|server| {
-        for cb_vec in server.listeners.values() {
-            for &cb in cb_vec.iter() {
-                mark_cb(cb, mark);
+    for_each_handle_mut_of::<WsServerHandle, _>(|server| {
+        for cb_vec in server.listeners.values_mut() {
+            for cb in cb_vec.iter_mut() {
+                visitor.visit_i64_slot(cb);
             }
         }
     });
@@ -295,6 +295,7 @@ pub unsafe extern "C" fn js_ws_connect(
                             msg_result = read.next() => {
                                 match msg_result {
                                     Some(Ok(Message::Text(text))) => {
+                                        let text = text.to_string();
                                         let has_listeners = WS_CLIENT_LISTENERS.lock().unwrap()
                                             .get(&ws_id_io)
                                             .map(|l| l.listeners.get("message").map(|v| !v.is_empty()).unwrap_or(false))
@@ -347,7 +348,7 @@ pub unsafe extern "C" fn js_ws_connect(
                                 match cmd {
                                     Some(WsCommand::Send(msg)) => {
                                         ws_file_log(&format!("[WS-io] sending len={}", msg.len()));
-                                        if let Err(e) = write.send(Message::Text(msg)).await {
+                                        if let Err(e) = write.send(Message::Text(msg.into())).await {
                                             ws_file_log(&format!("[WS-io] send ERR: {}", e));
                                             break;
                                         }
@@ -476,6 +477,7 @@ pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
                             msg_result = read.next() => {
                                 match msg_result {
                                     Some(Ok(Message::Text(text))) => {
+                                        let text = text.to_string();
                                         let has_listeners = WS_CLIENT_LISTENERS.lock().unwrap()
                                             .get(&ws_id_io)
                                             .map(|l| l.listeners.get("message").map(|v| !v.is_empty()).unwrap_or(false))
@@ -526,7 +528,7 @@ pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
                             cmd = rx.recv() => {
                                 match cmd {
                                     Some(WsCommand::Send(msg)) => {
-                                        if write.send(Message::Text(msg)).await.is_err() {
+                                        if write.send(Message::Text(msg.into())).await.is_err() {
                                             break;
                                         }
                                     }
@@ -910,10 +912,9 @@ pub unsafe extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
         shutdown_tx: Some(shutdown_tx),
     });
     WS_ACTIVE_SERVERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    // WS dispatches message/connection events to user closures from
-    // tokio worker threads, whose stacks the main-thread GC can't scan.
-    // Mark GC-unsafe for as long as the server is running (issue #31).
-    perry_runtime::gc::js_gc_enter_unsafe_zone();
+    // Tokio workers only enqueue raw Rust events here. JS closure dispatch
+    // happens later in `js_ws_process_pending` on the main thread, and the
+    // listener slots are covered by the ws mutable root scanner.
     // Spawn the accept loop
     let handle_id = server_handle;
     spawn(async move {
@@ -986,6 +987,7 @@ pub unsafe extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
                                                 msg_result = read.next() => {
                                                     match msg_result {
                                                         Some(Ok(Message::Text(text))) => {
+                                                            let text = text.to_string();
                                                             ws_file_log(&format!("[WS-srv-io] id={} recv len={}", ws_id_io, text.len()));
                                                             push_ws_event(
                                                                 PendingWsEvent::Message(ws_id_io, text)
@@ -1034,7 +1036,7 @@ pub unsafe extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
                                                     match cmd {
                                                         Some(WsCommand::Send(msg)) => {
                                                             ws_file_log(&format!("[WS-srv-io] id={} sending len={}", ws_id_io, msg.len()));
-                                                            match write.send(Message::Text(msg)).await {
+                                                            match write.send(Message::Text(msg.into())).await {
                                                                 Ok(_) => {
                                                                     ws_file_log(&format!("[WS-srv-io] id={} send OK", ws_id_io));
                                                                 }
@@ -1090,7 +1092,6 @@ pub unsafe extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
 #[no_mangle]
 pub unsafe extern "C" fn js_ws_server_close(handle: i64) {
     WS_ACTIVE_SERVERS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-    perry_runtime::gc::js_gc_exit_unsafe_zone();
     if let Some(server) = get_handle_mut::<WsServerHandle>(handle) {
         server.is_listening = false;
 
@@ -1139,17 +1140,32 @@ pub fn js_ws_has_active_handles() -> i32 {
 /// Process pending WebSocket events (called from js_stdlib_process_pending)
 /// Drains the event queue and invokes closures on the main thread.
 /// Returns number of events processed.
+///
+/// #1114 followup: same per-tick scratch-Vec discipline as the fastify
+/// (e538caa7) and net (this PR) pumps. Called every event-loop iteration
+/// + every inline `await` poll iteration; the original
+/// `Vec::drain(..).collect()` was a per-call heap alloc that contributed
+/// to the GC `madvise` churn observed under shop-admin's realtime WS
+/// broker + JobLoop combo. Reuse a per-thread scratch buffer (moved out
+/// across dispatch so a re-entrant pump from inside a user callback is
+/// safe).
 #[cfg(not(target_os = "ios"))]
 #[no_mangle]
 pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
-    let events: Vec<PendingWsEvent> = {
+    thread_local! {
+        static SCRATCH: std::cell::RefCell<Vec<PendingWsEvent>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let mut events = SCRATCH.with(|s| std::mem::take(&mut *s.borrow_mut()));
+    events.clear();
+    {
         let mut guard = WS_PENDING_EVENTS.lock().unwrap();
-        guard.drain(..).collect()
-    };
+        events.append(&mut *guard);
+    }
 
     let count = events.len() as i32;
 
-    for event in events {
+    for event in events.drain(..) {
         match event {
             PendingWsEvent::Connection(server_handle, client_ws_id) => {
                 // Get 'connection' listeners from server
@@ -1317,6 +1333,16 @@ pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
         }
     }
 
+    // Restore the (capacity-retaining) buffer to the thread-local so the
+    // next tick reuses it. A re-entrant pump call during dispatch may
+    // have left a grown buffer in the slot — keep whichever is larger.
+    SCRATCH.with(|s| {
+        let mut slot = s.borrow_mut();
+        if events.capacity() >= slot.capacity() {
+            *slot = events;
+        }
+    });
+
     count
 }
 
@@ -1325,4 +1351,38 @@ pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
 #[no_mangle]
 pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
     0
+}
+
+#[cfg(all(test, not(target_os = "ios")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_scanner_emits_client_and_server_listeners() {
+        {
+            let mut clients = WS_CLIENT_LISTENERS.lock().unwrap();
+            clients.clear();
+            clients.insert(
+                42,
+                WsClientListeners {
+                    listeners: HashMap::from([("message".to_string(), vec![0x1234_5678])]),
+                },
+            );
+        }
+        let server_handle = register_handle(WsServerHandle {
+            listeners: HashMap::from([("connection".to_string(), vec![0x2345_6780])]),
+            port: 0,
+            is_listening: false,
+            client_ids: Vec::new(),
+            shutdown_tx: None,
+        });
+
+        let mut emitted = Vec::new();
+        scan_ws_roots(&mut |value| emitted.push(value.to_bits()));
+
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x1234_5678)));
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x2345_6780)));
+        crate::common::drop_handle(server_handle);
+        WS_CLIENT_LISTENERS.lock().unwrap().clear();
+    }
 }

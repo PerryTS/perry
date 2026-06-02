@@ -1,0 +1,18 @@
+[package]
+name = "perry-ext-nodemailer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for npm `nodemailer` — uses only `perry-ffi`. SMTP transport via `lettre`. Async via spawn_blocking + JsPromise."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "builder", "hostname", "pool"] }
+tokio = { workspace = true }
+uuid = { version = "1.11", features = ["v4"] }
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

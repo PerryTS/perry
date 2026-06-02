@@ -1,6 +1,7 @@
 package com.perry.app
 
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.widget.FrameLayout
@@ -24,6 +25,13 @@ class PerryActivity : Activity() {
 
     companion object {
         private const val PERMISSION_REQUEST_CODE = 100
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        intent.data?.toString()?.takeIf { it.isNotEmpty() }?.let {
+            PerryBridge.deliverDeepLinkUrl(it, "warm")
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -50,6 +58,13 @@ class PerryActivity : Activity() {
 
         // Initialize the bridge with this Activity
         PerryBridge.init(this, rootLayout)
+
+        // Capture the cold-start deep-link URL (if any). The JS handler
+        // hasn't been registered yet — PerryBridge.appOnOpenUrl() will
+        // replay this through nativeInvokeDeepLinkCallback once it is.
+        intent?.data?.toString()?.takeIf { it.isNotEmpty() }?.let {
+            PerryBridge.deliverDeepLinkUrl(it, "cold-start")
+        }
 
         // Request any dangerous runtime permissions declared in the manifest
         // before starting native code, so they're available when needed.
@@ -100,6 +115,20 @@ class PerryActivity : Activity() {
                     grantResults[0] == PackageManager.PERMISSION_GRANTED
                 PerryBridge.onAudioPermissionResult(granted)
             }
+            45 -> { // GEOLOCATION_PERMISSION_REQUEST (issue #552)
+                val granted = grantResults.isNotEmpty() &&
+                    grantResults.any { it == PackageManager.PERMISSION_GRANTED }
+                PerryBridge.onGeolocationPermissionResult(granted)
+            }
+        }
+    }
+
+    @Deprecated("Required to wire pre-existing file dialog and the issue #552 image picker")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        when (requestCode) {
+            42 -> PerryBridge.onFileDialogResult(resultCode, data) // FILE_PICK_REQUEST
+            46 -> PerryBridge.onImagePickerResult(resultCode, data) // IMAGE_PICK_REQUEST (#552)
         }
     }
 

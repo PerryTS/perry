@@ -1,0 +1,5 @@
+alias top key: 3
+alias right: 5
+after push len: 3 top: 9
+after pop  len: 2 top: 3
+inorder: [1,2,3]

@@ -1,0 +1,18 @@
+[package]
+name = "perry-ext-validator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for the npm `validator` package — uses only `perry-ffi`. Sync, string-only port (Phase 5 step 8)."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+validator = "0.20"
+regex = "1"
+serde_json = { workspace = true }
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

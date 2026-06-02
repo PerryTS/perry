@@ -23,9 +23,10 @@ struct Cli {
     #[arg(long)]
     filter: Option<String>,
 
-    /// Skip examples whose relative path contains this substring.
+    /// Skip examples whose relative path contains any of these substrings.
+    /// Repeat the flag to exclude multiple paths.
     #[arg(long)]
-    filter_exclude: Option<String>,
+    filter_exclude: Vec<String>,
 
     /// Write a JSON report to this path.
     #[arg(long)]
@@ -171,10 +172,8 @@ fn run(cli: &Cli) -> Result<i32> {
                 continue;
             }
         }
-        if let Some(f) = &cli.filter_exclude {
-            if rel.contains(f) {
-                continue;
-            }
+        if cli.filter_exclude.iter().any(|f| rel.contains(f)) {
+            continue;
         }
 
         if !cli.xcompile_only {
@@ -374,11 +373,19 @@ fn discover_examples(root: &Path) -> Result<Vec<Example>> {
         if path.extension().and_then(|s| s.to_str()) != Some("ts") {
             continue;
         }
-        // Skip harness/support files.
+        // Skip harness/support files. `_fixtures` holds illustrative
+        // snippets that docs pages pull in via `{{#include}}` — they're
+        // expected to drift-protect via PR diff, not via compile-testing
+        // (a fixture may legitimately import a package that doesn't exist
+        // in-tree, see docs/examples/_fixtures/native-libraries/).
         if path.components().any(|c| {
             matches!(
                 c.as_os_str().to_str(),
-                Some("_harness") | Some("_baselines") | Some("_expected") | Some("_reports")
+                Some("_harness")
+                    | Some("_baselines")
+                    | Some("_expected")
+                    | Some("_reports")
+                    | Some("_fixtures")
             )
         }) {
             continue;

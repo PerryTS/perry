@@ -15,6 +15,10 @@ pub const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 pub const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 pub const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 pub const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+/// Issue #323 hole sentinel — see `perry-runtime::value::TAG_HOLE` for the
+/// invariant. Inline `IndexGet` paths emitted by the codegen must select-
+/// rewrite this back to `TAG_UNDEFINED` so user code never sees the sentinel.
+pub const TAG_HOLE: u64 = 0x7FFC_0000_0000_0010;
 pub const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 pub const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 pub const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
@@ -27,6 +31,7 @@ pub const TAG_UNDEFINED_I64: &str = "9222246136947933185";
 pub const TAG_NULL_I64: &str = "9222246136947933186";
 pub const TAG_FALSE_I64: &str = "9222246136947933187";
 pub const TAG_TRUE_I64: &str = "9222246136947933188";
+pub const TAG_HOLE_I64: &str = "9222246136947933200";
 pub const POINTER_TAG_I64: &str = "9222527611924643840";
 pub const POINTER_MASK_I64: &str = "281474976710655";
 pub const INT32_TAG_I64: &str = "9222809086901354496";
@@ -80,6 +85,7 @@ mod tests {
         assert_eq!(i64_literal(TAG_NULL), TAG_NULL_I64);
         assert_eq!(i64_literal(TAG_FALSE), TAG_FALSE_I64);
         assert_eq!(i64_literal(TAG_TRUE), TAG_TRUE_I64);
+        assert_eq!(i64_literal(TAG_HOLE), TAG_HOLE_I64);
         assert_eq!(i64_literal(POINTER_TAG), POINTER_TAG_I64);
         assert_eq!(i64_literal(POINTER_MASK), POINTER_MASK_I64);
         assert_eq!(i64_literal(INT32_TAG), INT32_TAG_I64);

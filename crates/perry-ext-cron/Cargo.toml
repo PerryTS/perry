@@ -1,0 +1,18 @@
+[package]
+name = "perry-ext-cron"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for npm `node-cron` — uses only `perry-ffi`. Cron-expression scheduling; callbacks fire on the perry main thread via the codegen event-loop tick."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+cron = "0.12"
+chrono = "0.4"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }
+perry-runtime.workspace = true

@@ -1,0 +1,107 @@
+# Parity-test skiplist.
+#
+# Drives `scripts/gen_parity_tests.py` and (downstream) the parity sweep.
+# Two tables: `skip-modules` excludes a whole `node:<name>` module from
+# generation; `skip-apis` excludes individual API rows from the test
+# files but otherwise leaves the module intact.
+#
+# Every entry MUST have a one-line reason explaining why parity isn't
+# pursued. Reasons that boil down to "we haven't gotten to it yet" do
+# NOT belong here — those are open gaps and stay in the test file as
+# TODO lines so the parity diff drives them to resolution.
+#
+# Three legitimate categories of skip:
+#
+# 1. Architectural — the API requires a JS interpreter at runtime
+#    (eval, Function constructor, vm.runInThisContext, dynamic
+#    import()) and Perry compiles ahead of time. There is no
+#    semantically correct AOT implementation.
+#
+# 2. Out-of-scope — the API targets something Perry doesn't model
+#    (V8 internals, the Node inspector protocol, the legacy domain
+#    error system, REPL interactivity). Implementing it would mean
+#    reimplementing a different runtime.
+#
+# 3. Non-deterministic / environment-dependent — the API returns
+#    values that legitimately differ between runs (process.pid,
+#    Date.now standalone, fs.watch event timing) so byte-for-byte
+#    parity comparison is not the right test shape.
+
+[skip-modules]
+# Architectural — require a JS interpreter at runtime.
+"vm" = "Compiles JS source at runtime; needs a JS interpreter (V8 fallback only)."
+
+# Out-of-scope — interactive / V8-specific / deprecated.
+"repl" = "Interactive REPL; not meaningful for AOT-compiled binaries."
+"inspector" = "V8 inspector protocol; Perry is not V8."
+"inspector/promises" = "V8 inspector protocol; Perry is not V8."
+"trace_events" = "V8 trace events; not applicable to native binaries."
+"v8" = "V8-specific introspection (heap snapshots, cached data, serialization). Inapplicable."
+"domain" = "Deprecated since Node 4; not implementing legacy error-routing system."
+
+# Out-of-scope test surface.
+"test/mock" = "Test-runner mocking; covered transitively by node:test if pursued."
+
+[skip-apis]
+# Architectural — need a JS interpreter.
+"vm.runInThisContext(code[, options])" = "Runtime eval — needs JS interpreter."
+"vm.runInContext(code, contextifiedObject[, options])" = "Runtime eval — needs JS interpreter."
+"vm.runInNewContext(code[, contextObject][, options])" = "Runtime eval — needs JS interpreter."
+"vm.compileFunction(code[, params][, options])" = "Runtime function construction — needs JS interpreter."
+"vm.createContext([contextObject][, options])" = "Runtime context — needs JS interpreter."
+"vm.measureMemory([options])" = "V8 heap measurement; inapplicable."
+"util.compileFunction(...)" = "Same as vm.compileFunction — needs JS interpreter."
+
+# Out-of-scope — native addons / V8 internals.
+"process.dlopen(module, filename[, flags])" = "Loads Node native (.node) addons; Perry has its own native-library system (perry-ext-*)."
+"process.binding(name)" = "Internal Node binding access; not part of public surface."
+"process._linkedBinding(name)" = "Internal Node binding access; not part of public surface."
+
+# Non-deterministic / environment-dependent — wrong test shape for byte parity.
+"process.pid" = "Per-run PID — shape-tested elsewhere, not byte-comparable."
+"process.ppid" = "Parent PID — shape-tested elsewhere, not byte-comparable."
+"process.uptime()" = "Wall-clock uptime — shape-tested elsewhere."
+"process.hrtime([time])" = "Monotonic clock — non-deterministic value."
+"process.hrtime.bigint()" = "Monotonic clock (bigint) — non-deterministic value."
+"process.cpuUsage([previousValue])" = "Per-run CPU counters — shape-tested elsewhere."
+"process.memoryUsage()" = "Per-run memory counters — shape-tested elsewhere."
+"process.memoryUsage.rss()" = "Per-run RSS — shape-tested elsewhere."
+"process.resourceUsage()" = "Per-run rusage counters — shape-tested elsewhere."
+"process.exit([code])" = "Terminates the process; would short-circuit the rest of the parity test."
+"process.abort()" = "SIGABRT; would terminate the parity test."
+"process.kill(pid[, signal])" = "Sends signals; not deterministic in a parity diff."
+
+"wasi.start(instance)" = "WASI lifecycle execution requires running WebAssembly instances; constructor/import-object shape is covered separately."
+"wasi.initialize(instance)" = "WASI lifecycle execution requires running WebAssembly instances; constructor/import-object shape is covered separately."
+"wasi.finalizeBindings(instance[, options])" = "WASI lifecycle execution requires running WebAssembly instances; constructor/import-object shape is covered separately."
+
+"os.uptime()" = "Host uptime — non-deterministic value."
+"os.loadavg()" = "Load averages — non-deterministic value."
+"os.freemem()" = "Free memory — non-deterministic value."
+"os.totalmem()" = "Total memory — host-dependent value."
+"os.cpus()" = "CPU model strings + counters — host-dependent."
+"os.networkInterfaces()" = "Per-host network configuration — host-dependent."
+"os.hostname()" = "Per-host name — host-dependent."
+"os.userInfo([options])" = "Per-user info — host-dependent."
+"os.homedir()" = "Per-user homedir — host-dependent."
+"os.tmpdir()" = "Per-host tmpdir — host-dependent."
+"os.machine()" = "CPU architecture details — host-dependent."
+
+"Math.random()" = "Non-deterministic by design — shape-tested elsewhere."
+"Date.now()" = "Wall-clock time — non-deterministic; use fixed timestamps in tests."
+"new Date()" = "Wall-clock time — non-deterministic; construct from a literal in tests."
+
+"crypto.randomBytes(size[, callback])" = "Non-deterministic; shape-tested elsewhere."
+"crypto.randomFillSync(buffer[, offset][, size])" = "Non-deterministic; shape-tested elsewhere."
+"crypto.randomFill(buffer[, offset][, size], callback)" = "Non-deterministic; shape-tested elsewhere."
+"crypto.randomInt([min, ]max[, callback])" = "Non-deterministic; shape-tested elsewhere."
+"crypto.randomUUID([options])" = "Non-deterministic; shape-tested elsewhere."
+"crypto.generateKey(type, options, callback)" = "Non-deterministic; shape-tested elsewhere."
+"crypto.generateKeyPair(type, options, callback)" = "Non-deterministic; shape-tested elsewhere."
+"crypto.generateKeyPairSync(type, options)" = "Non-deterministic; shape-tested elsewhere."
+"crypto.generateKeySync(type, options)" = "Non-deterministic; shape-tested elsewhere."
+"crypto.generatePrime(size[, options[, callback]])" = "Non-deterministic; shape-tested elsewhere."
+
+"fs.watch(filename[, options][, listener])" = "Filesystem-event timing is non-deterministic; not parity-testable."
+"fs.watchFile(filename[, options], listener)" = "Polling-based watch; non-deterministic event timing."
+"fs.unwatchFile(filename[, listener])" = "Counterpart to watchFile."

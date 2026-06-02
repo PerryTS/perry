@@ -1,0 +1,38 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-and-patch:
+        update-types: [minor, patch]
+    # AEAD/cipher stack must be bumped together (see issue #1238).
+    # aes-gcm 0.11 is still RC (rc.3 as of 2026-05); meanwhile aes 0.9 and
+    # aes-kw 0.3 ship a cipher 0.5 / hybrid-array API that aes-gcm 0.10
+    # doesn't understand. Suppress the breaking 0.x -> 0.(x+1) PRs
+    # (dependabot classifies these as "minor" for pre-1.0 crates) until
+    # aes-gcm 0.11 lands and the whole AEAD surface can move in one PR.
+    # Patch bumps still flow through.
+    ignore:
+      - dependency-name: "aes"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "aes-gcm"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "aes-kw"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "cipher"
+        update-types: ["version-update:semver-minor"]
+    commit-message:
+      prefix: "deps"
+      include: scope
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
+      include: scope

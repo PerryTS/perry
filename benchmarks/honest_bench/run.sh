@@ -2,14 +2,23 @@
 # Top-level driver: build all implementations, run all workloads, write
 # results/results.json and results/metadata.json. Exits non-zero if any build
 # fails; workload run failures are recorded as exit_code in the JSON but
-# don't abort the suite.
+# don't abort the suite (unless --strict-output is set and a row had an
+# output mismatch — see #441).
+#
+# Flags:
+#   --strict-output   Fail the run if any measured row had output_match=false.
+#                     Default: log + continue (so the report can surface
+#                     "perf-only" + "correctness" regressions separately).
 #
 # Env var overrides (all optional):
 #   HONEST_BENCH_WARMUP=5
 #   HONEST_BENCH_MEASURED=20
-#   HONEST_BENCH_SKIP_BUILD=1     — skip (re)building the three toolchains
-#   HONEST_BENCH_ONLY=3           — comma-separated workload ids to run
-#                                   (1=json, 3=image_convolution; 2 is TBD)
+#   HONEST_BENCH_SKIP_BUILD=1            — skip (re)building the toolchains
+#   HONEST_BENCH_ONLY=3                  — comma-separated workload ids to run
+#                                          (1=json, 3=image_convolution; 2 TBD)
+#   HONEST_BENCH_REFRESH_EXPECTED=1      — rebuild results/expected.json from
+#                                          a fresh Bun run (output semantics
+#                                          intentionally changed)
 #
 # Layout assumes cwd = benchmarks/honest_bench/.
 
@@ -20,6 +29,19 @@ ROOT="$(pwd)"
 PERRY_ROOT="$(cd ../.. && pwd)"
 RESULTS_DIR="$ROOT/results"
 mkdir -p "$RESULTS_DIR"
+
+STRICT_OUTPUT=0
+for arg in "$@"; do
+  case "$arg" in
+    --strict-output) STRICT_OUTPUT=1 ;;
+    -h|--help)
+      sed -n '2,30p' "$0"
+      exit 0
+      ;;
+    *)
+      echo "unknown arg: $arg" >&2; exit 2 ;;
+  esac
+done
 
 # ------------------------------ 1. metadata -----------------------------------
 echo "--- capturing metadata"
@@ -89,8 +111,57 @@ with open('$ROOT/assets/input_small.json', 'w') as f:
 "
 fi
 
-# ------------------------------ 4. run ----------------------------------------
+# ------------------------------ 3.5 reference capture (#441) ------------------
+# Bun is the truth source for output correctness. We capture canonical tokens
+# (hash=…, checksum=…, records_in=…, dims=…) + the sha256 of any output file
+# once, cache to results/expected.json, and use that to gate every measured
+# run. Updated only when output semantics intentionally change (set
+# HONEST_BENCH_REFRESH_EXPECTED=1 to refresh).
+EXPECTED="$RESULTS_DIR/expected.json"
 ONLY="${HONEST_BENCH_ONLY:-1,3}"
+NODE_FLAGS="--experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON"
+NODE_IMG="$ROOT/workloads/3_image_convolution/node/image_conv.ts"
+NODE_JSON="$ROOT/workloads/1_json_pipeline/node/json_pipeline.ts"
+
+if [[ ! -f "$EXPECTED" || -n "${HONEST_BENCH_REFRESH_EXPECTED:-}" ]]; then
+  echo "--- capturing Bun reference outputs → $EXPECTED"
+  python3 - "$ROOT" "$ONLY" <<'PY' > "$EXPECTED"
+import json, os, subprocess, sys
+ROOT, only_str = sys.argv[1], sys.argv[2]
+ONLY = set(only_str.split(","))
+HARNESS = os.path.join(ROOT, "harness", "capture_expected.py")
+NODE_IMG  = os.path.join(ROOT, "workloads", "3_image_convolution", "node", "image_conv.ts")
+NODE_JSON = os.path.join(ROOT, "workloads", "1_json_pipeline", "node", "json_pipeline.ts")
+SMALL_IN  = os.path.join(ROOT, "assets", "input_small.json")
+FULL_IN   = os.path.join(ROOT, "assets", "input.json")
+
+def capture(workload, *args):
+    r = subprocess.run(["python3", HARNESS, workload, *args],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.stderr.write(f"capture failed for {workload}:\n{r.stderr}")
+        sys.exit(2)
+    return json.loads(r.stdout)
+
+out = {}
+if "3" in ONLY:
+    out["image_convolution"] = capture("image_convolution", "--", "bun", "run", NODE_IMG)
+if "1" in ONLY:
+    out["json_pipeline_small"] = capture(
+        "json_pipeline_small", "--output-file=/tmp/out_bun.json",
+        "--", "bun", "run", NODE_JSON, SMALL_IN, "/tmp/out_bun.json")
+    out["json_pipeline_full"] = capture(
+        "json_pipeline_full",  "--output-file=/tmp/out_bun.json",
+        "--", "bun", "run", NODE_JSON, FULL_IN,  "/tmp/out_bun.json")
+
+print(json.dumps(out, indent=2, sort_keys=True))
+PY
+fi
+
+export HONEST_BENCH_EXPECTED_JSON="$EXPECTED"
+export HONEST_BENCH_CHECK_OUTPUT="$ROOT/harness/check_output.py"
+
+# ------------------------------ 4. run ----------------------------------------
 RESULTS="$RESULTS_DIR/results.json"
 # Clear & start a JSON array — we append raw rows and close it at the end.
 : > "$RESULTS.rows"
@@ -98,12 +169,16 @@ RESULTS="$RESULTS_DIR/results.json"
 run_one() {
   local workload="$1" lang="$2" bin="$3"; shift 3
   echo "--- running $workload / $lang"
-  bash "$ROOT/harness/run_bench.sh" "$workload" "$lang" "$bin" "$@" >> "$RESULTS.rows"
+  # For workloads that produce an output file, pass its path through the
+  # environment so the harness can sha256 it against the cached Bun reference.
+  # By the call sites' convention, the last positional is the output path.
+  local out_file=""
+  if [[ "$workload" == json_pipeline* && $# -ge 1 ]]; then
+    out_file="${@: -1}"
+  fi
+  HONEST_BENCH_OUTPUT_FILE="$out_file" \
+    bash "$ROOT/harness/run_bench.sh" "$workload" "$lang" "$bin" "$@" >> "$RESULTS.rows"
 }
-
-NODE_FLAGS="--experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON"
-NODE_IMG="$ROOT/workloads/3_image_convolution/node/image_conv.ts"
-NODE_JSON="$ROOT/workloads/1_json_pipeline/node/json_pipeline.ts"
 
 if [[ ",$ONLY," == *,3,* ]]; then
   echo "=== workload 3: image convolution ==="
@@ -149,3 +224,19 @@ rm -f "$RESULTS.rows"
 N=$(python3 -c "import json; print(len(json.load(open('$RESULTS'))['rows']))")
 echo "--- wrote $RESULTS with $N rows"
 echo "--- metadata: $RESULTS_DIR/metadata.json"
+
+# ------------------------------ 6. summary (#441) -----------------------------
+python3 "$ROOT/scripts/summary.py"
+
+if [[ "$STRICT_OUTPUT" == "1" ]]; then
+  N_BAD=$(python3 -c "
+import json
+rows = json.load(open('$RESULTS'))['rows']
+print(sum(1 for r in rows if r.get('output_match') is False))")
+  if [[ "$N_BAD" -gt 0 ]]; then
+    echo "ERROR: --strict-output: $N_BAD measured rows had output mismatches" >&2
+    echo "       see $RESULTS_DIR/summary.txt" >&2
+    exit 1
+  fi
+  echo "--- --strict-output: all rows matched the Bun reference"
+fi

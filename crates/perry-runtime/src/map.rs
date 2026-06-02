@@ -1,20 +1,67 @@
 //! Map representation for Perry
 //!
-//! Maps are heap-allocated with a stable header pointer.
+//! Maps are arena-allocated GC objects.
 //! The entries array is separately allocated and can be reallocated
-//! without changing the MapHeader address.
+//! without changing the MapHeader address between GC moves.
 
+use crate::fast_hash::{new_ptr_hash_set, PtrHashSet};
 use crate::string::StringHeader;
-use std::alloc::{alloc, realloc, Layout};
+use std::alloc::{alloc, dealloc, realloc, Layout};
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::ptr;
 
 /// Must match value.rs TAG_UNDEFINED
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
 thread_local! {
-    static MAP_REGISTRY: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
+    static MAP_ITERATOR_ARRAYS: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
+}
+
+fn mark_map_iterator_array(arr: *mut crate::array::ArrayHeader) {
+    if !arr.is_null() {
+        MAP_ITERATOR_ARRAYS.with(|r| {
+            r.borrow_mut().insert(arr as usize);
+        });
+    }
+}
+
+pub fn is_registered_map_iterator(addr: usize) -> bool {
+    MAP_ITERATOR_ARRAYS.with(|r| r.borrow().contains(&addr))
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_FORCE_HELPER_GC: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_force_next_map_helper_gc() {
+    TEST_FORCE_HELPER_GC.with(|force| force.set(force.get().saturating_add(1)));
+}
+
+#[cfg(test)]
+fn maybe_force_helper_gc_for_test() {
+    let should_collect = TEST_FORCE_HELPER_GC.with(|force| {
+        let remaining = force.get();
+        if remaining > 0 {
+            force.set(remaining - 1);
+            true
+        } else {
+            false
+        }
+    });
+    if should_collect {
+        let _ = crate::gc::gc_collect_minor();
+    }
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn maybe_force_helper_gc_for_test() {}
+
+thread_local! {
+    static MAP_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
 }
 
 fn register_map(ptr: *mut MapHeader) {
@@ -22,7 +69,322 @@ fn register_map(ptr: *mut MapHeader) {
 }
 
 pub fn is_registered_map(addr: usize) -> bool {
+    // Fast pre-filter: managed Maps carry `GcHeader.obj_type ==
+    // GC_TYPE_MAP` at `addr - GC_HEADER_SIZE`. A single i8 load + cmp
+    // short-circuits the non-Map path (the common case across the
+    // typed-dispatch chain `if is_registered_map { ... } else if
+    // is_registered_set { ... } ...`) without paying the
+    // `HashSet<usize>::contains` SipHash. The HashSet check still runs
+    // on byte-matches to defend against:
+    //   1. False-positive aliasing — another managed object or a non-GC
+    //      allocation (for example a small BufferHeader slab entry) whose
+    //      preceding byte happens to read as 8.
+    //   2. Stale post-sweep ptrs — drop_map_index removes from
+    //      MAP_REGISTRY; the GcHeader byte may persist until the slot
+    //      is reused.
+    // Profile (samply, perf-comprehensive): ~5.7% inclusive samples
+    // were attributed to is_registered_map's HashSet lookup before
+    // this fast path landed.
+    // #4004: small-handle registry ids (Web Fetch, perry-ffi/node:http, timers,
+    // …) are NaN-boxed POINTER_TAG values living below the `0x100000`
+    // small-handle cutoff; they are not heap addresses. Managed Maps are
+    // arena-allocated above it, so reject the whole small-handle band before
+    // dereferencing `addr - GC_HEADER_SIZE` (deref'ing e.g. a 0x40000 fetch
+    // handle reads unmapped memory and segfaults — see is_date_cell_addr).
+    if addr < 0x100000 {
+        return false;
+    }
+    unsafe {
+        let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*header).obj_type != crate::gc::GC_TYPE_MAP {
+            return false;
+        }
+    }
     MAP_REGISTRY.with(|r| r.borrow().contains(&addr))
+}
+
+/// Resolve a NaN-boxed (or raw-i64) `this` receiver to a registered `Map`
+/// pointer, or `None` if the receiver is not a `Map`. Backs the reflective
+/// `Map.prototype.*` thunks so they can perform the spec brand check
+/// (`TypeError` on a non-`Map` receiver) before dispatching. See
+/// `set::set_ptr_from_receiver_bits` for the receiver-extraction rationale.
+pub fn map_ptr_from_receiver_bits(bits: u64) -> Option<*mut MapHeader> {
+    let jsv = crate::value::JSValue::from_bits(bits);
+    let addr = if jsv.is_pointer() {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if bits >> 48 == 0 && bits > 0x10000 {
+        bits as usize
+    } else {
+        return None;
+    };
+    if is_registered_map(addr) {
+        Some(addr as *mut MapHeader)
+    } else {
+        None
+    }
+}
+
+/// Numeric-key index entry: hashed/compared by raw f64 bits only.
+/// Strings/object-pointer keys are NOT inserted here — those still go
+/// through the linear-scan fallback in `find_key_index`. The reason is
+/// that gen-GC may forward a string/object behind a Map.entries slot,
+/// and the entries-array gets rewritten via `rewrite_map_fields`, but
+/// the side-table's stored f64 bits for that key go stale. A subsequent
+/// lookup that triggers `jsvalue_eq` on the stale bits would deref
+/// freed memory (string content compare). Numeric f64 values have no
+/// pointers, so they're safe to index by bits.
+#[derive(Clone, Copy)]
+struct NumericKey(u64);
+
+impl Hash for NumericKey {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+impl PartialEq for NumericKey {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl Eq for NumericKey {}
+
+/// `true` if `bits` is a non-pointer JSValue (number, bool, undefined,
+/// null, INT32, or any NaN-tagged value that is NOT a string/heap pointer).
+/// We index only these in the side-table.
+#[inline]
+fn is_safe_numeric_key(bits: u64) -> bool {
+    let upper = bits >> 48;
+    // STRING_TAG (0x7FFF), POINTER_TAG (0x7FFD), BIGINT_TAG (0x7FFE) are pointers.
+    if upper == 0x7FFF || upper == 0x7FFD || upper == 0x7FFE {
+        return false;
+    }
+    // SHORT_STRING_TAG (0x7FF9) inline SSO strings need content-based
+    // comparison against heap STRING_TAG keys (issue #434). Routing them
+    // through the bits-keyed side-table would mask cross-representation
+    // matches: a Map populated with heap-string keys has no side-table
+    // slot, so an SSO lookup would short-circuit to -1 and skip the
+    // linear-scan fallback that calls `jsvalue_eq`. Force SSO keys onto
+    // the linear path so content equality kicks in.
+    if upper == (crate::value::SHORT_STRING_TAG >> 48) {
+        return false;
+    }
+    // Raw pointer (0x0000) with a plausible heap address is also a pointer.
+    if upper == 0x0000 {
+        let lower = bits & 0x0000_FFFF_FFFF_FFFF;
+        if lower > 0x10000 {
+            return false;
+        }
+    }
+    true
+}
+
+// Side-table mapping `map_ptr -> (NumericKey-bits -> entries-array-index)`.
+// O(1) `find_key_index` for numeric keys; pointer keys still take the
+// linear-scan path so they remain correct under gen-GC string forwarding.
+//
+// Both nesting levels use `PtrHasher` (Fibonacci-multiplicative + xorshift
+// avalanche, see `crate::fast_hash`). The xorshift step is essential here
+// because `NumericKey(u64)` holds f64 bit-patterns — small whole-number
+// EntityIds have mantissa-zero, so pure multiplicative hashing would
+// collapse hundreds of keys into bucket 0 (caught by a 2x regression
+// the first time around). With the avalanche step, even the worst-case
+// integer-f64 inputs distribute across buckets normally.
+thread_local! {
+    static MAP_INDEX: RefCell<
+        crate::fast_hash::PtrHashMap<usize, crate::fast_hash::PtrHashMap<NumericKey, u32>>,
+    > = RefCell::new(crate::fast_hash::new_ptr_hash_map());
+}
+
+// Side-table mapping `map_ptr -> (FNV-1a 64-bit content hash -> Vec<entries-array-index>)`
+// for STRING keys. Bypasses the gen-GC-stale-bits constraint that keeps
+// `MAP_INDEX` numeric-only by hashing the string's CONTENT, not its
+// pointer bits — so a forwarded heap-string and an SSO inline string
+// with the same bytes share the same bucket. Stored values are u32
+// indexes into the entries array (not pointers), which survive
+// `rewrite_map_fields` evacuation rewrites untouched.
+//
+// The per-bucket `Vec<u32>` accommodates hash collisions: while FNV-1a
+// 64-bit collisions are vanishingly rare for distinct strings, we still
+// validate each candidate via `jsvalue_eq` on lookup so a collision
+// just costs an extra few-byte memcmp, never a wrong answer.
+//
+// Pre-fix `Map.set("key_" + i, …)` over 500k inserts was O(N²) because
+// each `set` did a linear `find_key_index` to dedup-check; with this
+// table the dedup probe is O(1) amortized.
+thread_local! {
+    static MAP_STRING_INDEX: RefCell<
+        crate::fast_hash::PtrHashMap<usize, std::collections::HashMap<u64, Vec<u32>>>,
+    > = RefCell::new(crate::fast_hash::new_ptr_hash_map());
+}
+
+/// FNV-1a 64-bit content hash for any string-like JSValue.
+/// Returns `None` for non-strings, `Some(FNV_OFFSET_BASIS)` for the empty
+/// string. SSO and heap STRING_TAG hash into the same space because both
+/// representations decode through `string_view_from_bits`.
+#[inline]
+fn string_content_hash(value_bits: u64) -> Option<u64> {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let (ptr, len) = string_view_from_bits(value_bits, &mut scratch)?;
+    // FNV-1a 64-bit constants per http://www.isthe.com/chongo/tech/comp/fnv/
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    if len == 0 {
+        return Some(h);
+    }
+    unsafe {
+        let bytes = std::slice::from_raw_parts(ptr, len as usize);
+        for &b in bytes {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    Some(h)
+}
+
+/// Drop the side-table entry AND deregister from `MAP_REGISTRY` for a
+/// map address that's about to be reused or freed. Safe to call on
+/// unregistered addresses.
+///
+/// Without the `MAP_REGISTRY.remove`, a freed Map's address would
+/// permanently identify as a Map even after the GC slot is reused for
+/// (say) an Array — so `js_array_get_f64` would route through the Map
+/// branch, read the new Array's first u32 as `(*map).size`, the next
+/// 8 bytes as `(*map).entries`, and dereference whatever bit pattern
+/// happened to land at offset 8. With gen-GC churn this manifested as
+/// an `EXC_BAD_ACCESS` at address 0x7ffd_02xx_xxxx_xxxx (POINTER_TAG
+/// bits read as a raw pointer) inside `js_array_get_f64 + 672` while
+/// `processCommands` iterated `commands[i]` over an Array whose memory
+/// had been a Map a few collections earlier.
+pub fn drop_map_index(addr: usize) {
+    MAP_INDEX.with(|idx| {
+        idx.borrow_mut().remove(&addr);
+    });
+    MAP_STRING_INDEX.with(|idx| {
+        idx.borrow_mut().remove(&addr);
+    });
+    MAP_REGISTRY.with(|r| {
+        r.borrow_mut().remove(&addr);
+    });
+}
+
+pub(crate) fn map_header_moved_for_gc(old_addr: usize, new_addr: usize) {
+    if old_addr == 0 || new_addr == 0 || old_addr == new_addr {
+        return;
+    }
+    MAP_REGISTRY.with(|r| {
+        let mut registry = r.borrow_mut();
+        if registry.remove(&old_addr) {
+            registry.insert(new_addr);
+        }
+    });
+    MAP_INDEX.with(|idx| {
+        let mut idx = idx.borrow_mut();
+        idx.remove(&new_addr);
+        if let Some(slot) = idx.remove(&old_addr) {
+            idx.insert(new_addr, slot);
+        }
+    });
+    MAP_STRING_INDEX.with(|idx| {
+        let mut idx = idx.borrow_mut();
+        idx.remove(&new_addr);
+        if let Some(slot) = idx.remove(&old_addr) {
+            idx.insert(new_addr, slot);
+        }
+    });
+}
+
+pub(crate) unsafe fn finalize_map_side_allocation_for_gc(map: *mut MapHeader) {
+    if map.is_null() {
+        return;
+    }
+    let addr = map as usize;
+    let was_registered = MAP_REGISTRY.with(|r| r.borrow_mut().remove(&addr));
+    MAP_INDEX.with(|idx| {
+        idx.borrow_mut().remove(&addr);
+    });
+    MAP_STRING_INDEX.with(|idx| {
+        idx.borrow_mut().remove(&addr);
+    });
+    if !was_registered {
+        return;
+    }
+
+    let entries = (*map).entries;
+    let capacity = (*map).capacity as usize;
+    if !entries.is_null() && capacity > 0 {
+        dealloc(entries as *mut u8, entries_layout(capacity));
+    }
+    // GC_STORE_AUDIT(POINTER_FREE): finalizer clears external entries side-allocation pointer after deregistration/deallocation.
+    (*map).entries = std::ptr::null_mut();
+    (*map).capacity = 0;
+    (*map).size = 0;
+}
+
+fn is_dead_copied_minor_from_space_map(addr: usize) -> bool {
+    let space = crate::arena::classify_heap_space(addr);
+    if !matches!(space, crate::arena::HeapSpace::NurseryEden)
+        && space != crate::arena::active_survivor_space()
+    {
+        return false;
+    }
+    if addr < crate::gc::GC_HEADER_SIZE {
+        return false;
+    }
+    unsafe {
+        let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*header).obj_type != crate::gc::GC_TYPE_MAP {
+            return false;
+        }
+        let flags = (*header).gc_flags;
+        flags & crate::gc::GC_FLAG_ARENA != 0
+            && flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_FORWARDED) == 0
+    }
+}
+
+pub(crate) fn finalize_dead_copied_minor_from_space_maps() -> usize {
+    let maps = MAP_REGISTRY.with(|r| {
+        r.borrow()
+            .iter()
+            .copied()
+            .filter(|&addr| is_dead_copied_minor_from_space_map(addr))
+            .collect::<Vec<_>>()
+    });
+    let count = maps.len();
+    for addr in maps {
+        unsafe {
+            finalize_map_side_allocation_for_gc(addr as *mut MapHeader);
+        }
+    }
+    count
+}
+
+#[cfg(test)]
+pub(crate) fn test_map_numeric_index_contains(map: *const MapHeader, key: f64) -> bool {
+    let key = normalize_zero(key);
+    let bits = key.to_bits();
+    if !is_safe_numeric_key(bits) {
+        return false;
+    }
+    MAP_INDEX.with(|idx| {
+        idx.borrow()
+            .get(&(map as usize))
+            .is_some_and(|slot| slot.contains_key(&NumericKey(bits)))
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn test_map_string_index_contains(map: *const MapHeader, key: f64) -> bool {
+    let bits = key.to_bits();
+    let Some(hash) = string_content_hash(bits) else {
+        return false;
+    };
+    MAP_STRING_INDEX.with(|idx| {
+        idx.borrow()
+            .get(&(map as usize))
+            .is_some_and(|slot| slot.get(&hash).is_some_and(|bucket| !bucket.is_empty()))
+    })
 }
 
 /// Strip NaN-boxing tags from a map pointer (defensive guard).
@@ -47,7 +409,7 @@ fn clean_map_ptr_mut(map: *mut MapHeader) -> *mut MapHeader {
     clean_map_ptr(map as *const MapHeader) as *mut MapHeader
 }
 
-/// Map header - stable address, entries allocated separately
+/// Map header - GC-movable address, entries allocated separately
 #[repr(C)]
 pub struct MapHeader {
     /// Number of key-value pairs in the map
@@ -91,46 +453,10 @@ fn normalize_zero(key: f64) -> f64 {
     }
 }
 
-/// Check if a value looks like a heap pointer (raw pointer stored in f64)
-/// On most systems, heap pointers have small upper bits (0x0000 or close to it)
-fn looks_like_pointer(val: f64) -> bool {
-    let bits = val.to_bits();
-    // Heap pointers on modern systems typically have upper 16 bits as 0x0000
-    // and lower 48 bits as the actual address. Addresses above 0x100000000 are typical.
-    let upper_16 = bits >> 48;
-    let lower_48 = bits & 0x0000_FFFF_FFFF_FFFF;
-    // Check if upper bits are 0 (user-space pointer) and lower bits look like a valid address
-    upper_16 == 0 && lower_48 > 0x10000
-}
-
-/// Extract pointer from raw f64 (for non-NaN-boxed pointers)
-fn as_raw_pointer(val: f64) -> *const u8 {
-    val.to_bits() as *const u8
-}
-
-/// Compare two strings by content
-unsafe fn strings_equal(a: *const StringHeader, b: *const StringHeader) -> bool {
-    if a.is_null() || b.is_null() || (a as usize) < 0x1000 || (b as usize) < 0x1000 {
-        return a == b;
-    }
-    let len_a = (*a).byte_len;
-    let len_b = (*b).byte_len;
-    if len_a != len_b {
-        return false;
-    }
-    // Compare content byte by byte
-    let data_a = (a as *const u8).add(std::mem::size_of::<StringHeader>());
-    let data_b = (b as *const u8).add(std::mem::size_of::<StringHeader>());
-    for i in 0..len_a as usize {
-        if *data_a.add(i) != *data_b.add(i) {
-            return false;
-        }
-    }
-    true
-}
-
 /// Extract a string pointer from a value that might be NaN-boxed with various tags.
 /// Returns the raw pointer if the value looks like it contains a string pointer, or null otherwise.
+/// Does NOT handle SHORT_STRING_TAG (SSO) — those don't carry a heap pointer;
+/// use `string_view_from_bits` for representation-agnostic content access.
 fn extract_string_ptr_from_value(bits: u64) -> *const StringHeader {
     let upper = bits >> 48;
     match upper {
@@ -149,14 +475,76 @@ fn extract_string_ptr_from_value(bits: u64) -> *const StringHeader {
     }
 }
 
-/// Check if a value looks like it contains a string/pointer (STRING_TAG, POINTER_TAG, or raw pointer)
+/// Return a `(ptr, byte_len)` view for any string-like JSValue.
+/// Heap pointers point into the `StringHeader`'s inline data; SSO values
+/// decode into `scratch`. Returns `None` for non-string values.
+///
+/// Issue #434: pre-fix, jsvalue_eq only handled heap-pointer string
+/// representations, so `Map.get(JSON.parse('"hello"'))` missed the
+/// `"hello"` key stored as STRING_TAG.
+fn string_view_from_bits<'a>(
+    bits: u64,
+    scratch: &'a mut [u8; crate::value::SHORT_STRING_MAX_LEN],
+) -> Option<(*const u8, u32)> {
+    let upper = bits >> 48;
+    if upper == (crate::value::SHORT_STRING_TAG >> 48) {
+        let len = ((bits & crate::value::SHORT_STRING_LEN_MASK)
+            >> crate::value::SHORT_STRING_LEN_SHIFT) as usize;
+        let data = bits & crate::value::SHORT_STRING_DATA_MASK;
+        for (i, slot) in scratch.iter_mut().enumerate().take(len) {
+            *slot = ((data >> (i * 8)) & 0xFF) as u8;
+        }
+        return Some((scratch.as_ptr(), len as u32));
+    }
+    let ptr = extract_string_ptr_from_value(bits);
+    if ptr.is_null() || (ptr as usize) < 0x1000 {
+        return None;
+    }
+    unsafe {
+        let len = (*ptr).byte_len;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        Some((data, len))
+    }
+}
+
+/// Check if a value looks like it contains a string (heap STRING_TAG / inline
+/// SHORT_STRING_TAG SSO, or POINTER_TAG / raw pointer that *actually* points at a
+/// `GC_TYPE_STRING` allocation).
+///
+/// Issue #549: pre-fix, this returned `true` for any POINTER_TAG value because
+/// `extract_string_ptr_from_value` accepts the tag without validating the GC
+/// type at the pointee. That made `jsvalue_eq` content-compare two distinct
+/// objects (or an object and a string, etc.) by reinterpreting the
+/// `ObjectHeader` as a `StringHeader` — `class_id` showed up as `byte_len`,
+/// the comparison read raw memory past the header as "string bytes", and two
+/// empty `{}` literals (same class_id, both empty) ended up colliding inside
+/// `Set.add` / `Map.set`. Validate the GC header here so only real string
+/// pointees enter the content-comparison path; everything else falls back
+/// to the bit-identity check that JS Set/Map `SameValueZero` semantics call
+/// for on object keys.
 fn is_string_like(bits: u64) -> bool {
-    !extract_string_ptr_from_value(bits).is_null()
+    let upper = bits >> 48;
+    if upper == (crate::value::SHORT_STRING_TAG >> 48) {
+        return true;
+    }
+    // STRING_TAG always identifies a string pointee — accept without GC check.
+    if upper == 0x7FFF {
+        return !extract_string_ptr_from_value(bits).is_null();
+    }
+    let ptr = extract_string_ptr_from_value(bits);
+    if ptr.is_null() || (ptr as usize) < 0x1000 {
+        return false;
+    }
+    unsafe {
+        let gc_hdr =
+            (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        (*gc_hdr).obj_type == crate::gc::GC_TYPE_STRING
+    }
 }
 
 /// Check if two JSValues are equal (for map key comparison)
-/// This handles NaN-boxed values with STRING_TAG (0x7FFF), POINTER_TAG (0x7FFD),
-/// raw pointers (0x0000), and cross-tag combinations (e.g., STRING_TAG vs POINTER_TAG).
+/// Handles STRING_TAG (0x7FFF), POINTER_TAG (0x7FFD), SHORT_STRING_TAG (0x7FF9 SSO),
+/// raw pointers (0x0000), and cross-tag combinations (e.g., STRING_TAG vs SHORT_STRING_TAG).
 fn jsvalue_eq(a: f64, b: f64) -> bool {
     let a_bits = a.to_bits();
     let b_bits = b.to_bits();
@@ -166,16 +554,25 @@ fn jsvalue_eq(a: f64, b: f64) -> bool {
         return true;
     }
 
-    // If both values look like they contain string pointers (any tag combination),
-    // compare by content. This handles:
-    // - STRING_TAG (0x7FFF) vs STRING_TAG (0x7FFF)
-    // - STRING_TAG (0x7FFF) vs POINTER_TAG (0x7FFD)
-    // - POINTER_TAG (0x7FFD) vs POINTER_TAG (0x7FFD)
-    // - Raw pointer (0x0000) vs any of the above
     if is_string_like(a_bits) && is_string_like(b_bits) {
-        let ptr_a = extract_string_ptr_from_value(a_bits);
-        let ptr_b = extract_string_ptr_from_value(b_bits);
-        return unsafe { strings_equal(ptr_a, ptr_b) };
+        let mut a_scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let mut b_scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        if let (Some((a_ptr, a_len)), Some((b_ptr, b_len))) = (
+            string_view_from_bits(a_bits, &mut a_scratch),
+            string_view_from_bits(b_bits, &mut b_scratch),
+        ) {
+            if a_len != b_len {
+                return false;
+            }
+            if a_len == 0 {
+                return true;
+            }
+            unsafe {
+                let a_slice = std::slice::from_raw_parts(a_ptr, a_len as usize);
+                let b_slice = std::slice::from_raw_parts(b_ptr, b_len as usize);
+                return a_slice == b_slice;
+            }
+        }
     }
 
     false
@@ -187,25 +584,48 @@ pub extern "C" fn js_map_alloc(capacity: u32) -> *mut MapHeader {
     let cap = if capacity == 0 { 4 } else { capacity };
     let ent_layout = entries_layout(cap as usize);
 
-    // Allocate header via GC so the GC can trace Map entries (keys/values)
-    // and keep gc-allocated strings/arrays/objects alive
-    let ptr = crate::gc::gc_malloc(std::mem::size_of::<MapHeader>(), crate::gc::GC_TYPE_MAP)
-        as *mut MapHeader;
+    // Allocate the fixed-size header in the managed arena. The entries buffer
+    // remains external and is traced through the Map rewrite descriptor.
+    let ptr =
+        crate::arena::arena_alloc_gc(std::mem::size_of::<MapHeader>(), 8, crate::gc::GC_TYPE_MAP)
+            as *mut MapHeader;
 
     unsafe {
-        // Entries array uses standard alloc (not gc-tracked, just data)
+        // Entries array uses standard alloc (not gc-tracked, just data).
+        // Zero the buffer at allocation: libc hands out raw memory and a
+        // freshly-allocated Map after a sibling was freed often lands on
+        // the same address. find_key_index walks entries[0..size]; if a
+        // realloc-grow leaves stale bytes in the live range a `has()`
+        // check can find a stale key from a prior Map. Witnessed in
+        // ecs-perf-test/repro/foreach-many.ts iter 5: 2500 stale entries
+        // from iter 4's freed buffer made `Map.has(5121)` return true
+        // on a fresh Map that never saw entity 5121.
         let entries = alloc(ent_layout) as *mut f64;
         if entries.is_null() {
             panic!("Failed to allocate map entries");
         }
+        ptr::write_bytes(entries as *mut u8, 0u8, ent_layout.size());
 
         // Initialize header
         (*ptr).size = 0;
         (*ptr).capacity = cap;
+        // GC_STORE_AUDIT(INIT): map entries buffer is external storage; element stores are barriered separately.
         (*ptr).entries = entries;
 
         // Register in map registry for runtime type detection
         register_map(ptr);
+
+        // Initialize / reset the O(1) lookup side-table for this address.
+        // Arena reuse may recycle a freed Map's GC slot, so a stale index
+        // entry from the prior occupant must be cleared here.
+        MAP_INDEX.with(|idx| {
+            idx.borrow_mut()
+                .insert(ptr as usize, crate::fast_hash::new_ptr_hash_map());
+        });
+        MAP_STRING_INDEX.with(|idx| {
+            idx.borrow_mut()
+                .insert(ptr as usize, std::collections::HashMap::new());
+        });
 
         ptr
     }
@@ -221,11 +641,91 @@ pub extern "C" fn js_map_size(map: *const MapHeader) -> u32 {
     unsafe { (*map).size }
 }
 
-/// Find the index of a key in the map, or -1 if not found
+/// Find the index of a key in the map, or -1 if not found.
+/// Uses the O(1) MAP_INDEX side-table; falls back to a linear scan only
+/// when no side-table entry exists (e.g. a Map produced by a path that
+/// bypassed `js_map_alloc`).
+/// Below this size, linear scan over the entries buffer beats the
+/// side-table lookup (RefCell::borrow + HashMap::get is ~100ns per
+/// call; a linear scan over <=8 f64 keys is ~10-20ns + better cache
+/// locality). Most archetype.componentData / per-entity-relations Maps
+/// hold 1-3 entries — paying the side-table cost on them dominates
+/// the perf-comprehensive sync-heavy benchmarks.
+const SIDE_TABLE_THRESHOLD: u32 = 8;
+
 unsafe fn find_key_index(map: *const MapHeader, key: f64) -> i32 {
     let size = (*map).size;
-    let entries = entries_ptr(map);
+    let key_bits = key.to_bits();
 
+    // Small maps: linear scan beats side-table dispatch.
+    if size <= SIDE_TABLE_THRESHOLD {
+        let entries = entries_ptr(map);
+        for i in 0..size {
+            let entry_key = ptr::read(entries.add((i as usize) * 2));
+            if jsvalue_eq(entry_key, key) {
+                return i as i32;
+            }
+        }
+        return -1;
+    }
+
+    // Side-table fast path is restricted to non-pointer keys. Object /
+    // bigint pointer keys still take the linear scan because the
+    // side-table's stored bits go stale when gen-GC forwards the
+    // backing object (see comment on `NumericKey`).
+    if is_safe_numeric_key(key_bits) {
+        let hit = MAP_INDEX.with(|idx| {
+            let idx = idx.borrow();
+            if let Some(slot) = idx.get(&(map as usize)) {
+                if let Some(&i) = slot.get(&NumericKey(key_bits)) {
+                    if i < size {
+                        return Some(i as i32);
+                    }
+                }
+                return Some(-1i32);
+            }
+            None
+        });
+        if let Some(v) = hit {
+            return v;
+        }
+    }
+
+    // String-key fast path: content-hashed side-table bypasses the
+    // gen-GC-stale-bits constraint by hashing the bytes (heap-pointer
+    // string and SSO collide into the same bucket). Index values are
+    // u32 entry offsets — pointer-stable across `rewrite_map_fields`.
+    if is_string_like(key_bits) {
+        if let Some(h) = string_content_hash(key_bits) {
+            let entries = entries_ptr(map);
+            let hit = MAP_STRING_INDEX.with(|idx| {
+                let idx = idx.borrow();
+                if let Some(slot) = idx.get(&(map as usize)) {
+                    if let Some(bucket) = slot.get(&h) {
+                        // FNV-1a collisions are rare but possible; validate
+                        // each candidate via `jsvalue_eq` (memcmp on bytes).
+                        for &cand_idx in bucket {
+                            if cand_idx >= size {
+                                continue;
+                            }
+                            let cand_key = ptr::read(entries.add((cand_idx as usize) * 2));
+                            if jsvalue_eq(cand_key, key) {
+                                return Some(cand_idx as i32);
+                            }
+                        }
+                    }
+                    return Some(-1i32);
+                }
+                None
+            });
+            if let Some(v) = hit {
+                return v;
+            }
+        }
+    }
+
+    // Linear scan for object/bigint pointer keys, or maps with no side-table entry.
+    let entries = entries_ptr(map);
     for i in 0..size {
         let entry_key = ptr::read(entries.add((i as usize) * 2));
         if jsvalue_eq(entry_key, key) {
@@ -237,12 +737,12 @@ unsafe fn find_key_index(map: *const MapHeader, key: f64) -> i32 {
 }
 
 /// Grow the entries array if needed (header stays at same address)
-unsafe fn ensure_capacity(map: *mut MapHeader) {
+unsafe fn ensure_capacity(map: *mut MapHeader) -> bool {
     let size = (*map).size;
     let capacity = (*map).capacity;
 
     if size < capacity {
-        return;
+        return false;
     }
 
     // Double the capacity
@@ -255,8 +755,10 @@ unsafe fn ensure_capacity(map: *mut MapHeader) {
         panic!("Failed to grow map entries");
     }
 
+    // GC_STORE_AUDIT(INIT): map external buffer pointer moves; live entry slots are dirtied by caller.
     (*map).entries = new_entries;
     (*map).capacity = new_capacity;
+    true
 }
 
 /// Set a key-value pair in the map
@@ -269,26 +771,77 @@ pub extern "C" fn js_map_set(map: *mut MapHeader, key: f64, value: f64) -> *mut 
     }
     let key = normalize_zero(key);
     unsafe {
-        // Check if key already exists
+        // Check if key already exists (O(1) via MAP_INDEX)
         let idx = find_key_index(map, key);
 
         if idx >= 0 {
-            // Update existing value
+            // Update existing value (key position unchanged → no index update)
             let entries = entries_ptr_mut(map);
-            ptr::write(entries.add((idx as usize) * 2 + 1), value);
+            let value_slot = entries.add((idx as usize) * 2 + 1);
+            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map value slot uses the shared external-slot helper.
+            crate::gc::runtime_store_external_jsvalue_slot(
+                map as usize,
+                value_slot as usize,
+                value.to_bits(),
+            );
             return map;
         }
 
-        // Key doesn't exist, need to add new entry
-        ensure_capacity(map);
+        // Key doesn't exist, append a new entry
+        let grew = ensure_capacity(map);
         let size = (*map).size;
         let entries = entries_ptr_mut(map);
+        if grew && size > 0 {
+            crate::gc::runtime_dirty_external_slot_span(
+                map as usize,
+                entries as usize,
+                size as usize * 2,
+            );
+        }
 
-        // Write key and value
-        ptr::write(entries.add((size as usize) * 2), key);
-        ptr::write(entries.add((size as usize) * 2 + 1), value);
+        let key_slot = entries.add((size as usize) * 2);
+        let value_slot = entries.add((size as usize) * 2 + 1);
+        // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map append key/value slots use the shared external-slot helper.
+        crate::gc::runtime_store_external_jsvalue_slot(
+            map as usize,
+            key_slot as usize,
+            key.to_bits(),
+        );
+        crate::gc::runtime_store_external_jsvalue_slot(
+            map as usize,
+            value_slot as usize,
+            value.to_bits(),
+        );
 
         (*map).size = size + 1;
+
+        // Update O(1) side-table for numeric keys. Object/bigint pointer
+        // keys stay out so a gen-GC forward of the backing object can't
+        // leave stale bits in the index.
+        let key_bits = key.to_bits();
+        if is_safe_numeric_key(key_bits) {
+            MAP_INDEX.with(|idx| {
+                let mut idx = idx.borrow_mut();
+                let slot = idx
+                    .entry(map as usize)
+                    .or_insert_with(crate::fast_hash::new_ptr_hash_map);
+                slot.insert(NumericKey(key_bits), size);
+            });
+        } else if is_string_like(key_bits) {
+            // String key: content-hashed index bypasses the gen-GC stale-bits
+            // constraint by storing entry indexes (not pointers) keyed by
+            // FNV-1a 64-bit hash of the bytes.
+            if let Some(h) = string_content_hash(key_bits) {
+                MAP_STRING_INDEX.with(|idx| {
+                    let mut idx = idx.borrow_mut();
+                    let slot = idx
+                        .entry(map as usize)
+                        .or_insert_with(std::collections::HashMap::new);
+                    slot.entry(h).or_insert_with(Vec::new).push(size);
+                });
+            }
+        }
+
         map
     }
 }
@@ -351,17 +904,81 @@ pub extern "C" fn js_map_delete(map: *mut MapHeader, key: f64) -> i32 {
         let size = (*map).size;
         let entries = entries_ptr_mut(map);
 
-        // If not the last element, swap with the last element
-        if (idx as u32) < size - 1 {
-            let last_key = ptr::read(entries.add(((size - 1) as usize) * 2));
-            let last_value = ptr::read(entries.add(((size - 1) as usize) * 2 + 1));
-            ptr::write(entries.add((idx as usize) * 2), last_key);
-            ptr::write(entries.add((idx as usize) * 2 + 1), last_value);
+        // #2831: preserve insertion order. JS Map iteration must keep the
+        // relative order of surviving entries after a delete (and a
+        // delete-then-re-add appends at the end). The previous swap-and-pop
+        // moved the last entry into the hole, reordering iteration. Shift
+        // every entry after `idx` down by one slot instead.
+        for i in (idx as usize)..(size as usize - 1) {
+            let next_key = ptr::read(entries.add((i + 1) * 2));
+            let next_value = ptr::read(entries.add((i + 1) * 2 + 1));
+            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map compaction slots use the shared external-slot helper.
+            crate::gc::runtime_store_external_jsvalue_slot(
+                map as usize,
+                entries.add(i * 2) as usize,
+                next_key.to_bits(),
+            );
+            crate::gc::runtime_store_external_jsvalue_slot(
+                map as usize,
+                entries.add(i * 2 + 1) as usize,
+                next_value.to_bits(),
+            );
         }
 
         (*map).size = size - 1;
+
+        // The shift changes the entry index of every surviving key at or
+        // after `idx`, so the O(1) lookup side-tables can't be patched in
+        // place cheaply — rebuild them from the compacted buffer. Small
+        // maps don't use the side-table fast path (linear scan under
+        // SIDE_TABLE_THRESHOLD), so this only matters for large maps where
+        // a full rebuild is still O(size) like the shift itself.
+        rebuild_map_index(map);
         1
     }
+}
+
+/// Rebuild the numeric + string lookup side-tables for `map` from its
+/// current compacted entries buffer. Used after an order-preserving
+/// `delete` shifts entry indexes (#2831).
+unsafe fn rebuild_map_index(map: *mut MapHeader) {
+    if map.is_null() {
+        return;
+    }
+    let size = (*map).size as usize;
+    let capacity = (*map).capacity as usize;
+    if size > capacity || size > 16_000_000 || (*map).entries.is_null() {
+        return;
+    }
+    let entries = entries_ptr(map);
+    MAP_INDEX.with(|idx| {
+        let mut idx = idx.borrow_mut();
+        let slot = idx
+            .entry(map as usize)
+            .or_insert_with(crate::fast_hash::new_ptr_hash_map);
+        slot.clear();
+        for i in 0..size {
+            let key_bits = ptr::read(entries.add(i * 2)).to_bits();
+            if is_safe_numeric_key(key_bits) {
+                slot.insert(NumericKey(key_bits), i as u32);
+            }
+        }
+    });
+    MAP_STRING_INDEX.with(|idx| {
+        let mut idx = idx.borrow_mut();
+        let slot = idx
+            .entry(map as usize)
+            .or_insert_with(std::collections::HashMap::new);
+        slot.clear();
+        for i in 0..size {
+            let key_bits = ptr::read(entries.add(i * 2)).to_bits();
+            if is_string_like(key_bits) {
+                if let Some(h) = string_content_hash(key_bits) {
+                    slot.entry(h).or_insert_with(Vec::new).push(i as u32);
+                }
+            }
+        }
+    });
 }
 
 /// Clear all entries from the map
@@ -374,6 +991,56 @@ pub extern "C" fn js_map_clear(map: *mut MapHeader) {
     unsafe {
         (*map).size = 0;
     }
+    MAP_INDEX.with(|idx| {
+        let mut idx = idx.borrow_mut();
+        if let Some(slot) = idx.get_mut(&(map as usize)) {
+            slot.clear();
+        }
+    });
+    MAP_STRING_INDEX.with(|idx| {
+        let mut idx = idx.borrow_mut();
+        if let Some(slot) = idx.get_mut(&(map as usize)) {
+            slot.clear();
+        }
+    });
+}
+
+/// Read the key at entry index `idx` of `map`. Used by perry-hir's
+/// `for (const [k, v] of mapExpr)` fast path to avoid materializing
+/// pair Arrays via `js_map_entries`. Returns `TAG_UNDEFINED` for an
+/// out-of-range index or null map; the caller is expected to bound
+/// the loop by `js_map_size`.
+#[no_mangle]
+pub extern "C" fn js_map_entry_key_at(map: *const MapHeader, idx: u32) -> f64 {
+    let map = clean_map_ptr(map);
+    if map.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    unsafe {
+        let size = (*map).size;
+        if idx >= size {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        let entries = entries_ptr(map);
+        ptr::read(entries.add(idx as usize * 2))
+    }
+}
+
+/// Companion to `js_map_entry_key_at` — read the value at entry index `idx`.
+#[no_mangle]
+pub extern "C" fn js_map_entry_value_at(map: *const MapHeader, idx: u32) -> f64 {
+    let map = clean_map_ptr(map);
+    if map.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    unsafe {
+        let size = (*map).size;
+        if idx >= size {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        let entries = entries_ptr(map);
+        ptr::read(entries.add(idx as usize * 2 + 1))
+    }
 }
 
 /// Get the entries of a map as an array of [key, value] pairs
@@ -384,24 +1051,47 @@ pub extern "C" fn js_map_entries(map: *const MapHeader) -> *mut crate::array::Ar
     if map.is_null() {
         return crate::array::js_array_alloc(0);
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let map_handle = scope.root_raw_const_ptr(map);
     unsafe {
+        let map = map_handle.get_raw_const_ptr::<MapHeader>();
         let size = (*map).size as usize;
-        let entries = entries_ptr(map);
-        let result = crate::array::js_array_alloc(size as u32);
+
+        // Outer Array sized exactly to hold N pair pointers — set length
+        // up front so we can write directly into the elements buffer
+        // instead of going through `js_array_push_f64` per pair.
+        let result = crate::array::js_array_alloc_with_length(size as u32);
+        let result_handle = scope.root_raw_mut_ptr(result);
+        maybe_force_helper_gc_for_test();
 
         for i in 0..size {
-            // Create a pair array [key, value]
+            // Inner pair Array: allocate via js_array_alloc (which floors
+            // to MIN_ARRAY_CAPACITY), then write key/value/length directly.
+            // Skips the two `js_array_push_f64` calls per pair (each does
+            // its own bounds + capacity check).
             let pair = crate::array::js_array_alloc(2);
+            let map = map_handle.get_raw_const_ptr::<MapHeader>();
+            let entries = entries_ptr(map);
             let key = ptr::read(entries.add(i * 2));
             let value = ptr::read(entries.add(i * 2 + 1));
-            crate::array::js_array_push_f64(pair, key);
-            crate::array::js_array_push_f64(pair, value);
+            // GC_STORE_AUDIT(BARRIERED): pair array key slot uses the shared array slot-store helper.
+            crate::array::store_array_slot(pair, 0, key.to_bits());
+            // GC_STORE_AUDIT(BARRIERED): pair array value slot uses the shared array slot-store helper.
+            crate::array::store_array_slot(pair, 1, value.to_bits());
+            (*pair).length = 2;
+            crate::array::rebuild_array_layout_exact(pair);
 
-            // Push the pair as a pointer-NaN-boxed value
+            // Write the NaN-boxed pair pointer directly into the outer
+            // array's element slot — no push.
             let pair_boxed = crate::value::js_nanbox_pointer(pair as i64);
-            crate::array::js_array_push_f64(result, pair_boxed);
+            let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            // GC_STORE_AUDIT(BARRIERED): outer entries array slot uses the shared array slot-store helper.
+            crate::array::store_array_slot(result, i, pair_boxed.to_bits());
         }
+        let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+        crate::array::rebuild_array_layout_exact(result);
 
+        mark_map_iterator_array(result);
         result
     }
 }
@@ -413,16 +1103,27 @@ pub extern "C" fn js_map_keys(map: *const MapHeader) -> *mut crate::array::Array
     if map.is_null() {
         return crate::array::js_array_alloc(0);
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let map_handle = scope.root_raw_const_ptr(map);
     unsafe {
+        let map = map_handle.get_raw_const_ptr::<MapHeader>();
         let size = (*map).size as usize;
-        let entries = entries_ptr(map);
         let result = crate::array::js_array_alloc(size as u32);
+        let result_handle = scope.root_raw_mut_ptr(result);
+        maybe_force_helper_gc_for_test();
 
         for i in 0..size {
+            let map = map_handle.get_raw_const_ptr::<MapHeader>();
+            let entries = entries_ptr(map);
             let key = ptr::read(entries.add(i * 2));
-            crate::array::js_array_push_f64(result, key);
+            let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            // GC_STORE_AUDIT(BARRIERED): map keys array slot uses the shared array slot-store helper.
+            crate::array::store_array_slot(result, i, key.to_bits());
+            (*result).length = (i + 1) as u32;
         }
 
+        let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+        mark_map_iterator_array(result);
         result
     }
 }
@@ -434,89 +1135,303 @@ pub extern "C" fn js_map_values(map: *const MapHeader) -> *mut crate::array::Arr
     if map.is_null() {
         return crate::array::js_array_alloc(0);
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let map_handle = scope.root_raw_const_ptr(map);
     unsafe {
+        let map = map_handle.get_raw_const_ptr::<MapHeader>();
         let size = (*map).size as usize;
-        let entries = entries_ptr(map);
         let result = crate::array::js_array_alloc(size as u32);
+        let result_handle = scope.root_raw_mut_ptr(result);
+        maybe_force_helper_gc_for_test();
 
         for i in 0..size {
+            let map = map_handle.get_raw_const_ptr::<MapHeader>();
+            let entries = entries_ptr(map);
             let value = ptr::read(entries.add(i * 2 + 1));
-            crate::array::js_array_push_f64(result, value);
+            let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            // GC_STORE_AUDIT(BARRIERED): map values array slot uses the shared array slot-store helper.
+            crate::array::store_array_slot(result, i, value.to_bits());
+            (*result).length = (i + 1) as u32;
         }
 
+        let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+        mark_map_iterator_array(result);
         result
     }
 }
 
-/// Create a new Map from an array of [key, value] pair arrays.
-/// Used for `new Map([["a", 1], ["b", 2]])` construction.
-#[no_mangle]
-pub extern "C" fn js_map_from_array(arr: *const crate::array::ArrayHeader) -> *mut MapHeader {
-    let map = js_map_alloc(4);
-    if arr.is_null() {
-        return map;
+/// Copy all entries of a source Map into a freshly-allocated Map.
+/// Used by `js_map_from_array` for the `new Map(otherMap)` case: a Map is
+/// itself iterable in JS and yields `[key, value]` pairs, so cloning must
+/// preserve every entry rather than treat the MapHeader bytes as an
+/// ArrayHeader (which read `size`/`capacity` as `length`/`capacity` and
+/// produced an empty Map — the root cause of effect's `FiberRefs.updateAs`
+/// dropping every fiber-ref except the one being set; see #33/#321).
+fn copy_map_into_new(src: *const MapHeader) -> *mut MapHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let src = clean_map_ptr(src);
+    if src.is_null() {
+        return js_map_alloc(4);
     }
-    unsafe {
-        let len = crate::array::js_array_length(arr);
-        for i in 0..len {
-            // Each entry must itself be a 2-element array [key, value].
-            // Array elements are stored as f64 NaN-boxed values; nested arrays
-            // come through as POINTER_TAG-boxed f64 values.
-            let entry_val = crate::array::js_array_get_f64(arr, i);
-            let entry_bits = entry_val.to_bits();
-            // Extract the inner array pointer (strip NaN-box tag if present).
-            let upper = entry_bits >> 48;
-            let inner_ptr = if upper == 0x7FFD || upper == 0x7FFF || upper == 0x7FFA {
-                // NaN-boxed pointer
-                (entry_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::array::ArrayHeader
-            } else if upper == 0x0000 {
-                let lower = entry_bits & 0x0000_FFFF_FFFF_FFFF;
-                if lower > 0x10000 {
-                    lower as *const crate::array::ArrayHeader
-                } else {
-                    continue;
-                }
-            } else {
-                continue;
-            };
-            if inner_ptr.is_null() {
-                continue;
+    let src_handle = scope.root_raw_const_ptr(src);
+    let size = unsafe {
+        let s = src_handle.get_raw_const_ptr::<MapHeader>();
+        (*s).size as usize
+    };
+    let map = js_map_alloc(size.max(4) as u32);
+    let map_handle = scope.root_raw_mut_ptr(map);
+    for i in 0..size {
+        let (key, value) = unsafe {
+            let s = src_handle.get_raw_const_ptr::<MapHeader>();
+            if i >= (*s).size as usize {
+                break;
             }
-            let inner_len = crate::array::js_array_length(inner_ptr);
-            if inner_len < 2 {
-                continue;
-            }
-            let key = crate::array::js_array_get_f64(inner_ptr, 0);
-            let value = crate::array::js_array_get_f64(inner_ptr, 1);
-            js_map_set(map, key, value);
-        }
+            let entries = entries_ptr(s);
+            (
+                ptr::read(entries.add(i * 2)),
+                ptr::read(entries.add(i * 2 + 1)),
+            )
+        };
+        let map = map_handle.get_raw_mut_ptr::<MapHeader>();
+        js_map_set(map, key, value);
     }
-    map
+    map_handle.get_raw_mut_ptr::<MapHeader>()
 }
 
-/// Iterate over map entries, calling a callback with (value, key, map) for each
+/// Create a new Map from an iterable source. Two shapes are supported:
+/// - an array of `[key, value]` pair arrays (`new Map([["a", 1]])`), and
+/// - another Map (`new Map(otherMap)`), whose entries are copied directly.
+///
+/// The Map case is detected first because a MapHeader and an ArrayHeader
+/// share the same `(u32, u32)` prefix but mean different things, so casting
+/// a Map to ArrayHeader silently mis-reads it. Codegen passes the raw
+/// (unboxed) pointer here for both `Expr::MapNewFromArray` shapes.
 #[no_mangle]
-pub extern "C" fn js_map_foreach(map: *const MapHeader, callback: f64) {
+pub extern "C" fn js_map_from_array(arr: *const crate::array::ArrayHeader) -> *mut MapHeader {
+    // `new Map(otherMap)`: a Map is iterable and yields [k, v] pairs. The
+    // registry check (GcHeader.obj_type fast-path + MAP_REGISTRY) is robust
+    // against false positives from the shared header prefix.
+    if !arr.is_null() && crate::map::is_registered_map(arr as usize) {
+        return copy_map_into_new(arr as *const MapHeader);
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = if arr.is_null() {
+        None
+    } else {
+        Some(scope.root_raw_const_ptr(arr))
+    };
+    let map = js_map_alloc(4);
+    let map_handle = scope.root_raw_mut_ptr(map);
+    if arr.is_null() {
+        return map_handle.get_raw_mut_ptr::<MapHeader>();
+    }
+    maybe_force_helper_gc_for_test();
+    let arr = arr_handle
+        .as_ref()
+        .expect("non-null array should have a runtime handle")
+        .get_raw_const_ptr::<crate::array::ArrayHeader>();
+    let len = crate::array::js_array_length(arr);
+    for i in 0..len {
+        let arr = arr_handle
+            .as_ref()
+            .expect("non-null array should have a runtime handle")
+            .get_raw_const_ptr::<crate::array::ArrayHeader>();
+        // Each entry must itself be a 2-element array [key, value].
+        // Array elements are stored as f64 NaN-boxed values; nested arrays
+        // come through as POINTER_TAG-boxed f64 values.
+        let entry_val = crate::array::js_array_get_f64(arr, i);
+        let entry_bits = entry_val.to_bits();
+        // Extract the inner array pointer (strip NaN-box tag if present).
+        let upper = entry_bits >> 48;
+        let inner_ptr = if upper == 0x7FFD || upper == 0x7FFF || upper == 0x7FFA {
+            // NaN-boxed pointer
+            (entry_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::array::ArrayHeader
+        } else if upper == 0x0000 {
+            let lower = entry_bits & 0x0000_FFFF_FFFF_FFFF;
+            if lower > 0x10000 {
+                lower as *const crate::array::ArrayHeader
+            } else {
+                continue;
+            }
+        } else {
+            continue;
+        };
+        if inner_ptr.is_null() {
+            continue;
+        }
+        let inner_len = crate::array::js_array_length(inner_ptr);
+        if inner_len < 2 {
+            continue;
+        }
+        let key = crate::array::js_array_get_f64(inner_ptr, 0);
+        let value = crate::array::js_array_get_f64(inner_ptr, 1);
+        let map = map_handle.get_raw_mut_ptr::<MapHeader>();
+        js_map_set(map, key, value);
+    }
+    map_handle.get_raw_mut_ptr::<MapHeader>()
+}
+
+/// `new Map(init)` with full `AddEntriesFromIterable` semantics (issue #2770).
+///
+/// Takes the NaN-boxed init value (not a pre-unboxed array pointer) so it can
+/// classify the argument exactly like Node:
+/// - `null`/`undefined` → empty Map,
+/// - another Map / Set / Array / string / custom iterable → consume its
+///   yielded values,
+/// - non-iterable (number, boolean, bigint, symbol, function, plain object
+///   without `[Symbol.iterator]`) → throw
+///   `TypeError: <type> ... is not iterable (...)`.
+///
+/// Each yielded value must be an *object* (array or plain object). Its `[0]`
+/// and `[1]` properties become the entry key/value (missing → `undefined`),
+/// so `new Map([['k']])` and `new Map([[]])` keep entries with `undefined`
+/// components. A non-object yielded value throws
+/// `TypeError: Iterator value <v> is not an entry object`.
+///
+/// The `new Map(existingMap)` fast path is preserved via `js_for_of_to_array`
+/// (Maps materialize to their `[k, v]` pair arrays) inside `classify_init`.
+#[no_mangle]
+pub extern "C" fn js_map_from_iterable(value: f64) -> *mut MapHeader {
+    use crate::collection_iter::{constructor_iter, ConstructorIter};
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+
+    let adder = crate::collection_iter::require_callable(
+        crate::collection_iter::builtin_prototype_method("Map", "set"),
+        "Map.prototype.set",
+    );
+    let adder = crate::collection_iter::normalize_callable_value(adder);
+    let adder_handle = scope.root_nanbox_f64(adder);
+
+    fn add_entry(
+        map_handle: crate::gc::RuntimeHandle<'_>,
+        adder_handle: crate::gc::RuntimeHandle<'_>,
+        entry: f64,
+        iter_to_close: Option<f64>,
+    ) {
+        if !crate::collection_iter::is_entry_object(entry) {
+            if let Some(iter) = iter_to_close {
+                crate::collection_iter::iterator_close(iter);
+            }
+            crate::collection_iter::throw_not_entry_object(entry);
+        }
+        let entry_bits = entry.to_bits() as i64;
+        let pair = crate::collection_iter::call_capturing_throw(|| {
+            let key = crate::object::js_object_get_index_polymorphic(entry_bits, 0.0);
+            let val = crate::object::js_object_get_index_polymorphic(entry_bits, 1.0);
+            let args = [key, val];
+            let adder = adder_handle.get_nanbox_f64();
+            let map = map_handle.get_raw_mut_ptr::<MapHeader>();
+            if crate::object::is_builtin_map_set_value(adder) {
+                crate::map::js_map_set(map, key, val);
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            } else {
+                let map_value = crate::value::js_nanbox_pointer(map as i64);
+                crate::collection_iter::call_with_this_capturing_throw(adder, map_value, &args)
+                    .unwrap_or_else(|exc| crate::exception::js_throw(exc))
+            }
+        });
+        if let Err(exc) = pair {
+            if let Some(iter) = iter_to_close {
+                crate::collection_iter::iterator_close(iter);
+            }
+            crate::exception::js_throw(exc);
+        }
+    }
+
+    match constructor_iter(value_handle.get_nanbox_f64()) {
+        ConstructorIter::Empty => {
+            let map = js_map_alloc(4);
+            return map;
+        }
+        ConstructorIter::Array(arr_value) => {
+            let arr_handle = scope.root_nanbox_f64(arr_value);
+            let map = js_map_alloc(4);
+            let map_handle = scope.root_raw_mut_ptr(map);
+            let arr_ptr = crate::value::js_nanbox_get_pointer(arr_handle.get_nanbox_f64())
+                as *mut crate::array::ArrayHeader;
+            if !arr_ptr.is_null() {
+                let len = {
+                    let arr = crate::value::js_nanbox_get_pointer(arr_handle.get_nanbox_f64())
+                        as *const crate::array::ArrayHeader;
+                    crate::array::js_array_length(arr)
+                };
+                for i in 0..len {
+                    let entry = {
+                        let arr = crate::value::js_nanbox_get_pointer(arr_handle.get_nanbox_f64())
+                            as *const crate::array::ArrayHeader;
+                        crate::array::js_array_get_f64(arr, i)
+                    };
+                    add_entry(map_handle, adder_handle, entry, None);
+                }
+            }
+            map_handle.get_raw_mut_ptr::<MapHeader>()
+        }
+        ConstructorIter::Iterator(iter) => {
+            let iter_handle = scope.root_nanbox_f64(iter);
+            let map = js_map_alloc(4);
+            let map_handle = scope.root_raw_mut_ptr(map);
+            loop {
+                let iter = iter_handle.get_nanbox_f64();
+                let next = crate::collection_iter::iterator_next_value(iter);
+                let Some(entry) = next else {
+                    break;
+                };
+                add_entry(map_handle, adder_handle, entry, Some(iter));
+            }
+            map_handle.get_raw_mut_ptr::<MapHeader>()
+        }
+    }
+}
+
+// #2770: `js_map_from_iterable` is only invoked from generated LLVM IR
+// (codegen emits the `new Map(...)` call in
+// `perry-codegen/src/expr/misc_methods.rs`), so it has zero internal Rust
+// callers. The whole-program auto-optimize bitcode link would otherwise
+// internalize + dead-strip the `#[no_mangle]` export and break the default
+// compile path. The `#[used]` anchor pins it (see project_auto_optimize_keepalive).
+#[used]
+static KEEP_JS_MAP_FROM_ITERABLE: extern "C" fn(f64) -> *mut MapHeader = js_map_from_iterable;
+
+/// `Map.prototype.forEach(callback, thisArg)` — calls `callback` with the
+/// full `(value, key, map)` argument triple (#2830) and binds `thisArg` as
+/// the callback's `this` for non-arrow functions. `this_arg` is `undefined`
+/// when omitted at the call site.
+#[no_mangle]
+pub extern "C" fn js_map_foreach(map: *const MapHeader, callback: f64, this_arg: f64) {
     let map = clean_map_ptr(map);
     if map.is_null() {
         return;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let map_handle = scope.root_raw_const_ptr(map);
+    let callback_handle = scope.root_nanbox_f64(callback);
+    let this_handle = scope.root_nanbox_f64(this_arg);
     unsafe {
+        let map = map_handle.get_raw_const_ptr::<MapHeader>();
         let size = (*map).size as usize;
-        let entries = entries_ptr(map);
-
-        // Extract the closure pointer from the NaN-boxed callback.
-        // The callback may be NaN-boxed with POINTER_TAG (0x7FFD) or
-        // passed as a raw pointer (i64 bitcast to f64). Mask off the
-        // upper 16 bits to get the real 48-bit pointer.
-        let closure_ptr =
-            (callback.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::closure::ClosureHeader;
+        // The collection itself is the third callback argument and the
+        // identity user code compares `self === m` against.
+        let map_value = crate::value::js_nanbox_pointer(map as i64);
 
         for i in 0..size {
+            let map = map_handle.get_raw_const_ptr::<MapHeader>();
+            if i >= (*map).size as usize {
+                break;
+            }
+            let entries = entries_ptr(map);
             let key = ptr::read(entries.add(i * 2));
             let value = ptr::read(entries.add(i * 2 + 1));
-            // Call closure with (value, key) - Map.forEach callback signature
-            crate::closure::js_closure_call2(closure_ptr, value, key);
+            let args = [value, key, map_value];
+            let cb = callback_handle.get_nanbox_f64();
+            let this_v = this_handle.get_nanbox_f64();
+            // Bind `thisArg` for the duration of the call (matches the
+            // URLSearchParams.forEach pattern); `js_native_call_value`
+            // dispatches the NaN-boxed callback with the full arg vector.
+            let prev_this = crate::object::js_implicit_this_set(this_v);
+            let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
+            crate::object::js_implicit_this_set(prev_this);
         }
     }
 }

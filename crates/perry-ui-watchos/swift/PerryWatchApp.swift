@@ -5,10 +5,17 @@
 // via FFI and renders it as SwiftUI views reactively.
 
 import SwiftUI
+import MapKit
+import WatchKit
 
 // MARK: - FFI declarations
 
 @_silgen_name("perry_main_init") func perry_main_init()
+// perry/background (#538) — WKApplicationDelegate.handle(_:) routes
+// each delivered WKRefreshBackgroundTask's `userInfo["perry_id"]`
+// here so Rust can dispatch the right registered handler.
+@_silgen_name("perry_watchos_dispatch_background_task")
+func perry_watchos_dispatch_background_task(_ id: UnsafePointer<CChar>)
 
 // Tree query
 @_silgen_name("perry_watchos_root_node") func perry_watchos_root_node() -> Int64
@@ -68,20 +75,91 @@ import SwiftUI
 @_silgen_name("perry_watchos_node_has_edge_insets") func perry_watchos_node_has_edge_insets(_ id: Int64) -> Bool
 @_silgen_name("perry_watchos_node_edge_inset") func perry_watchos_node_edge_inset(_ id: Int64, _ side: Int32) -> Double
 
+// MapView (issue #517)
+@_silgen_name("perry_watchos_node_map_lat") func perry_watchos_node_map_lat(_ id: Int64) -> Double
+@_silgen_name("perry_watchos_node_map_lon") func perry_watchos_node_map_lon(_ id: Int64) -> Double
+@_silgen_name("perry_watchos_node_map_lat_span") func perry_watchos_node_map_lat_span(_ id: Int64) -> Double
+@_silgen_name("perry_watchos_node_map_lon_span") func perry_watchos_node_map_lon_span(_ id: Int64) -> Double
+@_silgen_name("perry_watchos_node_map_type") func perry_watchos_node_map_type(_ id: Int64) -> Int64
+@_silgen_name("perry_watchos_node_map_pin_count") func perry_watchos_node_map_pin_count(_ id: Int64) -> Int32
+@_silgen_name("perry_watchos_node_map_pin_lat") func perry_watchos_node_map_pin_lat(_ id: Int64, _ idx: Int32) -> Double
+@_silgen_name("perry_watchos_node_map_pin_lon") func perry_watchos_node_map_pin_lon(_ id: Int64, _ idx: Int32) -> Double
+@_silgen_name("perry_watchos_node_map_pin_title") func perry_watchos_node_map_pin_title(_ id: Int64, _ idx: Int32) -> UnsafePointer<CChar>?
+
+// Toast overlay (issue #476)
+@_silgen_name("perry_watchos_toast_active_text") func perry_watchos_toast_active_text() -> UnsafePointer<CChar>?
+@_silgen_name("perry_watchos_toast_active_duration_ms") func perry_watchos_toast_active_duration_ms() -> UInt32
+@_silgen_name("perry_watchos_toast_seq") func perry_watchos_toast_seq() -> UInt64
+@_silgen_name("perry_watchos_toast_dismiss") func perry_watchos_toast_dismiss()
+
 // MARK: - Observable bridge
 
 class PerryBridge: ObservableObject {
     @Published var version: UInt64 = 0
+    @Published var toastSeq: UInt64 = 0
+    @Published var toastText: String? = nil
     private var timer: Timer?
+    private var toastDismissWork: DispatchWorkItem?
 
     func start() {
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
             let v = perry_watchos_tree_version()
-            if v != self?.version {
-                self?.version = v
+            if v != self.version {
+                self.version = v
+            }
+            let s = perry_watchos_toast_seq()
+            if s != self.toastSeq {
+                self.toastSeq = s
+                self.refreshActiveToast()
             }
         }
     }
+
+    private func refreshActiveToast() {
+        if let cstr = perry_watchos_toast_active_text() {
+            let str = String(cString: cstr)
+            self.toastText = str
+            let durationMs = perry_watchos_toast_active_duration_ms()
+            let interval = max(0.5, Double(durationMs) / 1000.0)
+            self.toastDismissWork?.cancel()
+            let work = DispatchWorkItem {
+                perry_watchos_toast_dismiss()
+            }
+            self.toastDismissWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + interval, execute: work)
+        } else {
+            self.toastText = nil
+            self.toastDismissWork?.cancel()
+            self.toastDismissWork = nil
+        }
+    }
+}
+
+struct ToastBanner: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.footnote)
+            .foregroundColor(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.black.opacity(0.85))
+            )
+            .padding(.top, 6)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .transition(.move(edge: .top).combined(with: .opacity))
+    }
+}
+
+// MARK: - Map annotation model (issue #517)
+
+struct PerryMapPin: Identifiable {
+    let id: Int
+    let coordinate: CLLocationCoordinate2D
+    let title: String
 }
 
 // MARK: - Recursive SwiftUI renderer
@@ -116,6 +194,7 @@ struct NodeView: View {
         case 12: pickerView
         case 13: List { children }
         case 14: NavigationStack { children }
+        case 16: mapView
         default: EmptyView()
         }
     }
@@ -182,6 +261,47 @@ struct NodeView: View {
 
     var progressView: some View {
         ProgressView(value: perry_watchos_node_progress_value(nodeId))
+    }
+
+    // MARK: MapView (issue #517)
+    //
+    // SwiftUI `Map(coordinateRegion:annotationItems:)` is available on
+    // watchOS 7+. The pin overlays use the deprecated `MapMarker` API
+    // because the newer `Map { Marker(...) }` shape requires watchOS 10;
+    // the deprecated API still ships and runs on every shipping watch.
+    // `set_map_type` is read but ignored — SwiftUI's watchOS Map doesn't
+    // expose the `mapStyle` modifier on watchOS 7-9.
+    @ViewBuilder var mapView: some View {
+        let lat = perry_watchos_node_map_lat(nodeId)
+        let lon = perry_watchos_node_map_lon(nodeId)
+        let latSpan = perry_watchos_node_map_lat_span(nodeId)
+        let lonSpan = perry_watchos_node_map_lon_span(nodeId)
+        let region = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+            span: MKCoordinateSpan(
+                latitudeDelta: max(latSpan, 0.001),
+                longitudeDelta: max(lonSpan, 0.001)
+            )
+        )
+        let count = Int(perry_watchos_node_map_pin_count(nodeId))
+        let pins: [PerryMapPin] = (0..<count).map { i in
+            let plat = perry_watchos_node_map_pin_lat(nodeId, Int32(i))
+            let plon = perry_watchos_node_map_pin_lon(nodeId, Int32(i))
+            let title: String = {
+                if let p = perry_watchos_node_map_pin_title(nodeId, Int32(i)) {
+                    return String(cString: p)
+                }
+                return ""
+            }()
+            return PerryMapPin(
+                id: i,
+                coordinate: CLLocationCoordinate2D(latitude: plat, longitude: plon),
+                title: title
+            )
+        }
+        Map(coordinateRegion: .constant(region), annotationItems: pins) { item in
+            MapMarker(coordinate: item.coordinate)
+        }
     }
 
     var pickerView: some View {
@@ -309,8 +429,32 @@ struct CommonModifiers: ViewModifier {
 
 // MARK: - App entry point
 
+// perry/background (#538) — receive WKRefreshBackgroundTask deliveries.
+// Reads our `userInfo["perry_id"]` and forwards to Rust; calls
+// `setTaskCompletedWithSnapshot(false)` on each task to release the OS budget.
+final class PerryWatchAppDelegate: NSObject, WKApplicationDelegate {
+    func handle(_ backgroundTasks: Set<WKRefreshBackgroundTask>) {
+        for task in backgroundTasks {
+            if let refresh = task as? WKApplicationRefreshBackgroundTask {
+                if let info = refresh.userInfo as? [String: Any],
+                   let id = info["perry_id"] as? String {
+                    id.withCString { cstr in
+                        perry_watchos_dispatch_background_task(cstr)
+                    }
+                }
+                refresh.setTaskCompletedWithSnapshot(false)
+            } else {
+                // Other refresh kinds (URLSession, snapshot, etc.) are not
+                // currently routed through perry/background.
+                task.setTaskCompletedWithSnapshot(false)
+            }
+        }
+    }
+}
+
 @main
 struct PerryApp: App {
+    @WKApplicationDelegateAdaptor(PerryWatchAppDelegate.self) var appDelegate
     @StateObject private var bridge = PerryBridge()
 
     init() {
@@ -319,13 +463,19 @@ struct PerryApp: App {
 
     var body: some Scene {
         WindowGroup {
-            let rootId = perry_watchos_root_node()
-            if rootId > 0 {
-                NodeView(nodeId: rootId, bridge: bridge)
-                    .onAppear { bridge.start() }
-            } else {
-                Text("Perry watchOS App")
-                    .onAppear { bridge.start() }
+            ZStack(alignment: .top) {
+                let rootId = perry_watchos_root_node()
+                if rootId > 0 {
+                    NodeView(nodeId: rootId, bridge: bridge)
+                        .onAppear { bridge.start() }
+                } else {
+                    Text("Perry watchOS App")
+                        .onAppear { bridge.start() }
+                }
+                if let msg = bridge.toastText {
+                    ToastBanner(text: msg)
+                        .animation(.easeInOut(duration: 0.2), value: bridge.toastSeq)
+                }
             }
         }
     }

@@ -1,8 +1,11 @@
 name: Deploy Docs
 on:
+  # Deploy docs on release tags so the public site stays pinned to the
+  # latest released binary. Use workflow_dispatch to push out-of-band fixes
+  # (typos, clarifications) without waiting for the next release.
   push:
-    branches: [main]
-    paths: ['docs/**']
+    tags: ['v*']
+  workflow_dispatch:
 permissions:
   contents: read
   pages: write
@@ -17,7 +20,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install mdBook
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -25,13 +28,15 @@ jobs:
           mkdir -p "$HOME/.cargo/bin"
           tag=$(curl -sS -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/rust-lang/mdBook/releases/latest | jq -r .tag_name)
           curl -sSL "https://github.com/rust-lang/mdBook/releases/download/${tag}/mdbook-${tag}-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C "$HOME/.cargo/bin"
-      - name: Build docs
+      - name: Install mdbook-i18n-helpers
+        run: cargo install mdbook-i18n-helpers --locked --version 0.4.0
+      - name: Build docs (all languages)
         run: |
-          mdbook build docs
+          ./docs/i18n.sh build-all
           cp docs/CNAME docs/book/CNAME
-      - uses: actions/configure-pages@v4
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: docs/book
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

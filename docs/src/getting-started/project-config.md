@@ -50,6 +50,70 @@ When a package is listed here, Perry:
 
 This is useful for pure TypeScript/JavaScript packages that don't rely on Node.js APIs. Packages that use native bindings, `eval()`, or dynamic `require()` won't work.
 
+#### `codegen`
+
+Perry is an ahead-of-time compiler: it never runs a code string at runtime. Many libraries that would normally JIT a function from a schema or a config (`ajv`, `fast-json-stringify`, Prisma, Drizzle, …) ship a **build-time** mode that emits plain, eval-free source instead. The `codegen` field declares the commands that produce that source. Perry runs them **before** compiling, then compiles the generated output natively — so the shipped binary links no JavaScript engine.
+
+```json
+{
+  "perry": {
+    "codegen": [
+      { "label": "ajv validators", "command": "node scripts/generate-validators.mjs" }
+    ]
+  }
+}
+```
+
+Each entry is either a bare command string or an object with `command` (required) and an optional `label` shown in build output. Commands run in declaration order, with the working directory set to the folder containing this `package.json`, so relative script paths resolve as expected. If a command exits non-zero the build fails and prints its captured stdout/stderr.
+
+**Security:** `codegen` is read **only** from the host project's `package.json` — never from a dependency's — so a transitive dependency can't smuggle in a build command (the same trust boundary as `compilePackages`). Skip the steps for a reproducible or sandboxed build (where the generated output is already committed) with `perry compile --no-codegen` or `PERRY_SKIP_CODEGEN=1`.
+
+##### Worked example: `ajv/standalone`
+
+`ajv` validates against a JSON Schema. Its default mode JITs the validator with `new Function`; its **standalone** mode emits the same validator as plain source. The generator script:
+
+```js
+// scripts/generate-validators.mjs
+import Ajv from "ajv";
+import standaloneCode from "ajv/dist/standalone/index.js";
+import { writeFileSync } from "node:fs";
+
+const schema = {
+  $id: "Config",
+  type: "object",
+  properties: { host: {}, port: {} },
+  required: ["host", "port"],
+  additionalProperties: false,
+};
+
+const ajv = new Ajv({ code: { source: true } }); // standalone source
+const moduleCode = standaloneCode(ajv, ajv.compile(schema));
+writeFileSync(new URL("../generated/validator.cjs", import.meta.url), moduleCode);
+```
+
+Then import the generated validator like any other module:
+
+```ts
+import validate from "./generated/validator.cjs";
+if (!validate(input)) throw new Error("invalid config");
+```
+
+`perry compile` runs the `codegen` step, ajv emits `generated/validator.cjs` (no `new Function`), and Perry compiles it natively. See `test-files/test_ajv_standalone.ts` for a runnable, byte-parity-tested sample.
+
+##### Same convention, other tools
+
+The convention is library-agnostic — point a `codegen` command at any build-time generator and import its output:
+
+| Tool | `command` | Output to import |
+|------|-----------|------------------|
+| **ajv** | `node scripts/generate-validators.mjs` (uses `ajv/standalone`) | generated validator module |
+| **Prisma** | `prisma generate` | generated client |
+| **Drizzle** | `drizzle-kit introspect` | generated schema/types |
+| **kysely-codegen** | `kysely-codegen --out-file src/db.d.ts` | generated DB types |
+| **Vue SFC** | `vue-tsc` / your SFC compile step | compiled `.vue` output |
+
+Libraries that JIT at runtime with **no** standalone mode (e.g. `fast-json-stringify`, `find-my-way`) are handled separately — see the [`eval` / `new Function` strategy](https://github.com/PerryTS/perry/issues/1677).
+
 #### `splash`
 
 Configure a native splash screen for iOS and Android. The splash screen appears instantly during cold start, before your app code runs.

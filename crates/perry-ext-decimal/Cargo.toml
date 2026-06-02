@@ -1,0 +1,16 @@
+[package]
+name = "perry-ext-decimal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for npm `decimal.js` / `bignumber.js` — uses only `perry-ffi`. Sync, arbitrary-precision arithmetic via `rust_decimal`."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+rust_decimal = "1"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

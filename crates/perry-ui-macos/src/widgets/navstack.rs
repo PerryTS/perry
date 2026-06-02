@@ -1,7 +1,7 @@
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::MainThreadOnly;
-use objc2_app_kit::{NSStackView, NSView};
+use objc2_app_kit::NSView;
 use objc2_foundation::MainThreadMarker;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -14,20 +14,25 @@ thread_local! {
 /// Create a navigation stack container. Returns widget handle.
 /// `_title_ptr` is a StringHeader pointer for the initial title (reserved for future use).
 /// `body_handle` is the handle of the initial body view.
+///
+/// Implementation: plain `NSView` registered in `ZSTACK_HANDLES` so the
+/// shared `add_child` routes through `zstack::add_child` (pin-to-fill).
+/// State-driven `NavStack(state, routes)` adds N route bodies up front
+/// and toggles visibility via setHidden; with NSStackView vertical the
+/// inner VStack(Spacer, Text, Spacer) bodies have intrinsic height ≈ 0
+/// and the visible route stayed collapsed (#612). z-stack pinning gives
+/// every route body the navstack's full bounds; hidden routes simply
+/// don't paint.
 pub fn create(_title_ptr: *const u8, body_handle: i64) -> i64 {
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     unsafe {
-        let stack: Retained<NSStackView> = msg_send![
-            NSStackView::alloc(mtm), initWithFrame: objc2_core_foundation::CGRect::ZERO
+        let view: Retained<NSView> = msg_send![
+            NSView::alloc(mtm), initWithFrame: objc2_core_foundation::CGRect::ZERO
         ];
-        let _: () = msg_send![&*stack, setOrientation: 1i64]; // vertical
-        let _: () = msg_send![&*stack, setSpacing: 0.0f64];
-
-        let view: Retained<NSView> = Retained::cast_unchecked(stack);
         let handle = super::register_widget(view);
+        super::zstack::register_as_zstack(handle);
 
-        // Add initial body
         if body_handle > 0 {
             super::add_child(handle, body_handle);
         }

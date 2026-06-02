@@ -1,11 +1,13 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::widgets;
 
 extern "C" {
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
+    fn js_get_string_pointer_unified(value: f64) -> *const u8;
 }
 
 struct StateEntry {
@@ -26,8 +28,14 @@ struct ToggleBinding {
     toggle_handle: i64,
 }
 
-struct TextFieldBinding {
-    textfield_handle: i64,
+pub(crate) struct TextFieldBinding {
+    pub(crate) textfield_handle: i64,
+    /// True while `state_set` is mid-flight writing this textfield, OR while the
+    /// textfield's own change observer is invoking user code that may call
+    /// `state.set`. Either way, the state→textfield write inside
+    /// `state_set` is skipped so the field's cursor / selection doesn't
+    /// reset on every keystroke. See #1198.
+    pub(crate) suppress: Cell<bool>,
 }
 
 /// A part of a multi-state text template.
@@ -60,7 +68,11 @@ thread_local! {
     /// Map from state_handle -> toggle bindings (two-way)
     static TOGGLE_BINDINGS: RefCell<HashMap<i64, Vec<ToggleBinding>>> = RefCell::new(HashMap::new());
     /// Map from state_handle -> textfield bindings (two-way)
-    static TEXTFIELD_BINDINGS: RefCell<HashMap<i64, Vec<TextFieldBinding>>> = RefCell::new(HashMap::new());
+    static TEXTFIELD_BINDINGS: RefCell<HashMap<i64, Vec<Rc<TextFieldBinding>>>> = RefCell::new(HashMap::new());
+    /// Map from textfield_handle -> binding, used by the textfield change
+    /// observer in `widgets/textfield.rs` to suppress the echo-back during
+    /// user-initiated edits (#1198).
+    pub(crate) static TEXTFIELD_TO_BINDING: RefCell<HashMap<i64, Rc<TextFieldBinding>>> = RefCell::new(HashMap::new());
     /// All multi-state text bindings
     static MULTI_TEXT_BINDINGS: RefCell<Vec<MultiTextBinding>> = const { RefCell::new(Vec::new()) };
     /// Map from state_handle -> indices into MULTI_TEXT_BINDINGS
@@ -86,15 +98,20 @@ fn str_from_header(ptr: *const u8) -> &'static str {
     }
 }
 
-/// Check if a f64 value is a NaN-boxed string (STRING_TAG = 0x7FFF).
+/// Check if a f64 value is a NaN-boxed string. Accepts heap
+/// `STRING_TAG` (0x7FFF) and inline SSO `SHORT_STRING_TAG` (0x7FF9).
 fn is_nanboxed_string(value: f64) -> bool {
-    let bits = value.to_bits();
-    (bits >> 48) == 0x7FFF
+    let tag = value.to_bits() >> 48;
+    tag == 0x7FFF || tag == 0x7FF9
 }
 
-/// Extract the string content from a NaN-boxed string value.
+/// Extract the string content from a NaN-boxed string value. Routes
+/// through `js_get_string_pointer_unified` so SSO inline strings get
+/// materialized to a heap StringHeader instead of being misread as a
+/// pointer (the SSO payload bytes look like a bogus address to
+/// `js_nanbox_get_pointer`).
 fn extract_nanboxed_string(value: f64) -> String {
-    let ptr = unsafe { js_nanbox_get_pointer(value) } as *const u8;
+    let ptr = unsafe { js_get_string_pointer_unified(value) };
     str_from_header(ptr).to_string()
 }
 
@@ -191,11 +208,19 @@ pub fn state_set(handle: i64, value: f64) {
         }
     });
 
-    // Update textfield bindings (two-way)
+    // Update textfield bindings (two-way). Skip bindings whose
+    // suppress flag is set — that means the update originated from
+    // the textfield itself (user typing) and writing back would
+    // reset the cursor / selection. See #1198.
     TEXTFIELD_BINDINGS.with(|b| {
         if let Some(bindings) = b.borrow().get(&handle) {
             for binding in bindings {
+                if binding.suppress.get() {
+                    continue;
+                }
+                binding.suppress.set(true);
                 widgets::textfield::set_text_str(binding.textfield_handle, &formatted);
+                binding.suppress.set(false);
             }
         }
     });
@@ -332,13 +357,36 @@ pub fn bind_toggle(state_handle: i64, toggle_handle: i64) {
 }
 
 /// Bind a textfield to a state cell (two-way binding).
+///
+/// The state→textfield direction lives here: `state_set` walks
+/// `TEXTFIELD_BINDINGS` and rewrites the field. The textfield→state
+/// direction stays user-wired through the closure passed to
+/// `TextField(placeholder, onChange)` (typically
+/// `(v) => state.set(v)`). The piece this binding adds for two-way
+/// safety is the suppress flag: while the textfield's change observer
+/// is invoking that user closure, the state_set echo-back is
+/// skipped so the field's cursor / selection isn't reset. See #1198.
 pub fn bind_textfield(state_handle: i64, textfield_handle: i64) {
+    let binding = Rc::new(TextFieldBinding {
+        textfield_handle,
+        suppress: Cell::new(false),
+    });
     TEXTFIELD_BINDINGS.with(|b| {
         b.borrow_mut()
             .entry(state_handle)
             .or_default()
-            .push(TextFieldBinding { textfield_handle });
+            .push(binding.clone());
     });
+    TEXTFIELD_TO_BINDING.with(|m| {
+        m.borrow_mut().insert(textfield_handle, binding);
+    });
+
+    // Seed the textfield with the current state value (matches the
+    // GTK4 / Windows behavior so a non-empty initial state shows up
+    // in the field on first paint).
+    let value = state_get(state_handle);
+    let text = format_value(value);
+    widgets::textfield::set_text_str(textfield_handle, &text);
 }
 
 /// Bind a text widget to multiple states with a template.

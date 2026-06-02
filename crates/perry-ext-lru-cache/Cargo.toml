@@ -1,0 +1,16 @@
+[package]
+name = "perry-ext-lru-cache"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for the npm `lru-cache` package — uses only `perry-ffi`. First handle-based wrapper port and acceptance test for perry-ffi's v0.5.x handle registry surface."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+lru = "0.18"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

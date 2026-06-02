@@ -4,21 +4,24 @@ Perry compiles TypeScript apps for Linux using GTK4.
 
 ## Requirements
 
-- GTK4 development libraries:
-  ```bash
-  # Ubuntu/Debian
-  sudo apt install libgtk-4-dev
+GTK4 + libshumate (MapView) + GStreamer (audio playback) development libraries.
+The release-packages CI pins to these and a build-from-source fails without
+them. Cairo comes in as a transitive dep of GTK4 on every distro.
 
-  # Fedora
-  sudo dnf install gtk4-devel
+```bash
+# Ubuntu / Debian
+sudo apt install libgtk-4-dev libshumate-dev libgstreamer1.0-dev
 
-  # Arch
-  sudo pacman -S gtk4
-  ```
-- Cairo development libraries (for canvas):
-  ```bash
-  sudo apt install libcairo2-dev
-  ```
+# Fedora
+sudo dnf install gtk4-devel libshumate-devel gstreamer1-devel \
+                 gstreamer1-plugins-base-devel
+
+# Arch
+sudo pacman -S gtk4 libshumate gstreamer gst-plugins-base
+```
+
+If you only need the CLI (compiling for non-Linux targets) and won't build
+`perry-ui-gtk4` locally, you can skip libshumate and gstreamer.
 
 ## Building
 

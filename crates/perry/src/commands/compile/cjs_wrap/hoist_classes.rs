@@ -1,0 +1,606 @@
+//! Top-level `class` hoisting and `module.exports = class …` rewrite passes.
+
+#[allow(unused_imports)]
+use super::*;
+
+/// Issue #665 (fifth pass): rewrite the leaf-file shape
+/// `module.exports = class Name { ... };` into declaration form
+/// `class Name { ... }\nmodule.exports = Name;` so the existing
+/// `extract_top_level_class_decls` + `extract_single_module_exports_assignment`
+/// pipeline can surface the class as a module-scope binding. Returns the
+/// rewritten source on success; `None` when the input does not match the
+/// pattern (rest of the pipeline runs unchanged in that case).
+///
+/// This is the class-expression counterpart to the v0.5.839 fix, which
+/// only handled the declaration form. Real-world packages like
+/// rate-limiter-flexible (`lib/RateLimiterAbstract.js`) ship the
+/// expression form, which made `super(opts)` calls from child classes
+/// silently no-op the parent constructor — the consumer's `import X` saw
+/// only the opaque `_cjs` IIFE result, never registered class identity
+/// in compile.rs, and codegen's super-call dispatch fell through to the
+/// no-parent-in-ctx branch.
+///
+/// Defensive constraints (returns `None` if any fails):
+///   - exactly one top-level `module.exports = ...` assignment exists
+///   - that assignment is anchored at column 0 (no leading whitespace)
+///   - the RHS starts with `class\b`
+///   - the class body is brace-balanced (with string/template/comment skip)
+///   - the chosen class name does not collide with any existing top-level
+///     `class <Name>` declaration in the source
+pub fn rewrite_module_exports_class_expression(source: &str) -> Option<String> {
+    // Find every `module.exports = ...` assignment at column 0. Multiple
+    // (possibly conflicting) targets disqualify the rewrite — the IIFE's
+    // last-assignment-wins semantics must keep running through `_cjs`.
+    let any_assign_re = regex::Regex::new(r#"(?m)^module\.exports[\t ]*="#).ok()?;
+    let assigns: Vec<_> = any_assign_re.find_iter(source).collect();
+    if assigns.len() != 1 {
+        return None;
+    }
+    let assign = &assigns[0];
+    let assign_start = assign.start();
+    let assign_end_byte = assign.end();
+
+    let bytes = source.as_bytes();
+
+    // Locate the `class` keyword after `module.exports =` (with optional
+    // intervening spaces / tabs — we don't cross newlines into the RHS).
+    let mut p = assign_end_byte;
+    while p < bytes.len() && (bytes[p] == b' ' || bytes[p] == b'\t') {
+        p += 1;
+    }
+    let class_kw_start = p;
+    if class_kw_start + "class".len() > bytes.len() {
+        return None;
+    }
+    if &bytes[class_kw_start..class_kw_start + "class".len()] != b"class" {
+        return None;
+    }
+    // `class` must be followed by a non-identifier character (whitespace,
+    // `{`, etc.) so we don't match `classify` or similar.
+    let after_kw = class_kw_start + "class".len();
+    if after_kw >= bytes.len() {
+        return None;
+    }
+    let next = bytes[after_kw];
+    let is_ident_cont = next.is_ascii_alphanumeric() || next == b'_' || next == b'$';
+    if is_ident_cont {
+        return None;
+    }
+    p = after_kw;
+
+    // Skip whitespace (including newlines — the class body can span lines,
+    // and the optional name may sit on the next line in rare formatting).
+    while p < bytes.len() && bytes[p].is_ascii_whitespace() {
+        p += 1;
+    }
+
+    // Optional class name.
+    let name_start = p;
+    while p < bytes.len()
+        && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'_' || bytes[p] == b'$')
+    {
+        p += 1;
+    }
+    let name_end = p;
+    let parsed_name = if name_end > name_start {
+        Some(
+            std::str::from_utf8(&bytes[name_start..name_end])
+                .ok()?
+                .to_string(),
+        )
+    } else {
+        None
+    };
+
+    // Scan forward to the opening `{` of the class body. `extends X`
+    // clauses live here and may include member access / call expressions,
+    // but not newlines that exit the declaration head — class bodies
+    // always open with `{` before any executable statement.
+    while p < bytes.len() && bytes[p] != b'{' {
+        p += 1;
+    }
+    if p >= bytes.len() {
+        return None;
+    }
+    let body_start = p;
+
+    // Brace-balanced scan, skipping string / template / line-comment /
+    // block-comment contents. Mirrors the logic in
+    // `extract_top_level_class_decls`.
+    let mut depth: i32 = 0;
+    let mut r = body_start;
+    while r < bytes.len() {
+        match bytes[r] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    r += 1;
+                    break;
+                }
+            }
+            b'"' | b'\'' => {
+                let quote = bytes[r];
+                r += 1;
+                while r < bytes.len() && bytes[r] != quote {
+                    if bytes[r] == b'\\' && r + 1 < bytes.len() {
+                        r += 2;
+                        continue;
+                    }
+                    r += 1;
+                }
+            }
+            b'`' => {
+                r += 1;
+                while r < bytes.len() && bytes[r] != b'`' {
+                    if bytes[r] == b'\\' && r + 1 < bytes.len() {
+                        r += 2;
+                        continue;
+                    }
+                    r += 1;
+                }
+            }
+            b'/' if r + 1 < bytes.len() && bytes[r + 1] == b'/' => {
+                r += 2;
+                while r < bytes.len() && bytes[r] != b'\n' {
+                    r += 1;
+                }
+            }
+            b'/' if r + 1 < bytes.len() && bytes[r + 1] == b'*' => {
+                r += 2;
+                while r + 1 < bytes.len() && !(bytes[r] == b'*' && bytes[r + 1] == b'/') {
+                    r += 1;
+                }
+                if r + 1 < bytes.len() {
+                    r += 2;
+                }
+            }
+            _ => {}
+        }
+        r += 1;
+    }
+    if depth != 0 {
+        return None;
+    }
+    let body_end = r;
+
+    // Optional trailing whitespace + optional `;` to consume.
+    let mut q = body_end;
+    while q < bytes.len() && (bytes[q] == b' ' || bytes[q] == b'\t') {
+        q += 1;
+    }
+    if q < bytes.len() && bytes[q] == b';' {
+        q += 1;
+    }
+
+    // Pick the name to use in the rewritten declaration. Anonymous gets
+    // a synthetic name. Reject if a top-level `class <ChosenName>`
+    // declaration already exists — we don't want to emit duplicates.
+    let chosen_name = parsed_name
+        .clone()
+        .unwrap_or_else(|| "__perry_cjs_default__".to_string());
+    let collision_pattern = format!(r#"(?m)^class[\t ]+{}\b"#, regex::escape(&chosen_name));
+    let collision_re = regex::Regex::new(&collision_pattern).ok()?;
+    if collision_re.is_match(source) {
+        return None;
+    }
+
+    // Build the replacement. Use the original class head when named
+    // (`class Foo extends Bar `) so any extends clause survives byte-for-byte.
+    // For anonymous, inject the synthetic name between `class` and the rest.
+    let class_head = if parsed_name.is_some() {
+        std::str::from_utf8(&bytes[class_kw_start..body_start])
+            .ok()?
+            .to_string()
+    } else {
+        let after_class_kw = std::str::from_utf8(&bytes[after_kw..body_start]).ok()?;
+        format!("class {}{}", chosen_name, after_class_kw)
+    };
+    let class_body = std::str::from_utf8(&bytes[body_start..body_end]).ok()?;
+    let replacement = format!(
+        "{}{}\nmodule.exports = {};",
+        class_head, class_body, chosen_name
+    );
+
+    let mut s = source.to_string();
+    s.replace_range(assign_start..q, &replacement);
+    Some(s)
+}
+
+/// Issue #652: extract top-level `class X { ... }` declarations from the CJS
+/// source so they can be hoisted OUT of the wrapping IIFE. Returns:
+///   - the extracted class block (joined with newlines, empty if none)
+///   - the list of class names extracted
+///   - the source with the class blocks replaced by blank lines (preserves
+///     line numbers for diagnostics)
+///
+/// Detection is brace-balanced, anchored to lines where `class ` appears at
+/// column 0 (strict top-level only — nested classes inside functions /
+/// blocks / object literals are left alone). Skips classes whose name is
+/// already a duplicate of a previously-seen class (defensive).
+pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, String) {
+    let bytes = source.as_bytes();
+    let mut hoisted_blocks: Vec<&str> = Vec::new();
+    let mut hoisted_names: Vec<String> = Vec::new();
+    let mut elided: Vec<(usize, usize)> = Vec::new();
+
+    // Issue #2310 — collect the names of top-level `let`/`const`/`var`
+    // declarations in this CJS source so we can REFUSE to hoist a class
+    // whose body references any of them. Hoisting moves the class out of
+    // the IIFE wrap, which severs the closure over those bindings — the
+    // class's methods then see `unknown identifier` warnings and any
+    // `++`/`--` update on an IIFE-internal let hard-errors with
+    // `Undefined variable in update expression`. The conservative rule
+    // is to leave the class inside the IIFE when *any* of its referenced
+    // identifiers would lose their binding to the IIFE-local state.
+    let iife_locals = collect_top_level_let_const_var_names(source);
+
+    let mut i = 0usize;
+    while i < bytes.len() {
+        // Anchor on a `class` keyword at the start of a line (after only
+        // whitespace would also be acceptable in principle, but real CJS
+        // packages put their class declarations at column 0).
+        let line_start = if i == 0 || bytes[i - 1] == b'\n' {
+            i
+        } else {
+            // Find the next newline; advance.
+            i += 1;
+            continue;
+        };
+
+        // Match optional leading whitespace.
+        let mut p = line_start;
+        while p < bytes.len() && (bytes[p] == b' ' || bytes[p] == b'\t') {
+            p += 1;
+        }
+
+        if p + 6 <= bytes.len() && &bytes[p..p + 6] == b"class " {
+            // Skip past "class ".
+            let name_start = p + 6;
+            // Scan identifier.
+            let mut name_end = name_start;
+            while name_end < bytes.len() {
+                let c = bytes[name_end];
+                let valid = (c.is_ascii_alphanumeric()) || c == b'_' || c == b'$';
+                if !valid {
+                    break;
+                }
+                name_end += 1;
+            }
+            if name_end > name_start {
+                let class_name = std::str::from_utf8(&bytes[name_start..name_end])
+                    .unwrap_or("")
+                    .to_string();
+                // Skip whitespace + optional `extends ...` clause + opening `{`.
+                let mut q = name_end;
+                while q < bytes.len() && (bytes[q] == b' ' || bytes[q] == b'\t') {
+                    q += 1;
+                }
+                // Optional `extends X` (or `extends X.Y` / `extends X(arg)` etc.) — scan
+                // until we hit the opening `{` for the class body, refusing
+                // to cross newlines so we stay inside the declaration head.
+                while q < bytes.len() && bytes[q] != b'{' && bytes[q] != b'\n' {
+                    q += 1;
+                }
+                if q < bytes.len() && bytes[q] == b'{' {
+                    // Brace-balanced scan to find the matching closing `}`.
+                    let body_start = q;
+                    let mut depth: i32 = 0;
+                    let mut r = q;
+                    while r < bytes.len() {
+                        match bytes[r] {
+                            b'{' => depth += 1,
+                            b'}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    r += 1;
+                                    break;
+                                }
+                            }
+                            // String / template / line-comment / block-comment
+                            // skip — minimal handling, sufficient for typical
+                            // class bodies. Class bodies don't usually contain
+                            // string literals with stray braces, but handle
+                            // the common cases defensively.
+                            b'"' | b'\'' => {
+                                let quote = bytes[r];
+                                r += 1;
+                                while r < bytes.len() && bytes[r] != quote {
+                                    if bytes[r] == b'\\' && r + 1 < bytes.len() {
+                                        r += 2;
+                                        continue;
+                                    }
+                                    r += 1;
+                                }
+                            }
+                            b'`' => {
+                                r += 1;
+                                while r < bytes.len() && bytes[r] != b'`' {
+                                    if bytes[r] == b'\\' && r + 1 < bytes.len() {
+                                        r += 2;
+                                        continue;
+                                    }
+                                    r += 1;
+                                }
+                            }
+                            b'/' if r + 1 < bytes.len() && bytes[r + 1] == b'/' => {
+                                r += 2;
+                                while r < bytes.len() && bytes[r] != b'\n' {
+                                    r += 1;
+                                }
+                            }
+                            b'/' if r + 1 < bytes.len() && bytes[r + 1] == b'*' => {
+                                r += 2;
+                                while r + 1 < bytes.len()
+                                    && !(bytes[r] == b'*' && bytes[r + 1] == b'/')
+                                {
+                                    r += 1;
+                                }
+                                if r + 1 < bytes.len() {
+                                    r += 2;
+                                }
+                            }
+                            _ => {}
+                        }
+                        r += 1;
+                    }
+                    if depth == 0 && r > body_start {
+                        // Successful brace-balanced match. Record the block —
+                        // unless the body references an IIFE-local let/const/var,
+                        // in which case hoisting would sever the closure (#2310).
+                        let block_text = std::str::from_utf8(&bytes[line_start..r]).unwrap_or("");
+                        let body_text = std::str::from_utf8(&bytes[body_start..r]).unwrap_or("");
+                        let references_iife_local =
+                            class_body_references_any(body_text, &iife_locals);
+                        if !hoisted_names.contains(&class_name) && !references_iife_local {
+                            hoisted_blocks.push(block_text);
+                            hoisted_names.push(class_name);
+                            elided.push((line_start, r));
+                        }
+                        i = r;
+                        continue;
+                    }
+                }
+            }
+        }
+        // Advance to the next line.
+        while i < bytes.len() && bytes[i] != b'\n' {
+            i += 1;
+        }
+        i += 1;
+    }
+
+    let mut out_source = source.to_string();
+    // Replace the elided ranges with whitespace (back-to-front to preserve
+    // earlier indices). Empty out the original class body but keep newlines
+    // for line-number stability.
+    for (start, end) in elided.iter().rev() {
+        let original = &source[*start..*end];
+        let blanked: String = original
+            .chars()
+            .map(|c| if c == '\n' { '\n' } else { ' ' })
+            .collect();
+        out_source.replace_range(*start..*end, &blanked);
+    }
+
+    let hoisted_block = hoisted_blocks.join("\n");
+    (hoisted_block, hoisted_names, out_source)
+}
+
+/// Issue #2310 — scan the source for **top-level** `let`/`const`/`var`
+/// declarations and return their bare identifier names. Used by
+/// `extract_top_level_class_decls` to refuse a hoist when the candidate
+/// class body references any of these — the wrap moves the class out of
+/// the IIFE so a hoisted class can't reach an IIFE-local binding, which
+/// surfaces as `Undefined variable in update expression` for `x++`/`x--`
+/// inside the class body.
+///
+/// Detection is intentionally textual (no SWC parse): the wrap layer
+/// already operates on raw source ranges, and the cost of a parse here
+/// is wasted work for the >95% of CJS files that don't trip this case.
+/// We accept the same anchor rule as the class scan: declarations at the
+/// start of a line (after only whitespace), brace-depth-aware so we
+/// ignore decls inside functions / classes / object literals.
+fn collect_top_level_let_const_var_names(source: &str) -> Vec<String> {
+    let bytes = source.as_bytes();
+    let mut names: Vec<String> = Vec::new();
+    let mut depth: i32 = 0;
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        let at_line_start = i == 0 || bytes[i - 1] == b'\n';
+        // Update brace depth for non-line-start bytes (and also at line start —
+        // a line starting with `}` decreases depth before the keyword scan).
+        match bytes[i] {
+            b'{' => {
+                depth += 1;
+                i += 1;
+                continue;
+            }
+            b'}' => {
+                depth -= 1;
+                i += 1;
+                continue;
+            }
+            b'"' | b'\'' => {
+                let q = bytes[i];
+                i += 1;
+                while i < bytes.len() && bytes[i] != q {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                }
+                i += 1;
+                continue;
+            }
+            b'`' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'`' {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                }
+                i += 1;
+                continue;
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                if i + 1 < bytes.len() {
+                    i += 2;
+                }
+                continue;
+            }
+            _ => {}
+        }
+        if !at_line_start || depth != 0 {
+            i += 1;
+            continue;
+        }
+        // At column 0 of a line, depth 0: probe for let/const/var (optionally
+        // preceded by whitespace, though real CJS rarely indents top-level
+        // decls).
+        let mut p = i;
+        while p < bytes.len() && (bytes[p] == b' ' || bytes[p] == b'\t') {
+            p += 1;
+        }
+        let rest = &bytes[p..];
+        let kw_len = if rest.starts_with(b"const ") || rest.starts_with(b"const\t") {
+            6
+        } else if rest.starts_with(b"let ") || rest.starts_with(b"let\t") {
+            4
+        } else if rest.starts_with(b"var ") || rest.starts_with(b"var\t") {
+            4
+        } else {
+            i += 1;
+            continue;
+        };
+        let mut q = p + kw_len;
+        // Walk through one or more comma-separated declarators on the same
+        // logical line. Stop at `=` (initializer), `;`, or the end of line
+        // (semicolon optional in JS).
+        loop {
+            while q < bytes.len() && (bytes[q] == b' ' || bytes[q] == b'\t') {
+                q += 1;
+            }
+            let name_start = q;
+            while q < bytes.len()
+                && (bytes[q].is_ascii_alphanumeric() || bytes[q] == b'_' || bytes[q] == b'$')
+            {
+                q += 1;
+            }
+            if q > name_start {
+                let n = std::str::from_utf8(&bytes[name_start..q])
+                    .unwrap_or("")
+                    .to_string();
+                if !n.is_empty() && !names.contains(&n) {
+                    names.push(n);
+                }
+            }
+            // Skip ahead past an `=` initializer (brace/paren/bracket-aware so a
+            // `let m = { … }` doesn't trip our depth tracking) to the next
+            // comma or end of statement.
+            let mut inner: i32 = 0;
+            while q < bytes.len() {
+                match bytes[q] {
+                    b'(' | b'[' | b'{' => inner += 1,
+                    b')' | b']' | b'}' => inner -= 1,
+                    b'"' | b'\'' => {
+                        let qq = bytes[q];
+                        q += 1;
+                        while q < bytes.len() && bytes[q] != qq {
+                            if bytes[q] == b'\\' && q + 1 < bytes.len() {
+                                q += 2;
+                                continue;
+                            }
+                            q += 1;
+                        }
+                    }
+                    b'`' => {
+                        q += 1;
+                        while q < bytes.len() && bytes[q] != b'`' {
+                            if bytes[q] == b'\\' && q + 1 < bytes.len() {
+                                q += 2;
+                                continue;
+                            }
+                            q += 1;
+                        }
+                    }
+                    b',' if inner == 0 => {
+                        q += 1;
+                        break;
+                    }
+                    b';' | b'\n' if inner == 0 => {
+                        // End of declaration.
+                        i = q;
+                        break;
+                    }
+                    _ => {}
+                }
+                q += 1;
+            }
+            if q >= bytes.len() || bytes[q] == b';' || bytes[q] == b'\n' {
+                break;
+            }
+        }
+        // Advance past the line; the outer loop will keep scanning.
+        while i < bytes.len() && bytes[i] != b'\n' {
+            i += 1;
+        }
+        i += 1;
+    }
+
+    names
+}
+
+/// Issue #2310 — true if `class_body` contains any of the given names as a
+/// bare identifier (word-boundary match). Used to gate the hoist in
+/// `extract_top_level_class_decls`. We don't try to be precise about
+/// shadowing inside the class body — class-private fields and method
+/// parameters shadow only inside their scope, and the cost of a false
+/// "don't hoist" is a slower lookup (closure-captured) rather than a
+/// miscompile, so the conservative answer is acceptable here.
+fn class_body_references_any(class_body: &str, names: &[String]) -> bool {
+    if names.is_empty() {
+        return false;
+    }
+    let bytes = class_body.as_bytes();
+    for name in names {
+        let nbytes = name.as_bytes();
+        if nbytes.is_empty() {
+            continue;
+        }
+        let mut i = 0usize;
+        while i + nbytes.len() <= bytes.len() {
+            if &bytes[i..i + nbytes.len()] == nbytes {
+                let before_ok = i == 0
+                    || !(bytes[i - 1].is_ascii_alphanumeric()
+                        || bytes[i - 1] == b'_'
+                        || bytes[i - 1] == b'$'
+                        || bytes[i - 1] == b'.');
+                let after = i + nbytes.len();
+                let after_ok = after >= bytes.len()
+                    || !(bytes[after].is_ascii_alphanumeric()
+                        || bytes[after] == b'_'
+                        || bytes[after] == b'$');
+                if before_ok && after_ok {
+                    return true;
+                }
+            }
+            i += 1;
+        }
+    }
+    false
+}

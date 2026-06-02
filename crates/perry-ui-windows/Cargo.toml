@@ -9,11 +9,26 @@ crate-type = ["rlib", "staticlib"]
 [dependencies]
 perry-ui = { path = "../perry-ui" }
 perry-ui-testkit = { workspace = true }
+perry-audio-miniaudio = { workspace = true }
 perry-runtime = { path = "../perry-runtime", default-features = false, features = ["stdlib"] }
+base64 = "0.22"
 libc = "0.2"
 # Proper PNG encoder (deflate). The old inline encoder wrote stored blocks
 # → 2.7 MB baseline for a 900×788 window. With real compression: ~50 KB.
 png = "0.17"
+# Pure-Rust QR code generator for the qrcode widget (GDI bitmap path).
+# macOS/iOS/tvOS use CIFilter("CIQRCodeGenerator"); Android uses zxing-android-embedded;
+# GTK4 stub. Windows path renders the matrix into a 32bpp DIB and BitBlt's it onto
+# a custom STATIC child window during WM_PAINT.
+qrcodegen = "1.8"
+# WebView2 — issue #658 Phase 2 Windows backend. CoreWebView2 controller
+# parented to a host HWND with sync-pumped init via WebView2's async
+# completion-handler callbacks. WebView2 Runtime ships with Windows 11
+# by default and as a redistributable on Windows 10 1803+.
+# webview2-com 0.34.x is the last release that uses windows 0.58 (matches
+# the rest of perry-ui-windows). 0.35+ moved to windows 0.59+ which would
+# clash with our HWND/PCWSTR types.
+webview2-com = "=0.34"
 
 [features]
 geisterhand = []
@@ -41,4 +56,20 @@ windows = { version = "0.58", features = [
     "Win32_System_Threading",
     "Win32_System_SystemInformation",
     "Win32_Graphics_GdiPlus",
+    # perry/media — Windows.Media.Playback.MediaPlayer (winrt) for streaming
+    # audio playback (#351).
+    "Media_Playback",
+    "Media_Core",
+    "Foundation",
+    # SystemMediaTransportControls / DisplayUpdater / MusicDisplayProperties
+    # (#367 — volume HUD media tile, headphone media keys, Edge Now Playing).
+    "Media",
+    "Storage_Streams",
+    # WinHTTP — URL-fetched images on Windows (Image(url, alt) +
+    # ImageGallery URLs). Mirrors the macOS NSURL/NSData path: native
+    # OS HTTP client, no extra Rust deps. WinHttpOpen / Connect /
+    # OpenRequest / SendRequest / ReceiveResponse / ReadData chain
+    # runs on a background thread; bytes are decoded via GDI+
+    # GdipLoadImageFromStream on the main thread during WM_PAINT.
+    "Win32_Networking_WinHttp",
 ] }

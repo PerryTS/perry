@@ -2,10 +2,6 @@ package com.perry.app
 
 import android.Manifest
 import android.app.Activity
-import android.app.AlarmManager
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -19,7 +15,6 @@ import android.location.LocationManager
 import android.media.ImageReader
 import android.net.Uri
 import android.view.PixelCopy
-import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
@@ -33,8 +28,6 @@ import android.view.TextureView
 import android.view.View
 import android.widget.*
 import androidx.core.app.ActivityCompat
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -63,6 +56,17 @@ object PerryBridge {
     // Location callback tracking
     private var pendingLocationCallbackKey: Long = 0
     private const val LOCATION_PERMISSION_REQUEST = 43
+
+    // Issue #552 geolocation + image picker
+    private const val GEOLOCATION_PERMISSION_REQUEST = 45
+    private const val IMAGE_PICK_REQUEST = 46
+    private var pendingGeolocationSuccessKey: Long = 0
+    private var pendingGeolocationErrorKey: Long = 0
+    private var pendingGeolocationPermissionKey: Long = 0
+    private var pendingImagePickerKey: Long = 0
+    private var pendingImagePickerMaxCount: Int = 0
+    private val watchListeners = mutableMapOf<Long, android.location.LocationListener>()
+    private var nextWatchId: Long = 1L
 
     // Audio permission tracking
     private const val AUDIO_PERMISSION_REQUEST = 44
@@ -121,6 +125,55 @@ object PerryBridge {
 
     @JvmStatic
     fun getActivity(): Activity = activity
+
+    // --- Deep links (issue #583) ---
+    //
+    // The Rust side (perry-ui-android/src/deeplinks.rs) registers the JS
+    // handler via `PerryBridge.appOnOpenUrl(key)` and reads the cold-start
+    // URL via `appGetLaunchUrl()`. The Kotlin side owns the Activity-level
+    // intent.data capture (set from PerryActivity.onCreate / onNewIntent)
+    // and dispatches URLs into JS through `nativeInvokeDeepLinkCallback`.
+    //
+    // Without these methods, the JNI `call_static_method("appOnOpenUrl",
+    // "(J)V")` in set_handler() throws NoSuchMethodError → pending JNI
+    // exception → the next JNI op (e.g. NavStack create) aborts the app.
+
+    private var deepLinkCallbackKey: Long = 0L
+    private var pendingLaunchUrl: String = ""
+
+    @JvmStatic
+    fun appOnOpenUrl(callbackKey: Long) {
+        deepLinkCallbackKey = callbackKey
+        // Cold-start replay: if a URL arrived before the handler was
+        // registered, fire it now through the native invoker.
+        val pending = pendingLaunchUrl
+        if (pending.isNotEmpty()) {
+            pendingLaunchUrl = ""
+            try { nativeInvokeDeepLinkCallback(callbackKey, pending, "cold-start") }
+            catch (_: UnsatisfiedLinkError) { /* native lib unloaded — drop */ }
+        }
+    }
+
+    @JvmStatic
+    fun appGetLaunchUrl(): String = pendingLaunchUrl
+
+    /**
+     * Called from PerryActivity for cold-start (onCreate) and warm
+     * (onNewIntent) intents. If the JS handler is already registered
+     * the URL is dispatched immediately; otherwise it's queued for the
+     * cold-start replay path above.
+     */
+    @JvmStatic
+    fun deliverDeepLinkUrl(url: String, source: String) {
+        if (url.isEmpty()) return
+        val key = deepLinkCallbackKey
+        if (key == 0L) {
+            pendingLaunchUrl = url
+            return
+        }
+        try { nativeInvokeDeepLinkCallback(key, url, source) }
+        catch (_: UnsatisfiedLinkError) { /* native lib unloaded — drop */ }
+    }
 
     // --- Content view ---
 
@@ -181,6 +234,29 @@ object PerryBridge {
         view.setOnClickListener {
             nativeInvokeCallback1(callbackKey, arg)
         }
+    }
+
+    // --- Issue #553: scroll-end callback with backpressure ---
+    private val scrollEndArmed = mutableMapOf<View, Boolean>()
+
+    @JvmStatic
+    fun setOnScrollEndCallback(view: View, callbackKey: Long, thresholdPx: Float) {
+        scrollEndArmed[view] = true
+        view.setOnScrollChangeListener(View.OnScrollChangeListener { v, _, scrollY, _, _ ->
+            val contentBottom = (v as? ScrollView)?.getChildAt(0)?.height ?: v.height
+            val visibleBottom = scrollY + v.height
+            val inZone = visibleBottom >= contentBottom - thresholdPx
+            val armed = scrollEndArmed[v] ?: true
+            when {
+                inZone && armed -> {
+                    scrollEndArmed[v] = false
+                    nativeInvokeCallback0(callbackKey)
+                }
+                !inZone && !armed -> {
+                    scrollEndArmed[v] = true
+                }
+            }
+        })
     }
 
     // --- Button styling ---
@@ -408,6 +484,383 @@ object PerryBridge {
             fetchLastLocation(pendingLocationCallbackKey)
         } else {
             nativeInvokeCallback2(pendingLocationCallbackKey, Double.NaN, Double.NaN)
+        }
+    }
+
+    // --- Geolocation (issue #552) ---
+
+    @JvmStatic
+    fun requestGeolocationGetCurrent(successKey: Long, errorKey: Long) {
+        pendingGeolocationSuccessKey = successKey
+        pendingGeolocationErrorKey = errorKey
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            uiHandler.post { requestGeolocationGetCurrent(successKey, errorKey) }
+            return
+        }
+        if (ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_COARSE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED) {
+            fetchLocationOnce(successKey, errorKey)
+        } else {
+            ActivityCompat.requestPermissions(
+                activity,
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
+                GEOLOCATION_PERMISSION_REQUEST
+            )
+        }
+    }
+
+    private fun fetchLocationOnce(successKey: Long, errorKey: Long) {
+        try {
+            val lm = activity.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            // Try last-known position first (cheap, often sufficient).
+            @Suppress("MissingPermission")
+            val cached = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+            if (cached != null) {
+                nativeInvokeCallback4(successKey, cached.latitude, cached.longitude,
+                    cached.accuracy.toDouble(), cached.time.toDouble())
+                return
+            }
+            // No cached fix — request a single update on the network provider
+            // (least battery-hungry; GPS as fallback).
+            val provider = when {
+                lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+                lm.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+                else -> {
+                    nativeInvokeCallbackWithString(errorKey, "no-provider-available")
+                    return
+                }
+            }
+            @Suppress("MissingPermission")
+            lm.requestSingleUpdate(provider,
+                object : android.location.LocationListener {
+                    override fun onLocationChanged(location: android.location.Location) {
+                        nativeInvokeCallback4(successKey, location.latitude, location.longitude,
+                            location.accuracy.toDouble(), location.time.toDouble())
+                    }
+                    @Deprecated("Deprecated in Java")
+                    override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) {}
+                    override fun onProviderEnabled(provider: String) {}
+                    override fun onProviderDisabled(provider: String) {
+                        nativeInvokeCallbackWithString(errorKey, "provider-disabled")
+                    }
+                },
+                Looper.getMainLooper()
+            )
+        } catch (e: SecurityException) {
+            nativeInvokeCallbackWithString(errorKey, "permission-denied")
+        } catch (e: Exception) {
+            nativeInvokeCallbackWithString(errorKey, e.message ?: "location-error")
+        }
+    }
+
+    @JvmStatic
+    fun requestGeolocationWatch(callbackKey: Long): Long {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            // We need a synchronous return value, so block briefly on the
+            // UI thread to register the listener.
+            val latch = CountDownLatch(1)
+            var result: Long = 0
+            uiHandler.post {
+                result = registerWatchListener(callbackKey)
+                latch.countDown()
+            }
+            latch.await()
+            return result
+        }
+        return registerWatchListener(callbackKey)
+    }
+
+    private fun registerWatchListener(callbackKey: Long): Long {
+        if (ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_COARSE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            // No permission — return 0 (caller should request permission first).
+            return 0L
+        }
+        val id = nextWatchId++
+        val listener = object : android.location.LocationListener {
+            override fun onLocationChanged(location: android.location.Location) {
+                nativeInvokeCallback4(callbackKey, location.latitude, location.longitude,
+                    location.accuracy.toDouble(), location.time.toDouble())
+            }
+            @Deprecated("Deprecated in Java")
+            override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) {}
+            override fun onProviderEnabled(provider: String) {}
+            override fun onProviderDisabled(provider: String) {}
+        }
+        try {
+            val lm = activity.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val provider = when {
+                lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+                lm.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+                else -> return 0L
+            }
+            @Suppress("MissingPermission")
+            lm.requestLocationUpdates(provider, 0L, 0f, listener, Looper.getMainLooper())
+            watchListeners[id] = listener
+            return id
+        } catch (e: Exception) {
+            return 0L
+        }
+    }
+
+    @JvmStatic
+    fun stopGeolocationWatch(id: Long) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            uiHandler.post { stopGeolocationWatch(id) }
+            return
+        }
+        val listener = watchListeners.remove(id) ?: return
+        try {
+            val lm = activity.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            lm.removeUpdates(listener)
+        } catch (_: Exception) {}
+    }
+
+    @JvmStatic
+    fun requestGeolocationPermission(callbackKey: Long) {
+        pendingGeolocationPermissionKey = callbackKey
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            uiHandler.post { requestGeolocationPermission(callbackKey) }
+            return
+        }
+        val granted = ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            nativeInvokeCallbackWithString(callbackKey, "granted")
+        } else {
+            // Request via standard permission flow; result routed through
+            // PerryActivity.onRequestPermissionsResult → onGeolocationPermissionResult.
+            ActivityCompat.requestPermissions(
+                activity,
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
+                GEOLOCATION_PERMISSION_REQUEST
+            )
+        }
+    }
+
+    /** Routed from PerryActivity.onRequestPermissionsResult. */
+    fun onGeolocationPermissionResult(granted: Boolean) {
+        if (pendingGeolocationPermissionKey != 0L) {
+            nativeInvokeCallbackWithString(
+                pendingGeolocationPermissionKey,
+                if (granted) "granted" else "denied"
+            )
+            pendingGeolocationPermissionKey = 0L
+        }
+        // If a getCurrent was waiting on permission, fulfill it now.
+        if (pendingGeolocationSuccessKey != 0L) {
+            if (granted) {
+                fetchLocationOnce(pendingGeolocationSuccessKey, pendingGeolocationErrorKey)
+            } else {
+                nativeInvokeCallbackWithString(pendingGeolocationErrorKey, "permission-denied")
+            }
+            pendingGeolocationSuccessKey = 0L
+            pendingGeolocationErrorKey = 0L
+        }
+    }
+
+    // --- Image picker (issue #552) ---
+
+    @JvmStatic
+    fun requestImagePickerPick(maxCount: Int, allowMultiple: Boolean, callbackKey: Long) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            uiHandler.post { requestImagePickerPick(maxCount, allowMultiple, callbackKey) }
+            return
+        }
+        pendingImagePickerKey = callbackKey
+        pendingImagePickerMaxCount = maxCount
+
+        // Build the picker intent. Photo Picker (API 33+) is the modern,
+        // privacy-preserving path. Older devices fall back to ACTION_GET_CONTENT.
+        val intent = if (android.os.Build.VERSION.SDK_INT >= 33) {
+            Intent(android.provider.MediaStore.ACTION_PICK_IMAGES).apply {
+                type = "image/*"
+                if (allowMultiple) {
+                    val extraName = android.provider.MediaStore.EXTRA_PICK_IMAGES_MAX
+                    val limit = if (maxCount in 1..10) maxCount else 10
+                    putExtra(extraName, limit)
+                }
+            }
+        } else {
+            Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "image/*"
+                addCategory(Intent.CATEGORY_OPENABLE)
+                if (allowMultiple) {
+                    putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                }
+            }
+        }
+        try {
+            activity.startActivityForResult(intent, IMAGE_PICK_REQUEST)
+        } catch (e: Exception) {
+            // No suitable activity — return empty array.
+            nativeInvokeCallbackWithStringArray(callbackKey, emptyArray())
+            pendingImagePickerKey = 0L
+        }
+    }
+
+    /**
+     * Routed from PerryActivity.onActivityResult. Copies each selected URI's
+     * content into a fresh file under the app's cache directory and returns
+     * the absolute paths (so the user can fs.readFileSync them or upload).
+     */
+    fun onImagePickerResult(resultCode: Int, data: Intent?) {
+        val key = pendingImagePickerKey
+        val max = pendingImagePickerMaxCount
+        pendingImagePickerKey = 0L
+        if (key == 0L) return
+
+        if (resultCode != Activity.RESULT_OK || data == null) {
+            nativeInvokeCallbackWithStringArray(key, emptyArray())
+            return
+        }
+
+        val uris = mutableListOf<Uri>()
+        val clip = data.clipData
+        if (clip != null) {
+            val count = clip.itemCount
+            for (i in 0 until count) {
+                if (max in 1..uris.size) break
+                clip.getItemAt(i)?.uri?.let { uris.add(it) }
+            }
+        } else {
+            data.data?.let { uris.add(it) }
+        }
+
+        val paths = mutableListOf<String>()
+        val cacheDir = activity.cacheDir
+        for ((i, uri) in uris.withIndex()) {
+            try {
+                val ext = guessImageExtension(uri)
+                val out = java.io.File(cacheDir, "perry_pick_${System.currentTimeMillis()}_$i.$ext")
+                activity.contentResolver.openInputStream(uri)?.use { input ->
+                    java.io.FileOutputStream(out).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                if (out.exists() && out.length() > 0) {
+                    paths.add(out.absolutePath)
+                }
+            } catch (_: Exception) {
+                // skip this URI; user gets the others
+            }
+        }
+        nativeInvokeCallbackWithStringArray(key, paths.toTypedArray())
+    }
+
+    private fun guessImageExtension(uri: Uri): String {
+        val mime = activity.contentResolver.getType(uri) ?: return "jpg"
+        return when (mime) {
+            "image/jpeg" -> "jpg"
+            "image/png" -> "png"
+            "image/gif" -> "gif"
+            "image/webp" -> "webp"
+            "image/heic" -> "heic"
+            "image/heif" -> "heif"
+            "image/bmp" -> "bmp"
+            else -> "jpg"
+        }
+    }
+
+    // --- Background tasks (issue #538) — WorkManager ---
+
+    /** Map identifier → callback key, written from native registerTask, read
+     *  by PerryBackgroundWorker.doWork to invoke the right Perry handler. */
+    private val backgroundHandlerKeys = mutableMapOf<String, Long>()
+
+    @JvmStatic
+    fun backgroundRegisterTask(identifier: String, callbackKey: Long) {
+        backgroundHandlerKeys[identifier] = callbackKey
+    }
+
+    @JvmStatic
+    fun backgroundLookupCallbackKey(identifier: String): Long {
+        return backgroundHandlerKeys[identifier] ?: 0L
+    }
+
+    @JvmStatic
+    fun backgroundSchedule(
+        identifier: String,
+        kind: String,
+        earliestStartMs: Double,
+        requiresNetwork: Boolean,
+        requiresCharging: Boolean
+    ) {
+        try {
+            val constraintsCls = Class.forName("androidx.work.Constraints\$Builder")
+            val constraintsBuilder = constraintsCls.getConstructor().newInstance()
+            if (requiresNetwork) {
+                val networkTypeCls = Class.forName("androidx.work.NetworkType")
+                val connected = networkTypeCls.getField("CONNECTED").get(null)
+                constraintsCls.getMethod("setRequiredNetworkType", networkTypeCls)
+                    .invoke(constraintsBuilder, connected)
+            }
+            if (requiresCharging) {
+                constraintsCls.getMethod("setRequiresCharging", Boolean::class.javaPrimitiveType)
+                    .invoke(constraintsBuilder, true)
+            }
+            val constraints = constraintsCls.getMethod("build").invoke(constraintsBuilder)
+
+            val workerCls = Class.forName("com.perry.app.PerryBackgroundWorker")
+            val builderCls = Class.forName("androidx.work.OneTimeWorkRequest\$Builder")
+            val builder = builderCls.getConstructor(Class::class.java).newInstance(workerCls)
+
+            val dataBuilderCls = Class.forName("androidx.work.Data\$Builder")
+            val dataBuilder = dataBuilderCls.getConstructor().newInstance()
+            dataBuilderCls.getMethod("putString", String::class.java, String::class.java)
+                .invoke(dataBuilder, "identifier", identifier)
+            val data = dataBuilderCls.getMethod("build").invoke(dataBuilder)
+            builderCls.getMethod("setInputData", Class.forName("androidx.work.Data"))
+                .invoke(builder, data)
+
+            builderCls.getMethod("setConstraints", Class.forName("androidx.work.Constraints"))
+                .invoke(builder, constraints)
+
+            if (earliestStartMs > 0.0) {
+                val nowMs = System.currentTimeMillis().toDouble()
+                val delayMs = (earliestStartMs - nowMs).toLong().coerceAtLeast(0L)
+                builderCls.getMethod(
+                    "setInitialDelay",
+                    Long::class.javaPrimitiveType,
+                    java.util.concurrent.TimeUnit::class.java
+                ).invoke(builder, delayMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            }
+
+            val request = builderCls.getMethod("build").invoke(builder)
+            val workManagerCls = Class.forName("androidx.work.WorkManager")
+            val workManager = workManagerCls.getMethod("getInstance", Context::class.java)
+                .invoke(null, activity)
+            val policyCls = Class.forName("androidx.work.ExistingWorkPolicy")
+            val replace = policyCls.getField("REPLACE").get(null)
+            workManagerCls.getMethod(
+                "enqueueUniqueWork",
+                String::class.java, policyCls,
+                Class.forName("androidx.work.OneTimeWorkRequest")
+            ).invoke(workManager, identifier, replace, request)
+            val _unused = kind
+        } catch (e: ClassNotFoundException) {
+            Log.w("PerryBackground", "androidx.work not on classpath; schedule() is a no-op")
+        } catch (e: Exception) {
+            Log.e("PerryBackground", "schedule failed: ${e.message}")
+        }
+    }
+
+    @JvmStatic
+    fun backgroundCancel(identifier: String) {
+        try {
+            val workManagerCls = Class.forName("androidx.work.WorkManager")
+            val workManager = workManagerCls.getMethod("getInstance", Context::class.java)
+                .invoke(null, activity)
+            workManagerCls.getMethod("cancelUniqueWork", String::class.java)
+                .invoke(workManager, identifier)
+        } catch (_: ClassNotFoundException) {
+        } catch (e: Exception) {
+            Log.e("PerryBackground", "cancel failed: ${e.message}")
         }
     }
 
@@ -725,6 +1178,22 @@ object PerryBridge {
         }
     }
 
+    // --- Toast (Phase 2 v3.3) ---
+
+    /**
+     * Show an Android Toast message on the UI thread.
+     * Called from the Perry native thread via JNI; posts to uiHandler so
+     * Toast.makeText runs on the main looper as required by the Android SDK.
+     * Toast.LENGTH_SHORT = 0 (approx 2s), consistent with the macOS 2.5s hold.
+     */
+    @JvmStatic
+    fun showToast(msg: String) {
+        val ctx = activity
+        uiHandler.post {
+            Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     // --- Timer ---
 
     @JvmStatic
@@ -774,6 +1243,544 @@ object PerryBridge {
         }
     }
 
+    // ============================================================
+    // Issue #481 — Calendar widget (android.widget.CalendarView).
+    // ============================================================
+    //
+    // CalendarView's `setOnDateChangeListener` fires with (year, monthZeroBased,
+    // day); we format `yyyy-MM-dd` (POSIX/ISO) here so the cross-platform
+    // string matches the macOS / gtk4 / iOS twins exactly.
+
+    @JvmStatic
+    fun calendarCreate(year: Long, month: Long, callbackKey: Long): android.widget.CalendarView {
+        val cv = android.widget.CalendarView(activity)
+        // Initial date — Calendar uses 0-based month; user-facing month is 1-based.
+        if (year > 0L && month in 1L..12L) {
+            val cal = java.util.Calendar.getInstance()
+            cal.set(year.toInt(), (month - 1).toInt(), 1)
+            cv.date = cal.timeInMillis
+        }
+        if (callbackKey != 0L) {
+            cv.setOnDateChangeListener { _, y, m, d ->
+                val iso = String.format("%04d-%02d-%02d", y, m + 1, d)
+                nativeInvokeCallbackWithString(callbackKey, iso)
+            }
+        }
+        return cv
+    }
+
+    @JvmStatic
+    fun calendarSetDate(cv: android.widget.CalendarView, year: Long, month: Long, day: Long) {
+        if (year <= 0L || month !in 1L..12L || day !in 1L..31L) return
+        val cal = java.util.Calendar.getInstance()
+        cal.set(year.toInt(), (month - 1).toInt(), day.toInt())
+        uiHandler.post {
+            cv.date = cal.timeInMillis
+        }
+    }
+
+    @JvmStatic
+    fun calendarGetSelectedDate(cv: android.widget.CalendarView): String {
+        val cal = java.util.Calendar.getInstance()
+        cal.timeInMillis = cv.date
+        val y = cal.get(java.util.Calendar.YEAR)
+        val m = cal.get(java.util.Calendar.MONTH) + 1
+        val d = cal.get(java.util.Calendar.DAY_OF_MONTH)
+        return String.format("%04d-%02d-%02d", y, m, d)
+    }
+
+    // ============================================================
+    // Issue #475 — Combobox (android.widget.AutoCompleteTextView).
+    // ============================================================
+    //
+    // Each combobox keeps its own ArrayAdapter<String> in a side-map so
+    // `comboboxAddItem` only needs to push one entry instead of rebuilding
+    // the whole list. The TextWatcher fires nativeInvokeCallbackWithString
+    // on each edit; selecting an autocomplete suggestion already feeds the
+    // text back through the same path.
+
+    private val comboboxAdapters =
+        mutableMapOf<android.widget.AutoCompleteTextView, ArrayAdapter<String>>()
+
+    @JvmStatic
+    fun comboboxCreate(
+        initial: String,
+        callbackKey: Long
+    ): android.widget.AutoCompleteTextView {
+        val actv = android.widget.AutoCompleteTextView(activity)
+        // simple_dropdown_item_1line is the canonical built-in row layout.
+        val adapter = ArrayAdapter<String>(
+            activity,
+            android.R.layout.simple_dropdown_item_1line,
+            mutableListOf<String>()
+        )
+        actv.setAdapter(adapter)
+        actv.threshold = 1
+        if (initial.isNotEmpty()) {
+            actv.setText(initial, false)
+        }
+        comboboxAdapters[actv] = adapter
+        if (callbackKey != 0L) {
+            actv.addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(s: Editable?) {
+                    nativeInvokeCallbackWithString(callbackKey, s?.toString() ?: "")
+                }
+            })
+        }
+        return actv
+    }
+
+    @JvmStatic
+    fun comboboxAddItem(actv: android.widget.AutoCompleteTextView, value: String) {
+        val adapter = comboboxAdapters[actv] ?: return
+        uiHandler.post {
+            adapter.add(value)
+            adapter.notifyDataSetChanged()
+        }
+    }
+
+    @JvmStatic
+    fun comboboxSetValue(actv: android.widget.AutoCompleteTextView, value: String) {
+        uiHandler.post {
+            actv.setText(value, false)
+        }
+    }
+
+    @JvmStatic
+    fun comboboxGetValue(actv: android.widget.AutoCompleteTextView): String {
+        return actv.text?.toString() ?: ""
+    }
+
+    // ============================================================
+    // Issue #478 — RichText editor (EditText + SpannableStringBuilder).
+    // ============================================================
+    //
+    // EditText stores its content as a SpannableStringBuilder under the
+    // hood, so every span we apply via toggleBold/toggleItalic/etc.
+    // survives the round-trip back through `Html.toHtml`. Toggle methods
+    // apply the requested style to the active selection (or insertion
+    // point) — matching the macOS NSTextView twin's behavior, where
+    // formatting at an empty cursor sets the "typing attributes" for the
+    // next characters.
+
+    @JvmStatic
+    fun richTextCreate(width: Double, height: Double, callbackKey: Long): EditText {
+        val et = EditText(activity)
+        et.gravity = android.view.Gravity.TOP or android.view.Gravity.START
+        et.setSingleLine(false)
+        et.isVerticalScrollBarEnabled = true
+        if (width > 0 || height > 0) {
+            et.layoutParams = FrameLayout.LayoutParams(
+                if (width > 0) width.toInt() else FrameLayout.LayoutParams.MATCH_PARENT,
+                if (height > 0) height.toInt() else FrameLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        if (callbackKey != 0L) {
+            et.addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(s: Editable?) {
+                    nativeInvokeCallbackWithString(callbackKey, s?.toString() ?: "")
+                }
+            })
+        }
+        return et
+    }
+
+    @JvmStatic
+    fun richTextSetString(et: EditText, text: String) {
+        uiHandler.post { et.setText(text) }
+    }
+
+    @JvmStatic
+    fun richTextGetString(et: EditText): String {
+        return et.text?.toString() ?: ""
+    }
+
+    @JvmStatic
+    fun richTextSetHtml(et: EditText, html: String) {
+        uiHandler.post {
+            val spanned: android.text.Spanned = if (android.os.Build.VERSION.SDK_INT >= 24) {
+                android.text.Html.fromHtml(html, android.text.Html.FROM_HTML_MODE_COMPACT)
+            } else {
+                @Suppress("DEPRECATION")
+                android.text.Html.fromHtml(html)
+            }
+            et.setText(spanned)
+        }
+    }
+
+    @JvmStatic
+    fun richTextGetHtml(et: EditText): String {
+        val text = et.text ?: return ""
+        val spanned: android.text.Spanned = if (text is android.text.Spanned) {
+            text
+        } else {
+            android.text.SpannableStringBuilder(text)
+        }
+        return if (android.os.Build.VERSION.SDK_INT >= 24) {
+            android.text.Html.toHtml(
+                spanned,
+                android.text.Html.TO_HTML_PARAGRAPH_LINES_CONSECUTIVE
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            android.text.Html.toHtml(spanned)
+        }
+    }
+
+    private fun richTextSelectionRange(et: EditText): IntArray {
+        val start = et.selectionStart.coerceAtLeast(0)
+        val end = et.selectionEnd.coerceAtLeast(start)
+        // Empty selection: format the entire content so the typing-attribute
+        // model maps cleanly even on Android (which lacks NSTextView's
+        // typingAttributes concept).
+        if (start == end) {
+            return intArrayOf(0, et.text?.length ?: 0)
+        }
+        return intArrayOf(start, end)
+    }
+
+    private inline fun <reified T : android.text.style.CharacterStyle> richTextToggleSpan(
+        et: EditText,
+        crossinline factory: () -> T,
+        crossinline matches: (T) -> Boolean
+    ) {
+        uiHandler.post {
+            val editable = et.text ?: return@post
+            val (start, end) = richTextSelectionRange(et).let { it[0] to it[1] }
+            if (start >= end) return@post
+            val existing = editable.getSpans(start, end, T::class.java).filter(matches)
+            if (existing.isNotEmpty()) {
+                for (sp in existing) {
+                    editable.removeSpan(sp)
+                }
+            } else {
+                editable.setSpan(
+                    factory(),
+                    start,
+                    end,
+                    android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+            }
+        }
+    }
+
+    @JvmStatic
+    fun richTextToggleBold(et: EditText) {
+        richTextToggleSpan(
+            et,
+            { android.text.style.StyleSpan(android.graphics.Typeface.BOLD) },
+            { it.style == android.graphics.Typeface.BOLD || it.style == android.graphics.Typeface.BOLD_ITALIC }
+        )
+    }
+
+    @JvmStatic
+    fun richTextToggleItalic(et: EditText) {
+        richTextToggleSpan(
+            et,
+            { android.text.style.StyleSpan(android.graphics.Typeface.ITALIC) },
+            { it.style == android.graphics.Typeface.ITALIC || it.style == android.graphics.Typeface.BOLD_ITALIC }
+        )
+    }
+
+    // ============================================================
+    // Issue #474 — Chart widget (custom View.onDraw, 3 chart kinds).
+    // ============================================================
+    //
+    // Kotlin owns the data; Rust just pushes points and asks for redraws
+    // (`postInvalidate`). kind: 0=line, 1=bar, 2=pie. PerryChartView keeps
+    // its own MutableList<Pair<String,Double>> and renders directly in
+    // onDraw — no graphing library dep.
+
+    private class PerryChartView(
+        context: Context,
+        var kind: Int
+    ) : View(context) {
+        val points: MutableList<Pair<String, Double>> = mutableListOf()
+        var title: String = ""
+
+        private val barFillPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF4287F5.toInt()
+            style = android.graphics.Paint.Style.FILL
+        }
+        private val linePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF4287F5.toInt()
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 4f
+        }
+        private val pointPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF1B5FB8.toInt()
+            style = android.graphics.Paint.Style.FILL
+        }
+        private val axisPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF888888.toInt()
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 2f
+        }
+        private val labelPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF222222.toInt()
+            textSize = 24f
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+        private val titlePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF222222.toInt()
+            textSize = 32f
+            textAlign = android.graphics.Paint.Align.CENTER
+            isFakeBoldText = true
+        }
+        private val pieColors = intArrayOf(
+            0xFF4287F5.toInt(), 0xFFE54545.toInt(), 0xFF34A853.toInt(),
+            0xFFFBBC05.toInt(), 0xFF9C27B0.toInt(), 0xFF00ACC1.toInt(),
+            0xFFFF7043.toInt(), 0xFF8D6E63.toInt()
+        )
+
+        override fun onDraw(canvas: android.graphics.Canvas) {
+            super.onDraw(canvas)
+            val w = width.toFloat()
+            val h = height.toFloat()
+            val titleHeight = if (title.isNotEmpty()) 48f else 0f
+            if (title.isNotEmpty()) {
+                canvas.drawText(title, w / 2f, 36f, titlePaint)
+            }
+            if (points.isEmpty()) return
+
+            when (kind) {
+                0 -> drawLine(canvas, w, h, titleHeight)
+                1 -> drawBar(canvas, w, h, titleHeight)
+                2 -> drawPie(canvas, w, h, titleHeight)
+                else -> drawBar(canvas, w, h, titleHeight)
+            }
+        }
+
+        private fun drawBar(canvas: android.graphics.Canvas, w: Float, h: Float, top: Float) {
+            val padL = 48f; val padR = 16f; val padB = 48f; val padT = top + 16f
+            val plotW = w - padL - padR
+            val plotH = h - padT - padB
+            if (plotW <= 0 || plotH <= 0) return
+            val maxV = points.maxOf { it.second }.coerceAtLeast(1e-9)
+            val barWidth = plotW / points.size * 0.7f
+            val step = plotW / points.size
+            // axis
+            canvas.drawLine(padL, h - padB, w - padR, h - padB, axisPaint)
+            for ((i, pt) in points.withIndex()) {
+                val cx = padL + step * (i + 0.5f)
+                val barH = (pt.second / maxV * plotH).toFloat()
+                val left = cx - barWidth / 2f
+                val top0 = (h - padB) - barH
+                canvas.drawRect(left, top0, left + barWidth, h - padB, barFillPaint)
+                canvas.drawText(pt.first, cx, h - padB + 28f, labelPaint)
+            }
+        }
+
+        private fun drawLine(canvas: android.graphics.Canvas, w: Float, h: Float, top: Float) {
+            val padL = 48f; val padR = 16f; val padB = 48f; val padT = top + 16f
+            val plotW = w - padL - padR
+            val plotH = h - padT - padB
+            if (plotW <= 0 || plotH <= 0) return
+            val maxV = points.maxOf { it.second }.coerceAtLeast(1e-9)
+            val step = if (points.size <= 1) 0f else plotW / (points.size - 1)
+            canvas.drawLine(padL, h - padB, w - padR, h - padB, axisPaint)
+            val path = android.graphics.Path()
+            for ((i, pt) in points.withIndex()) {
+                val cx = padL + step * i
+                val cy = (h - padB) - (pt.second / maxV * plotH).toFloat()
+                if (i == 0) path.moveTo(cx, cy) else path.lineTo(cx, cy)
+            }
+            canvas.drawPath(path, linePaint)
+            for ((i, pt) in points.withIndex()) {
+                val cx = padL + step * i
+                val cy = (h - padB) - (pt.second / maxV * plotH).toFloat()
+                canvas.drawCircle(cx, cy, 6f, pointPaint)
+                canvas.drawText(pt.first, cx, h - padB + 28f, labelPaint)
+            }
+        }
+
+        private fun drawPie(canvas: android.graphics.Canvas, w: Float, h: Float, top: Float) {
+            val sum = points.sumOf { it.second }
+            if (sum <= 0) return
+            val padT = top + 16f
+            val plotW = w
+            val plotH = h - padT - 16f
+            val r = (Math.min(plotW, plotH) / 2f - 16f).coerceAtLeast(8f)
+            val cx = w / 2f
+            val cy = padT + plotH / 2f
+            val rect = android.graphics.RectF(cx - r, cy - r, cx + r, cy + r)
+            val slicePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                style = android.graphics.Paint.Style.FILL
+            }
+            var startAngle = -90f
+            for ((i, pt) in points.withIndex()) {
+                val sweep = (pt.second / sum * 360.0).toFloat()
+                slicePaint.color = pieColors[i % pieColors.size]
+                canvas.drawArc(rect, startAngle, sweep, true, slicePaint)
+                startAngle += sweep
+            }
+            // simple legend bottom-left
+            var ly = padT + 16f
+            for ((i, pt) in points.withIndex()) {
+                slicePaint.color = pieColors[i % pieColors.size]
+                canvas.drawRect(16f, ly - 16f, 36f, ly, slicePaint)
+                canvas.drawText(pt.first, 80f, ly, labelPaint.apply {
+                    textAlign = android.graphics.Paint.Align.LEFT
+                })
+                ly += 28f
+            }
+            labelPaint.textAlign = android.graphics.Paint.Align.CENTER
+        }
+    }
+
+    @JvmStatic
+    fun chartCreate(kind: Long, width: Double, height: Double): View {
+        val v = PerryChartView(activity, kind.toInt())
+        if (width > 0 || height > 0) {
+            v.layoutParams = FrameLayout.LayoutParams(
+                if (width > 0) width.toInt() else FrameLayout.LayoutParams.MATCH_PARENT,
+                if (height > 0) height.toInt() else FrameLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        return v
+    }
+
+    @JvmStatic
+    fun chartAddDataPoint(v: View, label: String, value: Double) {
+        val chart = v as? PerryChartView ?: return
+        uiHandler.post {
+            chart.points.add(label to value)
+            chart.invalidate()
+        }
+    }
+
+    @JvmStatic
+    fun chartClearData(v: View) {
+        val chart = v as? PerryChartView ?: return
+        uiHandler.post {
+            chart.points.clear()
+            chart.invalidate()
+        }
+    }
+
+    @JvmStatic
+    fun chartSetTitle(v: View, title: String) {
+        val chart = v as? PerryChartView ?: return
+        uiHandler.post {
+            chart.title = title
+            chart.invalidate()
+        }
+    }
+
+    // ============================================================
+    // Issue #480 — TreeView (flat ListView with depth-aware adapter).
+    // ============================================================
+    //
+    // Rust owns the node graph; Kotlin only renders. `treeViewRefresh`
+    // receives a pre-flattened (rows, ids) pair where `rows` contain the
+    // already-indented strings ("    ▾ Label") and `ids` are the parallel
+    // node IDs. OnItemClickListener forwards the tapped id back to Rust
+    // via `nativeTreeRowTapped(widgetHandle, id)`, which both toggles
+    // expand/collapse state and fires the user on_select closure.
+
+    private val treeViewAdapters = mutableMapOf<android.widget.ListView, ArrayAdapter<String>>()
+    private val treeViewIds = mutableMapOf<android.widget.ListView, Array<String>>()
+
+    @JvmStatic
+    fun treeViewCreate(callbackKey: Long): android.widget.ListView {
+        val lv = android.widget.ListView(activity)
+        val adapter = ArrayAdapter<String>(
+            activity,
+            android.R.layout.simple_list_item_1,
+            mutableListOf<String>()
+        )
+        lv.adapter = adapter
+        treeViewAdapters[lv] = adapter
+        // OnItemClickListener fires regardless of callbackKey because we
+        // still need to drive the local expand/collapse state machine.
+        lv.setOnItemClickListener { _, _, position, _ ->
+            val ids = treeViewIds[lv] ?: return@setOnItemClickListener
+            if (position in ids.indices) {
+                // `widgetHandle` is encoded as the ListView's tag (set by
+                // treeViewRefresh below) so we can route the tap back to
+                // the right Rust TreeViewState.
+                val handle = (lv.tag as? Long) ?: 0L
+                nativeTreeRowTapped(handle, ids[position])
+            }
+        }
+        return lv
+    }
+
+    @JvmStatic
+    fun treeViewRefresh(
+        widgetHandle: Long,
+        lv: android.widget.ListView,
+        rows: Array<String>,
+        ids: Array<String>
+    ) {
+        uiHandler.post {
+            lv.tag = widgetHandle
+            treeViewIds[lv] = ids
+            val adapter = treeViewAdapters[lv] ?: return@post
+            adapter.clear()
+            adapter.addAll(rows.toList())
+            adapter.notifyDataSetChanged()
+        }
+    }
+
+    // ============================================================
+    // Issue #479 — RichTooltip (long-press PopupWindow).
+    // ============================================================
+    //
+    // Android has no hover model on touch devices, so the cross-platform
+    // `hover_delay_ms` argument is dropped on the Rust side and the system
+    // long-press duration (~500 ms) is used here. The popup hosts the
+    // content widget subtree directly; outside-touch dismisses it.
+
+    @JvmStatic
+    fun setRichTooltip(trigger: View, content: View) {
+        trigger.setOnLongClickListener {
+            // Detach the content View from any previous parent before
+            // handing it to the PopupWindow — re-parenting an already-attached
+            // View throws IllegalStateException.
+            (content.parent as? android.view.ViewGroup)?.removeView(content)
+            val popup = android.widget.PopupWindow(
+                content,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+                true // focusable so back-press dismisses
+            )
+            popup.isOutsideTouchable = true
+            popup.setBackgroundDrawable(
+                android.graphics.drawable.ColorDrawable(0xFFFFFFFF.toInt())
+            )
+            popup.elevation = 8f
+            // Anchor at the trigger; the system places the popup below it,
+            // flipping above if it would clip the screen edge.
+            popup.showAsDropDown(trigger)
+            true
+        }
+    }
+
+    @JvmStatic
+    fun richTextToggleUnderline(et: EditText) {
+        uiHandler.post {
+            val editable = et.text ?: return@post
+            val (start, end) = richTextSelectionRange(et).let { it[0] to it[1] }
+            if (start >= end) return@post
+            val existing = editable.getSpans(start, end, android.text.style.UnderlineSpan::class.java)
+            if (existing.isNotEmpty()) {
+                for (sp in existing) editable.removeSpan(sp)
+            } else {
+                editable.setSpan(
+                    android.text.style.UnderlineSpan(),
+                    start,
+                    end,
+                    android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+            }
+        }
+    }
+
     // --- Native methods ---
 
     @JvmStatic
@@ -800,6 +1807,18 @@ object PerryBridge {
     @JvmStatic
     external fun nativeInvokeCallbackWithString(key: Long, text: String)
 
+    // Issue #552 — extra invoke shapes for the geolocation success callback
+    // (4 doubles) and the image-picker callback (string array).
+    @JvmStatic
+    external fun nativeInvokeCallback4(key: Long, a0: Double, a1: Double, a2: Double, a3: Double)
+
+    @JvmStatic
+    external fun nativeInvokeCallbackWithStringArray(key: Long, paths: Array<String>)
+
+    // Issue #480 — TreeView row-tap callback.
+    @JvmStatic
+    external fun nativeTreeRowTapped(widgetHandle: Long, id: String)
+
     @JvmStatic
     external fun nativeFileDialogResult(key: Long, content: String?)
 
@@ -812,258 +1831,25 @@ object PerryBridge {
     @JvmStatic
     external fun nativeMenuItemSelected(menuHandle: Long, index: Int)
 
-    /// Forwarded by `PerryNotificationReceiver.onReceive` when the user taps
-    /// a notification. The Rust side dispatches to the JS closure registered
-    /// via `notificationOnTap` with `(id, undefined)` — `action` will become
-    /// the action-button id once button registration lands (#97 follow-up).
+    // Push/local notification JNI bridge. Implemented in
+    // perry-ui-android `system.rs` as
+    // `Java_com_perry_app_PerryBridge_nativeNotification*`; declared here so
+    // PerryFirebaseMessagingService / PerryNotificationReceiver can invoke
+    // them (decls were missing, breaking the Android Kotlin build).
     @JvmStatic
     external fun nativeNotificationTap(id: String)
 
-    /// Forwarded by `PerryFirebaseMessagingService.onNewToken` (#95) when
-    /// FCM hands us a registration token. Rust dispatches to the JS closure
-    /// registered via `notificationRegisterRemote`.
     @JvmStatic
     external fun nativeNotificationToken(token: String)
 
-    /// Forwarded by `PerryFirebaseMessagingService.onMessageReceived` (#95)
-    /// for foreground push messages. `payloadJson` is a JSON-serialized
-    /// shape of the `RemoteMessage` (data + notification fields) — the Rust
-    /// side `JSON.parse`s it into a Perry object before invoking the JS
-    /// closure registered via `notificationOnReceive`.
     @JvmStatic
     external fun nativeNotificationReceive(payloadJson: String)
 
-    /// Forwarded by `PerryFirebaseMessagingService.onMessageReceived` (#98)
-    /// for every push payload that reaches the FCM service — Android's
-    /// equivalent to iOS's
-    /// `application:didReceiveRemoteNotification:fetchCompletionHandler:`
-    /// path. Same JSON-payload shape as `nativeNotificationReceive`. The
-    /// Rust side runs the user's Promise-returning callback and pumps
-    /// microtasks until the synchronously-attached chain quiesces; the FCM
-    /// service then returns and Android's normal background-runtime
-    /// budget governs how much further async work can complete.
     @JvmStatic
     external fun nativeNotificationBackgroundReceive(payloadJson: String)
 
-    // --- Notifications (#94) ---
-
-    /**
-     * Show a fire-and-forget local notification. Called from native via JNI:
-     * `sendNotification(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;)V`.
-     *
-     * Posts under a single fixed channel id ("perry-default") and a fixed
-     * notification id (`PERRY_DEFAULT_NOTIFICATION_ID = 1`) so subsequent
-     * calls replace the previous notification — matches iOS / macOS where
-     * `notificationSend` reuses the same `requestWithIdentifier:` slot.
-     *
-     * Silently no-ops if `POST_NOTIFICATIONS` (API 33+) isn't granted; the
-     * Rust-side `notificationSend` API doesn't surface a result so there's
-     * nowhere to plumb a "permission denied" signal. Apps that need that
-     * feedback should request the permission explicitly via the upcoming
-     * `notificationRequestPermission` API (#95-area follow-up).
-     */
+    // Implemented in perry-ui-android `callback.rs` as
+    // `Java_com_perry_app_PerryBridge_nativeInvokeDeepLinkCallback`.
     @JvmStatic
-    fun sendNotification(activity: Activity, title: String, body: String) {
-        val notificationManager = NotificationManagerCompat.from(activity)
-
-        // Channel creation: idempotent on API 26+, no-op on older.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                PERRY_DEFAULT_CHANNEL_ID,
-                "Notifications",
-                NotificationManager.IMPORTANCE_DEFAULT
-            )
-            notificationManager.createNotificationChannel(channel)
-        }
-
-        // POST_NOTIFICATIONS gate (API 33+).
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(
-                    activity,
-                    Manifest.permission.POST_NOTIFICATIONS
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                Log.w(
-                    "PerryBridge",
-                    "sendNotification: POST_NOTIFICATIONS not granted; notification dropped"
-                )
-                return
-            }
-        }
-
-        // Tap PendingIntent (#97). Targets `PerryNotificationReceiver` which
-        // forwards back to the JS closure registered via `notificationOnTap`.
-        // FLAG_IMMUTABLE is required at API 31+ and harmless before.
-        // FLAG_UPDATE_CURRENT lets the same PendingIntent be reused across
-        // calls (matching the fixed-id replace-by-id semantics on the
-        // notification itself). Request code matches the notify int id
-        // (`"perry_notification".hashCode()`) so `cancelNotification("perry_notification")`
-        // can tear both down (#96).
-        val tapIntent = Intent(activity, PerryNotificationReceiver::class.java).apply {
-            action = "com.perry.app.NOTIFICATION_TAP"
-            putExtra("id", PERRY_DEFAULT_ID)
-        }
-        val intId = PERRY_DEFAULT_ID.hashCode()
-        val tapPending = PendingIntent.getBroadcast(
-            activity,
-            intId,
-            tapIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val notification = NotificationCompat.Builder(activity, PERRY_DEFAULT_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .setAutoCancel(true)
-            .setContentIntent(tapPending)
-            .build()
-
-        try {
-            notificationManager.notify(intId, notification)
-        } catch (e: SecurityException) {
-            Log.w(
-                "PerryBridge",
-                "sendNotification: SecurityException (permission revoked or channel disabled)",
-                e
-            )
-        }
-    }
-
-    private const val PERRY_DEFAULT_CHANNEL_ID: String = "perry-default"
-    private const val PERRY_DEFAULT_NOTIFICATION_ID: Int = 1
-    /// String id used by `sendNotification` (no user-supplied id). Same
-    /// value as iOS's `requestWithIdentifier:"perry_notification"`. Hashed
-    /// to an int for `NotificationManager.notify`/`cancel` lookups; that
-    /// hash also serves as the PendingIntent request code so
-    /// `cancelNotification("perry_notification")` finds the registration.
-    private const val PERRY_DEFAULT_ID: String = "perry_notification"
-
-    // --- Scheduled notifications (#96) ---
-
-    /**
-     * Build a `PendingIntent` targeting `PerryScheduledNotificationReceiver`
-     * with the given id/title/body extras. The request code is `id.hashCode()`
-     * so `cancel(id)` later can match the same PendingIntent and tear the
-     * alarm down.
-     */
-    private fun buildScheduledPendingIntent(
-        activity: Activity, id: String, title: String, body: String
-    ): PendingIntent {
-        val intent = Intent(activity, PerryScheduledNotificationReceiver::class.java).apply {
-            action = "com.perry.app.SCHEDULED_FIRE"
-            putExtra("id", id)
-            putExtra("title", title)
-            putExtra("body", body)
-        }
-        return PendingIntent.getBroadcast(
-            activity,
-            id.hashCode(),
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-    }
-
-    /**
-     * Schedule a notification firing after `seconds` (#96, interval trigger).
-     *
-     * `repeats=true` uses `AlarmManager.setRepeating` with `RTC_WAKEUP` —
-     * inexact on API 19+ but acceptable for our semantics. `repeats=false`
-     * uses `setAndAllowWhileIdle` for a one-shot that survives Doze without
-     * the `SCHEDULE_EXACT_ALARM` permission.
-     */
-    @JvmStatic
-    fun scheduleInterval(
-        activity: Activity, id: String, title: String, body: String,
-        seconds: Double, repeats: Boolean
-    ) {
-        val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val pi = buildScheduledPendingIntent(activity, id, title, body)
-        val triggerAt = System.currentTimeMillis() + (seconds * 1000.0).toLong().coerceAtLeast(0L)
-        if (repeats) {
-            val intervalMs = (seconds * 1000.0).toLong().coerceAtLeast(60_000L)
-            alarmManager.setRepeating(AlarmManager.RTC_WAKEUP, triggerAt, intervalMs, pi)
-        } else {
-            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
-        }
-    }
-
-    /**
-     * Schedule a notification firing once at `timestampMs` (#96, calendar
-     * trigger). Uses `setAndAllowWhileIdle` — inexact but Doze-safe and
-     * permission-free. Apps that need exact wall-clock fire have to request
-     * the `SCHEDULE_EXACT_ALARM` permission themselves.
-     */
-    @JvmStatic
-    fun scheduleCalendar(
-        activity: Activity, id: String, title: String, body: String,
-        timestampMs: Double
-    ) {
-        val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val pi = buildScheduledPendingIntent(activity, id, title, body)
-        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, timestampMs.toLong(), pi)
-    }
-
-    /**
-     * Kick off FCM registration (#95). Calls
-     * `FirebaseMessaging.getInstance().token` to fetch the current cached
-     * token (if any) and forwards it to native via `nativeNotificationToken`.
-     * Future token rotations come through
-     * `PerryFirebaseMessagingService.onNewToken`.
-     *
-     * Catches reflectively because the FCM SDK throws at runtime if no real
-     * `google-services.json` was wired in (the placeholder ships in the
-     * template repo so the build succeeds without breaking — actual FCM
-     * needs the user's real file).
-     */
-    @JvmStatic
-    fun registerForRemoteNotifications(activity: Activity) {
-        try {
-            val fm = com.google.firebase.messaging.FirebaseMessaging.getInstance()
-            fm.token.addOnSuccessListener { token: String ->
-                try {
-                    nativeNotificationToken(token)
-                } catch (e: UnsatisfiedLinkError) {
-                    Log.w("PerryFirebase", "nativeNotificationToken unavailable", e)
-                }
-            }.addOnFailureListener { e ->
-                Log.w(
-                    "PerryFirebase",
-                    "FCM token request failed (likely placeholder google-services.json): ${e.message}"
-                )
-            }
-        } catch (e: Throwable) {
-            Log.w(
-                "PerryFirebase",
-                "registerForRemoteNotifications: FCM init failed (${e.javaClass.simpleName}): ${e.message}"
-            )
-        }
-    }
-
-    /**
-     * Cancel a previously scheduled notification by id (#96). Tears down both
-     * the AlarmManager registration (so future fires don't post anything) and
-     * any already-displayed notification under that id.
-     */
-    @JvmStatic
-    fun cancelNotification(activity: Activity, id: String) {
-        val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        // Build a matching PendingIntent (same intent + same request code) so
-        // alarmManager.cancel can find and remove the registration.
-        val intent = Intent(activity, PerryScheduledNotificationReceiver::class.java).apply {
-            action = "com.perry.app.SCHEDULED_FIRE"
-        }
-        val pi = PendingIntent.getBroadcast(
-            activity,
-            id.hashCode(),
-            intent,
-            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
-        )
-        if (pi != null) {
-            alarmManager.cancel(pi)
-            pi.cancel()
-        }
-        NotificationManagerCompat.from(activity).cancel(id.hashCode())
-    }
+    external fun nativeInvokeDeepLinkCallback(key: Long, url: String, source: String)
 }

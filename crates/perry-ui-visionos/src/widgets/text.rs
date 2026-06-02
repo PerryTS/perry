@@ -160,6 +160,48 @@ pub fn set_selectable(_handle: i64, _selectable: bool) {
     // UITextView instead. No-op for now.
 }
 
+/// Issue #707 — cap the maximum number of visible lines on a UILabel. 0 = unlimited.
+pub fn set_number_of_lines(handle: i64, lines: i64) {
+    if let Some(view) = super::get_widget(handle) {
+        unsafe {
+            if let Some(lbl_cls) = AnyClass::get(c"UILabel") {
+                let is_lbl: bool = msg_send![&*view, isKindOfClass: lbl_cls];
+                if !is_lbl {
+                    return;
+                }
+            }
+            let _: () = msg_send![&*view, setNumberOfLines: lines];
+            if lines > 0 {
+                let current: i64 = msg_send![&*view, lineBreakMode];
+                if current == 0 {
+                    let _: () = msg_send![&*view, setLineBreakMode: 4u64];
+                }
+            }
+        }
+    }
+}
+
+/// Issue #707 — set truncation mode. 0=word-wrap, 1=head, 2=middle, 3=tail.
+pub fn set_truncation_mode(handle: i64, mode: i64) {
+    if let Some(view) = super::get_widget(handle) {
+        unsafe {
+            if let Some(lbl_cls) = AnyClass::get(c"UILabel") {
+                let is_lbl: bool = msg_send![&*view, isKindOfClass: lbl_cls];
+                if !is_lbl {
+                    return;
+                }
+            }
+            let lbm: u64 = match mode {
+                1 => 3,
+                2 => 5,
+                3 => 4,
+                _ => 0,
+            };
+            let _: () = msg_send![&*view, setLineBreakMode: lbm];
+        }
+    }
+}
+
 /// Text decoration on a UILabel (issue #185 Phase B). 0=none, 1=underline,
 /// 2=strikethrough. Pattern mirrors iOS / tvOS twin.
 pub fn set_decoration(handle: i64, decoration: i64) {

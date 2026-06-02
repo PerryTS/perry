@@ -1,0 +1,17 @@
+[package]
+name = "perry-ext-sharp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for npm `sharp` — uses only `perry-ffi`. Image processing via the `image` crate; sync transforms + async toFile/toBuffer/metadata via `spawn_blocking` + `JsPromise`."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+image = "0.25"
+base64 = "0.22"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

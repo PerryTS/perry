@@ -108,7 +108,7 @@ static NET_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 /// `cron.rs::ensure_gc_scanner_registered`.
 fn ensure_gc_scanner_registered() {
     NET_GC_REGISTERED.call_once(|| {
-        perry_runtime::gc::gc_register_root_scanner(scan_net_roots);
+        perry_runtime::gc::gc_register_mutable_root_scanner_named("stdlib:net", scan_net_roots_mut);
     });
 }
 
@@ -122,17 +122,18 @@ fn ensure_gc_scanner_registered() {
 /// next `js_closure_call1` would dereference freed memory. This was a
 /// latent bug until v0.5.25 made GC fire during synchronous decode
 /// loops (issue #35).
+#[allow(dead_code)]
 fn scan_net_roots(mark: &mut dyn FnMut(f64)) {
-    if let Ok(listeners) = NET_LISTENERS.lock() {
-        for per_socket in listeners.values() {
-            for cb_vec in per_socket.values() {
-                for &cb in cb_vec.iter() {
-                    if cb != 0 {
-                        let boxed = f64::from_bits(
-                            0x7FFD_0000_0000_0000 | (cb as u64 & 0x0000_FFFF_FFFF_FFFF),
-                        );
-                        mark(boxed);
-                    }
+    let mut visitor = perry_runtime::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_net_roots_mut(&mut visitor);
+}
+
+fn scan_net_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
+    if let Ok(mut listeners) = NET_LISTENERS.lock() {
+        for per_socket in listeners.values_mut() {
+            for cb_vec in per_socket.values_mut() {
+                for cb in cb_vec.iter_mut() {
+                    visitor.visit_i64_slot(cb);
                 }
             }
         }
@@ -141,6 +142,13 @@ fn scan_net_roots(mark: &mut dyn FnMut(f64)) {
 
 struct SocketState {
     cmd_tx: mpsc::UnboundedSender<SocketCommand>,
+    /// `Some` only between `js_net_socket_alloc` and the first
+    /// `js_net_socket_method_connect` — held here so the deferred connect
+    /// path (issue #422: `new net.Socket()` then `sock.connect(port, host)`)
+    /// can move it into the spawned tokio task at connect time. Stays
+    /// `None` for the eager factory paths (`createConnection` / `tls.connect`)
+    /// where the rx flows straight into the task.
+    pending_rx: Option<mpsc::UnboundedReceiver<SocketCommand>>,
     is_open: bool,
 }
 
@@ -175,6 +183,154 @@ unsafe fn string_from_header_i64(ptr: i64) -> Option<String> {
     let data_ptr = (hdr as *const u8).add(std::mem::size_of::<StringHeader>());
     let bytes = std::slice::from_raw_parts(data_ptr, len);
     std::str::from_utf8(bytes).ok().map(|s| s.to_string())
+}
+
+/// Issue #770 — true iff `val_f64` carries `POINTER_TAG` (0x7FFD), i.e.
+/// it's a real heap-pointer NaN-box (object or closure). Plain `f64`
+/// ports like `80.0` never reach this band, and `undefined` / `null`
+/// land in `0x7FFC` so they're cleanly rejected — which matters
+/// because the dispatch table pads missing user args with
+/// `TAG_UNDEFINED`.
+fn is_nanboxed_pointer(val_f64: f64) -> bool {
+    (val_f64.to_bits() >> 48) == 0x7FFD
+}
+
+unsafe fn unbox_pointer(val_f64: f64) -> *mut u8 {
+    let bits = val_f64.to_bits();
+    (bits & 0x0000_FFFF_FFFF_FFFF) as *mut u8
+}
+
+/// Issue #1131 — read a NaN-boxed JS value as the raw bytes for
+/// `socket.write(chunk)`. Mirror of perry-ext-net's
+/// `jsvalue_to_socket_bytes` (the live path for `node:net` imports is
+/// the perry-ext-net copy after the well-known flip; this bundled-net
+/// copy stays in sync so the HANDLE_METHOD_DISPATCH fallback through
+/// `dispatch_net_socket` is correct too). A JS string is a 20-byte
+/// `StringHeader`; a Buffer is an 8-byte `BufferHeader` — reading one
+/// through the other's layout (the pre-#1131 unconditional
+/// `*BufferHeader` cast) emits garbage. Probe `BUFFER_REGISTRY` first.
+unsafe fn jsvalue_to_socket_bytes(value: f64) -> Option<Vec<u8>> {
+    let v = JSValue::from_bits(value.to_bits());
+    if v.is_undefined() || v.is_null() {
+        return None;
+    }
+    if v.is_string() {
+        let ptr = unbox_pointer(value) as *const StringHeader;
+        if ptr.is_null() {
+            return None;
+        }
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        return Some(std::slice::from_raw_parts(data, len).to_vec());
+    }
+    if v.is_pointer() {
+        let raw = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+        if perry_runtime::buffer::js_buffer_is_buffer(raw) != 0 {
+            let buf = raw as *const BufferHeader;
+            if !buf.is_null() {
+                let len = (*buf).length as usize;
+                let data = (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
+                return Some(std::slice::from_raw_parts(data, len).to_vec());
+            }
+        }
+        let sptr = raw as *const StringHeader;
+        if !sptr.is_null() {
+            let len = (*sptr).byte_len as usize;
+            if len <= (1 << 30) {
+                let data = (sptr as *const u8).add(std::mem::size_of::<StringHeader>());
+                return Some(std::slice::from_raw_parts(data, len).to_vec());
+            }
+        }
+        return None;
+    }
+    if v.is_number() {
+        return Some(v.to_number().to_string().into_bytes());
+    }
+    if v.is_bool() {
+        return Some(
+            if v.to_bool() { "true" } else { "false" }
+                .to_string()
+                .into_bytes(),
+        );
+    }
+    None
+}
+
+unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> Option<String> {
+    if !is_nanboxed_pointer(obj_f64) {
+        return None;
+    }
+    let obj_ptr = unbox_pointer(obj_f64) as *const perry_runtime::ObjectHeader;
+    if obj_ptr.is_null() {
+        return None;
+    }
+    let key = perry_runtime::js_string_from_bytes(field_name.as_ptr(), field_name.len() as u32);
+    let val = perry_runtime::js_object_get_field_by_name(obj_ptr, key);
+    if val.is_undefined() || val.is_null() {
+        return None;
+    }
+    if val.is_string() {
+        return string_from_header_i64(val.as_string_ptr() as i64);
+    }
+    if val.is_number() {
+        return Some(format!("{}", val.as_number() as i64));
+    }
+    None
+}
+
+unsafe fn get_object_number_field(obj_f64: f64, field_name: &str) -> Option<f64> {
+    if !is_nanboxed_pointer(obj_f64) {
+        return None;
+    }
+    let obj_ptr = unbox_pointer(obj_f64) as *const perry_runtime::ObjectHeader;
+    if obj_ptr.is_null() {
+        return None;
+    }
+    let key = perry_runtime::js_string_from_bytes(field_name.as_ptr(), field_name.len() as u32);
+    let val = perry_runtime::js_object_get_field_by_name(obj_ptr, key);
+    if val.is_undefined() || val.is_null() {
+        return None;
+    }
+    if val.is_number() {
+        return Some(val.as_number());
+    }
+    if val.is_string() {
+        if let Some(s) = string_from_header_i64(val.as_string_ptr() as i64) {
+            if let Ok(n) = s.parse::<f64>() {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+/// Issue #770 — build an `Error`-shaped object `{ message: msg }` so
+/// `socket.on('error', err => err.message)` works. Returns a NaN-boxed
+/// f64 pointing at the object, falling back to a bare string on alloc
+/// failure. Packed-keys format (NUL-delimited names + hash shape id)
+/// mirrors `crates/perry-stdlib/src/sqlite.rs::build_packed_keys`.
+unsafe fn build_error_object(msg: &str) -> f64 {
+    use perry_runtime::JSValue;
+    let name = b"message";
+    let packed: Vec<u8> = name.to_vec();
+    let mut shape_id: u32 = 0x4E45_0000; // "NE" — net error
+    for &b in name {
+        shape_id = shape_id.wrapping_mul(31).wrapping_add(b as u32);
+    }
+    shape_id = shape_id.wrapping_add(1);
+    let s_msg = perry_runtime::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let obj = perry_runtime::js_object_alloc_with_shape(
+        shape_id,
+        1,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+    if obj.is_null() {
+        return f64::from_bits(0x7FFF_0000_0000_0000u64 | (s_msg as u64 & 0x0000_FFFF_FFFF_FFFF));
+    }
+    perry_runtime::js_object_set_field(obj, 0, JSValue::string_ptr(s_msg));
+    let obj_bits = (obj as u64 & 0x0000_FFFF_FFFF_FFFF) | 0x7FFD_0000_0000_0000;
+    f64::from_bits(obj_bits)
 }
 
 fn next_id() -> i64 {
@@ -283,22 +439,176 @@ fn build_tls_connector_insecure() -> Result<TlsConnector, String> {
     Ok(TlsConnector::from(Arc::new(config)))
 }
 
-// ─── FFI: net.createConnection(port, host) ───────────────────────────────────
+// ─── FFI: net.createConnection / net.connect ─────────────────────────────────
 
-/// `net.createConnection(port, host)` — returns a handle immediately;
-/// connection happens in the background and emits `'connect'` or `'error'`.
+/// `net.createConnection(...)` / `net.connect(...)` — returns a handle
+/// immediately; connection happens in the background and emits
+/// `'connect'` or `'error'`.
 ///
-/// Argument order matches Node.js: port (number) first, host (string) second.
+/// Supports both Node overloads (issue #770):
+///   - Positional: `net.connect(port, host, cb?)` — `arg1_f64` is the
+///     port, `arg2_f64` is the host (NaN-boxed string), `arg3_f64` is
+///     the optional connectListener.
+///   - Options object: `net.connect({ host, port }, cb?)` — `arg1_f64`
+///     is a NaN-boxed pointer to the options object; `arg2_f64` is the
+///     optional connectListener; `arg3_f64` is unused (the dispatch
+///     table pads it with `undefined`).
+///
+/// The `connectListener` is auto-registered as a `'connect'` listener
+/// on the new socket handle, matching Node spec.
+///
 /// Signature matches NATIVE_MODULE_TABLE entry
-/// `{ module: "net", method: "createConnection", args: &[NA_F64, NA_STR], ret: NR_PTR }`.
+/// `{ module: "net", method: "connect" | "createConnection", args: &[NA_F64, NA_F64, NA_F64], ret: NR_PTR }`.
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_connect(port: f64, host_ptr: i64) -> i64 {
+pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64, arg3_f64: f64) -> i64 {
+    fn register_connect_cb(handle: i64, cb_f64: f64) {
+        if handle == 0 || !is_nanboxed_pointer(cb_f64) {
+            return;
+        }
+        let cb_ptr = unsafe { unbox_pointer(cb_f64) } as i64;
+        if cb_ptr == 0 {
+            return;
+        }
+        let mut listeners = NET_LISTENERS.lock().unwrap();
+        listeners
+            .entry(handle)
+            .or_default()
+            .entry("connect".to_string())
+            .or_default()
+            .push(cb_ptr);
+    }
+
+    if is_nanboxed_pointer(arg1_f64) {
+        let host = match get_object_string_field(arg1_f64, "host")
+            .or_else(|| get_object_string_field(arg1_f64, "hostname"))
+        {
+            Some(h) if !h.is_empty() => h,
+            _ => "localhost".to_string(),
+        };
+        let port = match get_object_number_field(arg1_f64, "port") {
+            Some(p) => {
+                perry_runtime::net_validate::js_net_validate_connect_port(p);
+                p as u16
+            }
+            None => return 0,
+        };
+        let handle = spawn_socket_task(host, port, /* direct_tls: */ None);
+        register_connect_cb(handle, arg2_f64);
+        return handle;
+    }
+    // Positional form: arg2 is a NaN-boxed string, arg3 is the cb.
+    perry_runtime::net_validate::js_net_validate_connect_port(arg1_f64);
+    let host_ptr = perry_runtime::js_get_string_pointer_unified(arg2_f64);
     let host = match string_from_header_i64(host_ptr) {
         Some(h) => h,
         None => return 0,
     };
+    let port = arg1_f64 as u16;
+    let handle = spawn_socket_task(host, port, /* direct_tls: */ None);
+    register_connect_cb(handle, arg3_f64);
+    handle
+}
+
+// ─── FFI: new net.Socket() (alloc-only, deferred connect) ────────────────────
+
+/// `new net.Socket()` — allocates an unconnected socket handle. The TCP
+/// connection is deferred until `js_net_socket_method_connect` is called
+/// (`sock.connect(port, host)`).
+///
+/// Pre-issue-#422 the only path into the net module was the eager
+/// `net.createConnection(port, host)` factory, which both allocates the
+/// handle AND kicks off the connect in one shot. Real-world TS code
+/// (including pure-TS Postgres / MySQL / MQTT drivers) commonly takes
+/// the `new net.Socket()` + later `.connect(...)` shape, where listener
+/// registration sits between the two — that pattern needs a separate
+/// allocator.
+///
+/// Signature matches NATIVE_MODULE_TABLE entry
+/// `{ module: "net", method: "Socket", args: &[], ret: NR_PTR }`.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
+    ensure_gc_scanner_registered();
+    let id = next_id();
+    let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
+    NET_SOCKETS.lock().unwrap().insert(
+        id,
+        SocketState {
+            cmd_tx: tx,
+            pending_rx: Some(rx),
+            is_open: false,
+        },
+    );
+    NET_LISTENERS.lock().unwrap().insert(id, HashMap::new());
+    id
+}
+
+// ─── FFI: socket.connect(port, host) (instance method on existing handle) ─────
+
+/// `socket.connect(port, host)` — initiates a TCP connection on a socket
+/// previously allocated by `new net.Socket()`. Spawns the same tokio task
+/// shape as `js_net_socket_connect`, but pulls its receiver out of the
+/// `SocketState::pending_rx` slot rather than allocating a fresh channel,
+/// so any listener already registered (`sock.on('data', cb)` etc.) sees
+/// the same handle id once the connect completes.
+///
+/// If `pending_rx` is already empty (already connected, or unknown handle)
+/// this pushes an `'error'` event rather than silently dropping — matches
+/// Node's behavior where calling `.connect()` twice on the same socket
+/// emits `Error: already connected`.
+///
+/// Signature matches NATIVE_MODULE_TABLE entry
+/// `{ has_receiver: true, method: "connect", class_filter: Some("Socket"),
+///    args: &[NA_F64, NA_STR], ret: NR_VOID }`.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_method_connect(handle: i64, port: f64, host_ptr: i64) {
+    perry_runtime::net_validate::js_net_validate_connect_port(port);
+    let host = match string_from_header_i64(host_ptr) {
+        Some(h) => h,
+        None => {
+            push_event(PendingNetEvent::Error(
+                handle,
+                "socket.connect: invalid host string".to_string(),
+            ));
+            return;
+        }
+    };
     let port = port as u16;
-    spawn_socket_task(host, port, /* direct_tls: */ None)
+
+    // Move the deferred-connect rx out of the SocketState. After this
+    // take, subsequent .connect() calls land in the `None` arm below.
+    let mut rx = {
+        let mut guard = NET_SOCKETS.lock().unwrap();
+        match guard.get_mut(&handle).and_then(|s| s.pending_rx.take()) {
+            Some(rx) => rx,
+            None => {
+                push_event(PendingNetEvent::Error(
+                    handle,
+                    "socket already connected (or unknown handle)".to_string(),
+                ));
+                return;
+            }
+        }
+    };
+
+    spawn(async move {
+        let addr = format!("{}:{}", host, port);
+        let tcp = match TcpStream::connect(&addr).await {
+            Ok(s) => s,
+            Err(e) => {
+                push_event(PendingNetEvent::Error(handle, format!("{}", e)));
+                push_event(PendingNetEvent::Close(handle));
+                mark_closed(handle);
+                return;
+            }
+        };
+
+        if let Some(s) = NET_SOCKETS.lock().unwrap().get_mut(&handle) {
+            s.is_open = true;
+        }
+        push_event(PendingNetEvent::Connect(handle));
+
+        run_socket_task(handle, Transport::Plain(tcp), &mut rx).await;
+    });
 }
 
 // ─── FFI: tls.connect(host, port, servername) ────────────────────────────────
@@ -346,6 +656,7 @@ fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>
         id,
         SocketState {
             cmd_tx: tx,
+            pending_rx: None,
             is_open: false,
         },
     );
@@ -507,17 +818,19 @@ async fn run_socket_task(
 
 // ─── FFI: socket.write(buf) ──────────────────────────────────────────────────
 
-/// `socket.write(buffer)` — enqueues bytes for the writer task.
-/// Signature matches `{ has_receiver: true, method: "write", args: &[NA_PTR], ret: NR_VOID }`.
+/// `socket.write(chunk)` — enqueues bytes for the writer task.
+/// Issue #1131 — `chunk_bits` is the full NaN-boxed JS value (codegen
+/// passes `NA_JSV`; the dispatch shim passes `args[0].to_bits()`), not
+/// a pre-stripped `BufferHeader` pointer. `jsvalue_to_socket_bytes`
+/// probes Buffer-vs-string-vs-number and reads the correct layout so
+/// `socket.write("ping")` sends the UTF-8 bytes instead of garbage.
+/// Signature matches `{ has_receiver: true, method: "write", args: &[NA_JSV], ret: NR_VOID }`.
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_write(handle: i64, buf_ptr: i64) {
-    if buf_ptr == 0 || (buf_ptr as usize) < 0x1000 {
-        return;
-    }
-    let buf = buf_ptr as *const BufferHeader;
-    let len = (*buf).length as usize;
-    let data_ptr = (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len).to_vec();
+pub unsafe extern "C" fn js_net_socket_write(handle: i64, chunk_bits: i64) {
+    let bytes = match jsvalue_to_socket_bytes(f64::from_bits(chunk_bits as u64)) {
+        Some(b) => b,
+        None => return,
+    };
 
     let sockets = NET_SOCKETS.lock().unwrap();
     if let Some(s) = sockets.get(&handle) {
@@ -525,14 +838,26 @@ pub unsafe extern "C" fn js_net_socket_write(handle: i64, buf_ptr: i64) {
     }
 }
 
-// ─── FFI: socket.end() ───────────────────────────────────────────────────────
+// ─── FFI: socket.end([data]) ─────────────────────────────────────────────────
 
-/// `socket.end()` — graceful shutdown: stops further writes, lets reads drain.
-/// Signature matches `{ has_receiver: true, method: "end", args: &[], ret: NR_VOID }`.
+/// `socket.end([data])` — optionally write a final chunk, then graceful
+/// shutdown: stops further writes, lets reads drain.
+///
+/// Issue #1852 — Node's `socket.end(data)` writes `data` then sends FIN.
+/// `chunk_bits` is the full NaN-boxed JS value (NA_JSV); `undefined`/`null`
+/// (the no-arg `socket.end()` form) yields no bytes. Kept in sync with the
+/// live perry-ext-net copy so the `js_net_socket_end` symbol has one
+/// signature regardless of which archive links.
+/// Signature matches `{ has_receiver: true, method: "end", args: &[NA_JSV], ret: NR_VOID }`.
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_end(handle: i64) {
+pub unsafe extern "C" fn js_net_socket_end(handle: i64, chunk_bits: i64) {
     let sockets = NET_SOCKETS.lock().unwrap();
     if let Some(s) = sockets.get(&handle) {
+        if let Some(bytes) = jsvalue_to_socket_bytes(f64::from_bits(chunk_bits as u64)) {
+            if !bytes.is_empty() {
+                let _ = s.cmd_tx.send(SocketCommand::Write(bytes));
+            }
+        }
         let _ = s.cmd_tx.send(SocketCommand::End);
     }
 }
@@ -653,15 +978,32 @@ pub unsafe extern "C" fn js_net_socket_upgrade_tls(
 ///
 /// Per the arena-safety rule: JSValue construction (Buffer, error string)
 /// happens HERE on the main thread, never in the tokio read task.
+///
+/// #1114 followup (mysql wedge): this pump runs on EVERY iteration of the
+/// generated event loop AND every iteration of every inline `await` poll
+/// loop. `@perryts/mysql` (pure-TS driver) drives all its bytes through
+/// `net.Socket`, so under a `setInterval` + async-query JobLoop this
+/// function is the dominant per-tick path. The original `Vec::drain(..)
+/// .collect()` allocated a fresh Vec every call (mirroring the fastify
+/// wedge that e538caa7 fixed) → GC `madvise` page-churn. Reuse a
+/// per-thread scratch buffer (moved out across dispatch so a re-entrant
+/// pump from inside a user callback is safe; capacity retained → zero
+/// steady-state allocation).
 #[no_mangle]
 pub unsafe extern "C" fn js_net_process_pending() -> i32 {
-    let events: Vec<PendingNetEvent> = {
+    thread_local! {
+        static SCRATCH: std::cell::RefCell<Vec<PendingNetEvent>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let mut events = SCRATCH.with(|s| std::mem::take(&mut *s.borrow_mut()));
+    events.clear();
+    {
         let mut g = NET_PENDING_EVENTS.lock().unwrap();
-        g.drain(..).collect()
-    };
+        events.append(&mut *g);
+    }
     let count = events.len() as i32;
 
-    for ev in events {
+    for ev in events.drain(..) {
         match ev {
             PendingNetEvent::Connect(id) => {
                 for cb in listeners_for(id, "connect") {
@@ -696,13 +1038,14 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                 if cbs.is_empty() {
                     continue;
                 }
-                let bytes = msg.as_bytes();
-                let s = perry_runtime::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-                let s_f64 =
-                    f64::from_bits(0x7FFF_0000_0000_0000u64 | (s as u64 & 0x0000_FFFF_FFFF_FFFF));
+                // Issue #770 — emit an Error-shaped object `{message: msg}`
+                // so user code can read `err.message`. Pre-fix the listener
+                // received a raw NaN-boxed string and `err.message` came
+                // back as `undefined`.
+                let err_f64 = build_error_object(&msg);
                 for cb in cbs {
                     if cb != 0 {
-                        js_closure_call1(cb as *const ClosureHeader, s_f64);
+                        js_closure_call1(cb as *const ClosureHeader, err_f64);
                     }
                 }
             }
@@ -717,6 +1060,16 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
             }
         }
     }
+
+    // Restore the (capacity-retaining) buffer to the thread-local so the
+    // next tick reuses it. A re-entrant pump call during dispatch may
+    // have left a grown buffer in the slot — keep whichever is larger.
+    SCRATCH.with(|s| {
+        let mut slot = s.borrow_mut();
+        if events.capacity() >= slot.capacity() {
+            *slot = events;
+        }
+    });
 
     count
 }
@@ -753,4 +1106,31 @@ pub fn js_net_has_active_handles() -> i32 {
 /// or inside a struct field).
 pub fn is_net_socket_handle(handle: i64) -> bool {
     NET_SOCKETS.lock().unwrap().contains_key(&handle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_scanner_emits_socket_listeners() {
+        {
+            let mut listeners = NET_LISTENERS.lock().unwrap();
+            listeners.clear();
+            listeners.insert(
+                7,
+                HashMap::from([
+                    ("data".to_string(), vec![0x1234_5678]),
+                    ("error".to_string(), vec![0x2345_6780]),
+                ]),
+            );
+        }
+
+        let mut emitted = Vec::new();
+        scan_net_roots(&mut |value| emitted.push(value.to_bits()));
+
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x1234_5678)));
+        assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x2345_6780)));
+        NET_LISTENERS.lock().unwrap().clear();
+    }
 }

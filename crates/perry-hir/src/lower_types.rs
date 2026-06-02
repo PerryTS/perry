@@ -7,8 +7,247 @@ use perry_types::{Type, TypeParam};
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
-use crate::lower::LoweringContext;
+use crate::lower::{lower_expr, LoweringContext};
 use crate::lower_patterns::{get_pat_name, lower_lit};
+
+pub(crate) const FILEHANDLE_READLINES_ITERATOR_TYPE: &str = "__PerryFileHandleReadLinesIterator";
+
+fn is_fs_promises_module(module: &str) -> bool {
+    module.strip_prefix("node:").unwrap_or(module) == "fs/promises"
+}
+
+fn filehandle_type() -> Type {
+    Type::Named("FileHandle".to_string())
+}
+
+fn typed_array_name_for_name(name: &str) -> Option<&'static str> {
+    match name {
+        "Int8Array" => Some("Int8Array"),
+        "Uint8Array" => Some("Uint8Array"),
+        "Uint8ClampedArray" => Some("Uint8ClampedArray"),
+        "Int16Array" => Some("Int16Array"),
+        "Uint16Array" => Some("Uint16Array"),
+        "Int32Array" => Some("Int32Array"),
+        "Uint32Array" => Some("Uint32Array"),
+        "Float16Array" => Some("Float16Array"),
+        "Float32Array" => Some("Float32Array"),
+        "Float64Array" => Some("Float64Array"),
+        _ => None,
+    }
+}
+
+fn native_arena_global_is_shadowed(ctx: &LoweringContext) -> bool {
+    ctx.lookup_local("NativeArena").is_some()
+        || ctx.lookup_func("NativeArena").is_some()
+        || ctx.lookup_imported_func("NativeArena").is_some()
+        || ctx.lookup_class("NativeArena").is_some()
+}
+
+fn native_arena_owner_type(ty: &Type) -> bool {
+    matches!(ty, Type::Named(name) if name == "NativeArena" || name == "NativeArenaOwner")
+}
+
+fn expr_may_infer_to_native_arena_owner(expr: &ast::Expr, ctx: &LoweringContext) -> bool {
+    match expr {
+        ast::Expr::Ident(ident) => {
+            let name = ident.sym.as_ref();
+            if name == "NativeArena" && !native_arena_global_is_shadowed(ctx) {
+                return true;
+            }
+            ctx.lookup_local_type(name)
+                .is_some_and(native_arena_owner_type)
+        }
+        ast::Expr::Call(call) => {
+            let ast::Callee::Expr(callee) = &call.callee else {
+                return false;
+            };
+            let ast::Expr::Member(member) = callee.as_ref() else {
+                return false;
+            };
+            let ast::MemberProp::Ident(method) = &member.prop else {
+                return false;
+            };
+            matches!(
+                (member.obj.as_ref(), method.sym.as_ref()),
+                (ast::Expr::Ident(obj), "alloc")
+                    if obj.sym.as_ref() == "NativeArena" && !native_arena_global_is_shadowed(ctx)
+            )
+        }
+        ast::Expr::Member(member) if matches!(member.obj.as_ref(), ast::Expr::This(_)) => {
+            let ast::MemberProp::Ident(prop) = &member.prop else {
+                return false;
+            };
+            let Some(class_name) = &ctx.current_class else {
+                return false;
+            };
+            ctx.lookup_class_field_type(class_name, prop.sym.as_ref())
+                .is_some_and(native_arena_owner_type)
+        }
+        ast::Expr::Paren(paren) => expr_may_infer_to_native_arena_owner(&paren.expr, ctx),
+        ast::Expr::TsAs(ts_as) => expr_may_infer_to_native_arena_owner(&ts_as.expr, ctx),
+        ast::Expr::TsTypeAssertion(ts_assert) => {
+            expr_may_infer_to_native_arena_owner(&ts_assert.expr, ctx)
+        }
+        ast::Expr::TsNonNull(non_null) => expr_may_infer_to_native_arena_owner(&non_null.expr, ctx),
+        ast::Expr::TsConstAssertion(const_assert) => {
+            expr_may_infer_to_native_arena_owner(&const_assert.expr, ctx)
+        }
+        _ => false,
+    }
+}
+
+fn native_arena_view_type_from_kind(ctx: &LoweringContext, expr: &ast::Expr) -> Option<Type> {
+    match expr {
+        ast::Expr::Lit(ast::Lit::Str(s)) => {
+            typed_array_name_for_name(s.value.as_str().unwrap_or(""))
+        }
+        ast::Expr::Ident(ident)
+            if ctx.lookup_local(ident.sym.as_ref()).is_none()
+                && ctx.lookup_func(ident.sym.as_ref()).is_none()
+                && ctx.lookup_imported_func(ident.sym.as_ref()).is_none()
+                && ctx.lookup_class(ident.sym.as_ref()).is_none() =>
+        {
+            typed_array_name_for_name(ident.sym.as_ref())
+        }
+        ast::Expr::Paren(paren) => return native_arena_view_type_from_kind(ctx, &paren.expr),
+        ast::Expr::TsAs(ts_as) => return native_arena_view_type_from_kind(ctx, &ts_as.expr),
+        ast::Expr::TsTypeAssertion(ts_assert) => {
+            return native_arena_view_type_from_kind(ctx, &ts_assert.expr);
+        }
+        ast::Expr::TsNonNull(non_null) => {
+            return native_arena_view_type_from_kind(ctx, &non_null.expr);
+        }
+        ast::Expr::TsConstAssertion(const_assert) => {
+            return native_arena_view_type_from_kind(ctx, &const_assert.expr);
+        }
+        _ => None,
+    }
+    .map(|name| Type::Named(name.to_string()))
+}
+
+fn infer_native_arena_call_return_type(
+    call: &ast::CallExpr,
+    ctx: &LoweringContext,
+) -> Option<Type> {
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return None;
+    };
+    let ast::Expr::Member(member) = callee.as_ref() else {
+        return None;
+    };
+    let ast::MemberProp::Ident(method) = &member.prop else {
+        return None;
+    };
+    let method_name = method.sym.as_ref();
+
+    if matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if obj.sym.as_ref() == "NativeArena")
+        && method_name == "alloc"
+        && !native_arena_global_is_shadowed(ctx)
+    {
+        return Some(Type::Named("NativeArena".to_string()));
+    }
+
+    if !expr_may_infer_to_native_arena_owner(&member.obj, ctx)
+        || !native_arena_owner_type(&infer_type_from_expr(&member.obj, ctx))
+    {
+        return None;
+    }
+
+    match method_name {
+        "view" => call
+            .args
+            .first()
+            .and_then(|arg| native_arena_view_type_from_kind(ctx, arg.expr.as_ref()))
+            .or(Some(Type::Any)),
+        "podView" => {
+            let Some(type_args) = call.type_args.as_ref() else {
+                return Some(Type::Generic {
+                    base: "PerryPodView".to_string(),
+                    type_args: vec![Type::Any],
+                });
+            };
+            if type_args.params.len() != 1 {
+                return Some(Type::Any);
+            }
+            Some(Type::Generic {
+                base: "PerryPodView".to_string(),
+                type_args: vec![extract_ts_type_with_ctx(&type_args.params[0], Some(ctx))],
+            })
+        }
+        "dispose" => Some(Type::Void),
+        _ => None,
+    }
+}
+
+fn url_encoding_constructor_type(ctx: &LoweringContext, callee: &ast::Expr) -> Option<Type> {
+    fn class_type(name: &str) -> Option<Type> {
+        match name {
+            "URL" | "URLSearchParams" | "TextEncoder" | "TextDecoder" => {
+                Some(Type::Named(name.to_string()))
+            }
+            _ => None,
+        }
+    }
+
+    fn module_constructor_type(module_name: &str, method_name: Option<&str>) -> Option<Type> {
+        match (module_name, method_name) {
+            ("url", Some("URL")) => class_type("URL"),
+            ("url", Some("URLSearchParams")) => class_type("URLSearchParams"),
+            ("util", Some("TextEncoder")) => class_type("TextEncoder"),
+            ("util", Some("TextDecoder")) => class_type("TextDecoder"),
+            _ => None,
+        }
+    }
+
+    match callee {
+        ast::Expr::Ident(ident) => {
+            let name = ident.sym.as_ref();
+            if let Some(ty) = class_type(name) {
+                return Some(ty);
+            }
+            if let Some(resolved) = ctx.resolve_class_alias(name) {
+                if let Some(ty) = class_type(&resolved) {
+                    return Some(ty);
+                }
+            }
+            ctx.lookup_native_module(name)
+                .and_then(|(module_name, method_name)| {
+                    module_constructor_type(module_name, method_name)
+                })
+        }
+        ast::Expr::Member(member) => {
+            let (ast::Expr::Ident(obj), ast::MemberProp::Ident(prop)) =
+                (member.obj.as_ref(), &member.prop)
+            else {
+                return None;
+            };
+            let obj_name = obj.sym.as_ref();
+            let prop_name = prop.sym.as_ref();
+            if obj_name == "globalThis" && ctx.lookup_local("globalThis").is_none() {
+                return class_type(prop_name);
+            }
+            if let Some(module_name) = ctx.lookup_builtin_module_alias(obj_name) {
+                if let Some(ty) = module_constructor_type(module_name, Some(prop_name)) {
+                    return Some(ty);
+                }
+            }
+            if let Some((module_name, None)) = ctx.lookup_native_module(obj_name) {
+                return module_constructor_type(module_name, Some(prop_name));
+            }
+            None
+        }
+        ast::Expr::Paren(paren) => url_encoding_constructor_type(ctx, &paren.expr),
+        ast::Expr::TsAs(ts_as) => url_encoding_constructor_type(ctx, &ts_as.expr),
+        ast::Expr::TsTypeAssertion(ts_assert) => {
+            url_encoding_constructor_type(ctx, &ts_assert.expr)
+        }
+        ast::Expr::TsNonNull(non_null) => url_encoding_constructor_type(ctx, &non_null.expr),
+        ast::Expr::TsConstAssertion(const_assert) => {
+            url_encoding_constructor_type(ctx, &const_assert.expr)
+        }
+        _ => None,
+    }
+}
 
 pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
     match expr {
@@ -80,13 +319,24 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
                 // Bitwise operators → Number
                 BitAnd | BitOr | BitXor | LShift | RShift | ZeroFillRShift => Type::Number,
 
-                // Logical operators → type of operands (simplified)
+                // Logical operators → type of operands (simplified).
+                //
+                // `A && B` yields B's value when A is truthy (else A); `A || B`
+                // yields B when A is falsy (else A). So when B has a concrete
+                // type we approximate the result as that type. But when B is
+                // `Any` we must NOT fall back to A's type: #3527 hit
+                // `var hasMap = typeof Map === "function" && Map.prototype`,
+                // where A is a boolean compare and B (`Map.prototype`) is `Any`.
+                // Returning A's `Boolean` mistyped `hasMap` as a boolean even
+                // though it holds an object, so a later `hasMap && d && d.get`
+                // chain miscompiled and dereferenced `null`. The result can be
+                // the (unknown) right value, so `Any` is the only sound type.
                 LogicalAnd | LogicalOr => {
                     let right = infer_type_from_expr(&bin.right, ctx);
                     if !matches!(right, Type::Any) {
                         right
                     } else {
-                        infer_type_from_expr(&bin.left, ctx)
+                        Type::Any
                     }
                 }
                 NullishCoalescing => {
@@ -144,6 +394,9 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
 
         // Function calls → look up known return types
         ast::Expr::Call(call) => {
+            if let Some(ty) = infer_native_arena_call_return_type(call, ctx) {
+                return ty;
+            }
             if let ast::Callee::Expr(callee) = &call.callee {
                 infer_call_return_type(callee, ctx)
             } else {
@@ -198,6 +451,9 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
         // (otherwise `s.has(...)` falls back to dynamic-method lookup and
         // returns `undefined`).
         ast::Expr::New(new_expr) => {
+            if let Some(ty) = url_encoding_constructor_type(ctx, new_expr.callee.as_ref()) {
+                return ty;
+            }
             if let ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
                 let name = ident.sym.to_string();
                 if let Some(type_args) = new_expr.type_args.as_ref() {
@@ -214,10 +470,36 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
                     }
                 }
                 match name.as_str() {
-                    "Map" | "Set" | "WeakMap" | "WeakSet" | "Array" | "Promise" => Type::Generic {
+                    // Issue #533: walk the entries arg of `new Map([...])` /
+                    // `new WeakMap([...])` so K/V are populated when no explicit
+                    // <K, V> is given. Without this, downstream `m.get(k)`
+                    // returns Type::Any and `for-of` over the result falls off
+                    // the Map fast path, silently producing zero iterations.
+                    "Map" | "WeakMap" => {
+                        let inferred = infer_map_entries_type(new_expr, ctx);
+                        Type::Generic {
+                            base: name,
+                            type_args: inferred,
+                        }
+                    }
+                    "Set" | "WeakSet" => {
+                        let inferred = infer_set_elements_type(new_expr, ctx);
+                        Type::Generic {
+                            base: name,
+                            type_args: inferred,
+                        }
+                    }
+                    "Array" | "Promise" => Type::Generic {
                         base: name,
                         type_args: Vec::new(),
                     },
+                    // #1367: `new X509Certificate(...)` returns a runtime
+                    // crypto HANDLE (like `createECDH()`), not a user class.
+                    // Typing it `Named` sends property reads down the broken
+                    // class-field path (returns 0); leave it `Any` so reads
+                    // route through HANDLE_PROPERTY_DISPATCH to the X509
+                    // property dispatch (matching how ECDH handles work).
+                    "X509Certificate" => Type::Any,
                     _ => Type::Named(name),
                 }
             } else {
@@ -233,6 +515,7 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
         ast::Expr::Object(obj) => {
             let mut properties: std::collections::HashMap<String, perry_types::PropertyInfo> =
                 std::collections::HashMap::new();
+            let mut property_order: Vec<String> = Vec::new();
             let mut open_shape = false;
             for prop in &obj.props {
                 match prop {
@@ -244,6 +527,9 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
                         ast::Prop::Shorthand(ident) => {
                             let name = ident.sym.to_string();
                             let ty = ctx.lookup_local_type(&name).cloned().unwrap_or(Type::Any);
+                            if !properties.contains_key(&name) {
+                                property_order.push(name.clone());
+                            }
                             properties.insert(
                                 name,
                                 perry_types::PropertyInfo {
@@ -264,6 +550,9 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
                                 }
                             };
                             let ty = infer_type_from_expr(&kv.value, ctx);
+                            if !properties.contains_key(&key) {
+                                property_order.push(key.clone());
+                            }
                             properties.insert(
                                 key,
                                 perry_types::PropertyInfo {
@@ -286,10 +575,23 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
                 Type::Object(perry_types::ObjectType {
                     name: None,
                     properties,
+                    property_order: Some(property_order),
                     index_signature: None,
                 })
             }
         }
+
+        // `this` inside a class method → Type::Named(<current class>) so
+        // sibling-method calls (`this.foo()`) and field access (`this.x`)
+        // can resolve through the Named-receiver paths in
+        // `infer_call_return_type` and the Member arm above. Falls back to
+        // Type::Any outside a class context (top-level / arrow with no
+        // enclosing method — already legal under the existing catch-all).
+        ast::Expr::This(_) => ctx
+            .current_class
+            .as_ref()
+            .map(|c| Type::Named(c.clone()))
+            .unwrap_or(Type::Any),
 
         // Arrow/function expressions
         ast::Expr::Arrow(arrow) => {
@@ -429,11 +731,175 @@ fn collect_return_types(stmts: &[ast::Stmt], ctx: &LoweringContext, out: &mut Ve
 }
 
 /// Infer the return type of a function/method call expression.
+/// Issue #533: walk `new Map([[k1, v1], [k2, v2], ...])` / `new WeakMap(...)`
+/// to recover K, V from the literal entries. Returns an empty vec when the
+/// argument isn't an array literal (e.g. dynamic `new Map(someArr)`) or when
+/// no element parses as a 2-tuple — caller treats that as unknown type args.
+fn infer_map_entries_type(new_expr: &ast::NewExpr, ctx: &LoweringContext) -> Vec<Type> {
+    let Some(args) = new_expr.args.as_ref() else {
+        return Vec::new();
+    };
+    let Some(first_arg) = args.first() else {
+        return Vec::new();
+    };
+    let ast::Expr::Array(arr_lit) = first_arg.expr.as_ref() else {
+        return Vec::new();
+    };
+    for elem_opt in &arr_lit.elems {
+        let Some(elem) = elem_opt else { continue };
+        let ast::Expr::Array(entry) = elem.expr.as_ref() else {
+            continue;
+        };
+        if entry.elems.len() < 2 {
+            continue;
+        }
+        let k = entry.elems[0]
+            .as_ref()
+            .map(|t| infer_type_from_expr(&t.expr, ctx))
+            .unwrap_or(Type::Any);
+        let v = entry.elems[1]
+            .as_ref()
+            .map(|t| infer_type_from_expr(&t.expr, ctx))
+            .unwrap_or(Type::Any);
+        return vec![k, v];
+    }
+    Vec::new()
+}
+
+/// Issue #533 (sibling): infer `T` from `new Set([elem1, elem2, ...])` /
+/// `new WeakSet(...)` based on the first non-elided element.
+fn infer_set_elements_type(new_expr: &ast::NewExpr, ctx: &LoweringContext) -> Vec<Type> {
+    let Some(args) = new_expr.args.as_ref() else {
+        return Vec::new();
+    };
+    let Some(first_arg) = args.first() else {
+        return Vec::new();
+    };
+    let ast::Expr::Array(arr_lit) = first_arg.expr.as_ref() else {
+        return Vec::new();
+    };
+    for elem_opt in &arr_lit.elems {
+        let Some(elem) = elem_opt else { continue };
+        return vec![infer_type_from_expr(&elem.expr, ctx)];
+    }
+    Vec::new()
+}
+
+fn known_receiver_method_name(method_name: &str) -> bool {
+    matches!(
+        method_name,
+        // Map / Set / WeakMap / WeakSet
+        "get" | "has" | "delete" | "set" | "add"
+        // TypedArray / String / Array
+        | "slice" | "subarray" | "trim" | "trimStart" | "trimEnd" | "toLowerCase"
+        | "toUpperCase" | "substring" | "substr" | "replace" | "replaceAll"
+        | "padStart" | "padEnd" | "repeat" | "charAt" | "concat" | "normalize"
+        | "toLocaleLowerCase" | "toLocaleUpperCase" | "indexOf" | "lastIndexOf"
+        | "search" | "charCodeAt" | "codePointAt" | "localeCompare" | "startsWith"
+        | "endsWith" | "includes" | "split" | "match" | "matchAll" | "push"
+        | "unshift" | "findIndex" | "join" | "pop" | "shift" | "find" | "at"
+        | "map" | "filter" | "flat" | "flatMap" | "reverse" | "sort" | "splice"
+        | "reduce" | "fill" | "forEach"
+        // Number / object-ish builtins
+        | "toFixed" | "toPrecision" | "toExponential" | "toString" | "valueOf"
+        // Known userland-native instance return tables.
+        | "encode" | "encodeInto" | "decode" | "readLines" | "readableWebStream"
+        | "take" | "drop" | "compose"
+    )
+}
+
+fn ident_has_known_static_method_return(
+    ctx: &LoweringContext,
+    name: &str,
+    method_name: &str,
+) -> bool {
+    if matches!(
+        name,
+        "Math"
+            | "Number"
+            | "JSON"
+            | "Object"
+            | "Date"
+            | "Buffer"
+            | "Readable"
+            | "crypto"
+            | "console"
+    ) {
+        return true;
+    }
+    if name != "Uint8Array" && crate::ir::typed_array_kind_for_name(name).is_some() {
+        return matches!(method_name, "from" | "of");
+    }
+    if ctx.lookup_builtin_module_alias(name).is_some()
+        || matches!(ctx.lookup_native_module(name), Some((_, None)))
+    {
+        return true;
+    }
+    false
+}
+
+fn expr_may_have_typed_receiver(expr: &ast::Expr, ctx: &LoweringContext) -> bool {
+    match expr {
+        ast::Expr::Lit(ast::Lit::Str(_)) => true,
+        ast::Expr::Array(_) => true,
+        ast::Expr::Ident(ident) => ctx
+            .lookup_local_type(ident.sym.as_ref())
+            .is_some_and(|ty| !matches!(ty, Type::Any | Type::Unknown)),
+        ast::Expr::This(_) => true,
+        ast::Expr::New(_) => true,
+        ast::Expr::Member(member) => {
+            if matches!(member.obj.as_ref(), ast::Expr::This(_)) {
+                return true;
+            }
+            expr_may_have_typed_receiver(&member.obj, ctx)
+        }
+        ast::Expr::Call(call) => {
+            let ast::Callee::Expr(callee) = &call.callee else {
+                return false;
+            };
+            let ast::Expr::Member(member) = callee.as_ref() else {
+                return false;
+            };
+            expr_may_have_typed_receiver(&member.obj, ctx)
+        }
+        ast::Expr::Paren(paren) => expr_may_have_typed_receiver(&paren.expr, ctx),
+        ast::Expr::TsAs(ts_as) => expr_may_have_typed_receiver(&ts_as.expr, ctx),
+        ast::Expr::TsTypeAssertion(ts_assert) => expr_may_have_typed_receiver(&ts_assert.expr, ctx),
+        ast::Expr::TsNonNull(non_null) => expr_may_have_typed_receiver(&non_null.expr, ctx),
+        ast::Expr::TsConstAssertion(const_assert) => {
+            expr_may_have_typed_receiver(&const_assert.expr, ctx)
+        }
+        _ => false,
+    }
+}
+
+fn method_return_may_depend_on_receiver_type(
+    ctx: &LoweringContext,
+    receiver: &ast::Expr,
+    method_name: &str,
+) -> bool {
+    if known_receiver_method_name(method_name) {
+        return true;
+    }
+    if let ast::Expr::Ident(ident) = receiver {
+        if ident_has_known_static_method_return(ctx, ident.sym.as_ref(), method_name) {
+            return true;
+        }
+    }
+    expr_may_have_typed_receiver(receiver, ctx)
+}
+
 pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) -> Type {
     match callee {
         // Direct function call: foo()
         ast::Expr::Ident(ident) => {
             let name = ident.sym.as_ref();
+            if matches!(
+                ctx.lookup_native_module(name),
+                Some((module, Some("open"))) if is_fs_promises_module(module)
+            ) {
+                return Type::Promise(Box::new(filehandle_type()));
+            }
             // Check user-defined function return types
             if let Some(ty) = ctx.lookup_func_return_type(name) {
                 return ty.clone();
@@ -452,6 +918,25 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
         ast::Expr::Member(member) => {
             if let ast::MemberProp::Ident(method) = &member.prop {
                 let method_name = method.sym.as_ref();
+                if method_name == "open" {
+                    if let ast::Expr::Ident(obj) = member.obj.as_ref() {
+                        let namespace_is_fs_promises = matches!(
+                            ctx.lookup_native_module(obj.sym.as_ref()),
+                            Some((module, None)) if is_fs_promises_module(module)
+                        ) || ctx
+                            .lookup_builtin_module_alias(obj.sym.as_ref())
+                            .is_some_and(is_fs_promises_module);
+                        if namespace_is_fs_promises {
+                            return Type::Promise(Box::new(filehandle_type()));
+                        }
+                    }
+                }
+                if method_name == "toString" {
+                    return Type::String;
+                }
+                if !method_return_may_depend_on_receiver_type(ctx, &member.obj, method_name) {
+                    return Type::Any;
+                }
                 let obj_ty = infer_type_from_expr(&member.obj, ctx);
 
                 // Phase 4.1: user class methods. When the receiver is typed
@@ -466,6 +951,62 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                 if let Type::Named(class_name) = &obj_ty {
                     if let Some(ty) = ctx.lookup_class_method_return_type(class_name, method_name) {
                         return ty.clone();
+                    }
+                    if typed_array_name_for_name(class_name).is_some() {
+                        return match method_name {
+                            "slice" | "subarray" => obj_ty.clone(),
+                            _ => Type::Any,
+                        };
+                    }
+                    // Built-in TextEncoder / TextDecoder method return types.
+                    // `new TextEncoder().encode(s)` → Uint8Array (issue #584:
+                    // without this the local typed-anonymously inherits
+                    // Type::Any, the codegen index path falls through to the
+                    // f64-stride reader, and `bytes[i]` reads 8 packed bytes
+                    // as a single f64 instead of one byte).
+                    match (class_name.as_str(), method_name) {
+                        ("TextEncoder", "encode") => return Type::Named("Uint8Array".into()),
+                        ("TextEncoder", "encodeInto") => return Type::Object(Default::default()),
+                        ("TextDecoder", "decode") => return Type::String,
+                        ("FileHandle", "readLines") => {
+                            return Type::Named(FILEHANDLE_READLINES_ITERATOR_TYPE.to_string());
+                        }
+                        ("FileHandle", "readableWebStream") => {
+                            return Type::Named("ReadableStream".to_string());
+                        }
+                        (
+                            "Readable",
+                            "map" | "filter" | "flatMap" | "take" | "drop" | "compose",
+                        ) => return Type::Named("Readable".into()),
+                        _ => {}
+                    }
+                }
+
+                // Issue #533: Map<K, V> / WeakMap<K, V> / Set<T> / WeakSet<T>
+                // method-return inference. `m.get(k)` returns V (not V|undef —
+                // matches the pattern Array<T>.pop() uses below) so downstream
+                // type-driven dispatch (for-of fast path, .size resolution,
+                // formatter pretty-printing) sees the right element type
+                // without forcing the user to annotate every `const c =
+                // m.get(k)!` binding.
+                if let Type::Generic { base, type_args } = &obj_ty {
+                    match base.as_str() {
+                        "Map" | "WeakMap" => {
+                            return match method_name {
+                                "get" => type_args.get(1).cloned().unwrap_or(Type::Any),
+                                "has" | "delete" => Type::Boolean,
+                                "set" => obj_ty.clone(),
+                                _ => Type::Any,
+                            };
+                        }
+                        "Set" | "WeakSet" => {
+                            return match method_name {
+                                "has" | "delete" => Type::Boolean,
+                                "add" => obj_ty.clone(),
+                                _ => Type::Any,
+                            };
+                        }
+                        _ => {}
                     }
                 }
 
@@ -521,7 +1062,9 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                             "floor" | "ceil" | "round" | "abs" | "sqrt" | "pow" | "min" | "max"
                             | "random" | "log" | "log2" | "log10" | "sin" | "cos" | "tan"
                             | "asin" | "acos" | "atan" | "atan2" | "exp" | "sign" | "trunc"
-                            | "cbrt" | "hypot" | "fround" | "clz32" | "imul" => Type::Number,
+                            | "cbrt" | "hypot" | "fround" | "f16round" | "clz32" | "imul" => {
+                                Type::Number
+                            }
                             _ => Type::Any,
                         };
                     }
@@ -566,12 +1109,34 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                     // array path which reads f64 elements as JS values.
                     if obj_name == "Buffer" {
                         return match method_name {
-                            "from" | "alloc" | "allocUnsafe" | "concat" => {
+                            "from" | "alloc" | "allocUnsafe" | "concat" | "copyBytesFrom" => {
                                 Type::Named("Uint8Array".to_string())
                             }
                             "isBuffer" => Type::Boolean,
                             "byteLength" => Type::Number,
                             "compare" => Type::Number,
+                            _ => Type::Any,
+                        };
+                    }
+                    // #2902: `<TypedArray>.from(...)` / `<TypedArray>.of(...)`
+                    // produce a typed array of the receiver's kind. Typing the
+                    // local refines `arr[i]` / `arr.length` onto the typed-array
+                    // fast path (like the `new TypedArray(...)` form), instead of
+                    // the generic `Any` index path which reads raw f64 garbage.
+                    // Uint8Array stays a Buffer (handled above).
+                    if obj_name != "Uint8Array"
+                        && crate::ir::typed_array_kind_for_name(obj_name).is_some()
+                        && matches!(method_name, "from" | "of")
+                    {
+                        return Type::Named(obj_name.to_string());
+                    }
+                    // `Readable.from(...)` produces a classic node:stream
+                    // Readable. Typing it lets `for await (... of r)` lower
+                    // through the stream iterator instead of the generic
+                    // array-index fallback.
+                    if obj_name == "Readable" {
+                        return match method_name {
+                            "from" | "of" => Type::Named("Readable".to_string()),
                             _ => Type::Any,
                         };
                     }
@@ -586,6 +1151,17 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                                 Type::Named("Uint8Array".to_string())
                             }
                             "randomUUID" => Type::String,
+                            // `crypto.randomInt(...)` is an integer; typing it
+                            // as Number lets arithmetic / comparisons take the
+                            // numeric fast path.
+                            "randomInt" => Type::Number,
+                            // `crypto.getHashes()` / `getCiphers()` return
+                            // `string[]`. Typing the result as an array routes
+                            // `.includes` / `.indexOf` through the content-
+                            // comparison path (otherwise an `any`-typed result
+                            // uses pointer-identity comparison and never
+                            // matches a freshly-allocated needle string).
+                            "getHashes" | "getCiphers" => Type::Array(Box::new(Type::String)),
                             _ => Type::Any,
                         };
                     }
@@ -593,11 +1169,6 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                     if obj_name == "console" {
                         return Type::Void;
                     }
-                }
-
-                // Generic .toString() on any object → String
-                if method_name == "toString" {
-                    return Type::String;
                 }
             }
             Type::Any
@@ -699,9 +1270,34 @@ pub(crate) fn extract_ts_type_with_ctx(
                 }
             };
 
-            // First check if this is a type parameter reference (like T, K, V)
+            // First check if this is a type parameter reference (like T, K, V).
+            //
+            // When the parameter has a runtime-meaningful upper-bound
+            // constraint (`<T extends string>`, `<T extends number>`,
+            // `<T extends string[]>` …) substitute the constraint type
+            // here, so the rest of the lowering + codegen sees the
+            // narrowed runtime type directly. Without this, perry's
+            // codegen `is_string_expr`/`is_array_expr`/`is_numeric_expr`
+            // fast paths don't fire on `<T extends string>(self: T)
+            // => self[0]` and the IndexGet falls through to the
+            // polymorphic-object runtime helper, which reads a
+            // `StringHeader*` as `ArrayHeader*` and returns header
+            // bytes as a subnormal f64 (#321: effect `Str.capitalize`
+            // surfaced as `1.5E-323oo`). Arrow functions and
+            // function-typed-local indirections in particular bypass
+            // generic-call monomorphization entirely, so the
+            // un-substituted body would be the one codegen emits.
+            //
+            // Constraints that don't usefully narrow the runtime
+            // representation (named class, literal type, intersection,
+            // `unknown`/`any`) fall through to `TypeVar(name)` as
+            // before — preserving the existing native-instance tagging
+            // / class-id propagation paths.
             if let Some(context) = ctx {
                 if context.is_type_param(&name) {
+                    if let Some(resolved) = context.resolve_type_param_constraint(&name) {
+                        return resolved;
+                    }
                     return Type::TypeVar(name);
                 }
             }
@@ -730,6 +1326,21 @@ pub(crate) fn extract_ts_type_with_ctx(
                         };
                     }
                 }
+            }
+
+            if matches!(
+                name.as_str(),
+                "PerryU32"
+                    | "PerryU64"
+                    | "PerryUSize"
+                    | "PerryF32"
+                    | "PerryF64"
+                    | "PerryI32"
+                    | "PerryI64"
+                    | "PerryBufferLen"
+                    | "PerryHandleId"
+            ) {
+                return Type::Named(name);
             }
 
             // Check if this is a type alias — resolve to the underlying type
@@ -834,6 +1445,7 @@ pub(crate) fn extract_ts_type_with_ctx(
         // Type literal: { a: T, b: U }
         TsTypeLit(lit) => {
             let mut properties = std::collections::HashMap::new();
+            let mut property_order = Vec::new();
             for member in &lit.members {
                 match member {
                     ast::TsTypeElement::TsPropertySignature(prop) => {
@@ -844,6 +1456,9 @@ pub(crate) fn extract_ts_type_with_ctx(
                             } else {
                                 Type::Any
                             };
+                            if !properties.contains_key(&field_name) {
+                                property_order.push(field_name.clone());
+                            }
                             properties.insert(
                                 field_name,
                                 perry_types::PropertyInfo {
@@ -892,6 +1507,7 @@ pub(crate) fn extract_ts_type_with_ctx(
                             return Type::Object(perry_types::ObjectType {
                                 name: None,
                                 properties,
+                                property_order: Some(property_order),
                                 index_signature: Some(Box::new(val_type)),
                             });
                         }
@@ -905,6 +1521,7 @@ pub(crate) fn extract_ts_type_with_ctx(
                 Type::Object(perry_types::ObjectType {
                     name: None,
                     properties,
+                    property_order: Some(property_order),
                     index_signature: None,
                 })
             }
@@ -920,11 +1537,6 @@ pub(crate) fn get_ts_entity_name(entity: &ast::TsEntityName) -> String {
             format!("{}.{}", get_ts_entity_name(&qname.left), qname.right.sym)
         }
     }
-}
-
-/// Helper to get parameter name and type from TsFnParam
-pub(crate) fn get_fn_param_name_and_type(param: &ast::TsFnParam) -> (String, Type) {
-    get_fn_param_name_and_type_with_ctx(param, None)
 }
 
 /// Helper to get parameter name and type from TsFnParam with context
@@ -967,14 +1579,6 @@ pub(crate) fn get_fn_param_name_and_type_with_ctx(
             ("_obj".to_string(), ty)
         }
     }
-}
-
-/// Extract type from an optional type annotation
-pub(crate) fn extract_type_annotation(type_ann: &Option<Box<ast::TsTypeAnn>>) -> Type {
-    type_ann
-        .as_ref()
-        .map(|ann| extract_ts_type(&ann.type_ann))
-        .unwrap_or(Type::Any)
 }
 
 /// Extract class name from a member expression (e.g., "ethers.JsonRpcProvider" -> "JsonRpcProvider")
@@ -1030,11 +1634,6 @@ pub(crate) fn extract_pattern_type_with_ctx(pat: &ast::Pat, ctx: Option<&Lowerin
     }
 }
 
-/// Alias for parameter type extraction (same as pattern type)
-pub(crate) fn extract_param_type(pat: &ast::Pat) -> Type {
-    extract_pattern_type(pat)
-}
-
 /// Alias for parameter type extraction with context
 pub(crate) fn extract_param_type_with_ctx(pat: &ast::Pat, ctx: Option<&LoweringContext>) -> Type {
     extract_pattern_type_with_ctx(pat, ctx)
@@ -1047,7 +1646,7 @@ pub(crate) fn extract_binding_type(binding: &ast::Pat) -> Type {
 
 /// Lower decorators from SWC AST to HIR Decorators
 pub(crate) fn lower_decorators(
-    _ctx: &mut LoweringContext,
+    ctx: &mut LoweringContext,
     decorators: &[ast::Decorator],
 ) -> Vec<Decorator> {
     decorators
@@ -1060,30 +1659,56 @@ pub(crate) fn lower_decorators(
                 ast::Expr::Ident(ident) => Some(Decorator {
                     name: ident.sym.to_string(),
                     args: Vec::new(),
+                    is_factory: false,
+                    is_reflect_metadata: false,
                 }),
                 ast::Expr::Call(call) => {
                     // Get the callee name
                     if let ast::Callee::Expr(callee_expr) = &call.callee {
+                        if let ast::Expr::Member(member) = callee_expr.as_ref() {
+                            if let ast::Expr::Ident(obj) = member.obj.as_ref() {
+                                if obj.sym.as_ref() == "Reflect" {
+                                    if let ast::MemberProp::Ident(method) = &member.prop {
+                                        if method.sym.as_ref() == "metadata" {
+                                            let args: Vec<Expr> = call
+                                                .args
+                                                .iter()
+                                                .filter_map(|arg| {
+                                                    if arg.spread.is_some() {
+                                                        None
+                                                    } else {
+                                                        lower_decorator_arg(ctx, arg.expr.as_ref())
+                                                    }
+                                                })
+                                                .collect();
+                                            return Some(Decorator {
+                                                name: "Reflect.metadata".to_string(),
+                                                args,
+                                                is_factory: true,
+                                                is_reflect_metadata: true,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         if let ast::Expr::Ident(ident) = callee_expr.as_ref() {
-                            // Lower the arguments - for now just handle simple literals
                             let args: Vec<Expr> = call
                                 .args
                                 .iter()
                                 .filter_map(|arg| {
                                     if arg.spread.is_some() {
-                                        None // Skip spread arguments for now
+                                        None
                                     } else {
-                                        // For decorator args, only handle simple literals for now
-                                        match arg.expr.as_ref() {
-                                            ast::Expr::Lit(lit) => lower_lit(lit).ok(),
-                                            _ => None,
-                                        }
+                                        lower_decorator_arg(ctx, arg.expr.as_ref())
                                     }
                                 })
                                 .collect();
                             return Some(Decorator {
                                 name: ident.sym.to_string(),
                                 args,
+                                is_factory: true,
+                                is_reflect_metadata: false,
                             });
                         }
                     }
@@ -1093,4 +1718,74 @@ pub(crate) fn lower_decorators(
             }
         })
         .collect()
+}
+
+fn lower_decorator_arg(ctx: &mut LoweringContext, expr: &ast::Expr) -> Option<Expr> {
+    match expr {
+        ast::Expr::Lit(lit) => lower_lit(lit).ok(),
+        ast::Expr::Ident(ident) => match lower_expr(ctx, expr).ok() {
+            Some(Expr::GlobalGet(0)) => Some(Expr::ClassRef(ident.sym.to_string())),
+            // Bare built-in name `Date`/`Array`/`Object`/... now lowers
+            // to `PropertyGet { GlobalGet(0), name }` (so the value-side
+            // identity comparison `inst.constructor === Date` matches).
+            // For decorator-arg use it's still a class ref.
+            Some(Expr::PropertyGet {
+                object: ref obj,
+                property: _,
+            }) if matches!(obj.as_ref(), Expr::GlobalGet(0)) => {
+                Some(Expr::ClassRef(ident.sym.to_string()))
+            }
+            other => other,
+        },
+        ast::Expr::Array(arr) => {
+            let items = arr
+                .elems
+                .iter()
+                .map(|elem| {
+                    elem.as_ref()
+                        .and_then(|elem| {
+                            if elem.spread.is_some() {
+                                None
+                            } else {
+                                lower_decorator_arg(ctx, elem.expr.as_ref())
+                            }
+                        })
+                        .unwrap_or(Expr::Undefined)
+                })
+                .collect();
+            Some(Expr::Array(items))
+        }
+        ast::Expr::Object(obj) => {
+            let mut fields = Vec::new();
+            for prop in &obj.props {
+                let ast::PropOrSpread::Prop(prop) = prop else {
+                    return None;
+                };
+                match prop.as_ref() {
+                    ast::Prop::KeyValue(kv) => {
+                        let key = decorator_prop_name(&kv.key)?;
+                        let value = lower_decorator_arg(ctx, kv.value.as_ref())?;
+                        fields.push((key, value));
+                    }
+                    ast::Prop::Shorthand(ident) => {
+                        let name = ident.sym.to_string();
+                        let value = lower_decorator_arg(ctx, &ast::Expr::Ident(ident.clone()))?;
+                        fields.push((name, value));
+                    }
+                    _ => return None,
+                }
+            }
+            Some(Expr::Object(fields))
+        }
+        _ => lower_expr(ctx, expr).ok(),
+    }
+}
+
+fn decorator_prop_name(name: &ast::PropName) -> Option<String> {
+    match name {
+        ast::PropName::Ident(ident) => Some(ident.sym.to_string()),
+        ast::PropName::Str(s) => Some(s.value.as_str().unwrap_or("").to_string()),
+        ast::PropName::Num(n) => Some(n.value.to_string()),
+        _ => None,
+    }
 }

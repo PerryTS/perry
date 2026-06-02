@@ -164,10 +164,8 @@ fn column_value_to_jsvalue(row: &PgRow, index: usize) -> JSValue {
         }
         "VARCHAR" | "CHAR" | "TEXT" | "BPCHAR" | "NAME" => {
             if let Ok(val) = row.try_get::<String, _>(index) {
-                unsafe {
-                    let str_ptr = js_string_from_bytes(val.as_ptr(), val.len() as u32);
-                    JSValue::string_ptr(str_ptr)
-                }
+                let str_ptr = js_string_from_bytes(val.as_ptr(), val.len() as u32);
+                JSValue::string_ptr(str_ptr)
             } else {
                 JSValue::null()
             }
@@ -182,10 +180,8 @@ fn column_value_to_jsvalue(row: &PgRow, index: usize) -> JSValue {
         _ => {
             // Try as string fallback
             if let Ok(val) = row.try_get::<String, _>(index) {
-                unsafe {
-                    let str_ptr = js_string_from_bytes(val.as_ptr(), val.len() as u32);
-                    JSValue::string_ptr(str_ptr)
-                }
+                let str_ptr = js_string_from_bytes(val.as_ptr(), val.len() as u32);
+                JSValue::string_ptr(str_ptr)
             } else {
                 JSValue::null()
             }

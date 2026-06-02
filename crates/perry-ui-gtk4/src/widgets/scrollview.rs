@@ -1,5 +1,22 @@
 use gtk4::prelude::*;
 use gtk4::ScrolledWindow;
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+extern "C" {
+    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_nanbox_get_pointer(value: f64) -> i64;
+}
+
+struct ScrollEndState {
+    closure: f64,
+    threshold_px: f64,
+    armed: bool,
+}
+
+thread_local! {
+    static SCROLL_END_STATES: RefCell<HashMap<i64, ScrollEndState>> = RefCell::new(HashMap::new());
+}
 
 /// Create a GtkScrolledWindow with vertical scrollbar. Returns widget handle.
 pub fn create() -> i64 {
@@ -71,4 +88,58 @@ pub fn set_offset(scroll_handle: i64, offset: f64) {
             scrolled.vadjustment().set_value(offset);
         }
     }
+}
+
+/// Issue #553 — fire `callback` once when the user scrolls within
+/// `threshold_px` of the bottom of the inner content. Re-arms after the
+/// user scrolls back up past the threshold. Backed by GtkAdjustment's
+/// `value-changed` signal.
+pub fn set_scroll_end_callback(scroll_handle: i64, callback: f64, threshold_px: f64) {
+    let Some(scroll_widget) = super::get_widget(scroll_handle) else {
+        return;
+    };
+    let Some(scrolled) = scroll_widget.downcast_ref::<ScrolledWindow>() else {
+        return;
+    };
+    SCROLL_END_STATES.with(|s| {
+        s.borrow_mut().insert(
+            scroll_handle,
+            ScrollEndState {
+                closure: callback,
+                threshold_px: if threshold_px > 0.0 {
+                    threshold_px
+                } else {
+                    200.0
+                },
+                armed: true,
+            },
+        );
+    });
+    let h = scroll_handle;
+    scrolled.vadjustment().connect_value_changed(move |adj| {
+        let visible_bottom = adj.value() + adj.page_size();
+        let upper = adj.upper();
+        let (closure, in_zone, should_fire) = SCROLL_END_STATES.with(|s| {
+            let mut states = s.borrow_mut();
+            let Some(state) = states.get_mut(&h) else {
+                return (0.0, false, false);
+            };
+            let in_zone = visible_bottom >= upper - state.threshold_px;
+            let mut fire = false;
+            if in_zone && state.armed {
+                state.armed = false;
+                fire = true;
+            } else if !in_zone && !state.armed {
+                state.armed = true;
+            }
+            (state.closure, in_zone, fire)
+        });
+        let _ = in_zone;
+        if should_fire && closure != 0.0 {
+            unsafe {
+                let ptr = js_nanbox_get_pointer(closure) as *const u8;
+                js_closure_call0(ptr);
+            }
+        }
+    });
 }

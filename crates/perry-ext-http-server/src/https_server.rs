@@ -1,0 +1,530 @@
+//! `https.createServer({ key, cert }, handler)` — TLS variant of
+//! `http.createServer`. Re-uses the Phase 1 IncomingMessage /
+//! ServerResponse / event-loop machinery. The accept loop wraps each
+//! TCP stream in `tokio_rustls::TlsAcceptor` before handing the
+//! decrypted stream to hyper.
+
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use bytes::Bytes;
+use http_body_util::{BodyExt, Full};
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper::{body::Incoming, Request, Response};
+use hyper_util::rt::TokioIo;
+use perry_ffi::{
+    alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, RawClosureHeader,
+    StringHeader,
+};
+use tokio::net::TcpListener;
+use tokio::sync::{mpsc, oneshot};
+use tokio_rustls::TlsAcceptor;
+
+use crate::ensure_gc_scanner_registered;
+use crate::request::{
+    alloc_incoming_message, emit_no_arg_to_listeners, handle_to_pointer_f64, with_implicit_this,
+    IncomingMessage,
+};
+use crate::response::{alloc_server_response, HyperResponseShape, ResponseBody};
+use crate::server::{HttpPendingRequest, HttpServer};
+use crate::tls::{
+    build_server_config, has_pem_material, json_value_to_pem_bytes, parse_cert_chain,
+    parse_private_key,
+};
+
+/// Decode `{ key, cert, alpnProtocols? }` from a NaN-boxed JsValue
+/// object literal into the PEM byte buffers + a flag for whether to
+/// advertise `h2` in ALPN. `key`/`cert` accept either a PEM string
+/// OR a `Buffer` (the form `fs.readFileSync('key.pem')` returns when
+/// no encoding is supplied) — see `json_value_to_pem_bytes`. Falls
+/// back to empty PEMs (which the cert-chain parser then rejects) on
+/// any extraction failure so the user sees a clear bind error.
+unsafe fn parse_https_opts(opts_f64: f64) -> (Vec<u8>, Vec<u8>, bool) {
+    use perry_ffi::JsValue;
+    let v = JsValue::from_bits(opts_f64.to_bits());
+    if !v.is_pointer() {
+        return (Vec::new(), Vec::new(), true);
+    }
+    let json = match perry_ffi::json_stringify(v) {
+        Some(j) => j,
+        None => return (Vec::new(), Vec::new(), true),
+    };
+    let parsed: serde_json::Value = match serde_json::from_str(&json) {
+        Ok(p) => p,
+        Err(_) => return (Vec::new(), Vec::new(), true),
+    };
+    let key_pem = json_value_to_pem_bytes(parsed.get("key"));
+    let cert_pem = json_value_to_pem_bytes(parsed.get("cert"));
+    // Default ALPN to `[http/1.1]` only — node:https is HTTP/1.1
+    // by spec; users wanting HTTP/2 should reach for node:http2's
+    // createSecureServer instead. Opt-in via `alpnProtocols: ["h2", "http/1.1"]`.
+    // Without this, an HTTP/2-aware client (curl --http2) negotiates h2
+    // via ALPN against our http1::Builder accept loop and the request
+    // hangs because we never speak h2 frames back.
+    let enable_h2 = parsed
+        .get("alpnProtocols")
+        .and_then(|a| a.as_array())
+        .map(|arr| arr.iter().any(|v| v.as_str() == Some("h2")))
+        .unwrap_or(false);
+    (key_pem, cert_pem, enable_h2)
+}
+use crate::types::{
+    extract_host, extract_port, js_promise_run_microtasks, read_string_header, POINTER_TAG,
+    PTR_MASK,
+};
+
+/// `https.createServer(opts, handler)` — opts carries `{ key, cert }`
+/// (PEM strings) plus optional `passphrase`/`ca`. `handler` is the
+/// usual `(req, res) => …` closure.
+///
+/// `opts_f64` is the NaN-boxed `{ key, cert, alpnProtocols? }` object
+/// the TS user passes to `https.createServer(opts, handler)`. Read
+/// via `json_stringify` so binary cert data has to fit through a
+/// PEM round-trip — fine since key + cert PEM are both ASCII.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_https_create_server(opts_f64: f64, handler: i64) -> i64 {
+    ensure_gc_scanner_registered();
+
+    let (key_pem, cert_pem, enable_http2_alpn) = parse_https_opts(opts_f64);
+    let mut base = HttpServer::with_handler(handler);
+    crate::server::apply_server_options(&mut base, opts_f64);
+
+    let cert_chain = parse_cert_chain(&cert_pem);
+    let has_tls_material = has_pem_material(&key_pem, &cert_pem);
+    let private_key = match parse_private_key(&key_pem) {
+        Some(k) => k,
+        None => {
+            if has_tls_material {
+                eprintln!("[node:https] no recognized PEM private key");
+            }
+            // Still register the handle so the user gets a `.listen`
+            // call that fails with a clear bind error rather than a
+            // silent zero-handle.
+            return register_handle(HttpsServer {
+                handler,
+                tls_config: None,
+                base,
+            });
+        }
+    };
+    let tls_config = match build_server_config(cert_chain, private_key, enable_http2_alpn) {
+        Ok(c) => Some(c),
+        Err(e) => {
+            eprintln!("[node:https] {}", e);
+            None
+        }
+    };
+
+    register_handle(HttpsServer {
+        handler,
+        tls_config,
+        base,
+    })
+}
+
+/// Backing struct for an `https.Server` JS-side handle. Wraps the
+/// HTTP/1.1 base server with a rustls `ServerConfig`.
+pub struct HttpsServer {
+    pub handler: i64,
+    pub tls_config: Option<Arc<rustls::ServerConfig>>,
+    pub base: HttpServer,
+}
+
+/// `httpsServer.listen(port?, host?, backlog?, cb?)` — binds + starts
+/// accepting TLS-wrapped connections. `args_array` carries the variadic
+/// `listen()` arguments; see `js_node_http_server_listen` / `parse_listen_args`
+/// for the overload resolution. Issue #2041.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_array: i64) -> i64 {
+    // Returns `server_handle` for chainability (#2129).
+    let parsed = crate::types::parse_listen_args(args_array);
+    let opts_f64 = parsed.opts;
+    let port = extract_port(opts_f64, 443);
+    let host = parsed
+        .host
+        .unwrap_or_else(|| extract_host(opts_f64, "0.0.0.0"));
+    let callback = parsed.callback;
+
+    let (request_tx, request_rx) = mpsc::channel::<HttpPendingRequest>(1024);
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
+
+    // #2132 — synchronous bind so `server.address().port` reflects the
+    // OS-assigned ephemeral port before the `listen(port, cb)` callback
+    // fires. See `server::js_node_http_server_listen` for the full
+    // rationale; same shape here, on top of the TLS-acceptor wrap.
+    let bind_str = format!("{}:{}", host, port);
+    let addr: SocketAddr = match bind_str.parse() {
+        Ok(a) => a,
+        Err(_) => SocketAddr::from(([0, 0, 0, 0], port)),
+    };
+    let std_listener = match std::net::TcpListener::bind(addr) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("[node:https] bind {}:{} failed: {}", host, port, e);
+            return server_handle;
+        }
+    };
+    let actual_port = std_listener.local_addr().map(|a| a.port()).unwrap_or(port);
+    if let Err(e) = std_listener.set_nonblocking(true) {
+        eprintln!("[node:https] set_nonblocking failed: {}", e);
+        return server_handle;
+    }
+
+    let tls_config = if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
+        s.base.bound_port = actual_port;
+        s.base.bound_host = host.clone();
+        s.base.listening = true;
+        s.base.shutdown_tx = Some(shutdown_tx);
+        s.base.request_rx = Some(request_rx);
+        s.tls_config.clone()
+    } else {
+        return server_handle;
+    };
+
+    let tls_config = match tls_config {
+        Some(c) => c,
+        None => {
+            eprintln!("[node:https] tls config unavailable; refusing to listen");
+            return server_handle;
+        }
+    };
+
+    // TLS accept workers queue Rust request handles; JS callbacks run from
+    // the main-thread HTTP pump, so listener lifetime is GC-safe.
+
+    let request_tx = Arc::new(request_tx);
+    let request_tx_for_spawn = request_tx.clone();
+    let acceptor = TlsAcceptor::from(tls_config);
+
+    perry_ffi::spawn_blocking_with_reactor(move || {
+        tokio::spawn(async move {
+            let listener = match TcpListener::from_std(std_listener) {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("[node:https] tokio adopt failed: {}", e);
+                    return;
+                }
+            };
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        match accepted {
+                            Ok((stream, peer)) => {
+                                let acceptor = acceptor.clone();
+                                let request_tx = request_tx_for_spawn.clone();
+                                tokio::spawn(async move {
+                                    let tls_stream = match acceptor.accept(stream).await {
+                                        Ok(s) => s,
+                                        Err(e) => {
+                                            eprintln!("[node:https] tls handshake: {}", e);
+                                            return;
+                                        }
+                                    };
+                                    let io = TokioIo::new(tls_stream);
+                                    let service = service_fn(move |req: Request<Incoming>| {
+                                        let request_tx = request_tx.clone();
+                                        async move {
+                                            handle_https_request(server_handle, peer, req, request_tx).await
+                                        }
+                                    });
+                                    if let Err(e) = http1::Builder::new()
+                                        .serve_connection(io, service)
+                                        .with_upgrades()
+                                        .await
+                                    {
+                                        let _ = e;
+                                    }
+                                });
+                            }
+                            Err(e) => eprintln!("[node:https] accept error: {}", e),
+                        }
+                    }
+                    _ = &mut shutdown_rx => break,
+                }
+            }
+        });
+    });
+
+    // Bind `this` to the server for the `'listening'` listeners + the
+    // optional `cb`, mirroring Node so `this.address().port` resolves
+    // inside the listen callback (#2132).
+    let this_val = handle_to_pointer_f64(server_handle);
+    let listening_listeners = get_handle::<HttpsServer>(server_handle)
+        .and_then(|s| s.base.listeners.get("listening").cloned())
+        .unwrap_or_default();
+    with_implicit_this(this_val, || emit_no_arg_to_listeners(&listening_listeners));
+    if callback != 0 {
+        let raw = callback as *const RawClosureHeader;
+        let closure = JsClosure::from_raw(raw);
+        if !closure.is_null() {
+            with_implicit_this(this_val, || {
+                let _ = closure.call0();
+            });
+        }
+    }
+
+    // Closes #604 — `listen()` is now non-blocking. Pending requests
+    // are drained via the unified `js_node_http_server_process_pending`
+    // pump in `server.rs`, which iterates HTTP/1, HTTPS, and HTTP/2
+    // handles each tick.
+    server_handle
+}
+
+async fn handle_https_request(
+    server_handle: i64,
+    peer: SocketAddr,
+    req: Request<Incoming>,
+    request_tx: Arc<mpsc::Sender<HttpPendingRequest>>,
+) -> Result<Response<ResponseBody>, hyper::Error> {
+    let method = req.method().to_string();
+    let uri = req.uri();
+    let url = match uri.query() {
+        Some(q) => format!("{}?{}", uri.path(), q),
+        None => uri.path().to_string(),
+    };
+    let mut headers_lower = HashMap::new();
+    let mut raw_headers = Vec::new();
+    for (n, v) in req.headers() {
+        if let Ok(vs) = v.to_str() {
+            headers_lower.insert(n.to_string().to_lowercase(), vs.to_string());
+            raw_headers.push((n.to_string(), vs.to_string()));
+        }
+    }
+    // #2132 — capture before `req` / `headers_lower` are consumed below.
+    let http_version = req.version();
+    let req_connection = headers_lower.get("connection").cloned();
+    let body = match req.collect().await {
+        Ok(c) => c.to_bytes().to_vec(),
+        Err(_) => Vec::new(),
+    };
+    let im_handle = alloc_incoming_message(IncomingMessage::new(
+        method,
+        url,
+        headers_lower,
+        raw_headers,
+        body,
+        peer.ip().to_string(),
+        peer.port(),
+    ));
+    let (response_tx, response_rx) = oneshot::channel::<HyperResponseShape>();
+    let sr_handle = alloc_server_response(response_tx);
+    let (request_listeners, handler, keep_alive_timeout) =
+        match get_handle::<HttpsServer>(server_handle) {
+            Some(s) => (
+                s.base.listeners.get("request").cloned().unwrap_or_default(),
+                s.handler,
+                s.base.keep_alive_timeout,
+            ),
+            None => (Vec::new(), 0, 5_000.0),
+        };
+    let pending = HttpPendingRequest {
+        server_handle,
+        request_handle: im_handle,
+        response_handle: sr_handle,
+        request_listeners,
+        handler,
+    };
+    if request_tx.send(pending).await.is_err() {
+        return Ok(Response::builder()
+            .status(503)
+            .body(Full::new(Bytes::from("Server unavailable")).boxed())
+            .unwrap());
+    }
+    perry_ffi::notify_main_thread();
+    match response_rx.await {
+        Ok(mut shape) => {
+            shape.apply_default_connection_headers(
+                http_version,
+                req_connection.as_deref(),
+                keep_alive_timeout,
+            );
+            Ok(shape.into_hyper())
+        }
+        Err(_) => Ok(Response::builder()
+            .status(500)
+            .body(Full::new(Bytes::from("Handler error")).boxed())
+            .unwrap()),
+    }
+}
+
+/// Non-blocking try_recv for HTTPS pending requests. Called by
+/// `js_node_http_server_process_pending` in `server.rs` each tick.
+pub(crate) fn try_recv_pending_https_nonblocking(server_handle: i64) -> Option<HttpPendingRequest> {
+    if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
+        if let Some(rx) = s.base.request_rx.as_mut() {
+            return rx.try_recv().ok();
+        }
+    }
+    None
+}
+
+/// Dispatch one HTTPS pending request — fire `'request'` listeners,
+/// then the main handler. Same shape as `server::process_pending`
+/// (the per-server struct differs but the dispatch logic is
+/// identical). Per the issue #604 architectural change, we no
+/// longer block on the handler-returned Promise.
+pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
+    let req_f64 = handle_to_pointer_f64(pending.request_handle);
+    let res_f64 = handle_to_pointer_f64(pending.response_handle);
+    for cb in &pending.request_listeners {
+        if *cb == 0 {
+            continue;
+        }
+        unsafe {
+            let raw = *cb as *const RawClosureHeader;
+            let closure = JsClosure::from_raw(raw);
+            if !closure.is_null() {
+                let _ = closure.call2(req_f64, res_f64);
+            }
+            js_promise_run_microtasks();
+        }
+    }
+    if pending.handler != 0 {
+        unsafe {
+            let raw = pending.handler as *const RawClosureHeader;
+            let closure = JsClosure::from_raw(raw);
+            if !closure.is_null() {
+                let _ = closure.call2(req_f64, res_f64);
+            }
+            js_promise_run_microtasks();
+        }
+    }
+    crate::server::synthesize_default_response_if_needed(pending.response_handle);
+    perry_ffi::drop_handle(pending.request_handle);
+    perry_ffi::drop_handle(pending.response_handle);
+}
+
+/// `httpsServer.address()` mirroring `http.Server.address()`.
+#[no_mangle]
+pub extern "C" fn js_node_https_server_address_json(handle: i64) -> *mut StringHeader {
+    let s = get_handle::<HttpsServer>(handle)
+        .map(|s| {
+            if !s.base.listening {
+                "null".to_string()
+            } else {
+                let family = if s.base.bound_host.contains(':') {
+                    "IPv6"
+                } else {
+                    "IPv4"
+                };
+                serde_json::json!({
+                    "port": s.base.bound_port,
+                    "address": s.base.bound_host,
+                    "family": family,
+                })
+                .to_string()
+            }
+        })
+        .unwrap_or_else(|| "null".to_string());
+    alloc_string(&s).as_raw()
+}
+
+/// `httpsServer.close(cb?)`.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_https_server_close(handle: i64, callback: i64) {
+    let close_listeners;
+    if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
+        s.base.listening = false;
+        s.base.shutdown_tx.take();
+        close_listeners = s.base.listeners.get("close").cloned().unwrap_or_default();
+    } else {
+        close_listeners = Vec::new();
+    }
+    emit_no_arg_to_listeners(&close_listeners);
+    if callback != 0 {
+        let raw = callback as *const RawClosureHeader;
+        let closure = JsClosure::from_raw(raw);
+        if !closure.is_null() {
+            let _ = closure.call0();
+        }
+    }
+}
+
+/// `httpsServer.on(event, cb)`.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_https_server_on(
+    handle: i64,
+    event_name_ptr: *const StringHeader,
+    callback: i64,
+) -> f64 {
+    let event = read_string_header(event_name_ptr as *mut _).unwrap_or_default();
+    if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
+        s.base.listeners.entry(event).or_default().push(callback);
+    }
+    f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_https_server_close_all_connections(_handle: i64) {}
+
+#[no_mangle]
+pub extern "C" fn js_node_https_server_close_idle_connections(_handle: i64) {}
+
+macro_rules! https_server_getter {
+    ($name:ident, $field:ident) => {
+        #[no_mangle]
+        pub extern "C" fn $name(handle: i64) -> f64 {
+            get_handle::<HttpsServer>(handle)
+                .map(|s| s.base.$field)
+                .unwrap_or(0.0)
+        }
+    };
+}
+
+macro_rules! https_server_setter {
+    ($name:ident, $field:ident) => {
+        #[no_mangle]
+        pub extern "C" fn $name(handle: i64, value: f64) -> f64 {
+            if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
+                s.base.$field = value;
+            }
+            value
+        }
+    };
+}
+
+https_server_getter!(js_node_https_server_headers_timeout, headers_timeout);
+https_server_setter!(js_node_https_server_set_headers_timeout, headers_timeout);
+https_server_getter!(js_node_https_server_keep_alive_timeout, keep_alive_timeout);
+https_server_setter!(
+    js_node_https_server_set_keep_alive_timeout,
+    keep_alive_timeout
+);
+https_server_getter!(js_node_https_server_request_timeout, request_timeout);
+https_server_setter!(js_node_https_server_set_request_timeout, request_timeout);
+https_server_getter!(js_node_https_server_idle_timeout, idle_timeout);
+https_server_setter!(js_node_https_server_set_idle_timeout, idle_timeout);
+https_server_getter!(js_node_https_server_max_headers_count, max_headers_count);
+https_server_setter!(
+    js_node_https_server_set_max_headers_count,
+    max_headers_count
+);
+https_server_getter!(
+    js_node_https_server_max_requests_per_socket,
+    max_requests_per_socket
+);
+https_server_setter!(
+    js_node_https_server_set_max_requests_per_socket,
+    max_requests_per_socket
+);
+
+#[no_mangle]
+pub extern "C" fn js_node_https_server_set_timeout_method(
+    handle: i64,
+    msecs: f64,
+    callback: i64,
+) -> i64 {
+    if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
+        s.base.idle_timeout = msecs;
+        if callback != 0 {
+            s.base
+                .listeners
+                .entry("timeout".to_string())
+                .or_default()
+                .push(callback);
+        }
+    }
+    handle
+}

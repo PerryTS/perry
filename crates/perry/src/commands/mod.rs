@@ -1,6 +1,7 @@
 //! CLI command implementations
 
 pub mod appstore;
+pub mod attest;
 pub mod audit;
 pub mod cache;
 pub mod check;
@@ -14,9 +15,16 @@ pub mod fixer;
 pub mod harmonyos_hap;
 pub mod i18n;
 pub mod init;
+pub mod install;
+pub mod lock;
 pub mod login;
+pub mod native;
+pub mod perry_lock;
+pub(crate) mod progress;
 pub mod publish;
 pub mod run;
+pub mod sandbox_profile;
+pub mod sanitize;
 pub mod setup;
 pub mod stdlib_features;
 pub mod typecheck;
@@ -24,3 +32,4 @@ pub mod types;
 pub mod update;
 pub mod updater;
 pub mod verify;
+pub mod widget;

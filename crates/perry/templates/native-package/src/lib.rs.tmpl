@@ -1,0 +1,38 @@
+//! Native bindings for {{description}}
+//!
+//! Skeleton emitted by `perry native init`. Each TypeScript wrapper
+//! in `src/index.ts` should call a `js_*` symbol declared in the
+//! `perry.nativeLibrary` block in package.json. Add one
+//! `#[no_mangle] pub extern "C"` entry per binding and remove the
+//! `hello` example.
+
+use perry_ffi::{alloc_string, read_string, JsString, StringHeader};
+
+/// Example binding — `import { hello } from "{{npm_name}}"`.
+///
+/// # Safety
+///
+/// `name_ptr` must be null or a Perry-runtime `StringHeader`.
+#[no_mangle]
+pub unsafe extern "C" fn js_{{crate_name}}_hello(name_ptr: *const StringHeader) -> *mut StringHeader {
+    let name = JsString::from_raw(name_ptr as *mut StringHeader);
+    let greeting = match read_string(name) {
+        Some(s) => format!("Hello, {}!", s),
+        None => "Hello, world!".to_string(),
+    };
+    alloc_string(&greeting).as_raw()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn greet_round_trip() {
+        let name = alloc_string("perry");
+        let greeting_ptr = unsafe { js_{{crate_name}}_hello(name.as_raw()) };
+        let greeting =
+            read_string(unsafe { JsString::from_raw(greeting_ptr) }).expect("non-null");
+        assert_eq!(greeting, "Hello, perry!");
+    }
+}

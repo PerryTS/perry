@@ -9,7 +9,10 @@ description = "LLVM code generation backend for Perry"
 perry-hir.workspace = true
 perry-types.workspace = true
 perry-dispatch.workspace = true
+perry-api-manifest.workspace = true
 
 anyhow.workspace = true
 thiserror.workspace = true
 log.workspace = true
+serde.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,10 @@
+import { setTimeout, clearTimeout, setInterval, clearInterval } from "node:timers";
+let timeoutCount = 0;
+let intervalCount = 0;
+const timeout = setTimeout(() => { timeoutCount++; }, 0);
+const interval = setInterval(() => { intervalCount++; }, 0);
+clearInterval(timeout as any);
+clearTimeout(interval as any);
+await new Promise((resolve) => setTimeout(resolve, 5));
+console.log("timeout count:", timeoutCount);
+console.log("interval count:", intervalCount);

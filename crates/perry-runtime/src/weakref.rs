@@ -17,7 +17,7 @@ use crate::array::{
 use crate::object::{
     js_object_alloc_with_shape, js_object_get_field_by_name, js_object_set_field, ObjectHeader,
 };
-use crate::value::{js_nanbox_get_pointer, JSValue};
+use crate::value::{js_nanbox_get_pointer, JSValue, POINTER_MASK};
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
@@ -25,14 +25,124 @@ const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 
 const WEAKREF_SHAPE_ID: u32 = 0x7FFF_FE10;
 const FINREG_SHAPE_ID: u32 = 0x7FFF_FE11;
+pub const CLASS_ID_WEAKREF: u32 = 0xFFFF_0029;
+pub const CLASS_ID_FINALIZATION_REGISTRY: u32 = 0xFFFF_002A;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WeakWrapperKind {
+    WeakRef,
+    FinalizationRegistry,
+    WeakMap,
+    WeakSet,
+}
+
+pub(crate) fn weak_wrapper_kind(obj: *const ObjectHeader) -> Option<WeakWrapperKind> {
+    if obj.is_null() {
+        return None;
+    }
+    match unsafe { (*obj).class_id } {
+        CLASS_ID_WEAKREF => Some(WeakWrapperKind::WeakRef),
+        CLASS_ID_FINALIZATION_REGISTRY => Some(WeakWrapperKind::FinalizationRegistry),
+        CLASS_ID_WEAKMAP => Some(WeakWrapperKind::WeakMap),
+        CLASS_ID_WEAKSET => Some(WeakWrapperKind::WeakSet),
+        _ => None,
+    }
+}
+
+/// The full `util.inspect` body for a weak-collection wrapper, or `None` if
+/// `obj` isn't one. Returning the complete string (not just the class name)
+/// lets WeakMap/WeakSet print Node's `{ <items unknown> }` placeholder — their
+/// contents are intentionally not enumerable — while WeakRef /
+/// FinalizationRegistry stay `{}`. Without this, WeakMap/WeakSet leaked their
+/// `__perry_wk_entries` storage field (e.g. `{ __perry_wk_entries: [] }`).
+pub(crate) fn weak_wrapper_inspect_label(obj: *const ObjectHeader) -> Option<&'static str> {
+    match weak_wrapper_kind(obj)? {
+        WeakWrapperKind::WeakRef => Some("WeakRef {}"),
+        WeakWrapperKind::FinalizationRegistry => Some("FinalizationRegistry {}"),
+        WeakWrapperKind::WeakMap => Some("WeakMap { <items unknown> }"),
+        WeakWrapperKind::WeakSet => Some("WeakSet { <items unknown> }"),
+    }
+}
+
+pub(crate) fn weak_collection_entries(obj: *const ObjectHeader) -> Vec<(f64, f64)> {
+    match weak_wrapper_kind(obj) {
+        Some(WeakWrapperKind::WeakMap | WeakWrapperKind::WeakSet) => {}
+        _ => return Vec::new(),
+    }
+
+    unsafe {
+        let entries_ptr = entries_array(obj as *mut ObjectHeader);
+        if entries_ptr.is_null() {
+            return Vec::new();
+        }
+        let len = js_array_length(entries_ptr) as usize;
+        let mut entries = Vec::with_capacity(len);
+        for i in 0..len {
+            let pair_val_f = js_array_get_f64(entries_ptr, i as u32);
+            let pair_ptr = (pair_val_f.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
+            if pair_ptr.is_null() {
+                continue;
+            }
+            entries.push((js_array_get_f64(pair_ptr, 0), js_array_get_f64(pair_ptr, 1)));
+        }
+        entries
+    }
+}
+
+fn weakref_type_error(message: &str) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    let err_val = JSValue::pointer(err as *const u8);
+    crate::exception::js_throw(f64::from_bits(err_val.bits()))
+}
+
+fn is_valid_weak_target(value: f64) -> bool {
+    if crate::value::is_js_handle(value) {
+        return true;
+    }
+
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+
+    let ptr = (jv.bits() & POINTER_MASK) as usize;
+    ptr != 0 && !crate::symbol::is_global_registered_symbol(ptr)
+}
+
+fn is_undefined_value(value: f64) -> bool {
+    JSValue::from_bits(value.to_bits()).is_undefined()
+}
+
+fn is_callable_value(value: f64) -> bool {
+    if crate::value::is_js_handle(value) && crate::value::js_handle_is_function(value) {
+        return true;
+    }
+
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+
+    crate::closure::is_closure_ptr((jv.bits() & POINTER_MASK) as usize)
+}
 
 /// Allocate a `WeakRef` wrapper object that strongly holds the target value
-/// in a single field named `target`.
+/// in a single sentinel-named field. #1766: the field name uses a `__perry_`
+/// prefix so user code reading `(wr as any).target` returns `undefined` like
+/// Node, instead of leaking the internal storage slot.
 #[no_mangle]
 pub extern "C" fn js_weakref_new(target: f64) -> *mut ObjectHeader {
-    let packed = b"target\0";
+    if !is_valid_weak_target(target) {
+        weakref_type_error("WeakRef: invalid target");
+    }
+
+    let packed = b"__perry_wr_target\0";
     let obj = js_object_alloc_with_shape(WEAKREF_SHAPE_ID, 1, packed.as_ptr(), packed.len() as u32);
     js_object_set_field(obj, 0, JSValue::from_bits(target.to_bits()));
+    unsafe {
+        (*obj).class_id = CLASS_ID_WEAKREF;
+    }
     obj
 }
 
@@ -46,14 +156,12 @@ pub extern "C" fn js_weakref_deref(weakref: f64) -> f64 {
     if ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    unsafe {
-        let key_ptr = crate::string::js_string_from_bytes(b"target".as_ptr(), 6);
-        let val = js_object_get_field_by_name(ptr, key_ptr);
-        if val.is_undefined() {
-            f64::from_bits(TAG_UNDEFINED)
-        } else {
-            f64::from_bits(val.bits())
-        }
+    let key_ptr = crate::string::js_string_from_bytes(b"__perry_wr_target".as_ptr(), 17);
+    let val = js_object_get_field_by_name(ptr, key_ptr);
+    if val.is_undefined() {
+        f64::from_bits(TAG_UNDEFINED)
+    } else {
+        f64::from_bits(val.bits())
     }
 }
 
@@ -62,11 +170,20 @@ pub extern "C" fn js_weakref_deref(weakref: f64) -> f64 {
 /// 2-element `[token, held]` array used by `unregister(token)` to find matches.
 #[no_mangle]
 pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
-    let packed = b"callback\0entries\0";
+    if !is_callable_value(callback) {
+        weakref_type_error("FinalizationRegistry: cleanup must be callable");
+    }
+
+    // #1766: sentinel-name internal slots so `(fr as any).callback` /
+    // `.entries` return `undefined` like Node.
+    let packed = b"__perry_fr_callback\0__perry_fr_entries\0";
     let obj = js_object_alloc_with_shape(FINREG_SHAPE_ID, 2, packed.as_ptr(), packed.len() as u32);
     js_object_set_field(obj, 0, JSValue::from_bits(callback.to_bits()));
     let entries_arr = js_array_alloc(0);
     js_object_set_field(obj, 1, JSValue::array_ptr(entries_arr));
+    unsafe {
+        (*obj).class_id = CLASS_ID_FINALIZATION_REGISTRY;
+    }
     obj
 }
 
@@ -76,25 +193,35 @@ pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
 /// provided, we still record an `[undefined, held]` pair so the registration count
 /// is correct (but it can never be unregistered).
 #[no_mangle]
-pub extern "C" fn js_finreg_register(registry: f64, _target: f64, held: f64, token: f64) -> f64 {
+pub extern "C" fn js_finreg_register(registry: f64, target: f64, held: f64, token: f64) -> f64 {
+    if !is_valid_weak_target(target) {
+        weakref_type_error("FinalizationRegistry.prototype.register: invalid target");
+    }
+    if target.to_bits() == held.to_bits() {
+        weakref_type_error(
+            "FinalizationRegistry.prototype.register: target and holdings must not be same",
+        );
+    }
+    if !is_undefined_value(token) && !is_valid_weak_target(token) {
+        weakref_type_error("Invalid unregisterToken");
+    }
+
     let reg_ptr = js_nanbox_get_pointer(registry) as *mut ObjectHeader;
     if reg_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    unsafe {
-        let entries_key = crate::string::js_string_from_bytes(b"entries".as_ptr(), 7);
-        let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
-        let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
-        if entries_ptr.is_null() {
-            return f64::from_bits(TAG_UNDEFINED);
-        }
-        // Build a 2-element array: [token, held]
-        let pair = js_array_alloc_with_length(2);
-        js_array_set_f64(pair, 0, token);
-        js_array_set_f64(pair, 1, held);
-        let pair_val = f64::from_bits(JSValue::array_ptr(pair).bits());
-        js_array_push_f64(entries_ptr, pair_val);
+    let entries_key = crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18);
+    let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
+    let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
+    if entries_ptr.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
     }
+    // Build a 2-element array: [token, held]
+    let pair = js_array_alloc_with_length(2);
+    js_array_set_f64(pair, 0, token);
+    js_array_set_f64(pair, 1, held);
+    let pair_val = f64::from_bits(JSValue::array_ptr(pair).bits());
+    js_array_push_f64(entries_ptr, pair_val);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -104,41 +231,43 @@ pub extern "C" fn js_finreg_register(registry: f64, _target: f64, held: f64, tok
 /// references — both sides are stored as POINTER_TAG-tagged f64 values.
 #[no_mangle]
 pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
+    if !is_valid_weak_target(token) {
+        weakref_type_error("Invalid unregisterToken");
+    }
+
     let reg_ptr = js_nanbox_get_pointer(registry) as *mut ObjectHeader;
     if reg_ptr.is_null() {
         return f64::from_bits(TAG_FALSE);
     }
-    unsafe {
-        let entries_key = crate::string::js_string_from_bytes(b"entries".as_ptr(), 7);
-        let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
-        let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
-        if entries_ptr.is_null() {
-            return f64::from_bits(TAG_FALSE);
+    let entries_key = crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18);
+    let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
+    let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
+    if entries_ptr.is_null() {
+        return f64::from_bits(TAG_FALSE);
+    }
+    let len = js_array_length(entries_ptr) as usize;
+    let mut found = false;
+    // Rebuild the entries array without the matching pairs.
+    let new_arr = js_array_alloc(0);
+    for i in 0..len {
+        let pair_val_f = js_array_get_f64(entries_ptr, i as u32);
+        let pair_ptr = (pair_val_f.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
+        if pair_ptr.is_null() {
+            continue;
         }
-        let len = js_array_length(entries_ptr) as usize;
-        let mut found = false;
-        // Rebuild the entries array without the matching pairs.
-        let new_arr = js_array_alloc(0);
-        for i in 0..len {
-            let pair_val_f = js_array_get_f64(entries_ptr, i as u32);
-            let pair_ptr = (pair_val_f.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
-            if pair_ptr.is_null() {
-                continue;
-            }
-            let stored_token = js_array_get_f64(pair_ptr, 0);
-            if stored_token.to_bits() == token.to_bits() {
-                found = true;
-                continue;
-            }
-            js_array_push_f64(new_arr, pair_val_f);
+        let stored_token = js_array_get_f64(pair_ptr, 0);
+        if stored_token.to_bits() == token.to_bits() {
+            found = true;
+            continue;
         }
-        // Replace entries field with the new array.
-        js_object_set_field(reg_ptr, 1, JSValue::array_ptr(new_arr));
-        if found {
-            f64::from_bits(TAG_TRUE)
-        } else {
-            f64::from_bits(TAG_FALSE)
-        }
+        js_array_push_f64(new_arr, pair_val_f);
+    }
+    // Replace entries field with the new array.
+    js_object_set_field(reg_ptr, 1, JSValue::array_ptr(new_arr));
+    if found {
+        f64::from_bits(TAG_TRUE)
+    } else {
+        f64::from_bits(TAG_FALSE)
     }
 }
 
@@ -154,23 +283,168 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
 const WEAKMAP_SHAPE_ID: u32 = 0x7FFF_FE12;
 const WEAKSET_SHAPE_ID: u32 = 0x7FFF_FE13;
 
+// Reserved `ObjectHeader.class_id` markers for WeakMap/WeakSet instances.
+// These follow the same `0xFFFF00xx` reserved-builtin convention as
+// CLASS_ID_MAP/CLASS_ID_SET (see object/instanceof.rs). Unlike Map/Set —
+// which are plain-alloc and tracked in raw-pointer registries — WeakMap/
+// WeakSet objects are GcHeader-backed and movable, so a registry of raw
+// pointers would dangle after a GC evacuation. The class_id travels with
+// the object across GC moves, so `js_native_call_method` can recognise a
+// WeakMap/WeakSet held in an `any`-typed binding (e.g. effect's
+// `globalValue(() => new WeakMap())`) and dispatch .has/.get/.set/.delete/
+// .add through to these helpers. 0x27/0x28 are the next free slots after
+// CLASS_ID_BLOB (0x26). Issue #1757/#1758.
+pub const CLASS_ID_WEAKMAP: u32 = 0xFFFF_0027;
+pub const CLASS_ID_WEAKSET: u32 = 0xFFFF_0028;
+
+/// Dynamic-dispatch entry point for WeakMap/WeakSet method calls (issue
+/// #1757/#1758). `js_native_call_method` calls this for any heap object;
+/// it returns `Some(result)` only when `obj` carries the reserved
+/// WeakMap/WeakSet `class_id` and `method_name` is one of their methods,
+/// and `None` otherwise so the caller falls through to its normal
+/// dispatch. `receiver` is the NaN-boxed f64 the `js_weak*` helpers expect.
+///
+/// Unknown methods on a known WeakMap/WeakSet resolve to `undefined`,
+/// mirroring the Map/Set registry arms in the dynamic dispatcher.
+///
+/// # Safety
+/// `obj` must be a valid, readable `ObjectHeader` pointer (the caller has
+/// already validated it as a live heap object).
+pub unsafe fn try_weak_method_dispatch(
+    obj: *const ObjectHeader,
+    receiver: f64,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    let class_id = (*obj).class_id;
+    if class_id != CLASS_ID_WEAKMAP && class_id != CLASS_ID_WEAKSET {
+        return None;
+    }
+    let args: &[f64] = if !args_ptr.is_null() && args_len > 0 {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    } else {
+        &[]
+    };
+    let result = match method_name {
+        "set" if args.len() >= 2 => js_weakmap_set(receiver, args[0], args[1]),
+        "add" if !args.is_empty() => js_weakset_add(receiver, args[0]),
+        "get" if !args.is_empty() => js_weakmap_get(receiver, args[0]),
+        "has" if !args.is_empty() => js_weakmap_has(receiver, args[0]),
+        "delete" if !args.is_empty() => js_weakmap_delete(receiver, args[0]),
+        _ => f64::from_bits(TAG_UNDEFINED),
+    };
+    Some(result)
+}
+
+/// Return the reserved WeakMap/WeakSet `class_id` of `receiver` if it is one
+/// of those collections, else `None`. Backs the reflective
+/// `WeakMap.prototype.*` / `WeakSet.prototype.*` thunks so they can perform
+/// the spec brand check (`TypeError` on a non-Weak* receiver) before
+/// dispatching. The `GcHeader.obj_type == GC_TYPE_OBJECT` pre-filter ensures
+/// the pointer is an `ObjectHeader`-backed allocation before `class_id` is
+/// read, so a `Set`/`Map` pointer (different `obj_type`) or a primitive
+/// (`js_nanbox_get_pointer` yields 0) safely resolves to `None`.
+pub fn weak_class_id_from_receiver(receiver: f64) -> Option<u32> {
+    let addr = js_nanbox_get_pointer(receiver) as usize;
+    // #4004: reject the `< 0x100000` small-handle band (Web Fetch / node:http /
+    // timer ids are NaN-boxed POINTER_TAG values, not heap addresses) before
+    // dereferencing the GC header. WeakMap/WeakSet are ObjectHeader-backed
+    // allocations above the cutoff. See map::is_registered_map.
+    if addr < 0x100000 {
+        return None;
+    }
+    unsafe {
+        let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+            return None;
+        }
+        let cid = (*(addr as *const ObjectHeader)).class_id;
+        if cid == CLASS_ID_WEAKMAP || cid == CLASS_ID_WEAKSET {
+            return Some(cid);
+        }
+    }
+    None
+}
+
 unsafe fn entries_array(reg: *mut ObjectHeader) -> *mut ArrayHeader {
-    let entries_key = crate::string::js_string_from_bytes(b"entries".as_ptr(), 7);
+    let entries_key = crate::string::js_string_from_bytes(b"__perry_wk_entries".as_ptr(), 18);
     let entries_val = js_object_get_field_by_name(reg, entries_key);
     (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader
 }
 
 #[no_mangle]
 pub extern "C" fn js_weakmap_new() -> *mut ObjectHeader {
-    let packed = b"entries\0";
+    // #1766: sentinel-named slot so `(wm as any).entries` returns
+    // `undefined` like Node, instead of leaking the [k, v]-pair array.
+    let packed = b"__perry_wk_entries\0";
     let obj = js_object_alloc_with_shape(WEAKMAP_SHAPE_ID, 1, packed.as_ptr(), packed.len() as u32);
     let entries_arr = js_array_alloc(0);
     js_object_set_field(obj, 0, JSValue::array_ptr(entries_arr));
+    // Stamp the GC-stable kind marker so dynamic method dispatch
+    // (js_native_call_method) recognises this as a WeakMap. Issue #1757.
+    unsafe {
+        (*obj).class_id = CLASS_ID_WEAKMAP;
+    }
     obj
 }
 
 #[no_mangle]
+pub extern "C" fn js_weakmap_init_iterable(map: f64, iterable: f64) -> f64 {
+    use crate::collection_iter::{classify_init, InitIter};
+
+    // #2772: consume ANY iterable (Map/Set/custom), throw on non-iterables,
+    // require each yielded value to be an entry object, and require each key
+    // to be an object (`js_weakmap_set` validates the key).
+    let arr_ptr = match classify_init(iterable) {
+        InitIter::Empty => return map,
+        InitIter::Values(p) => p as *const ArrayHeader,
+    };
+    if arr_ptr.is_null() {
+        return map;
+    }
+    unsafe {
+        let len = js_array_length(arr_ptr) as usize;
+        for i in 0..len {
+            let entry = js_array_get_f64(arr_ptr, i as u32);
+            if !crate::collection_iter::is_entry_object(entry) {
+                crate::collection_iter::throw_not_entry_object(entry);
+            }
+            let entry_bits = entry.to_bits() as i64;
+            let key = crate::object::js_object_get_index_polymorphic(entry_bits, 0.0);
+            let val = crate::object::js_object_get_index_polymorphic(entry_bits, 1.0);
+            js_weakmap_set(map, key, val);
+        }
+    }
+    map
+}
+
+/// Throw `TypeError: Invalid value used as weak map key` (WeakMap key must be
+/// an object). Never returns.
+fn throw_invalid_weakmap_key() -> ! {
+    let msg = "Invalid value used as weak map key";
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(msg_str);
+    crate::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
+}
+
+/// Throw `TypeError: Invalid value used in weak set` (WeakSet value must be an
+/// object). Never returns.
+fn throw_invalid_weakset_value() -> ! {
+    let msg = "Invalid value used in weak set";
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(msg_str);
+    crate::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
+}
+
+#[no_mangle]
 pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
+    // #2772: WeakMap keys must be objects. Validate at runtime so a primitive
+    // arriving through a variable / dynamic expression still throws (not only
+    // the AST-literal fast path in lowering).
+    if !crate::collection_iter::is_entry_object(key) {
+        throw_invalid_weakmap_key();
+    }
     let map_ptr = js_nanbox_get_pointer(map) as *mut ObjectHeader;
     if map_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -296,15 +570,50 @@ pub extern "C" fn js_weakmap_delete(map: f64, key: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_weakset_new() -> *mut ObjectHeader {
-    let packed = b"entries\0";
+    // #1766: shares the sentinel name with js_weakmap_new so the same
+    // `entries_array` helper reaches the [k,v]-pair storage.
+    let packed = b"__perry_wk_entries\0";
     let obj = js_object_alloc_with_shape(WEAKSET_SHAPE_ID, 1, packed.as_ptr(), packed.len() as u32);
     let entries_arr = js_array_alloc(0);
     js_object_set_field(obj, 0, JSValue::array_ptr(entries_arr));
+    // Stamp the GC-stable kind marker (see js_weakmap_new). Issue #1757.
+    unsafe {
+        (*obj).class_id = CLASS_ID_WEAKSET;
+    }
     obj
 }
 
 #[no_mangle]
+pub extern "C" fn js_weakset_init_iterable(set: f64, iterable: f64) -> f64 {
+    use crate::collection_iter::{classify_init, InitIter};
+
+    // #2772: consume ANY iterable (Map/Set/custom), throw on non-iterables,
+    // and require each value to be an object (`js_weakset_add` validates).
+    let arr_ptr = match classify_init(iterable) {
+        InitIter::Empty => return set,
+        InitIter::Values(p) => p as *const ArrayHeader,
+    };
+    if arr_ptr.is_null() {
+        return set;
+    }
+    unsafe {
+        let len = js_array_length(arr_ptr) as usize;
+        for i in 0..len {
+            js_weakset_add(set, js_array_get_f64(arr_ptr, i as u32));
+        }
+    }
+    set
+}
+
+#[no_mangle]
 pub extern "C" fn js_weakset_add(set: f64, value: f64) -> f64 {
+    // #2772: WeakSet values must be objects — throw the WeakSet-specific
+    // message *before* delegating (js_weakmap_set throws the weak-map-key
+    // message, which is wrong for a Set). Validate at runtime so a primitive
+    // arriving through a variable/dynamic expression still throws.
+    if !crate::collection_iter::is_entry_object(value) {
+        throw_invalid_weakset_value();
+    }
     // Reuse js_weakmap_set with value as both key and value (matches JS Set spec).
     js_weakmap_set(set, value, value);
     set
@@ -333,4 +642,30 @@ pub extern "C" fn js_weak_throw_primitive() -> f64 {
     let err = crate::error::js_error_new_with_message(msg_str);
     let err_val = JSValue::pointer(err as *const u8);
     crate::exception::js_throw(f64::from_bits(err_val.bits()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn weak_collections_inspect_with_items_unknown() {
+        // WeakMap/WeakSet contents aren't enumerable, so Node prints the
+        // `<items unknown>` placeholder rather than leaking storage fields.
+        let wm = js_weakmap_new();
+        assert_eq!(
+            weak_wrapper_inspect_label(wm),
+            Some("WeakMap { <items unknown> }")
+        );
+        let ws = js_weakset_new();
+        assert_eq!(
+            weak_wrapper_inspect_label(ws),
+            Some("WeakSet { <items unknown> }")
+        );
+        // WeakRef / FinalizationRegistry have no items placeholder.
+        let target = crate::object::js_object_alloc(0, 0);
+        let target_val = f64::from_bits(JSValue::pointer(target as *const u8).bits());
+        let wr = js_weakref_new(target_val);
+        assert_eq!(weak_wrapper_inspect_label(wr), Some("WeakRef {}"));
+    }
 }

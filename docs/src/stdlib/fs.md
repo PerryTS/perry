@@ -60,6 +60,16 @@ import { dirname } from "path";
 const dir = dirname(fileURLToPath(import.meta.url));
 ```
 
+## Threading
+
+`fs` numeric file descriptors and `fs.promises.FileHandle` objects are
+thread-affine across `perry/thread`. Passing a numeric fd into `spawn` or
+`parallelMap` copies only the number; the receiving thread has its own fd
+registry, so operations fail with `EBADF`. Passing a `FileHandle` produces a
+detached handle with `fd === -1`.
+
+Pass file paths across thread boundaries and reopen files inside the worker.
+
 ## Next Steps
 
 - [HTTP & Networking](http.md)

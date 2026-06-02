@@ -1,6 +1,7 @@
 //! HTTP server for geisterhand.
 //! Routes: /widgets, /click/:handle, /type/:handle, /slide/:handle,
-//! /toggle/:handle, /state/:handle, /key, /scroll/:handle, /chaos/start, /chaos/stop, /chaos/status
+//! /select/:handle, /toggle/:handle, /state/:handle, /key,
+//! /scroll/:handle, /chaos/start, /chaos/stop, /chaos/status
 
 use tiny_http::{Header, Method, Response, Server};
 
@@ -434,6 +435,33 @@ pub fn run_server(port: u16) {
                 None => error_json(400, "invalid handle"),
             },
 
+            // POST /select/:handle — set Picker selected index + fire onChange.
+            // #1488: Picker registers as widget kind 4 (`callback_kind=1` =
+            // onChange) but had no automation route. Mirrors /slide — the
+            // index is queued as the onChange arg, and the JS-side state
+            // setter (`onChange={(idx) => setSelected(idx)}` pattern) drives
+            // the re-render. Body shape: `{"index": N}`. (Label-string lookup
+            // suggested in the issue is a later step — see the issue thread.)
+            (Method::Post, p) if p.starts_with("/select/") => match parse_handle(p, "/select/") {
+                Some(handle) => {
+                    let body = read_body(&mut request);
+                    let index = match serde_json::from_str::<serde_json::Value>(&body) {
+                        Ok(v) => v.get("index").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                        Err(_) => 0.0,
+                    };
+                    let closure = unsafe { perry_geisterhand_get_closure(handle, CB_ON_CHANGE) };
+                    if closure != 0.0 {
+                        unsafe {
+                            perry_geisterhand_queue_action1(closure, index);
+                        }
+                        ok_json(r#"{"ok":true}"#)
+                    } else {
+                        error_json(404, "no onChange callback for this handle")
+                    }
+                }
+                None => error_json(400, "invalid handle"),
+            },
+
             // POST /toggle/:handle — toggle + fire onChange
             (Method::Post, p) if p.starts_with("/toggle/") => {
                 match parse_handle(p, "/toggle/") {
@@ -737,11 +765,21 @@ pub fn run_server(port: u16) {
             }
 
             // GET /value/:handle — read current widget value
+            //
+            // Issue #640: distinguish "widget not found / not readable"
+            // (ptr.is_null() → `value: null`) from "widget found with
+            // empty stringValue" (ptr non-null + len=0 → `value: ""`).
+            // Pre-fix the truthiness check `len > 0` collapsed the two
+            // cases, so a TextField that the user had just typed `""`
+            // into (or that was empty after a route swap) was
+            // indistinguishable from a torn-down widget — confounding
+            // bug-triage of issues like the multi-route TextField
+            // probe in the issue's reproducer.
             (Method::Get, p) if p.starts_with("/value/") => match parse_handle(p, "/value/") {
                 Some(handle) => {
                     let mut len: usize = 0;
                     let ptr = unsafe { perry_geisterhand_request_value(handle, &mut len) };
-                    if !ptr.is_null() && len > 0 {
+                    if !ptr.is_null() {
                         let val = unsafe {
                             String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len))
                                 .into_owned()
@@ -752,7 +790,7 @@ pub fn run_server(port: u16) {
                         ok_json(&format!(
                             r#"{{"handle":{},"value":"{}"}}"#,
                             handle,
-                            val.replace('"', "\\\"")
+                            val.replace('\\', "\\\\").replace('"', "\\\"")
                         ))
                     } else {
                         ok_json(&format!(r#"{{"handle":{},"value":null}}"#, handle))

@@ -1,0 +1,16 @@
+[package]
+name = "perry-ext-ethers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for npm `ethers` utilities — uses only `perry-ffi`. Sync, hex/keccak256/EIP-55/parseUnits/formatUnits/parseEther/formatEther utilities."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+rand = "0.8"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

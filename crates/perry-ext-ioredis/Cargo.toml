@@ -1,0 +1,18 @@
+[package]
+name = "perry-ext-ioredis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for npm `ioredis` — uses only `perry-ffi`. Async Redis client (lazy connection) via the `redis` crate. spawn_blocking + JsPromise + tokio::Handle::current().block_on bridge."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+redis = { version = "1.2", features = ["tokio-comp", "connection-manager"] }
+tokio = { workspace = true }
+lazy_static = "1.5"
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }

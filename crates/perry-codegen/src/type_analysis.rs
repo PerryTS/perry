@@ -9,6 +9,19 @@ use perry_types::Type as HirType;
 
 use crate::expr::FnCtx;
 
+pub(crate) fn is_global_constructor_expr(e: &Expr, name: &str) -> bool {
+    matches!(e, Expr::GlobalGet(_))
+        || matches!(
+            e,
+            Expr::PropertyGet { object, property }
+                if property == name && matches!(object.as_ref(), Expr::GlobalGet(_))
+        )
+}
+
+fn is_process_namespace_version_property(object: &Expr, property: &str) -> bool {
+    property == "version" && matches!(object, Expr::NativeModuleRef(module) if module == "process")
+}
+
 /// Refine an `Any`-typed local's static type based on its initializer
 /// expression. Returns Some(Type) when we can statically prove the
 /// initializer produces a more specific type, so the `Stmt::Let`
@@ -31,7 +44,11 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // because the local stays at type Any. Critical for hot loops
         // in object_create / binary_trees / fibonacci where the counter
         // is a "let i = 0" with no explicit annotation.
-        Expr::Number(_) | Expr::Integer(_) => Some(HirType::Number),
+        Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::PodLayoutSizeOf { .. }
+        | Expr::PodLayoutAlignOf { .. }
+        | Expr::PodLayoutOffsetOf { .. } => Some(HirType::Number),
         Expr::Binary { op, left, right } => {
             // Numeric arithmetic produces Number when both operands are
             // statically numeric (matches `is_numeric_expr`'s rule).
@@ -45,6 +62,14 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             }
         }
         Expr::Array(_) | Expr::ArraySpread(_) => {
+            Some(HirType::Array(Box::new(HirType::Any)))
+        }
+        // `new Array(n)` / `new Array(a, b, ...)` — the static_type_of arm
+        // already maps this to Array<Any>, so the let-binding refinement
+        // must agree. Without it, `const xs = new Array(4); xs[i]` falls
+        // through to the generic Object index path which doesn't translate
+        // the issue #323 HOLE sentinel back to undefined.
+        Expr::New { class_name, .. } if class_name == "Array" => {
             Some(HirType::Array(Box::new(HirType::Any)))
         }
         Expr::ArraySlice { .. }
@@ -66,13 +91,18 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         | Expr::ArrayValues { .. }
         | Expr::StringMatch { .. }
         | Expr::StringMatchAll { .. } => Some(HirType::Array(Box::new(HirType::Any))),
-        // TextEncoder.encode(str) — runtime returns an ArrayHeader whose
-        // f64 elements hold UTF-8 byte values. Refining the local type to
-        // Array(Number) lets `encoded.length` / `encoded[i]` hit the
-        // inline array fast paths instead of the dynamic-field fallback.
-        Expr::TextEncoderEncode(_) => Some(HirType::Array(Box::new(HirType::Number))),
-        // TextDecoder.decode(buf) always produces a string.
-        Expr::TextDecoderDecode(_) => Some(HirType::String),
+        // TextEncoder.encode(str) — runtime returns a BufferHeader with
+        // packed u8 bytes (same shape as `new Uint8Array([...])`). Refining
+        // the local type to Uint8Array lets `encoded[i]` route through the
+        // `Uint8ArrayGet` u8-load fast path. Pre-fix this was Array(Number)
+        // and the generic f64-stride indexing read 8 bytes-as-f64 instead
+        // of one byte (issue #584).
+        Expr::TextEncoderEncode(_) => Some(HirType::Named("Uint8Array".into())),
+        Expr::TextEncoderEncodeInto { .. } => Some(HirType::Object(Default::default())),
+        // TextDecoder.decode(buf) / .encoding always produce a string.
+        Expr::TextDecoderDecode { .. } => Some(HirType::String),
+        Expr::TextDecoderEncoding(_) => Some(HirType::String),
+        Expr::TextDecoderFatal(_) | Expr::TextDecoderIgnoreBom(_) => Some(HirType::Boolean),
         // string.split(sep) → Array<string>
         Expr::StringSplit { .. } => Some(HirType::Array(Box::new(HirType::String))),
         // Set.values() / Set.keys() → iterable, but Array.from wraps it
@@ -99,6 +129,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         | Expr::StringCoerce(_)
         | Expr::StringFromCodePoint(_)
         | Expr::StringFromCharCode(_)
+        | Expr::StringRaw { .. }
         | Expr::StringAt { .. }
         | Expr::RegExpSource(_)
         | Expr::RegExpFlags(_)
@@ -108,15 +139,21 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // hit the string method fast path.
         | Expr::ProcessVersion
         | Expr::ProcessCwd
+        | Expr::ProcessTitle
         | Expr::OsArch
         | Expr::OsType
         | Expr::OsPlatform
         | Expr::OsRelease
         | Expr::OsHostname
         | Expr::OsEOL
+        | Expr::OsDevNull
+        | Expr::OsEndianness
+        | Expr::OsMachine
+        | Expr::OsVersion
         // Date string-returning methods all produce real string handles
         // via js_date_to_*_string. Refining the local lets `dateStr.includes("2024")`
         // hit the string .includes fast path.
+        | Expr::DateToString(_)
         | Expr::DateToDateString(_)
         | Expr::DateToTimeString(_)
         | Expr::DateToLocaleString(_)
@@ -162,6 +199,17 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // method registry instead of the universal fallback. This is
         // the difference between `l.size()` returning the real size
         // and returning undefined for generic class instances.
+        // WHATWG URL constructors — both routes (`new URL(...)` /
+        // `new URL(rel, base)`) go through the dedicated HIR variant
+        // `Expr::UrlNew`, which bypasses the generic `Expr::New` arm
+        // below. Refining to `Named("URL")` lets `u.searchParams.get(k)` and
+        // friends hit the `is_url_search_params_expr` fast paths.
+        Expr::UrlNew { .. } => Some(HirType::Named("URL".to_string())),
+        Expr::UrlSearchParamsNew(_) => Some(HirType::Named("URLSearchParams".to_string())),
+        // `url.searchParams` getter on a typed URL: refining lets a chained
+        // `const sp = url.searchParams; sp.append(...)` keep the typed
+        // dispatch instead of falling through to generic property access.
+        Expr::UrlGetSearchParams(_) => Some(HirType::Named("URLSearchParams".to_string())),
         Expr::New { class_name, .. } => {
             // Resolve through `local_class_aliases` so `let b: any = new Y()`
             // (where `let Y = SomeClass` aliased Y → SomeClass) refines `b`
@@ -187,18 +235,45 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // fall through to the dynamic-array codegen which reads f64 elements
         // from the underlying storage as if they were JS values.
         Expr::BufferFrom { .. }
+        | Expr::BufferFromArrayBuffer { .. }
         | Expr::BufferAlloc { .. }
         | Expr::BufferAllocUnsafe(_)
         | Expr::BufferConcat(_)
+        | Expr::BufferConcatWithLength { .. }
         | Expr::CryptoRandomBytes(_) => Some(HirType::Named("Uint8Array".into())),
+        Expr::NativeMethodCall {
+            module,
+            method,
+            object: None,
+            ..
+        } if module == "buffer" && method == "copyBytesFrom" => {
+            Some(HirType::Named("Uint8Array".into()))
+        }
         // Compare results are now NaN-boxed booleans (TAG_TRUE/FALSE).
         // Type-refining the local as Boolean lets is_numeric_expr
         // skip the fast path (which would emit fcmp/sitofp on a NaN
         // bit pattern, giving wrong results) and routes printing
         // through js_console_log_dynamic which dispatches on the
         // NaN tag to print "true"/"false" instead of "1"/"0".
-        Expr::Compare { .. } | Expr::Bool(_) | Expr::Logical { .. } => {
-            Some(HirType::Boolean)
+        Expr::Compare { .. } | Expr::Bool(_) => Some(HirType::Boolean),
+        // Issue #637: `a || b` / `a && b` produce the operand's value
+        // per JS spec, NOT a boolean. Only refine as Boolean when BOTH
+        // operands are statically known to be bool — otherwise the
+        // result inherits whatever truthy operand wins. Pre-fix,
+        // `let c = objA || objB` had `c` typed as Boolean, and
+        // subsequent `if (c)` / `!c` went through the bool fast-path
+        // `bits == TAG_TRUE_I64` which returned false for the
+        // NaN-boxed pointer (whose bits don't equal TAG_TRUE), so the
+        // `if (c)` branch was treated as falsy even though `c` was a
+        // real object reference. Repro: `const a = {x:1}; const b =
+        // {y:2}; const c = a || b; if (c) ...` — pre-fix took the
+        // else branch.
+        Expr::Logical { left, right, .. } => {
+            if is_bool_expr(ctx, left) && is_bool_expr(ctx, right) {
+                Some(HirType::Boolean)
+            } else {
+                None
+            }
         }
         Expr::IndexGet { object, .. } => {
             // arr[i] where arr is Array<T> → element type T.
@@ -225,6 +300,9 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             None
         }
         Expr::PropertyGet { object, property } => {
+            if is_process_namespace_version_property(object, property) {
+                return Some(HirType::String);
+            }
             // Error instance `e.message` / `e.stack` / `e.name` — all
             // return string handles via the runtime's GC_TYPE_ERROR
             // dispatch in js_object_get_field_by_name_f64. Refining to
@@ -248,7 +326,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // `p.then(cb)`, `p.catch(cb)`, etc. Refine the local to
         // `Promise(Any)` so `is_promise_expr` can detect subsequent
         // `.then()` / `.catch()` chains.
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, args, .. } => {
             if is_promise_expr(ctx, init) {
                 return Some(HirType::Promise(Box::new(HirType::Any)));
             }
@@ -270,14 +348,58 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
                         _ => {}
                     }
                 }
+                if matches!(object.as_ref(), Expr::NativeModuleRef(m) if m == "crypto") {
+                    match property.as_str() {
+                        // #1432: crypto factories / KDFs that return a
+                        // NaN-boxed BufferHeader. Without this refinement
+                        // they're typed `Any`, so the HMAC fast-path's
+                        // `key_is_buffer` check can't identify a
+                        // `SecretKey` / `pbkdf2Sync` result as a Buffer —
+                        // the call falls through to handle-dispatch
+                        // (~3 mutex locks) instead of the inline-FFI
+                        // literal-key fast path.
+                        "createSecretKey"
+                        | "generateKeySync"
+                        | "scryptSync"
+                        | "pbkdf2Sync"
+                        | "hkdfSync"
+                        | "randomBytes" => {
+                            return Some(HirType::Named("Buffer".into()));
+                        }
+                        // Inventory helpers expose a `string[]` to JS.
+                        "getHashes" | "getCiphers" | "getCurves" => {
+                            return Some(HirType::Array(Box::new(HirType::String)));
+                        }
+                        // `generateKeyPairSync` returns a `{ publicKey,
+                        // privateKey }` object; tagging it lets callers
+                        // refine the field types downstream.
+                        "generateKeyPairSync" => {
+                            return Some(HirType::Named("CryptoKeyPair".into()));
+                        }
+                        _ => {}
+                    }
+                }
             }
             // `crypto.createHash(alg).update(data).digest(enc)` chain.
-            // The expr.rs handler collapses this into a runtime call that
-            // returns a NaN-boxed string. Refine the local to String so
-            // `hmac === hmac2` routes through `js_string_equals` instead of
-            // bit-comparing two distinct allocations.
+            // The expr.rs handler collapses this into a runtime call. With an
+            // encoding arg (`'hex'`/`'base64'`/…) it returns a NaN-boxed
+            // string — refine to String so `hmac === hmac2` routes through
+            // `js_string_equals` instead of bit-comparing two distinct
+            // allocations. With no arg (or `undefined`), `digest()` returns a
+            // Buffer; refining to Uint8Array lets `buf.toString('hex')` and
+            // `buf[i]` take the buffer dispatch instead of mis-reading the
+            // raw bytes as a Latin-1 string (#1353).
             if is_crypto_digest_chain(callee) {
-                return Some(HirType::String);
+                let no_encoding = match args.first() {
+                    None => true,
+                    Some(Expr::Undefined) => true,
+                    _ => false,
+                };
+                return Some(if no_encoding {
+                    HirType::Named("Uint8Array".into())
+                } else {
+                    HirType::String
+                });
             }
             // String prototype methods that return strings — when called
             // on a known-string receiver, the result is also a string.
@@ -321,44 +443,69 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
 /// `crypto.createHmac(alg, key).update(data).digest(enc)` chain shape.
 /// Walks the nested PropertyGet→Call structure looking for the
 /// `NativeModuleRef("crypto")` root.
+/// Wrapper used by the call-site refinement: returns `true` when the
+/// callee is the `crypto.create(Hash|Hmac)(...).update(...).digest(...)`
+/// shape, regardless of whether the encoding arg is present.
 fn is_crypto_digest_chain(callee: &Expr) -> bool {
+    crypto_digest_chain_has_string_encoding(callee).is_some()
+}
+
+#[allow(dead_code)]
+fn crypto_digest_chain_has_string_encoding(callee: &Expr) -> Option<bool> {
     let Expr::PropertyGet {
         property: p1,
         object: o1,
     } = callee
     else {
-        return false;
+        return None;
     };
     if p1 != "digest" {
-        return false;
+        return None;
     }
-    let Expr::Call { callee: c2, .. } = o1.as_ref() else {
-        return false;
+    let Expr::Call {
+        callee: c2,
+        args: digest_args,
+        ..
+    } = o1.as_ref()
+    else {
+        return None;
     };
     let Expr::PropertyGet {
         property: p2,
         object: o2,
     } = c2.as_ref()
     else {
-        return false;
+        return None;
     };
     if p2 != "update" {
-        return false;
+        return None;
     }
     let Expr::Call { callee: c3, .. } = o2.as_ref() else {
-        return false;
+        return None;
     };
     let Expr::PropertyGet {
         property: p3,
         object: o3,
     } = c3.as_ref()
     else {
-        return false;
+        return None;
     };
     if p3 != "createHash" && p3 != "createHmac" {
-        return false;
+        return None;
     }
-    matches!(o3.as_ref(), Expr::NativeModuleRef(n) if n == "crypto")
+    if !matches!(o3.as_ref(), Expr::NativeModuleRef(n) if n == "crypto") {
+        return None;
+    }
+    // Node returns a Buffer for `.digest()` with no encoding and a string
+    // when an encoding is supplied. Preserve that distinction so
+    // `.digest().toString("hex")` dispatches through Buffer, not String.
+    if digest_args.is_empty() || matches!(digest_args.first(), Some(Expr::Undefined)) {
+        return Some(false);
+    }
+    if matches!(digest_args.first(), Some(Expr::String(s)) if s.eq_ignore_ascii_case("buffer")) {
+        return Some(false);
+    }
+    Some(true)
 }
 
 /// Compute the effective list of capture LocalIds for a closure. Starts
@@ -376,7 +523,23 @@ pub(crate) fn compute_auto_captures(
     body: &[perry_hir::Stmt],
     explicit: &[u32],
 ) -> Vec<u32> {
-    let mut out: Vec<u32> = explicit.to_vec();
+    // Exclude module globals from the explicit captures list. perry-hir
+    // sometimes lists block-scoped top-level lets (those whose
+    // `inside_block_scope > 0`) in `Closure.captures` — the HIR-side
+    // `module_level_ids` filter only catches the strict module-top
+    // case. If such a var was later globalized (referenced from any
+    // function/closure body, see codegen.rs:1029), capturing it would
+    // store the global's f64 VALUE in the capture slot — not a box
+    // pointer. The closure body, which sees `boxed_vars.contains(id)`,
+    // would then deref that f64 as a box pointer (0x0 → "invalid box
+    // pointer 0x0" warning, count stays 0). Symmetric with the
+    // auto-detected branch below: closures auto-load module globals
+    // directly through `@perry_global_*`, no capture slot needed.
+    let mut out: Vec<u32> = explicit
+        .iter()
+        .copied()
+        .filter(|id| !ctx.module_globals.contains_key(id))
+        .collect();
     let mut referenced: std::collections::HashSet<u32> = std::collections::HashSet::new();
     crate::collectors::collect_ref_ids_in_stmts(body, &mut referenced);
     let mut inner_lets: std::collections::HashSet<u32> = std::collections::HashSet::new();
@@ -448,9 +611,66 @@ pub(crate) fn is_bigint_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+fn is_numeric_typed_array_class(name: &str) -> bool {
+    matches!(
+        name,
+        "Int8Array"
+            | "Uint8Array"
+            | "Uint8ClampedArray"
+            | "Int16Array"
+            | "Uint16Array"
+            | "Int32Array"
+            | "Uint32Array"
+            | "Float16Array"
+            | "Float32Array"
+            | "Float64Array"
+    )
+}
+
+fn expression_has_numeric_length(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    match static_type_of(ctx, object) {
+        Some(HirType::Array(_)) | Some(HirType::Tuple(_)) | Some(HirType::String) => true,
+        Some(HirType::Named(name)) => name == "Buffer" || is_numeric_typed_array_class(&name),
+        _ => false,
+    }
+}
+
+fn is_fixed_width_buffer_numeric_read(method: &str) -> bool {
+    matches!(
+        method,
+        "readUInt8"
+            | "readUint8"
+            | "readInt8"
+            | "readUInt16BE"
+            | "readUint16BE"
+            | "readUInt16LE"
+            | "readUint16LE"
+            | "readInt16BE"
+            | "readInt16LE"
+            | "readUInt32BE"
+            | "readUint32BE"
+            | "readUInt32LE"
+            | "readUint32LE"
+            | "readInt32BE"
+            | "readInt32LE"
+            | "readFloatBE"
+            | "readFloatLE"
+            | "readDoubleBE"
+            | "readDoubleLE"
+    )
+}
+
 pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
-        Expr::Integer(_) | Expr::Number(_) => true,
+        Expr::Integer(_)
+        | Expr::Number(_)
+        | Expr::PodLayoutSizeOf { .. }
+        | Expr::PodLayoutAlignOf { .. }
+        | Expr::PodLayoutOffsetOf { .. } => true,
+        Expr::Uint8ArrayGet { .. }
+        | Expr::BufferIndexGet { .. }
+        | Expr::Uint8ArrayLength(_)
+        | Expr::BufferLength(_) => true,
         Expr::LocalGet(id) => matches!(
             ctx.local_types.get(id),
             Some(HirType::Number) | Some(HirType::Int32)
@@ -484,6 +704,9 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // walker matches `class_field_global_index`'s inheritance
         // traversal so the type of any inherited field is also seen.
         Expr::PropertyGet { object, property } => {
+            if property == "length" && expression_has_numeric_length(ctx, object) {
+                return true;
+            }
             let Some(owner_class_name) = receiver_class_name(ctx, object) else {
                 return false;
             };
@@ -504,6 +727,12 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // load in `js_number_coerce` which blocks LLVM's vectorizer
         // and adds a function call per iteration.
         Expr::IndexGet { object, .. } => {
+            if receiver_class_name(ctx, object)
+                .as_deref()
+                .is_some_and(is_numeric_typed_array_class)
+            {
+                return true;
+            }
             let Expr::LocalGet(arr_id) = object.as_ref() else {
                 return false;
             };
@@ -511,6 +740,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 Some(HirType::Array(elem)) => {
                     matches!(**elem, HirType::Number | HirType::Int32)
                 }
+                Some(HirType::Named(name)) => is_numeric_typed_array_class(name),
                 _ => false,
             }
         }
@@ -518,6 +748,15 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // Without this, `fib(n-1) + fib(n-2)` wraps both results in
         // js_number_coerce — ~4 billion wasted runtime calls on fib(40).
         Expr::Call { callee, .. } => {
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if is_fixed_width_buffer_numeric_read(property)
+                    && receiver_class_name(ctx, object)
+                        .as_deref()
+                        .is_some_and(|name| matches!(name, "Buffer" | "Uint8Array"))
+                {
+                    return true;
+                }
+            }
             if let Expr::FuncRef(fid) = callee.as_ref() {
                 ctx.func_signatures
                     .get(fid)
@@ -554,6 +793,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 pub(crate) fn is_integer_valued_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::Integer(_) => true,
+        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
         Expr::LocalGet(id) => ctx.integer_locals.contains(id),
         Expr::Update { id, .. } => ctx.integer_locals.contains(id),
         Expr::Binary { op, left, right } => match op {
@@ -631,6 +871,36 @@ pub(crate) fn is_set_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+/// Issue #650: detect URLSearchParams receivers for `sp.size` property
+/// access. URLSearchParams is allocated as a generic ObjectHeader; the
+/// type system tracks it as `HirType::Named("URLSearchParams")`. Used by
+/// the codegen `Expr::PropertyGet { property: "size" }` arm to route
+/// through `js_url_search_params_size` instead of returning undefined.
+pub(crate) fn is_url_search_params_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    match e {
+        Expr::UrlSearchParamsNew(_) => true,
+        Expr::LocalGet(id) => matches!(
+            ctx.local_types.get(id),
+            Some(HirType::Named(name)) if name == "URLSearchParams"
+        ),
+        Expr::UrlGetSearchParams(_) => true,
+        // `urlInstance.searchParams` — the HIR keeps this as a generic
+        // PropertyGet (the URL HIR variant only fires for direct typed
+        // receivers in `lower_member`). Detect the chained access here
+        // so `url.searchParams.size` works without an intermediate let.
+        Expr::PropertyGet { object, property } if property == "searchParams" => {
+            if let Expr::LocalGet(id) = object.as_ref() {
+                return matches!(
+                    ctx.local_types.get(id),
+                    Some(HirType::Named(name)) if name == "URL"
+                );
+            }
+            matches!(object.as_ref(), Expr::UrlNew { .. })
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn is_map_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::MapNew | Expr::MapNewFromArray(_) => true,
@@ -677,6 +947,13 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::LocalGet(id) => {
             matches!(ctx.local_types.get(id), Some(HirType::String))
         }
+        Expr::PathToNamespacedPath(path) => is_definitely_string_expr(ctx, path),
+        Expr::PathWin32 {
+            method: perry_hir::PathWin32Method::ToNamespacedPath,
+            args,
+        } => args
+            .first()
+            .map_or(false, |arg| is_definitely_string_expr(ctx, arg)),
         Expr::StringCoerce(_)
         | Expr::TypeOf(_)
         | Expr::ArrayJoin { .. }
@@ -685,6 +962,7 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::JsonStringifyFull(..)
         | Expr::StringFromCodePoint(_)
         | Expr::StringFromCharCode(_)
+        | Expr::StringRaw { .. }
         | Expr::FsReadFileSync(_)
         | Expr::FsReadFileBinary(_)
         | Expr::PathSep
@@ -695,14 +973,34 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::PathExtname(_)
         | Expr::PathResolve(_)
         | Expr::PathNormalize(_)
+        | Expr::PathResolveJoin(..)
+        | Expr::PathWin32Join(..)
+        | Expr::PathWin32 {
+            method:
+                perry_hir::PathWin32Method::Dirname
+                | perry_hir::PathWin32Method::Basename
+                | perry_hir::PathWin32Method::BasenameExt
+                | perry_hir::PathWin32Method::Extname
+                | perry_hir::PathWin32Method::Normalize
+                | perry_hir::PathWin32Method::Format
+                | perry_hir::PathWin32Method::Relative
+                | perry_hir::PathWin32Method::Resolve
+                | perry_hir::PathWin32Method::ResolveJoin,
+            ..
+        }
         | Expr::ProcessVersion
         | Expr::ProcessCwd
+        | Expr::ProcessTitle
         | Expr::OsArch
         | Expr::OsType
         | Expr::OsPlatform
         | Expr::OsRelease
         | Expr::OsHostname
-        | Expr::OsEOL => true,
+        | Expr::OsEOL
+        | Expr::OsDevNull
+        | Expr::OsEndianness
+        | Expr::OsMachine
+        | Expr::OsVersion => true,
         // `.toString()` always returns a string regardless of receiver
         // type, so it's safe to count as definitely-string for concat.
         // Same for other unary string-returning string methods.
@@ -738,8 +1036,56 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             else_expr,
             ..
         } => is_definitely_string_expr(ctx, then_expr) && is_definitely_string_expr(ctx, else_expr),
+        Expr::PropertyGet { object, property }
+            if is_process_namespace_version_property(object, property) =>
+        {
+            true
+        }
         _ => false,
     }
+}
+
+/// Resolve the declared type of `<object>.<field>` when `object` is a
+/// known user class or interface that declares (or inherits) a field
+/// named `field`. Returns `None` when the receiver isn't a tracked
+/// class/interface, or when no such field is declared on it.
+///
+/// Used to keep name-only field heuristics (the Error `.message` /
+/// `.stack` / `.name` string assumption) from hijacking a user class
+/// whose own field happens to share that name with a non-string type
+/// (e.g. `effect`'s `RedBlackTreeIterator.stack: Array<...>` — #321).
+pub(crate) fn declared_field_type(ctx: &FnCtx<'_>, object: &Expr, field: &str) -> Option<HirType> {
+    let receiver_class = receiver_class_name(ctx, object)?;
+    if let Some(class) = ctx.classes.get(&receiver_class) {
+        if let Some(f) = class.fields.iter().find(|f| f.name == field) {
+            return Some(f.ty.clone());
+        }
+        // Walk the inheritance chain.
+        let mut parent = class.extends_name.as_deref();
+        while let Some(p) = parent {
+            let Some(pc) = ctx.classes.get(p) else { break };
+            if let Some(f) = pc.fields.iter().find(|f| f.name == field) {
+                return Some(f.ty.clone());
+            }
+            parent = pc.extends_name.as_deref();
+        }
+        return None;
+    }
+    if let Some(iface) = ctx.interfaces.get(&receiver_class) {
+        if let Some(p) = iface.properties.iter().find(|p| p.name == field) {
+            return Some(p.ty.clone());
+        }
+        for ext in &iface.extends {
+            if let HirType::Named(parent_name) = ext {
+                if let Some(parent_iface) = ctx.interfaces.get(parent_name) {
+                    if let Some(p) = parent_iface.properties.iter().find(|p| p.name == field) {
+                        return Some(p.ty.clone());
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
@@ -785,6 +1131,13 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Binary { op: BinaryOp::Add, left, right } => {
             is_string_expr(ctx, left) || is_string_expr(ctx, right)
         }
+        Expr::PathToNamespacedPath(path) => is_definitely_string_expr(ctx, path),
+        Expr::PathWin32 {
+            method: perry_hir::PathWin32Method::ToNamespacedPath,
+            args,
+        } => args
+            .first()
+            .map_or(false, |arg| is_definitely_string_expr(ctx, arg)),
         // String coerce, JSON.stringify, ArrayJoin, etc. all return
         // strings.
         Expr::StringCoerce(_)
@@ -798,15 +1151,32 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::PathBasename(_)
         | Expr::PathExtname(_)
         | Expr::PathResolve(_)
-        | Expr::PathNormalize(_) => true,
+        | Expr::PathNormalize(_)
+        | Expr::PathResolveJoin(..)
+        | Expr::PathWin32Join(..)
+        | Expr::PathWin32 {
+            method:
+                perry_hir::PathWin32Method::Dirname
+                | perry_hir::PathWin32Method::Basename
+                | perry_hir::PathWin32Method::BasenameExt
+                | perry_hir::PathWin32Method::Extname
+                | perry_hir::PathWin32Method::Normalize
+                | perry_hir::PathWin32Method::Format
+                | perry_hir::PathWin32Method::Relative
+                | perry_hir::PathWin32Method::Resolve
+                | perry_hir::PathWin32Method::ResolveJoin,
+            ..
+        } => true,
         // String.fromCodePoint(...) / String.fromCharCode(...) / str.at(i)
         // / RegExp.source|flags — all produce string handles.
         Expr::StringFromCodePoint(_)
         | Expr::StringFromCharCode(_)
+        | Expr::StringRaw { .. }
         | Expr::StringAt { .. }
         | Expr::RegExpSource(_)
         | Expr::RegExpFlags(_)
         // Date.prototype.to*String() → string
+        | Expr::DateToString(_)
         | Expr::DateToDateString(_)
         | Expr::DateToTimeString(_)
         | Expr::DateToLocaleString(_)
@@ -817,22 +1187,28 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // node:path constants
         | Expr::PathSep
         | Expr::PathDelimiter
-        // JSON.stringify returns a string
+        // JSON.stringify returns a string. #853: `JsonStringifyFull(..)`
+        // is already enumerated in the earlier (line ~878) arm — listing
+        // it again here was dead.
         | Expr::JsonStringify(_)
-        | Expr::JsonStringifyPretty { .. }
-        | Expr::JsonStringifyFull(..) => true,
+        | Expr::JsonStringifyPretty { .. } => true,
         // process.* / os.* string-returning accessors. These lower to runtime
         // calls that return raw StringHeader* pointers, NaN-boxed with STRING_TAG
         // in expr.rs. Without this, `process.version.startsWith('v')` falls
         // through to the generic native method dispatch and returns undefined.
         Expr::ProcessVersion
         | Expr::ProcessCwd
+        | Expr::ProcessTitle
         | Expr::OsArch
         | Expr::OsType
         | Expr::OsPlatform
         | Expr::OsRelease
         | Expr::OsHostname
-        | Expr::OsEOL => true,
+        | Expr::OsEOL
+        | Expr::OsDevNull
+        | Expr::OsEndianness
+        | Expr::OsMachine
+        | Expr::OsVersion => true,
         // `obj.toString()` always returns a string. Same for the
         // string-returning method family (trim, trimStart, trimEnd,
         // toLowerCase, toUpperCase, slice, substring, charAt, repeat,
@@ -862,8 +1238,48 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // all route through the runtime's GC_TYPE_ERROR dispatch and
         // return string pointers. Recognize them so chained calls like
         // `e.stack!.includes("...")` hit the string method fast path.
-        Expr::PropertyGet { property, .. }
+        //
+        // BUT this name-only heuristic must NOT hijack a user class /
+        // interface whose own field happens to be called `stack` /
+        // `name` / `message` with a non-string declared type. The
+        // RedBlackTreeIterator in `effect` has `readonly stack:
+        // Array<Node<K,V>>`; without this guard `this.stack[i]` was
+        // mis-lowered as a string `char_at` (garbage element reads →
+        // null SortedSet iteration, #321). When the receiver resolves
+        // to a concrete declared field type, defer to it; only fall
+        // back to the Error-string assumption when the receiver's type
+        // is genuinely unknown (a real caught `Error`/`unknown`/`any`).
+        Expr::PropertyGet { object, property }
             if matches!(property.as_str(), "message" | "stack" | "name") =>
+        {
+            // If the receiver is a known user class / interface that
+            // *declares* a field with this name, that field's declared
+            // type wins over the name-only Error heuristic.
+            if let Some(declared) = declared_field_type(ctx, object, property) {
+                return matches!(declared, HirType::String);
+            }
+            // Otherwise it's an Error-shaped property (caught `e`,
+            // `unknown`/`any`, or an untracked receiver) → string.
+            true
+        }
+        // Namespace `node:process` exports share the same runtime process
+        // surface as bare `process`. Keep the string method dispatch
+        // available for namespace imports:
+        // `import * as process from "node:process"; process.version.startsWith("v")`.
+        Expr::PropertyGet { object, property }
+            if is_process_namespace_version_property(object, property) =>
+        {
+            true
+        }
+        // Perry's native crypto.generateKeyPairSync returns a plain object
+        // with PEM string fields. Refining these fields keeps
+        // `pair.publicKey.includes(...)` on the string fast path.
+        Expr::PropertyGet { object, property }
+            if matches!(property.as_str(), "publicKey" | "privateKey")
+                && matches!(
+                    static_type_of(ctx, object),
+                    Some(HirType::Named(ref name)) if name == "CryptoKeyPair"
+                ) =>
         {
             true
         }
@@ -882,10 +1298,19 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 .map(|f| matches!(f.ty, HirType::String))
                 .unwrap_or(false)
         }
-        // `crypto.createHash(alg).update(data).digest(enc)` chain.
-        // Recognized so chained `.length`/`.includes`/`===` on the
-        // resulting hex string hit the string fast paths.
-        Expr::Call { callee, .. } if is_crypto_digest_chain(callee) => true,
+        // `crypto.createHash(alg).update(data).digest(enc)` chain — only
+        // when an encoding is given. Recognized so chained `.length` /
+        // `.includes` / `===` on the resulting hex/base64 string hit the
+        // string fast paths. The no-arg `digest()` returns a Buffer, not a
+        // string, so it must NOT be classified here — otherwise
+        // `digest().toString('hex')` skips the buffer encoding path and
+        // mis-reads the bytes as Latin-1 (#1353).
+        Expr::Call { callee, args, .. }
+            if is_crypto_digest_chain(callee)
+                && matches!(args.first(), Some(a) if !matches!(a, Expr::Undefined)) =>
+        {
+            true
+        }
         // atob/btoa always return strings.
         Expr::Atob(_) | Expr::Btoa(_) => true,
         _ => false,
@@ -893,6 +1318,40 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 }
 
 /// Statically determine whether an expression evaluates to a Promise.
+/// #1008: does `expr` refer to a built-in global (e.g. `Promise`,
+/// `Array`)? Recognises both shapes that the HIR lowers bare global
+/// idents into:
+///
+/// - Legacy: `Expr::GlobalGet(_)` directly. Pre-#973 codepath.
+/// - Post-#973: `Expr::PropertyGet { object: GlobalGet(0), property:
+///   <name> }`. After PR #973, bare built-in idents lower as a
+///   property access on `globalThis` so they route through the
+///   globalThis singleton closure path. Old call sites that only
+///   matched the legacy shape silently lost specialization.
+///
+/// Pass `name = "Promise"` (etc.) to require the property-access form
+/// to actually name that built-in; the legacy `GlobalGet(_)` arm
+/// accepts any global because the original code never narrowed.
+// `dead_code` allow: the function survived an unresolved merge in
+// main (commit 9a9a233c's "fix: recognize global Promise static
+// calls" left HEAD/incoming markers in this file). The
+// `is_global_constructor_expr` helper added by the same commit
+// supersedes this one, but ripping it out is outside #516's
+// scope — leave the lingering definition with an allow so the
+// dead-code lint doesn't fail the build.
+#[allow(dead_code)]
+pub(crate) fn is_global_builtin_named(expr: &Expr, name: &str) -> bool {
+    if matches!(expr, Expr::GlobalGet(_)) {
+        return true;
+    }
+    if let Expr::PropertyGet { object, property } = expr {
+        if matches!(object.as_ref(), Expr::GlobalGet(_)) && property == name {
+            return true;
+        }
+    }
+    false
+}
+
 /// Used by `.then()` / `.catch()` / `.finally()` dispatch in lower_call
 /// to intercept promise method calls and route them through the runtime
 /// `js_promise_then` / `js_promise_catch` functions.
@@ -917,18 +1376,32 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // Promise.resolve / reject / all / race / allSettled / any
         Expr::Call { callee, .. } => match callee.as_ref() {
             Expr::PropertyGet { object, property } => {
-                // `Promise.resolve(...)` etc. — GlobalGet receiver with
-                // a promise-shaped static method name.
-                if matches!(object.as_ref(), Expr::GlobalGet(_))
-                    && matches!(
-                        property.as_str(),
-                        "resolve" | "reject" | "all" | "race" | "allSettled" | "any"
-                    )
+                // `Promise.resolve(...)` etc. The receiver `Promise` can
+                // appear in two shapes:
+                //   - Legacy: bare ident → `Expr::GlobalGet(_)` directly.
+                //   - Post-#973: bare built-in idents lower to
+                //     `PropertyGet { GlobalGet(0), "Promise" }` so they
+                //     route through the globalThis singleton closure
+                //     path. Without the second arm, `is_promise_expr`
+                //     returned false for `Promise.resolve()` and the
+                //     `.then` codegen fell through to generic native
+                //     dispatch — microtask-02..07 and edge-promises went
+                //     silent (callbacks never enqueued). (#1008)
+                //
+                // Resolved-from-merge note: the HEAD side called
+                // `is_global_builtin_named`, the incoming side called
+                // `is_global_constructor_expr`. Post-#1030 the rest of
+                // the codegen prefers the latter helper, so we keep the
+                // richer HEAD comment but switch to the canonical call.
+                if matches!(
+                    property.as_str(),
+                    "resolve" | "reject" | "all" | "race" | "allSettled" | "any"
+                ) && is_global_builtin_named(object.as_ref(), "Promise")
                 {
                     return true;
                 }
                 // `Array.fromAsync(...)` returns a Promise<Array>.
-                if matches!(object.as_ref(), Expr::GlobalGet(_)) && property == "fromAsync" {
+                if property == "fromAsync" && is_global_builtin_named(object.as_ref(), "Array") {
                     return true;
                 }
                 // `.then(cb)` / `.catch(cb)` / `.finally(cb)` on a promise
@@ -938,6 +1411,61 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 {
                     return true;
                 }
+                // Issue #489 followup: `obj.field(args)` where `field` is
+                // typed as an async function or a function returning
+                // `Promise<T>`. Drizzle's `mysql-proxy/session.js` calls
+                // `this.client(...).then(({rows}) => rows)` where
+                // `this.client` is a class field of type
+                // `(sql, params, method) => Promise<{rows, …}>`. Without
+                // this arm, perry's `.then` lowering doesn't recognize
+                // the call result as a Promise and falls through to a
+                // generic dispatch that silently drops the callback (the
+                // await of `db.insert(...)` resolves to undefined / "").
+                if let Some(HirType::Function(ft)) = static_type_of(ctx, callee.as_ref()) {
+                    if ft.is_async {
+                        return true;
+                    }
+                    if matches!(*ft.return_type, HirType::Promise(_)) {
+                        return true;
+                    }
+                    if let HirType::Generic { ref base, .. } = *ft.return_type {
+                        if base == "Promise" {
+                            return true;
+                        }
+                    }
+                }
+                // Issue #489 followup: `obj.method(args)` where `method`
+                // is a class instance method declared `async` or with a
+                // return type of `Promise<T>`. Class methods live in
+                // `class.methods` (not `class.fields`), so the
+                // static_type_of branch above doesn't catch them. Walk
+                // the parent chain for inherited async methods too —
+                // drizzle's `MySqlInsertBase.execute` is a class-field
+                // arrow defined on the subclass, but the override-vs-
+                // inherited shape varies per query-builder, so handle
+                // both. The fallback class_name comes from the receiver.
+                if let Some(class_name) = receiver_class_name(ctx, object) {
+                    let mut current = Some(class_name);
+                    while let Some(cn) = current {
+                        if let Some(class) = ctx.classes.get(&cn) {
+                            if let Some(m) = class.methods.iter().find(|m| m.name == *property) {
+                                if m.is_async {
+                                    return true;
+                                }
+                                match &m.return_type {
+                                    HirType::Promise(_) => return true,
+                                    HirType::Generic { base, .. } if base == "Promise" => {
+                                        return true
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            current = class.extends_name.clone();
+                        } else {
+                            break;
+                        }
+                    }
+                }
                 false
             }
             // Direct call to a locally-defined async function — its
@@ -945,6 +1473,23 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             // `Function::is_async` flag is collected into
             // `cross_module.local_async_funcs` at module compile time.
             Expr::FuncRef(fid) => ctx.local_async_funcs.contains(fid),
+            // Issue #633 / #611 followup: call to a local LET-bound
+            // async closure — `const fn = async (...) => ...; fn(...)`.
+            // The let's type is `HirType::Function { is_async: true }`,
+            // recorded in `local_types`. Without this arm, perry's
+            // `.then()` lowering at `lower_call.rs:1188` doesn't
+            // recognize `fn({}).then(cb)` as a Promise receiver and the
+            // .then call falls through to a generic dispatch that
+            // silently drops the callback.
+            Expr::LocalGet(id) => match ctx.local_types.get(id) {
+                Some(HirType::Function(ft)) if ft.is_async => true,
+                Some(HirType::Function(ft)) => match ft.return_type.as_ref() {
+                    HirType::Promise(_) => true,
+                    HirType::Generic { base, .. } if base == "Promise" => true,
+                    _ => false,
+                },
+                _ => false,
+            },
             _ => false,
         },
         _ => false,
@@ -978,6 +1523,21 @@ pub(crate) fn class_field_global_index(
 ) -> Option<u32> {
     // Walk parent chain to find the field. Parent fields come first in
     // the slot layout, so we sum parent counts as we descend.
+    //
+    // Refs #420: must skip computed-key fields (`[Symbol.X] = init`) when
+    // counting positions — the inline-slot layout in `packed_keys` only
+    // includes string-keyed fields. If we count computed-key fields here,
+    // the index used for `this.config = {...}` writes shifts past where
+    // readers look for "config", and every cross-module access reads from
+    // an uninitialised slot (raw f64 zero, which presents as `number 0`
+    // when treated as a NaN-boxed value). drizzle's `class ColumnBuilder
+    // { config; $default = this.$defaultFn; $onUpdate = this.$onUpdateFn; }`
+    // shape — where the `config;` declaration sits among method-ref class
+    // fields — surfaces this as `column.config = 0` for every column
+    // builder when read from the importing module.
+    fn count_keyable(fields: &[perry_hir::ClassField]) -> u32 {
+        fields.iter().filter(|f| f.key_expr.is_none()).count() as u32
+    }
     fn walk(ctx: &FnCtx<'_>, class_name: &str, property: &str, offset: u32) -> Option<u32> {
         let class = ctx.classes.get(class_name)?;
         // Bail if a getter/setter shadows the field — those need real
@@ -993,7 +1553,7 @@ pub(crate) fn class_field_global_index(
             let mut p = Some(parent_name.to_string());
             while let Some(name) = p {
                 if let Some(parent) = ctx.classes.get(&name) {
-                    p_count += parent.fields.len() as u32;
+                    p_count += count_keyable(&parent.fields);
                     p = parent.extends_name.clone();
                 } else {
                     return None; // unresolvable parent — no inline path
@@ -1004,9 +1564,18 @@ pub(crate) fn class_field_global_index(
             0
         };
         // Look for the field on this class first (the most-derived
-        // declaration shadows parents in TypeScript).
-        if let Some(idx) = class.fields.iter().position(|f| f.name == property) {
-            return Some(offset + parent_count + idx as u32);
+        // declaration shadows parents in TypeScript). Position within the
+        // own-fields list must skip computed-key entries to match the
+        // packed_keys layout the runtime sees.
+        let mut own_idx: u32 = 0;
+        for f in &class.fields {
+            if f.key_expr.is_some() {
+                continue;
+            }
+            if f.name == property {
+                return Some(offset + parent_count + own_idx);
+            }
+            own_idx += 1;
         }
         // Otherwise walk into the parent chain looking for the field.
         if let Some(parent_name) = class.extends_name.as_deref() {
@@ -1015,6 +1584,28 @@ pub(crate) fn class_field_global_index(
         None
     }
     walk(ctx, class_name, property, 0)
+}
+
+pub(crate) fn class_field_declared_type(
+    ctx: &FnCtx<'_>,
+    class_name: &str,
+    property: &str,
+) -> Option<HirType> {
+    let mut current = ctx.classes.get(class_name).copied();
+    while let Some(cls) = current {
+        if let Some(field) = cls
+            .fields
+            .iter()
+            .find(|field| field.key_expr.is_none() && field.name == property)
+        {
+            return Some(field.ty.clone());
+        }
+        current = cls
+            .extends_name
+            .as_deref()
+            .and_then(|parent| ctx.classes.get(parent).copied());
+    }
+    None
 }
 
 /// If the expression is a known instance of a Named class type, return
@@ -1105,6 +1696,29 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
 pub(crate) fn is_array_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match static_type_of(ctx, e) {
         Some(HirType::Array(_)) | Some(HirType::Tuple(_)) => true,
+        // #3148: %TypedArray% receivers route their not-already-folded methods
+        // (fill / reverse / keys / values / entries / set / subarray) through
+        // `lower_array_method`; the generic `js_array_*` helpers delegate to the
+        // element-typed `js_typed_array_*` impls via `lookup_typed_array_kind`.
+        // Uint8Array / Uint8ClampedArray are intentionally excluded — they are
+        // buffer-backed and dispatched by `dispatch_buffer_method`.
+        Some(HirType::Named(ref n))
+            if matches!(
+                n.as_str(),
+                "Int8Array"
+                    | "Int16Array"
+                    | "Int32Array"
+                    | "Uint16Array"
+                    | "Uint32Array"
+                    | "Float16Array"
+                    | "Float32Array"
+                    | "Float64Array"
+                    | "BigInt64Array"
+                    | "BigUint64Array"
+            ) =>
+        {
+            true
+        }
         // `T | null`, `T | undefined`, `T[] | null` — when an `if (x)`
         // guard narrows away the null/undefined, the truthy branch
         // still has the same union type in the HIR, so recognize
@@ -1116,6 +1730,32 @@ pub(crate) fn is_array_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             .any(|v| matches!(v, HirType::Array(_) | HirType::Tuple(_))),
         _ => false,
     }
+}
+
+/// True when `e` is a *dynamic* index into a native-module namespace —
+/// the auditable `ns[dynamicKey]` sub-namespace-selection shape (#1740,
+/// e.g. `(path as any)[k]` resolving to `path.win32` / `path.posix`).
+///
+/// Such a receiver evaluates to a native-module sub-object at runtime,
+/// never a primitive, so a method call on it must route through the
+/// generic `js_native_call_method` dispatch (which reaches
+/// `dispatch_native_module_method`) rather than being mis-classified as
+/// a `String`/`Number` prototype method by its name alone. Without this,
+/// a prototype-colliding name like `normalize` is lowered as a string
+/// method and the namespace pointer is handed to a string FFI → SIGSEGV
+/// (#1760).
+///
+/// Gated on a *non-literal* index: `(path as any)["sep"]` (a literal
+/// string property) can legitimately resolve to a string and must keep
+/// its string-method lowering, whereas `(path as any)[k]` is the dynamic
+/// sub-namespace form this targets.
+pub(crate) fn is_native_module_dynamic_index(e: &Expr) -> bool {
+    matches!(
+        e,
+        Expr::IndexGet { object, index }
+            if matches!(object.as_ref(), Expr::NativeModuleRef(_))
+                && !matches!(index.as_ref(), Expr::String(_) | Expr::WtfString(_))
+    )
 }
 
 /// Best-effort static type lookup for an expression. Returns the HIR
@@ -1138,30 +1778,69 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         Expr::Bool(_) => Some(HirType::Boolean),
         Expr::LocalGet(id) => ctx.local_types.get(id).cloned(),
         Expr::PropertyGet { object, property } => {
+            if property == "length" && expression_has_numeric_length(ctx, object) {
+                return Some(HirType::Number);
+            }
+            if is_process_namespace_version_property(object, property) {
+                return Some(HirType::String);
+            }
+            if matches!(property.as_str(), "publicKey" | "privateKey")
+                && matches!(
+                    static_type_of(ctx, object),
+                    Some(HirType::Named(ref name)) if name == "CryptoKeyPair"
+                )
+            {
+                return Some(HirType::String);
+            }
             // If the object is a known class instance, look up the field
             // type from the class definition.
             let receiver_class = receiver_class_name(ctx, object)?;
-            let class = ctx.classes.get(&receiver_class)?;
-            class
-                .fields
-                .iter()
-                .find(|f| f.name == *property)
-                .map(|f| f.ty.clone())
-                .or_else(|| {
-                    // Walk up the inheritance chain.
-                    let mut parent = class.extends_name.as_deref();
-                    while let Some(p) = parent {
-                        if let Some(pc) = ctx.classes.get(p) {
-                            if let Some(field) = pc.fields.iter().find(|f| f.name == *property) {
-                                return Some(field.ty.clone());
+            if let Some(class) = ctx.classes.get(&receiver_class) {
+                return class
+                    .fields
+                    .iter()
+                    .find(|f| f.name == *property)
+                    .map(|f| f.ty.clone())
+                    .or_else(|| {
+                        // Walk up the inheritance chain.
+                        let mut parent = class.extends_name.as_deref();
+                        while let Some(p) = parent {
+                            if let Some(pc) = ctx.classes.get(p) {
+                                if let Some(field) = pc.fields.iter().find(|f| f.name == *property)
+                                {
+                                    return Some(field.ty.clone());
+                                }
+                                parent = pc.extends_name.as_deref();
+                            } else {
+                                break;
                             }
-                            parent = pc.extends_name.as_deref();
-                        } else {
-                            break;
+                        }
+                        None
+                    });
+            }
+            // Issue #655: receiver may be typed against a TS `interface`
+            // rather than a class. The runtime layout is identical to a
+            // plain object literal, so the property's declared type is
+            // the right answer for the array fast-path / `length=` setter
+            // path. Walks the `extends` chain too so chained interfaces
+            // (`interface Sub extends Base { ... }`) resolve.
+            if let Some(iface) = ctx.interfaces.get(&receiver_class) {
+                if let Some(p) = iface.properties.iter().find(|p| p.name == *property) {
+                    return Some(p.ty.clone());
+                }
+                for ext in &iface.extends {
+                    if let HirType::Named(parent_name) = ext {
+                        if let Some(parent_iface) = ctx.interfaces.get(parent_name) {
+                            if let Some(p) =
+                                parent_iface.properties.iter().find(|p| p.name == *property)
+                            {
+                                return Some(p.ty.clone());
+                            }
                         }
                     }
-                    None
-                })
+                }
+            }
+            None
         }
         Expr::This => {
             let cls = ctx.class_stack.last()?.clone();
@@ -1185,6 +1864,11 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         | Expr::ObjectKeys(_)
         | Expr::ObjectValues(_)
         | Expr::ObjectEntries(_) => Some(HirType::Array(Box::new(HirType::Any))),
+        // `process.argv` is a real Array<string> at runtime (see
+        // `js_process_argv` in perry-runtime/os.rs). Without this entry
+        // `is_array_expr(Expr::ProcessArgv)` is false and `argv.includes(x)`
+        // takes the string-method dispatch path (issue #346) — closes #346.
+        Expr::ProcessArgv => Some(HirType::Array(Box::new(HirType::String))),
         // `str.split(delim)` returns Array<String>. Catches the generic
         // Call form that bypasses the `Expr::StringSplit` variant — e.g.
         // `"a,b,c".split(",")` in an expression position where we need
@@ -1196,6 +1880,30 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
                 Expr::PropertyGet { property, object } if matches!(
                     property.as_str(), "split" | "match" | "matchAll"
                 ) && is_string_expr(ctx, object)
+            ) =>
+        {
+            Some(HirType::Array(Box::new(HirType::String)))
+        }
+        // `crypto.createHash(alg).update(d).digest()` with no encoding arg
+        // returns a Buffer. Recognizing the inline chain (not just a bound
+        // local) lets `...digest().toString('hex')` / `...digest()[i]` take
+        // the buffer dispatch instead of the Latin-1 string path (#1353).
+        Expr::Call { callee, args, .. }
+            if args.first().map_or(true, |a| matches!(a, Expr::Undefined))
+                && is_crypto_digest_chain(callee) =>
+        {
+            Some(HirType::Named("Uint8Array".into()))
+        }
+        // crypto.getHashes()/getCiphers()/getCurves() all return
+        // Array<string>. Recognize this even in expression position so
+        // chained `.includes(...)` uses Array SameValueZero instead of
+        // falling through to dynamic/string dispatch.
+        Expr::Call { callee, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { property, object }
+                    if matches!(object.as_ref(), Expr::NativeModuleRef(m) if m == "crypto")
+                        && matches!(property.as_str(), "getHashes" | "getCiphers" | "getCurves")
             ) =>
         {
             Some(HirType::Array(Box::new(HirType::String)))

@@ -33,6 +33,7 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_callback_timer_tick() -> i32;
     fn js_interval_timer_tick() -> i32;
+    fn js_frame_pump_default() -> i32;
 }
 
 /// Timer ID for periodic tick that processes setTimeout/setInterval queues.
@@ -96,6 +97,16 @@ pub(crate) struct AppEntry {
     root_widget: Option<i64>,
     min_size: Option<(f64, f64)>,
     max_size: Option<(f64, f64)>,
+    /// Issue #1280 — initial window state requested by App({ windowState }).
+    /// Applied at app_run time; None / "normal" => SW_SHOW.
+    window_state: Option<WindowState>,
+}
+
+/// Issue #1280 — initial window state for the main app window.
+#[derive(Copy, Clone)]
+pub(crate) enum WindowState {
+    Maximized,
+    Fullscreen,
 }
 
 struct PendingShortcut {
@@ -184,7 +195,13 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
                 lpfnWndProc: Some(wnd_proc),
                 hInstance: HINSTANCE::from(hinstance),
                 hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-                hbrBackground: HBRUSH(std::ptr::null_mut()),
+                // Default window-color class brush (matches the secondary-window
+                // class in window.rs). A null brush erases nothing, so any client
+                // area not covered by a child renders black after a resize (#1542).
+                // The WM_ERASEBKGND handler still returns early for explicit
+                // .background() colors/gradients, so this only affects the
+                // no-background case.
+                hbrBackground: HBRUSH((COLOR_WINDOW.0 + 1) as *mut _),
                 lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
                 ..Default::default()
             };
@@ -217,6 +234,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
                     root_widget: None,
                     min_size: None,
                     max_size: None,
+                    window_state: None,
                 });
                 apps.len() as i64
             })
@@ -233,6 +251,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
                 root_widget: None,
                 min_size: None,
                 max_size: None,
+                window_state: None,
             });
             apps.len() as i64
         })
@@ -270,6 +289,12 @@ pub fn app_set_body(app_handle: i64, root_handle: i64) {
 
 /// Run the app event loop (blocks until window closes).
 pub fn app_run(app_handle: i64) {
+    // Phase 2 v3.3: register cross-platform showToast / setText handlers so
+    // `perry_arkts_show_toast` and `perry_arkts_set_text` (defined in
+    // perry-runtime/src/ui_text_registry.rs) forward to our Win32
+    // borderless-popup toast presenter and SetWindowTextW text updater.
+    register_cross_platform_text_handlers();
+
     // Install pending keyboard shortcuts
     PENDING_SHORTCUTS.with(|pending| {
         let shortcuts: Vec<PendingShortcut> = pending.borrow_mut().drain(..).collect();
@@ -284,9 +309,46 @@ pub fn app_run(app_handle: i64) {
             let apps = apps.borrow();
             let idx = (app_handle - 1) as usize;
             if idx < apps.len() {
+                let hwnd = apps[idx].hwnd;
+                let state = apps[idx].window_state;
                 unsafe {
-                    let _ = ShowWindow(apps[idx].hwnd, SW_SHOW);
-                    let _ = UpdateWindow(apps[idx].hwnd);
+                    // Issue #1280 — apply requested initial window state.
+                    // Fullscreen on Win32 = drop WS_OVERLAPPEDWINDOW frame and
+                    // resize to the monitor's full rect (not just the work
+                    // area, which excludes the taskbar). Maximized = standard
+                    // SW_SHOWMAXIMIZED which respects the taskbar.
+                    match state {
+                        Some(WindowState::Fullscreen) => {
+                            let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+                            let new_style = style & !WS_OVERLAPPEDWINDOW.0;
+                            SetWindowLongW(hwnd, GWL_STYLE, new_style as i32);
+                            let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                            let mut mi = MONITORINFO {
+                                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                                ..Default::default()
+                            };
+                            if GetMonitorInfoW(monitor, &mut mi).as_bool() {
+                                let r = mi.rcMonitor;
+                                let _ = SetWindowPos(
+                                    hwnd,
+                                    HWND_TOP,
+                                    r.left,
+                                    r.top,
+                                    r.right - r.left,
+                                    r.bottom - r.top,
+                                    SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
+                                );
+                            }
+                            let _ = ShowWindow(hwnd, SW_SHOW);
+                        }
+                        Some(WindowState::Maximized) => {
+                            let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+                        }
+                        None => {
+                            let _ = ShowWindow(hwnd, SW_SHOW);
+                        }
+                    }
+                    let _ = UpdateWindow(hwnd);
                 }
             }
         });
@@ -369,6 +431,21 @@ pub fn app_run(app_handle: i64) {
                         continue;
                     }
                 }
+                // Issue #1864: continuous onKeyDown/onKeyUp dispatch.
+                // Runs after the shortcut check so a menu hotkey still wins.
+                if msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN {
+                    crate::keyboard::dispatch_message(
+                        msg.wParam.0 as u16,
+                        msg.lParam.0 as isize,
+                        true,
+                    );
+                } else if msg.message == WM_KEYUP || msg.message == WM_SYSKEYUP {
+                    crate::keyboard::dispatch_message(
+                        msg.wParam.0 as u16,
+                        msg.lParam.0 as isize,
+                        false,
+                    );
+                }
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
                 // Process setTimeout/setInterval callbacks outside wndproc to avoid re-entrancy
@@ -376,8 +453,15 @@ pub fn app_run(app_handle: i64) {
                     unsafe {
                         js_callback_timer_tick();
                         js_interval_timer_tick();
+                        // Issue #1865: perry/ui `onFrame` display-link
+                        // callbacks. Real DwmFlush-aligned vsync driver is
+                        // a follow-up.
+                        js_frame_pump_default();
                     }
                 }
+                // perry/media (#351) — UI-thread state poll for active
+                // MediaPlayer instances. Internally throttled to ~10 Hz.
+                crate::media_playback::pump_tick();
                 #[cfg(feature = "geisterhand")]
                 {
                     extern "C" {
@@ -547,6 +631,28 @@ pub fn set_max_size(app_handle: i64, w: f64, h: f64) {
         let idx = (app_handle - 1) as usize;
         if idx < apps.len() {
             apps[idx].max_size = Some((w, h));
+        }
+    });
+}
+
+/// Issue #1280 — record the requested initial window state. The state is
+/// applied in `app_run` (Win32 needs the window to exist + be ready before
+/// `ShowWindow(SW_SHOWMAXIMIZED)` or the fullscreen frame swap takes effect).
+/// `value_ptr` is a perry-runtime StringHeader pointer to one of
+/// "normal" | "maximized" | "fullscreen". Anything else is silently ignored.
+pub fn set_window_state(app_handle: i64, value_ptr: *const u8) {
+    let state_str = str_from_header(value_ptr);
+    let state = match state_str {
+        "maximized" => Some(WindowState::Maximized),
+        "fullscreen" => Some(WindowState::Fullscreen),
+        // "normal" or anything else => default behavior (SW_SHOW).
+        _ => None,
+    };
+    APPS.with(|apps| {
+        let mut apps = apps.borrow_mut();
+        let idx = (app_handle - 1) as usize;
+        if idx < apps.len() {
+            apps[idx].window_state = state;
         }
     });
 }
@@ -1052,6 +1158,14 @@ unsafe extern "system" fn wnd_proc(
             }
             LRESULT(0)
         }
+        // WM_NOTIFY (0x004E) — control notifications that don't fit
+        // WM_COMMAND. lparam is `*mut NMHDR { hwndFrom, idFrom, code }`.
+        // Calendar's `MCN_SELCHANGE` (-749 / 0xFFFFFD13) and TreeView's
+        // `TVN_SELCHANGED` (-402 / 0xFFFFFE6E) are routed here.
+        x if x == 0x004E => {
+            crate::widgets::handle_notify(lparam);
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         x if x == WM_HSCROLL || x == WM_VSCROLL => {
             crate::widgets::handle_scroll(wparam, lparam);
             LRESULT(0)
@@ -1149,6 +1263,13 @@ unsafe extern "system" fn wnd_proc(
             do_layout();
             LRESULT(0)
         }
+        x if x == crate::tray::WM_PERRY_TRAY => {
+            // Tray icon callback (issue #490). lparam carries the actual mouse
+            // event (WM_LBUTTONUP / WM_RBUTTONUP); wparam's low word is the
+            // tray's `uID`. The tray module handles dispatch + popup menu.
+            crate::tray::handle_callback_message(wparam.0, lparam.0);
+            LRESULT(0)
+        }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
@@ -1206,4 +1327,44 @@ pub fn register_global_hotkey(key_ptr: *const u8, modifiers: f64, callback: f64)
 pub fn get_app_icon(_path_ptr: *const u8) -> i64 {
     // TODO: Full implementation with SHGetFileInfo + HICON -> bitmap conversion
     0
+}
+
+// ============================================================================
+// Phase 2 v3.3: cross-platform showToast / setText wiring.
+// ============================================================================
+
+extern "C" {
+    /// Defined in `perry-runtime/src/ui_text_registry.rs`. Stores the passed
+    /// handler in an AtomicPtr consulted by `perry_arkts_show_toast` on each
+    /// call. No-op when `ohos-napi` feature is active.
+    fn js_register_show_toast_handler(f: extern "C" fn(msg_ptr: *const u8, msg_len: usize));
+    fn js_register_set_text_handler(
+        f: extern "C" fn(id_ptr: *const u8, id_len: usize, val_ptr: *const u8, val_len: usize),
+    );
+    fn js_register_text_id_handler(
+        f: extern "C" fn(widget_handle: i64, id_ptr: *const u8, id_len: usize),
+    );
+    /// Issue #535 Layer 2 — `js_state_set` calls this for every NavStack
+    /// route bound to the changed state's synth id. Defined in
+    /// `perry-runtime/src/ui_text_registry.rs`'s `NAVSTACK_REGISTRY` block.
+    fn js_register_widget_hidden_handler(f: extern "C" fn(widget_handle: i64, hidden: i32));
+    /// ForEach re-render handler (#610 / state binding Layer 2). Defined
+    /// in `perry-runtime/src/ui_text_registry.rs::FOREACH_REGISTRY`.
+    fn js_register_foreach_render_handler(
+        f: extern "C" fn(container_handle: i64, render_closure: f64, count: f64),
+    );
+}
+
+extern "C" fn navstack_set_widget_hidden(widget_handle: i64, hidden: i32) {
+    crate::widgets::set_hidden(widget_handle, hidden != 0);
+}
+
+fn register_cross_platform_text_handlers() {
+    unsafe {
+        js_register_show_toast_handler(crate::widgets::toast::show_toast_handler);
+        js_register_set_text_handler(crate::widgets::text_registry::set_text_handler);
+        js_register_text_id_handler(crate::widgets::text_registry::register_text_id_handler);
+        js_register_widget_hidden_handler(navstack_set_widget_hidden);
+        js_register_foreach_render_handler(crate::widgets::foreach_registry::render_handler);
+    }
 }

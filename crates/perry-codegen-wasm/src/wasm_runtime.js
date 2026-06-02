@@ -19,6 +19,18 @@ const _u64 = new BigUint64Array(_convBuf);
 function f64ToU64(f) { _f64[0] = f; return _u64[0]; }
 function u64ToF64(u) { _u64[0] = u; return _f64[0]; }
 
+// Issue #1035: pad a BigInt arg list to match the WASM function's declared arity.
+// Missing trailing slots correspond to TS optional params the caller omitted; the
+// WASM ABI expects an i64 (BigInt) per declared slot, so we fill with TAG_UNDEFINED.
+// Without this, V8/SpiderMonkey auto-coerce `undefined` via BigInt(undefined) and
+// throw "Cannot convert undefined to a BigInt". `prefix` is the count of leading
+// args already on the call (e.g. 1 for the receiver, or closure capture count).
+function __padBigintArgs(fn, prefix, bigintArgs) {
+  const need = Math.max(0, (fn.length | 0) - (prefix | 0));
+  while (bigintArgs.length < need) bigintArgs.push(TAG_UNDEFINED);
+  return bigintArgs;
+}
+
 // NaN-box helpers
 function nanboxString(id) {
   return u64ToF64((STRING_TAG << 48n) | BigInt(id));
@@ -232,15 +244,15 @@ function buildImports() {
       },
       object_keys: (handle) => {
         const obj = getHandle(handle);
-        return nanboxPointer(allocHandle(obj ? Object.keys(obj) : []));
+        return nanboxPointer(allocHandle(obj ? Object.keys(obj).filter(k => k !== "__class__") : []));
       },
       object_values: (handle) => {
         const obj = getHandle(handle);
-        return nanboxPointer(allocHandle(obj ? Object.values(obj) : []));
+        return nanboxPointer(allocHandle(obj ? Object.keys(obj).filter(k => k !== "__class__").map(k => obj[k]) : []));
       },
       object_entries: (handle) => {
         const obj = getHandle(handle);
-        return nanboxPointer(allocHandle(obj ? Object.entries(obj) : []));
+        return nanboxPointer(allocHandle(obj ? Object.entries(obj).filter(([k]) => k !== "__class__") : []));
       },
       object_has_property: (handle, key) => {
         const obj = getHandle(handle);
@@ -250,10 +262,12 @@ function buildImports() {
       },
       // object_assign(target, source) -> target handle
       object_assign: (target, source) => {
-        const t = getHandle(target);
-        const s = getHandle(source);
-        if (t && s) Object.assign(t, s);
-        return target;
+        const rawTarget = toJsValue(target);
+        if (rawTarget == null) throw new TypeError('Cannot convert undefined or null to object');
+        const t = Object(rawTarget);
+        const s = toJsValue(source);
+        if (s != null) Object.assign(t, s);
+        return isPointer(target) ? target : fromJsValue(t);
       },
 
       // ===== Phase 1: Arrays =====
@@ -467,28 +481,33 @@ function buildImports() {
         if (!c || !wasmInstance) return u64ToF64(TAG_UNDEFINED);
         const fn = wasmInstance.exports.__indirect_function_table?.get(c.funcIdx | 0);
         if (!fn) return u64ToF64(TAG_UNDEFINED);
-        return u64ToF64(fn(...c.captures));
+        // Pad for omitted TS optional params (Issue #1035).
+        const padded = __padBigintArgs(fn, c.captures.length, []);
+        return u64ToF64(fn(...c.captures, ...padded));
       },
       closure_call_1: (handle, a0) => {
         const c = getHandle(handle);
         if (!c || !wasmInstance) return u64ToF64(TAG_UNDEFINED);
         const fn = wasmInstance.exports.__indirect_function_table?.get(c.funcIdx | 0);
         if (!fn) return u64ToF64(TAG_UNDEFINED);
-        return u64ToF64(fn(...c.captures, f64ToU64(a0)));
+        const padded = __padBigintArgs(fn, c.captures.length + 1, [f64ToU64(a0)]);
+        return u64ToF64(fn(...c.captures, ...padded));
       },
       closure_call_2: (handle, a0, a1) => {
         const c = getHandle(handle);
         if (!c || !wasmInstance) return u64ToF64(TAG_UNDEFINED);
         const fn = wasmInstance.exports.__indirect_function_table?.get(c.funcIdx | 0);
         if (!fn) return u64ToF64(TAG_UNDEFINED);
-        return u64ToF64(fn(...c.captures, f64ToU64(a0), f64ToU64(a1)));
+        const padded = __padBigintArgs(fn, c.captures.length + 2, [f64ToU64(a0), f64ToU64(a1)]);
+        return u64ToF64(fn(...c.captures, ...padded));
       },
       closure_call_3: (handle, a0, a1, a2) => {
         const c = getHandle(handle);
         if (!c || !wasmInstance) return u64ToF64(TAG_UNDEFINED);
         const fn = wasmInstance.exports.__indirect_function_table?.get(c.funcIdx | 0);
         if (!fn) return u64ToF64(TAG_UNDEFINED);
-        return u64ToF64(fn(...c.captures, f64ToU64(a0), f64ToU64(a1), f64ToU64(a2)));
+        const padded = __padBigintArgs(fn, c.captures.length + 3, [f64ToU64(a0), f64ToU64(a1), f64ToU64(a2)]);
+        return u64ToF64(fn(...c.captures, ...padded));
       },
       // closure_call_spread(handle, args_array_handle) -> result
       closure_call_spread: (handle, argsHandle) => {
@@ -497,8 +516,8 @@ function buildImports() {
         if (!c || !wasmInstance) return u64ToF64(TAG_UNDEFINED);
         const fn = wasmInstance.exports.__indirect_function_table?.get(c.funcIdx | 0);
         if (!fn) return u64ToF64(TAG_UNDEFINED);
-        const bigintArgs = args.map(v => f64ToU64(fromJsValue(v)));
-        return u64ToF64(fn(...c.captures, ...bigintArgs));
+        const padded = __padBigintArgs(fn, c.captures.length, args.map(v => f64ToU64(fromJsValue(v))));
+        return u64ToF64(fn(...c.captures, ...padded));
       },
 
       // ===== Phase 2: Array higher-order methods =====
@@ -639,7 +658,9 @@ function buildImports() {
               const fn = wasmInstance?.exports.__indirect_function_table?.get(methods[mname]);
               if (fn) {
                 const args = getHandle(argsHandle) || [];
-                return u64ToF64(fn(f64ToU64(handle), ...args.map(v => f64ToU64(fromJsValue(v)))));
+                // Pad for omitted TS optional params (Issue #1035).
+                const padded = __padBigintArgs(fn, 1, args.map(v => f64ToU64(fromJsValue(v))));
+                return u64ToF64(fn(f64ToU64(handle), ...padded));
               }
             }
             cls = classParentTable[cls] || null;
@@ -678,7 +699,7 @@ function buildImports() {
           arc: "perry_ui_canvas_arc", closePath: "perry_ui_canvas_close_path",
           fill: "perry_ui_canvas_fill", stroke: "perry_ui_canvas_stroke",
           setLineWidth: "perry_ui_canvas_set_line_width", fillText: "perry_ui_canvas_fill_text",
-          setFont: "perry_ui_canvas_set_font",
+          setFont: "perry_ui_canvas_set_font", drawImage: "perry_ui_canvas_draw_image",
           // ScrollView
           setChild: "perry_ui_scrollview_set_child",
           // TextField
@@ -884,6 +905,7 @@ function buildImports() {
       date_get_full_year: (h) => { const d = getHandle(h); return d instanceof Date ? d.getFullYear() : 0; },
       date_get_month: (h) => { const d = getHandle(h); return d instanceof Date ? d.getMonth() : 0; },
       date_get_date: (h) => { const d = getHandle(h); return d instanceof Date ? d.getDate() : 0; },
+      date_get_day: (h) => { const d = getHandle(h); return d instanceof Date ? d.getDay() : 0; },
       date_get_hours: (h) => { const d = getHandle(h); return d instanceof Date ? d.getHours() : 0; },
       date_get_minutes: (h) => { const d = getHandle(h); return d instanceof Date ? d.getMinutes() : 0; },
       date_get_seconds: (h) => { const d = getHandle(h); return d instanceof Date ? d.getSeconds() : 0; },
@@ -1363,10 +1385,8 @@ function buildImports() {
         for (let i = 0; i < argc; i++) args.push(__bitsToJsValue(u64View[i]));
         let result;
         const coreFn = __memDispatch[name];
-        if (name?.startsWith('object')) console.log("mem_call:", name, "args:", args, "base:", base);
         if (coreFn) {
           result = coreFn(...args);
-          if (name?.startsWith('object')) console.log("  result:", result, "bits:", __jsValueToBits(result)?.toString(16));
         } else {
           const uiFn = __perryUiDispatch[name];
           if (uiFn) {
@@ -1407,6 +1427,44 @@ function buildImports() {
   };
 }
 
+// rt-namespace imports whose WASM-declared return type is NOT i64.
+// `wrapForI64` MUST NOT BigInt-coerce Number returns for these — the
+// WASM caller expects an i32 or f64, and a BigInt return throws
+// "Cannot convert a BigInt value to a number" at the import boundary
+// (#1049 instances 2/3). Built from the type tables in `emit.rs`:
+// every entry with a `t_*_i32` signature plus the f64-return `mem_call`.
+const __NON_I64_RETURN_IMPORTS = new Set([
+  // i32 return
+  'string_eq', 'is_truthy', 'js_strict_eq', 'is_null_or_undefined',
+  'object_has_property', 'array_includes', 'array_is_array',
+  'string_includes', 'string_startsWith', 'string_endsWith',
+  'array_some', 'array_every', 'class_instanceof', 'map_has', 'set_has',
+  'regexp_test', 'is_nan', 'is_finite', 'has_exception',
+  'searchparams_has', 'response_ok', 'buffer_equals', 'buffer_is_buffer',
+  'path_is_absolute',
+  // f64 return — dummy 0, real result is in WASM memory
+  'mem_call',
+  // i32-return memory-bridge
+  'mem_call_i32',
+  // void return — wrapper passes through `undefined`, but listing here
+  // makes the contract explicit and guards against future changes to the
+  // wrapper that might try to coerce `0` for a void callee.
+  'string_new', 'console_log', 'console_warn', 'console_error',
+  'console_log_multi',
+  'object_delete', 'object_delete_dynamic',
+  'array_unshift', 'array_forEach',
+  'try_start', 'try_end', 'throw_value',
+  'map_clear', 'map_delete',
+  'set_clear', 'set_add', 'set_delete',
+  'searchparams_set', 'searchparams_append', 'searchparams_delete',
+  'class_set_method', 'class_set_field', 'class_set_static', 'class_set_parent',
+  'object_set_dynamic',
+  'array_set', 'buffer_set', 'buffer_copy', 'buffer_write',
+  'uint8array_set',
+  'set_timeout', 'set_interval', 'clear_timeout', 'clear_interval',
+  'promise_resolve',
+]);
+
 // Wrap a JS function so it interoperates with WASM i64 params/results.
 //
 // Default wrapping (used for the rt namespace): convert BigInt i64 args to f64
@@ -1414,7 +1472,16 @@ function buildImports() {
 // working. Number results are coerced back to BigInt for WASM i64 return.
 // Necessary because BigInt(NaN) throws. Escape hatch: set `fn.__rawBigint = true`
 // on the callee to skip the wrapper entirely and receive raw BigInt bits.
-function wrapForI64(fn) {
+//
+// `coerceNumberToBigInt` (default true) is set to false at the wrap site for
+// imports whose declared WASM return is `i32`/`f64`/void — see
+// `__NON_I64_RETURN_IMPORTS`. Without this guard, #1049 instance 1's
+// `BigInt(result)` would mis-encode every i32-return import (is_truthy,
+// js_strict_eq, mem_call_i32, …) and the f64-return `mem_call`, throwing
+// "Cannot convert a BigInt value to a number" on the very first call
+// (instances 2/3 reproduce as soon as `_start` invokes `class_set_method`
+// via `mem_call`).
+function wrapForI64(fn, coerceNumberToBigInt = true) {
   if (fn.__rawBigint === true) return fn;
   return function(...args) {
     const convertedArgs = args.map(a => {
@@ -1424,7 +1491,18 @@ function wrapForI64(fn) {
     const result = fn.apply(this, convertedArgs);
     if (typeof result === 'bigint') return result;
     if (typeof result === 'number') {
-      if (Number.isInteger(result) && Math.abs(result) < 2147483648) return result;
+      // #1049 instance 1: this wrapper exists because most callees here are
+      // imported from a WASM site declared `i64`. A plain Number return —
+      // even a small integer that JS would happily round-trip — throws
+      // `TypeError: Cannot convert X to a BigInt` at the import boundary.
+      // Coerce integers via `BigInt(n)` and non-integers (NaN-boxed f64
+      // payloads) via bit-reinterpret. Skipped for non-i64-return imports
+      // (#1049 instances 2/3) — those declare i32/f64 returns and would
+      // reject a BigInt with the inverse error.
+      if (coerceNumberToBigInt && Number.isInteger(result) && Math.abs(result) < 2147483648) {
+        return BigInt(result);
+      }
+      if (!coerceNumberToBigInt) return result;
       _f64[0] = result;
       return _u64[0];
     }
@@ -1447,9 +1525,18 @@ function wrapFfiForI64(fn) {
     const result = fn.apply(this, convertedArgs);
     if (typeof result === 'bigint') return result;
     if (typeof result === 'number') {
-      if (Number.isInteger(result) && Math.abs(result) < 2147483648) return result;
-      _f64[0] = result;
-      return _u64[0];
+      // #1049 instance 1: the WASM import side declares these as `i64`
+      // returns (handles, NaN-box bits, etc.). A plain Number return —
+      // even a small integer JS could round-trip — throws
+      // `TypeError: Cannot convert X to a BigInt` at the import
+      // boundary. NaN-box the Number via f64 bit-reinterpret for ALL
+      // integers (not just non-integers): a raw `BigInt(1)` round-trips
+      // as i64=1 which Perry then mis-reads as f64=5e-324 inside the WASM
+      // body (#1049 instance 3 with `add_numbers` returning 7 surfacing
+      // as `3.5e-323`). NaN-boxing via __jsValueToBits encodes the value
+      // as a proper JSValue so downstream WASM code that reinterprets
+      // i64 → f64 sees the original Number.
+      return __jsValueToBits(result);
     }
     // Non-numeric result: encode via __jsValueToBits so callers that thread results
     // back into Perry get proper NaN-box bits.
@@ -1468,11 +1555,31 @@ function wrapNamespace(ns, wrapper) {
   });
 }
 
+// rt-namespace Proxy: pass each import's name into `wrapForI64` so it knows
+// whether to BigInt-coerce Number returns. Names listed in
+// `__NON_I64_RETURN_IMPORTS` have a non-i64 WASM-declared return (#1049
+// instances 2/3) and must pass Numbers through unchanged.
+function wrapRtNamespace(ns) {
+  return new Proxy(ns, {
+    get(target, prop) {
+      const v = target[prop];
+      if (typeof v === 'function') {
+        const coerce = !__NON_I64_RETURN_IMPORTS.has(prop);
+        return wrapForI64(v, coerce);
+      }
+      return v;
+    },
+  });
+}
+
 function wrapImportsForI64(imports) {
   const wrapped = {};
   for (const nsName in imports) {
-    const wrapper = nsName === 'ffi' ? wrapFfiForI64 : wrapForI64;
-    wrapped[nsName] = wrapNamespace(imports[nsName], wrapper);
+    if (nsName === 'ffi') {
+      wrapped[nsName] = wrapNamespace(imports[nsName], wrapFfiForI64);
+    } else {
+      wrapped[nsName] = wrapRtNamespace(imports[nsName]);
+    }
   }
   return wrapped;
 }
@@ -1570,16 +1677,18 @@ const __memDispatch = {
   },
   object_delete: (obj, key) => { if (obj && typeof obj === 'object') delete obj[String(key)]; },
   object_delete_dynamic: (obj, key) => { if (obj && typeof obj === 'object') delete obj[key]; },
-  object_keys: (obj) => obj && typeof obj === 'object' ? Object.keys(obj) : [],
-  object_values: (obj) => obj && typeof obj === 'object' ? Object.values(obj) : [],
-  object_entries: (obj) => obj && typeof obj === 'object' ? Object.entries(obj) : [],
+  object_keys: (obj) => obj && typeof obj === 'object' ? Object.keys(obj).filter(k => k !== "__class__") : [],
+  object_values: (obj) => obj && typeof obj === 'object' ? Object.keys(obj).filter(k => k !== "__class__").map(k => obj[k]) : [],
+  object_entries: (obj) => obj && typeof obj === 'object' ? Object.entries(obj).filter(([k]) => k !== "__class__") : [],
   object_has_property: (obj, key) => {
     if (!obj || typeof obj !== 'object') return 0;
     return (key in obj) ? 1 : 0;
   },
   object_assign: (target, source) => {
-    if (target && source && typeof target === 'object' && typeof source === 'object') Object.assign(target, source);
-    return target;
+    if (target == null) throw new TypeError('Cannot convert undefined or null to object');
+    const t = Object(target);
+    if (source != null) Object.assign(t, source);
+    return t;
   },
 
   // Arrays — args are plain JS values (arr is the array itself, etc.)
@@ -1662,32 +1771,38 @@ const __memDispatch = {
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
-    return __bitsToJsValue(fn(...closure.captures));
+    // Pad for omitted TS optional params (Issue #1035).
+    const padded = __padBigintArgs(fn, closure.captures.length, []);
+    return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_1: (closure, a0) => {
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
-    return __bitsToJsValue(fn(...closure.captures, __jsValueToBits(a0)));
+    const padded = __padBigintArgs(fn, closure.captures.length + 1, [__jsValueToBits(a0)]);
+    return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_2: (closure, a0, a1) => {
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
-    return __bitsToJsValue(fn(...closure.captures, __jsValueToBits(a0), __jsValueToBits(a1)));
+    const padded = __padBigintArgs(fn, closure.captures.length + 2, [__jsValueToBits(a0), __jsValueToBits(a1)]);
+    return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_3: (closure, a0, a1, a2) => {
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
-    return __bitsToJsValue(fn(...closure.captures, __jsValueToBits(a0), __jsValueToBits(a1), __jsValueToBits(a2)));
+    const padded = __padBigintArgs(fn, closure.captures.length + 3, [__jsValueToBits(a0), __jsValueToBits(a1), __jsValueToBits(a2)]);
+    return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_spread: (closure, args) => {
     const argArr = Array.isArray(args) ? args : [];
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
-    return __bitsToJsValue(fn(...closure.captures, ...argArr.map(v => __jsValueToBits(v))));
+    const padded = __padBigintArgs(fn, closure.captures.length, argArr.map(v => __jsValueToBits(v)));
+    return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
 
   // Array higher-order methods — WASM callbacks use i64 (BigInt) params/returns.
@@ -1783,8 +1898,10 @@ const __memDispatch = {
           const fn = wasmInstance?.exports.__indirect_function_table?.get(methods[mname]);
           if (fn) {
             const args = Array.isArray(argsArr) ? argsArr : [];
-            // WASM functions use i64 (BigInt) params/returns
-            return __bitsToJsValue(fn(__jsValueToBits(obj), ...args.map(v => __jsValueToBits(v))));
+            // WASM functions use i64 (BigInt) params/returns.
+            // Pad for omitted TS optional params (Issue #1035).
+            const padded = __padBigintArgs(fn, 1, args.map(v => __jsValueToBits(v)));
+            return __bitsToJsValue(fn(__jsValueToBits(obj), ...padded));
           }
         }
         cls = classParentTable[cls] || null;
@@ -1818,7 +1935,7 @@ const __memDispatch = {
       arc: "perry_ui_canvas_arc", closePath: "perry_ui_canvas_close_path",
       fill: "perry_ui_canvas_fill", stroke: "perry_ui_canvas_stroke",
       setLineWidth: "perry_ui_canvas_set_line_width", fillText: "perry_ui_canvas_fill_text",
-      setFont: "perry_ui_canvas_set_font",
+      setFont: "perry_ui_canvas_set_font", drawImage: "perry_ui_canvas_draw_image",
       setChild: "perry_ui_scrollview_set_child", focus: "perry_ui_textfield_focus",
       setWidth: "perry_ui_widget_set_width", setHeight: "perry_ui_widget_set_height",
       matchParentWidth: "perry_ui_widget_match_parent_width",
@@ -1914,16 +2031,44 @@ const __memDispatch = {
   set_values: (s) => (s instanceof Set) ? [...s.values()] : [],
 
   // Date — arg is a plain JS value (the Date object itself once created)
+  date_new: () => new Date(),
   date_new_val: (arg) => (arg === undefined) ? new Date() : new Date(arg),
+  date_now: () => Date.now(),
+  date_parse: (s) => Date.parse(String(s)),
+  date_utc: (...args) => Date.UTC(...args.map(Number)),
   date_get_time: (d) => (d instanceof Date) ? d.getTime() : 0,
+  date_value_of: (d) => (d instanceof Date) ? d.valueOf() : 0,
   date_to_iso_string: (d) => { if (!(d instanceof Date)) return undefined; return d.toISOString(); },
+  date_to_date_string: (d) => (d instanceof Date) ? d.toDateString() : '',
+  date_to_time_string: (d) => (d instanceof Date) ? d.toTimeString() : '',
+  date_to_locale_string: (d) => (d instanceof Date) ? d.toLocaleString() : '',
+  date_to_locale_date_string: (d) => (d instanceof Date) ? d.toLocaleDateString() : '',
+  date_to_locale_time_string: (d) => (d instanceof Date) ? d.toLocaleTimeString() : '',
+  date_to_json: (d) => (d instanceof Date) ? d.toJSON() : null,
   date_get_full_year: (d) => (d instanceof Date) ? d.getFullYear() : 0,
   date_get_month: (d) => (d instanceof Date) ? d.getMonth() : 0,
   date_get_date: (d) => (d instanceof Date) ? d.getDate() : 0,
+  date_get_day: (d) => (d instanceof Date) ? d.getDay() : 0,
   date_get_hours: (d) => (d instanceof Date) ? d.getHours() : 0,
   date_get_minutes: (d) => (d instanceof Date) ? d.getMinutes() : 0,
   date_get_seconds: (d) => (d instanceof Date) ? d.getSeconds() : 0,
   date_get_milliseconds: (d) => (d instanceof Date) ? d.getMilliseconds() : 0,
+  date_get_utc_full_year: (d) => (d instanceof Date) ? d.getUTCFullYear() : 0,
+  date_get_utc_month: (d) => (d instanceof Date) ? d.getUTCMonth() : 0,
+  date_get_utc_date: (d) => (d instanceof Date) ? d.getUTCDate() : 0,
+  date_get_utc_day: (d) => (d instanceof Date) ? d.getUTCDay() : 0,
+  date_get_utc_hours: (d) => (d instanceof Date) ? d.getUTCHours() : 0,
+  date_get_utc_minutes: (d) => (d instanceof Date) ? d.getUTCMinutes() : 0,
+  date_get_utc_seconds: (d) => (d instanceof Date) ? d.getUTCSeconds() : 0,
+  date_get_utc_milliseconds: (d) => (d instanceof Date) ? d.getUTCMilliseconds() : 0,
+  date_get_timezone_offset: (d) => (d instanceof Date) ? d.getTimezoneOffset() : 0,
+  date_set_utc_full_year: (d, v) => (d instanceof Date) ? d.setUTCFullYear(Number(v)) : 0,
+  date_set_utc_month: (d, v) => (d instanceof Date) ? d.setUTCMonth(Number(v)) : 0,
+  date_set_utc_date: (d, v) => (d instanceof Date) ? d.setUTCDate(Number(v)) : 0,
+  date_set_utc_hours: (d, v) => (d instanceof Date) ? d.setUTCHours(Number(v)) : 0,
+  date_set_utc_minutes: (d, v) => (d instanceof Date) ? d.setUTCMinutes(Number(v)) : 0,
+  date_set_utc_seconds: (d, v) => (d instanceof Date) ? d.setUTCSeconds(Number(v)) : 0,
+  date_set_utc_milliseconds: (d, v) => (d instanceof Date) ? d.setUTCMilliseconds(Number(v)) : 0,
 
   // Error — args are plain JS values
   error_new: (msg) => new Error(msg === undefined ? undefined : String(msg)),
@@ -1965,6 +2110,7 @@ const __memDispatch = {
 
   // Crypto — args are plain JS values
   crypto_random_uuid: () => crypto.randomUUID(),
+  crypto_random_uuidv7: () => crypto.randomUUIDv7(),
   crypto_random_bytes: (n) => crypto.getRandomValues(new Uint8Array(n)),
   crypto_sha256: (data) => {
     const str = String(data);
@@ -2420,6 +2566,7 @@ let currentException = null;
 const uiHandles = new Map();   // handle_id -> DOM element or state object
 const uiStates = new Map();    // handle_id -> { _value, subscribers[] }
 let uiNextHandle = 1;
+const perryImageCache = new Map();
 
 function uiAlloc(el) {
   const h = uiNextHandle++;
@@ -2446,7 +2593,10 @@ function callWasmClosure(closureVal, ...extraArgs) {
     const fn = wasmInstance.exports.__indirect_function_table.get(closure.funcIdx | 0);
     // Extra args need to be BigInt (i64) for WASM functions. Captures are already BigInt.
     const wasmArgs = extraArgs.map(v => __jsValueToBits(v));
-    if (fn) return __bitsToJsValue(fn(...(closure.captures || []), ...wasmArgs));
+    if (fn) {
+      const result = fn(...(closure.captures || []), ...wasmArgs);
+      return (typeof result === 'bigint') ? __bitsToJsValue(result) : undefined;
+    }
   }
   return u64ToF64(TAG_UNDEFINED);
 }
@@ -2495,13 +2645,48 @@ function uiStateSet(h, value) {
 
 // ---------- Widget creation functions (take JS values, return handle_id) ----------
 
+// #1546: showToast(msg) — bottom-center fade-in/out toast for --target web.
+// HarmonyOS routes through `promptAction.showToast` via a runtime drain queue;
+// on web the previous behavior was a documented no-op. The implementation here
+// stays minimal: one host-managed div, queued messages, default 3s visible.
+function perry_ui_show_toast(message) {
+  if (typeof document === "undefined") return;
+  const msg = (message === null || message === undefined) ? "" : String(message);
+  if (!perry_ui_show_toast._q) perry_ui_show_toast._q = [];
+  perry_ui_show_toast._q.push(msg);
+  if (perry_ui_show_toast._busy) return;
+  perry_ui_show_toast._busy = true;
+  const drain = () => {
+    const next = perry_ui_show_toast._q.shift();
+    if (next === undefined) { perry_ui_show_toast._busy = false; return; }
+    let el = perry_ui_show_toast._el;
+    if (!el) {
+      el = document.createElement("div");
+      el.setAttribute("data-perry-toast", "");
+      el.style.cssText =
+        "position:fixed;left:50%;bottom:32px;transform:translateX(-50%);" +
+        "background:rgba(28,28,30,0.92);color:#fff;padding:10px 18px;" +
+        "border-radius:18px;font:14px -apple-system,system-ui,Segoe UI,Roboto,sans-serif;" +
+        "max-width:80vw;box-shadow:0 6px 24px rgba(0,0,0,0.25);" +
+        "opacity:0;transition:opacity .18s ease;pointer-events:none;z-index:2147483647;";
+      document.body.appendChild(el);
+      perry_ui_show_toast._el = el;
+    }
+    el.textContent = next;
+    requestAnimationFrame(() => { el.style.opacity = "1"; });
+    setTimeout(() => {
+      el.style.opacity = "0";
+      setTimeout(drain, 200);
+    }, 3000);
+  };
+  drain();
+}
+
 function perry_ui_app_create(titleOrOpts, width, height) {
-  console.log("app_create:", typeof titleOrOpts, JSON.stringify(titleOrOpts)?.substring(0,100));
   let title = "Perry App", bodyH, w = 800, ht = 600;
   if (typeof titleOrOpts === "object" && titleOrOpts !== null) {
     title = titleOrOpts.title || title; w = titleOrOpts.width || w; ht = titleOrOpts.height || ht;
     bodyH = titleOrOpts.body;
-    console.log("  body handle:", bodyH, "uiGet:", uiGet(bodyH));
   } else { title = titleOrOpts || title; w = width || w; ht = height || ht; }
   document.title = title;
   const root = uiGetRoot();
@@ -2532,13 +2717,18 @@ function perry_ui_zstack_create() {
   el.style.position = "relative"; el.style.display = "flex"; el.style.flex = "1 1 0%";
   return uiAlloc(el);
 }
-function perry_ui_text_create(text) {
+function perry_ui_text_create(text, id) {
   const el = document.createElement("span");
   el.textContent = (text !== undefined && text !== null) ? String(text) : "";
-  return uiAlloc(el);
+  const h = uiAlloc(el);
+  // Issue #1392 — 2-arg `Text(content, id)` form. The state_desugar pass
+  // emits `count.text()` as `Text("<initial>", "__state_N")`; the id string
+  // is reused as the keyed-state key, so registering the widget here lets
+  // `setText(id, …)` and `__state_set("__state_N", …)` find and re-render it.
+  if (typeof id === "string" && id.length > 0) uiTextRegister(h, id);
+  return h;
 }
 function perry_ui_button_create(label, callback) {
-  console.log("button_create label:", typeof label, label, "callback:", typeof callback, callback);
   const el = document.createElement("button");
   el.textContent = (typeof label === 'string') ? label : String(label ?? "");
   el._perryCallback = callback;
@@ -2873,6 +3063,27 @@ function perry_ui_animate_position(h, dx, dy, durationSecs) {
 }
 
 // ---------- Events ----------
+// Issue #1865: display-link callbacks. One-shot per registration, like
+// requestAnimationFrame. The id we return matches the rAF id so cancelFrame
+// can hand it straight to cancelAnimationFrame. timestampMs is rAF's
+// DOMHighResTimeStamp; deltaMs is computed per stable WASM function-table
+// index because the JS closure wrapper crossing the WASM boundary is freshly
+// allocated on each call. This keeps the idiomatic
+// `function loop(t,dt){ ...; onFrame(loop); }` pattern accurate.
+const __perryFrameLastByFuncIdx = new Map();
+function perry_ui_on_frame(callback) {
+  if (!callback || typeof callback.funcIdx === 'undefined') return 0;
+  const key = callback.funcIdx | 0;
+  const id = requestAnimationFrame((ts) => {
+    const prev = __perryFrameLastByFuncIdx.get(key);
+    const dt = (typeof prev === 'number' && ts >= prev) ? ts - prev : 0;
+    __perryFrameLastByFuncIdx.set(key, ts);
+    callWasmClosure(callback, ts, dt);
+  });
+  return id;
+}
+function perry_ui_cancel_frame(id) { cancelAnimationFrame(id); }
+
 function perry_ui_set_on_click(h, callback) {
   const el = uiGet(h); if (el) el.addEventListener("click", () => callWasmClosure(callback));
 }
@@ -2944,6 +3155,83 @@ function perry_ui_state_bind_textfield(stateH, widgetH) {
   }
 }
 
+// ---------- Issue #1392: keyed state + setText registry ----------
+// The state_desugar pass (crates/perry-transform/src/state_desugar.rs) lowers
+// `state<T>` to a synthetic, string-keyed registry API rather than the
+// handle-based `perry_ui_state_create` surface above:
+//   let c = state(0)      -> __state_init("__state_0", 0)
+//   c.value / c.get()     -> __state_get("__state_0")
+//   c.set(v)              -> __state_set("__state_0", v)
+//   c.text()              -> Text("0", "__state_0")   (registers via uiTextRegister)
+// The synth id ("__state_0") is reused as both the state key and the Text
+// widget's setText id, so a write fans out to every bound widget. This
+// mirrors the native runtime (perry-runtime/src/ui_text_registry.rs:
+// js_state_init / js_state_get / js_state_set + perry_arkts_set_text).
+const keyedStates = new Map();    // synth id -> current value
+const uiTextIds = new Map();      // text id  -> [widget handle, ...]
+const keyedNavstack = new Map();  // synth id -> [{ name, handle }, ...]
+const keyedForeach = new Map();   // synth id -> [{ host, render }, ...]
+
+function uiTextRegister(handle, id) {
+  let list = uiTextIds.get(id);
+  if (!list) { list = []; uiTextIds.set(id, list); }
+  list.push(handle);
+}
+
+function perry_ui_set_text(id, value) {
+  const list = uiTextIds.get(id);
+  if (!list) return;
+  const str = (value === undefined || value === null) ? "" : String(value);
+  for (const h of list) { const el = uiGet(h); if (el) el.textContent = str; }
+}
+
+function perry_ui_state_init(id, initial) { keyedStates.set(id, initial); }
+function perry_ui_state_get_keyed(id) {
+  return keyedStates.has(id) ? keyedStates.get(id) : undefined;
+}
+function perry_ui_state_set_keyed(id, value) {
+  keyedStates.set(id, value);
+  perry_ui_set_text(id, value);          // reactive Text re-render
+  navstackDispatchKeyed(id, value);      // route visibility
+  foreachDispatchKeyed(id, value);       // dynamic-list re-render
+}
+
+function foreachRenderKeyed(host, render, value) {
+  const p = uiGet(host); if (!p) return;
+  p.innerHTML = "";
+  const count = typeof value === 'number' ? value : (Array.isArray(value) ? value.length : 0);
+  for (let i = 0; i < count; i++) {
+    const childVal = callWasmClosure(render, i);
+    const childEl = uiGet(typeof childVal === 'number' ? childVal : 0);
+    if (childEl) p.appendChild(childEl);
+  }
+}
+function foreachDispatchKeyed(id, value) {
+  const binds = keyedForeach.get(id); if (!binds) return;
+  for (const b of binds) foreachRenderKeyed(b.host, b.render, value);
+}
+function perry_ui_foreach_register(id, host, render) {
+  let list = keyedForeach.get(id);
+  if (!list) { list = []; keyedForeach.set(id, list); }
+  list.push({ host, render });
+  if (keyedStates.has(id)) foreachRenderKeyed(host, render, keyedStates.get(id));
+}
+
+function navstackDispatchKeyed(id, value) {
+  const routes = keyedNavstack.get(id); if (!routes) return;
+  const cur = (value === undefined || value === null) ? "" : String(value);
+  for (const r of routes) { const el = uiGet(r.handle); if (el) el.style.display = (r.name === cur) ? "" : "none"; }
+}
+function perry_ui_navstack_register_route(id, name, body) {
+  let list = keyedNavstack.get(id);
+  if (!list) { list = []; keyedNavstack.set(id, list); }
+  list.push({ name, handle: body });
+  if (keyedStates.has(id)) {
+    const cur = String(keyedStates.get(id));
+    const el = uiGet(body); if (el && name !== cur) el.style.display = "none";
+  }
+}
+
 // ---------- Text/Button/TextField ops ----------
 function perry_ui_text_set_string(h, text) { const el = uiGet(h); if (el) el.textContent = String(text ?? ""); }
 function perry_ui_text_set_selectable(h, selectable) { const el = uiGet(h); if (el) el.style.userSelect = selectable ? "text" : "none"; }
@@ -3009,11 +3297,101 @@ function perry_ui_picker_get_selected(h) { const el = uiGet(h); return el ? el.s
 
 // ---------- Image ----------
 function perry_ui_image_create_symbol(name) { return perry_ui_text_create("⬜ " + name); }
+function perry_ui_image_create_url(url, alt) {
+  const el = document.createElement("img");
+  el.src = url || "";
+  if (alt) el.alt = alt;
+  el.style.objectFit = "cover";
+  return uiAlloc(el);
+}
 function perry_ui_image_set_size(h, width, height) {
   const el = uiGet(h); if (!el) return;
   if (width) el.style.width = width + "px"; if (height) el.style.height = height + "px";
 }
 function perry_ui_image_set_tint(h, r, g, b, a) { perry_ui_set_foreground(h, r, g, b, a); }
+
+// ---------- WebView (issue #658 Phase 5 web target) ----------
+// Renders an <iframe>. Cross-origin restrictions limit what we can hook:
+// `onShouldNavigate` only fires for same-origin nav (we observe via the
+// `load` event and inspect contentWindow.location); `onLoaded` fires
+// after the iframe's `load` event for any nav; `onError` is delivered
+// when the iframe fails to load (same-origin only). Custom UA is
+// browser-controlled and can't be overridden from JS.
+//
+// v2-C cross-origin postMessage bridge: when a `postMessage` arrives
+// from the iframe's contentWindow, we route it to the per-handle
+// onMessage closure if any. The user wires this from TS via
+// `webviewEvaluateJs(handle, "window.parent.postMessage(payload, '*')")`
+// from inside the embedded page (or the embedded page can call
+// `window.parent.postMessage(...)` directly). This is the standard
+// cross-origin message channel — both sides must opt in.
+function perry_ui_webview_create(url, _width, _height, _ephemeral) {
+  const el = document.createElement("iframe");
+  el.src = url || "about:blank";
+  el.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-popups");
+  el.style.border = "0";
+  el.style.width = "100%";
+  el.style.height = "100%";
+  el._perry_state = { allowed: [], onShould: null, onLoaded: null, onError: null };
+  // v2-C: cross-origin postMessage is a TS-side concern — user code
+  // calls `window.addEventListener("message", e => ...)` directly to
+  // receive frames from the iframe's contentWindow. To send TO the
+  // iframe, use `webviewEvaluateJs(handle, "window.postMessage(...)")`.
+  // See the JSDoc on the WebView() type declaration for the working
+  // pattern. We don't expose a cross-platform onMessage / postMessage
+  // FFI in v1 because that's the Tauri/Electron path Perry's WebView
+  // explicitly avoids per the #658 design discussion.
+  el.addEventListener("load", () => {
+    const st = el._perry_state;
+    let url = "";
+    try { url = el.contentWindow?.location?.href || el.src; } catch { url = el.src; }
+    if (st.onShould && st.allowed.length > 0) {
+      // Best-effort allowlist — for cross-origin URIs, contentWindow throws.
+      try {
+        const host = new URL(url).hostname;
+        const ok = st.allowed.some(d => host === d || host.endsWith("." + d));
+        if (!ok) { el.src = "about:blank"; return; }
+      } catch {}
+    }
+    if (st.onLoaded) st.onLoaded(url);
+  });
+  el.addEventListener("error", () => {
+    const st = el._perry_state;
+    if (st.onError) st.onError(0, "iframe load error");
+  });
+  return uiAlloc(el);
+}
+function perry_ui_webview_set_user_agent(_h, _ua) { /* not configurable from JS */ }
+function perry_ui_webview_set_allowed_domains(h, arr) {
+  const el = uiGet(h); if (!el || !el._perry_state) return;
+  el._perry_state.allowed = Array.isArray(arr) ? arr.slice() : [];
+}
+function perry_ui_webview_set_ephemeral(_h, _e) { /* iframe storage = parent storage; isolation needs a fresh tab */ }
+function perry_ui_webview_set_on_should_navigate(h, cb) { const el = uiGet(h); if (el?._perry_state) el._perry_state.onShould = cb; }
+function perry_ui_webview_set_on_loaded(h, cb) { const el = uiGet(h); if (el?._perry_state) el._perry_state.onLoaded = cb; }
+function perry_ui_webview_set_on_error(h, cb) { const el = uiGet(h); if (el?._perry_state) el._perry_state.onError = cb; }
+function perry_ui_webview_load_url(h, url) { const el = uiGet(h); if (el) el.src = url; }
+function perry_ui_webview_reload(h) {
+  const el = uiGet(h); if (!el) return;
+  try { el.contentWindow?.location?.reload(); } catch { el.src = el.src; }
+}
+function perry_ui_webview_go_back(h) { const el = uiGet(h); if (!el) return; try { el.contentWindow?.history?.back(); } catch {} }
+function perry_ui_webview_go_forward(h) { const el = uiGet(h); if (!el) return; try { el.contentWindow?.history?.forward(); } catch {} }
+function perry_ui_webview_can_go_back(h) {
+  const el = uiGet(h); if (!el) return 0;
+  try { return (el.contentWindow?.history?.length || 0) > 1 ? 1 : 0; } catch { return 0; }
+}
+function perry_ui_webview_evaluate_js(h, js, cb) {
+  const el = uiGet(h); if (!el) { if (cb) cb(""); return; }
+  // Same-origin only — cross-origin contentWindow access throws.
+  try {
+    const result = el.contentWindow?.eval(js);
+    if (cb) cb(result == null ? "" : String(result));
+  } catch {
+    if (cb) cb("");
+  }
+}
+function perry_ui_webview_clear_cookies(_h) { /* iframe shares storage with parent */ }
 
 // ---------- ProgressView ----------
 function perry_ui_progressview_set_value(h, value) { const el = uiGet(h); if (el) { el.max = 1; el.value = value; } }
@@ -3034,6 +3412,58 @@ function perry_ui_canvas_stroke(h) { const el = uiGet(h); if (el?._ctx) el._ctx.
 function perry_ui_canvas_set_line_width(h, w) { const el = uiGet(h); if (el?._ctx) el._ctx.lineWidth = w; }
 function perry_ui_canvas_fill_text(h, text, x, y) { const el = uiGet(h); if (el?._ctx) el._ctx.fillText(text, x, y); }
 function perry_ui_canvas_set_font(h, font) { const el = uiGet(h); if (el?._ctx) el._ctx.font = font; }
+
+function perry_ui_load_image(url) {
+    const key = String(url || "");
+    if (perryImageCache.has(key)) return perryImageCache.get(key).promise;
+    const img = new Image();
+    const asset = { url: key, element: img, width: 0, height: 0, ready: false, error: null };
+    const promise = new Promise((resolve, reject) => {
+        img.onload = () => {
+            asset.width = img.naturalWidth || img.width || 0;
+            asset.height = img.naturalHeight || img.height || 0;
+            asset.ready = true;
+            resolve(asset);
+        };
+        img.onerror = () => {
+            asset.error = new Error(`Failed to load image: ${key}`);
+            reject(asset.error);
+        };
+        img.src = key;
+        if (img.decode) img.decode().then(() => {
+            if (!asset.ready) {
+                asset.width = img.naturalWidth || img.width || 0;
+                asset.height = img.naturalHeight || img.height || 0;
+                asset.ready = true;
+                resolve(asset);
+            }
+        }).catch(() => { /* onerror covers network/decode failures */ });
+    });
+    asset.promise = promise;
+    perryImageCache.set(key, asset);
+    return promise;
+}
+
+function perry_ui_canvas_draw_image(h, image, ...args) {
+    const el = (typeof getHandle === "function") ? getHandle(h) : uiGet(h);
+    const ctx = el && el._ctx;
+    const asset = image && image.element ? image : null;
+    if (!ctx || !asset || !asset.ready || !asset.element) return;
+    if (args.length === 2) {
+        ctx.drawImage(asset.element, args[0], args[1]);
+    } else if (args.length === 4) {
+        ctx.drawImage(asset.element, args[0], args[1], args[2], args[3]);
+    } else if (args.length >= 8) {
+        const [sx, sy, sw, sh, dx, dy, dw, dh] = args;
+        const srcW = sw > 0 ? sw : asset.width;
+        const srcH = sh > 0 ? sh : asset.height;
+        const dstW = dw > 0 ? dw : srcW;
+        const dstH = dh > 0 ? dh : srcH;
+        if (srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) return;
+        ctx.drawImage(asset.element, sx, sy, srcW, srcH, dx, dy, dstW, dstH);
+    }
+}
+
 function perry_ui_canvas_fill_gradient(h, r1, g1, b1, a1, r2, g2, b2, a2, direction) {
   const el = uiGet(h); if (!el?._ctx) return;
   const ctx = el._ctx;
@@ -3093,6 +3523,146 @@ function perry_ui_alert(title, message, buttons, callback) {
 }
 
 // ---------- Keyboard ----------
+
+// Continuous keyboard events (issue #1864). Mirrors the macOS contract:
+// one document-level listener routes events to whichever widget owns
+// `__perryFocusedWidget`, with a `0`-keyed fallback for app-level handlers.
+//
+// `KeyboardEvent.code` is normalised to the same canonical names declared in
+// `perry-ui::keys` (lowercase letters, "ArrowLeft", "Space", …). Names not in
+// the canonical set are ignored — same behaviour as the native LUT.
+const __perryKeyDownCBs = new Map();
+const __perryKeyUpCBs = new Map();
+let __perryFocusedWidget = 0;
+let __perryAppKeyDownCB; // f64 callback
+let __perryAppKeyUpCB;
+const __perryHeldKeys = new Set();
+let __perryCurrentMods = 0;
+let __perryKbdInstalled = false;
+
+// `KeyboardEvent.code` → numeric `Key` enum value (matches perry-ui::keys).
+// Returns 0 (`Key.Unknown`) for codes outside the canonical set.
+function __perryCodeToKey(code) {
+  if (code.length === 4 && code.startsWith("Key")) {
+    const c = code.charCodeAt(3);
+    if (c >= 65 && c <= 90) return c - 64; // KeyA -> 1
+  }
+  if (code.length === 6 && code.startsWith("Digit")) {
+    const c = code.charCodeAt(5);
+    if (c >= 48 && c <= 57) return c - 21; // Digit0 -> 27
+  }
+  if (code.length >= 2 && code.charAt(0) === "F") {
+    const n = parseInt(code.slice(1), 10);
+    if (n >= 1 && n <= 12) return 36 + n;  // F1 -> 37
+    if (n >= 13 && n <= 20) return 62 + n; // F13 -> 75
+  }
+  if (code.length >= 6 && code.startsWith("Numpad")) {
+    const tail = code.slice(6);
+    if (tail.length === 1) {
+      const c = tail.charCodeAt(0);
+      if (c >= 48 && c <= 57) return 83 + (c - 48); // Numpad0 -> 83
+    }
+    switch (tail) {
+      case "Decimal": return 93;
+      case "Enter": return 94;
+      case "Add": return 95;
+      case "Subtract": return 96;
+      case "Multiply": return 97;
+      case "Divide": return 98;
+      case "Equal": return 99;
+      case "Clear": return 100;
+    }
+  }
+  switch (code) {
+    case "ArrowUp": return 49;
+    case "ArrowDown": return 50;
+    case "ArrowLeft": return 51;
+    case "ArrowRight": return 52;
+    case "Space": return 53;
+    case "Enter": case "NumpadEnter": return 54;
+    case "Tab": return 55;
+    case "Escape": return 56;
+    case "Backspace": return 57;
+    case "Delete": return 58;
+    case "Home": return 59;
+    case "End": return 60;
+    case "PageUp": return 61;
+    case "PageDown": return 62;
+    case "Insert": return 63;
+    case "Minus": return 64;
+    case "Equal": return 65;
+    case "BracketLeft": return 66;
+    case "BracketRight": return 67;
+    case "Backslash": return 68;
+    case "Semicolon": return 69;
+    case "Quote": return 70;
+    case "Comma": return 71;
+    case "Period": return 72;
+    case "Slash": return 73;
+    case "Backquote": return 74;
+    default: return 0;
+  }
+}
+function __perryEventMods(e) {
+  return (e.metaKey ? 1 : 0) | (e.shiftKey ? 2 : 0) | (e.altKey ? 4 : 0) | (e.ctrlKey ? 8 : 0);
+}
+function __perryEnsureKbdInstalled() {
+  if (__perryKbdInstalled) return;
+  __perryKbdInstalled = true;
+  // `keydown`/`keyup` update both held set and current modifier snapshot.
+  // The DOM gives us modifier state on every event including modifier-only
+  // presses (Shift down alone fires keydown with `Shift` code), so we don't
+  // need a separate `flagsChanged`-equivalent listener.
+  document.addEventListener("keydown", (e) => {
+    __perryCurrentMods = __perryEventMods(e);
+    const key = __perryCodeToKey(e.code);
+    if (!key) return;
+    __perryHeldKeys.add(key);
+    const cb = __perryKeyDownCBs.get(__perryFocusedWidget) ?? __perryAppKeyDownCB;
+    if (cb !== undefined) {
+      callWasmClosure(cb, key, __perryCurrentMods, e.repeat ? 1 : 0);
+    }
+  });
+  document.addEventListener("keyup", (e) => {
+    __perryCurrentMods = __perryEventMods(e);
+    const key = __perryCodeToKey(e.code);
+    if (!key) return;
+    __perryHeldKeys.delete(key);
+    const cb = __perryKeyUpCBs.get(__perryFocusedWidget) ?? __perryAppKeyUpCB;
+    if (cb !== undefined) {
+      callWasmClosure(cb, key, __perryCurrentMods);
+    }
+  });
+}
+function perry_ui_widget_set_on_key_down(handle, callback) {
+  __perryEnsureKbdInstalled();
+  __perryKeyDownCBs.set(Number(handle), callback);
+}
+function perry_ui_widget_set_on_key_up(handle, callback) {
+  __perryEnsureKbdInstalled();
+  __perryKeyUpCBs.set(Number(handle), callback);
+}
+function perry_ui_app_set_on_key_down(callback) {
+  __perryEnsureKbdInstalled();
+  __perryAppKeyDownCB = callback;
+}
+function perry_ui_app_set_on_key_up(callback) {
+  __perryEnsureKbdInstalled();
+  __perryAppKeyUpCB = callback;
+}
+function perry_ui_focus_widget(handle) { __perryFocusedWidget = Number(handle); }
+function perry_ui_blur_widget(handle) {
+  if (__perryFocusedWidget === Number(handle)) __perryFocusedWidget = 0;
+}
+function perry_ui_is_key_down(keyCode) {
+  __perryEnsureKbdInstalled();
+  return __perryHeldKeys.has(Number(keyCode)) ? 1 : 0;
+}
+function perry_ui_current_modifiers() {
+  __perryEnsureKbdInstalled();
+  return __perryCurrentMods;
+}
+
 function perry_ui_register_global_hotkey(_key, _modifiers, _callback) {
   // Global hotkeys require OS-level hook APIs not available in a browser context.
 }
@@ -3216,6 +3786,823 @@ function perry_ui_camera_unfreeze(_h) {}
 function perry_ui_camera_sample_color(_x, _y) { return -1; }
 function perry_ui_camera_set_on_tap(_h, _cb) {}
 
+// ---------- perry/media (issue #370) — HTML5 <audio> + Media Session API ----------
+//
+// Per-process player table. Index 0 is reserved (handles are 1-based).
+// Each entry: { audio, state, duration, hasStarted, ended, onStateChange?, onTimeUpdate? }.
+const PERRY_MEDIA_PLAYERS = [];
+let PERRY_MEDIA_SESSION_WIRED = false;
+
+function _perry_media_get(handle) {
+  // handle arrives as a JS number (NaN-boxed values are decoded by mem_call before dispatch).
+  if (typeof handle !== "number" || handle < 1) return null;
+  return PERRY_MEDIA_PLAYERS[handle - 1] || null;
+}
+
+function _perry_media_flush_state(handle) {
+  const e = _perry_media_get(handle);
+  if (!e || e.onStateChange === undefined || e.onStateChange === null) return;
+  try {
+    callWasmClosure(e.onStateChange, fromJsValue(e.state));
+  } catch (err) { console.warn("perry/media onStateChange threw:", err); }
+}
+
+function _perry_media_flush_time(handle) {
+  const e = _perry_media_get(handle);
+  if (!e || e.onTimeUpdate === undefined || e.onTimeUpdate === null) return;
+  const t = isFinite(e.audio.currentTime) ? e.audio.currentTime : 0;
+  const d = isFinite(e.duration) ? e.duration : 0;
+  try {
+    callWasmClosure(e.onTimeUpdate, t, d);
+  } catch (err) { console.warn("perry/media onTimeUpdate threw:", err); }
+}
+
+function _perry_media_first_live_handle() {
+  for (let i = 0; i < PERRY_MEDIA_PLAYERS.length; i++) {
+    if (PERRY_MEDIA_PLAYERS[i]) return i + 1;
+  }
+  return 0;
+}
+
+function _perry_media_wire_session() {
+  if (PERRY_MEDIA_SESSION_WIRED) return;
+  if (!('mediaSession' in navigator)) return;
+  PERRY_MEDIA_SESSION_WIRED = true;
+  try {
+    navigator.mediaSession.setActionHandler('play', () => {
+      const h = _perry_media_first_live_handle();
+      if (h) perry_media_play(h);
+    });
+    navigator.mediaSession.setActionHandler('pause', () => {
+      const h = _perry_media_first_live_handle();
+      if (h) perry_media_pause(h);
+    });
+    navigator.mediaSession.setActionHandler('seekto', (details) => {
+      const h = _perry_media_first_live_handle();
+      if (h && typeof details.seekTime === "number") perry_media_seek(h, details.seekTime);
+    });
+    navigator.mediaSession.setActionHandler('seekforward', (details) => {
+      const h = _perry_media_first_live_handle();
+      if (!h) return;
+      const e = _perry_media_get(h);
+      if (!e) return;
+      const skip = (details && details.seekOffset) || 10;
+      perry_media_seek(h, (e.audio.currentTime || 0) + skip);
+    });
+    navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+      const h = _perry_media_first_live_handle();
+      if (!h) return;
+      const e = _perry_media_get(h);
+      if (!e) return;
+      const skip = (details && details.seekOffset) || 10;
+      perry_media_seek(h, Math.max(0, (e.audio.currentTime || 0) - skip));
+    });
+  } catch (err) { /* setActionHandler can throw on unsupported actions — ignore */ }
+}
+
+function perry_media_create_player(url) {
+  const audio = new Audio(typeof url === "string" ? url : "");
+  audio.preload = "auto";
+  const entry = { audio, state: "loading", duration: 0, hasStarted: false, ended: false };
+  PERRY_MEDIA_PLAYERS.push(entry);
+  const handle = PERRY_MEDIA_PLAYERS.length; // 1-based
+  audio.addEventListener('loadedmetadata', () => {
+    entry.duration = isFinite(audio.duration) ? audio.duration : 0;
+  });
+  audio.addEventListener('canplay', () => {
+    if (entry.state === 'loading') entry.state = 'ready';
+    _perry_media_flush_state(handle);
+  });
+  audio.addEventListener('play', () => {
+    entry.state = 'playing';
+    _perry_media_flush_state(handle);
+  });
+  audio.addEventListener('playing', () => {
+    entry.state = 'playing';
+    _perry_media_flush_state(handle);
+  });
+  audio.addEventListener('pause', () => {
+    if (entry.ended) return;
+    entry.state = entry.hasStarted ? 'paused' : 'ready';
+    _perry_media_flush_state(handle);
+  });
+  audio.addEventListener('ended', () => {
+    entry.ended = true;
+    entry.state = 'ended';
+    _perry_media_flush_state(handle);
+  });
+  audio.addEventListener('error', () => {
+    entry.state = 'error';
+    _perry_media_flush_state(handle);
+  });
+  audio.addEventListener('waiting', () => {
+    entry.state = 'loading';
+    _perry_media_flush_state(handle);
+  });
+  audio.addEventListener('timeupdate', () => {
+    // Belt-and-braces ended fallback (acroyear #351 comment) — Chromium /
+    // Chromecast have historically dropped the `ended` event.
+    if (entry.hasStarted && entry.duration > 0.25 && audio.currentTime >= entry.duration - 0.25 && !entry.ended) {
+      entry.ended = true;
+      entry.state = 'ended';
+      _perry_media_flush_state(handle);
+    }
+    if (entry.state === 'playing' || entry.state === 'loading') {
+      _perry_media_flush_time(handle);
+    }
+  });
+  return handle;
+}
+
+function perry_media_play(handle) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  e.hasStarted = true;
+  e.ended = false;
+  const p = e.audio.play();
+  if (p && typeof p.catch === "function") {
+    p.catch(() => { e.state = 'error'; _perry_media_flush_state(handle); });
+  }
+}
+
+function perry_media_pause(handle) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  e.audio.pause();
+}
+
+function perry_media_stop(handle) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  e.audio.pause();
+  try { e.audio.currentTime = 0; } catch (_) { /* live stream */ }
+  e.hasStarted = false;
+  e.ended = false;
+  e.state = 'ready';
+  _perry_media_flush_state(handle);
+}
+
+function perry_media_seek(handle, seconds) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  const d = e.audio.duration;
+  let target = Number(seconds) || 0;
+  if (target < 0) target = 0;
+  if (isFinite(d) && target > d) target = d;
+  try { e.audio.currentTime = target; } catch (_) { /* live stream */ }
+}
+
+function perry_media_set_volume(handle, vol) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  let v = Number(vol);
+  if (!isFinite(v)) v = 1;
+  if (v < 0) v = 0;
+  if (v > 1) v = 1;
+  e.audio.volume = v;
+}
+
+function perry_media_set_rate(handle, rate) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  const r = Number(rate);
+  if (!isFinite(r) || r <= 0) return;
+  e.audio.playbackRate = r;
+}
+
+function perry_media_get_current_time(handle) {
+  const e = _perry_media_get(handle);
+  if (!e) return 0;
+  return isFinite(e.audio.currentTime) ? e.audio.currentTime : 0;
+}
+
+function perry_media_get_duration(handle) {
+  const e = _perry_media_get(handle);
+  if (!e) return 0;
+  return isFinite(e.duration) ? e.duration : 0;
+}
+
+function perry_media_get_state(handle) {
+  const e = _perry_media_get(handle);
+  return e ? e.state : "error";
+}
+
+function perry_media_is_playing(handle) {
+  const e = _perry_media_get(handle);
+  return (e && e.state === 'playing') ? 1 : 0;
+}
+
+function perry_media_on_state_change(handle, callback) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  // callback comes through mem_call as a decoded JS value — either a JS
+  // function (closure) or a wasm-closure handle object {funcIdx, captures}.
+  // Both shapes are handled by callWasmClosure.
+  e.onStateChange = (callback === undefined || callback === null) ? null : callback;
+}
+
+function perry_media_on_time_update(handle, callback) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  e.onTimeUpdate = (callback === undefined || callback === null) ? null : callback;
+}
+
+function perry_media_set_now_playing(handle, title, artist, album, artworkUrl) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  if (!('mediaSession' in navigator)) return;
+  try {
+    const meta = {
+      title: String(title || ""),
+      artist: String(artist || ""),
+      album: String(album || ""),
+    };
+    if (artworkUrl && typeof MediaMetadata !== "undefined") {
+      meta.artwork = [{ src: String(artworkUrl) }];
+    }
+    navigator.mediaSession.metadata = (typeof MediaMetadata !== "undefined")
+      ? new MediaMetadata(meta)
+      : meta;
+    _perry_media_wire_session();
+  } catch (err) { console.warn("perry/media setNowPlaying:", err); }
+}
+
+function perry_media_destroy(handle) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  try { e.audio.pause(); } catch (_) {}
+  try { e.audio.src = ""; } catch (_) {}
+  e.onStateChange = null;
+  e.onTimeUpdate = null;
+  PERRY_MEDIA_PLAYERS[handle - 1] = null;
+}
+
+// ---------- perry/audio (issue #1867) — Web Audio API: low-latency SFX + buses ----------
+//
+// Distinct from perry/media (streaming + lock-screen). This is the game-audio path:
+// preloaded PCM, voice pool, bus hierarchy, pitch/pan/fade/loop.
+//
+// Handle ranges (must match Apple impl):
+//   Sound:      0x00000001..0x0FFFFFFF
+//   PlaybackId: 0x10000001..0x1FFFFFFF
+//   Bus:        0x20000001..0x2FFFFFFF
+//   0 = master bus
+const PERRY_AUDIO_SOUND_BASE = 0x00000000;
+const PERRY_AUDIO_PLAYBACK_BASE = 0x10000000;
+const PERRY_AUDIO_BUS_BASE = 0x20000000;
+const PERRY_AUDIO_RANGE_MASK = 0xF0000000;
+
+const PERRY_AUDIO_SOUNDS = [];     // index = (handle - 1)
+const PERRY_AUDIO_PLAYBACKS = [];  // index = (handle - PERRY_AUDIO_PLAYBACK_BASE - 1)
+const PERRY_AUDIO_BUSES = [];      // index 0 = master (handle 0 maps here too)
+
+let PERRY_AUDIO_CTX = null;
+let PERRY_AUDIO_MASTER_GAIN = null;
+let PERRY_AUDIO_MASTER_BUS = null;
+let PERRY_AUDIO_WARNED_AUTOPLAY = false;
+
+function _perry_audio_ctx() {
+  if (PERRY_AUDIO_CTX) return PERRY_AUDIO_CTX;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) {
+      console.warn("perry/audio: Web Audio API not available");
+      return null;
+    }
+    PERRY_AUDIO_CTX = new AC();
+    PERRY_AUDIO_MASTER_GAIN = PERRY_AUDIO_CTX.createGain();
+    PERRY_AUDIO_MASTER_GAIN.gain.value = 1.0;
+    PERRY_AUDIO_MASTER_GAIN.connect(PERRY_AUDIO_CTX.destination);
+    // Master bus = index 0; handle 0 dereferences here.
+    PERRY_AUDIO_MASTER_BUS = {
+      name: "master",
+      parent_id: -1,
+      gainNode: PERRY_AUDIO_MASTER_GAIN,
+      stored_volume: 1.0,
+      muted: false,
+      soloed: false,
+      destroyed: false,
+    };
+    PERRY_AUDIO_BUSES[0] = PERRY_AUDIO_MASTER_BUS;
+  } catch (err) {
+    console.warn("perry/audio: failed to create AudioContext:", err);
+  }
+  return PERRY_AUDIO_CTX;
+}
+
+function _perry_audio_handle_kind(h) {
+  const n = Number(h) >>> 0;
+  if (n === 0) return "master";
+  const range = n & PERRY_AUDIO_RANGE_MASK;
+  if (range === PERRY_AUDIO_BUS_BASE) return "bus";
+  if (range === PERRY_AUDIO_PLAYBACK_BASE) return "playback";
+  return "sound";
+}
+
+function _perry_audio_get_sound(h) {
+  const n = Number(h) >>> 0;
+  if (n === 0 || (n & PERRY_AUDIO_RANGE_MASK) !== 0) return null;
+  return PERRY_AUDIO_SOUNDS[n - 1] || null;
+}
+function _perry_audio_get_playback(h) {
+  const n = Number(h) >>> 0;
+  if ((n & PERRY_AUDIO_RANGE_MASK) !== PERRY_AUDIO_PLAYBACK_BASE) return null;
+  return PERRY_AUDIO_PLAYBACKS[n - PERRY_AUDIO_PLAYBACK_BASE - 1] || null;
+}
+function _perry_audio_get_bus(h) {
+  const n = Number(h) >>> 0;
+  if (n === 0) return PERRY_AUDIO_MASTER_BUS;
+  if ((n & PERRY_AUDIO_RANGE_MASK) !== PERRY_AUDIO_BUS_BASE) return null;
+  return PERRY_AUDIO_BUSES[n - PERRY_AUDIO_BUS_BASE] || null;
+}
+
+function _perry_audio_resolve_url(path) {
+  try {
+    return new URL(String(path), document.baseURI).href;
+  } catch (_) {
+    return String(path);
+  }
+}
+
+function _perry_audio_set_gain(gainParam, target, fadeMs) {
+  if (!PERRY_AUDIO_CTX) return;
+  const t = Math.max(0, Number(target) || 0);
+  const ms = Number(fadeMs) || 0;
+  const now = PERRY_AUDIO_CTX.currentTime;
+  try {
+    gainParam.cancelScheduledValues(now);
+    if (ms > 0) {
+      const cur = gainParam.value;
+      gainParam.setValueAtTime(cur, now);
+      gainParam.linearRampToValueAtTime(t, now + ms / 1000);
+    } else {
+      gainParam.setValueAtTime(t, now);
+    }
+  } catch (err) {
+    try { gainParam.value = t; } catch (_) {}
+  }
+}
+
+function _perry_audio_start_voice(entry) {
+  // Materialize an AudioBufferSourceNode for this playback entry.
+  if (!PERRY_AUDIO_CTX || entry.stopped) return;
+  const sound = entry.sound;
+  if (!sound || !sound.audioBuffer) return;
+  const bus = entry.bus || PERRY_AUDIO_MASTER_BUS;
+  const src = PERRY_AUDIO_CTX.createBufferSource();
+  src.buffer = sound.audioBuffer;
+  src.loop = !!entry.loop;
+  try { src.playbackRate.value = entry.rate; } catch (_) {}
+
+  const voiceGain = PERRY_AUDIO_CTX.createGain();
+  let tail = voiceGain;
+  if (Math.abs(entry.pan) > 1e-6 && typeof PERRY_AUDIO_CTX.createStereoPanner === "function") {
+    const panner = PERRY_AUDIO_CTX.createStereoPanner();
+    try { panner.pan.value = Math.max(-1, Math.min(1, entry.pan)); } catch (_) {}
+    voiceGain.connect(panner);
+    tail = panner;
+    entry.pannerNode = panner;
+  }
+  tail.connect(bus.gainNode);
+  src.connect(voiceGain);
+
+  const now = PERRY_AUDIO_CTX.currentTime;
+  if (entry.fadeInMs > 0) {
+    voiceGain.gain.setValueAtTime(0, now);
+    voiceGain.gain.linearRampToValueAtTime(entry.volume, now + entry.fadeInMs / 1000);
+  } else {
+    voiceGain.gain.setValueAtTime(entry.volume, now);
+  }
+
+  entry.source = src;
+  entry.gain = voiceGain;
+  entry.startedAt = now - (entry.pauseOffset || 0);
+  entry.pauseOffset = entry.pauseOffset || 0;
+
+  src.onended = () => {
+    if (entry.suppressEnded) { entry.suppressEnded = false; return; }
+    if (entry.stopped) return;
+    entry.stopped = true;
+    entry.ended = true;
+    if (entry.onEnded) {
+      try { callWasmClosure(entry.onEnded); }
+      catch (err) { console.warn("perry/audio onEnded threw:", err); }
+    }
+  };
+
+  try { src.start(0, entry.pauseOffset || 0); }
+  catch (err) { console.warn("perry/audio start failed:", err); }
+}
+
+function _perry_audio_apply_solo_state() {
+  // When any bus is soloed, mute all non-soloed non-ancestor non-master buses.
+  if (!PERRY_AUDIO_CTX) return;
+  const soloed = PERRY_AUDIO_BUSES.filter(b => b && !b.destroyed && b.soloed);
+  for (let i = 1; i < PERRY_AUDIO_BUSES.length; i++) {
+    const b = PERRY_AUDIO_BUSES[i];
+    if (!b || b.destroyed) continue;
+    let audible;
+    if (soloed.length === 0) audible = !b.muted;
+    else audible = b.soloed && !b.muted;
+    _perry_audio_set_gain(b.gainNode.gain, audible ? b.stored_volume : 0, 0);
+  }
+}
+
+function perry_audio_load_sound(path, busHandle, stream) {
+  const ctx = _perry_audio_ctx();
+  if (!ctx) return 0;
+  const url = _perry_audio_resolve_url(path);
+  const bus = _perry_audio_get_bus(busHandle) || PERRY_AUDIO_MASTER_BUS;
+  const entry = {
+    url,
+    audioBuffer: null,
+    default_volume: 1.0,
+    default_bus: bus,
+    pendingPlays: [],
+    onLoaded: null,
+    loaded: false,
+    error: false,
+    stream: !!Number(stream),
+  };
+  PERRY_AUDIO_SOUNDS.push(entry);
+  const handle = PERRY_AUDIO_SOUNDS.length; // 1-based, within sound range
+  fetch(url).then(r => {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.arrayBuffer();
+  }).then(ab => new Promise((resolve, reject) => {
+    // decodeAudioData is older-API: pass callbacks for Safari compat.
+    try {
+      const p = ctx.decodeAudioData(ab, resolve, reject);
+      if (p && typeof p.then === "function") p.then(resolve, reject);
+    } catch (err) { reject(err); }
+  })).then(buf => {
+    entry.audioBuffer = buf;
+    entry.loaded = true;
+    // Flush queued plays.
+    const queued = entry.pendingPlays;
+    entry.pendingPlays = [];
+    for (const voice of queued) {
+      if (!voice.stopped) _perry_audio_start_voice(voice);
+    }
+    if (entry.onLoaded) {
+      try { callWasmClosure(entry.onLoaded); }
+      catch (err) { console.warn("perry/audio onLoaded threw:", err); }
+    }
+  }).catch(err => {
+    entry.error = true;
+    console.warn("perry/audio load failed for", url, err);
+  });
+  return handle;
+}
+
+function perry_audio_unload(soundHandle) {
+  const s = _perry_audio_get_sound(soundHandle);
+  if (!s) return;
+  // Stop any live voices on this sound.
+  for (let i = 0; i < PERRY_AUDIO_PLAYBACKS.length; i++) {
+    const v = PERRY_AUDIO_PLAYBACKS[i];
+    if (v && v.sound === s && !v.stopped) {
+      try { v.suppressEnded = true; if (v.source) v.source.stop(); } catch (_) {}
+      v.stopped = true;
+    }
+  }
+  s.audioBuffer = null;
+  s.pendingPlays = [];
+  s.onLoaded = null;
+  PERRY_AUDIO_SOUNDS[Number(soundHandle) - 1] = null;
+}
+
+function perry_audio_play(soundHandle, volume, loop_, rate, pan, fadeInMs) {
+  const ctx = _perry_audio_ctx();
+  if (!ctx) return 0;
+  const sound = _perry_audio_get_sound(soundHandle);
+  if (!sound) return 0;
+  // Autoplay-policy: if context is suspended (first play before user gesture)
+  // attempt resume; the browser will queue audio until the gesture arrives.
+  if (ctx.state === "suspended") {
+    const p = ctx.resume();
+    if (p && typeof p.catch === "function") p.catch(() => {
+      if (!PERRY_AUDIO_WARNED_AUTOPLAY) {
+        PERRY_AUDIO_WARNED_AUTOPLAY = true;
+        console.warn("perry/audio: AudioContext is suspended — first play must follow a user gesture (click/keydown).");
+      }
+    });
+  }
+  const vol = (Number(volume) >= 0) ? Number(volume) : sound.default_volume;
+  const entry = {
+    sound,
+    bus: sound.default_bus,
+    volume: vol,
+    loop: Number(loop_) >= 0.5,
+    rate: (Number(rate) > 0) ? Number(rate) : 1.0,
+    pan: Number(pan) || 0,
+    fadeInMs: Math.max(0, Number(fadeInMs) || 0),
+    source: null,
+    gain: null,
+    pannerNode: null,
+    onEnded: null,
+    stopped: false,
+    ended: false,
+    paused: false,
+    pauseOffset: 0,
+    startedAt: 0,
+    suppressEnded: false,
+  };
+  PERRY_AUDIO_PLAYBACKS.push(entry);
+  const handle = PERRY_AUDIO_PLAYBACK_BASE + PERRY_AUDIO_PLAYBACKS.length; // 1-based within playback range
+  if (sound.loaded && sound.audioBuffer) {
+    _perry_audio_start_voice(entry);
+  } else if (!sound.error) {
+    sound.pendingPlays.push(entry);
+  } else {
+    entry.stopped = true;
+  }
+  return handle;
+}
+
+function perry_audio_stop(handle, fadeOutMs) {
+  const ctx = _perry_audio_ctx();
+  if (!ctx) return;
+  const ms = Math.max(0, Number(fadeOutMs) || 0);
+  const stopOne = (v) => {
+    if (!v || v.stopped) return;
+    if (ms > 0 && v.gain) {
+      const now = ctx.currentTime;
+      try {
+        v.gain.gain.cancelScheduledValues(now);
+        v.gain.gain.setValueAtTime(v.gain.gain.value, now);
+        v.gain.gain.linearRampToValueAtTime(0, now + ms / 1000);
+      } catch (_) {}
+      v.stopped = true;
+      setTimeout(() => {
+        try { if (v.source) v.source.stop(); } catch (_) {}
+      }, ms + 5);
+    } else {
+      v.stopped = true;
+      try { if (v.source) v.source.stop(); } catch (_) {}
+    }
+  };
+  const kind = _perry_audio_handle_kind(handle);
+  if (kind === "playback") {
+    stopOne(_perry_audio_get_playback(handle));
+  } else if (kind === "sound") {
+    const s = _perry_audio_get_sound(handle);
+    if (s) {
+      for (const v of PERRY_AUDIO_PLAYBACKS) if (v && v.sound === s) stopOne(v);
+    }
+  }
+}
+
+function perry_audio_pause(playbackHandle) {
+  const ctx = _perry_audio_ctx();
+  if (!ctx) return;
+  const v = _perry_audio_get_playback(playbackHandle);
+  if (!v || v.stopped || v.paused) return;
+  // Web Audio source nodes can't pause — capture offset, stop, replay on resume.
+  const elapsed = ctx.currentTime - v.startedAt;
+  let offset = elapsed;
+  if (v.sound && v.sound.audioBuffer && !v.loop) {
+    offset = Math.min(elapsed, v.sound.audioBuffer.duration);
+  } else if (v.sound && v.sound.audioBuffer && v.loop) {
+    offset = elapsed % v.sound.audioBuffer.duration;
+  }
+  v.pauseOffset = offset;
+  v.paused = true;
+  v.suppressEnded = true;
+  try { if (v.source) v.source.stop(); } catch (_) {}
+  v.source = null;
+}
+
+function perry_audio_resume(playbackHandle) {
+  const ctx = _perry_audio_ctx();
+  if (!ctx) return;
+  const v = _perry_audio_get_playback(playbackHandle);
+  if (!v || v.stopped || !v.paused) return;
+  v.paused = false;
+  // Don't re-apply fade-in on resume.
+  const saved = v.fadeInMs;
+  v.fadeInMs = 0;
+  _perry_audio_start_voice(v);
+  v.fadeInMs = saved;
+}
+
+function perry_audio_set_volume(handle, volume, fadeMs) {
+  if (!PERRY_AUDIO_CTX) return;
+  const v = Math.max(0, Number(volume) || 0);
+  const kind = _perry_audio_handle_kind(handle);
+  if (kind === "playback") {
+    const p = _perry_audio_get_playback(handle);
+    if (p && p.gain) {
+      p.volume = v;
+      _perry_audio_set_gain(p.gain.gain, v, fadeMs);
+    } else if (p) {
+      p.volume = v;
+    }
+  } else if (kind === "bus" || kind === "master") {
+    const b = _perry_audio_get_bus(handle);
+    if (b) {
+      b.stored_volume = v;
+      if (!b.muted) _perry_audio_set_gain(b.gainNode.gain, v, fadeMs);
+    }
+  } else if (kind === "sound") {
+    const s = _perry_audio_get_sound(handle);
+    if (s) s.default_volume = v;
+  }
+}
+
+function perry_audio_set_rate(playbackHandle, rate) {
+  const v = _perry_audio_get_playback(playbackHandle);
+  if (!v) return;
+  const r = Number(rate);
+  if (!isFinite(r) || r <= 0) return;
+  v.rate = r;
+  if (v.source) {
+    try { v.source.playbackRate.value = r; } catch (_) {}
+  }
+}
+
+function perry_audio_set_pan(playbackHandle, pan) {
+  const ctx = _perry_audio_ctx();
+  if (!ctx) return;
+  const v = _perry_audio_get_playback(playbackHandle);
+  if (!v) return;
+  const p = Math.max(-1, Math.min(1, Number(pan) || 0));
+  v.pan = p;
+  if (v.pannerNode) {
+    try { v.pannerNode.pan.value = p; } catch (_) {}
+  } else if (v.source && v.gain && typeof ctx.createStereoPanner === "function") {
+    // Insert a panner mid-flight: voiceGain → panner → bus.
+    try {
+      const panner = ctx.createStereoPanner();
+      panner.pan.value = p;
+      v.gain.disconnect();
+      v.gain.connect(panner);
+      panner.connect((v.bus || PERRY_AUDIO_MASTER_BUS).gainNode);
+      v.pannerNode = panner;
+    } catch (err) { console.warn("perry/audio setPan:", err); }
+  }
+}
+
+function perry_audio_fade_in(playbackHandle, durationMs, toVol) {
+  const v = _perry_audio_get_playback(playbackHandle);
+  if (!v || !v.gain) return;
+  const t = Number(toVol);
+  const target = (isFinite(t) && t >= 0) ? t : v.volume;
+  v.volume = target;
+  _perry_audio_set_gain(v.gain.gain, target, durationMs);
+}
+
+function perry_audio_fade_out(playbackHandle, durationMs) {
+  perry_audio_stop(playbackHandle, durationMs);
+}
+
+function perry_audio_crossfade(fromHandle, toHandle, durationMs) {
+  const ms = Math.max(0, Number(durationMs) || 0);
+  const from = _perry_audio_get_playback(fromHandle);
+  const to = _perry_audio_get_playback(toHandle);
+  if (from && from.gain) _perry_audio_set_gain(from.gain.gain, 0, ms);
+  if (to && to.gain) _perry_audio_set_gain(to.gain.gain, to.volume || 1.0, ms);
+  if (from) {
+    from.stopped = true;
+    const ctx = _perry_audio_ctx();
+    setTimeout(() => { try { if (from.source) from.source.stop(); } catch (_) {} }, ms + 5);
+  }
+}
+
+function perry_audio_create_bus(name, parentBus) {
+  const ctx = _perry_audio_ctx();
+  if (!ctx) return 0;
+  const parent = _perry_audio_get_bus(parentBus) || PERRY_AUDIO_MASTER_BUS;
+  const gainNode = ctx.createGain();
+  gainNode.gain.value = 1.0;
+  gainNode.connect(parent.gainNode);
+  const entry = {
+    name: String(name || ""),
+    parent_id: parent === PERRY_AUDIO_MASTER_BUS ? 0 : PERRY_AUDIO_BUSES.indexOf(parent),
+    gainNode,
+    stored_volume: 1.0,
+    muted: false,
+    soloed: false,
+    destroyed: false,
+  };
+  // Index 0 reserved for master; user buses start at index 1.
+  if (PERRY_AUDIO_BUSES.length === 0) PERRY_AUDIO_BUSES[0] = PERRY_AUDIO_MASTER_BUS;
+  PERRY_AUDIO_BUSES.push(entry);
+  const idx = PERRY_AUDIO_BUSES.length - 1;
+  return PERRY_AUDIO_BUS_BASE + idx;
+}
+
+function perry_audio_destroy_bus(busHandle) {
+  const b = _perry_audio_get_bus(busHandle);
+  if (!b || b === PERRY_AUDIO_MASTER_BUS) return;
+  try { b.gainNode.disconnect(); } catch (_) {}
+  b.destroyed = true;
+}
+
+function perry_audio_mute_bus(busHandle, muted) {
+  const b = _perry_audio_get_bus(busHandle);
+  if (!b) return;
+  const m = Number(muted) >= 0.5;
+  b.muted = m;
+  _perry_audio_apply_solo_state();
+  if (!m && !PERRY_AUDIO_BUSES.some(x => x && x.soloed)) {
+    _perry_audio_set_gain(b.gainNode.gain, b.stored_volume, 0);
+  } else if (m) {
+    _perry_audio_set_gain(b.gainNode.gain, 0, 0);
+  }
+}
+
+function perry_audio_solo_bus(busHandle, soloed) {
+  const b = _perry_audio_get_bus(busHandle);
+  if (!b || b === PERRY_AUDIO_MASTER_BUS) return;
+  b.soloed = Number(soloed) >= 0.5;
+  _perry_audio_apply_solo_state();
+}
+
+function perry_audio_set_master_volume(volume, fadeMs) {
+  if (!_perry_audio_ctx()) return;
+  const v = Math.max(0, Number(volume) || 0);
+  PERRY_AUDIO_MASTER_BUS.stored_volume = v;
+  _perry_audio_set_gain(PERRY_AUDIO_MASTER_GAIN.gain, v, fadeMs);
+}
+
+function perry_audio_suspend() {
+  if (!PERRY_AUDIO_CTX) return;
+  try { PERRY_AUDIO_CTX.suspend(); } catch (_) {}
+}
+
+function perry_audio_resume_all() {
+  const ctx = _perry_audio_ctx();
+  if (!ctx) return;
+  const p = ctx.resume();
+  if (p && typeof p.catch === "function") p.catch(() => {
+    if (!PERRY_AUDIO_WARNED_AUTOPLAY) {
+      PERRY_AUDIO_WARNED_AUTOPLAY = true;
+      console.warn("perry/audio: resumeAll() rejected — must be called from a user gesture.");
+    }
+  });
+}
+
+function perry_audio_is_playing(handle) {
+  const kind = _perry_audio_handle_kind(handle);
+  if (kind === "playback") {
+    const v = _perry_audio_get_playback(handle);
+    return (v && !v.stopped && !v.paused) ? 1 : 0;
+  }
+  if (kind === "sound") {
+    const s = _perry_audio_get_sound(handle);
+    if (!s) return 0;
+    for (const v of PERRY_AUDIO_PLAYBACKS) {
+      if (v && v.sound === s && !v.stopped && !v.paused) return 1;
+    }
+    return 0;
+  }
+  return 0;
+}
+
+function perry_audio_get_duration(soundHandle) {
+  const s = _perry_audio_get_sound(soundHandle);
+  if (!s || !s.audioBuffer) return 0;
+  return s.audioBuffer.duration;
+}
+
+function perry_audio_get_position(playbackHandle) {
+  const ctx = _perry_audio_ctx();
+  if (!ctx) return 0;
+  const v = _perry_audio_get_playback(playbackHandle);
+  if (!v) return 0;
+  if (v.paused) return v.pauseOffset || 0;
+  if (v.stopped) return 0;
+  const elapsed = ctx.currentTime - v.startedAt;
+  if (v.sound && v.sound.audioBuffer) {
+    const d = v.sound.audioBuffer.duration;
+    if (v.loop && d > 0) return elapsed % d;
+    return Math.min(elapsed, d);
+  }
+  return elapsed;
+}
+
+function perry_audio_on_ended(playbackHandle, callback) {
+  const v = _perry_audio_get_playback(playbackHandle);
+  if (!v) return;
+  v.onEnded = (callback === undefined || callback === null) ? null : callback;
+}
+
+function perry_audio_on_loaded(soundHandle, callback) {
+  const s = _perry_audio_get_sound(soundHandle);
+  if (!s) return;
+  const cb = (callback === undefined || callback === null) ? null : callback;
+  if (s.loaded && cb) {
+    // Already loaded — fire on next microtask.
+    Promise.resolve().then(() => {
+      try { callWasmClosure(cb); }
+      catch (err) { console.warn("perry/audio onLoaded threw:", err); }
+    });
+    return;
+  }
+  s.onLoaded = cb;
+}
+
 // ---------- UI Dispatch table (maps bridge function names to implementations) ----------
 const __perryUiDispatch = {
   // Widget creation
@@ -3248,6 +4635,10 @@ const __perryUiDispatch = {
   perry_ui_widget_set_context_menu,
   // Animations
   perry_ui_animate_opacity, perry_ui_animate_position,
+  // #1546: showToast on web
+  perry_ui_show_toast,
+  // #1865: display-link callbacks (requestAnimationFrame)
+  perry_ui_on_frame, perry_ui_cancel_frame,
   // Events
   perry_ui_set_on_click, perry_ui_set_on_hover, perry_ui_set_on_double_click,
   // State
@@ -3255,6 +4646,9 @@ const __perryUiDispatch = {
   perry_ui_state_on_change, perry_ui_state_bind_text, perry_ui_state_bind_text_numeric,
   perry_ui_state_bind_slider, perry_ui_state_bind_toggle, perry_ui_state_bind_visibility,
   perry_ui_state_bind_foreach, perry_ui_state_bind_textfield,
+  // Keyed state + setText (issue #1392 — state_desugar synthetic API)
+  perry_ui_set_text, perry_ui_state_init, perry_ui_state_get_keyed, perry_ui_state_set_keyed,
+  perry_ui_foreach_register, perry_ui_navstack_register_route,
   // Text/Button/TextField ops
   perry_ui_text_set_string, perry_ui_text_set_selectable, perry_ui_text_set_wraps, perry_ui_text_set_color,
   perry_ui_button_set_bordered, perry_ui_button_set_title, perry_ui_button_set_text_color,
@@ -3270,13 +4664,15 @@ const __perryUiDispatch = {
   perry_ui_canvas_begin_path, perry_ui_canvas_move_to, perry_ui_canvas_line_to,
   perry_ui_canvas_arc, perry_ui_canvas_close_path, perry_ui_canvas_fill, perry_ui_canvas_stroke,
   perry_ui_canvas_set_line_width, perry_ui_canvas_fill_text, perry_ui_canvas_set_font,
+    perry_ui_canvas_draw_image,
   perry_ui_canvas_fill_gradient,
   // Navigation
   perry_ui_navstack_push, perry_ui_navstack_pop,
   // Picker
   perry_ui_picker_add_item, perry_ui_picker_set_selected, perry_ui_picker_get_selected,
   // Image
-  perry_ui_image_create_symbol, perry_ui_image_set_size, perry_ui_image_set_tint,
+  perry_ui_image_create_symbol, perry_ui_image_create_url,
+    perry_ui_load_image, perry_ui_image_set_size, perry_ui_image_set_tint,
   // ProgressView
   perry_ui_progressview_set_value,
   // Menu
@@ -3289,6 +4685,10 @@ const __perryUiDispatch = {
   perry_ui_open_file_dialog, perry_ui_open_folder_dialog, perry_ui_save_file_dialog, perry_ui_alert,
   // Keyboard
   perry_ui_register_global_hotkey, perry_ui_add_keyboard_shortcut,
+  perry_ui_widget_set_on_key_down, perry_ui_widget_set_on_key_up,
+  perry_ui_app_set_on_key_down, perry_ui_app_set_on_key_up,
+  perry_ui_focus_widget, perry_ui_blur_widget, perry_ui_is_key_down,
+  perry_ui_current_modifiers,
   // Sheet
   perry_ui_sheet_create, perry_ui_sheet_present, perry_ui_sheet_dismiss,
   // Toolbar
@@ -3308,6 +4708,20 @@ const __perryUiDispatch = {
   perry_ui_camera_create, perry_ui_camera_start, perry_ui_camera_stop,
   perry_ui_camera_freeze, perry_ui_camera_unfreeze,
   perry_ui_camera_sample_color, perry_ui_camera_set_on_tap,
+  // Media (issue #370) — HTML5 <audio> + Media Session API
+  perry_media_create_player, perry_media_play, perry_media_pause, perry_media_stop,
+  perry_media_seek, perry_media_set_volume, perry_media_set_rate,
+  perry_media_get_current_time, perry_media_get_duration, perry_media_get_state,
+  perry_media_is_playing, perry_media_on_state_change, perry_media_on_time_update,
+  perry_media_set_now_playing, perry_media_destroy,
+  // Audio (issue #1867) — Web Audio API: low-latency SFX + buses
+  perry_audio_load_sound, perry_audio_unload, perry_audio_play, perry_audio_stop,
+  perry_audio_pause, perry_audio_resume, perry_audio_set_volume, perry_audio_set_rate,
+  perry_audio_set_pan, perry_audio_fade_in, perry_audio_fade_out, perry_audio_crossfade,
+  perry_audio_create_bus, perry_audio_destroy_bus, perry_audio_mute_bus, perry_audio_solo_bus,
+  perry_audio_set_master_volume, perry_audio_suspend, perry_audio_resume_all,
+  perry_audio_is_playing, perry_audio_get_duration, perry_audio_get_position,
+  perry_audio_on_ended, perry_audio_on_loaded,
 };
 
 // Also expose as __perryUi for JS async function context
@@ -3344,7 +4758,7 @@ const __uiMethodMap = {
   arc: "perry_ui_canvas_arc", closePath: "perry_ui_canvas_close_path",
   fill: "perry_ui_canvas_fill", stroke: "perry_ui_canvas_stroke",
   setLineWidth: "perry_ui_canvas_set_line_width", fillText: "perry_ui_canvas_fill_text",
-  setFont: "perry_ui_canvas_set_font",
+  setFont: "perry_ui_canvas_set_font", drawImage: "perry_ui_canvas_draw_image",
   setChild: "perry_ui_scrollview_set_child", focus: "perry_ui_textfield_focus",
   setWidth: "perry_ui_widget_set_width", setHeight: "perry_ui_widget_set_height",
   matchParentWidth: "perry_ui_widget_match_parent_width",
@@ -3382,7 +4796,11 @@ function __classDispatch(objVal, mname, rawArgs) {
       const methods = classMethodTable[cls];
       if (methods && mname in methods) {
         const fn = wasmInstance?.exports.__indirect_function_table?.get(methods[mname]);
-        if (fn) return __bitsToJsValue(fn(__jsValueToBits(objVal), ...rawArgs.map(v => __jsValueToBits(v))));
+        if (fn) {
+          // Pad for omitted TS optional params (Issue #1035).
+          const padded = __padBigintArgs(fn, 1, rawArgs.map(v => __jsValueToBits(v)));
+          return __bitsToJsValue(fn(__jsValueToBits(objVal), ...padded));
+        }
       }
       cls = classParentTable[cls] || null;
     }

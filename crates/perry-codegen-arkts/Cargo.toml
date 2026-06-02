@@ -7,6 +7,7 @@ description = "ArkUI/ArkTS code generation for Perry --target harmonyos (declara
 
 [dependencies]
 perry-hir.workspace = true
+perry-types.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]

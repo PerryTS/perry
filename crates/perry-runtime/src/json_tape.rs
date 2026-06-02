@@ -30,6 +30,7 @@
 //! when Phase 2+ intercept access and skip materialization.
 
 use crate::value::JSValue;
+use std::cell::Cell;
 
 /// One tape entry. Kind + byte offset + (for container kinds) a
 /// parent/sibling pointer that lets materialization skip over
@@ -64,6 +65,85 @@ pub struct Tape {
     pub entries: Vec<TapeEntry>,
 }
 
+struct TapeScratch {
+    entries: Vec<TapeEntry>,
+    stack: Vec<u32>,
+}
+
+impl TapeScratch {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            stack: Vec::new(),
+        }
+    }
+
+    fn trim_for_reuse(&mut self) {
+        self.entries.clear();
+        self.stack.clear();
+
+        if self.entries.capacity() * std::mem::size_of::<TapeEntry>()
+            > MAX_RETAINED_TAPE_SCRATCH_BYTES
+        {
+            self.entries = Vec::new();
+        }
+        if self.stack.capacity() * std::mem::size_of::<u32>() > MAX_RETAINED_TAPE_STACK_BYTES {
+            self.stack = Vec::new();
+        }
+    }
+}
+
+const MAX_RETAINED_TAPE_SCRATCH_BYTES: usize = 1024 * 1024;
+const MAX_RETAINED_TAPE_STACK_BYTES: usize = 64 * 1024;
+
+thread_local! {
+    static TAPE_SCRATCH: Cell<Option<TapeScratch>> = Cell::new(Some(TapeScratch::new()));
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub enum JsonTapeSafepoint {
+    MaterializeObjectRooted,
+    MaterializeArrayRooted,
+    LazyArrayRooted,
+    LazyGetHeaderRooted,
+    ForceLazyHeaderRooted,
+    ForceLazyArrayRooted,
+}
+
+#[cfg(test)]
+pub type JsonTapeSafepointHook = fn(JsonTapeSafepoint, usize);
+
+#[cfg(test)]
+thread_local! {
+    static JSON_TAPE_SAFEPOINT_HOOK: Cell<Option<JsonTapeSafepointHook>> = const { Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_set_safepoint_hook(
+    hook: Option<JsonTapeSafepointHook>,
+) -> Option<JsonTapeSafepointHook> {
+    JSON_TAPE_SAFEPOINT_HOOK.with(|slot| {
+        let previous = slot.get();
+        slot.set(hook);
+        previous
+    })
+}
+
+#[cfg(test)]
+#[inline]
+fn json_tape_safepoint(point: JsonTapeSafepoint, ptr: usize) {
+    JSON_TAPE_SAFEPOINT_HOOK.with(|slot| {
+        if let Some(hook) = slot.get() {
+            hook(point, ptr);
+        }
+    });
+}
+
+#[cfg(not(test))]
+#[inline]
+fn json_tape_safepoint(_point: JsonTapeSafepoint, _ptr: usize) {}
+
 /// Build a tape from JSON bytes in one pass. Returns `None` on
 /// malformed input (caller should fall through to the direct parser
 /// which has richer error reporting).
@@ -74,15 +154,29 @@ pub struct Tape {
 /// pass be byte-scan-only (SIMD-friendly in future revisions) and
 /// avoids allocating for values that lazy access will never read.
 pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
+    let mut entries: Vec<TapeEntry> = Vec::new();
+    let mut stack: Vec<u32> = Vec::new();
+    if build_tape_into(bytes, &mut entries, &mut stack) {
+        Some(Tape { entries })
+    } else {
+        None
+    }
+}
+
+/// Build a tape into caller-provided storage. This is the hot-path
+/// variant used by `JSON.parse` so repeated parse-churn workloads do
+/// not allocate and free a fresh tape vector on every iteration.
+fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u32>) -> bool {
+    entries.clear();
+    stack.clear();
     // Pre-size: worst case is one tape entry per ~4 bytes of input
     // (single-digit integers in an array), though typical JSON is
     // closer to one per 15-20 bytes. Pre-allocating to len/8 is a
     // reasonable middle.
-    let mut entries: Vec<TapeEntry> = Vec::with_capacity(bytes.len() / 8 + 8);
+    entries.reserve(bytes.len() / 8 + 8);
     // Parallel stack of (tape index of the matching OBJ/ARR start).
     // On end-of-container, we pop and backfill the start entry's
     // `link` field with the end's tape index.
-    let mut stack: Vec<u32> = Vec::new();
     let mut pos = 0usize;
 
     // Helper: skip whitespace.
@@ -193,11 +287,11 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                             state = State::Value;
                             // Immediately parse the key.
                             if pos >= bytes.len() || bytes[pos] != b'"' {
-                                return None;
+                                return false;
                             }
                             let key_off = pos as u32;
                             if !skip_string(bytes, &mut pos) {
-                                return None;
+                                return false;
                             }
                             entries.push(TapeEntry {
                                 offset: key_off,
@@ -206,7 +300,7 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                             });
                             skip_ws(bytes, &mut pos);
                             if pos >= bytes.len() || bytes[pos] != b':' {
-                                return None;
+                                return false;
                             }
                             pos += 1;
                         }
@@ -238,7 +332,7 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                     }
                     b'"' => {
                         if !skip_string(bytes, &mut pos) {
-                            return None;
+                            return false;
                         }
                         entries.push(TapeEntry {
                             offset: tok_off,
@@ -249,7 +343,7 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                     }
                     b't' => {
                         if pos + 4 > bytes.len() || &bytes[pos..pos + 4] != b"true" {
-                            return None;
+                            return false;
                         }
                         entries.push(TapeEntry {
                             offset: tok_off,
@@ -261,7 +355,7 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                     }
                     b'f' => {
                         if pos + 5 > bytes.len() || &bytes[pos..pos + 5] != b"false" {
-                            return None;
+                            return false;
                         }
                         entries.push(TapeEntry {
                             offset: tok_off,
@@ -273,7 +367,7 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                     }
                     b'n' => {
                         if pos + 4 > bytes.len() || &bytes[pos..pos + 4] != b"null" {
-                            return None;
+                            return false;
                         }
                         entries.push(TapeEntry {
                             offset: tok_off,
@@ -292,7 +386,7 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                         });
                         state = State::AfterValue;
                     }
-                    _ => return None,
+                    _ => return false,
                 }
             }
             State::AfterValue => {
@@ -310,11 +404,11 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                             // Expect next key.
                             skip_ws(bytes, &mut pos);
                             if pos >= bytes.len() || bytes[pos] != b'"' {
-                                return None;
+                                return false;
                             }
                             let key_off = pos as u32;
                             if !skip_string(bytes, &mut pos) {
-                                return None;
+                                return false;
                             }
                             entries.push(TapeEntry {
                                 offset: key_off,
@@ -323,7 +417,7 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                             });
                             skip_ws(bytes, &mut pos);
                             if pos >= bytes.len() || bytes[pos] != b':' {
-                                return None;
+                                return false;
                             }
                             pos += 1;
                         }
@@ -353,19 +447,38 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                         pos += 1;
                         state = State::AfterValue;
                     }
-                    _ => return None,
+                    _ => return false,
                 }
             }
         }
     }
 
     if !stack.is_empty() {
-        return None;
+        return false;
     } // unclosed container
     if entries.is_empty() {
-        return None;
+        return false;
     }
-    Some(Tape { entries })
+    true
+}
+
+/// Build a tape using thread-local scratch storage, then borrow the
+/// completed entries for a caller-provided operation. Scratch is kept
+/// only while it remains modest; large blobs are allowed to return
+/// their backing allocation to the system allocator instead of pinning
+/// a high-water tape buffer for the rest of the thread.
+pub(crate) fn with_built_tape<R>(bytes: &[u8], f: impl FnOnce(&[TapeEntry]) -> R) -> Option<R> {
+    TAPE_SCRATCH.with(|cell| {
+        let mut scratch = cell.take().unwrap_or_else(TapeScratch::new);
+        let result = if build_tape_into(bytes, &mut scratch.entries, &mut scratch.stack) {
+            Some(f(&scratch.entries))
+        } else {
+            None
+        };
+        scratch.trim_for_reuse();
+        cell.set(Some(scratch));
+        result
+    })
 }
 
 /// Materialize a tape into a `JSValue` tree identical to what the
@@ -381,45 +494,122 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
 /// Returns `JSValue::null()` on empty tape (caller shouldn't invoke
 /// materialize on None tapes, but this keeps the function total).
 pub unsafe fn materialize(tape: &Tape, bytes: &[u8]) -> JSValue {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source = TapeSource::Borrowed {
+        tape: &tape.entries,
+        bytes,
+    };
     let mut idx: usize = 0;
-    materialize_value(tape, bytes, &mut idx)
+    materialize_value_source(&source, &scope, &mut idx)
 }
 
-#[inline]
-unsafe fn materialize_value(tape: &Tape, bytes: &[u8], idx: &mut usize) -> JSValue {
-    materialize_value_slice(&tape.entries, bytes, idx)
+enum TapeSource<'a, 'scope> {
+    Borrowed {
+        tape: &'a [TapeEntry],
+        bytes: &'a [u8],
+    },
+    Lazy {
+        hdr_handle: crate::gc::RuntimeHandle<'scope>,
+    },
 }
 
-/// Slice-backed recursive materializer. Used both by the top-level
-/// `materialize(&Tape, …)` entry (via the thin wrapper above) and by
-/// `materialize_from_idx` in the lazy-array force-materialize path.
-/// Operating on a borrowed slice lets the lazy path materialize
-/// without copying the tape — the inline tape bytes in the
-/// `LazyArrayHeader` are read directly.
+impl<'a, 'scope> TapeSource<'a, 'scope> {
+    #[inline]
+    unsafe fn len(&self) -> usize {
+        match self {
+            TapeSource::Borrowed { tape, .. } => tape.len(),
+            TapeSource::Lazy { hdr_handle } => {
+                let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
+                if hdr.is_null() {
+                    0
+                } else {
+                    (*hdr).tape_len as usize
+                }
+            }
+        }
+    }
+
+    #[inline]
+    unsafe fn entry(&self, idx: usize) -> Option<TapeEntry> {
+        match self {
+            TapeSource::Borrowed { tape, .. } => tape.get(idx).copied(),
+            TapeSource::Lazy { hdr_handle } => {
+                let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
+                if hdr.is_null() || idx >= (*hdr).tape_len as usize {
+                    return None;
+                }
+                let base = (hdr as *const u8).add(std::mem::size_of::<LazyArrayHeader>())
+                    as *const TapeEntry;
+                Some(*base.add(idx))
+            }
+        }
+    }
+
+    #[inline]
+    unsafe fn bytes_from_offset<'b>(&'b self, offset: usize) -> &'b [u8] {
+        match self {
+            TapeSource::Borrowed { bytes, .. } => {
+                if offset <= bytes.len() {
+                    &bytes[offset..]
+                } else {
+                    &[]
+                }
+            }
+            TapeSource::Lazy { hdr_handle } => {
+                let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
+                if hdr.is_null() {
+                    return &[];
+                }
+                let bytes = LazyArrayHeader::blob_bytes(hdr);
+                if offset <= bytes.len() {
+                    &bytes[offset..]
+                } else {
+                    &[]
+                }
+            }
+        }
+    }
+
+    #[inline]
+    fn is_lazy(&self) -> bool {
+        matches!(self, TapeSource::Lazy { .. })
+    }
+}
+
+/// Source-backed recursive materializer. The borrowed variant is used
+/// by eager tape materialization; the lazy variant re-reads tape/blob
+/// pointers through a refreshed `LazyArrayHeader` handle instead of
+/// carrying slices across safepoints.
 #[inline]
-unsafe fn materialize_value_slice(tape: &[TapeEntry], bytes: &[u8], idx: &mut usize) -> JSValue {
-    if *idx >= tape.len() {
+unsafe fn materialize_value_source(
+    source: &TapeSource<'_, '_>,
+    scope: &crate::gc::RuntimeHandleScope,
+    idx: &mut usize,
+) -> JSValue {
+    if *idx >= source.len() {
         return JSValue::null();
     }
-    let entry = tape[*idx];
+    let Some(entry) = source.entry(*idx) else {
+        return JSValue::null();
+    };
     match entry.kind {
         KIND_OBJ_START => {
             let end_idx = entry.link as usize;
             *idx += 1;
-            materialize_object(tape, bytes, idx, end_idx)
+            materialize_object(source, scope, idx, end_idx)
         }
         KIND_ARR_START => {
             let end_idx = entry.link as usize;
             *idx += 1;
-            materialize_array(tape, bytes, idx, end_idx)
+            materialize_array(source, scope, idx, end_idx)
         }
         KIND_STRING => {
             *idx += 1;
-            materialize_string_value(bytes, entry.offset as usize)
+            materialize_string_value(source, entry.offset as usize)
         }
         KIND_NUMBER => {
             *idx += 1;
-            materialize_number(bytes, entry.offset as usize)
+            materialize_number(source, entry.offset as usize)
         }
         KIND_TRUE => {
             *idx += 1;
@@ -438,41 +628,69 @@ unsafe fn materialize_value_slice(tape: &[TapeEntry], bytes: &[u8], idx: &mut us
 }
 
 unsafe fn materialize_object(
-    tape: &[TapeEntry],
-    bytes: &[u8],
+    source: &TapeSource<'_, '_>,
+    scope: &crate::gc::RuntimeHandleScope,
     idx: &mut usize,
     end_idx: usize,
 ) -> JSValue {
     let obj = crate::object::js_object_alloc(0, 0);
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    json_tape_safepoint(JsonTapeSafepoint::MaterializeObjectRooted, obj as usize);
     while *idx < end_idx {
-        let key_entry = tape[*idx];
+        let Some(key_entry) = source.entry(*idx) else {
+            break;
+        };
         debug_assert_eq!(key_entry.kind, KIND_KEY);
         *idx += 1;
-        // Extract and (possibly decode) the key bytes.
-        let key_ptr = decode_key_to_interned_string(bytes, key_entry.offset as usize);
-        let value = materialize_value_slice(tape, bytes, idx);
+        let key_ptr = decode_key_to_interned_string(source, key_entry.offset as usize);
+        let field_scope = crate::gc::RuntimeHandleScope::new();
+        let key_handle = field_scope.root_string_ptr(key_ptr);
+        let value = materialize_value_source(source, &field_scope, idx);
+        let value_handle = field_scope.root_nanbox_u64(value.bits());
+        let key_ptr =
+            key_handle.get_raw_const_ptr::<crate::StringHeader>() as *mut crate::StringHeader;
         if !key_ptr.is_null() {
-            crate::object::js_object_set_field_by_name(obj, key_ptr, f64::from_bits(value.bits()));
+            let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+            crate::object::js_object_set_field_by_name(
+                obj,
+                key_ptr,
+                f64::from_bits(value_handle.get_nanbox_u64()),
+            );
         }
     }
-    // Skip past the OBJ_END marker.
     *idx = end_idx + 1;
+    let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
     JSValue::object_ptr(obj as *mut u8)
 }
 
 unsafe fn materialize_array(
-    tape: &[TapeEntry],
-    bytes: &[u8],
+    source: &TapeSource<'_, '_>,
+    scope: &crate::gc::RuntimeHandleScope,
     idx: &mut usize,
     end_idx: usize,
 ) -> JSValue {
-    let mut arr = crate::array::js_array_alloc(16);
+    let arr = crate::array::js_array_alloc(16);
+    let arr_handle = scope.root_nanbox_u64(JSValue::object_ptr(arr as *mut u8).bits());
+    json_tape_safepoint(JsonTapeSafepoint::MaterializeArrayRooted, arr as usize);
     while *idx < end_idx {
-        let value = materialize_value_slice(tape, bytes, idx);
-        arr = crate::array::js_array_push(arr, value);
+        let elem_scope = crate::gc::RuntimeHandleScope::new();
+        let value = materialize_value_source(source, &elem_scope, idx);
+        let value_handle = elem_scope.root_nanbox_u64(value.bits());
+        let arr = array_from_nanbox_handle(&arr_handle);
+        let arr =
+            crate::array::js_array_push(arr, JSValue::from_bits(value_handle.get_nanbox_u64()));
+        arr_handle.set_nanbox_u64(JSValue::object_ptr(arr as *mut u8).bits());
     }
     *idx = end_idx + 1;
+    let arr = array_from_nanbox_handle(&arr_handle);
     JSValue::object_ptr(arr as *mut u8)
+}
+
+#[inline]
+fn array_from_nanbox_handle(
+    handle: &crate::gc::RuntimeHandle<'_>,
+) -> *mut crate::array::ArrayHeader {
+    (handle.get_nanbox_u64() & crate::value::POINTER_MASK) as *mut crate::array::ArrayHeader
 }
 
 /// Decode the string literal starting at `offset` (the opening `"`)
@@ -483,17 +701,43 @@ unsafe fn materialize_array(
 /// longlived strings and the tape path ends up ~3× slower than the
 /// direct parser which always went through the cache (`json.rs:448`
 /// keyed path in `DirectParser::parse_object`).
-unsafe fn decode_key_to_interned_string(bytes: &[u8], offset: usize) -> *mut crate::StringHeader {
-    let bytes_at_key = &bytes[offset..];
+unsafe fn decode_key_to_interned_string(
+    source: &TapeSource<'_, '_>,
+    offset: usize,
+) -> *mut crate::StringHeader {
+    let bytes_at_key = source.bytes_from_offset(offset);
     let key_bytes: Vec<u8> = match parse_string_bytes_static(bytes_at_key) {
-        Some(ParsedStr::Borrowed(slice)) => slice.to_vec(),
+        Some(ParsedStr::Borrowed(slice)) => {
+            let cached = crate::json::PARSE_KEY_CACHE.with(|c| c.borrow().get(slice).copied());
+            if let Some(p) = cached {
+                return p as *mut crate::StringHeader;
+            }
+            if source.is_lazy() {
+                let owned = slice.to_vec();
+                let p = crate::string::js_string_from_bytes_longlived(
+                    owned.as_ptr(),
+                    owned.len() as u32,
+                );
+                crate::json::PARSE_KEY_CACHE.with(|c| {
+                    c.borrow_mut().insert(owned, p);
+                });
+                return p;
+            }
+            let p =
+                crate::string::js_string_from_bytes_longlived(slice.as_ptr(), slice.len() as u32);
+            crate::json::PARSE_KEY_CACHE.with(|c| {
+                c.borrow_mut().insert(slice.to_vec(), p);
+            });
+            return p;
+        }
         Some(ParsedStr::Owned(v)) => v,
         None => return std::ptr::null_mut(),
     };
     // Two-phase lookup: check cache with immutable borrow first, then
     // allocate OUTSIDE the borrow (allocation may trigger GC →
     // `scan_parse_roots` → borrow() on same RefCell).
-    let cached = crate::json::PARSE_KEY_CACHE.with(|c| c.borrow().get(&key_bytes).copied());
+    let cached =
+        crate::json::PARSE_KEY_CACHE.with(|c| c.borrow().get(key_bytes.as_slice()).copied());
     if let Some(p) = cached {
         return p as *mut crate::StringHeader;
     }
@@ -505,8 +749,8 @@ unsafe fn decode_key_to_interned_string(bytes: &[u8], offset: usize) -> *mut cra
     p
 }
 
-unsafe fn materialize_string_value(bytes: &[u8], offset: usize) -> JSValue {
-    let bytes_at_val = &bytes[offset..];
+unsafe fn materialize_string_value(source: &TapeSource<'_, '_>, offset: usize) -> JSValue {
+    let bytes_at_val = source.bytes_from_offset(offset);
     match parse_string_bytes_static(bytes_at_val) {
         Some(ParsedStr::Borrowed(slice)) => {
             // v0.5.216 SSO: short-string values inline into the
@@ -518,7 +762,12 @@ unsafe fn materialize_string_value(bytes: &[u8], offset: usize) -> JSValue {
             if let Some(sso) = JSValue::try_short_string(slice) {
                 return sso;
             }
-            let ptr = crate::string::js_string_from_bytes(slice.as_ptr(), slice.len() as u32);
+            let ptr = if source.is_lazy() {
+                let owned = slice.to_vec();
+                crate::string::js_string_from_bytes(owned.as_ptr(), owned.len() as u32)
+            } else {
+                crate::string::js_string_from_bytes(slice.as_ptr(), slice.len() as u32)
+            };
             JSValue::string_ptr(ptr)
         }
         Some(ParsedStr::Owned(vec)) => {
@@ -532,10 +781,11 @@ unsafe fn materialize_string_value(bytes: &[u8], offset: usize) -> JSValue {
     }
 }
 
-unsafe fn materialize_number(bytes: &[u8], offset: usize) -> JSValue {
+unsafe fn materialize_number(source: &TapeSource<'_, '_>, offset: usize) -> JSValue {
     // Find the number's end using the same rules as skip_number in
     // the tape builder. Slice then parse.
-    let mut end = offset;
+    let bytes = source.bytes_from_offset(offset);
+    let mut end = 0usize;
     if end < bytes.len() && bytes[end] == b'-' {
         end += 1;
     }
@@ -557,7 +807,7 @@ unsafe fn materialize_number(bytes: &[u8], offset: usize) -> JSValue {
             end += 1;
         }
     }
-    let num_str = std::str::from_utf8_unchecked(&bytes[offset..end]);
+    let num_str = std::str::from_utf8_unchecked(&bytes[..end]);
     let value: f64 = num_str.parse().unwrap_or(0.0);
     JSValue::number(value)
 }
@@ -773,6 +1023,52 @@ mod tests {
             "TapeEntry grew beyond 12 bytes — check padding"
         );
     }
+
+    #[test]
+    fn force_materialize_numeric_lazy_array_preserves_raw_payload() {
+        let input = br#"[1,2.5,3]"#;
+        let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
+        let lazy = with_built_tape(input, |tape| unsafe {
+            alloc_lazy_array(tape, 0, count_array_length(tape, 0), text)
+        })
+        .expect("valid JSON should build a tape");
+
+        let arr = unsafe { force_materialize_lazy(lazy) };
+
+        assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 1);
+        assert_eq!(crate::array::js_array_numeric_get_f64_unboxed(arr, 0), 1.0);
+        assert_eq!(crate::array::js_array_numeric_get_f64_unboxed(arr, 1), 2.5);
+        assert_eq!(crate::array::js_array_numeric_get_f64_unboxed(arr, 2), 3.0);
+        assert_eq!(
+            crate::gc::test_layout_pointer_slot_count(arr as usize, 3),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn force_materialize_lazy_array_cache_downgrades_for_pointer_values() {
+        let input = br#"[1,2,3]"#;
+        let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
+        let lazy = with_built_tape(input, |tape| unsafe {
+            alloc_lazy_array(tape, 0, count_array_length(tape, 0), text)
+        })
+        .expect("valid JSON should build a tape");
+
+        unsafe {
+            let cached = crate::string::js_string_from_bytes(b"cached".as_ptr(), 6);
+            *(*lazy).materialized_elements.add(1) =
+                JSValue::string_ptr(cached as *mut crate::StringHeader);
+            *(*lazy).materialized_bitmap |= 1u64 << 1;
+        }
+
+        let arr = unsafe { force_materialize_lazy(lazy) };
+
+        assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 0);
+        assert_eq!(
+            crate::gc::test_layout_pointer_slot_count(arr as usize, 3),
+            Some(1)
+        );
+    }
 }
 
 impl PartialEq for TapeEntry {
@@ -908,19 +1204,32 @@ pub unsafe fn alloc_lazy_array(
     cached_length: u32,
     blob_str: *const crate::StringHeader,
 ) -> *mut LazyArrayHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let blob_handle = scope.root_string_ptr(blob_str);
     let tape_bytes = std::mem::size_of_val(tape_entries);
     let total = std::mem::size_of::<LazyArrayHeader>() + tape_bytes;
     let raw = crate::arena::arena_alloc_gc(total, 8, crate::gc::GC_TYPE_LAZY_ARRAY);
     let hdr = raw as *mut LazyArrayHeader;
-    (*hdr).magic = LAZY_ARRAY_MAGIC;
     (*hdr).cached_length = cached_length;
+    (*hdr).magic = LAZY_ARRAY_MAGIC;
     (*hdr).root_idx = root_idx;
     (*hdr).tape_len = tape_entries.len() as u32;
-    (*hdr).blob_str = blob_str;
+    (*hdr).blob_str = blob_handle.get_raw_const_ptr::<crate::StringHeader>();
     (*hdr).materialized = std::ptr::null_mut();
+    (*hdr).materialized_elements = std::ptr::null_mut();
+    (*hdr).materialized_bitmap = std::ptr::null_mut();
     (*hdr).walk_idx = u32::MAX;
     (*hdr).walk_tape_pos = 0;
     (*hdr).cumulative_walk_steps = 0;
+    let hdr_handle = scope.root_raw_mut_ptr(hdr);
+    json_tape_safepoint(JsonTapeSafepoint::LazyArrayRooted, hdr as usize);
+    let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
+    (*hdr).blob_str = blob_handle.get_raw_const_ptr::<crate::StringHeader>();
+    note_lazy_raw_slot(
+        hdr,
+        &(*hdr).blob_str as *const _ as usize,
+        (*hdr).blob_str as usize,
+    );
     // Allocate the sparse cache + bitmap in the arena so GC traces
     // them together with the header. The cache is an array of
     // `cached_length` JSValue slots; the bitmap is
@@ -944,19 +1253,34 @@ pub unsafe fn alloc_lazy_array(
         // stale JSValue from a prior LazyArrayHeader gives us a
         // cross-parse ghost cache hit.
         std::ptr::write_bytes(cache_raw, 0, cache_bytes);
+        let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
         (*hdr).materialized_elements = cache_raw as *mut crate::value::JSValue;
+        note_lazy_raw_slot(
+            hdr,
+            &(*hdr).materialized_elements as *const _ as usize,
+            cache_raw as usize,
+        );
         let bitmap_words = (cached_length as usize).div_ceil(64);
         let bitmap_bytes = bitmap_words * 8;
         let bitmap_raw = crate::arena::arena_alloc_gc(bitmap_bytes, 8, crate::gc::GC_TYPE_STRING);
         std::ptr::write_bytes(bitmap_raw, 0, bitmap_bytes);
+        let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
         (*hdr).materialized_bitmap = bitmap_raw as *mut u64;
-    } else {
-        (*hdr).materialized_elements = std::ptr::null_mut();
-        (*hdr).materialized_bitmap = std::ptr::null_mut();
+        note_lazy_raw_slot(
+            hdr,
+            &(*hdr).materialized_bitmap as *const _ as usize,
+            bitmap_raw as usize,
+        );
     }
-    let tape_dst = (raw as *mut u8).add(std::mem::size_of::<LazyArrayHeader>()) as *mut TapeEntry;
+    let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
+    let tape_dst = (hdr as *mut u8).add(std::mem::size_of::<LazyArrayHeader>()) as *mut TapeEntry;
     std::ptr::copy_nonoverlapping(tape_entries.as_ptr(), tape_dst, tape_entries.len());
-    hdr
+    hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>()
+}
+
+#[inline]
+unsafe fn note_lazy_raw_slot(hdr: *mut LazyArrayHeader, slot_addr: usize, child_addr: usize) {
+    crate::gc::runtime_write_barrier_slot(hdr as usize, slot_addr, child_addr as u64);
 }
 
 /// Count top-level elements in the tape's root array. Hops forward
@@ -1005,6 +1329,13 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     if hdr.is_null() {
         return JSValue::from_bits(crate::value::TAG_UNDEFINED);
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let hdr_handle = scope.root_raw_mut_ptr(hdr);
+    json_tape_safepoint(JsonTapeSafepoint::LazyGetHeaderRooted, hdr as usize);
+    let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
+    if hdr.is_null() {
+        return JSValue::from_bits(crate::value::TAG_UNDEFINED);
+    }
     // Fast path 1: full-materialize already triggered. Read from
     // the real array at arr+8+i*8.
     let mat = (*hdr).materialized;
@@ -1036,13 +1367,15 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     }
 
     // Cold path: walk tape to entry i, materialize subtree, cache.
-    let tape = LazyArrayHeader::tape_slice(hdr);
-    let bytes = LazyArrayHeader::blob_bytes(hdr);
+    let source = TapeSource::Lazy { hdr_handle };
     let root = (*hdr).root_idx as usize;
-    if root >= tape.len() || tape[root].kind != KIND_ARR_START {
+    let Some(root_entry) = source.entry(root) else {
+        return JSValue::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    if root_entry.kind != KIND_ARR_START {
         return JSValue::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let end = tape[root].link as usize;
+    let end = root_entry.link as usize;
 
     // Walk cursor optimization: sequential access
     // (`for i in 0..len { parsed[i] }`) would otherwise be O(n²) —
@@ -1063,9 +1396,12 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
 
     let mut element_count = start_count;
     while idx < end && element_count < i {
-        let k = tape[idx].kind;
+        let Some(entry) = source.entry(idx) else {
+            return JSValue::from_bits(crate::value::TAG_UNDEFINED);
+        };
+        let k = entry.kind;
         if k == KIND_OBJ_START || k == KIND_ARR_START {
-            idx = tape[idx].link as usize + 1;
+            idx = entry.link as usize + 1;
         } else {
             idx += 1;
         }
@@ -1085,9 +1421,19 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     (*hdr).walk_tape_pos = idx as u32;
     (*hdr).cumulative_walk_steps = (*hdr).cumulative_walk_steps.saturating_add(step_cost);
 
-    let value = materialize_from_idx(tape, bytes, idx);
+    let value = materialize_from_idx_source(&source, &scope, idx);
+    let value_handle = scope.root_nanbox_u64(value.bits());
+    let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
+    let bitmap = (*hdr).materialized_bitmap;
+    let cache = (*hdr).materialized_elements;
     if !bitmap.is_null() && !cache.is_null() {
-        *cache.add(i as usize) = value;
+        let value_bits = value_handle.get_nanbox_u64();
+        *cache.add(i as usize) = JSValue::from_bits(value_bits);
+        crate::gc::runtime_write_barrier_slot(
+            hdr as usize,
+            cache.add(i as usize) as usize,
+            value_bits,
+        );
         let word_idx = (i as usize) / 64;
         let bit_idx = (i as usize) % 64;
         *bitmap.add(word_idx) |= 1u64 << bit_idx;
@@ -1100,11 +1446,12 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     // step) trips after ~4 accesses on a 10k array. Post-trip,
     // every subsequent `lazy_get` hits the fast path at the top of
     // the function (materialized != null → direct ArrayHeader read).
+    let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
     if (*hdr).cumulative_walk_steps > (cached_length as u64) * 2 {
         force_materialize_lazy(hdr);
     }
 
-    value
+    JSValue::from_bits(value_handle.get_nanbox_u64())
 }
 
 /// Force-materialize a lazy array into an `ArrayHeader`-backed tree.
@@ -1115,13 +1462,20 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
     if hdr.is_null() {
         return std::ptr::null_mut();
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let hdr_handle = scope.root_raw_mut_ptr(hdr);
+    json_tape_safepoint(JsonTapeSafepoint::ForceLazyHeaderRooted, hdr as usize);
+    let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
+    if hdr.is_null() {
+        return std::ptr::null_mut();
+    }
     if !(*hdr).materialized.is_null() {
         return (*hdr).materialized;
     }
     let cached_length = (*hdr).cached_length;
     let bitmap = (*hdr).materialized_bitmap;
     let cache = (*hdr).materialized_elements;
-    let has_cache_hits = if !bitmap.is_null() && cached_length > 0 {
+    let has_cache_hits = if !bitmap.is_null() && !cache.is_null() && cached_length > 0 {
         let words = (cached_length as usize).div_ceil(64);
         let mut any = false;
         for w in 0..words {
@@ -1138,12 +1492,18 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
     // Fast path: no cache hits — the tape is authoritative for
     // every element, walk it top-to-bottom.
     if !has_cache_hits {
-        let tape = LazyArrayHeader::tape_slice(hdr);
-        let bytes = LazyArrayHeader::blob_bytes(hdr);
+        let source = TapeSource::Lazy { hdr_handle };
         let root = (*hdr).root_idx as usize;
-        let js = materialize_from_idx(tape, bytes, root);
-        let arr_ptr = (js.bits() & crate::value::POINTER_MASK) as *mut crate::array::ArrayHeader;
+        let js = materialize_from_idx_source(&source, &scope, root);
+        let arr_handle = scope.root_nanbox_u64(js.bits());
+        let arr_ptr = array_from_nanbox_handle(&arr_handle);
+        let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
         (*hdr).materialized = arr_ptr;
+        note_lazy_raw_slot(
+            hdr,
+            &(*hdr).materialized as *const _ as usize,
+            arr_ptr as usize,
+        );
         return arr_ptr;
     }
 
@@ -1152,39 +1512,75 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
     // set (preserves mutations + identity); otherwise materialize
     // from the tape. Build the array element-by-element.
     let arr_ptr = crate::array::js_array_alloc(cached_length);
-    let elements_ptr =
-        (arr_ptr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
-    let tape = LazyArrayHeader::tape_slice(hdr);
-    let bytes = LazyArrayHeader::blob_bytes(hdr);
+    let arr_handle = scope.root_nanbox_u64(JSValue::object_ptr(arr_ptr as *mut u8).bits());
+    json_tape_safepoint(JsonTapeSafepoint::ForceLazyArrayRooted, arr_ptr as usize);
+    let source = TapeSource::Lazy { hdr_handle };
+    let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
     let root = (*hdr).root_idx as usize;
-    if root < tape.len() && tape[root].kind == KIND_ARR_START {
-        let end = tape[root].link as usize;
+    if let Some(root_entry) = source.entry(root) {
+        if root_entry.kind != KIND_ARR_START {
+            let arr_ptr = array_from_nanbox_handle(&arr_handle);
+            let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
+            (*hdr).materialized = arr_ptr;
+            note_lazy_raw_slot(
+                hdr,
+                &(*hdr).materialized as *const _ as usize,
+                arr_ptr as usize,
+            );
+            return arr_ptr;
+        }
+        let end = root_entry.link as usize;
         let mut idx = root + 1;
         for i in 0..cached_length as usize {
             if idx >= end {
                 break;
             }
+            let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
+            let bitmap = (*hdr).materialized_bitmap;
+            let cache = (*hdr).materialized_elements;
+            if bitmap.is_null() || cache.is_null() {
+                break;
+            }
             let word_idx = i / 64;
             let bit_idx = i % 64;
             let use_cache = (*bitmap.add(word_idx)) & (1u64 << bit_idx) != 0;
+            let elem_scope = crate::gc::RuntimeHandleScope::new();
             let value = if use_cache {
                 *cache.add(i)
             } else {
                 let mut walk_idx = idx;
-                materialize_value_slice(tape, bytes, &mut walk_idx)
+                materialize_value_source(&source, &elem_scope, &mut walk_idx)
             };
-            *elements_ptr.add(i) = value.bits();
+            let value_handle = elem_scope.root_nanbox_u64(value.bits());
+            let arr_ptr = array_from_nanbox_handle(&arr_handle);
+            let elements_ptr = (arr_ptr as *mut u8)
+                .add(std::mem::size_of::<crate::array::ArrayHeader>())
+                as *mut u64;
+            let value_bits = value_handle.get_nanbox_u64();
+            *elements_ptr.add(i) = value_bits;
+            (*arr_ptr).length = (i + 1) as u32;
+            crate::array::note_array_slot(arr_ptr, i, value_bits);
             // Advance tape cursor past this element.
-            let k = tape[idx].kind;
+            let Some(entry) = source.entry(idx) else {
+                break;
+            };
+            let k = entry.kind;
             if k == KIND_OBJ_START || k == KIND_ARR_START {
-                idx = tape[idx].link as usize + 1;
+                idx = entry.link as usize + 1;
             } else {
                 idx += 1;
             }
         }
     }
+    let arr_ptr = array_from_nanbox_handle(&arr_handle);
     (*arr_ptr).length = cached_length;
+    let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
     (*hdr).materialized = arr_ptr;
+    note_lazy_raw_slot(
+        hdr,
+        &(*hdr).materialized as *const _ as usize,
+        arr_ptr as usize,
+    );
     arr_ptr
 }
 
@@ -1196,6 +1592,16 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
 /// and showed up as a 2-3× slowdown on `bench_json_readonly_indexed`
 /// vs the direct parser).
 pub unsafe fn materialize_from_idx(tape: &[TapeEntry], bytes: &[u8], start_idx: usize) -> JSValue {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source = TapeSource::Borrowed { tape, bytes };
+    materialize_from_idx_source(&source, &scope, start_idx)
+}
+
+unsafe fn materialize_from_idx_source(
+    source: &TapeSource<'_, '_>,
+    scope: &crate::gc::RuntimeHandleScope,
+    start_idx: usize,
+) -> JSValue {
     let mut idx = start_idx;
-    materialize_value_slice(tape, bytes, &mut idx)
+    materialize_value_source(source, scope, &mut idx)
 }

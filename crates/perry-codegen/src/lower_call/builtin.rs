@@ -16,7 +16,7 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
+use crate::expr::{lower_array_literal, lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
 use crate::types::{DOUBLE, I32, I64};
 
@@ -27,7 +27,184 @@ pub(super) fn lower_builtin_new(
     class_name: &str,
     args: &[Expr],
 ) -> Result<Option<String>> {
+    // Issue #602: ambiguously-named built-in constructors (Client / Pool /
+    // Database / Redis / MongoClient / Decimal) collide with default-import
+    // aliases from unrelated packages — `import Client from "better-sqlite3"`
+    // would otherwise dispatch through pg's Client arm and emit an undefined
+    // `js_pg_client_new` reference at link time. When `class_name` matches an
+    // ambiguous arm AND we know the import source is NOT the package the arm
+    // is for, return `None` so `lower_new` falls through to the generic path.
+    // Names without a recorded import source (top-level globals, locally-
+    // defined classes already filtered upstream, etc.) keep their pre-#602
+    // behavior — the arm still fires.
+    let import_src = ctx
+        .imported_class_sources
+        .get(class_name)
+        .map(|s| s.as_str());
+    let arm_mismatches_source = match (class_name, import_src) {
+        ("Client", Some(src)) => src != "pg",
+        ("Pool", Some(src)) => src != "pg",
+        ("Database", Some(src)) => src != "better-sqlite3",
+        ("DatabaseSync", Some(src)) => src != "sqlite",
+        ("Session", Some(src)) => src != "sqlite",
+        ("StatementSync", Some(src)) => src != "sqlite",
+        ("Redis", Some(src)) => src != "ioredis" && src != "redis",
+        ("MongoClient", Some(src)) => src != "mongodb",
+        ("Decimal", Some(src)) => src != "decimal.js",
+        _ => false,
+    };
+    if arm_mismatches_source {
+        return Ok(None);
+    }
     match class_name {
+        "Utf8Stream"
+            if import_src
+                .map(|source| source.strip_prefix("node:").unwrap_or(source) == "fs")
+                .unwrap_or(false) =>
+        {
+            let options = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for arg in args.iter().skip(1) {
+                let _ = lower_expr(ctx, arg)?;
+            }
+            Ok(Some(ctx.block().call(
+                DOUBLE,
+                "js_fs_utf8_stream_new",
+                &[(DOUBLE, &options)],
+            )))
+        }
+        "EvalError" | "URIError" => {
+            let msg_box = if let Some(message) = args.first() {
+                lower_expr(ctx, message)?
+            } else {
+                lower_expr(ctx, &Expr::String(String::new()))?
+            };
+            for arg in args.iter().skip(1) {
+                let _ = lower_expr(ctx, arg)?;
+            }
+            let blk = ctx.block();
+            let msg_handle = unbox_to_i64(blk, &msg_box);
+            let runtime = if class_name == "EvalError" {
+                "js_evalerror_new"
+            } else {
+                "js_urierror_new"
+            };
+            let err_handle = blk.call(I64, runtime, &[(I64, &msg_handle)]);
+            Ok(Some(nanbox_pointer_inline(blk, &err_handle)))
+        }
+        // `new RegExp(pattern)` / `new RegExp(pattern, flags)` — call
+        // js_regexp_new directly so the resulting object is a real
+        // RegExpHeader (registered in REGEX_POINTERS, .test/.exec/etc
+        // dispatch correctly). Refs #486 — hono's `buildWildcardRegExp`
+        // does `new RegExp(path === "*" ? "" : ...)`. Pre-fix, the
+        // generic Expr::New path fell through to the placeholder
+        // js_object_alloc(0,0) and the resulting "fake regex" never
+        // actually matched anything (`.test("/")` returned false on every
+        // input — caused middleware-vs-route lookup in
+        // RegExpRouter.add's wildcard branch to skip every push, leaving
+        // matchResult[0] missing the middleware entry). Compile-time
+        // RegExp LITERALS (`/foo/g`) already lower through Expr::RegExp
+        // at expr.rs:4964 — this arm covers the runtime `new RegExp(arg)`
+        // form where the pattern argument is a non-literal expression.
+        // `new ArrayBuffer(size)` — issue #579. Pre-fix this fell through
+        // to the empty-ObjectHeader placeholder and `new Uint8Array(ab)`
+        // views silently allocated independent storage (no aliasing). The
+        // runtime's `js_array_buffer_new` allocates a real BufferHeader
+        // that subsequent Uint8Array views share by pointer (see
+        // `js_uint8array_new` in `crates/perry-runtime/src/buffer.rs`:
+        // sources that ARE registered buffers but NOT marked as
+        // Uint8Array — i.e. ArrayBuffers — are aliased rather than
+        // copied). SharedArrayBuffer uses the same storage allocation with a
+        // separate runtime registry so util.types can distinguish it.
+        "ArrayBuffer" | "SharedArrayBuffer" => {
+            let size_box = if !args.is_empty() {
+                lower_expr(ctx, &args[0])?
+            } else {
+                double_literal(0.0)
+            };
+            let blk = ctx.block();
+            let runtime = if class_name == "SharedArrayBuffer" {
+                "js_shared_array_buffer_new_value"
+            } else {
+                "js_array_buffer_new_value"
+            };
+            let handle = blk.call(I64, runtime, &[(DOUBLE, &size_box)]);
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "Uint8Array" if args.len() >= 2 => {
+            let source = lower_expr(ctx, &args[0])?;
+            let offset = lower_expr(ctx, &args[1])?;
+            let offset_i32 = ctx.block().fptosi(DOUBLE, &offset, I32);
+            let length_i32 = if args.len() >= 3 {
+                let length = lower_expr(ctx, &args[2])?;
+                ctx.block().fptosi(DOUBLE, &length, I32)
+            } else {
+                "-1".to_string()
+            };
+            let handle = ctx.block().call(
+                I64,
+                "js_uint8array_view",
+                &[(DOUBLE, &source), (I32, &offset_i32), (I32, &length_i32)],
+            );
+            Ok(Some(nanbox_pointer_inline(ctx.block(), &handle)))
+        }
+        // Minimal DataView support for BufferSource consumers such as
+        // StringDecoder: Perry models ArrayBuffer/Uint8Array storage as a
+        // BufferHeader, so `new DataView(buffer)` can create a registered view
+        // over that backing store for byte-extraction call sites.
+        "DataView" => {
+            // Pass the raw NaN-boxed arguments (undefined when absent) so the
+            // runtime can apply the spec's ToIndex/range validation and throw
+            // TypeError/RangeError where required (#3657).
+            let view_box = if !args.is_empty() {
+                lower_expr(ctx, &args[0])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let offset_box = if args.len() >= 2 {
+                lower_expr(ctx, &args[1])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let length_box = if args.len() >= 3 {
+                lower_expr(ctx, &args[2])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            Ok(Some(ctx.block().call(
+                DOUBLE,
+                "js_data_view_new",
+                &[
+                    (DOUBLE, &view_box),
+                    (DOUBLE, &offset_box),
+                    (DOUBLE, &length_box),
+                ],
+            )))
+        }
+        "RegExp" => {
+            let pattern_box = if !args.is_empty() {
+                lower_expr(ctx, &args[0])?
+            } else {
+                double_literal(0.0)
+            };
+            let flags_box = if args.len() > 1 {
+                lower_expr(ctx, &args[1])?
+            } else {
+                double_literal(0.0)
+            };
+            let blk = ctx.block();
+            let pattern_handle = unbox_to_i64(blk, &pattern_box);
+            let flags_handle = unbox_to_i64(blk, &flags_box);
+            let handle = blk.call(
+                I64,
+                "js_regexp_new",
+                &[(I64, &pattern_handle), (I64, &flags_handle)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
         // commander Command — `new Command()` allocates a real CommanderHandle
         // via the runtime constructor so subsequent `.command(...).action(...)
         // .parse(...)` calls operate on a registered handle. Without this,
@@ -48,12 +225,235 @@ pub(super) fn lower_builtin_new(
         // every .on/.emit call dispatched against a junk pointer and
         // silently registered nothing / fired nothing.
         "EventEmitter" => {
+            let opts = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_event_emitter_new_with_options", &[(DOUBLE, &opts)]);
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "EventEmitterAsyncResource" => {
+            let opts = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_event_emitter_async_resource_new",
+                &[(DOUBLE, &opts)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "EventTarget" => {
             for a in args {
                 let _ = lower_expr(ctx, a)?;
             }
             let blk = ctx.block();
-            let handle = blk.call(I64, "js_event_emitter_new", &[]);
+            let handle = blk.call(I64, "js_event_target_new", &[]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "MessageChannel" => {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            Ok(Some(blk.call(DOUBLE, "js_message_channel_new", &[])))
+        }
+        "MessagePort" => {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            Ok(Some(blk.call(
+                DOUBLE,
+                "js_message_port_constructor_error",
+                &[],
+            )))
+        }
+        "BroadcastChannel" => {
+            let name = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            Ok(Some(blk.call(
+                DOUBLE,
+                "js_broadcast_channel_new",
+                &[(DOUBLE, &name)],
+            )))
+        }
+        "Event" => {
+            let event_type = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let options = if let Some(a) = args.get(1) {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(2) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let argc = args.len().to_string();
+            let handle = blk.call(
+                I64,
+                "js_event_new",
+                &[(DOUBLE, &event_type), (DOUBLE, &options), (I32, &argc)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "CustomEvent" => {
+            let event_type = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let options = if let Some(a) = args.get(1) {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(2) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let argc = args.len().to_string();
+            let handle = blk.call(
+                I64,
+                "js_custom_event_new",
+                &[(DOUBLE, &event_type), (DOUBLE, &options), (I32, &argc)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "DOMException" => {
+            let message = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let name = if let Some(a) = args.get(1) {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(2) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_dom_exception_new",
+                &[(DOUBLE, &message), (DOUBLE, &name)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "Console" => {
+            let opts = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            if let Some(stderr_arg) = args.get(1) {
+                let stderr = lower_expr(ctx, stderr_arg)?;
+                for a in args.iter().skip(2) {
+                    let _ = lower_expr(ctx, a)?;
+                }
+                return Ok(Some(ctx.block().call(
+                    DOUBLE,
+                    "js_console_new2",
+                    &[(DOUBLE, &opts), (DOUBLE, &stderr)],
+                )));
+            }
+            Ok(Some(ctx.block().call(
+                DOUBLE,
+                "js_console_new",
+                &[(DOUBLE, &opts)],
+            )))
+        }
+        // node:perf_hooks — `new PerformanceObserver(cb)` registers the
+        // observer and returns its `perf_observer` namespace object (already
+        // NaN-boxed). `cb` is passed through so the runtime can invoke it on
+        // flush; absent → undefined.
+        "PerformanceObserver" => {
+            let cb = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            Ok(Some(ctx.block().call(
+                DOUBLE,
+                "js_perf_observer_new",
+                &[(DOUBLE, &cb)],
+            )))
+        }
+        // string_decoder.StringDecoder — issue #848. `new StringDecoder("utf8")`
+        // pre-fix fell through to the generic `js_object_alloc(0, 0)` placeholder,
+        // so `dec.write` / `dec.end` were `undefined`. Allocate a real handle
+        // here; `common/dispatch.rs` dispatches the instance methods + getters
+        // through HANDLE_METHOD_DISPATCH / HANDLE_PROPERTY_DISPATCH. Encoding
+        // arg is passed through so future non-UTF-8 backends can switch on it;
+        // the current impl only tracks the UTF-8 partial-codepoint state.
+        "StringDecoder" => {
+            let enc_box = if !args.is_empty() {
+                lower_expr(ctx, &args[0])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let enc_handle = unbox_to_i64(blk, &enc_box);
+            let handle = blk.call(I64, "js_string_decoder_new", &[(I64, &enc_handle)]);
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        // node:stream — `new Readable(opts)` / `new Writable(opts)` /
+        // `new Duplex(opts)` / `new Transform(opts)` / `new PassThrough(opts)`.
+        // Issue #631. Pre-fix the generic Expr::New path produced an empty
+        // ObjectHeader, so `r.on`, `r.pipe`, `.read`, etc. were undefined and
+        // any downstream call crashed. The runtime helpers in
+        // `perry-runtime/src/node_stream.rs` build an ObjectHeader with each
+        // method name keyed to a NaN-boxed closure pointer that captures the
+        // host object — `typeof r.on === "function"` and chained
+        // `.on(...).on(...).pipe(...)` calls return `this` so the chain
+        // doesn't lose identity. Stub semantics only: no real data pump.
+        "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough" => {
+            let opts_box = if !args.is_empty() {
+                lower_expr(ctx, &args[0])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            // Lower any extra args for side effects.
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let runtime_fn = match class_name {
+                "Readable" => "js_node_stream_readable_new",
+                "Writable" => "js_node_stream_writable_new",
+                "Duplex" => "js_node_stream_duplex_new",
+                "Transform" => "js_node_stream_transform_new",
+                "PassThrough" => "js_node_stream_passthrough_new",
+                _ => unreachable!(),
+            };
+            let result = ctx.block().call(DOUBLE, runtime_fn, &[(DOUBLE, &opts_box)]);
+            Ok(Some(result))
         }
         // lru-cache LRUCache — `new LRUCache({ max: N })`. Runtime takes
         // a single `max: f64`. Extract the `max` field from the options
@@ -142,6 +542,65 @@ pub(super) fn lower_builtin_new(
             let handle = blk.call(I64, "js_sqlite_open", &[(I64, &path_ptr)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        // node:sqlite DatabaseSync — keep full NaN-boxed values for path and
+        // options so the runtime can preserve Node-shaped validation errors.
+        "DatabaseSync" => {
+            let path_value = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let options_value = if let Some(arg) = args.get(1) {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_node_sqlite_database_sync_new",
+                &[(DOUBLE, &path_value), (DOUBLE, &options_value)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "StatementSync" => {
+            let arg0 = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let arg1 = if let Some(arg) = args.get(1) {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_node_sqlite_statement_sync_new",
+                &[(DOUBLE, &arg0), (DOUBLE, &arg1)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "Session" => {
+            let arg0 = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let arg1 = if let Some(arg) = args.get(1) {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_node_sqlite_session_new",
+                &[(DOUBLE, &arg0), (DOUBLE, &arg1)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
         // mongodb MongoClient — `new MongoClient(uri)` matching npm mongodb's
         // API. URI is a string; runtime stores it and connects later via
         // `await client.connect()`.
@@ -189,6 +648,94 @@ pub(super) fn lower_builtin_new(
             let handle = blk.call(I64, "js_async_local_storage_new", &[]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        // #1367: `new crypto.X509Certificate(pem | der)` — parse the cert
+        // into a handle exposing subject/issuer/validFrom/validTo/
+        // serialNumber/fingerprint/fingerprint256/ca/raw. The arg is a PEM
+        // string or DER Buffer; unbox to its raw pointer for the runtime
+        // parser (`js_crypto_x509_new` returns an already-NaN-boxed handle).
+        "X509Certificate" => {
+            let input = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let blk = ctx.block();
+            let input_handle = unbox_to_i64(blk, &input);
+            Ok(Some(blk.call(
+                DOUBLE,
+                "js_crypto_x509_new",
+                &[(I64, &input_handle)],
+            )))
+        }
+        "AsyncResource" => {
+            let type_value = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let options_value = if let Some(arg) = args.get(1) {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_async_resource_new",
+                &[(DOUBLE, &type_value), (DOUBLE, &options_value)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        // #2875: TC39 explicit-resource-management stacks. `new
+        // DisposableStack()` / `new AsyncDisposableStack()` allocate a
+        // GC-managed stack object (NaN-boxed pointer) so the instance methods
+        // (`use` / `adopt` / `defer` / `dispose` / `move` / `disposed`)
+        // dispatch through the `__disposable__` rows in native_table.
+        "DisposableStack" => {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_disposable_stack_new", &[]);
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "AsyncDisposableStack" => {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_async_disposable_stack_new", &[]);
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        // #2875: `new SuppressedError(error, suppressed, message?)` — an
+        // Error-subclass object carrying `.error` / `.suppressed` /
+        // `.message` / `.name`. The runtime ctor registers the class id as
+        // extending Error (once) so `instanceof Error` holds; the property
+        // reads flow through the ordinary by-name object getter.
+        "SuppressedError" => {
+            let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let error = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                undef.clone()
+            };
+            let suppressed = if let Some(a) = args.get(1) {
+                lower_expr(ctx, a)?
+            } else {
+                undef.clone()
+            };
+            let message = if let Some(a) = args.get(2) {
+                lower_expr(ctx, a)?
+            } else {
+                undef.clone()
+            };
+            let blk = ctx.block();
+            Ok(Some(blk.call(
+                DOUBLE,
+                "js_suppressed_error_new",
+                &[(DOUBLE, &error), (DOUBLE, &suppressed), (DOUBLE, &message)],
+            )))
+        }
         // decimal.js Decimal — `new Decimal(value)` where value is a number,
         // string, or another Decimal. Routes through `js_decimal_coerce_to_handle`
         // which NaN-decodes the JSValue and dispatches to `from_number` /
@@ -207,29 +754,41 @@ pub(super) fn lower_builtin_new(
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         "Array" => {
-            // `new Array()` → empty array, `new Array(n)` → length-n array
-            // (zero-initialized slots), `new Array(a, b, c)` → 3-element array
-            // [a, b, c]. We handle the no-arg and single-numeric-arg cases
-            // here. Multi-arg / non-numeric single arg falls back to the
-            // generic Expr::New path.
-            let blk = ctx.block();
-            let handle = if args.is_empty() {
-                blk.call(I64, "js_array_create", &[])
-            } else if args.len() == 1 {
-                let cap = lower_expr(ctx, &args[0])?;
+            // `new Array()` → empty array, `new Array(n)` → length-n sparse
+            // array after runtime validation, and `new Array(value)` with a
+            // non-number argument → one-element array.
+            if args.is_empty() {
                 let blk = ctx.block();
-                let cap_i32 = blk.fptosi(DOUBLE, &cap, I32);
-                blk.call(I64, "js_array_alloc_with_length", &[(I32, &cap_i32)])
-            } else {
-                return Ok(None);
-            };
-            let blk = ctx.block();
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+                let handle = blk.call(I64, "js_array_create", &[]);
+                let blk = ctx.block();
+                return Ok(Some(nanbox_pointer_inline(blk, &handle)));
+            }
+            if args.len() == 1 {
+                let value = lower_expr(ctx, &args[0])?;
+                let blk = ctx.block();
+                let handle = blk.call(I64, "js_array_constructor_single", &[(DOUBLE, &value)]);
+                let blk = ctx.block();
+                return Ok(Some(nanbox_pointer_inline(blk, &handle)));
+            }
+            // #3985: `Array(a, b, c, ...)` / `new Array(a, b, ...)` with ≥2 args
+            // is the element-list form — semantically identical to the
+            // `[a, b, c, ...]` literal (only the single-number form means
+            // "length"). Previously this returned `Ok(None)` and fell back to a
+            // generic path that produced a length-0 array.
+            let arr = lower_array_literal(ctx, args)?;
+            Ok(Some(arr))
         }
         "Response" => {
             // new Response(body?, init?) — init = { status?, statusText?, headers? }
+            // Route the body through js_response_body_init_ptr (not the plain
+            // string coercion) so a ReadableStream body — e.g. Hono's
+            // `new Response(res.body, res)` header re-wrap — is drained to its
+            // bytes instead of stringified to its numeric stream handle.
+            // Non-stream bodies coerce exactly as get_raw_string_ptr did.
             let body_ptr = if !args.is_empty() {
-                get_raw_string_ptr(ctx, &args[0])?
+                let v = lower_expr(ctx, &args[0])?;
+                let blk = ctx.block();
+                blk.call(I64, "js_response_body_init_ptr", &[(DOUBLE, &v)])
             } else {
                 "0".to_string()
             };
@@ -265,8 +824,59 @@ pub(super) fn lower_builtin_new(
                         }
                     }
                 } else {
-                    // Not an object literal — still evaluate for side effects.
-                    let _ = lower_expr(ctx, &args[1])?;
+                    // Fix #421 (v0.5.575): the second arg is a runtime
+                    // object (not an object literal) — happens when
+                    // user code does `new Response(body, opts)` where
+                    // `opts` is bound from elsewhere. Hono's
+                    // `c.text(body, status)` path builds `{ status,
+                    // headers }` inside `#newResponse` and passes it
+                    // here. Previously perry just evaluated the arg
+                    // for side effects and dropped status/headers,
+                    // so every hono response had perry-default
+                    // status (200) and no headers — `res.status`
+                    // read undefined because the response never
+                    // got a status to begin with. Now we extract
+                    // `.status` / `.statusText` / `.headers` at
+                    // runtime via `js_object_get_field_by_name_f64`
+                    // and feed them to `js_response_new`.
+                    let opts_val = lower_expr(ctx, &args[1])?;
+                    let blk = ctx.block();
+                    let opts_handle = crate::expr::unbox_to_i64(blk, &opts_val);
+
+                    // Helper: intern a key, load its raw string ptr,
+                    // call js_object_get_field_by_name_f64.
+                    let get_field = |ctx_inner: &mut FnCtx<'_>, key: &str| -> Result<String> {
+                        let key_idx = ctx_inner.strings.intern(key);
+                        let key_global =
+                            format!("@{}", ctx_inner.strings.entry(key_idx).handle_global);
+                        let blk = ctx_inner.block();
+                        let key_box = blk.load(DOUBLE, &key_global);
+                        let key_bits = blk.bitcast_double_to_i64(&key_box);
+                        let key_raw = blk.and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
+                        let opts_handle_local = opts_handle.clone();
+                        Ok(blk.call(
+                            DOUBLE,
+                            "js_object_get_field_by_name_f64",
+                            &[(I64, &opts_handle_local), (I64, &key_raw)],
+                        ))
+                    };
+
+                    // status: NaN-boxed f64. The runtime treats NaN /
+                    // 0 as "use default 200" so a missing field flows
+                    // through cleanly.
+                    status_val = get_field(ctx, "status")?;
+                    // statusText: NaN-boxed string. Strip to raw ptr
+                    // for the FFI signature.
+                    let st_box = get_field(ctx, "statusText")?;
+                    let blk = ctx.block();
+                    status_text_ptr =
+                        blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &st_box)]);
+                    // headers: NaN-boxed Headers handle (an f64
+                    // numeric id from `js_headers_new`). Pass through
+                    // verbatim — js_response_new accepts the raw f64.
+                    // Defensive: strip NaN-box tag if hono / user code
+                    // wrapped it as a pointer.
+                    headers_handle = get_field(ctx, "headers")?;
                 }
             }
 
@@ -285,17 +895,96 @@ pub(super) fn lower_builtin_new(
             Ok(Some(handle))
         }
 
+        // Issue #1211: `new Blob(parts, opts)` / `new File(parts, name, opts)`.
+        // `parts` is a JS array of mixed string/Buffer/Blob inputs — the
+        // runtime helper (`js_blob_new` / `js_file_new`) walks the array
+        // and concatenates the bytes. Locals bound by `const b = new Blob(...)`
+        // are tagged `("blob", "Blob")` in `destructuring/var_decl.rs` so
+        // subsequent property/method access dispatches through the
+        // `module == "blob"` arm above.
+        "Blob" => {
+            let parts = if !args.is_empty() {
+                lower_expr(ctx, &args[0])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let mut type_str = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            if args.len() >= 2 {
+                if let Some(props) = extract_options_fields(ctx, &args[1]) {
+                    for (k, vexpr) in &props {
+                        if k == "type" {
+                            type_str = lower_expr(ctx, vexpr)?;
+                        } else {
+                            let _ = lower_expr(ctx, vexpr)?;
+                        }
+                    }
+                } else {
+                    let _ = lower_expr(ctx, &args[1])?;
+                }
+            }
+            let handle = ctx.block().call(
+                DOUBLE,
+                "js_blob_new",
+                &[(DOUBLE, &parts), (DOUBLE, &type_str)],
+            );
+            Ok(Some(handle))
+        }
+
+        "File" => {
+            let parts = if !args.is_empty() {
+                lower_expr(ctx, &args[0])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let name = if args.len() >= 2 {
+                lower_expr(ctx, &args[1])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let mut type_str = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            // NaN signals "use Date.now()" inside the runtime helper.
+            let mut last_modified = double_literal(f64::NAN);
+            if args.len() >= 3 {
+                if let Some(props) = extract_options_fields(ctx, &args[2]) {
+                    for (k, vexpr) in &props {
+                        match k.as_str() {
+                            "type" => type_str = lower_expr(ctx, vexpr)?,
+                            "lastModified" => last_modified = lower_expr(ctx, vexpr)?,
+                            _ => {
+                                let _ = lower_expr(ctx, vexpr)?;
+                            }
+                        }
+                    }
+                } else {
+                    let _ = lower_expr(ctx, &args[2])?;
+                }
+            }
+            let handle = ctx.block().call(
+                DOUBLE,
+                "js_file_new",
+                &[
+                    (DOUBLE, &parts),
+                    (DOUBLE, &name),
+                    (DOUBLE, &type_str),
+                    (DOUBLE, &last_modified),
+                ],
+            );
+            Ok(Some(handle))
+        }
+
         "Headers" => {
             // new Headers(init?) — init can be an object literal or another
-            // Headers/array iterable. Only inline object literals are
-            // handled so far; anything else falls back to empty.
+            // Headers/array iterable.
             let h = ctx.block().call(DOUBLE, "js_headers_new", &[]);
             if !args.is_empty() {
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
                     for (k, vexpr) in &props {
                         let key_expr = Expr::String(k.clone());
                         let key_ptr = get_raw_string_ptr(ctx, &key_expr)?;
-                        let val_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                        let value = lower_expr(ctx, vexpr)?;
+                        let val_ptr =
+                            ctx.block()
+                                .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &value)]);
                         ctx.block().call(
                             DOUBLE,
                             "js_headers_set",
@@ -303,14 +992,27 @@ pub(super) fn lower_builtin_new(
                         );
                     }
                 } else {
-                    let _ = lower_expr(ctx, &args[0])?;
+                    let init = lower_expr(ctx, &args[0])?;
+                    ctx.block().call(
+                        DOUBLE,
+                        "js_headers_init_from_value",
+                        &[(DOUBLE, &h), (DOUBLE, &init)],
+                    );
                 }
             }
             Ok(Some(h))
         }
 
+        "FormData" => {
+            // new FormData() — Perry's current native registry stores string
+            // values, which covers deterministic constructor/mutator parity
+            // for append/set/delete/get/getAll/has/iteration.
+            let h = ctx.block().call(DOUBLE, "js_form_data_new", &[]);
+            Ok(Some(h))
+        }
+
         "Request" => {
-            // new Request(url, init?) — init = { method?, body?, headers? }
+            // new Request(url, init?) — init = Fetch RequestInit subset.
             let url_ptr = if !args.is_empty() {
                 get_raw_string_ptr(ctx, &args[0])?
             } else {
@@ -320,6 +1022,16 @@ pub(super) fn lower_builtin_new(
             let mut method_ptr = "0".to_string();
             let mut body_ptr = "0".to_string();
             let mut headers_handle = "0.0".to_string();
+            let mut referrer_ptr = "0".to_string();
+            let mut referrer_policy_ptr = "0".to_string();
+            let mut mode_ptr = "0".to_string();
+            let mut credentials_ptr = "0".to_string();
+            let mut cache_ptr = "0".to_string();
+            let mut redirect_ptr = "0".to_string();
+            let mut integrity_ptr = "0".to_string();
+            let mut keepalive = double_literal(f64::from_bits(crate::nanbox::TAG_FALSE));
+            let mut duplex_ptr = "0".to_string();
+            let mut signal = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
 
             if args.len() >= 2 {
                 if let Some(props) = extract_options_fields(ctx, &args[1]) {
@@ -337,6 +1049,36 @@ pub(super) fn lower_builtin_new(
                                 } else {
                                     headers_handle = lower_expr(ctx, vexpr)?;
                                 }
+                            }
+                            "referrer" => {
+                                referrer_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "referrerPolicy" => {
+                                referrer_policy_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "mode" => {
+                                mode_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "credentials" => {
+                                credentials_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "cache" => {
+                                cache_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "redirect" => {
+                                redirect_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "integrity" => {
+                                integrity_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "keepalive" => {
+                                keepalive = lower_expr(ctx, vexpr)?;
+                            }
+                            "duplex" => {
+                                duplex_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "signal" => {
+                                signal = lower_expr(ctx, vexpr)?;
                             }
                             _ => {
                                 let _ = lower_expr(ctx, vexpr)?;
@@ -356,6 +1098,16 @@ pub(super) fn lower_builtin_new(
                     (I64, &method_ptr),
                     (I64, &body_ptr),
                     (DOUBLE, &headers_handle),
+                    (I64, &referrer_ptr),
+                    (I64, &referrer_policy_ptr),
+                    (I64, &mode_ptr),
+                    (I64, &credentials_ptr),
+                    (I64, &cache_ptr),
+                    (I64, &redirect_ptr),
+                    (I64, &integrity_ptr),
+                    (DOUBLE, &keepalive),
+                    (I64, &duplex_ptr),
+                    (DOUBLE, &signal),
                 ],
             );
             Ok(Some(handle))
@@ -369,7 +1121,8 @@ pub(super) fn lower_builtin_new(
             let mut start = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut pull = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut cancel = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let mut hwm = double_literal(1.0);
+            let mut source_type = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let mut strategy = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             if !args.is_empty() {
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
                     for (k, vexpr) in &props {
@@ -383,6 +1136,9 @@ pub(super) fn lower_builtin_new(
                             "cancel" => {
                                 cancel = lower_expr(ctx, vexpr)?;
                             }
+                            "type" => {
+                                source_type = lower_expr(ctx, vexpr)?;
+                            }
                             _ => {
                                 let _ = lower_expr(ctx, vexpr)?;
                             }
@@ -393,36 +1149,45 @@ pub(super) fn lower_builtin_new(
                 }
             }
             if args.len() >= 2 {
-                if let Some(qprops) = extract_options_fields(ctx, &args[1]) {
-                    for (k, vexpr) in &qprops {
-                        if k == "highWaterMark" {
-                            hwm = lower_expr(ctx, vexpr)?;
-                        }
-                    }
-                }
+                strategy = lower_expr(ctx, &args[1])?;
             }
             let h = ctx.block().call(
                 DOUBLE,
-                "js_readable_stream_new",
+                "js_readable_stream_new_with_strategy_and_source_type",
                 &[
                     (DOUBLE, &start),
                     (DOUBLE, &pull),
                     (DOUBLE, &cancel),
-                    (DOUBLE, &hwm),
+                    (DOUBLE, &strategy),
+                    (DOUBLE, &source_type),
                 ],
             );
             Ok(Some(h))
         }
 
         "WritableStream" => {
+            if matches!(args.first(), Some(Expr::Null)) {
+                for arg in args {
+                    let _ = lower_expr(ctx, arg)?;
+                }
+                let h = ctx
+                    .block()
+                    .call(DOUBLE, "js_writable_stream_throw_invalid_sink", &[]);
+                return Ok(Some(h));
+            }
+            let mut start = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut write = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut close = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut abort = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let mut sink_type = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut hwm = double_literal(1.0);
             if !args.is_empty() {
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
                     for (k, vexpr) in &props {
                         match k.as_str() {
+                            "start" => {
+                                start = lower_expr(ctx, vexpr)?;
+                            }
                             "write" => {
                                 write = lower_expr(ctx, vexpr)?;
                             }
@@ -432,6 +1197,9 @@ pub(super) fn lower_builtin_new(
                             "abort" => {
                                 abort = lower_expr(ctx, vexpr)?;
                             }
+                            "type" => {
+                                sink_type = lower_expr(ctx, vexpr)?;
+                            }
                             _ => {
                                 let _ = lower_expr(ctx, vexpr)?;
                             }
@@ -448,22 +1216,32 @@ pub(super) fn lower_builtin_new(
                             hwm = lower_expr(ctx, vexpr)?;
                         }
                     }
+                } else {
+                    let strategy = lower_expr(ctx, &args[1])?;
+                    hwm = ctx.block().call(
+                        DOUBLE,
+                        "js_streams_strategy_high_water_mark",
+                        &[(DOUBLE, &strategy)],
+                    );
                 }
             }
             let h = ctx.block().call(
                 DOUBLE,
-                "js_writable_stream_new",
+                "js_writable_stream_new_with_sink_type",
                 &[
+                    (DOUBLE, &start),
                     (DOUBLE, &write),
                     (DOUBLE, &close),
                     (DOUBLE, &abort),
                     (DOUBLE, &hwm),
+                    (DOUBLE, &sink_type),
                 ],
             );
             Ok(Some(h))
         }
 
         "TransformStream" => {
+            let mut start = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut transform = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut flush = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut hwm = double_literal(1.0);
@@ -471,6 +1249,9 @@ pub(super) fn lower_builtin_new(
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
                     for (k, vexpr) in &props {
                         match k.as_str() {
+                            "start" => {
+                                start = lower_expr(ctx, vexpr)?;
+                            }
                             "transform" => {
                                 transform = lower_expr(ctx, vexpr)?;
                             }
@@ -498,8 +1279,50 @@ pub(super) fn lower_builtin_new(
             let h = ctx.block().call(
                 DOUBLE,
                 "js_transform_stream_new",
-                &[(DOUBLE, &transform), (DOUBLE, &flush), (DOUBLE, &hwm)],
+                &[
+                    (DOUBLE, &start),
+                    (DOUBLE, &transform),
+                    (DOUBLE, &flush),
+                    (DOUBLE, &hwm),
+                ],
             );
+            Ok(Some(h))
+        }
+
+        "TextEncoderStream" | "TextDecoderStream" => {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let runtime = if class_name == "TextEncoderStream" {
+                "js_text_encoder_stream_new"
+            } else {
+                "js_text_decoder_stream_new"
+            };
+            let h = ctx.block().call(DOUBLE, runtime, &[]);
+            Ok(Some(h))
+        }
+
+        // node:stream/web QueuingStrategy classes (#1545). Both take a single
+        // `{ highWaterMark }` options object; the runtime reads
+        // `opts.highWaterMark` and builds a `{ highWaterMark, size }` object.
+        // CountQueuingStrategy.size() returns 1, ByteLengthQueuingStrategy.size(chunk)
+        // returns chunk.byteLength. Pass the whole options expression through so
+        // both literal (`{ highWaterMark: 5 }`) and dynamic option objects work.
+        "CountQueuingStrategy" | "ByteLengthQueuingStrategy" => {
+            let opts = if !args.is_empty() {
+                lower_expr(ctx, &args[0])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let func = if class_name == "CountQueuingStrategy" {
+                "js_count_queuing_strategy_new"
+            } else {
+                "js_byte_length_queuing_strategy_new"
+            };
+            let h = ctx.block().call(DOUBLE, func, &[(DOUBLE, &opts)]);
             Ok(Some(h))
         }
 
@@ -521,26 +1344,41 @@ pub(super) fn lower_builtin_new(
             Ok(Some(nanbox_pointer_inline(blk, &p)))
         }
         "WeakMap" => {
-            // Lower init iterable args for side effects; the runtime's
-            // js_weakmap_new takes no args and the HIR lowering of
-            // `.set(k,v)` calls dispatch on the resulting handle.
-            for a in args {
-                let _ = lower_expr(ctx, a)?;
-            }
+            let lowered_args = args
+                .iter()
+                .map(|a| lower_expr(ctx, a))
+                .collect::<Result<Vec<_>>>()?;
             let handle = ctx.block().call(I64, "js_weakmap_new", &[]);
             // js_weakmap_new returns a raw `*mut ObjectHeader` — NaN-box
             // with POINTER_TAG so subsequent `js_weakmap_*` calls can
             // `js_nanbox_get_pointer` on the f64.
             let boxed = nanbox_pointer_inline(ctx.block(), &handle);
-            Ok(Some(boxed))
+            if let Some(iterable) = lowered_args.first() {
+                Ok(Some(ctx.block().call(
+                    DOUBLE,
+                    "js_weakmap_init_iterable",
+                    &[(DOUBLE, &boxed), (DOUBLE, iterable)],
+                )))
+            } else {
+                Ok(Some(boxed))
+            }
         }
         "WeakSet" => {
-            for a in args {
-                let _ = lower_expr(ctx, a)?;
-            }
+            let lowered_args = args
+                .iter()
+                .map(|a| lower_expr(ctx, a))
+                .collect::<Result<Vec<_>>>()?;
             let handle = ctx.block().call(I64, "js_weakset_new", &[]);
             let boxed = nanbox_pointer_inline(ctx.block(), &handle);
-            Ok(Some(boxed))
+            if let Some(iterable) = lowered_args.first() {
+                Ok(Some(ctx.block().call(
+                    DOUBLE,
+                    "js_weakset_init_iterable",
+                    &[(DOUBLE, &boxed), (DOUBLE, iterable)],
+                )))
+            } else {
+                Ok(Some(boxed))
+            }
         }
         "AbortController" => {
             // Lower any incidental args for side effects (shouldn't have any).
@@ -568,6 +1406,36 @@ pub(super) fn lower_builtin_new(
             let blk = ctx.block();
             let handle = blk.call(I64, "js_ws_server_new", &[(DOUBLE, &opts)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        // Issue #606 — `new WebSocket(url)` from `import { WebSocket } from
+        // "ws"`. npm ws's API is sync-ctor: returns the client handle
+        // immediately and connects in the background; the user's
+        // `client.on("open", cb)` then registers a listener that fires
+        // once the connect completes. The previous lower path treated
+        // `new WebSocket(...)` as a no-op `Expr::New` and let the
+        // method-dispatch tower invoke `js_ws_connect` (which returns a
+        // Promise, not a handle), so `client.on(...)` was being called
+        // against a promise pointer and silently no-op'd. Routing
+        // through `js_ws_connect_start` returns the handle synchronously
+        // and the connect runs as a sibling tokio task that pushes an
+        // Open / Error event when complete.
+        "WebSocket" => {
+            let url_box = if !args.is_empty() {
+                lower_expr(ctx, &args[0])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            ctx.pending_declares
+                .push(("js_ws_connect_start".to_string(), DOUBLE, vec![DOUBLE]));
+            let blk = ctx.block();
+            // js_ws_connect_start returns the ws_id as a plain f64
+            // (1.0, 2.0, …). Convert to i64 then NaN-box with
+            // POINTER_TAG so the standard `unbox_to_i64` receiver
+            // contract recovers the right ws_id at every method call
+            // site (`client.on(...)`, `.send(...)`, `.close()`).
+            let raw_f64 = blk.call(DOUBLE, "js_ws_connect_start", &[(DOUBLE, &url_box)]);
+            let raw_i64 = blk.fptosi(DOUBLE, &raw_f64, I64);
+            Ok(Some(nanbox_pointer_inline(blk, &raw_i64)))
         }
 
         _ => Ok(None),

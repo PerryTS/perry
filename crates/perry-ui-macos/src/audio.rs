@@ -2,7 +2,10 @@ use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::fs::File;
+use std::io::Write;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 
 // =============================================================================
 // Shared atomic state — written by audio thread, read by main thread
@@ -24,6 +27,17 @@ static WAVEFORM_WRITE_INDEX: AtomicU64 = AtomicU64::new(0);
 /// - Only one writer (audio thread via tap callback)
 /// - Reader (main thread) tolerates stale reads
 static mut WAVEFORM_BUFFER: [f64; WAVEFORM_SIZE] = [0.0; WAVEFORM_SIZE];
+
+// =============================================================================
+// Recording state
+// =============================================================================
+
+static RECORDING: AtomicBool = AtomicBool::new(false);
+static RECORDED_SAMPLES: Mutex<Vec<f32>> = Mutex::new(Vec::new());
+static OUTPUT_FILENAME: Mutex<String> = Mutex::new(String::new());
+/// Sample rate captured live from the input format. Bits of an f64.
+/// 0 means "not yet observed"; stop_recording falls back to 48000 in that case.
+static RECORDING_SAMPLE_RATE: AtomicU64 = AtomicU64::new(0);
 
 // =============================================================================
 // A-weighting IIR filter state (per audio session)
@@ -291,6 +305,101 @@ pub fn get_device_model() -> i64 {
     unsafe { js_string_from_bytes(model.as_ptr(), model.len() as i32) }
 }
 
+/// Set the output filename a subsequent `start_recording()` will write to.
+/// Stored separately from the recording flag so callers can configure the
+/// destination once and toggle recording on/off without re-passing it.
+pub fn set_output_filename(filename: &str) {
+    let mut slot = OUTPUT_FILENAME.lock().unwrap();
+    slot.clear();
+    slot.push_str(filename);
+}
+
+/// Begin accumulating microphone samples into the recording buffer. The
+/// AVAudioEngine tap installed by `start()` must already be running — calling
+/// this without `audioStart()` produces an empty WAV.
+pub fn start_recording() {
+    RECORDED_SAMPLES.lock().unwrap().clear();
+    RECORDING.store(true, Ordering::Relaxed);
+}
+
+/// Stop recording and flush the accumulated samples to the configured filename
+/// as a 16-bit mono PCM WAV. No-op if no filename was set or no samples were
+/// captured. The recording flag is cleared first so the audio thread stops
+/// appending before we drain the buffer.
+pub fn stop_recording() {
+    RECORDING.store(false, Ordering::Relaxed);
+
+    let filename = {
+        let mut slot = OUTPUT_FILENAME.lock().unwrap();
+        if slot.is_empty() {
+            return;
+        }
+        std::mem::take(&mut *slot)
+    };
+
+    let samples = std::mem::take(&mut *RECORDED_SAMPLES.lock().unwrap());
+    if samples.is_empty() {
+        return;
+    }
+
+    let observed = f64::from_bits(RECORDING_SAMPLE_RATE.load(Ordering::Relaxed));
+    let sample_rate = if observed > 0.0 {
+        observed as u32
+    } else {
+        48_000
+    };
+
+    if let Ok(mut file) = File::create(&filename) {
+        let _ = write_wav_header(&mut file, samples.len() as u32, sample_rate);
+        let _ = write_wav_samples(&mut file, &samples);
+    }
+}
+
+// =============================================================================
+// WAV file utilities — 16-bit mono PCM
+// =============================================================================
+
+fn write_u32_le(writer: &mut File, value: u32) -> std::io::Result<()> {
+    writer.write_all(&value.to_le_bytes())
+}
+
+fn write_u16_le(writer: &mut File, value: u16) -> std::io::Result<()> {
+    writer.write_all(&value.to_le_bytes())
+}
+
+fn write_wav_header(writer: &mut File, num_samples: u32, sample_rate: u32) -> std::io::Result<()> {
+    let bits_per_sample: u16 = 16;
+    let channels: u16 = 1;
+    let byte_rate = sample_rate * u32::from(channels) * u32::from(bits_per_sample) / 8;
+    let block_align = u32::from(channels) * u32::from(bits_per_sample) / 8;
+    let data_size = num_samples * u32::from(channels) * u32::from(bits_per_sample) / 8;
+    let chunk_size = 36 + data_size;
+
+    writer.write_all(b"RIFF")?;
+    write_u32_le(writer, chunk_size)?;
+    writer.write_all(b"WAVE")?;
+    writer.write_all(b"fmt ")?;
+    write_u32_le(writer, 16)?;
+    write_u16_le(writer, 1)?;
+    write_u16_le(writer, channels)?;
+    write_u32_le(writer, sample_rate)?;
+    write_u32_le(writer, byte_rate)?;
+    write_u16_le(writer, block_align as u16)?;
+    write_u16_le(writer, bits_per_sample)?;
+    writer.write_all(b"data")?;
+    write_u32_le(writer, data_size)?;
+    Ok(())
+}
+
+fn write_wav_samples(writer: &mut File, samples: &[f32]) -> std::io::Result<()> {
+    for &sample in samples {
+        let clamped = sample.clamp(-1.0, 1.0);
+        let int_sample = (clamped * i16::MAX as f32) as i16;
+        writer.write_all(&int_sample.to_le_bytes())?;
+    }
+    Ok(())
+}
+
 // =============================================================================
 // Internal: Audio processing
 // =============================================================================
@@ -329,6 +438,16 @@ unsafe fn process_audio_buffer(buffer: *mut AnyObject, sample_rate: f64) {
     }
 
     let n = frame_length as usize;
+
+    // Capture samples into the recording buffer if recording is active.
+    // The atomic flag is checked first to avoid acquiring the mutex on
+    // every buffer in the common (non-recording) case. Sample rate is
+    // also stored so stop_recording can write the correct WAV header.
+    if RECORDING.load(Ordering::Relaxed) {
+        RECORDING_SAMPLE_RATE.store(sample_rate.to_bits(), Ordering::Relaxed);
+        let slice = std::slice::from_raw_parts(samples, n);
+        RECORDED_SAMPLES.lock().unwrap().extend_from_slice(slice);
+    }
 
     // Apply A-weighting and compute RMS
     let mut sum_sq = 0.0f64;

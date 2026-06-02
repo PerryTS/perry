@@ -1,9 +1,48 @@
 //! Diagnostic emitters for different output formats.
 
+use crate::compat_report::{is_reportable_code, maybe_enqueue_for_diagnostic, ReportStage};
 use crate::diagnostic::{Diagnostic, Diagnostics, Severity};
 use crate::source_cache::SourceCache;
 use crate::span::LabelStyle;
 use std::io::Write;
+
+/// #849 chokepoint: extract the raw snippet for `diagnostic` from the
+/// `SourceCache` and forward it to the compat-report queue if the code
+/// is in the targeted set AND a sink is installed.
+///
+/// All three emitters call this from their `emit` implementation. It's
+/// the single place in the codebase where a diagnostic's source snippet
+/// becomes a candidate report — keeps emission policy out of the
+/// per-crate diagnostic-construction sites.
+pub fn forward_to_compat_report_channel(diagnostic: &Diagnostic, cache: &SourceCache) {
+    if !is_reportable_code(diagnostic.code) {
+        return;
+    }
+    let span = diagnostic.span;
+    if span.is_dummy() {
+        return;
+    }
+    let Some(file) = cache.get_file(span.file_id) else {
+        return;
+    };
+    // Pull the snippet (offset slice) from the file. Stay within bounds.
+    let src = &file.source;
+    let start = (span.start as usize).min(src.len());
+    let end = (span.end as usize).min(src.len()).max(start);
+    if start == end {
+        return;
+    }
+    // Find a UTF-8 char boundary at or after `start` and at or before `end`.
+    let start = (start..=end)
+        .find(|&i| src.is_char_boundary(i))
+        .unwrap_or(start);
+    let end = (start..=end)
+        .rev()
+        .find(|&i| src.is_char_boundary(i))
+        .unwrap_or(end);
+    let snippet = &src[start..end];
+    maybe_enqueue_for_diagnostic(diagnostic.code, snippet, ReportStage::HirLower, None, None);
+}
 
 /// Trait for emitting diagnostics in various formats.
 pub trait DiagnosticEmitter {
@@ -76,6 +115,11 @@ impl<W: Write> TerminalEmitter<W> {
 
 impl<W: Write> DiagnosticEmitter for TerminalEmitter<W> {
     fn emit(&mut self, diagnostic: &Diagnostic, cache: &SourceCache) -> std::io::Result<()> {
+        // #849: single chokepoint — enqueue a compatibility report when
+        // the diagnostic code is in the targeted set. No-op when no
+        // sink is installed.
+        forward_to_compat_report_channel(diagnostic, cache);
+
         let color = self.severity_color(diagnostic.severity);
         let reset = self.reset();
         let bold = self.bold();
@@ -223,6 +267,9 @@ impl<W: Write> JsonEmitter<W> {
 
 impl<W: Write> DiagnosticEmitter for JsonEmitter<W> {
     fn emit(&mut self, diagnostic: &Diagnostic, cache: &SourceCache) -> std::io::Result<()> {
+        // #849 chokepoint — see TerminalEmitter::emit comment.
+        forward_to_compat_report_channel(diagnostic, cache);
+
         let loc = cache.location(diagnostic.span);
 
         let json = serde_json::json!({
@@ -284,6 +331,9 @@ impl<W: Write> SimpleEmitter<W> {
 
 impl<W: Write> DiagnosticEmitter for SimpleEmitter<W> {
     fn emit(&mut self, diagnostic: &Diagnostic, cache: &SourceCache) -> std::io::Result<()> {
+        // #849 chokepoint — see TerminalEmitter::emit comment.
+        forward_to_compat_report_channel(diagnostic, cache);
+
         let loc = cache.location(diagnostic.span);
 
         if let Some(loc) = loc {
