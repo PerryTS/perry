@@ -492,6 +492,14 @@ https_server_setter!(
     js_node_https_server_set_keep_alive_timeout,
     keep_alive_timeout
 );
+https_server_getter!(
+    js_node_https_server_keep_alive_timeout_buffer,
+    keep_alive_timeout_buffer
+);
+https_server_setter!(
+    js_node_https_server_set_keep_alive_timeout_buffer,
+    keep_alive_timeout_buffer
+);
 https_server_getter!(js_node_https_server_request_timeout, request_timeout);
 https_server_setter!(js_node_https_server_set_request_timeout, request_timeout);
 https_server_getter!(js_node_https_server_idle_timeout, idle_timeout);

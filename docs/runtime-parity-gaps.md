@@ -731,7 +731,6 @@ Runtime-created fs SystemError metadata is covered by parity fixtures: sync, cal
 - `server[Symbol.asyncDispose]()`
 - `server.headersTimeout`
 - `server.keepAliveTimeout`
-- `server.keepAliveTimeoutBuffer`
 - `server.listening`
 - `server.maxHeadersCount`
 - `server.maxRequestsPerSocket`
