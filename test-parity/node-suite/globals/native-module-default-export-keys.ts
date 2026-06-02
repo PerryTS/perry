@@ -27,3 +27,21 @@ for (const k of ["serialize", "deserialize", "Serializer", "getHeapStatistics", 
 
 // `Object.keys` and `hasOwnProperty` agree on the enumerated surface.
 console.log("hasOwnProperty agrees:", Object.keys(utilTypes).every((k) => Object.prototype.hasOwnProperty.call(utilTypes, k)));
+
+// Every enumerated v8 key resolves to a value via dynamic read (no `undefined`
+// holes), matching Node's `typeof` for each.
+const v8Keys = [
+  "cachedDataVersionTag", "getHeapStatistics", "getHeapSpaceStatistics", "getHeapCodeStatistics",
+  "setFlagsFromString", "Serializer", "Deserializer", "DefaultSerializer", "DefaultDeserializer",
+  "deserialize", "takeCoverage", "stopCoverage", "serialize", "promiseHooks", "startupSnapshot",
+  "setHeapSnapshotNearHeapLimit", "GCProfiler",
+];
+for (const k of v8Keys) {
+  console.log("typeof v8." + k + ":", typeof (v8 as any)[k]);
+}
+
+// A captured/aliased v8 helper invokes its real implementation.
+const serialize = (v8 as any).serialize;
+const deserialize = (v8 as any).deserialize;
+console.log("v8 serialize roundtrip:", JSON.stringify(deserialize(serialize({ a: 1, b: [2, 3] }))));
+console.log("v8 cachedDataVersionTag bound typeof:", typeof (v8 as any).cachedDataVersionTag());

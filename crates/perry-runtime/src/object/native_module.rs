@@ -1983,19 +1983,6 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
         }
     }
 
-    // #3679: node:v8 lifecycle namespaces. `v8.startupSnapshot` /
-    // `v8.promiseHooks` are object-valued exports; resolve them to
-    // dedicated native-module namespace objects so `typeof === "object"` and
-    // their methods dispatch through `dispatch_native_module_method`.
-    if module_name == "v8" && matches!(property_name, "startupSnapshot" | "promiseHooks") {
-        let submodule = if property_name == "startupSnapshot" {
-            "v8.startupSnapshot"
-        } else {
-            "v8.promiseHooks"
-        };
-        return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
-    }
-
     if let Some(val) = get_native_module_constant(module_name, property_name, 0.0) {
         return val;
     }
@@ -2284,6 +2271,16 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("v8", "getCppHeapStatistics" | "startCpuProfile") => Some(0),
         ("v8", "getHeapSnapshot" | "isStringOneByteRepresentation" | "queryObjects") => Some(1),
         ("v8", "writeHeapSnapshot") => Some(2),
+        // #3906: implemented top-level v8 helpers reachable as bound callables.
+        ("v8", "serialize" | "deserialize") => Some(1),
+        (
+            "v8",
+            "getHeapStatistics"
+            | "getHeapSpaceStatistics"
+            | "getHeapCodeStatistics"
+            | "cachedDataVersionTag"
+            | "GCProfiler",
+        ) => Some(0),
         ("net", "_normalizeArgs") => Some(1),
         ("net", "_createServerHandle") => Some(5),
         ("domain", "Domain" | "createDomain" | "create") => Some(0),
@@ -3796,6 +3793,20 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("v8", "takeCoverage")
             | ("v8", "stopCoverage")
             | ("v8", "setHeapSnapshotNearHeapLimit")
+            // #3906: the implemented serialize/heap-introspection helpers read
+            // as bound callables too, so `const s = v8.serialize` / `v8[k]`
+            // (and `Object.keys(v8).map(k => v8[k])`) match Node instead of
+            // returning undefined. Invocation routes through
+            // dispatch_native_module_method. `GCProfiler` is a constructor
+            // (construction lowers via new_dynamic.rs); the value read is a
+            // function per Node.
+            | ("v8", "serialize")
+            | ("v8", "deserialize")
+            | ("v8", "getHeapStatistics")
+            | ("v8", "getHeapSpaceStatistics")
+            | ("v8", "getHeapCodeStatistics")
+            | ("v8", "cachedDataVersionTag")
+            | ("v8", "GCProfiler")
             // #3904: modern V8 diagnostics/profiler named exports (function-valued).
             | ("v8", "getCppHeapStatistics")
             | ("v8", "getHeapSnapshot")
@@ -4156,6 +4167,25 @@ pub(crate) unsafe fn get_native_module_constant(
         if let Some(value) = cjs_default_export_value(module_name) {
             return Some(value);
         }
+    }
+
+    // #3906/#3679: node:v8 lifecycle namespaces. `v8.startupSnapshot` /
+    // `v8.promiseHooks` are object-valued exports; resolve them to dedicated
+    // native-module namespace objects so `typeof === "object"` and their
+    // methods dispatch through `dispatch_native_module_method`. Handled here
+    // (rather than only in the codegen `js_native_module_property_by_name`
+    // path) so dynamic reads — `v8["promiseHooks"]`, `const { promiseHooks } =
+    // v8` — resolve to the same object instead of `undefined`.
+    if module_name == "v8" && matches!(property, "startupSnapshot" | "promiseHooks") {
+        let submodule = if property == "startupSnapshot" {
+            "v8.startupSnapshot"
+        } else {
+            "v8.promiseHooks"
+        };
+        return Some(js_create_native_module_namespace(
+            submodule.as_ptr(),
+            submodule.len(),
+        ));
     }
 
     let o_nofollow: f64 = {

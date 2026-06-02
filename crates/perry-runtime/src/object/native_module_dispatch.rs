@@ -1769,6 +1769,18 @@ pub(crate) unsafe fn dispatch_native_module_method(
             }
         }
 
+        // #3906: top-level v8 helpers invoked through a bound callable
+        // (`const s = v8.serialize; s(x)`). The method-call form
+        // (`v8.serialize(x)`) already lowers through the codegen
+        // NATIVE_MODULE_TABLE; these arms keep the value-read/bound-call form
+        // coherent with the same FFI impls.
+        ("v8", "serialize") => crate::node_v8::js_v8_serialize(arg(0)),
+        ("v8", "deserialize") => crate::node_v8::js_v8_deserialize(arg(0)),
+        ("v8", "getHeapStatistics") => crate::node_v8::js_v8_get_heap_statistics(),
+        ("v8", "getHeapSpaceStatistics") => crate::node_v8::js_v8_get_heap_space_statistics(),
+        ("v8", "getHeapCodeStatistics") => crate::node_v8::js_v8_get_heap_code_statistics(),
+        ("v8", "cachedDataVersionTag") => crate::node_v8::js_v8_cached_data_version_tag(),
+
         // #3142: `new v8.GCProfiler()` is the "v8.GCProfiler" namespace.
         // `start()` returns undefined; `stop()` returns the report object.
         ("v8.GCProfiler", "start") => f64::from_bits(JSValue::undefined().bits()),
