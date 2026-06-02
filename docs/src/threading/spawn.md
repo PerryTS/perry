@@ -45,6 +45,14 @@ Like `parallelMap`, `spawn` closures can capture outer variables. They are deep-
 
 Mutable variables cannot be captured — this is enforced at compile time.
 
+### File System Handles
+
+Do not capture numeric fds or `fs.promises.FileHandle` objects for file I/O in
+`spawn`. Perry's fd registry is per thread: a numeric fd captured from the main
+thread is not open in the worker, and a captured `FileHandle` arrives detached
+with `fd === -1`. Capture a path string instead, then call `fs.openSync` or
+`fs.promises.open` inside the spawned function.
+
 ## Returning Complex Values
 
 `spawn` can return any value type. Complex values (objects, arrays, strings) are serialized back to the main thread automatically:

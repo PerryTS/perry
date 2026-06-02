@@ -260,10 +260,25 @@ fn not_iterable_prefix(value: f64) -> String {
     "object".to_string()
 }
 
-/// Build a rejected Promise carrying a `TypeError: <prefix> is not iterable
-/// (cannot read property Symbol(Symbol.iterator))` — Node's exact message for
-/// a non-iterable Promise-combinator argument (issue #2822).
-fn rejected_not_iterable(value: f64) -> *mut Promise {
+fn combinator_catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, f64> {
+    let env = crate::exception::js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(env as *mut c_int) };
+    if jumped == 0 {
+        let result = f();
+        crate::exception::js_try_end();
+        Ok(result)
+    } else {
+        crate::exception::js_try_end();
+        let err = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        Err(err)
+    }
+}
+
+/// Build the `TypeError: <prefix> is not iterable (cannot read property
+/// Symbol(Symbol.iterator))` value — Node's exact message for a non-iterable
+/// Promise-combinator argument (issue #2822).
+fn not_iterable_error_value(value: f64) -> f64 {
     let msg = format!(
         "{} is not iterable (cannot read property Symbol(Symbol.iterator))",
         not_iterable_prefix(value)
@@ -271,9 +286,7 @@ fn rejected_not_iterable(value: f64) -> *mut Promise {
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err_ptr = crate::error::js_typeerror_new(msg_str);
     let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-    let p = js_promise_new();
-    js_promise_reject(p, f64::from_bits(err_value));
-    p
+    f64::from_bits(err_value)
 }
 
 /// Issue #2822: decide whether a boxed pointer value is iterable, and if so
@@ -287,7 +300,7 @@ fn rejected_not_iterable(value: f64) -> *mut Promise {
 /// a `TypeError` instead of silently coercing to `[]`.
 pub(crate) fn combinator_iterable_to_array(
     value: f64,
-) -> Result<*mut crate::array::ArrayHeader, ()> {
+) -> Result<*mut crate::array::ArrayHeader, f64> {
     use crate::value::JSValue;
 
     // Arrays and strings are always iterable.
@@ -303,12 +316,12 @@ pub(crate) fn combinator_iterable_to_array(
         ));
     }
     if !jsval.is_pointer() {
-        return Err(());
+        return Err(not_iterable_error_value(value));
     }
 
     let raw = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
     if raw < 0x100000 {
-        return Err(());
+        return Err(not_iterable_error_value(value));
     }
 
     // Side-table iterables.
@@ -325,14 +338,14 @@ pub(crate) fn combinator_iterable_to_array(
 
     // Symbols / closures are not iterable.
     if crate::symbol::is_registered_symbol(raw) || crate::closure::is_closure_ptr(raw) {
-        return Err(());
+        return Err(not_iterable_error_value(value));
     }
 
     // GC_TYPE_OBJECT: iterable only if it exposes `[Symbol.iterator]` or a
     // `.next` closure field (a bare iterator object).
     let obj_type = unsafe {
         if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
-            return Err(());
+            return Err(not_iterable_error_value(value));
         }
         let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         (*hdr).obj_type
@@ -366,7 +379,22 @@ pub(crate) fn combinator_iterable_to_array(
         }
     }
 
-    Err(())
+    Err(not_iterable_error_value(value))
+}
+
+fn combinator_iterable_to_array_caught(value: f64) -> Result<*mut crate::array::ArrayHeader, f64> {
+    let mut out = std::ptr::null_mut();
+    let result = combinator_catch_js(|| match combinator_iterable_to_array(value) {
+        Ok(arr) => {
+            out = arr;
+            0.0
+        }
+        Err(reason) => reason,
+    });
+    match result {
+        Ok(_) if !out.is_null() => Ok(out),
+        Ok(reason) | Err(reason) => Err(reason),
+    }
 }
 
 /// Iterable-accepting entry for `Promise.all` (issue #2822). Coerces any
@@ -374,36 +402,52 @@ pub(crate) fn combinator_iterable_to_array(
 /// delegating to the array-shaped `js_promise_all`.
 #[no_mangle]
 pub extern "C" fn js_promise_all_iterable(value: f64) -> *mut Promise {
-    match combinator_iterable_to_array(value) {
+    match combinator_iterable_to_array_caught(value) {
         Ok(arr) => js_promise_all(arr),
-        Err(()) => rejected_not_iterable(value),
+        Err(reason) => {
+            let p = js_promise_new();
+            js_promise_reject(p, reason);
+            p
+        }
     }
 }
 
 /// Iterable-accepting entry for `Promise.race` (issue #2822).
 #[no_mangle]
 pub extern "C" fn js_promise_race_iterable(value: f64) -> *mut Promise {
-    match combinator_iterable_to_array(value) {
+    match combinator_iterable_to_array_caught(value) {
         Ok(arr) => js_promise_race(arr),
-        Err(()) => rejected_not_iterable(value),
+        Err(reason) => {
+            let p = js_promise_new();
+            js_promise_reject(p, reason);
+            p
+        }
     }
 }
 
 /// Iterable-accepting entry for `Promise.allSettled` (issue #2822).
 #[no_mangle]
 pub extern "C" fn js_promise_all_settled_iterable(value: f64) -> *mut Promise {
-    match combinator_iterable_to_array(value) {
+    match combinator_iterable_to_array_caught(value) {
         Ok(arr) => js_promise_all_settled(arr),
-        Err(()) => rejected_not_iterable(value),
+        Err(reason) => {
+            let p = js_promise_new();
+            js_promise_reject(p, reason);
+            p
+        }
     }
 }
 
 /// Iterable-accepting entry for `Promise.any` (issue #2822).
 #[no_mangle]
 pub extern "C" fn js_promise_any_iterable(value: f64) -> *mut Promise {
-    match combinator_iterable_to_array(value) {
+    match combinator_iterable_to_array_caught(value) {
         Ok(arr) => js_promise_any(arr),
-        Err(()) => rejected_not_iterable(value),
+        Err(reason) => {
+            let p = js_promise_new();
+            js_promise_reject(p, reason);
+            p
+        }
     }
 }
 
@@ -503,6 +547,249 @@ extern "C" fn promise_reject_fn(closure: *const crate::closure::ClosureHeader, r
     0.0 // reject returns undefined
 }
 
+#[inline]
+fn callable_closure_value(value: f64) -> Option<*const crate::closure::ClosureHeader> {
+    let bits = value.to_bits();
+    let tag = bits & crate::value::TAG_MASK;
+    let raw = if tag == crate::value::POINTER_TAG || tag == crate::value::STRING_TAG {
+        (bits & crate::value::POINTER_MASK) as usize
+    } else {
+        bits as usize
+    };
+    if raw >= 0x10000
+        && raw % std::mem::align_of::<u32>() == 0
+        && crate::closure::is_closure_ptr(raw)
+    {
+        Some(raw as *const crate::closure::ClosureHeader)
+    } else {
+        None
+    }
+}
+
+fn is_native_array_value(value: f64) -> bool {
+    let bits = value.to_bits();
+    if (bits & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
+        return false;
+    }
+    let ptr = crate::value::js_nanbox_get_pointer(value) as usize;
+    if ptr < 0x100000 {
+        return false;
+    }
+    unsafe {
+        let header = (ptr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        matches!(
+            (*header).obj_type,
+            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+        )
+    }
+}
+
+fn get_array_prototype_then_action() -> Result<Option<f64>, f64> {
+    let array_ctor = crate::object::js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
+    if is_definitely_primitive(array_ctor) {
+        return Ok(None);
+    }
+    let array_proto = combinator_catch_js(|| unsafe {
+        crate::value::js_dynamic_object_get_property(
+            array_ctor,
+            b"prototype".as_ptr() as *const i8,
+            9,
+        )
+    })?;
+    if is_definitely_primitive(array_proto) {
+        return Ok(None);
+    }
+    let then = combinator_catch_js(|| unsafe {
+        crate::value::js_dynamic_object_get_property(array_proto, b"then".as_ptr() as *const i8, 4)
+    })?;
+    Ok(callable_closure_value(then).map(|_| then))
+}
+
+fn get_then_action(value: f64) -> Result<Option<f64>, f64> {
+    if is_definitely_primitive(value) {
+        return Ok(None);
+    }
+    let then = combinator_catch_js(|| unsafe {
+        crate::value::js_dynamic_object_get_property(value, b"then".as_ptr() as *const i8, 4)
+    })?;
+    if let Some(_) = callable_closure_value(then) {
+        return Ok(Some(then));
+    }
+    if is_native_array_value(value) {
+        return get_array_prototype_then_action();
+    }
+    Ok(None)
+}
+
+fn enqueue_thenable_job(promise: *mut Promise, thenable: f64, then_action: f64) {
+    use crate::closure::{
+        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
+    };
+
+    let callback = js_closure_alloc(promise_resolve_thenable_job as *const u8, 3);
+    js_closure_set_capture_ptr(callback, 0, promise as i64);
+    js_closure_set_capture_f64(callback, 1, thenable);
+    js_closure_set_capture_f64(callback, 2, then_action);
+
+    let context = capture_context();
+    let ids = crate::async_hooks::init_resource(
+        "PromiseResolveThenableJob",
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+        false,
+    );
+    TASK_QUEUE.with(|q| {
+        q.borrow_mut().push_back(Task::Microtask {
+            callback,
+            context,
+            async_id: ids.async_id,
+            trigger_async_id: ids.trigger_async_id,
+        });
+    });
+    crate::event_pump::js_notify_main_thread();
+}
+
+fn promise_resolve_assimilating(promise: *mut Promise, value: f64) {
+    if promise.is_null() {
+        return;
+    }
+    unsafe {
+        if (*promise).state != PromiseState::Pending {
+            return;
+        }
+    }
+
+    let value = adapt_foreign_promise_value(value);
+    if js_value_is_promise(value) != 0 {
+        let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
+        js_promise_resolve_with_promise(promise, inner);
+        return;
+    }
+
+    match get_then_action(value) {
+        Ok(Some(then_action)) => enqueue_thenable_job(promise, value, then_action),
+        Ok(None) => js_promise_resolve(promise, value),
+        Err(reason) => js_promise_reject(promise, reason),
+    }
+}
+
+#[inline]
+fn thenable_job_take_guard(guard_arr: *mut crate::array::ArrayHeader) -> bool {
+    use crate::array::{js_array_get_f64, js_array_set_f64};
+
+    if guard_arr.is_null() {
+        return false;
+    }
+    if js_array_get_f64(guard_arr, 0) != 0.0 {
+        return false;
+    }
+    js_array_set_f64(guard_arr, 0, 1.0);
+    true
+}
+
+extern "C" fn thenable_job_resolve_fn(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    use crate::closure::js_closure_get_capture_ptr;
+
+    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let guard_arr = js_closure_get_capture_ptr(closure, 1) as *mut crate::array::ArrayHeader;
+    if thenable_job_take_guard(guard_arr) {
+        promise_resolve_assimilating(promise, value);
+    }
+    0.0
+}
+
+extern "C" fn thenable_job_reject_fn(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
+    use crate::closure::js_closure_get_capture_ptr;
+
+    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let guard_arr = js_closure_get_capture_ptr(closure, 1) as *mut crate::array::ArrayHeader;
+    if thenable_job_take_guard(guard_arr) {
+        js_promise_reject(promise, reason);
+    }
+    0.0
+}
+
+extern "C" fn promise_resolve_thenable_job(closure: *const crate::closure::ClosureHeader) -> f64 {
+    use crate::array::{js_array_alloc, js_array_set_f64};
+    use crate::closure::{
+        js_closure_alloc, js_closure_get_capture_f64, js_closure_get_capture_ptr,
+        js_closure_set_capture_ptr,
+    };
+
+    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    if promise.is_null() {
+        return 0.0;
+    }
+    let thenable = js_closure_get_capture_f64(closure, 1);
+    let then_action = js_closure_get_capture_f64(closure, 2);
+    if callable_closure_value(then_action).is_none() {
+        js_promise_resolve(promise, thenable);
+        return 0.0;
+    }
+
+    let guard_arr = js_array_alloc(1);
+    unsafe {
+        (*guard_arr).length = 1;
+    }
+    js_array_set_f64(guard_arr, 0, 0.0);
+
+    let resolve_closure = js_closure_alloc(thenable_job_resolve_fn as *const u8, 2);
+    js_closure_set_capture_ptr(resolve_closure, 0, promise as i64);
+    js_closure_set_capture_ptr(resolve_closure, 1, guard_arr as i64);
+    let reject_closure = js_closure_alloc(thenable_job_reject_fn as *const u8, 2);
+    js_closure_set_capture_ptr(reject_closure, 0, promise as i64);
+    js_closure_set_capture_ptr(reject_closure, 1, guard_arr as i64);
+
+    let resolve_value = crate::value::js_nanbox_pointer(resolve_closure as i64);
+    let reject_value = crate::value::js_nanbox_pointer(reject_closure as i64);
+    let args = [resolve_value, reject_value];
+
+    let prev_this = crate::object::js_implicit_this_set(thenable);
+    let result = combinator_catch_js(|| unsafe {
+        crate::closure::js_native_call_value(then_action, args.as_ptr(), args.len())
+    });
+    crate::object::js_implicit_this_set(prev_this);
+    if let Err(reason) = result {
+        if thenable_job_take_guard(guard_arr) {
+            js_promise_reject(promise, reason);
+        }
+    }
+    0.0
+}
+
+fn promise_resolve_for_combinator(value: f64) -> Result<*mut Promise, f64> {
+    let value = adapt_foreign_promise_value(value);
+    if js_value_is_promise(value) != 0 {
+        let promise = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
+        if !promise.is_null() {
+            return Ok(promise);
+        }
+    }
+
+    match get_then_action(value) {
+        Ok(Some(then_action)) => {
+            let promise = js_promise_new();
+            enqueue_thenable_job(promise, value, then_action);
+            return Ok(promise);
+        }
+        Ok(None) => {}
+        Err(reason) => {
+            let promise = js_promise_new();
+            js_promise_reject(promise, reason);
+            return Ok(promise);
+        }
+    }
+
+    let promise = js_promise_new();
+    js_promise_resolve(promise, value);
+    Ok(promise)
+}
+
 /// Promise.all - takes an array of promises and returns a promise that resolves
 /// with an array of all resolved values, or rejects if any promise rejects.
 ///
@@ -513,7 +800,6 @@ extern "C" fn promise_reject_fn(closure: *const crate::closure::ClosureHeader, r
 #[no_mangle]
 pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader) -> *mut Promise {
     use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_set_f64};
-    use crate::value::js_nanbox_get_pointer;
 
     let result_promise = js_promise_new();
 
@@ -523,7 +809,7 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
             (*empty_arr).length = 0;
         }
         let arr_f64 = crate::value::js_nanbox_pointer(empty_arr as i64);
-        js_promise_resolve(result_promise, arr_f64);
+        promise_resolve_assimilating(result_promise, arr_f64);
         return result_promise;
     }
 
@@ -535,7 +821,7 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
             (*empty_arr).length = 0;
         }
         let arr_f64 = crate::value::js_nanbox_pointer(empty_arr as i64);
-        js_promise_resolve(result_promise, arr_f64);
+        promise_resolve_assimilating(result_promise, arr_f64);
         return result_promise;
     }
 
@@ -557,16 +843,13 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
     js_array_set_f64(state_arr, 1, 0.0);
 
     for i in 0..count {
-        let promise_f64 = adapt_foreign_promise_value(js_array_get_f64(promises_arr, i));
-
-        if js_value_is_promise(promise_f64) == 0 {
-            js_array_set_f64(results_arr, i, promise_f64);
-            let remaining = js_array_get_f64(state_arr, 0) - 1.0;
-            js_array_set_f64(state_arr, 0, remaining);
-            continue;
-        }
-
-        let promise_ptr = js_nanbox_get_pointer(promise_f64) as *mut Promise;
+        let promise_ptr = match promise_resolve_for_combinator(js_array_get_f64(promises_arr, i)) {
+            Ok(promise) => promise,
+            Err(reason) => {
+                promise_all_reject_direct(result_promise, state_arr, reason);
+                break;
+            }
+        };
         let state = PromiseAllState {
             result_promise,
             results_arr,
@@ -609,7 +892,7 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
     let remaining = js_array_get_f64(state_arr, 0);
     if remaining == 0.0 {
         let arr_f64 = crate::value::js_nanbox_pointer(results_arr as i64);
-        js_promise_resolve(result_promise, arr_f64);
+        promise_resolve_assimilating(result_promise, arr_f64);
     }
 
     result_promise
@@ -634,7 +917,7 @@ fn promise_all_fulfill_direct(state: PromiseAllState, value: f64) {
 
     if remaining == 0.0 {
         let arr_f64 = crate::value::js_nanbox_pointer(state.results_arr as i64);
-        js_promise_resolve(state.result_promise, arr_f64);
+        promise_resolve_assimilating(state.result_promise, arr_f64);
     }
 }
 
@@ -925,7 +1208,6 @@ pub extern "C" fn js_promise_all_settled(
     use crate::closure::{
         js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
     };
-    use crate::value::js_nanbox_get_pointer;
 
     let result_promise = js_promise_new();
 
@@ -935,7 +1217,7 @@ pub extern "C" fn js_promise_all_settled(
             (*empty_arr).length = 0;
         }
         let arr_f64 = crate::value::js_nanbox_pointer(empty_arr as i64);
-        js_promise_resolve(result_promise, arr_f64);
+        promise_resolve_assimilating(result_promise, arr_f64);
         return result_promise;
     }
 
@@ -946,7 +1228,7 @@ pub extern "C" fn js_promise_all_settled(
             (*empty_arr).length = 0;
         }
         let arr_f64 = crate::value::js_nanbox_pointer(empty_arr as i64);
-        js_promise_resolve(result_promise, arr_f64);
+        promise_resolve_assimilating(result_promise, arr_f64);
         return result_promise;
     }
 
@@ -967,25 +1249,13 @@ pub extern "C" fn js_promise_all_settled(
     js_array_set_f64(state_arr, 0, count as f64);
 
     for i in 0..count {
-        let promise_f64 = adapt_foreign_promise_value(js_array_get_f64(promises_arr, i));
-
-        // Only treat as a Promise if the value is a POINTER_TAG that walks
-        // back to a GcHeader with obj_type == GC_TYPE_PROMISE. Otherwise
-        // (string, plain number, undefined, null, object, etc.) wrap the
-        // value as already-fulfilled — Promise.allSettled spec passes any
-        // non-thenable through as `{status: "fulfilled", value}`.
-        let is_promise = js_value_is_promise(promise_f64) != 0;
-
-        if !is_promise {
-            // Non-promise value — wrap as fulfilled and decrement
-            let wrapped = build_settled_fulfilled(promise_f64);
-            js_array_set_f64(results_arr, i, wrapped);
-            let remaining = js_array_get_f64(state_arr, 0) - 1.0;
-            js_array_set_f64(state_arr, 0, remaining);
-            continue;
-        }
-
-        let promise_ptr = js_nanbox_get_pointer(promise_f64) as *mut Promise;
+        let promise_ptr = match promise_resolve_for_combinator(js_array_get_f64(promises_arr, i)) {
+            Ok(promise) => promise,
+            Err(reason) => {
+                js_promise_reject(result_promise, reason);
+                break;
+            }
+        };
 
         // Fulfill: store {status:"fulfilled", value:v}
         let fulfill_closure = js_closure_alloc(promise_all_settled_fulfill_handler as *const u8, 4);
@@ -1008,7 +1278,7 @@ pub extern "C" fn js_promise_all_settled(
     let remaining = js_array_get_f64(state_arr, 0);
     if remaining == 0.0 {
         let arr_f64 = crate::value::js_nanbox_pointer(results_arr as i64);
-        js_promise_resolve(result_promise, arr_f64);
+        promise_resolve_assimilating(result_promise, arr_f64);
     }
 
     result_promise
@@ -1037,7 +1307,7 @@ extern "C" fn promise_all_settled_fulfill_handler(
 
     if remaining == 0.0 {
         let arr_f64 = crate::value::js_nanbox_pointer(results_arr as i64);
-        js_promise_resolve(result_promise, arr_f64);
+        promise_resolve_assimilating(result_promise, arr_f64);
     }
     0.0
 }
@@ -1065,7 +1335,7 @@ extern "C" fn promise_all_settled_reject_handler(
 
     if remaining == 0.0 {
         let arr_f64 = crate::value::js_nanbox_pointer(results_arr as i64);
-        js_promise_resolve(result_promise, arr_f64);
+        promise_resolve_assimilating(result_promise, arr_f64);
     }
     0.0
 }
@@ -1222,8 +1492,150 @@ extern "C" fn promise_any_reject_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array::{js_array_alloc, js_array_set_f64};
+    use crate::array::{js_array_alloc, js_array_get_f64, js_array_set_f64};
+    use crate::closure::{
+        js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
+    };
+    use crate::object::{js_object_alloc, js_object_get_field, js_object_set_field_by_name};
     use crate::value::js_nanbox_pointer;
+
+    fn reset_promise_test_state() {
+        TASK_QUEUE.with(|q| q.borrow_mut().clear());
+        PROMISE_ALL_STATES.with(|s| s.borrow_mut().clear());
+    }
+
+    fn thenable_value(func: *const u8, captured: f64) -> f64 {
+        let obj = js_object_alloc(0, 0);
+        let then = js_closure_alloc(func, 1);
+        js_closure_set_capture_f64(then, 0, captured);
+        let key = crate::string::js_string_from_bytes(b"then".as_ptr(), 4);
+        js_object_set_field_by_name(obj, key, js_nanbox_pointer(then as i64));
+        js_nanbox_pointer(obj as i64)
+    }
+
+    extern "C" fn test_thenable_resolve_twice(
+        closure: *const crate::closure::ClosureHeader,
+        on_fulfilled: f64,
+        _on_rejected: f64,
+    ) -> f64 {
+        let value = js_closure_get_capture_f64(closure, 0);
+        let unexpected = value + 1000.0;
+        unsafe {
+            crate::closure::js_native_call_value(on_fulfilled, [value].as_ptr(), 1);
+            crate::closure::js_native_call_value(on_fulfilled, [unexpected].as_ptr(), 1);
+        }
+        0.0
+    }
+
+    extern "C" fn test_thenable_reject(
+        closure: *const crate::closure::ClosureHeader,
+        _on_fulfilled: f64,
+        on_rejected: f64,
+    ) -> f64 {
+        let reason = js_closure_get_capture_f64(closure, 0);
+        unsafe {
+            crate::closure::js_native_call_value(on_rejected, [reason].as_ptr(), 1);
+        }
+        0.0
+    }
+
+    #[test]
+    fn promise_all_assimilates_thenable_and_guards_double_resolve() {
+        unsafe {
+            reset_promise_test_state();
+            let arr = js_array_alloc(1);
+            (*arr).length = 1;
+            js_array_set_f64(
+                arr,
+                0,
+                thenable_value(test_thenable_resolve_twice as *const u8, 7.0),
+            );
+
+            let all = js_promise_all(arr);
+            assert_eq!((*all).state, PromiseState::Pending);
+
+            crate::promise::js_promise_run_microtasks();
+
+            assert_eq!((*all).state, PromiseState::Fulfilled);
+            let results = crate::value::js_nanbox_get_pointer((*all).value)
+                as *const crate::array::ArrayHeader;
+            assert_eq!(js_array_get_f64(results, 0), 7.0);
+        }
+    }
+
+    #[test]
+    fn promise_all_rejects_from_thenable_job() {
+        unsafe {
+            reset_promise_test_state();
+            let arr = js_array_alloc(1);
+            (*arr).length = 1;
+            js_array_set_f64(
+                arr,
+                0,
+                thenable_value(test_thenable_reject as *const u8, 13.0),
+            );
+
+            let all = js_promise_all(arr);
+            assert_eq!((*all).state, PromiseState::Pending);
+
+            crate::promise::js_promise_run_microtasks();
+
+            assert_eq!((*all).state, PromiseState::Rejected);
+            assert_eq!((*all).reason, 13.0);
+        }
+    }
+
+    #[test]
+    fn promise_all_settled_assimilates_thenables_in_input_order() {
+        unsafe {
+            reset_promise_test_state();
+            let arr = js_array_alloc(2);
+            (*arr).length = 2;
+            js_array_set_f64(
+                arr,
+                0,
+                thenable_value(test_thenable_reject as *const u8, 1.0),
+            );
+            js_array_set_f64(
+                arr,
+                1,
+                thenable_value(test_thenable_resolve_twice as *const u8, 2.0),
+            );
+
+            let settled = js_promise_all_settled(arr);
+            assert_eq!((*settled).state, PromiseState::Pending);
+
+            crate::promise::js_promise_run_microtasks();
+
+            assert_eq!((*settled).state, PromiseState::Fulfilled);
+            let results = crate::value::js_nanbox_get_pointer((*settled).value)
+                as *const crate::array::ArrayHeader;
+            let first = crate::value::js_nanbox_get_pointer(js_array_get_f64(results, 0))
+                as *const crate::object::ObjectHeader;
+            let second = crate::value::js_nanbox_get_pointer(js_array_get_f64(results, 1))
+                as *const crate::object::ObjectHeader;
+            assert_eq!(js_object_get_field(first, 1).bits(), 1.0f64.to_bits());
+            assert_eq!(js_object_get_field(second, 1).bits(), 2.0f64.to_bits());
+        }
+    }
+
+    #[test]
+    fn promise_result_resolution_assimilates_thenable_objects() {
+        unsafe {
+            reset_promise_test_state();
+            let promise = js_promise_new();
+            promise_resolve_assimilating(
+                promise,
+                thenable_value(test_thenable_resolve_twice as *const u8, 21.0),
+            );
+            assert_eq!((*promise).state, PromiseState::Pending);
+
+            crate::promise::js_promise_run_microtasks();
+
+            assert_eq!((*promise).state, PromiseState::Fulfilled);
+            assert_eq!((*promise).value, 21.0);
+        }
+    }
 
     /// Regression: a pending promise reused as input to two `Promise.all`
     /// calls must settle BOTH all-promises when it resolves. Pre-fix,

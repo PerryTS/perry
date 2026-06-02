@@ -175,6 +175,14 @@ pub(crate) fn js_error_new_with_name_message(
     unsafe { alloc_error(ERROR_KIND_ERROR, name, message) }
 }
 
+/// Create a new Error-like object with a dynamically supplied `.name`.
+pub(crate) fn js_error_new_with_name_message_bytes(
+    name: &[u8],
+    message: *mut StringHeader,
+) -> *mut ErrorHeader {
+    unsafe { alloc_error(ERROR_KIND_ERROR, name, message) }
+}
+
 /// Create a new Error with a message and a cause (raw f64 NaN-boxed)
 #[no_mangle]
 pub extern "C" fn js_error_new_with_cause(
@@ -390,12 +398,12 @@ pub extern "C" fn js_aggregateerror_new_full(
     // #2838: reuse the spec-shaped iterable→array converter that backs the
     // Promise combinators (`Promise.any`/`all`/…). It accepts arrays, strings,
     // Set/Map, buffers, generators, and any object exposing `[Symbol.iterator]`
-    // or a bare `.next` field, and returns `Err(())` for non-iterables
+    // or a bare `.next` field, and returns `Err(_)` for non-iterables
     // (`undefined`, numbers, plain objects) — exactly the AggregateError
     // contract.
     let arr = match crate::promise::combinators::combinator_iterable_to_array(errors) {
         Ok(arr) => arr,
-        Err(()) => throw_not_iterable_type_error(),
+        Err(_) => throw_not_iterable_type_error(),
     };
     unsafe {
         let ptr = alloc_error(ERROR_KIND_AGGREGATE_ERROR, b"AggregateError", message);
@@ -481,6 +489,14 @@ pub extern "C" fn js_throw_bigint_constructor_type_error() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_throw_math_constructor_type_error() -> f64 {
     throw_builtin_not_constructor("Math")
+}
+
+#[no_mangle]
+pub extern "C" fn js_throw_illegal_constructor_type_error() -> f64 {
+    let message = b"Illegal constructor";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
 fn value_to_lossy_string(value: f64) -> String {

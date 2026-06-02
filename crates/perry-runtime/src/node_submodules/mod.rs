@@ -790,7 +790,9 @@ pub(crate) fn emit_sys_deprecation_warning_once() {
         return;
     }
     let pid = std::process::id();
-    eprintln!("(node:{pid}) [DEP0025] DeprecationWarning: sys is deprecated. Use util instead.");
+    eprintln!(
+        "(node:{pid}) [DEP0025] DeprecationWarning: sys is deprecated. Use `node:util` instead."
+    );
     eprintln!("(Use `node --trace-deprecation ...` to show where the warning was created)");
 }
 

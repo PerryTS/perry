@@ -776,6 +776,27 @@ pub(super) fn try_global_builtins(
                             }));
                         }
                     }
+                    // #3927: `generateKeySync(alg, options)` from a named import.
+                    // Like createSecretKey above, rewrite to the dotted-form
+                    // `crypto.generateKeySync(...)` so the call reaches the
+                    // dedicated `js_crypto_generate_key_sync` dispatch in
+                    // `expr/calls.rs` (a generic NativeMethodCall has no runtime
+                    // dispatcher for it and returns undefined).
+                    "generateKeySync" => {
+                        if args.len() >= 2 {
+                            let mut iter = args.into_iter();
+                            let alg_arg = iter.next().unwrap();
+                            let options_arg = iter.next().unwrap();
+                            return Ok(Ok(Expr::Call {
+                                callee: Box::new(Expr::PropertyGet {
+                                    object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
+                                    property: "generateKeySync".to_string(),
+                                }),
+                                args: vec![alg_arg, options_arg],
+                                type_args: vec![],
+                            }));
+                        }
+                    }
                     _ => {} // Fall through
                 }
             }

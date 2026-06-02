@@ -226,9 +226,36 @@ pub fn module_has_public_named_export(module: &str, name: &str) -> bool {
     if name == "default" && is_node_core_module(module) {
         return true;
     }
+    if is_platform_unavailable_named_export(module, name) {
+        return false;
+    }
     API_MANIFEST.iter().any(|entry| {
         entry.module == module && entry.name == name && entry_is_public_named_export(entry)
     })
+}
+
+/// #3902: a handful of `node:constants` values are Linux-only — `O_DIRECT` /
+/// `O_NOATIME` (open(2) flags), `SIGPOLL` / `SIGPWR` / `SIGSTKFLT` (signals),
+/// and `RTLD_DEEPBIND` (a glibc-only dlopen(3) flag). Node's `node:constants`
+/// ESM namespace omits them on other platforms, so importing them there fails
+/// Node's module instantiation.
+///
+/// These entries stay in the static `API_MANIFEST` unconditionally so the
+/// generated docs (`docs/api/perry.d.ts`, `docs/src/api/reference.md`) and
+/// `--print-api-manifest` are byte-identical regardless of the host OS the
+/// generator runs on — otherwise `api-docs-drift` would fail on every PR (CI
+/// runs on Linux; the invariant is asserted by
+/// `deprecated_constants_alias_has_manifest_entries`). But the *import gate*
+/// must still match the host: on a non-Linux host these names are not valid
+/// named exports, so `perry check`/compile rejects them with `U006` instead of
+/// silently binding `undefined` and diverging from Node.
+fn is_platform_unavailable_named_export(module: &str, name: &str) -> bool {
+    let linux_only = module == "constants"
+        && matches!(
+            name,
+            "O_DIRECT" | "O_NOATIME" | "RTLD_DEEPBIND" | "SIGPOLL" | "SIGPWR" | "SIGSTKFLT"
+        );
+    linux_only && !cfg!(target_os = "linux")
 }
 
 /// True for Node.js built-in module specifiers that should use Node's public
@@ -292,7 +319,7 @@ pub fn is_node_core_module(module: &str) -> bool {
 }
 
 /// Public named-export filter shared by the import gate and docs emitters.
-pub(crate) fn entry_is_public_named_export(entry: &ApiEntry) -> bool {
+pub fn entry_is_public_named_export(entry: &ApiEntry) -> bool {
     if !entry.module_export {
         return false;
     }
@@ -370,9 +397,13 @@ fn is_node_core_private_named_export(module: &str, name: &str) -> bool {
                 | "setMaxListeners"
         ),
         "url" => matches!(name, "createObjectURL" | "revokeObjectURL"),
-        "worker_threads" => name == "getWorkerData",
+        "module" => matches!(name, "wrap" | "wrapper"),
+        "worker_threads" => matches!(name, "getWorkerData" | "postMessage"),
         "https" => matches!(name, "ClientRequest" | "IncomingMessage" | "ServerResponse"),
-        "http2" => name == "Http2SecureServer",
+        "http2" => matches!(
+            name,
+            "Http2SecureServer" | "listen" | "close" | "on" | "address"
+        ),
         "child_process" => name == "Stream",
         "cluster" => matches!(name, "addListener" | "on" | "worker"),
         "stream" => matches!(name, "from" | "fromWeb" | "prototype" | "toWeb"),
@@ -521,8 +552,9 @@ mod tests {
             ("node:tty", "clearLine"),
             ("node:process", "on"),
             ("node:process", "emit"),
+            ("node:module", "wrap"),
+            ("node:module", "wrapper"),
             ("node:url", "createObjectURL"),
-            ("node:worker_threads", "getWorkerData"),
             ("node:https", "ClientRequest"),
             ("node:http2", "Http2SecureServer"),
             ("node:child_process", "Stream"),
@@ -552,8 +584,11 @@ mod tests {
             ("node:tty", "ReadStream"),
             ("node:process", "cwd"),
             ("node:process", "env"),
+            ("node:module", "builtinModules"),
+            ("node:module", "createRequire"),
             ("node:url", "URL"),
             ("node:url", "fileURLToPath"),
+            ("node:worker_threads", "parentPort"),
             ("node:worker_threads", "workerData"),
             ("node:path", "default"),
             ("node:https", "Agent"),
@@ -570,6 +605,23 @@ mod tests {
                 "{module} should expose real named export {name}"
             );
         }
+    }
+
+    #[test]
+    fn worker_threads_post_message_is_receiver_only() {
+        let entry = module_has_symbol("node:worker_threads", "postMessage")
+            .expect("worker_threads.postMessage stays registered for receiver dispatch");
+        assert!(matches!(
+            entry.kind,
+            ApiKind::Method {
+                has_receiver: true,
+                class_filter: None
+            }
+        ));
+        assert!(
+            !module_has_public_named_export("node:worker_threads", "postMessage"),
+            "worker_threads.postMessage must not be accepted as a named export"
+        );
     }
 
     #[test]
@@ -596,6 +648,17 @@ mod tests {
                 class_filter: None
             }
         ));
+    }
+
+    #[test]
+    fn zlib_codes_is_manifest_named_export_property() {
+        let entry =
+            module_has_symbol("node:zlib", "codes").expect("zlib.codes should be in the manifest");
+        assert!(matches!(entry.kind, ApiKind::Property));
+        assert!(
+            module_has_public_named_export("node:zlib", "codes"),
+            "zlib.codes should be available to named imports"
+        );
     }
 
     #[test]
@@ -669,6 +732,41 @@ mod tests {
             "RTLD_DEEPBIND should be in the manifest on every platform"
         );
         assert!(matches!(rtld_deepbind.unwrap().kind, ApiKind::Property));
+    }
+
+    #[test]
+    fn platform_unavailable_constants_gate_the_import_surface() {
+        // #3902: Linux-only `node:constants` values stay in the manifest
+        // (for portable docs) but the import gate must follow the host
+        // platform so `perry check` matches Node's ESM instantiation.
+        let linux_only = [
+            "O_DIRECT",
+            "O_NOATIME",
+            "RTLD_DEEPBIND",
+            "SIGPOLL",
+            "SIGPWR",
+            "SIGSTKFLT",
+        ];
+        for name in linux_only {
+            // Always present in the raw manifest (docs portability).
+            assert!(
+                module_has_symbol("node:constants", name).is_some(),
+                "{name} must remain in the manifest on every platform"
+            );
+            // Import gate tracks the host platform.
+            assert_eq!(
+                module_has_public_named_export("node:constants", name),
+                cfg!(target_os = "linux"),
+                "{name} import availability must match the host platform"
+            );
+        }
+        // Cross-platform constants are always importable.
+        for name in ["O_RDONLY", "O_DIRECTORY", "SIGINT"] {
+            assert!(
+                module_has_public_named_export("node:constants", name),
+                "{name} must be importable on every platform"
+            );
+        }
     }
 
     #[test]
@@ -891,17 +989,20 @@ mod tests {
                 "string_decoder",
                 &["encoding", "lastChar", "lastNeed", "lastTotal"][..],
             ),
+            ("module", &["wrap", "wrapper"][..]),
             (
                 "tty",
                 &["clearLine", "clearScreenDown", "cursorTo", "moveCursor"][..],
             ),
             ("url", &["createObjectURL", "revokeObjectURL"][..]),
-            ("worker_threads", &["getWorkerData"][..]),
             (
                 "https",
                 &["ClientRequest", "IncomingMessage", "ServerResponse"][..],
             ),
-            ("http2", &["Http2SecureServer"][..]),
+            (
+                "http2",
+                &["Http2SecureServer", "listen", "close", "on", "address"][..],
+            ),
             ("child_process", &["Stream"][..]),
             ("cluster", &["addListener", "on", "worker"][..]),
             ("stream", &["from", "fromWeb", "prototype", "toWeb"][..]),
@@ -961,6 +1062,10 @@ mod tests {
                 ][..],
             ),
             ("process", &["cwd", "env", "pid", "version"][..]),
+            (
+                "module",
+                &["builtinModules", "constants", "createRequire"][..],
+            ),
             ("string_decoder", &["StringDecoder"][..]),
             ("tty", &["ReadStream", "WriteStream", "isatty"][..]),
             ("url", &["URL", "URLSearchParams", "fileURLToPath"][..]),

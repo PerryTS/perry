@@ -23,6 +23,7 @@ use std::sync::RwLock;
 // surface (all `#[no_mangle]` FFI entry points keep their exact symbol).
 // ---------------------------------------------------------------------------
 mod alloc;
+mod array_object_ops;
 mod assert;
 mod bigint_dispatch;
 mod buffer_dispatch;
@@ -35,7 +36,9 @@ mod delete_rest;
 mod descriptors;
 mod field_get_set;
 mod field_set_by_name;
+mod global_fetch;
 mod global_this;
+mod global_this_tables;
 mod groupby;
 pub(crate) mod has_own_helpers;
 mod instanceof;
@@ -49,7 +52,9 @@ mod polymorphic_index;
 pub(crate) mod prototype_chain;
 mod reflect_support;
 mod util_types;
+mod websocket_global;
 pub use alloc::*;
+pub(crate) use array_object_ops::*;
 pub use assert::*;
 pub(crate) use bigint_dispatch::*;
 pub use buffer_dispatch::*;
@@ -67,6 +72,7 @@ pub use descriptors::*;
 pub use field_get_set::*;
 pub use field_set_by_name::*;
 pub use global_this::*;
+pub(crate) use global_this_tables::*;
 pub use groupby::*;
 pub use instanceof::*;
 pub use native_call_method::*;
@@ -87,6 +93,7 @@ static OS_CONSTANTS_ERRNO_CACHE: AtomicU64 = AtomicU64::new(0);
 static OS_CONSTANTS_PRIORITY_CACHE: AtomicU64 = AtomicU64::new(0);
 static OS_CONSTANTS_DLOPEN_CACHE: AtomicU64 = AtomicU64::new(0);
 static GLOBAL_THIS_PTR: AtomicI64 = AtomicI64::new(0);
+static GLOBAL_THIS_READY: AtomicBool = AtomicBool::new(false);
 // #2145: the `%TypedArray%` intrinsic constructor (a closure) and its
 // `.prototype` (an object). Lazily allocated by
 // `populate_global_this_builtins` so the per-kind typed-array constructors
@@ -96,6 +103,8 @@ static GLOBAL_THIS_PTR: AtomicI64 = AtomicI64::new(0);
 // Both are mutable roots scanned by `scan_object_cache_roots_mut`.
 pub(crate) static TYPED_ARRAY_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
 pub(crate) static TYPED_ARRAY_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static LOCAL_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static SESSION_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
 
 // Overflow field storage for objects that exceed their pre-allocated inline slot count.
 // Keyed by (obj_ptr as usize) -> Vec<JSValue bits> indexed by absolute field_index
@@ -1288,6 +1297,8 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         Ordering::Acquire,
         Ordering::Release,
     );
+    visitor.visit_atomic_i64_slot(&LOCAL_STORAGE_PTR, Ordering::Acquire, Ordering::Release);
+    visitor.visit_atomic_i64_slot(&SESSION_STORAGE_PTR, Ordering::Acquire, Ordering::Release);
 }
 
 #[cfg(test)]
@@ -1450,6 +1461,7 @@ pub(crate) fn test_seed_object_cache_roots(object_cache_bits: [u64; 7], global_t
         global_this_ptr,
         Ordering::Release,
     );
+    GLOBAL_THIS_READY.store(true, Ordering::Release);
 }
 
 #[cfg(test)]
@@ -1502,6 +1514,7 @@ pub(crate) fn test_clear_object_cache_roots() {
     );
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinel into scanned GLOBAL_THIS_PTR.
     crate::gc::runtime_store_root_atomic_raw_i64(&GLOBAL_THIS_PTR, 0, Ordering::Release);
+    GLOBAL_THIS_READY.store(false, Ordering::Release);
 }
 
 /// Remove OVERFLOW_FIELDS entry for a freed object pointer.
@@ -1651,7 +1664,9 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         0
     };
     if raw_addr >= 0x1000 && crate::buffer::is_registered_buffer(raw_addr) {
-        let tag = if crate::buffer::is_array_buffer(raw_addr) {
+        let tag = if crate::buffer::crypto_key_meta(raw_addr).is_some() {
+            "CryptoKey"
+        } else if crate::buffer::is_array_buffer(raw_addr) {
             "ArrayBuffer"
         } else if crate::buffer::is_shared_array_buffer(raw_addr) {
             "SharedArrayBuffer"
@@ -1666,6 +1681,12 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }
     if let Some(tag) = web_stream_to_string_tag(value) {
+        let formatted = format!("[object {}]", tag);
+        let bytes = formatted.as_bytes();
+        let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
+    if let Some(tag) = crate::builtins::boxed_primitive_to_string_tag(value) {
         let formatted = format!("[object {}]", tag);
         let bytes = formatted.as_bytes();
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);

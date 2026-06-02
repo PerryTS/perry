@@ -35,11 +35,9 @@ pub extern "C" fn js_object_alloc_null_proto(class_id: u32, field_count: u32) ->
 /// Takes and returns a NaN-boxed JSValue (`f64`):
 /// - `undefined` / `null` / no-arg → a fresh ordinary `{}`.
 /// - an existing object/array/function (any pointer value) → returned unchanged.
-/// - BigInt and Symbol primitives → boxed primitive wrapper objects so
-///   `util.types.isBigIntObject(Object(1n))` and
-///   `util.types.isSymbolObject(Object(Symbol()))` match Node.
-/// - other primitives → a fresh `{}`, which preserves
-///   `typeof Object(5) === "object"`.
+/// - primitive values → boxed primitive wrapper objects so
+///   `Object(true).valueOf()`, `Object(0).valueOf()`,
+///   `Object("x").valueOf()`, and util.types boxed checks match Node.
 ///
 /// The `new Object(value)` form is handled separately by
 /// `js_new_function_construct`'s `"Object"` arm; this is only the bare-call
@@ -48,6 +46,10 @@ pub extern "C" fn js_object_alloc_null_proto(class_id: u32, field_count: u32) ->
 #[no_mangle]
 pub extern "C" fn js_object_coerce(value: f64) -> f64 {
     let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    if jsval.is_undefined() || jsval.is_null() {
+        let obj = js_object_alloc(0, 0);
+        return crate::value::js_nanbox_pointer(obj as i64);
+    }
     if jsval.is_bigint() {
         return crate::builtins::js_boxed_bigint_new(value);
     }
@@ -58,8 +60,13 @@ pub extern "C" fn js_object_coerce(value: f64) -> f64 {
         // Already an object/array/function — pass through unchanged.
         return value;
     }
-    let obj = js_object_alloc(0, 0);
-    crate::value::js_nanbox_pointer(obj as i64)
+    if jsval.is_bool() {
+        return crate::builtins::js_boxed_boolean_new(value);
+    }
+    if jsval.is_any_string() {
+        return crate::builtins::js_boxed_string_new(value);
+    }
+    crate::builtins::js_boxed_number_new(value)
 }
 
 /// Allocate a new object with class ID, parent class ID, and field count
@@ -648,7 +655,7 @@ pub unsafe extern "C" fn js_object_assign_validate_target(target_f64: f64) -> f6
     if target.is_undefined() || target.is_null() {
         throw_object_assign_nullish_target();
     }
-    target_f64
+    js_object_coerce(target_f64)
 }
 
 unsafe fn object_assign_set_string_key(
@@ -702,7 +709,7 @@ unsafe fn object_assign_string_source(
 /// properties (`Object.assign({}, "ab") -> {0:"a",1:"b"}`).
 #[no_mangle]
 pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) -> f64 {
-    js_object_assign_validate_target(target_f64);
+    let target_f64 = js_object_assign_validate_target(target_f64);
 
     let target_value = JSValue::from_bits(target_f64.to_bits());
     if !target_value.is_pointer() {
@@ -748,11 +755,7 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     // Same alignment guard as the target above — `src` is dereferenced at
     // `(*src).keys_array` just below; an unaligned non-object source must
     // be skipped, not dereferenced.
-    if src_raw < 0x10000
-        || src_raw % 8 != 0
-        || src_raw == tgt_raw
-        || crate::symbol::is_registered_symbol(src_raw)
-    {
+    if src_raw < 0x10000 || src_raw % 8 != 0 || crate::symbol::is_registered_symbol(src_raw) {
         return target_f64;
     }
 
@@ -763,12 +766,8 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     let src_keys = (*src).keys_array;
     if !src_keys.is_null() && (src_keys as usize) >= 0x10000 {
         let key_count = crate::array::js_array_length(src_keys) as usize;
-        let src_field_count = (*src).field_count as usize;
-        let alloc_limit = std::cmp::max(src_field_count, 8);
-        let header_size = std::mem::size_of::<ObjectHeader>();
-        let src_fields = (src as *const u8).add(header_size) as *const u64;
-        // Same overflow-aware iteration as `js_object_copy_own_fields`.
-        // #1781: SSO-aware — see the sibling helper above.
+        // Use the public [[Get]] path, not raw field slots, so accessors run
+        // and abrupt completions propagate the way Object.assign requires.
         for i in 0..key_count {
             let key_val = crate::array::js_array_get(src_keys, i as u32);
             if !key_val.is_any_string() {
@@ -780,13 +779,17 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
             if key_ptr.is_null() {
                 continue;
             }
-            let field_f64 = if i < alloc_limit {
-                let field_bits = *src_fields.add(i);
-                f64::from_bits(field_bits)
-            } else {
-                let v = js_object_get_field(src, i as u32);
-                f64::from_bits(v.bits())
-            };
+            let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            if let Some(name_bytes) = crate::string::js_string_key_bytes(key_val, &mut sso_buf) {
+                if let Ok(name) = std::str::from_utf8(name_bytes) {
+                    if let Some(attrs) = get_property_attrs(src_raw, name) {
+                        if !attrs.enumerable() {
+                            continue;
+                        }
+                    }
+                }
+            }
+            let field_f64 = f64::from_bits(js_object_get_field_by_name(src, key_ptr).bits());
             object_assign_set_string_key(target, target_is_array, key_ptr, field_f64);
         }
     }

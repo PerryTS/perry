@@ -684,6 +684,9 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
     if crate::worker_threads::js_worker_threads_channels_has_pending() != 0 {
         return 1;
     }
+    if crate::worker_threads::js_worker_threads_has_pending() != 0 {
+        return 1;
+    }
     // Bundled-fastify — keep the loop alive while any FastifyServerHandle
     // is in the "listening" state. Paired with
     // `js_fastify_process_pending` in `js_stdlib_process_pending` above

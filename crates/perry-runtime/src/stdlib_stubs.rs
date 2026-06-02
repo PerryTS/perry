@@ -26,6 +26,9 @@ const READLINE_REASON: &str =
     "readline symbol from perry-stdlib not linked into this binary (runtime-only build)";
 const STDLIB_DISPATCH_REASON: &str =
     "stdlib dispatch symbol from perry-stdlib not linked into this binary (runtime-only build)";
+#[cfg(not(feature = "external-fetch-symbols"))]
+const FETCH_REASON: &str =
+    "fetch symbol from perry-stdlib not linked into this binary (runtime-only build)";
 
 // === WebSocket stubs ===
 // On iOS, perry-stdlib provides the real WebSocket implementation (using
@@ -136,6 +139,18 @@ pub extern "C" fn js_stdlib_init_dispatch() {
     perry_stub_warn("js_stdlib_init_dispatch", STDLIB_DISPATCH_REASON, None);
 }
 
+#[cfg(not(feature = "external-fetch-symbols"))]
+#[no_mangle]
+pub extern "C" fn js_fetch_with_options(
+    _url_ptr: *const crate::string::StringHeader,
+    _method_ptr: *const crate::string::StringHeader,
+    _body_ptr: *const crate::string::StringHeader,
+    _headers_json_ptr: *const crate::string::StringHeader,
+) -> *mut crate::promise::Promise {
+    perry_stub_warn("js_fetch_with_options", FETCH_REASON, None);
+    std::ptr::null_mut()
+}
+
 // === readline (#347) stubs ===
 // `process.stdin.setRawMode(...)` and `process.stdin.on(...)` always
 // codegen direct extern calls to these symbols, even when the user's
@@ -156,3 +171,30 @@ pub extern "C" fn js_readline_stdin_on(_event_ptr: i64, _callback: i64) -> f64 {
     perry_stub_warn("js_readline_stdin_on", READLINE_REASON, Some("#347"));
     f64::from_bits(0x7FFC_0000_0000_0001)
 }
+#[cfg(not(target_os = "android"))]
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_remove_listener(_event_ptr: i64, _callback: i64) -> f64 {
+    perry_stub_warn(
+        "js_readline_stdin_remove_listener",
+        READLINE_REASON,
+        Some("#3962"),
+    );
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
+macro_rules! readline_stdin_lifecycle_stub {
+    ($name:ident) => {
+        #[cfg(not(target_os = "android"))]
+        #[no_mangle]
+        pub extern "C" fn $name() -> f64 {
+            perry_stub_warn(stringify!($name), READLINE_REASON, Some("#3962"));
+            f64::from_bits(0x7FFC_0000_0000_0001)
+        }
+    };
+}
+
+readline_stdin_lifecycle_stub!(js_readline_stdin_pause);
+readline_stdin_lifecycle_stub!(js_readline_stdin_resume);
+readline_stdin_lifecycle_stub!(js_readline_stdin_unref);
+readline_stdin_lifecycle_stub!(js_readline_stdin_ref);
+readline_stdin_lifecycle_stub!(js_readline_stdin_destroy);

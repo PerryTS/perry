@@ -571,6 +571,46 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
     if module == "FormData" {
         let handle = lower_expr(ctx, recv)?;
         match method {
+            "append" | "set" => {
+                let name = if !args.is_empty() {
+                    lower_expr(ctx, &args[0])?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                let value = if args.len() >= 2 {
+                    lower_expr(ctx, &args[1])?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                let runtime_fn = if method == "append" {
+                    "js_form_data_append"
+                } else {
+                    "js_form_data_set"
+                };
+                ctx.block().call(
+                    DOUBLE,
+                    runtime_fn,
+                    &[(DOUBLE, &handle), (DOUBLE, &name), (DOUBLE, &value)],
+                );
+                return Ok(Some(double_literal(f64::from_bits(
+                    crate::nanbox::TAG_UNDEFINED,
+                ))));
+            }
+            "delete" => {
+                let key_ptr = if args.is_empty() {
+                    "0".to_string()
+                } else {
+                    get_raw_string_ptr(ctx, &args[0])?
+                };
+                ctx.block().call(
+                    DOUBLE,
+                    "js_form_data_delete",
+                    &[(DOUBLE, &handle), (I64, &key_ptr)],
+                );
+                return Ok(Some(double_literal(f64::from_bits(
+                    crate::nanbox::TAG_UNDEFINED,
+                ))));
+            }
             "get" => {
                 if args.is_empty() {
                     return Ok(Some(double_literal(f64::from_bits(
@@ -581,6 +621,19 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 let value = ctx.block().call(
                     DOUBLE,
                     "js_form_data_get",
+                    &[(DOUBLE, &handle), (I64, &key_ptr)],
+                );
+                return Ok(Some(value));
+            }
+            "has" => {
+                let key_ptr = if args.is_empty() {
+                    "0".to_string()
+                } else {
+                    get_raw_string_ptr(ctx, &args[0])?
+                };
+                let value = ctx.block().call(
+                    DOUBLE,
+                    "js_form_data_has",
                     &[(DOUBLE, &handle), (I64, &key_ptr)],
                 );
                 return Ok(Some(value));
@@ -603,6 +656,34 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                     .block()
                     .call(DOUBLE, "js_form_data_entries", &[(DOUBLE, &handle)]);
                 return Ok(Some(arr));
+            }
+            "keys" => {
+                let arr = ctx
+                    .block()
+                    .call(DOUBLE, "js_form_data_keys", &[(DOUBLE, &handle)]);
+                return Ok(Some(arr));
+            }
+            "values" => {
+                let arr = ctx
+                    .block()
+                    .call(DOUBLE, "js_form_data_values", &[(DOUBLE, &handle)]);
+                return Ok(Some(arr));
+            }
+            "forEach" => {
+                if args.is_empty() {
+                    return Ok(Some(double_literal(f64::from_bits(
+                        crate::nanbox::TAG_UNDEFINED,
+                    ))));
+                }
+                let cb = lower_expr(ctx, &args[0])?;
+                ctx.block().call(
+                    DOUBLE,
+                    "js_form_data_for_each",
+                    &[(DOUBLE, &handle), (DOUBLE, &cb)],
+                );
+                return Ok(Some(double_literal(f64::from_bits(
+                    crate::nanbox::TAG_UNDEFINED,
+                ))));
             }
             _ => return Ok(None),
         }

@@ -11,6 +11,20 @@ use super::*;
 /// Signatures cross-checked against `crates/perry-runtime/src/` and
 /// `crates/perry-stdlib/src/`.
 pub fn declare_stdlib_ffi(module: &mut LlModule) {
+    // ========== worker_threads ==========
+    module.declare_function("js_worker_threads_worker_new", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_worker_threads_worker_post_message",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_worker_threads_worker_on", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function("js_worker_threads_worker_once", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function("js_worker_threads_worker_off", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function("js_worker_threads_worker_terminate", DOUBLE, &[I64]);
+    module.declare_function("js_worker_threads_worker_ref", DOUBLE, &[I64]);
+    module.declare_function("js_worker_threads_worker_unref", DOUBLE, &[I64]);
+
     // ========== HTTP server ==========
     module.declare_function("js_http_client_request_end", I64, &[I64, DOUBLE]);
     module.declare_function("js_http_client_request_write", I64, &[I64, DOUBLE]);
@@ -1216,6 +1230,24 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_event_emitter_listeners", I64, &[I64, I64]);
     module.declare_function("js_event_emitter_raw_listeners", I64, &[I64, I64]);
     module.declare_function("js_event_emitter_domain_value", DOUBLE, &[I64]);
+    module.declare_function("js_event_emitter_async_resource_new", I64, &[DOUBLE]);
+    module.declare_function("js_event_emitter_async_resource_call", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_event_emitter_async_resource_async_id", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_event_emitter_async_resource_trigger_async_id",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function(
+        "js_event_emitter_async_resource_async_resource",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function(
+        "js_event_emitter_async_resource_emit_destroy",
+        DOUBLE,
+        &[I64],
+    );
     // Module-level helpers
     module.declare_function("js_events_once", I64, &[DOUBLE, I64, DOUBLE]);
     module.declare_function("js_events_on", I64, &[DOUBLE, I64, DOUBLE]);

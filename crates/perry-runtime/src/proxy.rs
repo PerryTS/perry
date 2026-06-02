@@ -395,30 +395,6 @@ fn call_with_this_and_args(f: f64, this_arg: f64, args: &[f64]) -> f64 {
 
 /// Detect the runtime's "null object" sentinel returned by
 /// `js_native_call_method` when a method lookup falls off the end.
-/// Matches the static `NULL_OBJECT_BYTES` in `object.rs` — we treat
-/// any object pointer with `field_count == 0` and no keys array as
-/// the sentinel. Used by the proxy apply-trap fallback to detect
-/// when the user's `target.apply(...)` inside the trap evaluated to
-/// this sentinel and should be retried via the direct-call path.
-fn is_null_object_sentinel(value: f64) -> bool {
-    let bits = value.to_bits();
-    let top16 = (bits >> 48) as u16;
-    if top16 != 0x7FFD {
-        return false;
-    }
-    let ptr = (bits & POINTER_MASK) as usize;
-    if ptr < 0x1000 {
-        return false;
-    }
-    unsafe {
-        // NULL_OBJECT_BYTES in object.rs is declared with object_type=1
-        // and field_count=0 at well-known offsets. Check field_count
-        // at offset 4 (right after object_type u32 at offset 0).
-        let field_count_ptr = (ptr + 4) as *const u32;
-        *field_count_ptr == 0
-    }
-}
-
 /// `proxy[key]` — if handler.get exists, call it with (target, key);
 /// otherwise fetch the field from the target directly via the generic path.
 #[no_mangle]
@@ -620,8 +596,73 @@ fn reflect_ordinary_delete(target: f64, key: f64) -> f64 {
     nanbox_bool(true)
 }
 
-/// `proxy(arg0, arg1)` — if handler.apply exists, call it with
-/// (target, thisArg=undefined, argsArray); else call the target directly.
+/// Is `value` a callable function value: a closure, a class-ref constructor, or
+/// a (possibly callable) proxy? Distinct from `is_callable`, which treats *any*
+/// pointer-tagged value as callable — that's too loose for trap validation,
+/// where a present-but-non-callable trap (e.g. `apply: {}`) must throw a
+/// `TypeError` rather than be silently invoked as a no-op.
+fn is_callable_function(value: f64) -> bool {
+    let bits = value.to_bits();
+    // Class-ref constructors (INT32-tagged, top16 == 0x7FFE) are callable.
+    if (bits >> 48) == 0x7FFE {
+        return true;
+    }
+    // A proxy whose target is callable is itself callable.
+    if lookup(value).is_some() {
+        return true;
+    }
+    // A POINTER_TAG value is callable only if it points at a closure.
+    if (bits & !POINTER_MASK) == POINTER_TAG {
+        let raw = (bits & POINTER_MASK) as usize;
+        return crate::closure::is_closure_ptr(raw);
+    }
+    false
+}
+
+/// Forward a `[[Call]]` to `target` (the default behavior when a proxy has no
+/// `apply` trap). If `target` is itself a proxy, recurse so its own trap chain
+/// runs; otherwise invoke the target through the canonical value-call path with
+/// `this_arg` bound via `IMPLICIT_THIS`. Routing through `js_native_call_value`
+/// (rather than calling the closure directly) also recovers built-in prototype
+/// methods invoked as values — e.g. forwarding to `Object.prototype.hasOwnProperty`
+/// re-dispatches by name with the receiver taken from `IMPLICIT_THIS`.
+fn forward_apply(target: f64, this_arg: f64, args_array: f64) -> f64 {
+    if lookup(target).is_some() {
+        return js_proxy_apply(target, this_arg, args_array);
+    }
+    let args_bits = args_array.to_bits();
+    let arr_ptr = (args_bits & POINTER_MASK) as *const crate::ArrayHeader;
+    let len = if arr_ptr.is_null() {
+        0
+    } else {
+        crate::array::js_array_length(arr_ptr) as usize
+    };
+    let mut buf: Vec<f64> = Vec::with_capacity(len);
+    for i in 0..len {
+        let v = crate::array::js_array_get(arr_ptr, i as u32);
+        buf.push(f64::from_bits(v.bits()));
+    }
+    let (ptr, n) = if buf.is_empty() {
+        (std::ptr::null::<f64>(), 0usize)
+    } else {
+        (buf.as_ptr(), buf.len())
+    };
+    let prev = crate::object::js_implicit_this_set(this_arg);
+    let result = unsafe { crate::closure::js_native_call_value(target, ptr, n) };
+    crate::object::js_implicit_this_set(prev);
+    result
+}
+
+/// `proxy(arg0, arg1)` / `p.call(thisArg, …)` / `Reflect.apply(p, thisArg, …)`.
+///
+/// Implements the Proxy `[[Call]]` exotic behavior (#3656):
+///   * trap absent / `undefined` / `null` → forward `[[Call]]` to the target,
+///     binding `thisArg`;
+///   * trap present but not callable → `TypeError`;
+///   * trap present → `Call(trap, handler, «target, thisArg, argArray»)` — the
+///     handler is the trap's `this`, and the trap's return value is returned
+///     verbatim (no fallback to the target).
+///
 /// `args_array` is an already-constructed Array JSValue (NaN-boxed).
 #[no_mangle]
 pub extern "C" fn js_proxy_apply(proxy_boxed: f64, this_arg: f64, args_array: f64) -> f64 {
@@ -644,28 +685,40 @@ pub extern "C" fn js_proxy_apply(proxy_boxed: f64, this_arg: f64, args_array: f6
         return revoked_return();
     }
     let trap = handler_trap(handler, "apply");
-    if is_callable(trap) {
-        let trap_result = js_closure_call3(closure_from(trap), target, this_arg, args_array);
-        // Pragmatic fallback: if the trap returns undefined (because
-        // the user wrote `return target.apply(thisArg, args)` which
-        // Perry doesn't yet support on closures) OR returns the
-        // runtime's NULL_OBJECT sentinel (which is what
-        // js_native_call_method now returns when a method dispatch
-        // on a closure falls off the end), call the target directly
-        // with the args so the expected value still flows through.
-        if trap_result.to_bits() == TAG_UNDEFINED || is_null_object_sentinel(trap_result) {
-            return call_with_args_array(target, args_array);
-        }
-        return trap_result;
+    let trap_bits = trap.to_bits();
+    // GetMethod: a missing / undefined / null trap means "use the default" —
+    // forward the call to the target's [[Call]].
+    if trap_bits == TAG_UNDEFINED || trap_bits == TAG_NULL {
+        return forward_apply(target, this_arg, args_array);
     }
-    // Forward to target: call target with unpacked args. For simplicity
-    // we handle 0-3 arg fast paths.
-    call_with_args_array(target, args_array)
+    // Present-but-not-callable trap → TypeError.
+    if !is_callable_function(trap) {
+        return throw_type_error("proxy apply trap is not a function");
+    }
+    // Invoke the trap with the handler bound as `this` and the spec argument
+    // list (target, thisArgument, argArray). Object-literal/free-function traps
+    // read `this` from a closure slot and/or the IMPLICIT_THIS fallback, so we
+    // set both — mirroring the `Reflect.get` accessor path.
+    let rebound = crate::closure::clone_closure_rebind_this(trap_bits, handler);
+    let closure = closure_from(f64::from_bits(rebound));
+    if closure.is_null() {
+        return throw_type_error("proxy apply trap is not a function");
+    }
+    let prev = crate::object::js_implicit_this_set(handler);
+    let result = js_closure_call3(closure, target, this_arg, args_array);
+    crate::object::js_implicit_this_set(prev);
+    result
 }
 
-/// Call a closure/function value with positional args sourced from an Array
-/// JSValue. Up to 4 args handled.
-pub(crate) fn call_with_args_array(callee: f64, args_array: f64) -> f64 {
+/// Forward a `[[Construct]]` to `target` (the default behavior when a proxy has
+/// no `construct` trap). Recurses through proxy targets; otherwise constructs a
+/// fresh instance from the target function value.
+fn forward_construct(target: f64, args_array: f64, new_target: f64) -> f64 {
+    if lookup(target).is_some() {
+        return js_proxy_construct(target, args_array, new_target);
+    }
+    // Plain function/class target: build the positional arg buffer and
+    // construct via the function-as-constructor path.
     let args_bits = args_array.to_bits();
     let arr_ptr = (args_bits & POINTER_MASK) as *const crate::ArrayHeader;
     let len = if arr_ptr.is_null() {
@@ -673,31 +726,33 @@ pub(crate) fn call_with_args_array(callee: f64, args_array: f64) -> f64 {
     } else {
         crate::array::js_array_length(arr_ptr) as usize
     };
-    let a = |i: usize| -> f64 {
-        if i < len {
-            let v = crate::array::js_array_get(arr_ptr, i as u32);
-            f64::from_bits(v.bits())
-        } else {
-            f64::from_bits(TAG_UNDEFINED)
-        }
+    let mut buf: Vec<f64> = Vec::with_capacity(len);
+    for i in 0..len {
+        let v = crate::array::js_array_get(arr_ptr, i as u32);
+        buf.push(f64::from_bits(v.bits()));
+    }
+    let (ptr, n) = if buf.is_empty() {
+        (std::ptr::null::<f64>(), 0usize)
+    } else {
+        (buf.as_ptr(), buf.len())
     };
-    let closure = closure_from(callee);
-    if closure.is_null() {
-        return f64::from_bits(TAG_UNDEFINED);
-    }
-    match len {
-        0 => js_closure_call0(closure),
-        1 => js_closure_call1(closure, a(0)),
-        2 => js_closure_call2(closure, a(0), a(1)),
-        3 => js_closure_call3(closure, a(0), a(1), a(2)),
-        _ => crate::closure::js_closure_call4(closure, a(0), a(1), a(2), a(3)),
-    }
+    unsafe { crate::object::js_new_function_construct(target, ptr, n) }
 }
 
-/// `new Proxy(target_class, handler)` — if handler.construct exists, call it
-/// with (targetClass, argsArray); else construct the target class directly.
+/// `new Proxy(...)` / `Reflect.construct(p, args, newTarget)`.
+///
+/// Implements the Proxy `[[Construct]]` exotic behavior (#3656):
+///   * trap absent / `undefined` / `null` → forward `[[Construct]]` to the
+///     target (recursing through proxy targets), threading `newTarget`;
+///   * trap present but not callable → `TypeError`;
+///   * trap present → `Call(trap, handler, «target, argArray, newTarget»)` with
+///     the handler bound as `this`. The trap's result must be an Object, else
+///     `TypeError`.
+///
+/// `new_target` defaults to the proxy itself when the caller passes
+/// `undefined` (the `new Proxy(...)` path).
 #[no_mangle]
-pub extern "C" fn js_proxy_construct(proxy_boxed: f64, args_array: f64, _new_target: f64) -> f64 {
+pub extern "C" fn js_proxy_construct(proxy_boxed: f64, args_array: f64, new_target: f64) -> f64 {
     let id = match lookup(proxy_boxed) {
         Some(id) => id,
         None => return f64::from_bits(TAG_UNDEFINED),
@@ -716,14 +771,36 @@ pub extern "C" fn js_proxy_construct(proxy_boxed: f64, args_array: f64, _new_tar
     if revoked {
         return revoked_return();
     }
+    // Default newTarget to the proxy itself (spec: `new P(...)` passes the
+    // constructor being invoked, which is the proxy).
+    let nt = if new_target.to_bits() == TAG_UNDEFINED {
+        proxy_boxed
+    } else {
+        new_target
+    };
     let trap = handler_trap(handler, "construct");
-    if is_callable(trap) {
-        return js_closure_call2(closure_from(trap), target, args_array);
+    let trap_bits = trap.to_bits();
+    if trap_bits == TAG_UNDEFINED || trap_bits == TAG_NULL {
+        return forward_construct(target, args_array, nt);
     }
-    // Fallback: the target is a class — forward via callee (the compiler's
-    // new-path passes a constructor function NaN-boxed). We treat it as a
-    // callable and invoke it.
-    call_with_args_array(target, args_array)
+    if !is_callable_function(trap) {
+        return throw_type_error("proxy construct trap is not a function");
+    }
+    let rebound = crate::closure::clone_closure_rebind_this(trap_bits, handler);
+    let closure = closure_from(f64::from_bits(rebound));
+    if closure.is_null() {
+        return throw_type_error("proxy construct trap is not a function");
+    }
+    let prev = crate::object::js_implicit_this_set(handler);
+    let result = js_closure_call3(closure, target, args_array, nt);
+    crate::object::js_implicit_this_set(prev);
+    // [[Construct]] must return an Object (spec step 9 of the construct trap).
+    // Symbols are primitives despite being pointer-backed, so exclude them.
+    let is_symbol = unsafe { crate::symbol::js_is_symbol(result) != 0 };
+    if is_symbol || !reflect_value_is_object(result) {
+        return throw_type_error("proxy [[Construct]] trap returned a non-object value");
+    }
+    result
 }
 
 // ---- Reflect.* helpers (direct wrappers, not proxy-specific) -----

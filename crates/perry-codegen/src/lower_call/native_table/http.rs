@@ -56,6 +56,48 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         args: &[NA_VARARGS],
         ret: NR_PTR,
     },
+    // #3712 — module-level header-validation / parser-proxy helpers. Runtime
+    // impls live in `crates/perry-runtime/src/object/native_module_dispatch.rs`.
+    // `validateHeaderName`/`validateHeaderValue` throw Node-shaped error codes
+    // on invalid input; the two setters are deterministic no-ops returning
+    // undefined. Args are passed as NaN-boxed f64 (the helpers coerce/probe
+    // them), return is the NaN-boxed undefined value.
+    NativeModSig {
+        module: "http",
+        has_receiver: false,
+        method: "validateHeaderName",
+        class_filter: None,
+        runtime: "js_http_validate_header_name",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: false,
+        method: "validateHeaderValue",
+        class_filter: None,
+        runtime: "js_http_validate_header_value",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: false,
+        method: "setMaxIdleHTTPParsers",
+        class_filter: None,
+        runtime: "js_http_setter_noop",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: false,
+        method: "setGlobalProxyFromEnv",
+        class_filter: None,
+        runtime: "js_http_setter_noop",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ClientRequest instance methods (`req.on/.end/.write/.setHeader/.setTimeout`).
     // Shared between `http` and `https` factories — both register the
     // returned binding under module `"http"` in the HIR class table.

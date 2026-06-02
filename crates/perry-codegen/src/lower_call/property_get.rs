@@ -17,12 +17,8 @@ use crate::types::{DOUBLE, I32, I64};
 
 use super::{
     emit_guarded_direct_method_call, emit_own_method_override_check, lower_abort_controller_call,
-    lower_fetch_native_method,
+    lower_event_target_call, lower_fetch_native_method,
 };
-
-fn is_event_target_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
-    matches!(receiver_class_name(ctx, e).as_deref(), Some("EventTarget"))
-}
 
 /// Methods that exist on `Array.prototype` but NOT on `String.prototype`.
 /// Used to keep the string-method dispatch from claiming a call site
@@ -46,11 +42,7 @@ fn is_array_only_method_name(name: &str) -> bool {
 }
 
 /// Try to lower a `Call { callee: PropertyGet { .. } }` via the
-/// string/array/class/Map/Set/Promise/fetch/static/instance method
-/// dispatch tower. Returns `Ok(None)` when the callee shape doesn't
-/// match a PropertyGet at all, OR when the PropertyGet matches but no
-/// inner branch fires (caller falls through to subsequent
-/// lower_call branches).
+/// string/array/class/Map/Set/Promise/fetch/static/instance dispatch tower.
 pub fn try_lower_property_get_method_call(
     ctx: &mut FnCtx<'_>,
     callee: &Expr,
@@ -62,6 +54,11 @@ pub fn try_lower_property_get_method_call(
     let Expr::PropertyGet { object, property } = callee else {
         return Ok(None);
     };
+    if let Some(value) =
+        super::web_storage::try_lower_web_storage_method_call(ctx, object, property, args)?
+    {
+        return Ok(Some(value));
+    }
     // Number.prototype.toFixed(decimals) — call js_number_to_fixed.
     // Receiver is any number-typed value; we don't gate on
     // is_numeric_expr because tests often call it on Any locals.
@@ -776,33 +773,8 @@ pub fn try_lower_property_get_method_call(
         return Ok(Some(val));
     }
 
-    // ── EventTarget dispatch ──
-    // `new EventTarget()` is a runtime object, not a HIR class, so calls to
-    // its listener methods need the same explicit interception pattern as
-    // AbortSignal above.
-    if is_event_target_expr(ctx, object) && args.len() >= 2 {
-        if property == "addEventListener" || property == "removeEventListener" {
-            let target_box = lower_expr(ctx, object)?;
-            let event_box = lower_expr(ctx, &args[0])?;
-            let listener_box = lower_expr(ctx, &args[1])?;
-            let blk = ctx.block();
-            let target = unbox_to_i64(blk, &target_box);
-            let event = blk.call(
-                I64,
-                "js_get_string_pointer_unified",
-                &[(DOUBLE, &event_box)],
-            );
-            let listener = unbox_to_i64(blk, &listener_box);
-            let runtime = if property == "addEventListener" {
-                "js_event_target_add_event_listener"
-            } else {
-                "js_event_target_remove_event_listener"
-            };
-            blk.call_void(runtime, &[(I64, &target), (I64, &event), (I64, &listener)]);
-            return Ok(Some(double_literal(f64::from_bits(
-                crate::nanbox::TAG_UNDEFINED,
-            ))));
-        }
+    if let Some(val) = lower_event_target_call(ctx, object, property, args)? {
+        return Ok(Some(val));
     }
 
     // ── Chained Web Fetch dispatch ──

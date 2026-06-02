@@ -464,6 +464,14 @@ fn is_path_root(ctx: &LoweringContext, root_name: &str) -> bool {
             .unwrap_or(false)
 }
 
+fn path_submodule_name(module_name: &str) -> Option<&'static str> {
+    match module_name {
+        "path/posix" | "path.posix" => Some("posix"),
+        "path/win32" | "path.win32" => Some("win32"),
+        _ => None,
+    }
+}
+
 /// Core dispatch for `path.<sub>.<method>(...)` where `sub` is `"win32"` or
 /// `"posix"`. Shared by the direct member form and the aliased-local form
 /// (`const w = path.win32; w.<method>(...)`, #1750). Returns `Err(args)` when
@@ -640,10 +648,23 @@ pub(super) fn try_path_subnamespace(
     // root identifier resolves to the path module.
     if let ast::Expr::Member(inner_member) = outer_member.obj.as_ref() {
         if let ast::Expr::Ident(root_ident) = inner_member.obj.as_ref() {
-            if is_path_root(ctx, root_ident.sym.as_ref()) {
-                if let ast::MemberProp::Ident(sub_prop) = &inner_member.prop {
-                    let sub = sub_prop.sym.as_ref();
+            if let ast::MemberProp::Ident(sub_prop) = &inner_member.prop {
+                let sub = sub_prop.sym.as_ref();
+                let root_name = root_ident.sym.as_ref();
+                if is_path_root(ctx, root_name) {
                     if sub == "posix" || sub == "win32" {
+                        return dispatch_path_subnamespace(sub, method, args);
+                    }
+                }
+                if let Some((module_name, _)) = ctx.lookup_native_module(root_name) {
+                    if let Some(root_sub) = path_submodule_name(
+                        module_name.strip_prefix("node:").unwrap_or(module_name),
+                    ) {
+                        let sub = match sub {
+                            "default" => root_sub,
+                            "posix" | "win32" => sub,
+                            _ => return Err(args),
+                        };
                         return dispatch_path_subnamespace(sub, method, args);
                     }
                 }

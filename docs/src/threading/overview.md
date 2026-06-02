@@ -129,6 +129,12 @@ This eliminates data races by design. If you need to aggregate results, use the 
 
 Each worker thread has its own memory arena. Objects created on one thread can never be accessed from another thread. Values cross thread boundaries only through deep-copy serialization, which Perry handles automatically and invisibly.
 
+File-system descriptors are also thread-affine. Numeric fds from `fs.openSync`
+are just copied numbers in another thread, where the fd registry does not know
+them, so fd operations fail with `EBADF`. `fs.promises.FileHandle` objects cross
+thread boundaries as detached handles with `fd === -1`. Pass file paths to
+`spawn`/`parallelMap` and reopen files inside the worker when it needs file I/O.
+
 ## How It Works
 
 Perry's threading model is built on three pillars:
@@ -152,6 +158,7 @@ Values crossing thread boundaries are serialized to a thread-safe intermediate f
 | Arrays | O(n) deep copy of elements |
 | Objects | O(n) deep copy of fields |
 | Closures | Pointer + captured values |
+| `fs` numeric fds / `FileHandle` | Thread-affine; reopen by path |
 
 For numeric workloads — the most common parallelizable tasks — the threading overhead is negligible.
 

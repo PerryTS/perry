@@ -24,6 +24,19 @@ fn null() -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0002)
 }
 
+#[cfg(all(
+    not(feature = "bundled-net"),
+    feature = "external-net-pump",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+fn bool_value(value: bool) -> f64 {
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+
+    f64::from_bits(if value { TAG_TRUE } else { TAG_FALSE })
+}
+
 fn bind_handle_method(handle: i64, name: &'static [u8]) -> f64 {
     extern "C" {
         fn js_class_method_bind(
@@ -107,6 +120,7 @@ fn net_server_method_name(prop: &str) -> Option<&'static [u8]> {
         "listen" => Some(b"listen"),
         "ref" => Some(b"ref"),
         "unref" => Some(b"unref"),
+        "@@__perry_wk_asyncDispose" => Some(b"@@__perry_wk_asyncDispose"),
         "on" => Some(b"on"),
         "addListener" => Some(b"addListener"),
         "once" => Some(b"once"),
@@ -163,6 +177,22 @@ pub(crate) fn dispatch_property(handle: i64, property_name: &str) -> Option<f64>
         }
     }
 
+    #[cfg(all(
+        not(feature = "bundled-net"),
+        feature = "external-net-pump",
+        not(target_os = "ios"),
+        not(target_os = "android")
+    ))]
+    if property_name == "listening" {
+        extern "C" {
+            fn js_ext_net_is_server_handle(handle: i64) -> i32;
+            fn js_net_server_listening(handle: i64) -> i32;
+        }
+        if unsafe { js_ext_net_is_server_handle(handle) } != 0 {
+            return Some(bool_value(unsafe { js_net_server_listening(handle) } != 0));
+        }
+    }
+
     None
 }
 
@@ -211,6 +241,11 @@ pub(crate) unsafe fn dispatch_external_server_method(
             let callback = args.first().copied().map(unbox_to_i64).unwrap_or(0);
             js_net_server_close(handle, callback);
             nanbox_handle(handle)
+        }
+        "@@__perry_wk_asyncDispose" => {
+            js_net_server_close(handle, 0);
+            let promise = perry_runtime::js_promise_resolved(undefined());
+            perry_runtime::js_nanbox_pointer(promise as i64)
         }
         "address" => json_str_to_value(js_net_server_address(handle)),
         "on" | "addListener" if args.len() >= 2 => {

@@ -1,0 +1,2 @@
+spawn captured fd fstat: EBADF:fstat
+main fd still valid: true

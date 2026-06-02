@@ -240,68 +240,12 @@ pub(crate) const INSPECT_COLOR_STYLES: &[AnsiStyle] = &[
     },
 ];
 
-const STYLE_ALIASES: &[AnsiStyle] = &[
-    AnsiStyle {
-        name: "grey",
-        open: 90,
-        close: 39,
-    },
-    AnsiStyle {
-        name: "blackBright",
-        open: 90,
-        close: 39,
-    },
-    AnsiStyle {
-        name: "bgGrey",
-        open: 100,
-        close: 49,
-    },
-    AnsiStyle {
-        name: "bgBlackBright",
-        open: 100,
-        close: 49,
-    },
-    AnsiStyle {
-        name: "faint",
-        open: 2,
-        close: 22,
-    },
-    AnsiStyle {
-        name: "crossedout",
-        open: 9,
-        close: 29,
-    },
-    AnsiStyle {
-        name: "strikeThrough",
-        open: 9,
-        close: 29,
-    },
-    AnsiStyle {
-        name: "crossedOut",
-        open: 9,
-        close: 29,
-    },
-    AnsiStyle {
-        name: "conceal",
-        open: 8,
-        close: 28,
-    },
-    AnsiStyle {
-        name: "swapColors",
-        open: 7,
-        close: 27,
-    },
-    AnsiStyle {
-        name: "swapcolors",
-        open: 7,
-        close: 27,
-    },
-    AnsiStyle {
-        name: "doubleUnderline",
-        open: 21,
-        close: 24,
-    },
-];
+// #3870-adjacent (util/style-text): Node's `styleText` validates `format`
+// against `Object.keys(util.inspect.colors)` — exactly the 44 names in
+// `INSPECT_COLOR_STYLES`. It does NOT accept British/camelCase aliases
+// (`grey`, `bgGrey`, `strikeThrough`, `swapColors`, `doubleUnderline`,
+// `crossedout`, `conceal`, `faint`, `blackBright`, …); those throw
+// `ERR_INVALID_ARG_VALUE`. The previous alias table made Perry too lenient.
 
 const VALID_FORMATS_MESSAGE: &str = "'reset', 'bold', 'dim', 'italic', 'underline', 'blink', \
     'inverse', 'hidden', 'strikethrough', 'doubleunderline', 'black', 'red', 'green', \
@@ -310,14 +254,11 @@ const VALID_FORMATS_MESSAGE: &str = "'reset', 'bold', 'dim', 'italic', 'underlin
     'gray', 'redBright', 'greenBright', 'yellowBright', 'blueBright', 'magentaBright', \
     'cyanBright', 'whiteBright', 'bgGray', 'bgRedBright', 'bgGreenBright', \
     'bgYellowBright', 'bgBlueBright', 'bgMagentaBright', 'bgCyanBright', \
-    'bgWhiteBright', 'grey', 'blackBright', 'bgGrey', 'bgBlackBright', 'faint', \
-    'crossedout', 'strikeThrough', 'crossedOut', 'conceal', 'swapColors', \
-    'swapcolors', 'doubleUnderline'";
+    'bgWhiteBright'";
 
 fn style_for(name: &str) -> Option<AnsiStyle> {
     INSPECT_COLOR_STYLES
         .iter()
-        .chain(STYLE_ALIASES.iter())
         .find(|style| style.name == name)
         .copied()
 }

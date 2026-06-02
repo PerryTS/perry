@@ -21,13 +21,15 @@ use std::collections::{HashMap, HashSet};
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 #[cfg(target_os = "windows")]
+use windows::Win32::UI::Controls::WM_MOUSELEAVE;
+#[cfg(target_os = "windows")]
 use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSELEAVE, WM_MOUSEMOVE,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
 
 extern "C" {

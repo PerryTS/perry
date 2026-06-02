@@ -15,11 +15,37 @@ impl FormDataStore {
         self.entries.push((name, value));
     }
 
+    fn set(&mut self, name: String, value: String) {
+        let mut replaced_first = false;
+        self.entries.retain_mut(|(k, v)| {
+            if k != &name {
+                return true;
+            }
+            if replaced_first {
+                return false;
+            }
+            *v = value.clone();
+            replaced_first = true;
+            true
+        });
+        if !replaced_first {
+            self.entries.push((name, value));
+        }
+    }
+
+    fn delete(&mut self, name: &str) {
+        self.entries.retain(|(k, _)| k != name);
+    }
+
     fn get(&self, name: &str) -> Option<String> {
         self.entries
             .iter()
             .find(|(k, _)| k == name)
             .map(|(_, v)| v.clone())
+    }
+
+    fn has(&self, name: &str) -> bool {
+        self.entries.iter().any(|(k, _)| k == name)
     }
 
     fn get_all(&self, name: &str) -> Vec<String> {
@@ -114,6 +140,23 @@ fn form_data_from_urlencoded(body: &[u8]) -> FormDataStore {
         store.append(name, value);
     }
     store
+}
+
+unsafe fn form_data_value_string(value: f64) -> String {
+    let ptr = perry_runtime::value::js_jsvalue_to_string(value);
+    string_from_header(ptr as *const StringHeader).unwrap_or_default()
+}
+
+fn form_data_string_array(values: Vec<String>) -> f64 {
+    let mut arr = perry_runtime::js_array_alloc(values.len() as u32);
+    for value in values {
+        let value_ptr = js_string_from_bytes(value.as_ptr(), value.len() as u32);
+        arr = perry_runtime::js_array_push_f64(
+            arr,
+            f64::from_bits(JSValue::string_ptr(value_ptr).bits()),
+        );
+    }
+    nanbox_array_pointer(arr)
 }
 
 fn response_string_field(handle: f64, f: impl FnOnce(&FetchResponse) -> &str) -> *mut StringHeader {
@@ -357,6 +400,58 @@ pub unsafe extern "C" fn js_request_form_data(handle: f64) -> *mut perry_runtime
 }
 
 #[no_mangle]
+pub extern "C" fn js_form_data_new() -> f64 {
+    handle_to_f64(alloc_form_data(FormDataStore::default()))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_form_data_append(handle: f64, name: f64, value: f64) -> f64 {
+    let id = handle_id(handle);
+    let name = form_data_value_string(name);
+    let value = form_data_value_string(value);
+    if let Some(form) = FORM_DATA_REGISTRY.lock().unwrap().get_mut(&id) {
+        form.append(name, value);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_form_data_set(handle: f64, name: f64, value: f64) -> f64 {
+    let id = handle_id(handle);
+    let name = form_data_value_string(name);
+    let value = form_data_value_string(value);
+    if let Some(form) = FORM_DATA_REGISTRY.lock().unwrap().get_mut(&id) {
+        form.set(name, value);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_form_data_delete(handle: f64, name_ptr: *const StringHeader) -> f64 {
+    let id = handle_id(handle);
+    let name = string_from_header(name_ptr).unwrap_or_default();
+    if let Some(form) = FORM_DATA_REGISTRY.lock().unwrap().get_mut(&id) {
+        form.delete(&name);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_form_data_has(handle: f64, name_ptr: *const StringHeader) -> f64 {
+    let id = handle_id(handle);
+    let Some(name) = string_from_header(name_ptr) else {
+        return f64::from_bits(TAG_FALSE);
+    };
+    let has = FORM_DATA_REGISTRY
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|form| form.has(&name))
+        .unwrap_or(false);
+    tagged_bool(has)
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn js_form_data_get(handle: f64, name_ptr: *const StringHeader) -> f64 {
     let id = handle_id(handle);
     let Some(name) = string_from_header(name_ptr) else {
@@ -387,15 +482,7 @@ pub unsafe extern "C" fn js_form_data_get_all(handle: f64, name_ptr: *const Stri
         .get(&id)
         .map(|form| form.get_all(&name))
         .unwrap_or_default();
-    let mut arr = perry_runtime::js_array_alloc(values.len() as u32);
-    for value in values {
-        let value_ptr = js_string_from_bytes(value.as_ptr(), value.len() as u32);
-        arr = perry_runtime::js_array_push_f64(
-            arr,
-            f64::from_bits(JSValue::string_ptr(value_ptr).bits()),
-        );
-    }
-    nanbox_array_pointer(arr)
+    form_data_string_array(values)
 }
 
 #[no_mangle]
@@ -423,4 +510,57 @@ pub extern "C" fn js_form_data_entries(handle: f64) -> f64 {
         arr = perry_runtime::js_array_push_f64(arr, nanbox_array_pointer(pair));
     }
     nanbox_array_pointer(arr)
+}
+
+#[no_mangle]
+pub extern "C" fn js_form_data_keys(handle: f64) -> f64 {
+    let id = handle_id(handle);
+    let values = FORM_DATA_REGISTRY
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|form| form.entries.iter().map(|(k, _)| k.clone()).collect())
+        .unwrap_or_default();
+    form_data_string_array(values)
+}
+
+#[no_mangle]
+pub extern "C" fn js_form_data_values(handle: f64) -> f64 {
+    let id = handle_id(handle);
+    let values = FORM_DATA_REGISTRY
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|form| form.entries.iter().map(|(_, v)| v.clone()).collect())
+        .unwrap_or_default();
+    form_data_string_array(values)
+}
+
+#[no_mangle]
+pub extern "C" fn js_form_data_for_each(handle: f64, callback: f64) -> f64 {
+    let id = handle_id(handle);
+    let entries = FORM_DATA_REGISTRY
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|form| form.entries.clone())
+        .unwrap_or_default();
+    let cb_ptr = (callback.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+    if cb_ptr == 0 {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let closure = cb_ptr as *const perry_runtime::ClosureHeader;
+    for (name, value) in entries {
+        let name_ptr = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let value_ptr = js_string_from_bytes(value.as_ptr(), value.len() as u32);
+        let name_value = f64::from_bits(JSValue::string_ptr(name_ptr).bits());
+        let value_value = f64::from_bits(JSValue::string_ptr(value_ptr).bits());
+        perry_runtime::js_closure_call3(closure, value_value, name_value, handle);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+#[doc(hidden)]
+pub fn form_data_contains_handle(handle: usize) -> bool {
+    FORM_DATA_REGISTRY.lock().unwrap().contains_key(&handle)
 }

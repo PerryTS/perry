@@ -55,7 +55,7 @@ pub use decl::{
 pub use stmt::{CatchClause, Stmt, SwitchCase};
 
 // ---- expr.rs ----
-pub use expr::{BoxedPrimitiveKind, Expr, PathWin32Method};
+pub use expr::{BoxedPrimitiveKind, Expr, PathWin32Method, ProcessStdinLifecycleMethod};
 
 // ---- ops.rs ----
 pub use ops::{ArrayElement, BinaryOp, CallArg, CompareOp, LogicalOp, UnaryOp, UpdateOp};

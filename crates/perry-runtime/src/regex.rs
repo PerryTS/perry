@@ -212,6 +212,10 @@ fn js_regex_to_rust(pattern: &str) -> String {
     let mut result = String::with_capacity(pattern.len());
     let chars: Vec<char> = pattern.chars().collect();
     let mut i = 0;
+    // Track whether we're inside a `[...]` character class. JS and the Rust
+    // `regex` crate disagree on how a bare `[` inside a class is read, so we
+    // reconcile it below.
+    let mut in_class = false;
     while i < chars.len() {
         if chars[i] == '\\' && i + 1 < chars.len() {
             match chars[i + 1] {
@@ -220,16 +224,38 @@ fn js_regex_to_rust(pattern: &str) -> String {
                     result.push('/');
                     i += 2;
                 }
-                // Pass through all other backslash sequences as-is
+                // Pass through all other backslash sequences as-is. (An escaped
+                // `\[` / `\]` is consumed here and so never toggles `in_class`.)
                 _ => {
                     result.push('\\');
                     result.push(chars[i + 1]);
                     i += 2;
                 }
             }
-        } else if chars[i] == '(' && i + 2 < chars.len() && chars[i + 1] == '?' {
+        } else if chars[i] == '[' {
+            // In JS, an unescaped `[` inside a character class is a literal `[`
+            // (e.g. `/[[]/` matches a single `[`). The Rust `regex` crate rejects
+            // a bare `[` inside `[...]`, so escape it. A `[` outside a class opens
+            // one. This is what Hono's RegExpRouter relies on
+            // (`/[.\\+*[^\]$()]/g`), so every Hono app hit it before this fix.
+            if in_class {
+                result.push('\\');
+                result.push('[');
+            } else {
+                in_class = true;
+                result.push('[');
+            }
+            i += 1;
+        } else if chars[i] == ']' {
+            // An unescaped `]` closes the current class (an escaped `\]` was
+            // consumed by the backslash branch above and never reaches here).
+            in_class = false;
+            result.push(']');
+            i += 1;
+        } else if !in_class && chars[i] == '(' && i + 2 < chars.len() && chars[i + 1] == '?' {
             // Check for JS named group (?<name>...) — convert to (?P<name>...)
-            // But NOT (?<=...) (lookbehind) or (?<!...) (negative lookbehind)
+            // But NOT (?<=...) (lookbehind) or (?<!...) (negative lookbehind).
+            // Parens inside a character class are literals, so only outside a class.
             if chars[i + 2] == '<'
                 && i + 3 < chars.len()
                 && chars[i + 3] != '='

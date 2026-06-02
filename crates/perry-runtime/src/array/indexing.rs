@@ -329,6 +329,10 @@ pub extern "C" fn js_array_set_f64_extend(
     unsafe {
         let length = (*arr).length;
 
+        if index == u32::MAX {
+            return arr;
+        }
+
         // If index is within bounds, just set it
         if index < length {
             let value = canonicalize_array_numeric_store_value(arr, value);
@@ -449,7 +453,9 @@ pub extern "C" fn js_array_set_string_key(
     // Non-numeric string key — fall through to object-property set on the
     // array's expando map. Arrays with named properties are rare but spec-
     // legal.
-    crate::object::js_object_set_field_by_name(arr as *mut crate::object::ObjectHeader, key, value);
+    unsafe {
+        array_named_property_set(arr, key, value);
+    }
     arr
 }
 
@@ -489,19 +495,32 @@ pub extern "C" fn js_array_set_index_or_string(
             crate::value::js_get_string_pointer_unified(idx) as *const crate::StringHeader;
         return js_array_set_string_key(arr, str_ptr, value);
     }
-    // Treat as numeric (covers Int32 / plain f64 / other tags).
-    let idx_i32 = idx as i32;
-    if idx_i32 < 0 {
-        // Negative numeric key: per JS spec, becomes a string property on
-        // the array's expando map. Stringify and delegate.
-        let s = idx_i32.to_string();
-        let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-        crate::object::js_object_set_field_by_name(
-            arr as *mut crate::object::ObjectHeader,
-            key,
-            value,
-        );
-        return arr;
+    // Treat numeric keys according to the array-index boundary. Only
+    // integers in 0..2^32-2 extend element storage; 2^32-1 and larger are
+    // ordinary string properties.
+    let numeric = if (bits & crate::value::TAG_MASK) == crate::value::INT32_TAG {
+        Some(crate::value::JSValue::from_bits(bits).as_int32() as f64)
+    } else if top16 < 0x7FF8 || top16 > 0x7FFF {
+        Some(idx)
+    } else {
+        None
+    };
+    if let Some(n) = numeric {
+        if n.is_finite() && n.trunc() == n && n >= 0.0 && n < u32::MAX as f64 {
+            return js_array_set_f64_extend(arr, n as u32, value);
+        }
+        if n.is_finite() && n.trunc() == n {
+            let s = if n == 0.0 {
+                "0".to_string()
+            } else {
+                format!("{:.0}", n)
+            };
+            let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            unsafe {
+                array_named_property_set(arr, key, value);
+            }
+            return arr;
+        }
     }
-    js_array_set_f64_extend(arr, idx_i32 as u32, value)
+    arr
 }

@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2482 entries across 106 modules.
+Total: 2454 entries across 105 modules.
 
 ## Modules
 
@@ -79,7 +79,6 @@ Total: 2482 entries across 106 modules.
 - [`pg`](#pg)
 - [`process`](#process)
 - [`punycode`](#punycode)
-- [`punycode.ucs2`](#punycode-ucs2)
 - [`querystring`](#querystring)
 - [`rate-limiter-flexible`](#rate-limiter-flexible)
 - [`readline`](#readline)
@@ -342,6 +341,10 @@ Total: 2482 entries across 106 modules.
 - `fork` — module
 - `spawn` — module
 - `spawnSync` — module
+
+### Properties
+
+- `default`
 
 ## `cluster`
 
@@ -670,11 +673,17 @@ Total: 2482 entries across 106 modules.
 
 ### Classes
 
+- `Cipheriv`
+- `Decipheriv`
 - `ECDH`
 - `X509Certificate`
 
 ### Methods
 
+- `Hash` — module
+- `Hmac` — module
+- `Sign` — module
+- `Verify` — module
 - `createCipheriv` — module
 - `createDecipheriv` — module
 - `createDiffieHellman` — module
@@ -691,6 +700,7 @@ Total: 2482 entries across 106 modules.
 - `createVerify` — module
 - `generateKeyPairSync` — module
 - `generateKeyPairSync` — module
+- `generateKeySync` — module
 - `getCiphers` — module
 - `getCurves` — module
 - `getDiffieHellman` — module
@@ -967,6 +977,7 @@ Total: 2482 entries across 106 modules.
 - `TIMEOUT`
 - `V4MAPPED`
 - `V4MAPPED`
+- `default`
 - `promises`
 
 ## `dns/promises`
@@ -1045,6 +1056,7 @@ Total: 2482 entries across 106 modules.
 - `REFUSED`
 - `SERVFAIL`
 - `TIMEOUT`
+- `default`
 
 ## `domain`
 
@@ -1096,14 +1108,19 @@ Total: 2482 entries across 106 modules.
 ### Classes
 
 - `EventEmitter`
+- `EventEmitterAsyncResource`
 
 ### Methods
 
 - `EventEmitter` — module
+- `EventEmitterAsyncResource` — module
 - `addAbortListener` — module
 - `addListener` — instance
+- `asyncId` — instance *(class: `EventEmitterAsyncResource`)*
+- `asyncResource` — instance *(class: `EventEmitterAsyncResource`)*
 - `domain` — instance
 - `emit` — instance
+- `emitDestroy` — instance *(class: `EventEmitterAsyncResource`)*
 - `eventNames` — instance
 - `getEventListeners` — module
 - `getMaxListeners` — instance
@@ -1124,6 +1141,7 @@ Total: 2482 entries across 106 modules.
 - `removeListener` — instance
 - `setMaxListeners` — instance
 - `setMaxListeners` — module
+- `triggerAsyncId` — instance *(class: `EventEmitterAsyncResource`)*
 
 ### Properties
 
@@ -1185,6 +1203,7 @@ Total: 2482 entries across 106 modules.
 ### Classes
 
 - `Blob`
+- `FormData`
 - `Headers`
 - `Request`
 - `Response`
@@ -1472,7 +1491,9 @@ Total: 2482 entries across 106 modules.
 - `resume` — instance *(class: `IncomingMessage`)*
 - `reuseSocket` — instance *(class: `Agent`)*
 - `setEncoding` — instance *(class: `IncomingMessage`)*
+- `setGlobalProxyFromEnv` — module
 - `setHeader` — instance *(class: `ServerResponse`)*
+- `setMaxIdleHTTPParsers` — module
 - `setStatus` — instance *(class: `ServerResponse`)*
 - `setTimeout` — instance *(class: `HttpServer`)*
 - `setTimeout` — instance *(class: `ClientRequest`)*
@@ -1482,6 +1503,8 @@ Total: 2482 entries across 106 modules.
 - `timeout` — instance *(class: `HttpServer`)*
 - `trailers` — instance *(class: `IncomingMessage`)*
 - `url` — instance *(class: `IncomingMessage`)*
+- `validateHeaderName` — module
+- `validateHeaderValue` — module
 - `write` — instance *(class: `ServerResponse`)*
 - `writeContinue` — instance *(class: `ServerResponse`)*
 - `writeHead` — instance *(class: `ServerResponse`)*
@@ -1491,6 +1514,8 @@ Total: 2482 entries across 106 modules.
 
 - `METHODS`
 - `STATUS_CODES`
+- `globalAgent`
+- `maxHeaderSize`
 
 ## `http2`
 
@@ -1501,18 +1526,19 @@ Total: 2482 entries across 106 modules.
 
 ### Methods
 
-- `address` — instance *(class: `Http2SecureServer`)*
-- `close` — instance *(class: `Http2SecureServer`)*
+- `connect` — module
 - `createSecureServer` — module
+- `createServer` — module
 - `getDefaultSettings` — module
 - `getPackedSettings` — module
 - `getUnpackedSettings` — module
-- `listen` — instance *(class: `Http2SecureServer`)*
-- `on` — instance *(class: `Http2SecureServer`)*
+- `performServerHandshake` — module
 
 ### Properties
 
 - `constants`
+- `default`
+- `sensitiveHeaders`
 
 ## `https`
 
@@ -1679,8 +1705,6 @@ Total: 2482 entries across 106 modules.
 
 - `builtinModules`
 - `constants`
-- `wrap`
-- `wrapper`
 
 ## `moment`
 
@@ -1855,6 +1879,7 @@ Total: 2482 entries across 106 modules.
 ### Classes
 
 - `Blob`
+- `FormData`
 - `Headers`
 - `Request`
 - `Response`
@@ -1997,7 +2022,6 @@ Total: 2482 entries across 106 modules.
 
 - `createHistogram` — module
 - `disconnect` — instance *(class: `PerformanceObserver`)*
-- `eventLoopUtilization` — module
 - `monitorEventLoopDelay` — module
 - `observe` — instance *(class: `PerformanceObserver`)*
 - `takeRecords` — instance *(class: `PerformanceObserver`)*
@@ -2470,13 +2494,6 @@ Total: 2482 entries across 106 modules.
 - `ucs2`
 - `version`
 
-## `punycode.ucs2`
-
-### Methods
-
-- `decode` — module
-- `encode` — module
-
 ## `querystring`
 
 ### Methods
@@ -2848,6 +2865,7 @@ Total: 2482 entries across 106 modules.
 - `default` — module
 - `describe` — module
 - `enable` — module *(class: `timers`)*
+- `expectFailure` — module
 - `fn` — module *(class: `mock`)*
 - `getter` — module *(class: `mock`)*
 - `it` — module
@@ -2870,6 +2888,7 @@ Total: 2482 entries across 106 modules.
 
 ### Properties
 
+- `assert`
 - `mock`
 - `snapshot`
 
@@ -3129,14 +3148,18 @@ Total: 2482 entries across 106 modules.
 - `cachedDataVersionTag` — module
 - `createHook` — instance *(class: `promiseHooks`)*
 - `deserialize` — module
+- `getCppHeapStatistics` — module
 - `getHeapCodeStatistics` — module
+- `getHeapSnapshot` — module
 - `getHeapSpaceStatistics` — module
 - `getHeapStatistics` — module
 - `isBuildingSnapshot` — instance *(class: `startupSnapshot`)*
+- `isStringOneByteRepresentation` — module
 - `onAfter` — instance *(class: `promiseHooks`)*
 - `onBefore` — instance *(class: `promiseHooks`)*
 - `onInit` — instance *(class: `promiseHooks`)*
 - `onSettled` — instance *(class: `promiseHooks`)*
+- `queryObjects` — module
 - `readDouble` — instance *(class: `Deserializer`)*
 - `readHeader` — instance *(class: `Deserializer`)*
 - `readRawBytes` — instance *(class: `Deserializer`)*
@@ -3149,11 +3172,13 @@ Total: 2482 entries across 106 modules.
 - `setFlagsFromString` — module
 - `setHeapSnapshotNearHeapLimit` — module
 - `start` — instance *(class: `GCProfiler`)*
+- `startCpuProfile` — module
 - `stop` — instance *(class: `GCProfiler`)*
 - `stopCoverage` — module
 - `takeCoverage` — module
 - `writeDouble` — instance *(class: `Serializer`)*
 - `writeHeader` — instance *(class: `Serializer`)*
+- `writeHeapSnapshot` — module
 - `writeRawBytes` — instance *(class: `Serializer`)*
 - `writeUint32` — instance *(class: `Serializer`)*
 - `writeUint64` — instance *(class: `Serializer`)*
@@ -3210,12 +3235,15 @@ Total: 2482 entries across 106 modules.
 - `markAsUncloneable` — module
 - `markAsUntransferable` — module
 - `moveMessagePortToContext` — module
-- `parentPort` — module
-- `postMessage` — instance
+- `off` — instance *(class: `Worker`)*
+- `on` — instance *(class: `Worker`)*
+- `once` — instance *(class: `Worker`)*
 - `postMessageToThread` — module
 - `receiveMessageOnPort` — module
+- `ref` — instance *(class: `Worker`)*
 - `setEnvironmentData` — module
-- `workerData` — module
+- `terminate` — instance *(class: `Worker`)*
+- `unref` — instance *(class: `Worker`)*
 
 ### Properties
 

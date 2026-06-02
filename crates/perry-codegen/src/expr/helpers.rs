@@ -297,6 +297,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "TextDecoder"
             | "TextEncoderStream"
             | "TextDecoderStream"
+            | "Navigator"
             | "URL"
             | "URLSearchParams"
             | "AbortController"
@@ -305,6 +306,9 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "Crypto"
             | "CryptoKey"
             | "SubtleCrypto"
+            | "Event"
+            | "CustomEvent"
+            | "DOMException"
             | "FormData"
             | "Blob"
             | "File"
@@ -314,6 +318,8 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "MessageChannel"
             | "MessagePort"
             | "BroadcastChannel"
+            | "Storage"
+            | "WebSocket"
             | "FinalizationRegistry"
             | "Performance"
             | "PerformanceEntry"
@@ -328,6 +334,8 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "SuppressedError"
             | "Buffer"
             // Global functions (typeof === "function" in spec).
+            | "eval"
+            | "fetch"
             | "structuredClone"
             | "atob"
             | "btoa"
@@ -353,10 +361,13 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "Math"
             | "JSON"
             | "Reflect"
+            | "WebAssembly"
             | "performance"
             | "process"
             | "navigator"
             | "crypto"
+            | "localStorage"
+            | "sessionStorage"
     )
 }
 
@@ -374,10 +385,13 @@ pub(crate) fn is_global_this_builtin_function_name(name: &str) -> bool {
                 | "Math"
                 | "JSON"
                 | "Reflect"
+                | "WebAssembly"
                 | "performance"
                 | "process"
                 | "navigator"
                 | "crypto"
+                | "localStorage"
+                | "sessionStorage"
         )
 }
 

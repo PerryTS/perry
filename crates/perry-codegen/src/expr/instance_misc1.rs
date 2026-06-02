@@ -151,6 +151,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // Promise values are raw promise allocations, not ObjectHeader
                 // instances with a class_id field.
                 "Promise" => 0xFFFF0027u32,
+                // WHATWG fetch types. Like Blob/streams these are pointer-tagged
+                // small-int handles; the runtime resolves them via the stdlib
+                // fetch kind-probe (`res instanceof Response`, etc.).
+                "Response" => 0xFFFF0028u32,
+                "Request" => 0xFFFF0029u32,
+                "Headers" => 0xFFFF002Au32,
                 // #1545: Web Streams. Handles are numeric ids; the runtime
                 // resolves these via the stdlib stream-kind probe rather than
                 // the class chain (`ts.readable instanceof ReadableStream`,
@@ -160,13 +166,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "TransformStream" => 0xFFFF0062u32,
                 // node:perf_hooks entry classes. Runtime classifies the
                 // shaped entry objects returned by performance.mark/measure.
-                "Performance" => 0xFFFF0087u32,
+                // #3871: Performance / PerformanceObserverEntryList /
+                // PerformanceResourceTiming moved off 0x87/0x88/0x86 (which
+                // collided with fs Dirent/ReadStream/Dir) to 0x8E/0x8F/0x8D.
+                // Keep in sync with perry-runtime/src/perf_hooks.rs.
+                "Performance" => 0xFFFF008Eu32,
                 "PerformanceEntry" => 0xFFFF0080u32,
                 "PerformanceMark" => 0xFFFF0081u32,
                 "PerformanceMeasure" => 0xFFFF0082u32,
-                "PerformanceObserverEntryList" => 0xFFFF0088u32,
-                "PerformanceResourceTiming" => 0xFFFF0086u32,
+                "PerformanceObserverEntryList" => 0xFFFF008Fu32,
+                "PerformanceResourceTiming" => 0xFFFF008Du32,
                 "Console" => 0xFFFF0083u32,
+                "Event" | "globalThis.Event" => 0xFFFF2403u32,
+                "CustomEvent" | "globalThis.CustomEvent" => 0xFFFF2404u32,
+                "DOMException" | "globalThis.DOMException" => 0xFFFF2405u32,
                 // node:fs constructor exports. Keep these ids in sync with
                 // perry-runtime/src/fs/mod.rs and instanceof.rs.
                 "fs.Dir" => 0xFFFF0086u32,
@@ -185,6 +198,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "WriteStream" | "tty.WriteStream" => 0xFFFF0085u32,
                 "SecureContext" | "tls.SecureContext" => 0xFFFF00B5u32,
                 "WASI" | "wasi.WASI" => 0xFFFF00B2u32,
+                "Crypto" => 0xFFFF00C0u32,
+                "SubtleCrypto" => 0xFFFF00C1u32,
+                "CryptoKey" => 0xFFFF00C2u32,
                 // `Object` — every non-primitive matches per ECMAScript;
                 // reserved id mapped in the runtime. Pre-#585 this fell
                 // into the `cid = 0` fallback and matched accidentally
@@ -210,6 +226,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let native_event_cid = match ty.as_str() {
                         // Keep in sync with perry-runtime/src/object/instanceof.rs.
                         "EventEmitter" => Some(0xFFFF0076u32),
+                        "EventEmitterAsyncResource" => Some(0xFFFF0077u32),
                         _ => None,
                     };
                     if let Some(cid) = native_event_cid {
@@ -1082,7 +1099,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::JsonParse(text) => {
             let s_box = lower_expr(ctx, text)?;
             let blk = ctx.block();
-            let s_handle = unbox_to_i64(blk, &s_box);
+            // Materialize the operand to a real heap `*StringHeader`. A bare
+            // `unbox_to_i64` passes an SSO short-string's INLINE bytes as the
+            // pointer, and `js_json_parse` then dereferences them as a
+            // StringHeader → SIGSEGV (e.g. `JSON.parse('e' + 'n')`, or any
+            // short runtime/`.slice`-derived string). `js_get_string_pointer_
+            // unified` returns the heap pointer for heap strings and
+            // materializes SSO / number receivers to the heap. Refs #214.
+            let s_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &s_box)]);
             let result_i64 = blk.call(I64, "js_json_parse", &[(I64, &s_handle)]);
             Ok(blk.bitcast_i64_to_double(&result_i64))
         }
@@ -1113,7 +1137,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let packed = extract_array_of_object_shape(ty, ordered_keys.as_deref());
             let s_box = lower_expr(ctx, text)?;
             let blk = ctx.block();
-            let s_handle = unbox_to_i64(blk, &s_box);
+            // Same SSO-materialization fix as the generic JSON.parse arm above:
+            // a raw unbox would pass SSO inline bytes as a StringHeader pointer.
+            let s_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &s_box)]);
             let result_i64 = match packed {
                 Some((packed_bytes, field_count)) if field_count > 0 => {
                     // Emit a per-call-site rodata constant. The IR

@@ -31,7 +31,7 @@ pub use capability::{audit_module_capabilities, CapabilityPolicy, CapabilityViol
 pub use deferral::{arm_deferral_sink, disarm_deferral_sink, try_defer_refusal, DeferredRefusal};
 pub use dynamic_import::{
     collect_module_const_locals, detect_top_level_await, dynamic_import_glob_pattern,
-    flatten_exports, for_each_dynamic_import_mut, resolve_import_path,
+    flatten_exports, for_each_dynamic_import_mut, for_each_worker_new_mut, resolve_import_path,
     resolve_import_path_with_consts, FlatExport, Resolution, DYNAMIC_IMPORT_PATH_CAP,
 };
 pub use egress::{audit_module_egress, EgressRefusalReason, EgressViolation};

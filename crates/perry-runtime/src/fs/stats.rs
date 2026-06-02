@@ -242,11 +242,12 @@ pub(crate) unsafe fn build_stats_object(
             (ctime_ms as i64).saturating_mul(1_000_000),
             (birthtime_ms as i64).saturating_mul(1_000_000),
         ));
+        let ns_to_ms = |ns: i64| ns / 1_000_000;
         set(7, bigint_u64_value(size));
-        set(8, bigint_i64_value(atime_ms as i64));
-        set(9, bigint_i64_value(mtime_ms as i64));
-        set(10, bigint_i64_value(ctime_ms as i64));
-        set(11, bigint_i64_value(birthtime_ms as i64));
+        set(8, bigint_i64_value(ns_to_ms(a_ns)));
+        set(9, bigint_i64_value(ns_to_ms(m_ns)));
+        set(10, bigint_i64_value(ns_to_ms(c_ns)));
+        set(11, bigint_i64_value(ns_to_ms(b_ns)));
         set(12, bigint_i64_value(a_ns));
         set(13, bigint_i64_value(m_ns));
         set(14, bigint_i64_value(c_ns));
@@ -336,10 +337,21 @@ pub(crate) fn metadata_times_ns(meta: &fs::Metadata) -> (i64, i64, i64, i64) {
 }
 
 #[cfg(not(unix))]
-pub(crate) fn metadata_times_ns(_meta: &fs::Metadata) -> (i64, i64, i64, i64) {
-    // Sentinel; the bigint stats path multiplies ms × 1e6 when this
-    // fallback is hit so we keep behavior backward-compatible on Windows.
-    (0, 0, 0, 0)
+pub(crate) fn metadata_times_ns(meta: &fs::Metadata) -> (i64, i64, i64, i64) {
+    let to_ns = |ms: f64| -> i64 {
+        if ms.is_finite() {
+            (ms as i64).saturating_mul(1_000_000)
+        } else {
+            0
+        }
+    };
+    let (atime_ms, mtime_ms, ctime_ms, birthtime_ms) = metadata_times_ms(meta);
+    (
+        to_ns(atime_ms),
+        to_ns(mtime_ms),
+        to_ns(ctime_ms),
+        to_ns(birthtime_ms),
+    )
 }
 
 pub(crate) fn metadata_owner_ids(meta: &fs::Metadata) -> (f64, f64) {

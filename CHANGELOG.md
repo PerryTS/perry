@@ -2,6 +2,412 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1084 — fix(String): indexed reads use CanonicalNumericIndexString semantics (#3987, partial)
+
+`s[NaN]`, `s[Infinity]`, `s[-1]`, `s[1.5]`, and out-of-range `s[10]` returned `""` (or a wrong/truncated char) instead of `undefined`, and `s["1"]` returned the char at index 0 instead of index 1. Codegen lowered string `s[key]` by `fptosi`-truncating the key (so `1.5`→`1`, `NaN`→`0`) and calling `js_string_char_at`, which returns `""` for out-of-range/negative — never `undefined` — and mis-resolved string keys.
+
+Fix: new runtime `js_string_index_get(s, key)` (`crates/perry-runtime/src/string/char_ops.rs`) implements ECMAScript CanonicalNumericIndexString — it returns the single UTF-16 code-unit string only when `key` is a canonical array index (a non-negative integer, or a numeric string that round-trips its `ToString`, e.g. `"1"`) within `[0, length)`; every other key (`NaN`/`Infinity`/negatives/fractions/OOB/`"01"`/non-numeric) returns `undefined`. Codegen (`expr/index_get.rs`) now routes string-receiver `IndexGet` to it with the **raw** NaN-boxed key (no `fptosi`).
+
+Validated against `node --experimental-strip-types`: `s[NaN]`/`s[Infinity]`/`s[-1]`/`s[1.5]`/`s[10]`→`undefined`, `s[0]`/`s[2]`→chars, `s["1"]`→`"e"`; loops, variable/expression indices, nested `arr[i][j]`, and object numeric-string keys all match. `perry-runtime` char_ops/string unit tests green; url/path/querystring node-suite sweep 217/0 (no regression). The lone-surrogate (astral `"😀"[1]`) result is unchanged — that's the documented WTF-8 categorical gap, not affected by this change. Focused sub-fix of #3987 — its `new String(...)` wrapper own-`length` case remains open.
+
+## v0.5.1083 — fix(process.getBuiltinModule): punycode methods dispatch (decode/encode/toASCII/toUnicode)
+
+`process.getBuiltinModule("punycode")` returned a module whose `decode`/`encode`/`toASCII`/`toUnicode` were callable but returned `undefined` — so `punycode.decode("maana-pta")` gave `undefined` instead of `"mañana"`. (Direct `import punycode from "node:punycode"` already worked.)
+
+Root cause: `getBuiltinModule` returns the CJS-default namespace (`punycode.default`). `dispatch_native_module_method` aliases `.default` namespaces back to their base module before matching (`os.default`→`os`, `util.default`→`util`, …) so the base method arms apply — but `punycode.default` was missing from that alias list, so calls dispatched as `("punycode.default", "decode")`, which has no arm, and fell through to `undefined`.
+
+Fix (`crates/perry-runtime/src/object/native_module_dispatch.rs`): add `"punycode.default" => "punycode"` to the alias map. The existing `("punycode", …)` arms (and `("punycode.ucs2", …)`) then handle the calls.
+
+Validated against `node --experimental-strip-types`: `getBuiltinModule("punycode").decode/encode/toASCII/toUnicode` match Node; `node-suite/punycode` passes 8/8 (was failing `decode-errors` and `to-unicode-prefix-case`); other `.default` modules (path/util/os) unaffected.
+
+## v0.5.1082 — fix(String): charAt/at/codePointAt/charCodeAt ignore extra args instead of compile-failing (#3987, partial)
+
+`"hello".charAt(1, 2, 3, 4)` (and `.at`, `.codePointAt`, `.charCodeAt` with >1 arg) failed to **compile** — codegen `bail!`ed with `String.charAt expects at most 1 arg, got 4` even though `perry check` passed. JavaScript ignores extra arguments to these methods.
+
+Fix (`crates/perry-codegen/src/lower_string_method.rs`): the four index-taking string methods now use `args[0]` as the index and lower any remaining args for their **side effects** (evaluated left-to-right, results discarded), per JS call semantics — instead of erroring. `charAt(1, (c = 5))` now returns `"e"` and still assigns `c`.
+
+Validated against `node --experimental-strip-types`: `charAt(1,2,3,4)`→`e`, `at(1,9,9)`→`e`, `codePointAt(0,9)`→`104`, `charCodeAt(0,9,9)`→`104`, extra-arg side effects run; normal usage (no-arg, OOB, negative index, emoji surrogate pairs) byte-identical. Focused sub-fix of #3987 — its indexed-read (`s[NaN]`), `new String(...)` wrapper, and array-ToString cases remain open there.
+
+## v0.5.1081 — fix(number→string): scientific notation in String()/concat/template coercion (#3987, partial)
+
+`String(1e21)`, `"" + 1e21`, and `` `${1e21}` `` printed `1000000000000000000000` instead of `1e+21`, and `String(0.0000001)` printed `0.0000001` instead of `1e-7`. Only `n.toString()` was correct — it routed through `js_number_to_string`, which already applies the ECMAScript NumberToString exponent rule (scientific notation for `|n| >= 1e21` or `|n| < 1e-6`). The three *coercion* paths each had their own number formatter using Rust's full-decimal `format!("{}")`:
+
+- `js_string_coerce` (`String(x)` / `Expr::StringCoerce`) — `builtins/numbers.rs`
+- the 2-arg concat fast path (`"" + n`) and `format_number_into` (`js_string_concat_chain`, template literals) — `string/concat.rs`
+
+Fix: extracted the canonical formatting into `string::js_format_f64`, refactored `js_number_to_string` onto it, and routed all three coercion sites through it. Rust's `format!("{}")` also risked truncating `Number.MAX_VALUE`'s ~309-digit decimal into the fixed 32-byte concat buffers — scientific notation avoids that too.
+
+Validated against `node --experimental-strip-types`: 26 representative numbers (incl. `1e21`, `1e-7`, `1.5e30`, `-2.5e-10`, `NaN`, `±Infinity`, `±0`, integers, fractions) across all four paths (`String`/`+`/template/`.toString`) are byte-identical; `perry-runtime` string (97) + numbers (18) unit tests green; string/console node-suite sweep clean (the one diff is the pre-existing stack-trace-fidelity gap). Focused sub-fix of #3987 — its `new String(...)` wrapper `.length`, indexed-read, and array-ToString cases remain open there.
+
+## v0.5.1080 — node:https: request/get/Agent value-reads resolve to functions (#3697)
+
+`node:https` advertised `request`, `get`, and `Agent` in the API manifest, but reading them as values — `import { request } from "node:https"` or `https.request` — returned `undefined` (only the direct call form `https.request(...)` worked, via the codegen dispatch table). They were missing from `is_native_module_callable_export`, so the bound-value read fell through to `undefined`.
+
+- **`crates/perry-runtime/src/object/native_module.rs`** — `("https","request")`, `("https","get")`, `("https","Agent")` added to `is_native_module_callable_export` (so value reads return the bound function) + `native_callable_export_arity` (Node `.length`: `request` 0, `get` 3, `Agent` 1).
+- **`test-parity/node-suite/https/exports/module-surface.ts`** — new fixture (typeof/`.length`, named-import identity `=== https.X`); byte-identical to `node --experimental-strip-types`.
+
+Import/module-surface parity (closes #3697/#3695). Deeper `Agent` instance behavior, client overloads, and server controls stay tracked separately. (The sibling `node:http` request/get/Agent value reads have the same shape and remain available via the dispatch table for calls.)
+
+## v0.5.1079 — node:http2: expose server/client/default export surface (#3905)
+
+Perry's `node:http2` manifest claimed `createSecureServer`, the settings helpers, `performServerHandshake`, `sensitiveHeaders`, `constants`, and the request/response classes, but omitted the non-secure server factory, the client-session factory, and the module default — so `import { connect, createServer } from "node:http2"` (and `import http2 from "node:http2"`) failed `perry check` before runtime.
+
+- **`crates/perry-api-manifest/src/entries.rs`** — `method("http2","createServer")`, `method("http2","connect")`, `property("http2","default")`.
+- **`crates/perry-runtime/src/object/native_module.rs`** — `connect` added to `is_native_module_callable_export` (function-valued; `createServer` was already callable) + `native_callable_export_arity` (Node `.length`: `connect` 3, `createServer` 2); the `"http2"` property arm returns the module namespace for `default`.
+- **`test-parity/node-suite/http2/exports/server-client-surface.ts`** — new fixture (typeof/`.length`, namespace identity, default-import object + its `connect`/`createServer`); byte-identical to `node --experimental-strip-types`.
+
+Export-surface/manifest parity only; deeper server/client session behavior (and `createSecureServer({})` construction, #3884) stays tracked separately.
+
+## v0.5.1078 — fix(Array): multi-arg Array(...) / new Array(...) build the element list (#3985, partial)
+
+`Array(0, 1, 0, 1)` and `new Array(1, 2, 3)` returned a **length-0** array instead of `[0,1,0,1]` / `[1,2,3]`. `lower_builtin_new`'s `"Array"` arm handled the empty (`Array()`), single-number (`Array(5)` → sparse length), and single-value (`Array("x")` → one element) cases, but **returned `Ok(None)` for ≥2 args**, falling back to a generic path that produced an empty array.
+
+Fix (`crates/perry-codegen/src/lower_call/builtin.rs`): a multi-arg `Array(a, b, c, …)` is the element-list form — semantically identical to the `[a, b, c, …]` literal — so it now delegates to `lower_array_literal(ctx, args)`. Both the call form `Array(...)` and `new Array(...)` route through here, so both are fixed.
+
+Validated against `node --experimental-strip-types`: `Array(0,1,0,1)` → `[0,1,0,1]` (length 4), `new Array(1,2,3)` → `[1,2,3]`, `new Array("x","y")` → `["x","y"]`; `Array(5)` (sparse length 5), `Array()`, and `Array("only")` unchanged; `perry-codegen` array tests + object/array node-suite sweep green. This is a focused sub-fix of #3985 — the deeper Array-exotic prototype-identity cases (`[].toString === Array.prototype.toString`, `Array.isArray(Array.prototype)`) remain open there.
+
+## v0.5.1077 — node:v8: expose modern diagnostics/profiler named exports (#3904)
+
+Perry's `node:v8` manifest omitted several function-valued exports Node ships in the ESM namespace, so `import { queryObjects, getCppHeapStatistics, ... } from "node:v8"` failed `perry check` before runtime. Added `getCppHeapStatistics`, `getHeapSnapshot`, `isStringOneByteRepresentation`, `queryObjects`, `startCpuProfile`, and `writeHeapSnapshot` as function-valued exports (Node `.length` values preserved).
+
+- **`crates/perry-api-manifest/src/entries.rs`** — six `method("v8", …)` rows.
+- **`crates/perry-runtime/src/object/native_module.rs`** — the six added to `is_native_module_callable_export` (so the named/namespace reads are function-valued) and `native_callable_export_arity` (Node `.length`).
+- **`test-parity/node-suite/v8/exports/diagnostics-surface.ts`** — new fixture (typeof + `.length` + namespace identity); byte-identical to `node --experimental-strip-types`.
+
+Export-surface/manifest parity only; deeper behavior of `getHeapSnapshot`/`writeHeapSnapshot` remains tracked by #3140.
+
+## v0.5.1076 — fix(fs): opendirSync compiles (add missing #[no_mangle])
+
+Any program using `fs.opendirSync(...)` failed to link with `Undefined symbols: _js_fs_opendir_sync`. The runtime `js_fs_opendir_sync` (`crates/perry-runtime/src/fs/dir_glob_watch.rs`) was declared in codegen (`runtime_decls/strings.rs`) and called by the unmangled symbol name, but the Rust function was missing `#[no_mangle]` — so its symbol was Rust-mangled and the linker couldn't resolve the codegen call. (Its sibling `js_fs_glob_sync`/`js_fs_glob_sync_options` both have `#[no_mangle]` and linked fine; the async/`fs.promises` Dir paths reach the shared `js_fs_opendir_value` helper directly, so only the sync entry point was broken.)
+
+Fix: add `#[no_mangle]` to `js_fs_opendir_sync`. `opendirSync` now compiles and returns a Dir (`typeof === "object"`, `readSync` a function) matching `node --experimental-strip-types`.
+
+Found while investigating #3964 (the `ERR_DIR_CONCURRENT_OPERATION` overlap semantic for `readSync`/`closeSync` during a pending async `read`/`close` remains open — that's a separate behavior on top of this compile fix).
+
+## v0.5.1075 — fix(runtime): Buffer no longer misidentified as a Date cell in property reads (#4003)
+
+`gunzipSync(c).length` / `.byteLength` returned `undefined` for a bound-local Buffer input (Node: the decompressed byte length), while indexing, `.toString()`, `Buffer.isBuffer`, and `Buffer.byteLength(d)` all worked.
+
+Root cause: `Buffer`s are raw-`alloc`'d **without** a `GcHeader`, but `date::is_date_cell_addr(addr)` read the word at `addr - GC_HEADER_SIZE` and compared it to `GC_TYPE_DATE_CELL` — assuming every pointer has a valid GC header. For some buffer addresses (observed for the *first* `gunzipSync` result of a program) that adjacent word coincidentally held the `DATE_CELL` tag, so `js_object_get_field_by_name` took its Date branch and returned `undefined` for `.length`/`.byteLength`. It was call-ordinal/address-dependent (only the first result tripped it), which made it look like a GC stale-ref.
+
+Fix (`crates/perry-runtime/src/date.rs`): when the header byte matches `GC_TYPE_DATE_CELL`, `is_date_cell_addr` now also confirms the address is **not** a registered buffer (`!is_registered_buffer(addr)`) before reporting a Date cell. A registered buffer is never a `DateCell`. The extra lookup runs only in the rare tag-match case, so the common (non-Date) property-read hot path is unchanged, and this hardens every `is_date_cell_addr` caller (including `is_date_value`).
+
+Validated against `node --experimental-strip-types`: `gunzipSync(c).length`/`.byteLength` → 11 for all calls (was undefined on the first); `Date` reads (`getTime`/`constructor`/`getFullYear`/unknown-prop) unchanged; `perry-runtime` date (21) + buffer (41) unit tests green; buffer/zlib node-suite sweep clean except pre-existing, unrelated gaps (`new globalThis.File()` shape, zlib transform-stream output).
+
+## v0.5.1074 — node:v8: startupSnapshot registrars throw plain Error + parity fixture (#3141)
+
+`v8.startupSnapshot` (added in #3679) was complete except its `addSerializeCallback` / `addDeserializeCallback` / `setDeserializeMainFunction` registrars threw a `TypeError [ERR_NOT_BUILDING_SNAPSHOT]` outside snapshot-building mode, whereas Node throws a plain **`Error`** (`name === "Error"`) with that code.
+
+- **`crates/perry-runtime/src/node_v8.rs`** + **`crates/perry-runtime/src/object/native_module_dispatch.rs`** — both throw sites now use `throw_error_with_code` (plain `Error`) instead of `throw_type_error_with_code`, matching Node's error class.
+- **`test-parity/node-suite/v8/startup-snapshot/shape.ts`** — new fixture covering the namespace shape, `isBuildingSnapshot()` → `0`, and the three registrars throwing `Error`/`ERR_NOT_BUILDING_SNAPSHOT`; byte-identical to `node --experimental-strip-types`. Closes #3141 (the helper-state manifest/runtime surface was already present; this corrects the error class and adds the missing parity coverage).
+
+Perry's `node:test` manifest claimed the registration helpers, `mock`, and `snapshot` but not Node's current `assert` (assertion-namespace object) or `expectFailure` (function) named exports, so `import { assert, expectFailure } from "node:test"` was rejected before codegen and the module-shape coverage could drift.
+
+- **`crates/perry-api-manifest/src/entries.rs`** — `method("test", "expectFailure")` + `property("test", "assert")`.
+- **`crates/perry-runtime/src/node_test.rs`** — `expectFailure` routes through the same submodule-function path as the other helpers (`typeof === "function"`); `assert` returns a `{ register }` object matching Node's shape (`assert.register` is a length-2 function stub).
+- **`test-parity/node-suite/test/imports/assert-expectfailure-shape.ts`** — new fixture; byte-identical to `node --experimental-strip-types` (`expectFailure`/`assert.register` → function, `assert` → object, `Object.keys(assert)` → `register`).
+
+This is the export-shape/manifest tail of #3719; deeper test-runner behavior is tracked separately.
+
+## v0.5.1072 — node:http: populate STATUS_CODES map (#2519)
+
+`http.STATUS_CODES` was claimed in the API manifest but the runtime `native_module_property` "http" arm only materialized `METHODS`, so `http.STATUS_CODES` read back as `undefined` and `STATUS_CODES[200]` threw / returned undefined instead of Node's `"OK"`.
+
+Added `http_status_codes_object()` (`crates/perry-runtime/src/object/native_module.rs`): a cached object mapping the 63 standard status codes (numeric-string keys `"100".."511"`) to their reason phrases, mirroring the `http_global_agent_object` pattern (built once, cached as a scanned root in `NATIVE_MODULE_NAMESPACES`). `STATUS_CODES[200]` → `"OK"`, `[404]` → `"Not Found"`, `[418]` → `"I'm a Teapot"`, etc.; unknown codes read `undefined`. New fixture `test-parity/node-suite/http/exports/status-codes.ts` is byte-identical to `node --experimental-strip-types`.
+
+This completes #2519 (the module-level http validation helpers / properties — `validateHeaderName`/`validateHeaderValue`/`setMaxIdleHTTPParsers`/`setGlobalProxyFromEnv`/`globalAgent`/`maxHeaderSize` shipped in v0.5.1071 / #3712; `STATUS_CODES` is the last item).
+
+## v0.5.1071 — node:http: module-level header-validation / agent export tail (#3712)
+
+`node:http`'s manifest covered the server/client classes and request helpers but omitted a current Node export tail used for header validation and agent/feature detection. Compiling code that imported these names failed at module-collection (`<name> is not implemented in Perry`). Added:
+
+- **`http.maxHeaderSize`** — the 16 KiB (`16384`) default constant.
+- **`http.globalAgent`** — the shared `http.Agent` shape (`protocol: "http:"`, `defaultPort: 80`, keep-alive enabled to match Node 19+), distinct from the existing `https.globalAgent`.
+- **`http.validateHeaderName(name[, label])`** — throws `TypeError [ERR_INVALID_HTTP_TOKEN]` for a non-string / empty / non-token name (Node's `tokenRegExp` char set), else returns undefined.
+- **`http.validateHeaderValue(name, value)`** — throws `TypeError [ERR_HTTP_INVALID_HEADER_VALUE]` for an undefined value and `TypeError [ERR_INVALID_CHAR]` for control chars outside `\t` / `\x20-\x7e` / `\x80-\xff`, else returns undefined.
+- **`http.setMaxIdleHTTPParsers(max)`** / **`http.setGlobalProxyFromEnv([proxyEnv])`** — deterministic no-ops returning `undefined` (no shared parser pool / env-proxy state in Perry's runtime).
+
+Implementation:
+- **`crates/perry-api-manifest/src/entries.rs`** — six new `http` rows (two `property`, four `method`).
+- **`crates/perry-runtime/src/object/native_module.rs`** — `maxHeaderSize`/`globalAgent` property dispatch + `http_global_agent_object()`; the four helpers added to `is_native_module_callable_export` and `native_callable_export_arity`.
+- **`crates/perry-runtime/src/object/native_module_dispatch.rs`** — `js_http_validate_header_name` / `js_http_validate_header_value` / `js_http_setter_noop` FFI (Node-shaped error codes/messages) + dispatch arms.
+- **`crates/perry-codegen/src/lower_call/native_table/http.rs`** — static dispatch-table rows so the direct `http.validateHeaderName(...)` / named-import call forms dispatch (not just the value form).
+- **`test-parity/node-suite/http/exports/module-helper-tail.ts`** — new fixture covering export shape, `globalAgent` fields, `maxHeaderSize`, and the header-validation error cases; byte-identical to `node --experimental-strip-types`.
+
+Out of scope (tracked for follow-up): the class tail `http.OutgoingMessage`, `http.WebSocket`, `http.CloseEvent`, `http.MessageEvent`, and `http._connectionListener` are intentionally not yet claimed in the manifest pending an alias/implementation decision.
+
+## v0.5.1070 — util.styleText rejects non-Node format aliases (ERR_INVALID_ARG_VALUE)
+
+`util.styleText(format, text)` validates `format` against `Object.keys(util.inspect.colors)` — exactly 44 names. Perry additionally accepted 12 British/camelCase aliases (`grey`, `bgGrey`, `blackBright`, `bgBlackBright`, `faint`, `crossedout`, `crossedOut`, `strikeThrough`, `conceal`, `swapColors`, `swapcolors`, `doubleUnderline`) that Node does not, applying ANSI codes where Node throws `TypeError [ERR_INVALID_ARG_VALUE]`.
+
+Fix (`crates/perry-runtime/src/util_style_text.rs`): `style_for` now resolves only the 44 `INSPECT_COLOR_STYLES` (dropped the `STYLE_ALIASES` table from the lookup) and `VALID_FORMATS_MESSAGE` lists exactly Node's 44, so `styleText("grey", …)` etc. now throw `ERR_INVALID_ARG_VALUE` with Node's exact "must be one of: …" message. The canonical names (`gray`, `strikethrough`, `doubleunderline`, `framed`, `overlined`, `bgGray`, …) still produce identical ANSI output, and `util.inspect.colors` (built from the same 44) is unchanged.
+
+Validated against `node --experimental-strip-types`: every format in `node-suite/util/style-text/basic` matches (valid → same ANSI bytes; alias → `ERR_INVALID_ARG_VALUE`); a 12-format accept/throw matrix matches byte-for-byte.
+
+## v0.5.1069 — timers/promises + stream/promises: abort rejects with AbortError code "ABORT_ERR"
+
+When a `timers/promises` (`setTimeout`/`setImmediate`/`scheduler.wait`/interval) or `stream/promises` (`finished`/`pipeline`) operation was aborted, Perry rejected with the signal's `.reason` — for a default `controller.abort()` that is a DOMException whose `.code` is the numeric `20`, so fixtures saw `code: 20` instead of Node's `"ABORT_ERR"`.
+
+Node always rejects these operations with a fresh internal `AbortError` (`name: "AbortError"`, `message: "The operation was aborted"`, `code: "ABORT_ERR"`) and ignores `signal.reason` entirely — verified against `node --experimental-strip-types` for a bare abort, a custom `abort(reason)`, and an `AbortSignal.timeout()` `TimeoutError` (all reject with `AbortError`/`"ABORT_ERR"`).
+
+Fix (`crates/perry-runtime/src/node_submodules/stream_promises.rs`): `signal_reason` now returns `abort_error_value()` (the string-coded `AbortError`) unconditionally instead of reading `signal.reason`. This is the single error source shared by every `timers/promises` and `stream/promises` abort-rejection path (immediate-abort checks and the deferred `abort` listener), so all of them now match Node.
+
+Validated: `node-suite/timers/promises` `abort-error-shape`, `abort-signal`, `scheduler-wait-abort`, and `set-immediate-signal` now match Node byte-for-byte; `stream/promises` `finished`/`pipeline` abort still report `"ABORT_ERR"`. The 2 remaining `timers`/`stream` promise failures (`timeout-value-and-ref` unsettled-top-level-await warning, `pipeline-with-transform-collect` transform-collect concat) are pre-existing and unrelated to abort errors. `perry-runtime` stream_promises unit tests green.
+
+## v0.5.1068 — timers: drain microtasks between timer callbacks (#3870)
+
+Perry ran the microtask checkpoint only once after a whole batch of expired timers, not after each callback. So when a `setTimeout` callback queued a microtask *and* scheduled another zero-delay timeout, Perry fired the next timer before draining the microtask:
+
+```
+node:  promise|timeout1|micro-in-timeout|timeout2
+perry: promise|timeout1|timeout2|micro-in-timeout   (before)
+```
+
+Fix (`crates/perry-runtime/src/timer.rs`, `js_callback_timer_tick`): drain the microtask queue (`js_promise_run_microtasks`) after *each* timer callback rather than only once after the expired batch in the outer pump. In Node every timer callback is its own macrotask followed by a microtask checkpoint, so a `queueMicrotask`/`Promise.then` scheduled inside a timer callback now runs before the next timer fires.
+
+Validated against `node --experimental-strip-types`: all five `node-suite/timers/ordering` fixtures pass (the previously-failing `nested-order-extra` now matches). A 77-fixture sweep across `timers`/`promises`/`async-hooks` shows no regressions — the pre-existing failures (negative-delay warnings, `AbortError.code` shape, unsettled-top-level-await warnings) fail identically with and without this change (confirmed by a stashed-baseline rebuild) and are orthogonal to microtask ordering. `perry-runtime` timer + microtask unit tests green.
+
+## v0.5.1067 — node:https/http: URL-object request/get overload no longer throws circular-JSON (#3880)
+
+`https.get(new URL(...), options, callback)` (and the `http`/`request` variants) threw `TypeError: Converting circular structure to JSON` before the request could be built. Root cause: `parse_client_args` classified arguments by value type, and a `URL` *instance* — a heap object, not a string — fell into the "first non-string pointer → options bag" branch. `parse_options_object` then JSON-stringified the URL, which throws on its `searchParams` ↔ owner back-reference, and the real options object was dropped.
+
+Fixes:
+- **`crates/perry-runtime/src/url/url_class.rs`** — new `js_url_href_if_url(value) -> f64` FFI: returns a `URL` instance's `href` (NaN-boxed string) via the existing `is_url_object_shape` check, else `undefined`.
+- **`crates/perry-ext-http/src/client_overload.rs`** — `parse_client_args` now routes a `URL`-object argument to the string-URL slot (`out.url = href`) instead of the options slot, so the following options object is parsed normally and the URL is never JSON-stringified.
+- Same file — `method_for_overload` no longer force-returns `GET` for `get()`. `http.get`/`https.get` differ from `request()` only by auto-`end()`ing; Node derives the method from `options.method || 'GET'` for both, so `https.get(url, { method: "POST" }, cb)` now correctly issues a POST.
+
+Validated against `node --experimental-strip-types`: the `node-suite/https/surface/mirror-surface` fixture is byte-identical, and all overload shapes match — `get(string)`, `request(string, cb)`, `request(options-only)`, `get(URL)`, `request(URL, {method})`. `perry-ext-http` + `perry-runtime` url unit tests green.
+
+## v0.5.1066 — node:constants Linux-only constants gated out of the import surface on macOS (#3902)
+
+On macOS, Node's `node:constants` ESM namespace does not export six Linux-only constants (`O_DIRECT`, `O_NOATIME`, `RTLD_DEEPBIND`, `SIGPOLL`, `SIGPWR`, `SIGSTKFLT`), but Perry accepted all six as named imports and ran the program with each binding set to `undefined` — a false-positive surface: code that fails Node's ESM instantiation passed `perry check` and ran under Perry.
+
+Fix (`crates/perry-api-manifest/src/lib.rs`): a new `is_platform_unavailable_named_export` helper is consulted by `module_has_public_named_export` (the import gate behind the `U006` check). On a non-Linux host the six names are no longer valid named exports, so `perry check`/compile now rejects `import { O_DIRECT } from "node:constants"` with `error[U006] ... does not provide an export named 'O_DIRECT'`, matching Node. Valid constants (`O_RDONLY`, `O_DIRECTORY`, …) are unaffected.
+
+The entries deliberately stay in the static `API_MANIFEST` on every platform, so `--print-api-manifest` and the generated docs (`docs/api/perry.d.ts`, `docs/src/api/reference.md`) remain byte-identical regardless of the host OS the generator runs on — the existing `deprecated_constants_alias_has_manifest_entries` invariant (CI runs `api-docs-drift` on Linux). The gate touches only the import-validation path, not the docs/emit path. New test `platform_unavailable_constants_gate_the_import_surface` covers both halves.
+
+Also closed as already-fixed-on-main (stale mass-filed reports against an old baseline): **#3897** (node:buffer `Buffer.*` static methods misclassified as top-level exports — now `internal_method`, excluded) and **#3898** (node:perf_hooks `performance.*` singleton methods misclassified — now excluded). The current manifest's buffer/perf_hooks module exports already match Node.
+
+## v0.5.1065 — node-builtin submodule default imports resolve to the module namespace (#3906, partial)
+
+Default-importing a non-native node-builtin submodule (e.g. `import tp from "node:timers/promises"`, `import sp from "node:stream/promises"`) previously lowered the binding down the generic JS-module-default path, producing a primitive (`typeof tp === "boolean"`) instead of an object — so `tp.setTimeout(...)` / `sp.finished(...)` were unreachable. In CommonJS terms the default export *is* `module.exports`, which for these modules is the module namespace itself.
+
+Fix (`crates/perry-hir/src/lower/module_decl.rs`): a default import whose source `is_node_builtin_module` but is not a `NATIVE_MODULES` entry now registers as a namespace binding and pushes an `ImportSpecifier::Namespace { local }` (with `continue`) instead of a `Default` specifier. That places the local into the codegen driver's `namespace_imports`, so `typeof local` folds to `"object"` and `local.member(...)` dispatches through the submodule namespace — identical to the `import * as local` shape. Native-module default imports (os/path/fs) and `import * as` namespaces are untouched (verified byte-identical to Node).
+
+Validated: `typeof tp` → `"object"`, `tp.setTimeout`/`sp.finished`/`sp.pipeline` → `"function"` (matches `node --experimental-strip-types`); native + namespace import smoke clean; `perry-hir` test suite green.
+
+Remaining #3906 work (left open): the `__module__`-only `Object.keys` enumeration for native modules (v8/tty/http2/perf_hooks/util.types) — a broader runtime↔manifest key-order reconciliation — is deferred.
+
+## v0.5.1064 — fix(node): namespace reads of absent builtin members → undefined (#3896)
+
+A bare value read of an absent member on a Node-core module namespace/default
+object — e.g. `import * as dnsp from "node:dns/promises"; dnsp.ADDRCONFIG` (Node
+exposes `ADDRCONFIG` on `dns` but not `dns/promises`) — tripped the #463
+unimplemented-API read gate and errored at compile time, whereas Node treats it
+as an ordinary property miss returning `undefined`. The call form (`ns.foo()`)
+must still reject as unimplemented. Fixed by threading a transient
+`lowering_call_callee` flag through `LoweringContext`: `lower_call` sets it around
+the callee-lowering, and `lower_member_inner` captures-and-clears it at entry, so
+the read gate keeps rejecting call callees while relaxing pure value reads to
+`undefined` — scoped to Node core modules only (npm packages keep the strict
+gate, and the tree-shaking-deferral path is unchanged). Updated the
+`unimplemented_api_check` member/crypto unit tests to the new behavior (the
+bogus-*call* rejection sweep stays green); added a
+`node-core/namespace-absent-member-read` fixture and flipped
+`dns/constants/error-aliases`. Baseline-compared across fs/dns/events/crypto/os/
+path/process node-suite — no regressions (the pre-existing fs arg-validation
+message-detail and crypto cipher/fips/prime fails are unrelated).
+
+## v0.5.1063 — fix(crypto): wire crypto.generateKeySync (#3927)
+
+`crypto.generateKeySync("aes"|"hmac", { length })` was rejected by the #463
+unimplemented-API gate even though the runtime (`js_crypto_generate_key_sync`),
+the codegen dispatch (`expr/calls.rs`), and the AES-192/256 KeyObject metadata
+(fixed by #3930) were all already in place — `generateKeySync` was simply missing
+from the API manifest. Added the `method("crypto", "generateKeySync", …)` row so
+the dotted-form `crypto.generateKeySync(...)` reaches its dispatch, plus a
+named-import lowering arm in `expr_call/globals.rs` (mirroring `createSecretKey`)
+so the bare `import { generateKeySync } from "node:crypto"; generateKeySync(...)`
+shape rewrites to the dotted form too. Flips
+`node-suite/crypto/secret-key/generate-key-sync` to green (AES-128/192/256 + hmac
+all match `node --experimental-strip-types`). Remaining `node:crypto` node-suite
+failures (cipher invalid-state #3873, fips-api, prime) are unrelated and
+pre-existing.
+
+## v0.5.1062 — fix(perf_hooks): Performance/observer-list instanceof class-id collision (#3871)
+
+`performance instanceof Performance` and `list instanceof PerformanceObserverEntryList`
+returned `false` (mark/measure instanceof already worked). Root cause: the runtime
+class ids `CLASS_ID_PERFORMANCE` (0xFFFF0087), `CLASS_ID_PERFORMANCE_RESOURCE_TIMING`
+(0x86), and `CLASS_ID_PERFORMANCE_OBSERVER_ENTRY_LIST` (0x88) **collided** with
+`node:fs`'s `CLASS_ID_FS_DIRENT` / `CLASS_ID_FS_DIR` / `CLASS_ID_FS_READ_STREAM`. In
+`object/instanceof.rs`, the fs `Dir`/`Dirent`/`ReadStream` arms run *before* the
+perf-hooks shape check, so `js_instanceof(performance, 0x87)` hit
+`is_fs_dirent_instance_value` (→ false) and never reached `is_performance_object_value`.
+Moved the three perf ids to free slots (0x8D/0x8E/0x8F, past fs's 0x8C) in both
+`perf_hooks.rs` and the codegen `instanceof` map, and made `is_performance_object_value`
+recognize the `perf_hooks` namespace object by its stored module name (robust against
+the `PERFORMANCE_NS` pointer cache). Flips the `perf_hooks/global/class-constructors`
+and `perf_hooks/observer/list-instanceof` fixtures to green; `mark`/`measure` instanceof
+and `fs` `Dir`/`Dirent` instanceof are unregressed.
+
+## v0.5.1061 — fix(worker_threads): workerData is value-only, not callable (#3899)
+
+`worker_threads.workerData` read as a function and `workerData()` returned a
+value, whereas Node exposes `workerData` as a value (the worker's data, or `null`
+on the main thread) and `workerData()` throws. Root cause: a leftover
+`internal_method_sig` row made `module_has_symbol("worker_threads", "workerData")`
+return a `Method`, so codegen's `typeof <module>.<member>` fold reported
+`"function"` (parentPort, which only had a property row, already read `"object"`),
+and the `native_table/extras.rs` row routed `workerData()` to a runtime getter.
+Dropping the method row + call routing lets workerData resolve through
+`property("worker_threads", "workerData")` (typeof `"object"`, value `null`) and
+makes `workerData()` throw a normal `TypeError`. Fixes the
+`worker_threads/main-thread/worker-data-surface` fixture; adds
+`worker_threads/workerdata-value-boundary`. `getWorkerData` is left in place: it
+is not a public named export, but fully removing it makes
+`worker_threads.getWorkerData()` trip the compile-time #463 gate instead of Node's
+runtime TypeError — that absent-member-read boundary is tracked by #3896.
+
+## v0.5.1060 — fix(crypto): expose Hash/Hmac/Sign/Verify constructor exports (#3955)
+
+`import { Hash } from "node:crypto"` (and `Hmac`/`Sign`/`Verify`) failed `check`
+with "does not provide an export named 'Hash'" even though the HIR call-lowering
+in `lower/expr_call/crypto.rs` already routed `Hash(...)`/`Hmac(...)`/`Sign(...)`/
+`Verify(...)` through the same path as their `create*` factories. The four
+constructor classes are public `node:crypto` named exports in Node; added the
+manifest entries so they resolve on the ESM/named-import surface. Flips the
+`crypto/hash/constructor-export`, `crypto/hmac/constructor-export`, and
+`crypto/asymmetric/sign-verify-constructor-export` node-suite fixtures to green.
+
+Also closed (verified via `run_parity_tests.sh --suite node-suite --module <m>`,
+zero failures) the #2013 argument-validation tails for `node:buffer` (#3953),
+`node:process` (#3956), and `node:url` (#3957).
+
+## v0.5.1059 — fix(buffer): materialize Buffer iterators via spread + Array.from (#3909)
+
+`buf.keys()`, `buf.values()`, and `buf.entries()` already returned working
+iterator objects — `.next()` and `for...of` produced the right byte
+indices/values — but `[...buf.keys()]` and `Array.from(buf.values())` returned
+an empty array. `js_array_clone_for_spread` (the runtime helper behind array
+spread and `Array.from`) recognizes iterator objects by class id, but its
+`is_array_iterator` check listed only the array/map/set/iterator-helper class
+ids, not `BUFFER_ITERATOR_CLASS_ID`. A Buffer iterator therefore fell through to
+the array-like `.length`/`[i]` path (a Buffer iterator has neither), yielding
+nothing. Added the buffer iterator class id alongside the others, so spread and
+`Array.from` now drive its `.next()` protocol like every other iterator. Added a
+`node-suite/buffer/iterator-spread` regression fixture covering spread,
+`Array.from`, `.next()`, and `for...of`.
+
+## v0.5.1058 — fix(node): API-surface hygiene batch (#3925, #3946, #3857, #3962, #3938)
+
+Five Node-parity fixes for the `node:*` builtin surface:
+
+- **#3925 — `node:punycode.ucs2` phantom submodule.** Perry advertised
+  `node:punycode.ucs2` as an importable builtin; Node throws
+  `ERR_UNKNOWN_BUILTIN_MODULE` (`ucs2` is a *property* of `node:punycode`, not a
+  module). The HIR import gate (`lower/module_decl.rs`) now rejects any
+  `node:`-prefixed specifier that isn't a real Node builtin
+  (`NODE_BUILTIN_MODULES`) or a resolvable native module — also closing the
+  more general "`node:bogusmod` checks clean" gap. `punycode.ucs2` stays in
+  `NODE_SUBMODULES` as a Perry-internal dispatch namespace so
+  `punycode.ucs2.decode/encode` member access keeps working.
+- **#3946 — `node:process` core properties via named/namespace import.**
+  `import { pid, arch, platform, … } from "node:process"` and
+  `import * as p from "node:process"; p.pid` resolved to `undefined` (only the
+  default import and global `process` worked). Named imports now route process
+  *properties* through the dedicated `ProcessPid`/`OsArch`/… lowerings, and the
+  `process.<prop>` member path also fires for namespace/default import locals.
+- **#3857 — `JSON.stringify` of boxed primitive wrappers.**
+  `JSON.stringify(new String("hi"))` returned `{}` instead of `"hi"`; the same
+  applied to `new Number`/`new Boolean` and to wrappers nested in objects and
+  arrays, and the 3-arg pretty form crashed. Stringify now unwraps boxed
+  String/Number/Boolean/BigInt wrappers to their primitive across the compact,
+  array (fast + slow), and pretty paths.
+- **#3962 — `process.stdin` listener-removal + lifecycle for TUI teardown.**
+  `process.stdin` lacked `removeListener`/`off`/`addListener`/
+  `removeAllListeners`/`pause`/`resume`/`unref`/`destroy`. They're now present;
+  on stdin, `pause`/`unref`/`destroy` detach the readline reader so the event
+  loop can quiesce after teardown (readline `has_active` consults the new
+  `stdin_is_detached()` flag) without an explicit `process.exit()`.
+- **#3938 — literal dynamic import of slash submodules.**
+  `await import("node:util/types")` / `"node:path/posix"` /
+  `"node:stream/promises"` emitted invalid LLVM (a `@__perry_ns_…/…` global with
+  a slash). The dead extern-global/init declarations for `__native_mod__` /
+  `__node_submod__` sentinel prefixes (resolved at the dispatch site via runtime
+  namespace builders) are no longer emitted.
+
+Regression coverage: `node-suite` fixtures for #3857/#3946/#3938/#3925 and a
+`perry-hir` unknown-builtin-module rejection test.
+
+## v0.5.1057 — fix(#2169): perry-ui-windows LNK4006 / LNK4088 + windows-rs 0.58 drift
+
+The user-reported repro (Windows 10, perry 0.5.1025) failed silently with
+`LNK4088: image may not run` after `/FORCE`-resolved `LNK4006: js_*` duplicates
+inside `perry_ui_windows.lib`. Three independent issues:
+
+1. **Duplicate FFI stubs inside `perry_ui_windows.lib`.**
+   `crates/perry-ui-windows/src/ffi/js_interop.rs` defined `js_create_callback`,
+   `js_call_function`, `js_await_js_promise`, `js_load_module`,
+   `js_new_from_handle`, `js_new_instance`, `js_runtime_init`,
+   `js_set_property`, `js_get_export` as `#[no_mangle]` AOT stubs back when
+   `perry-runtime` had stripped them. `perry-runtime` re-added them as V8
+   stubs in `closure/v8_stubs.rs`, but both copies kept getting baked into the
+   archive: the V8 stubs came in via the Rust `perry-runtime` dep
+   (`perry_runtime-…rcgu.o`) and the AOT stubs came in via this crate's own
+   object (`perry_ui_windows-…rcgu.o`). MSVC LINK fell back to `/FORCE` and
+   warned the image may not run (#2169 reproducer log).
+
+   Worse, the local copies had **wrong arities** relative to codegen's
+   declarations in `crates/perry-codegen/src/runtime_decls/stdlib_ffi.rs`:
+   `js_call_function` had 4 args vs. codegen's 5; `js_load_module` had 1 vs. 2;
+   `js_set_property` had 3 vs. 4; `js_new_instance` had 4 vs. 5. Any callsite
+   the linker resolved against the local def would have corrupted the stack.
+
+   Fixed by deleting `crates/perry-ui-windows/src/ffi/js_interop.rs` and the
+   corresponding `pub mod js_interop;` declaration in `ffi/mod.rs`. The
+   `perry-runtime` V8 stubs (now the only definitions) match the
+   codegen-declared signatures exactly. Verified with `llvm-nm` on the
+   resulting `target/release/perry_ui_windows.lib`: each of the nine symbols
+   appears exactly once (pre-fix: twice).
+
+2. **`windows-rs 0.58` constant relocation.** `WM_MOUSELEAVE` lives in
+   `Win32::UI::Controls` in 0.58, not `Win32::UI::WindowsAndMessaging`.
+   `crates/perry-ui-windows/src/pointer.rs` was importing from the latter,
+   so `cargo build --release -p perry-ui-windows` had been failing locally
+   for anyone trying to refresh the shipped `.lib`. Moved the import.
+
+3. **`windows-rs 0.58` GDI+ signature drift.** `GdipDrawImageRectRectI`'s
+   `callback` parameter is `isize` (not `Option<_>`); the canvas widget at
+   `crates/perry-ui-windows/src/widgets/canvas.rs:314` was passing `None`,
+   producing `E0308`. Passing `0_isize` (null callback) restores compilation.
+
+The first item is what the user actually hit. (2) and (3) are pre-existing
+build failures that blocked anyone trying to rebuild the prebuilt `.lib`
+to ship the fix to users.
+
+## v0.5.1056 — fix(#3917): `(num: number).toLocaleString()` printed a 1970 date string
+
+`const num: number = 20; console.log(num.toLocaleString('en-US'))` printed
+`"12/31/1969, 4:00:00 PM"` (or the local-time equivalent) instead of `"20"`.
+The HIR lowers every `x.toLocaleString()` to the (misnamed) `Expr::DateToLocaleString`
+variant; the LLVM arm in `crates/perry-codegen/src/expr/env_clones.rs` is supposed
+to disambiguate Number-receivers vs Date-receivers by inspecting the receiver's
+static type. The disambiguator only called `refine_type_from_init`, which inspects
+AST shape (literals, arithmetic, `new T(...)`) and has no `LocalGet` arm — so for
+the common `let n: number = …; n.toLocaleString()` shape it returned `None` and
+the call fell through to `js_date_to_locale_string`, treating the number as a
+millisecond epoch.
+
+Fixed by falling back to `static_type_of` (which already reads `local_types`)
+when the structural refinement comes up empty. `static_type_of` resolves
+`LocalGet(id) → ctx.local_types[id]`, so a `number`-typed local now routes to
+`js_number_to_locale_string` and formats with thousands separators
+(`"1,234,567"`, etc.). Verified with literal, integer-local, and decimal-local
+receivers, plus `new Date(0).toLocaleString('en-US')` still emits the date
+string. The user-reported repro (Windows 11, perry 0.5.1025) was platform-agnostic
+— a HIR/codegen routing bug, not a runtime issue.
+
 ## v0.5.1055 — hotfix: actually remove native_module.rs conflict marker
 
 The v0.5.1054 hotfix bumped the version but its source edit failed to apply,

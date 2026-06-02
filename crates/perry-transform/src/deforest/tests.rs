@@ -88,6 +88,47 @@ fn rejects_producer_with_multiple_returns() {
     assert!(analyze_producer(&func).is_none());
 }
 
+#[test]
+fn synthetic_out_params_are_assigned_by_function_id() {
+    let mut first = make_simple_producer();
+    first.id = 2;
+    first.name = "second".to_string();
+    first.body[0] = Stmt::Let {
+        id: 20,
+        name: "out2".to_string(),
+        ty: Type::Array(Box::new(Type::Number)),
+        mutable: false,
+        init: Some(Expr::Array(vec![])),
+    };
+    first.body[1] = Stmt::Expr(Expr::ArrayPush {
+        array_id: 20,
+        value: Box::new(Expr::Integer(1)),
+    });
+    first.body[2] = Stmt::Return(Some(Expr::LocalGet(20)));
+
+    let mut second = make_simple_producer();
+    second.id = 1;
+    second.name = "first".to_string();
+
+    let mut module = Module::new("m");
+    module.functions = vec![first, second];
+
+    run(&mut module);
+
+    let func1 = module
+        .functions
+        .iter()
+        .find(|func| func.id == 1)
+        .expect("function must exist");
+    let func2 = module
+        .functions
+        .iter()
+        .find(|func| func.id == 2)
+        .expect("function must exist");
+    assert_eq!(func1.params.last().unwrap().id, 21);
+    assert_eq!(func2.params.last().unwrap().id, 22);
+}
+
 fn make_simple_producer() -> Function {
     Function {
         id: 1,

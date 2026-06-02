@@ -35,9 +35,17 @@ const ENTRY_TYPE_FUNCTION: u8 = 3;
 pub(crate) const CLASS_ID_PERFORMANCE_ENTRY: u32 = 0xFFFF_0080;
 pub(crate) const CLASS_ID_PERFORMANCE_MARK: u32 = 0xFFFF_0081;
 pub(crate) const CLASS_ID_PERFORMANCE_MEASURE: u32 = 0xFFFF_0082;
-pub(crate) const CLASS_ID_PERFORMANCE_RESOURCE_TIMING: u32 = 0xFFFF_0086;
-pub(crate) const CLASS_ID_PERFORMANCE: u32 = 0xFFFF_0087;
-pub(crate) const CLASS_ID_PERFORMANCE_OBSERVER_ENTRY_LIST: u32 = 0xFFFF_0088;
+// #3871: these three IDs previously collided with node:fs's CLASS_ID_FS_DIR
+// (0x86), CLASS_ID_FS_DIRENT (0x87), and CLASS_ID_FS_READ_STREAM (0x88), so
+// `performance instanceof Performance` / `list instanceof
+// PerformanceObserverEntryList` were intercepted by the fs Dir/Dirent/
+// ReadStream `instanceof` arms in `object/instanceof.rs` (which run before the
+// perf-hooks shape check) and returned false. Moved to free IDs past fs's range
+// (fs ends at 0x8C). Keep in sync with the literals in
+// `perry-codegen/src/expr/instance_misc1.rs`.
+pub(crate) const CLASS_ID_PERFORMANCE_RESOURCE_TIMING: u32 = 0xFFFF_008D;
+pub(crate) const CLASS_ID_PERFORMANCE: u32 = 0xFFFF_008E;
+pub(crate) const CLASS_ID_PERFORMANCE_OBSERVER_ENTRY_LIST: u32 = 0xFFFF_008F;
 
 /// Shape id for the `{ name, entryType, startTime, duration, detail }` object
 /// returned by mark/measure and the getEntries* arrays.
@@ -145,10 +153,29 @@ pub(crate) unsafe fn is_perf_entry_object_instance_of(
 
 pub(crate) fn is_performance_object_value(value: f64) -> bool {
     let bits = value.to_bits();
-    PERFORMANCE_NS.with(|c| {
+    // Fast path: the exact cached singleton pointer.
+    if PERFORMANCE_NS.with(|c| {
         let cached = c.get();
         cached != 0 && cached == bits
-    })
+    }) {
+        return true;
+    }
+    // #3871: `performance` (global + `node:perf_hooks` import) resolves to the
+    // `perf_hooks` native-module namespace object via
+    // `js_create_native_module_namespace`, whose pointer may differ from the
+    // `PERFORMANCE_NS` cell (the cell is only set by `performance_namespace()`).
+    // Recognize any `perf_hooks` namespace object by its stored module name so
+    // `performance instanceof Performance` holds — mirrors the field-0 name
+    // check used for the observer entry list below.
+    unsafe {
+        if let Some(obj) = as_object_ptr(value) {
+            let module = js_object_get_field(obj, 0);
+            if string_of(module).as_deref() == Some("perf_hooks") {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 pub(crate) fn is_perf_observer_list_value(value: f64) -> bool {
