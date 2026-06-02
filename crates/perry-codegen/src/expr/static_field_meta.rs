@@ -333,6 +333,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(proto_val)
         }
+        // #4141: link a generator/async-generator instance into the spec
+        // prototype chain. `js_generator_attach_prototype` interposes a fresh
+        // intermediate object so `Object.getPrototypeOf(Object.getPrototypeOf(
+        // gen()))` resolves to `%Generator.prototype%`. Returns the instance
+        // unchanged for inline use in return position.
+        Expr::LinkGeneratorPrototype { obj, is_async } => {
+            let obj_val = lower_expr(ctx, obj)?;
+            let is_async_str = if *is_async { "1" } else { "0" };
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_generator_attach_prototype",
+                &[(DOUBLE, &obj_val), (crate::types::I32, is_async_str)],
+            ))
+        }
         // Issue #838: `<Class>.prototype.<method> = <fn>` and the
         // aliased `let p = <Class>.prototype; p.<method> = <fn>`
         // shape. HIR recognises the assignment pattern and lowers it

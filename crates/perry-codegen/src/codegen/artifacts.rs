@@ -48,14 +48,23 @@ fn function_body_returns_generator_object(body: &[perry_hir::Stmt]) -> bool {
         return false;
     }
     body.iter().any(|stmt| match stmt {
-        perry_hir::Stmt::Return(Some(perry_hir::Expr::Object(props))) => {
-            props.len() == 3
-                && props[0].0 == "next"
-                && props[1].0 == "return"
-                && props[2].0 == "throw"
-                && props
-                    .iter()
-                    .all(|(_, value)| matches!(value, perry_hir::Expr::Closure { .. }))
+        // #4141: the returned iterator object is wrapped in
+        // `LinkGeneratorPrototype` (instance `[[Prototype]]` linker); unwrap it
+        // so the `{next,return,throw}` shape — the signal that this function is
+        // a generator wrapper — is still recognized.
+        perry_hir::Stmt::Return(Some(expr)) => {
+            let inner = match expr {
+                perry_hir::Expr::LinkGeneratorPrototype { obj, .. } => obj.as_ref(),
+                other => other,
+            };
+            matches!(inner, perry_hir::Expr::Object(props)
+                if props.len() == 3
+                    && props[0].0 == "next"
+                    && props[1].0 == "return"
+                    && props[2].0 == "throw"
+                    && props
+                        .iter()
+                        .all(|(_, value)| matches!(value, perry_hir::Expr::Closure { .. })))
         }
         _ => false,
     })

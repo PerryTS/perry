@@ -843,6 +843,20 @@ pub enum Expr {
         value: Box<Expr>,
         options: Box<Expr>,
     },
+    /// #4141: link a freshly-built generator/async-generator instance object
+    /// to the spec prototype chain. Emitted ONLY by `transform_generators`
+    /// wrapping the `{next,return,throw}` iterator object it returns. At
+    /// runtime, `js_generator_attach_prototype(obj, is_async)` interposes a
+    /// fresh intermediate object as `obj`'s `[[Prototype]]` whose own
+    /// `[[Prototype]]` is `%Generator.prototype%` / `%AsyncGenerator.prototype%`,
+    /// so `Object.getPrototypeOf(Object.getPrototypeOf(gen()))` resolves to the
+    /// brand-checked prototype (mirrors `instance → g.prototype →
+    /// %Generator.prototype%`). Evaluates to `obj` unchanged. `is_async` selects
+    /// the sync vs async generator prototype tower.
+    LinkGeneratorPrototype {
+        obj: Box<Expr>,
+        is_async: bool,
+    },
     /// queueMicrotask(callback) -> void
     QueueMicrotask(Box<Expr>),
 

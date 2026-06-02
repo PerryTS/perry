@@ -1844,6 +1844,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::RegisterFunctionPrototypeMethod { .. }
         | Expr::GetFunctionPrototypeMethod { .. }
         | Expr::ClassStaticSymbolSet { .. }
+        | Expr::LinkGeneratorPrototype { .. }
         | Expr::NativeModuleRef(..) => static_field_meta::lower(ctx, expr),
         Expr::PodLayoutSizeOf { .. }
         | Expr::PodLayoutAlignOf { .. }

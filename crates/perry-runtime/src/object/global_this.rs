@@ -1552,6 +1552,48 @@ extern "C" fn async_generator_proto_throw_thunk(
     generator_proto_method(b"throw", arg, true)
 }
 
+/// #4141: link a freshly-built generator/async-generator instance object into
+/// the spec `[[Prototype]]` chain. Perry lowers `gen()` to a `{next,return,
+/// throw}` object literal; this interposes a fresh intermediate object (the
+/// per-instance stand-in for `g.prototype`) as the instance's `[[Prototype]]`,
+/// whose own `[[Prototype]]` is `%Generator.prototype%` / `%AsyncGenerator.
+/// prototype%`. The result is the two-hop chain Node exposes:
+/// `Object.getPrototypeOf(gen())` → intermediate →
+/// `Object.getPrototypeOf(...)` → the brand-checked prototype carrying
+/// `next`/`return`/`throw`.
+///
+/// Returns `obj` unchanged so codegen can use it inline in return position.
+/// GC: both links go through `object_set_static_prototype`, whose side-table is
+/// traced + pointer-rewritten by the collector (see `prototype_chain.rs`), so
+/// the intermediate stays live as long as the instance does and dies with it.
+#[no_mangle]
+pub extern "C" fn js_generator_attach_prototype(obj: f64, is_async: i32) -> f64 {
+    let jv = JSValue::from_bits(obj.to_bits());
+    if !jv.is_pointer() {
+        return obj;
+    }
+    let obj_ptr = jv.as_pointer::<u8>() as usize;
+    if obj_ptr == 0 {
+        return obj;
+    }
+    let gen_proto = generator_prototype_ptr(is_async != 0);
+    if gen_proto.is_null() {
+        return obj;
+    }
+    // Intermediate object stands in for `g.prototype`: own `[[Prototype]]` is
+    // `%Generator.prototype%`, carries no own methods (the instance inherits
+    // `next`/`return`/`throw` from the brand-checked prototype two hops up).
+    let intermediate = js_object_alloc(0, 0);
+    if intermediate.is_null() {
+        return obj;
+    }
+    let gen_proto_bits = crate::value::js_nanbox_pointer(gen_proto as i64).to_bits();
+    super::prototype_chain::object_set_static_prototype(intermediate as usize, gen_proto_bits);
+    let intermediate_bits = crate::value::js_nanbox_pointer(intermediate as i64).to_bits();
+    super::prototype_chain::object_set_static_prototype(obj_ptr, intermediate_bits);
+    obj
+}
+
 /// Build one generator-intrinsic tower (sync or async) and store its three
 /// objects in the GC-rooted atomics declared in `object/mod.rs`.
 ///

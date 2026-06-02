@@ -252,6 +252,7 @@ impl SH for Expr {
             Expr::DecodeURIComponent(e) => { tag(h, 186); e.as_ref().hash(h); }
             Expr::StructuredClone { value, options } => { tag(h, 187); value.as_ref().hash(h); options.as_ref().hash(h); }
             Expr::QueueMicrotask(e) => { tag(h, 188); e.as_ref().hash(h); }
+            Expr::LinkGeneratorPrototype { obj, is_async } => { tag(h, 4141); obj.as_ref().hash(h); is_async.hash(h); }
             Expr::IterResultSet(e, b) => { tag(h, 189); e.as_ref().hash(h); b.hash(h); }
             Expr::IterResultGetValue => tag(h, 190),
             Expr::IterResultGetDone => tag(h, 191),

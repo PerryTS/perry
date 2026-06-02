@@ -581,7 +581,18 @@ pub fn transform_generator_function_with_extra_captures(
             ("return".to_string(), return_closure),
             ("throw".to_string(), throw_closure),
         ]);
-        new_body.push(Stmt::Return(Some(iter_obj)));
+        // #4141: wire the instance's `[[Prototype]]` chain
+        // (`gen() → g.prototype → %Generator.prototype%`) so reflective
+        // access via the instance (`Object.getPrototypeOf(Object.getPrototypeOf(
+        // gen()))`) reaches the brand-checked prototype methods. The object
+        // literal is hidden inside the wrapper in return position; escape
+        // analysis leaves the unanalyzed allocation on the heap (correct — a
+        // generator object always escapes via the return).
+        let linked = Expr::LinkGeneratorPrototype {
+            obj: Box::new(iter_obj),
+            is_async: is_async_generator,
+        };
+        new_body.push(Stmt::Return(Some(linked)));
     }
 
     func.body = new_body;

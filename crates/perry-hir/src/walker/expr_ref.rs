@@ -1090,6 +1090,9 @@ where
             f(value);
             f(options);
         }
+        Expr::LinkGeneratorPrototype { obj, .. } => {
+            f(obj);
+        }
         Expr::BufferFromArrayBuffer {
             data,
             byte_offset,

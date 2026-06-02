@@ -320,6 +320,12 @@ fn collect_nested_closure_boxed_vars_in_expr(expr: &perry_hir::Expr, out: &mut H
                 collect_nested_closure_boxed_vars_in_expr(i, out);
             }
         }
+        Expr::LinkGeneratorPrototype { obj, .. } => {
+            // #4141: the generator iterator object (with its next/return/throw
+            // closures capturing+mutating the state-machine locals) is wrapped
+            // here in return position — recurse so those locals still get boxed.
+            collect_nested_closure_boxed_vars_in_expr(obj, out);
+        }
         Expr::Object(props) => {
             for (_, v) in props {
                 collect_nested_closure_boxed_vars_in_expr(v, out);
