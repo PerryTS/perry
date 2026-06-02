@@ -2,6 +2,10 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1094 — fix(regexp): RegExp.prototype.toString returns /source/flags
+
+`/a/gi.toString()`, `String(/a/gi)`, and `` `${/a/gi}` `` all returned `"[object Object]"` instead of `"/a/gi"` — a RegExp fell through to `Object.prototype.toString` for both the explicit method call and ToString coercion. Added a shared `js_regexp_to_string(re)` helper (`/{source}/{flags}`, reusing the existing `source`/`flags` accessors) and wired it through three paths: the `regex.toString()` method dispatch (`dispatch_regex_receiver_method` + the `native_call_method` receiver gate, now `test|exec|toString`) and the ToString coercion in `js_jsvalue_to_string` (covers `String()` / template literals). Advances the RegExp conformance issue (#4035).
+
 ## v0.5.1093 — fix(json): JSON.parse rejects trailing tokens
 
 `JSON.parse("{}x")`, `JSON.parse("1 2")`, `JSON.parse('"a"b')`, etc. silently accepted the leading value and ignored trailing non-whitespace input; Node rejects these with a `SyntaxError`. `js_json_parse` parsed a value via `DirectParser` but never checked that the input was fully consumed. Added `DirectParser::has_trailing_content` (skips trailing whitespace, reports any remaining input) and, after a successful non-null parse, throws a `SyntaxError` when trailing tokens remain. Trailing whitespace (`"{}\n"`, `"{} "`) is still allowed; valid single-value JSON is unaffected (verified across 18 valid shapes incl. nested/scalars/whitespace-surrounded). Covers object/array/string/number/boolean/`null` leading values. Completes the parser-leniency half of #4030 (the SyntaxError-identity half shipped in v0.5.1090). Note: the large-array tape fast-path (top-level arrays ≥1 KB) is left untouched — a rarer edge case.

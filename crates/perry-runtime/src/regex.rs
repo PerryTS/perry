@@ -1257,6 +1257,13 @@ pub(crate) fn dispatch_regex_receiver_method(
                 f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits())
             })
         }
+        // `regex.toString()` → `/source/flags` (RegExp.prototype.toString).
+        "toString" => {
+            let s = js_regexp_to_string(re);
+            Some(f64::from_bits(
+                crate::value::js_nanbox_string(s as i64).to_bits(),
+            ))
+        }
         _ => None,
     }
 }
@@ -1356,6 +1363,17 @@ pub extern "C" fn js_regexp_get_flags(re: *const RegExpHeader) -> *mut StringHea
             js_string_from_str("")
         }
     }
+}
+
+/// `RegExp.prototype.toString()` — `/source/flags`. Used by both the
+/// `regex.toString()` method dispatch and ToString coercion (`String(re)`,
+/// template literals). Node never produces `"[object Object]"` for a RegExp.
+#[no_mangle]
+pub extern "C" fn js_regexp_to_string(re: *const RegExpHeader) -> *mut StringHeader {
+    let src = js_regexp_get_source(re);
+    let flg = js_regexp_get_flags(re);
+    let out = unsafe { format!("/{}/{}", string_as_str(src), string_as_str(flg)) };
+    js_string_from_str(&out)
 }
 
 /// Get regex.lastIndex — returns the current lastIndex value as f64

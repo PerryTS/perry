@@ -877,7 +877,7 @@ pub unsafe extern "C" fn js_native_call_method(
     // function result the codegen `Expr::RegExpTest` fast path can't see; without
     // this it throws `test is not a function`, breaking Hono `app.use('*', …)`
     // (#1731). The helper returns None for non-regex so generic dispatch resumes.
-    if matches!(method_name, "test" | "exec") && jsval.is_pointer() {
+    if matches!(method_name, "test" | "exec" | "toString") && jsval.is_pointer() {
         let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
         let arg0 = refreshed_args().first().copied().unwrap_or(undef);
         let p = jsval.as_pointer::<u8>();
