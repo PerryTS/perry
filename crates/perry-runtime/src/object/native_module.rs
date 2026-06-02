@@ -36,12 +36,7 @@ thread_local! {
 
 #[no_mangle]
 pub extern "C" fn js_vm_create_context(sandbox: f64) -> f64 {
-    let value = JSValue::from_bits(sandbox.to_bits());
-    if value.is_undefined() || value.is_null() {
-        let obj = js_object_alloc(0, 0);
-        return crate::value::js_nanbox_pointer(obj as i64);
-    }
-    sandbox
+    crate::node_vm::create_context(sandbox)
 }
 
 pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {

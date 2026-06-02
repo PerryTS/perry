@@ -1,11 +1,21 @@
 // node:vm Script execution and object-backed context semantics.
 import vm from "node:vm";
 
+function errorShape(label: string, fn: () => void) {
+  try {
+    fn();
+    console.log(label + ":", "ok");
+  } catch (error: any) {
+    console.log(label + ":", error.name, error.code || "-");
+  }
+}
+
 const sandbox: any = { x: 1 };
 const context = vm.createContext(sandbox);
 
 console.log("context identity:", context === sandbox);
 console.log("context markers:", vm.isContext(context), vm.isContext({}));
+errorShape("createContext validation", () => vm.createContext(123 as any));
 
 const script = new vm.Script("x = x + 2; y = x + 1; y");
 console.log(
@@ -15,6 +25,7 @@ console.log(
   sandbox.y,
   typeof (globalThis as any).y,
 );
+errorShape("run plain object validation", () => vm.runInContext("1", {} as any));
 
 try {
   (vm as any).Script("1");

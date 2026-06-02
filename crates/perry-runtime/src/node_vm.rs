@@ -973,6 +973,10 @@ fn new_plain_context() -> f64 {
     value
 }
 
+pub(crate) fn create_context(value: f64) -> f64 {
+    context_from_arg(value, "object")
+}
+
 fn context_from_arg(value: f64, arg_name: &str) -> f64 {
     let jv = JSValue::from_bits(value.to_bits());
     if jv.is_undefined() || is_dont_contextify(value) {
@@ -1439,7 +1443,7 @@ extern "C" fn vm_script_run_in_new_context_method(
     let Some(source) = script_source(script) else {
         return undefined_value();
     };
-    let context = context_from_arg(context_object, "contextObject");
+    let context = context_from_arg(context_object, "object");
     run_source(&source, context, HashMap::new())
 }
 
@@ -1472,7 +1476,7 @@ pub extern "C" fn js_vm_run_in_context(code: f64, contextified_object: f64, _opt
 
 pub extern "C" fn js_vm_run_in_new_context(code: f64, context_object: f64, _options: f64) -> f64 {
     let code = code_string_required(code, "code");
-    let context = context_from_arg(context_object, "contextObject");
+    let context = context_from_arg(context_object, "object");
     run_source(&code, context, HashMap::new())
 }
 
@@ -1953,7 +1957,7 @@ pub fn dispatch_vm_method(method: &str, arg0: f64, arg1: f64, arg2: f64) -> f64 
         "Module" => js_vm_module_call(),
         "SourceTextModule" => js_vm_source_text_module_new(arg0, arg1),
         "SyntheticModule" => js_vm_synthetic_module_new(arg0, arg1, arg2),
-        "createContext" => crate::object::js_vm_create_context(arg0),
+        "createContext" => create_context(arg0),
         "createScript" => js_vm_create_script(arg0, arg1),
         "runInContext" => js_vm_run_in_context(arg0, arg1, arg2),
         "runInNewContext" => js_vm_run_in_new_context(arg0, arg1, arg2),

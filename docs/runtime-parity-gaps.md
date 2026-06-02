@@ -129,23 +129,24 @@ Selected highlights (full list in `runtime-parity.md`):
 ### node:vm
 
 **Total APIs: 32** · Perry covers: import/require namespace shape, callable
-export metadata, `vm.constants`, `process.getBuiltinModule("vm")`, and
-`vm.isContext({})`, cached-data/source-map metadata shape,
-`SourceTextModule.createCachedData()`, gated
-`SourceTextModule`/`SyntheticModule` lifecycle behavior, and
-`vm.measureMemory()` result shape and option validation · Gap: runtime VM
-execution, contextification, context-loader constant behavior, and exact V8
-heap accounting
+export metadata, `vm.constants`, `process.getBuiltinModule("vm")`,
+`vm.isContext({})`, the narrowed deterministic execution subset for
+`Script`, object-backed context mutation/isolation, `compileFunction`,
+cached-data/source-map metadata shape, `SourceTextModule.createCachedData()`,
+gated `SourceTextModule`/`SyntheticModule` lifecycle behavior, and
+`vm.measureMemory()` result shape and option validation · Gap: full VM module
+parsing/evaluation beyond deterministic lifecycle fixtures,
+`USE_MAIN_CONTEXT_DEFAULT_LOADER` dynamic-import behavior, context-loader
+constant behavior, and exact V8 heap accounting
 
-Shape coverage is fixture-backed in `test-parity/node-suite/vm`; the generated
+Coverage is fixture-backed in `test-parity/node-suite/vm`; the generated
 `test_parity_vm` inventory now skip-lists only the still-open behavior leaves.
 
 Selected highlights (full list in `runtime-parity.md`):
 
-- `new vm.Script(code[, options])`
-- `script.runInContext(contextifiedObject[, options])`
-- `script.runInNewContext([contextObject[, options]])`
-- `script.runInThisContext([options])`
+- full `SourceTextModule` / `SyntheticModule` parsing, linking, and evaluation
+  semantics beyond deterministic lifecycle fixtures
+- `vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER` dynamic-import participation
 - `vm.measureMemory([options])`
 - … and 16 more
 
