@@ -686,6 +686,13 @@ impl LoweringContext {
         envs
     }
 
+    pub(crate) fn shadows_unqualified_global(&self, name: &str) -> bool {
+        self.lookup_local(name).is_some()
+            || self.lookup_func(name).is_some()
+            || self.lookup_imported_func(name).is_some()
+            || self.lookup_class(name).is_some()
+    }
+
     pub(crate) fn lookup_local_type(&self, name: &str) -> Option<&Type> {
         self.locals
             .iter()

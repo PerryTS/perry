@@ -92,12 +92,15 @@ pub(super) fn try_native_module_methods(
             // "node:process"` registers as the native `process` object, while
             // `import * as processNamespace` registers as `process.namespace`;
             // both must use the same strict method gate as the global object.
-            let is_process_ref = obj_name == "process"
-                || ctx.lookup_builtin_module_alias(&obj_name) == Some("process")
-                || matches!(
-                    ctx.lookup_native_module(&obj_name),
-                    Some(("process", _)) | Some(("process.namespace", _))
-                );
+            let process_name_is_shadowed =
+                obj_name == "process" && ctx.shadows_unqualified_global("process");
+            let is_process_ref = !process_name_is_shadowed
+                && (obj_name == "process"
+                    || ctx.lookup_builtin_module_alias(&obj_name) == Some("process")
+                    || matches!(
+                        ctx.lookup_native_module(&obj_name),
+                        Some(("process", _)) | Some(("process.namespace", _))
+                    ));
             if is_process_ref {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
