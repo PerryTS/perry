@@ -1085,6 +1085,37 @@ fn is_function_prototype_member(expr: &ast::Expr) -> bool {
     matches!(member.obj.as_ref(), ast::Expr::Ident(id) if id.sym.as_ref() == "Function")
 }
 
+/// #4100: true when `recv.<method>` is a primitive-wrapper prototype method that
+/// performs a spec `this` brand check at runtime (throws `TypeError` on an
+/// incompatible receiver). Folding `<recv>.<method>.call(x)` into `x.<method>()`
+/// would route through the lenient codegen fast-path / `Object.prototype`
+/// fallback (returns `"[object Object]"`, no throw). Keeping it reflective lets
+/// the installed brand-check thunk run. `Number.prototype.toFixed`/
+/// `toExponential`/`toPrecision` are deliberately excluded — the fold is the
+/// *correct* path for those (their reflective dispatch over-throws on a valid
+/// receiver), and only the brand-checked `valueOf`/`toString`/`toLocaleString`
+/// methods are affected. Symbol/BigInt have no codegen fold path, so they need
+/// no guard here.
+fn is_primitive_wrapper_brand_method(recv: &ast::Expr, method: &str) -> bool {
+    let ast::Expr::Member(member) = recv else {
+        return false;
+    };
+    let ast::MemberProp::Ident(prop) = &member.prop else {
+        return false;
+    };
+    if prop.sym.as_ref() != "prototype" {
+        return false;
+    }
+    let ast::Expr::Ident(base) = member.obj.as_ref() else {
+        return false;
+    };
+    match base.sym.as_ref() {
+        "Number" => matches!(method, "valueOf" | "toString" | "toLocaleString"),
+        "Boolean" => matches!(method, "valueOf" | "toString"),
+        _ => false,
+    }
+}
+
 pub(super) fn try_builtin_prototype_method_apply_call(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -1134,6 +1165,14 @@ pub(super) fn try_builtin_prototype_method_apply_call(
             if method_ident.sym.as_ref() == "toString"
                 && is_function_prototype_member(inner.obj.as_ref())
             {
+                return Ok(None);
+            }
+            // #4100: keep `Number.prototype.valueOf.call(x)` /
+            // `Boolean.prototype.toString.call(x)` reflective so the installed
+            // brand-check thunk runs (throws a `TypeError` on an incompatible
+            // `this`). Folding to `x.<method>()` routes through the lenient
+            // `Object.prototype` fallback (`"[object Object]"`, no throw).
+            if is_primitive_wrapper_brand_method(inner.obj.as_ref(), method_ident.sym.as_ref()) {
                 return Ok(None);
             }
             method_ident.clone()
@@ -1217,6 +1256,13 @@ pub(crate) fn as_builtin_proto_method_ref(
         return None;
     };
     if !is_builtin_prototype_receiver(ctx, &member.obj) {
+        return None;
+    }
+    // #4100: don't track `const v = Number.prototype.valueOf` for the fold —
+    // a later `v.call(x)` must stay reflective so the brand-check thunk runs
+    // (see `is_primitive_wrapper_brand_method`). Untracked, the value read goes
+    // through the reflective dispatch, which throws correctly.
+    if is_primitive_wrapper_brand_method(&member.obj, method.sym.as_ref()) {
         return None;
     }
     // For a `<Ctor>.prototype` receiver, any method ident is accepted (mirrors

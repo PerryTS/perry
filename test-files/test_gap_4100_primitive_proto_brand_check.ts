@@ -42,3 +42,30 @@ console.log("BigInt.valueOf(5n):", (BigInt.prototype.valueOf as any).call(5n) ==
 
 // --- Sanity: the fast direct-call path is unchanged. ---
 console.log("direct:", (5).valueOf(), true.toString(), (255n).toString(16), Symbol("z").toString());
+
+// --- Typed `.call`/`.apply` form (no `as any`) must brand-check too. ---
+// The statically-typed member `.call` previously folded to `x.<method>()` and
+// bypassed the brand-check thunk, returning "[object Object]" instead of
+// throwing (the #4100 residual after #4112).
+console.log("typed Number.valueOf{}:", threw(() => Number.prototype.valueOf.call({})));
+console.log("typed Number.toString{}:", threw(() => Number.prototype.toString.call({})));
+console.log("typed Number.toLocaleString{}:", threw(() => Number.prototype.toLocaleString.call({})));
+console.log("typed Boolean.valueOf{}:", threw(() => Boolean.prototype.valueOf.call({})));
+console.log("typed Boolean.toString{}:", threw(() => Boolean.prototype.toString.call({})));
+console.log("typed Number.valueOf.apply{}:", threw(() => Number.prototype.valueOf.apply({})));
+
+// Extracted-local form: `const v = Number.prototype.valueOf; v.call({})`.
+const extractedNumValueOf = Number.prototype.valueOf;
+const extractedBoolToString = Boolean.prototype.toString;
+console.log("extracted Number.valueOf{}:", threw(() => extractedNumValueOf.call({})));
+console.log("extracted Boolean.toString{}:", threw(() => extractedBoolToString.call({})));
+
+// Typed form on a valid receiver returns the correct value.
+console.log("typed Number.toString(5,2):", Number.prototype.toString.call(5, 2));
+console.log("typed Number.valueOf(42):", Number.prototype.valueOf.call(42));
+console.log("typed Boolean.toString(true):", Boolean.prototype.toString.call(true));
+console.log("extracted Number.valueOf(42):", extractedNumValueOf.call(42));
+
+// `toFixed`/`toExponential` keep folding (must not regress to a false throw).
+console.log("typed Number.toFixed(3.14159,2):", Number.prototype.toFixed.call(3.14159, 2));
+console.log("typed Number.toExponential(12345,2):", Number.prototype.toExponential.call(12345, 2));
