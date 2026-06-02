@@ -613,6 +613,28 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk(a, out);
             }
         }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            walk(home, out);
+            walk(key, out);
+            walk(receiver, out);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            walk(home, out);
+            walk(key, out);
+            walk(receiver, out);
+            for a in args {
+                walk(a, out);
+            }
+        }
         Expr::FsWriteFileSync(p, c) => {
             walk(p, out);
             walk(c, out);
@@ -821,6 +843,10 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         } => {
             walk(key_expr, out);
             walk(value_expr, out);
+        }
+        Expr::RegisterClassComputedMethod { key_expr, .. }
+        | Expr::RegisterClassComputedAccessor { key_expr, .. } => {
+            walk(key_expr, out);
         }
         Expr::ClassExprFresh {
             named_statics,

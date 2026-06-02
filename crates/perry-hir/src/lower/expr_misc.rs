@@ -68,15 +68,33 @@ pub(super) fn lower_super_prop(
     // NestJS patterns are all ident-form method calls, which go
     // through SuperMethodCall anyway).
     match &super_prop.prop {
-        ast::SuperProp::Ident(ident) => Ok(Expr::SuperPropertyGet {
-            property: ident.sym.to_string(),
-        }),
+        ast::SuperProp::Ident(ident) => {
+            if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
+                Ok(Expr::ObjectSuperPropertyGet {
+                    home: Box::new(Expr::LocalGet(home_id)),
+                    key: Box::new(Expr::String(ident.sym.to_string())),
+                    receiver: Box::new(Expr::This),
+                })
+            } else {
+                Ok(Expr::SuperPropertyGet {
+                    property: ident.sym.to_string(),
+                })
+            }
+        }
         ast::SuperProp::Computed(computed) => {
             let index = Box::new(lower_expr(ctx, &computed.expr)?);
-            Ok(Expr::IndexGet {
-                object: Box::new(Expr::This),
-                index,
-            })
+            if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
+                Ok(Expr::ObjectSuperPropertyGet {
+                    home: Box::new(Expr::LocalGet(home_id)),
+                    key: index,
+                    receiver: Box::new(Expr::This),
+                })
+            } else {
+                Ok(Expr::IndexGet {
+                    object: Box::new(Expr::This),
+                    index,
+                })
+            }
         }
     }
 }

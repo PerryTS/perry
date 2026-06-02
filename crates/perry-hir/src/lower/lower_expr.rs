@@ -22,6 +22,38 @@ use super::*;
 use crate::ir::*;
 use crate::lower_types::extract_ts_type_with_ctx;
 
+fn class_computed_member_registration_expr(class_name: &str, member: &ClassComputedMember) -> Expr {
+    match member.kind {
+        ClassComputedMemberKind::Method => Expr::RegisterClassComputedMethod {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            method_name: member.function.name.clone(),
+            is_static: member.is_static,
+            param_count: member.function.params.len() as u32,
+            has_rest: member
+                .function
+                .params
+                .last()
+                .map(|p| p.is_rest)
+                .unwrap_or(false),
+        },
+        ClassComputedMemberKind::Getter => Expr::RegisterClassComputedAccessor {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            getter_name: Some(member.function.name.clone()),
+            setter_name: None,
+            is_static: member.is_static,
+        },
+        ClassComputedMemberKind::Setter => Expr::RegisterClassComputedAccessor {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            getter_name: None,
+            setter_name: Some(member.function.name.clone()),
+            is_static: member.is_static,
+        },
+    }
+}
+
 pub(crate) fn throw_reference_error_expr(helper_name: &str) -> Expr {
     Expr::Call {
         callee: Box::new(Expr::ExternFuncRef {
@@ -1678,6 +1710,11 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     _ => None,
                 })
                 .collect();
+            let computed_member_registrations: Vec<Expr> = class
+                .computed_members
+                .iter()
+                .map(|member| class_computed_member_registration_expr(&synthetic_name, member))
+                .collect();
             ctx.pending_classes.push(class);
             // #1772: a class EXPRESSION that carries per-evaluation static
             // fields and is NOT a mixin (`class extends <expr>`) lowers to a
@@ -1700,12 +1737,18 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     .lookup_class_captures(&synthetic_name)
                     .map(|ids| ids.iter().map(|id| Expr::LocalGet(*id)).collect())
                     .unwrap_or_default();
-                return Ok(Expr::ClassExprFresh {
+                let fresh_expr = Expr::ClassExprFresh {
                     template: synthetic_name,
                     named_statics,
                     symbol_statics: static_symbol_registrations,
                     captured_args,
-                });
+                };
+                if computed_member_registrations.is_empty() {
+                    return Ok(fresh_expr);
+                }
+                let mut seq = computed_member_registrations;
+                seq.push(fresh_expr);
+                return Ok(Expr::Sequence(seq));
             }
             let mut seq: Vec<Expr> = Vec::new();
             if let Some(p) = parent_expr {
@@ -1714,6 +1757,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     parent_expr: p,
                 });
             }
+            seq.extend(computed_member_registrations);
             for (k, v) in static_symbol_registrations {
                 seq.push(Expr::RegisterClassStaticSymbol {
                     class_name: synthetic_name.clone(),

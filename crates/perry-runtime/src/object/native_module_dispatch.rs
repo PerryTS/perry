@@ -1918,16 +1918,15 @@ pub(crate) unsafe fn dispatch_native_module_method(
             _ => f64::from_bits(JSValue::undefined().bits()),
         },
 
-        // #3679: `v8.promiseHooks` namespace. Hook registrars return a stop
-        // function (Node returns a callable that removes the hook); we hand
-        // back a no-op callable so `const stop = onInit(fn); stop()` works.
+        // #3139: `v8.promiseHooks` namespace. Hook registrars install real
+        // Promise-lifecycle callbacks (fired from `promise/{then,microtasks,
+        // async_step}.rs`) and return a stop function that removes the hook.
         ("v8.promiseHooks", m) => match m {
-            "onInit" | "onBefore" | "onAfter" | "onSettled" | "createHook" => {
-                let c = crate::closure::js_closure_alloc_singleton(
-                    crate::node_v8::js_v8_noop_undefined as *const u8,
-                );
-                crate::value::js_nanbox_pointer(c as i64)
-            }
+            "onInit" => crate::v8::js_v8_promise_hooks_on_init(arg(0)),
+            "onBefore" => crate::v8::js_v8_promise_hooks_on_before(arg(0)),
+            "onAfter" => crate::v8::js_v8_promise_hooks_on_after(arg(0)),
+            "onSettled" => crate::v8::js_v8_promise_hooks_on_settled(arg(0)),
+            "createHook" => crate::v8::js_v8_promise_hooks_create_hook(arg(0)),
             _ => f64::from_bits(JSValue::undefined().bits()),
         },
 

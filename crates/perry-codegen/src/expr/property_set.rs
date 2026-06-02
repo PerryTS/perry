@@ -50,6 +50,34 @@ use super::{
     TypedFeedbackKind,
 };
 
+fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &str) -> bool {
+    ctx.classes
+        .get(class_name)
+        .is_some_and(|class| !class.computed_members.is_empty())
+}
+
+fn lower_runtime_property_set_by_name(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    value: &Expr,
+) -> Result<String> {
+    let recv_box = lower_expr(ctx, object)?;
+    let val_double = lower_expr(ctx, value)?;
+    let key_idx = ctx.strings.intern(property);
+    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let blk = ctx.block();
+    let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+    let key_box = blk.load(DOUBLE, &key_handle_global);
+    let key_bits = blk.bitcast_double_to_i64(&key_box);
+    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+    blk.call_void(
+        "js_object_set_field_by_name",
+        &[(I64, &obj_bits), (I64, &key_raw), (DOUBLE, &val_double)],
+    );
+    Ok(val_double)
+}
+
 pub(crate) fn emit_nullish_write_guard(
     ctx: &mut FnCtx<'_>,
     obj_bits: &str,
@@ -228,6 +256,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // store. The setter takes (this, value) and returns
             // undefined; we forward `value` as the expression result.
             if let Some(class_name) = receiver_class_name(ctx, object) {
+                if class_has_computed_runtime_members(ctx, &class_name) {
+                    return lower_runtime_property_set_by_name(ctx, object, property, value);
+                }
                 let setter_key = (class_name.clone(), format!("__set_{}", property));
                 if let Some(fn_name) = ctx.methods.get(&setter_key).cloned() {
                     let recv_box = lower_expr(ctx, object)?;

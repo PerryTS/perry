@@ -153,18 +153,25 @@ unsafe fn call_method_for_primitive(
     }
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let key_handle = scope.root_string_ptr(key);
-    let method = crate::object::js_object_get_field_by_name(
-        obj_ptr,
-        key_handle.get_raw_const_ptr::<crate::string::StringHeader>(),
-    );
+    let key_ptr = key_handle.get_raw_const_ptr::<crate::string::StringHeader>();
+    let has_own_method_key = crate::object::own_key_present(obj_ptr as *mut _, key_ptr);
+    let method = crate::object::js_object_get_field_by_name(obj_ptr, key_ptr);
     // Must be a callable closure value (POINTER_TAG + CLOSURE_MAGIC).
     let method_bits = method.bits();
     if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
-        return MethodOutcome::Absent;
+        return if has_own_method_key || (!method.is_undefined() && !method.is_null()) {
+            MethodOutcome::NonPrimitive
+        } else {
+            MethodOutcome::Absent
+        };
     }
     let method_ptr = (method_bits & POINTER_MASK) as usize;
     if !crate::closure::is_closure_ptr(method_ptr) {
-        return MethodOutcome::Absent;
+        return if has_own_method_key {
+            MethodOutcome::NonPrimitive
+        } else {
+            MethodOutcome::Absent
+        };
     }
     // Rebind `this` to the receiver: an INHERITED object-literal method
     // (`Object.create(proto)`) bakes its reserved `this` slot to the
@@ -269,6 +276,16 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                 return unsafe {
                     crate::symbol::js_symbol_to_string(value) as *mut crate::string::StringHeader
                 };
+            }
+            // #4101: a function/closure stringifies to its source text via
+            // Function.prototype.toString — covers `String(fn)`, `` `${fn}` ``,
+            // and the codegen `fn.toString()` fast-path (which routes through
+            // `js_jsvalue_to_string_method`) rather than "[object Object]".
+            if crate::closure::is_closure_ptr(ptr as usize) {
+                let func_ptr =
+                    unsafe { (*(ptr as *const crate::closure::ClosureHeader)).func_ptr as usize };
+                let s = crate::builtins::function_source_for_func_ptr(func_ptr);
+                return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
             }
             // Consult `[Symbol.toPrimitive]("string")` if the object has a
             // custom toPrimitive method registered in the symbol side-table.

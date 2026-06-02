@@ -378,6 +378,71 @@ pub fn function_name_for_ptr(func_ptr: usize) -> Option<String> {
         .filter(|n| !n.is_empty())
 }
 
+/// #4101: sidecar registry mapping each user function's compiled address to
+/// its retained original source text. Populated by `js_register_function_source`
+/// (emitted from module init alongside `js_register_function_name`), so by the
+/// time user code runs the map is fully populated. Mirrors the function-name
+/// registry's single-writer, last-write-wins semantics.
+fn function_source_registry(
+) -> &'static std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<str>>> {
+    use std::sync::OnceLock;
+    static REGISTRY: OnceLock<
+        std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<str>>>,
+    > = OnceLock::new();
+    REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Codegen-facing entry point: register `func_ptr` as the compiled address of
+/// a JS function whose original source spans `src_ptr..src_ptr+src_len` (UTF-8,
+/// not NUL-terminated). Idempotent — last write wins.
+///
+/// # Safety
+///
+/// `src_ptr..src_ptr+src_len` must point at a valid UTF-8 byte slice that
+/// outlives the call (we copy it). `func_ptr` is used only as a map key.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_function_source(
+    func_ptr: *const u8,
+    src_ptr: *const u8,
+    src_len: u32,
+) {
+    if func_ptr.is_null() || src_ptr.is_null() || src_len == 0 {
+        return;
+    }
+    let bytes = std::slice::from_raw_parts(src_ptr, src_len as usize);
+    let Ok(src) = std::str::from_utf8(bytes) else {
+        return;
+    };
+    if let Ok(mut map) = function_source_registry().lock() {
+        map.insert(func_ptr as usize, std::sync::Arc::from(src));
+    }
+}
+
+/// Look up the codegen-registered source text for a function pointer.
+pub fn function_source_for_ptr(func_ptr: usize) -> Option<String> {
+    if func_ptr == 0 {
+        return None;
+    }
+    function_source_registry()
+        .lock()
+        .ok()
+        .and_then(|map| map.get(&func_ptr).map(|s| s.to_string()))
+        .filter(|s| !s.is_empty())
+}
+
+/// #4101: build the `Function.prototype.toString` result for a closure whose
+/// `ClosureHeader.func_ptr` is `func_ptr`. Returns the retained source text
+/// when codegen registered it, otherwise a synthesized native form
+/// (`function <name>() { [native code] }`) matching Node's output for
+/// functions without recoverable source (built-ins / bound natives).
+pub fn function_source_for_func_ptr(func_ptr: usize) -> String {
+    if let Some(src) = function_source_for_ptr(func_ptr) {
+        return src;
+    }
+    let name = function_name_for_ptr(func_ptr).unwrap_or_default();
+    format!("function {name}() {{ [native code] }}")
+}
+
 /// Per-thread override for the `showHidden` inspect option. Defaults to
 /// `false` (Node default): `util.inspect` / `console.log` only show
 /// enumerable properties. `console.dir(value, { showHidden: true })`

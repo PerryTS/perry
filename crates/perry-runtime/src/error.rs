@@ -47,6 +47,19 @@ pub const CLASS_ID_URI_ERROR: u32 = 0xFFFF0016;
 /// `err instanceof Error` returns true on a thrown AssertionError.
 pub const CLASS_ID_ASSERTION_ERROR: u32 = 0xFFFF0020;
 
+pub(crate) fn error_kind_constructor_name(kind: u32) -> &'static str {
+    match kind {
+        ERROR_KIND_TYPE_ERROR => "TypeError",
+        ERROR_KIND_RANGE_ERROR => "RangeError",
+        ERROR_KIND_REFERENCE_ERROR => "ReferenceError",
+        ERROR_KIND_SYNTAX_ERROR => "SyntaxError",
+        ERROR_KIND_AGGREGATE_ERROR => "AggregateError",
+        ERROR_KIND_EVAL_ERROR => "EvalError",
+        ERROR_KIND_URI_ERROR => "URIError",
+        _ => "Error",
+    }
+}
+
 /// Error object header
 #[repr(C)]
 pub struct ErrorHeader {

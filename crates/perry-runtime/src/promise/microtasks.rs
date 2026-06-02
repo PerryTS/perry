@@ -255,6 +255,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         let async_id = (*promise).async_id;
                         let trigger_async_id = (*promise).trigger_async_id;
                         crate::async_hooks::before(async_id, trigger_async_id);
+                        crate::v8::promise_hook_before(promise);
                         let result = crate::closure::js_closure_call1(callback, value);
                         // Keep the callback result rooted across `after()` (which
                         // can run JS when async_hooks are active) via the value
@@ -266,6 +267,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
                         let promise = promise_handle.get_raw_mut_ptr::<Promise>();
                         let next = next_handle.get_raw_mut_ptr::<Promise>();
+                        crate::v8::promise_hook_after(promise);
                         crate::async_hooks::after(async_id);
                         if let Some(t) = t1 {
                             MT_TIME_NS_CALLBACK
@@ -363,8 +365,11 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     } else {
                         None
                     };
+                    crate::v8::promise_hook_before(next);
                     let result = crate::closure::js_closure_call1(callback, value);
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
+                    let next_for_after = CURRENT_MICROTASK_NEXT.with(|c| c.get());
+                    crate::v8::promise_hook_after(next_for_after);
                     if let Some(t) = t1 {
                         MT_TIME_NS_CALLBACK
                             .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -599,6 +604,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         unsafe { (*next).trigger_async_id }
                     };
                     crate::async_hooks::before(step_async_id, step_trigger_id);
+                    crate::v8::promise_hook_before(next);
                     let result = call_async_step_direct(step_closure, value, is_error_bits);
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
                     if let Some(t) = t1 {
@@ -616,6 +622,8 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     });
                     // #789: pair the `before()` above — fires the after hook and
                     // pops the execution-id stack using the captured id.
+                    let next_for_after = CURRENT_MICROTASK_NEXT.with(|c| c.get());
+                    crate::v8::promise_hook_after(next_for_after);
                     crate::async_hooks::after(step_async_id);
                     CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
 

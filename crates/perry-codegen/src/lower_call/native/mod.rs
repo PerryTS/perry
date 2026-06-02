@@ -238,16 +238,14 @@ pub(crate) fn lower_native_method_call(
     // `class_name` (`v8.startupSnapshot.isBuildingSnapshot()`,
     // `v8.promiseHooks.onInit(fn)`). Dispatch them statically.
     if module == "v8" {
+        // startupSnapshot helpers ignore their arguments (Perry never builds a
+        // snapshot); evaluate args for side effects then call the no-arg helper.
         let v8_sub = match (class_name, method) {
             (Some("startupSnapshot"), "isBuildingSnapshot") => Some("js_v8_is_building_snapshot"),
             (
                 Some("startupSnapshot"),
                 "addSerializeCallback" | "addDeserializeCallback" | "setDeserializeMainFunction",
             ) => Some("js_v8_throw_not_building_snapshot"),
-            (
-                Some("promiseHooks"),
-                "onInit" | "onBefore" | "onAfter" | "onSettled" | "createHook",
-            ) => Some("js_v8_promise_hook_register"),
             _ => None,
         };
         if let Some(fname) = v8_sub {
@@ -255,6 +253,28 @@ pub(crate) fn lower_native_method_call(
                 let _ = lower_expr(ctx, a)?;
             }
             return Ok(ctx.block().call(DOUBLE, fname, &[]));
+        }
+
+        // #3139: promiseHooks registrars install real lifecycle hooks. Pass the
+        // callback (onInit/&c.) or options object (createHook) as the first arg.
+        let v8_hook = match (class_name, method) {
+            (Some("promiseHooks"), "onInit") => Some("js_v8_promise_hooks_on_init"),
+            (Some("promiseHooks"), "onBefore") => Some("js_v8_promise_hooks_on_before"),
+            (Some("promiseHooks"), "onAfter") => Some("js_v8_promise_hooks_on_after"),
+            (Some("promiseHooks"), "onSettled") => Some("js_v8_promise_hooks_on_settled"),
+            (Some("promiseHooks"), "createHook") => Some("js_v8_promise_hooks_create_hook"),
+            _ => None,
+        };
+        if let Some(fname) = v8_hook {
+            let arg = if let Some(first) = args.first() {
+                lower_expr(ctx, first)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for extra in args.iter().skip(1) {
+                let _ = lower_expr(ctx, extra)?;
+            }
+            return Ok(ctx.block().call(DOUBLE, fname, &[(DOUBLE, &arg)]));
         }
     }
 

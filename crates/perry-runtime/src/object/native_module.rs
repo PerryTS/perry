@@ -5063,6 +5063,29 @@ pub extern "C" fn js_class_method_bind(
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
+pub(crate) const CLASS_PROTOTYPE_REF_FLAG: u64 = 1u64 << 32;
+
+pub(crate) fn class_constructor_ref_value(class_id: u32) -> f64 {
+    f64::from_bits(0x7FFE_0000_0000_0000u64 | (class_id as u64 & 0xFFFF_FFFF))
+}
+
+pub(crate) fn class_prototype_ref_value(class_id: u32) -> f64 {
+    f64::from_bits(
+        0x7FFE_0000_0000_0000u64 | CLASS_PROTOTYPE_REF_FLAG | (class_id as u64 & 0xFFFF_FFFF),
+    )
+}
+
+pub(crate) fn class_prototype_ref_id(value: f64) -> Option<u32> {
+    let bits = value.to_bits();
+    if (bits >> 48) == 0x7FFE && (bits & CLASS_PROTOTYPE_REF_FLAG) != 0 {
+        let class_id = (bits & 0xFFFF_FFFF) as u32;
+        if class_id != 0 && is_class_id_registered(class_id) {
+            return Some(class_id);
+        }
+    }
+    None
+}
+
 pub(crate) fn class_ref_id(value: f64) -> Option<u32> {
     let bits = value.to_bits();
     if (bits >> 48) == 0x7FFE {
@@ -5116,8 +5139,7 @@ pub fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -
     // total leak is bounded by the static set of decorated method
     // descriptors. The cache below short-circuits repeat queries.
     let leaked: &'static [u8] = method_name.as_bytes().to_vec().leak();
-    let class_bits = 0x7FFE_0000_0000_0000u64 | (class_id as u64 & 0xFFFF_FFFF);
-    let class_ref = f64::from_bits(class_bits);
+    let class_ref = class_prototype_ref_value(class_id);
     let value = js_class_method_bind(class_ref, leaked.as_ptr(), leaked.len());
     class_prototype_method_value_cache_root_store(
         class_id,

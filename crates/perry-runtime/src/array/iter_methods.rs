@@ -787,3 +787,144 @@ static KEEP_ARRAY_TO_LOCALE_STRING: extern "C" fn(
     f64,
     f64,
 ) -> *mut crate::string::StringHeader = js_array_to_locale_string;
+
+// ---------------------------------------------------------------------------
+// #4091: non-callable callback validation for higher-order array / TypedArray
+// methods (map/forEach/filter/reduce/find*/some/every/flatMap). Per ECMA-262
+// these throw a `TypeError` *before* iterating when the callback is not
+// callable. Codegen has already unboxed the closure pointer by the time the
+// runtime entry runs, so — mirroring `js_validate_array_comparator` (sort,
+// #2796) — the boxed value is threaded into a validator that returns the
+// resolved `ClosureHeader*` (as `i64`) or throws.
+// ---------------------------------------------------------------------------
+
+/// Read a runtime `StringHeader*` into an owned Rust `String`.
+fn header_to_owned_string(sp: *const crate::string::StringHeader) -> String {
+    if sp.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let header = &*sp;
+        let bytes_ptr = (sp as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let slice = std::slice::from_raw_parts(bytes_ptr, header.byte_len as usize);
+        std::str::from_utf8(slice).unwrap_or("").to_string()
+    }
+}
+
+#[inline]
+fn jsvalue_to_owned_string(v: f64) -> String {
+    header_to_owned_string(crate::value::js_jsvalue_to_string(v))
+}
+
+#[inline]
+fn typeof_owned_string(v: f64) -> String {
+    header_to_owned_string(crate::builtins::js_value_typeof(v))
+}
+
+/// Resolve a higher-order callback argument to its `ClosureHeader*` (as
+/// `i64`). Returns `Some(ptr)` only for values the runtime can actually
+/// invoke (real closures, bound methods/functions); `None` for any
+/// non-callable so the caller can throw the spec `TypeError`.
+#[inline]
+fn resolve_callback_ptr(cb_boxed: f64) -> Option<i64> {
+    use crate::value::JSValue;
+    let jv = JSValue::from_bits(cb_boxed.to_bits());
+    if jv.is_pointer() {
+        let ptr = jv.as_pointer::<ClosureHeader>();
+        if !crate::closure::get_valid_func_ptr(ptr).is_null() {
+            return Some(ptr as i64);
+        }
+    }
+    None
+}
+
+/// Render a non-callable value for the *standard* V8 message used by every
+/// `Array.prototype` iteration method and all `%TypedArray%.prototype`
+/// methods except `map`: `<typeof> <value>` (e.g. `number 5`, `string "x"`,
+/// `object null`, `undefined`, `boolean true`, `object`, `bigint`, `symbol`).
+fn render_callback_typeof(cb_boxed: f64) -> String {
+    use crate::value::JSValue;
+    let jv = JSValue::from_bits(cb_boxed.to_bits());
+    let ty = typeof_owned_string(cb_boxed);
+    match ty.as_str() {
+        "undefined" => "undefined".to_string(),
+        "object" if jv.is_null() => "object null".to_string(),
+        // Plain objects/arrays render as just the type — no value.
+        "object" => "object".to_string(),
+        "number" | "boolean" => format!("{} {}", ty, jsvalue_to_owned_string(cb_boxed)),
+        "string" => format!("{} \"{}\"", ty, jsvalue_to_owned_string(cb_boxed)),
+        // bigint / symbol render as just the type — no value.
+        _ => ty,
+    }
+}
+
+/// Render a non-callable value for `%TypedArray%.prototype.map`, which uses a
+/// distinct rendering with no `typeof` prefix (e.g. `5`, `x`, `null`, `true`,
+/// `undefined`). Object receivers fall back to V8's `#<Object>`.
+fn render_callback_plain(cb_boxed: f64) -> String {
+    use crate::value::JSValue;
+    let jv = JSValue::from_bits(cb_boxed.to_bits());
+    if jv.is_undefined()
+        || jv.is_null()
+        || jv.is_bool()
+        || jv.is_number()
+        || jv.is_int32()
+        || jv.is_any_string()
+        || jv.is_bigint()
+    {
+        return jsvalue_to_owned_string(cb_boxed);
+    }
+    if jv.is_pointer() {
+        let ptr = jv.as_pointer::<u8>();
+        if crate::symbol::is_registered_symbol(ptr as usize) {
+            return jsvalue_to_owned_string(cb_boxed);
+        }
+        return "#<Object>".to_string();
+    }
+    jsvalue_to_owned_string(cb_boxed)
+}
+
+#[cold]
+fn throw_not_a_function(rendered: String) -> ! {
+    let message = format!("{} is not a function", rendered);
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+}
+
+/// Validate a higher-order array/TypedArray callback (#4091). Returns the
+/// resolved `ClosureHeader*` (as `i64`) for callable values, or throws a
+/// `TypeError` with V8's standard `<typeof> <value> is not a function`
+/// message. Used by every iteration method except `map`.
+#[no_mangle]
+pub extern "C" fn js_validate_array_callback(cb_boxed: f64) -> i64 {
+    if let Some(p) = resolve_callback_ptr(cb_boxed) {
+        return p;
+    }
+    throw_not_a_function(render_callback_typeof(cb_boxed));
+}
+
+#[used]
+static KEEP_VALIDATE_ARRAY_CALLBACK: extern "C" fn(f64) -> i64 = js_validate_array_callback;
+
+/// Validate a `map` callback (#4091). Identical to
+/// [`js_validate_array_callback`] except that, for a typed-array receiver, the
+/// non-callable message uses `%TypedArray%.prototype.map`'s distinct rendering
+/// (no `typeof` prefix). Takes the receiver handle so it can pick the format.
+#[no_mangle]
+pub extern "C" fn js_validate_array_map_callback(arr: i64, cb_boxed: f64) -> i64 {
+    if let Some(p) = resolve_callback_ptr(cb_boxed) {
+        return p;
+    }
+    let is_typed_array = crate::typedarray::lookup_typed_array_kind(arr as usize).is_some();
+    let rendered = if is_typed_array {
+        render_callback_plain(cb_boxed)
+    } else {
+        render_callback_typeof(cb_boxed)
+    };
+    throw_not_a_function(rendered);
+}
+
+#[used]
+static KEEP_VALIDATE_ARRAY_MAP_CALLBACK: extern "C" fn(i64, f64) -> i64 =
+    js_validate_array_map_callback;

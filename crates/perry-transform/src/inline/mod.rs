@@ -699,6 +699,7 @@ mod tests {
             setters: Vec::new(),
             static_fields: Vec::new(),
             static_methods: Vec::new(),
+            computed_members: Vec::new(),
             decorators: Vec::new(),
             is_exported: false,
             aliases: Vec::new(),

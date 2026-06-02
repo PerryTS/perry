@@ -14,6 +14,38 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
+fn class_computed_member_registration_expr(class_name: &str, member: &ClassComputedMember) -> Expr {
+    match member.kind {
+        ClassComputedMemberKind::Method => Expr::RegisterClassComputedMethod {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            method_name: member.function.name.clone(),
+            is_static: member.is_static,
+            param_count: member.function.params.len() as u32,
+            has_rest: member
+                .function
+                .params
+                .last()
+                .map(|p| p.is_rest)
+                .unwrap_or(false),
+        },
+        ClassComputedMemberKind::Getter => Expr::RegisterClassComputedAccessor {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            getter_name: Some(member.function.name.clone()),
+            setter_name: None,
+            is_static: member.is_static,
+        },
+        ClassComputedMemberKind::Setter => Expr::RegisterClassComputedAccessor {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            getter_name: None,
+            setter_name: Some(member.function.name.clone()),
+            is_static: member.is_static,
+        },
+    }
+}
+
 fn is_cjs_style_native_default_import(module_name: &str) -> bool {
     matches!(
         module_name,
@@ -1116,6 +1148,14 @@ pub(crate) fn lower_module_decl(
                                 parent_expr: extends_expr.clone(),
                             }));
                     }
+                    for member in &class.computed_members {
+                        module
+                            .init
+                            .push(Stmt::Expr(class_computed_member_registration_expr(
+                                &class_name,
+                                member,
+                            )));
+                    }
                     // Inject static-field-init statements in source order
                     // (see non-export class arm below for rationale).
                     for sf in &class.static_fields {
@@ -1738,6 +1778,7 @@ pub(crate) fn lower_namespace_as_class(
                 setters: Vec::new(),
                 static_fields: Vec::new(),
                 static_methods: Vec::new(),
+                computed_members: Vec::new(),
                 decorators: Vec::new(),
                 is_exported,
                 aliases: Vec::new(),
@@ -1927,6 +1968,7 @@ pub(crate) fn lower_namespace_as_class(
         setters: Vec::new(),
         static_fields: Vec::new(),
         static_methods,
+        computed_members: Vec::new(),
         decorators: Vec::new(),
         is_exported,
         aliases: Vec::new(),

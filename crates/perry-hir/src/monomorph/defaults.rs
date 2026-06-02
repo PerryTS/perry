@@ -286,6 +286,28 @@ fn fill_defaults_in_expr(expr: &mut Expr, ctor_defaults: &HashMap<String, Vec<Op
                 fill_defaults_in_expr(arg, ctor_defaults);
             }
         }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            fill_defaults_in_expr(home, ctor_defaults);
+            fill_defaults_in_expr(key, ctor_defaults);
+            fill_defaults_in_expr(receiver, ctor_defaults);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            fill_defaults_in_expr(home, ctor_defaults);
+            fill_defaults_in_expr(key, ctor_defaults);
+            fill_defaults_in_expr(receiver, ctor_defaults);
+            for arg in args {
+                fill_defaults_in_expr(arg, ctor_defaults);
+            }
+        }
         Expr::SuperCall(args) => {
             for arg in args {
                 fill_defaults_in_expr(arg, ctor_defaults);
