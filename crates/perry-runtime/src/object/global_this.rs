@@ -2039,9 +2039,16 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             if ns_obj.is_null() {
                 continue;
             }
-            if name == "Math" {
-                install_proto_method(ns_obj, "f16round", math_f16round_thunk as *const u8, 1);
-                install_proto_method(ns_obj, "random", math_random_thunk as *const u8, 0);
+            // #4139: reify each namespace's own members as real properties so
+            // the reflection APIs (`getOwnPropertyDescriptor`,
+            // `getOwnPropertyNames`) observe them. Call sites (`Math.max(...)`,
+            // `JSON.stringify(...)`, `Reflect.get(...)`) are codegen intrinsics
+            // gated on the AST shape and never read these fields.
+            match name {
+                "Math" => install_math_namespace_members(ns_obj),
+                "JSON" => install_json_namespace_members(ns_obj),
+                "Reflect" => install_reflect_namespace_members(ns_obj),
+                _ => {}
             }
             crate::value::js_nanbox_pointer(ns_obj as i64)
         };
@@ -2723,6 +2730,125 @@ fn install_proto_method_rest(
         "length".to_string(),
         super::PropertyAttrs::new(false, false, true),
     );
+}
+
+/// #4139: reify the `Math` namespace's own members (methods + constants) as
+/// real own properties so reflection (`Object.getOwnPropertyDescriptor`,
+/// `Object.getOwnPropertyNames`) sees them. The actual `Math.<m>(...)` call
+/// sites are codegen intrinsics gated on the AST shape and never read these
+/// fields — this is reflection parity only, so the methods are backed by the
+/// shared no-op thunk (mirroring `install_proto_method`'s default). Methods
+/// are spec'd `{ writable:true, enumerable:false, configurable:true }`
+/// (set by `install_proto_method`); constants are `{ writable:false,
+/// enumerable:false, configurable:false }`. Member order matches V8/Node's
+/// own-key enumeration: methods, then constants, then the newer `f16round`.
+fn install_math_namespace_members(ns_obj: *mut ObjectHeader) {
+    let noop = global_this_builtin_noop_thunk as *const u8;
+    const METHODS: &[(&str, u32)] = &[
+        ("abs", 1),
+        ("acos", 1),
+        ("acosh", 1),
+        ("asin", 1),
+        ("asinh", 1),
+        ("atan", 1),
+        ("atanh", 1),
+        ("atan2", 2),
+        ("ceil", 1),
+        ("cbrt", 1),
+        ("expm1", 1),
+        ("clz32", 1),
+        ("cos", 1),
+        ("cosh", 1),
+        ("exp", 1),
+        ("floor", 1),
+        ("fround", 1),
+        ("hypot", 2),
+        ("imul", 2),
+        ("log", 1),
+        ("log1p", 1),
+        ("log2", 1),
+        ("log10", 1),
+        ("max", 2),
+        ("min", 2),
+        ("pow", 2),
+        ("random", 0),
+        ("round", 1),
+        ("sign", 1),
+        ("sin", 1),
+        ("sinh", 1),
+        ("sqrt", 1),
+        ("tan", 1),
+        ("tanh", 1),
+        ("trunc", 1),
+    ];
+    for (name, arity) in METHODS.iter().copied() {
+        // `random` keeps its dedicated thunk so the value-call path
+        // (`const r = Math.random; r()`) returns a real random number; the
+        // rest are reflection-only and share the no-op thunk. Installed in
+        // enumeration position so `getOwnPropertyNames(Math)` order matches V8.
+        let thunk = if name == "random" {
+            math_random_thunk as *const u8
+        } else {
+            noop
+        };
+        install_proto_method(ns_obj, name, thunk, arity);
+    }
+    let non_writable = super::PropertyAttrs::new(false, false, false);
+    const CONSTS: &[(&str, f64)] = &[
+        ("E", std::f64::consts::E),
+        ("LN10", std::f64::consts::LN_10),
+        ("LN2", std::f64::consts::LN_2),
+        ("LOG10E", std::f64::consts::LOG10_E),
+        ("LOG2E", std::f64::consts::LOG2_E),
+        ("PI", std::f64::consts::PI),
+        ("SQRT1_2", std::f64::consts::FRAC_1_SQRT_2),
+        ("SQRT2", std::f64::consts::SQRT_2),
+    ];
+    for (name, value) in CONSTS.iter().copied() {
+        set_intrinsic_data_prop(ns_obj, name, value, non_writable);
+    }
+    // `f16round` keeps its dedicated thunk (the only Math member with one).
+    install_proto_method(ns_obj, "f16round", math_f16round_thunk as *const u8, 1);
+}
+
+/// #4139: reify the `JSON` namespace's own methods for reflection parity. See
+/// `install_math_namespace_members` for the rationale (call sites are codegen
+/// intrinsics; these no-op-backed fields exist only for reflection).
+fn install_json_namespace_members(ns_obj: *mut ObjectHeader) {
+    let noop = global_this_builtin_noop_thunk as *const u8;
+    const METHODS: &[(&str, u32)] = &[
+        ("parse", 2),
+        ("stringify", 3),
+        ("rawJSON", 1),
+        ("isRawJSON", 1),
+    ];
+    for (name, arity) in METHODS.iter().copied() {
+        install_proto_method(ns_obj, name, noop, arity);
+    }
+}
+
+/// #4139: reify the `Reflect` namespace's own methods for reflection parity.
+/// See `install_math_namespace_members` for the rationale.
+fn install_reflect_namespace_members(ns_obj: *mut ObjectHeader) {
+    let noop = global_this_builtin_noop_thunk as *const u8;
+    const METHODS: &[(&str, u32)] = &[
+        ("defineProperty", 3),
+        ("deleteProperty", 2),
+        ("apply", 3),
+        ("construct", 2),
+        ("get", 2),
+        ("getOwnPropertyDescriptor", 2),
+        ("getPrototypeOf", 1),
+        ("has", 2),
+        ("isExtensible", 1),
+        ("ownKeys", 1),
+        ("preventExtensions", 1),
+        ("set", 3),
+        ("setPrototypeOf", 2),
+    ];
+    for (name, arity) in METHODS.iter().copied() {
+        install_proto_method(ns_obj, name, noop, arity);
+    }
 }
 
 /// Install a list of `(method_name, arity)` pairs on a prototype object,

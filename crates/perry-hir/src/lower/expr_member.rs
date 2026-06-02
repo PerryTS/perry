@@ -1691,7 +1691,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     } = &object_expr
     {
         if matches!(inner.as_ref(), Expr::GlobalGet(0))
-            && crate::analysis::is_builtin_global_value_name(property)
+            && (crate::analysis::is_builtin_global_value_name(property)
+                // #4139: `Math`/`JSON`/`Reflect` bare values now lower to
+                // `PropertyGet { GlobalGet(0), <name> }` (see lower_expr.rs) so
+                // reflection sees the real namespace object. But in member-OBJECT
+                // position (`Math.max(…)`, `JSON.stringify(…)`, `Reflect.get(…)`)
+                // the intrinsic call / constant-fold paths expect the bare
+                // `GlobalGet(0)` receiver — undo the reroute here exactly as for
+                // the built-in constructors, keeping those paths byte-identical.
+                || matches!(property.as_str(), "Math" | "JSON" | "Reflect"))
         {
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                 if obj_ident.sym.as_ref() == property.as_str() && property != "globalThis" {

@@ -391,6 +391,25 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     }
                 };
                 Ok(Expr::String(value))
+            } else if matches!(name.as_str(), "Math" | "JSON" | "Reflect") {
+                // #4139: the built-in namespace objects used as VALUES (passed
+                // to `Object.getOwnPropertyDescriptor(Math, …)`, stored in a
+                // local, etc.) must resolve to the real
+                // `populate_global_this_builtins`-installed namespace object —
+                // not the bare `GlobalGet(0)` sentinel (which IS `globalThis`,
+                // so `Math === globalThis` and reflection reads the wrong
+                // object). Reuse the `PropertyGet { GlobalGet(0), <name> }`
+                // value-form (same as the built-in constructors above). When
+                // these names appear in member-OBJECT position (`Math.max(…)`,
+                // `Math.PI`), expr_member.rs's #973 reroute-undo resets the
+                // receiver back to `GlobalGet(0)`, so the intrinsic call /
+                // constant-fold paths are unchanged. A shadowing local would
+                // have matched `ctx.lookup_local` earlier and never reached
+                // here.
+                Ok(Expr::PropertyGet {
+                    object: Box::new(Expr::GlobalGet(0)),
+                    property: name,
+                })
             } else {
                 // GlobalGet(0) is a sentinel: codegen routes by name from the
                 // parent PropertyGet/Call/Member context. Bare uses lower to
