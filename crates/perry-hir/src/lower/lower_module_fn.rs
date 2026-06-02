@@ -541,26 +541,6 @@ pub fn lower_module_full(
         }
     }
 
-    if !ctx.current_strict {
-        let mut implicit_globals: Vec<_> = reassigned_function_candidates.iter().cloned().collect();
-        implicit_globals.sort();
-        for name in implicit_globals {
-            if ctx.lookup_local(&name).is_none()
-                && ctx.lookup_func(&name).is_none()
-                && ctx.lookup_class(&name).is_none()
-            {
-                let id = ctx.define_local(name.clone(), Type::Any);
-                module.init.push(Stmt::Let {
-                    id,
-                    name,
-                    ty: Type::Any,
-                    mutable: true,
-                    init: Some(Expr::Undefined),
-                });
-            }
-        }
-    }
-
     // Main pass: lower everything
     for item in &ast_module.body {
         match item {

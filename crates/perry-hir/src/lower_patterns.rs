@@ -442,6 +442,266 @@ fn collect_implicit_assignment_expr_names(
     }
 }
 
+fn implicit_assignment_pat_contains_name(pat: &ast::Pat, name: &str) -> bool {
+    match pat {
+        ast::Pat::Ident(ident) => ident.id.sym.as_ref() == name,
+        ast::Pat::Array(arr) => arr
+            .elems
+            .iter()
+            .flatten()
+            .any(|elem| implicit_assignment_pat_contains_name(elem, name)),
+        ast::Pat::Object(obj) => obj.props.iter().any(|prop| match prop {
+            ast::ObjectPatProp::Assign(assign) => assign.key.sym.as_ref() == name,
+            ast::ObjectPatProp::KeyValue(kv) => {
+                implicit_assignment_pat_contains_name(&kv.value, name)
+            }
+            ast::ObjectPatProp::Rest(rest) => {
+                implicit_assignment_pat_contains_name(&rest.arg, name)
+            }
+        }),
+        ast::Pat::Assign(assign) => implicit_assignment_pat_contains_name(&assign.left, name),
+        ast::Pat::Rest(rest) => implicit_assignment_pat_contains_name(&rest.arg, name),
+        ast::Pat::Expr(_) | ast::Pat::Invalid(_) => false,
+    }
+}
+
+fn implicit_assignment_target_contains_name(target: &ast::AssignTarget, name: &str) -> bool {
+    match target {
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) => {
+            ident.id.sym.as_ref() == name
+        }
+        ast::AssignTarget::Pat(pat) => match pat {
+            ast::AssignTargetPat::Array(arr) => arr
+                .elems
+                .iter()
+                .flatten()
+                .any(|elem| implicit_assignment_pat_contains_name(elem, name)),
+            ast::AssignTargetPat::Object(obj) => obj.props.iter().any(|prop| match prop {
+                ast::ObjectPatProp::Assign(assign) => assign.key.sym.as_ref() == name,
+                ast::ObjectPatProp::KeyValue(kv) => {
+                    implicit_assignment_pat_contains_name(&kv.value, name)
+                }
+                ast::ObjectPatProp::Rest(rest) => {
+                    implicit_assignment_pat_contains_name(&rest.arg, name)
+                }
+            }),
+            ast::AssignTargetPat::Invalid(_) => false,
+        },
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::Paren(paren)) => {
+            expr_assigns_name(&paren.expr, name)
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsAs(ts_as)) => {
+            expr_assigns_name(&ts_as.expr, name)
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsNonNull(ts_nn)) => {
+            expr_assigns_name(&ts_nn.expr, name)
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsTypeAssertion(ts_ta)) => {
+            expr_assigns_name(&ts_ta.expr, name)
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsSatisfies(ts_sat)) => {
+            expr_assigns_name(&ts_sat.expr, name)
+        }
+        ast::AssignTarget::Simple(
+            ast::SimpleAssignTarget::Member(_)
+            | ast::SimpleAssignTarget::SuperProp(_)
+            | ast::SimpleAssignTarget::OptChain(_)
+            | ast::SimpleAssignTarget::TsInstantiation(_)
+            | ast::SimpleAssignTarget::Invalid(_),
+        ) => false,
+    }
+}
+
+fn expr_assigns_name(expr: &ast::Expr, name: &str) -> bool {
+    match expr {
+        ast::Expr::Assign(assign) => {
+            implicit_assignment_target_contains_name(&assign.left, name)
+                || expr_assigns_name(&assign.right, name)
+        }
+        ast::Expr::Seq(seq) => seq.exprs.iter().any(|expr| expr_assigns_name(expr, name)),
+        ast::Expr::Paren(paren) => expr_assigns_name(&paren.expr, name),
+        ast::Expr::TsAs(ts_as) => expr_assigns_name(&ts_as.expr, name),
+        ast::Expr::TsNonNull(ts_nn) => expr_assigns_name(&ts_nn.expr, name),
+        ast::Expr::TsTypeAssertion(ts_ta) => expr_assigns_name(&ts_ta.expr, name),
+        ast::Expr::TsSatisfies(ts_sat) => expr_assigns_name(&ts_sat.expr, name),
+        _ => false,
+    }
+}
+
+fn assignment_target_reads_name_before_assignment(
+    target: &ast::AssignTarget,
+    name: &str,
+    assigned: &mut bool,
+) -> bool {
+    match target {
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(member)) => {
+            expr_reads_name_before_assignment(&member.obj, name, assigned)
+                || matches!(
+                    &member.prop,
+                    ast::MemberProp::Computed(computed)
+                        if expr_reads_name_before_assignment(&computed.expr, name, assigned)
+                )
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::OptChain(opt_chain)) => {
+            match opt_chain.base.as_ref() {
+                ast::OptChainBase::Member(member) => {
+                    expr_reads_name_before_assignment(&member.obj, name, assigned)
+                        || matches!(
+                            &member.prop,
+                            ast::MemberProp::Computed(computed)
+                                if expr_reads_name_before_assignment(&computed.expr, name, assigned)
+                        )
+                }
+                ast::OptChainBase::Call(call) => {
+                    if expr_reads_name_before_assignment(&call.callee, name, assigned) {
+                        return true;
+                    }
+                    call.args
+                        .iter()
+                        .any(|arg| expr_reads_name_before_assignment(&arg.expr, name, assigned))
+                }
+            }
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::Paren(paren)) => {
+            expr_reads_name_before_assignment(&paren.expr, name, assigned)
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsAs(ts_as)) => {
+            expr_reads_name_before_assignment(&ts_as.expr, name, assigned)
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsNonNull(ts_nn)) => {
+            expr_reads_name_before_assignment(&ts_nn.expr, name, assigned)
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsTypeAssertion(ts_ta)) => {
+            expr_reads_name_before_assignment(&ts_ta.expr, name, assigned)
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsSatisfies(ts_sat)) => {
+            expr_reads_name_before_assignment(&ts_sat.expr, name, assigned)
+        }
+        ast::AssignTarget::Simple(
+            ast::SimpleAssignTarget::Ident(_)
+            | ast::SimpleAssignTarget::SuperProp(_)
+            | ast::SimpleAssignTarget::TsInstantiation(_)
+            | ast::SimpleAssignTarget::Invalid(_),
+        )
+        | ast::AssignTarget::Pat(_) => false,
+    }
+}
+
+fn expr_reads_name_before_assignment(expr: &ast::Expr, name: &str, assigned: &mut bool) -> bool {
+    match expr {
+        ast::Expr::Ident(ident) => ident.sym.as_ref() == name && !*assigned,
+        ast::Expr::Assign(assign) => {
+            if assignment_target_reads_name_before_assignment(&assign.left, name, assigned) {
+                return true;
+            }
+            if assign.op != ast::AssignOp::Assign
+                && implicit_assignment_target_contains_name(&assign.left, name)
+                && !*assigned
+            {
+                return true;
+            }
+            if expr_reads_name_before_assignment(&assign.right, name, assigned) {
+                return true;
+            }
+            if assign.op == ast::AssignOp::Assign
+                && implicit_assignment_target_contains_name(&assign.left, name)
+            {
+                *assigned = true;
+            }
+            false
+        }
+        ast::Expr::Seq(seq) => seq
+            .exprs
+            .iter()
+            .any(|expr| expr_reads_name_before_assignment(expr, name, assigned)),
+        ast::Expr::Paren(paren) => expr_reads_name_before_assignment(&paren.expr, name, assigned),
+        ast::Expr::TsAs(ts_as) => expr_reads_name_before_assignment(&ts_as.expr, name, assigned),
+        ast::Expr::TsNonNull(ts_nn) => {
+            expr_reads_name_before_assignment(&ts_nn.expr, name, assigned)
+        }
+        ast::Expr::TsTypeAssertion(ts_ta) => {
+            expr_reads_name_before_assignment(&ts_ta.expr, name, assigned)
+        }
+        ast::Expr::TsSatisfies(ts_sat) => {
+            expr_reads_name_before_assignment(&ts_sat.expr, name, assigned)
+        }
+        ast::Expr::Bin(bin) => {
+            expr_reads_name_before_assignment(&bin.left, name, assigned)
+                || expr_reads_name_before_assignment(&bin.right, name, assigned)
+        }
+        ast::Expr::Unary(unary) => expr_reads_name_before_assignment(&unary.arg, name, assigned),
+        ast::Expr::Update(update) => {
+            if let ast::Expr::Ident(ident) = update.arg.as_ref() {
+                ident.sym.as_ref() == name && !*assigned
+            } else {
+                expr_reads_name_before_assignment(&update.arg, name, assigned)
+            }
+        }
+        ast::Expr::Cond(cond) => {
+            if expr_reads_name_before_assignment(&cond.test, name, assigned) {
+                return true;
+            }
+            let mut cons_assigned = *assigned;
+            let mut alt_assigned = *assigned;
+            let cons_reads =
+                expr_reads_name_before_assignment(&cond.cons, name, &mut cons_assigned);
+            let alt_reads = expr_reads_name_before_assignment(&cond.alt, name, &mut alt_assigned);
+            *assigned = cons_assigned && alt_assigned;
+            cons_reads || alt_reads
+        }
+        ast::Expr::Call(call) => {
+            if let ast::Callee::Expr(callee) = &call.callee {
+                if expr_reads_name_before_assignment(callee, name, assigned) {
+                    return true;
+                }
+            }
+            call.args
+                .iter()
+                .any(|arg| expr_reads_name_before_assignment(&arg.expr, name, assigned))
+        }
+        ast::Expr::New(new_expr) => {
+            if expr_reads_name_before_assignment(&new_expr.callee, name, assigned) {
+                return true;
+            }
+            new_expr.args.as_ref().is_some_and(|args| {
+                args.iter()
+                    .any(|arg| expr_reads_name_before_assignment(&arg.expr, name, assigned))
+            })
+        }
+        ast::Expr::Member(member) => {
+            expr_reads_name_before_assignment(&member.obj, name, assigned)
+                || matches!(
+                    &member.prop,
+                    ast::MemberProp::Computed(computed)
+                        if expr_reads_name_before_assignment(&computed.expr, name, assigned)
+                )
+        }
+        ast::Expr::Array(array) => array
+            .elems
+            .iter()
+            .flatten()
+            .any(|elem| expr_reads_name_before_assignment(&elem.expr, name, assigned)),
+        ast::Expr::Object(object) => object.props.iter().any(|prop| match prop {
+            ast::PropOrSpread::Spread(spread) => {
+                expr_reads_name_before_assignment(&spread.expr, name, assigned)
+            }
+            ast::PropOrSpread::Prop(prop) => match prop.as_ref() {
+                ast::Prop::KeyValue(kv) => {
+                    expr_reads_name_before_assignment(&kv.value, name, assigned)
+                }
+                ast::Prop::Assign(assign) => {
+                    expr_reads_name_before_assignment(&assign.value, name, assigned)
+                }
+                _ => false,
+            },
+        }),
+        ast::Expr::Await(await_expr) => {
+            expr_reads_name_before_assignment(&await_expr.arg, name, assigned)
+        }
+        _ => false,
+    }
+}
+
 /// Sloppy-mode simple assignment to an unresolvable reference creates a global
 /// binding. Perry models the binding as a mutable local in the current lowering
 /// context; this helper emits backing `Stmt::Let`s before the containing
@@ -459,6 +719,12 @@ pub(crate) fn predeclare_implicit_assignment_targets(
 
     let mut stmts = Vec::new();
     for name in names {
+        let mut assigned = false;
+        if !ctx.pre_registered_module_var_decls.contains(&name)
+            && expr_reads_name_before_assignment(expr, &name, &mut assigned)
+        {
+            continue;
+        }
         if ctx.lookup_class(&name).is_some() || ctx.lookup_func(&name).is_some() {
             continue;
         }

@@ -190,7 +190,8 @@ unsafe fn call_method_for_primitive(
         || ret_jsv.is_bool()
         || ret_jsv.is_null()
         || ret_jsv.is_undefined()
-        || ret_jsv.is_bigint();
+        || ret_jsv.is_bigint()
+        || crate::symbol::js_is_symbol(ret) != 0;
     if is_primitive {
         MethodOutcome::Primitive(ret)
     } else {

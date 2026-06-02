@@ -84,6 +84,13 @@ pub(crate) unsafe fn own_data_field_by_name(
     if key.is_null() {
         return None;
     }
+    if obj.is_null() || !is_valid_obj_ptr(obj as *const u8) {
+        return None;
+    }
+    let obj_gc = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*obj_gc).obj_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
     let keys = (*obj).keys_array;
     let keys_ptr = keys as usize;
     if keys.is_null() || (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 {
@@ -1845,7 +1852,7 @@ pub extern "C" fn js_object_get_field_by_name(
         };
         // Native-module registry handles live below 0x100000 and can also be
         // POINTER_TAG-boxed; do not walk back to a GcHeader for those.
-        if raw >= 0x100000 && !key.is_null() {
+        if raw >= 0x100000 && !key.is_null() && is_valid_obj_ptr(raw as *const u8) {
             {
                 unsafe {
                     let gc_header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -2283,7 +2290,9 @@ pub extern "C" fn js_object_get_field_by_name(
         // Check GcHeader first (reliable for heap objects), then fallback to ObjectHeader.object_type
         // for static/const objects that don't have GcHeaders.
         // Guard: ensure we can safely read GC_HEADER_SIZE bytes before obj
-        if (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        if (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000
+            || !is_valid_obj_ptr(obj as *const u8)
+        {
             return JSValue::undefined();
         }
         let gc_header =
@@ -3602,14 +3611,20 @@ pub extern "C" fn js_object_get_field_ic_miss(
         // The codegen guard funnels non-OBJECT receivers here too, so this
         // belt-and-braces check keeps the cache from being primed with
         // values that would survive into the inline hot path.
-        let is_object = (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 && {
-            let gc_header =
-                (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
-        };
-        let keys = (*obj).keys_array;
+        let is_object = (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000
+            && is_valid_obj_ptr(obj as *const u8)
+            && {
+                let gc_header =
+                    (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
+            };
         let is_regular = is_object && (*obj).object_type == crate::error::OBJECT_TYPE_REGULAR;
-        if can_cache && is_regular && !keys.is_null() && (keys as usize) > 0x10000 {
+        if can_cache && is_regular {
+            let keys = (*obj).keys_array;
+            if keys.is_null() || (keys as usize) <= 0x10000 {
+                let value = js_object_get_field_by_name(obj, key);
+                return f64::from_bits(value.bits());
+            }
             let key_count = *(keys as *const u32) as usize;
             let keys_data = (keys as *const u8).add(8) as *const f64;
             let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
