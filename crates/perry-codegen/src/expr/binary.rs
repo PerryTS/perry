@@ -114,9 +114,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // step poisoned the result. Dispatch through the runtime
                 // helper that checks NaN-box tags: STRING_TAG / SHORT_STRING_TAG
                 // → string concat, BIGINT → bigint add, otherwise numeric.
-                let simple_numeric_literal =
-                    |e: &Expr| matches!(e, Expr::Integer(_) | Expr::Number(_));
-                if !(simple_numeric_literal(left) && simple_numeric_literal(right)) {
+                if !(crate::type_analysis::is_numeric_expr(ctx, left)
+                    && crate::type_analysis::is_numeric_expr(ctx, right))
+                {
                     let l = lower_expr(ctx, left)?;
                     let r = lower_expr(ctx, right)?;
                     return Ok(ctx.block().call(
