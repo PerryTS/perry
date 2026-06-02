@@ -1195,9 +1195,19 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         "_exiting" => bool_value(false),
         "_maxListeners" => undefined_value(),
         "_preload_modules" => module_array_value(&[]),
-        "domain" => f64::from_bits(crate::value::TAG_NULL),
+        "domain" => active_domain_value(),
         _ => return None,
     })
+}
+
+fn active_domain_value() -> f64 {
+    let ptr = crate::value::JS_NATIVE_DOMAIN_DISPATCH.load(Ordering::SeqCst);
+    if ptr.is_null() {
+        return f64::from_bits(crate::value::TAG_NULL);
+    }
+    let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+        unsafe { std::mem::transmute(ptr) };
+    unsafe { dispatch(b"active".as_ptr(), b"active".len(), std::ptr::null(), 0) }
 }
 
 /// `module.builtinModules` — Node exposes this as an Array of builtin module

@@ -1318,8 +1318,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_domain_intercept", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_domain_add", I64, &[I64, DOUBLE]);
     module.declare_function("js_domain_remove", I64, &[I64, DOUBLE]);
-    module.declare_function("js_domain_enter", I64, &[I64]);
-    module.declare_function("js_domain_exit", I64, &[I64]);
+    module.declare_function("js_domain_enter", DOUBLE, &[I64]);
+    module.declare_function("js_domain_exit", DOUBLE, &[I64]);
 
     // ========== StringDecoder (issue #848) ==========
     // `js_string_decoder_new` allocates a real handle; `write` / `end`

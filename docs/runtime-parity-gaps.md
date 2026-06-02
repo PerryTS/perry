@@ -203,23 +203,6 @@ Selected highlights (full list in `runtime-parity.md`):
 - `inspector.Network.responseReceived(params)`
 - … and 7 more
 
-### node:domain
-
-**Total APIs: 10** · Perry covers: 0 · Gap: 10
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `domain.create()`
-- `domain.active`
-- `domain.members`
-- `domain.add(emitter)`
-- `domain.bind(callback)`
-- `domain.intercept(callback)`
-- `domain.enter()`
-- `domain.exit()`
-- `domain.remove(emitter)`
-- `domain.run(fn[, ...args])`
-
 ### node:readline/promises
 
 **Total APIs: 7** · Perry covers: 0 · Gap: 7

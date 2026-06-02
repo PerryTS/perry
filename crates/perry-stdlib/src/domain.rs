@@ -178,7 +178,7 @@ fn exit_domain(handle: Handle) {
     ACTIVE_DOMAINS.with(|stack| {
         let mut stack = stack.borrow_mut();
         if let Some(pos) = stack.iter().rposition(|candidate| *candidate == handle) {
-            stack.remove(pos);
+            stack.truncate(pos);
         }
     });
 }
@@ -381,15 +381,15 @@ pub unsafe extern "C" fn js_domain_remove(handle: Handle, member: f64) -> Handle
 }
 
 #[no_mangle]
-pub extern "C" fn js_domain_enter(handle: Handle) -> Handle {
+pub extern "C" fn js_domain_enter(handle: Handle) -> f64 {
     enter_domain(handle);
-    handle
+    undefined()
 }
 
 #[no_mangle]
-pub extern "C" fn js_domain_exit(handle: Handle) -> Handle {
+pub extern "C" fn js_domain_exit(handle: Handle) -> f64 {
     exit_domain(handle);
-    handle
+    undefined()
 }
 
 extern "C" fn domain_bound_wrapper(closure: *const ClosureHeader, rest: f64) -> f64 {
@@ -460,8 +460,8 @@ pub unsafe fn dispatch_domain_method(handle: Handle, method: &str, args: &[f64])
         "intercept" if !args.is_empty() => Some(js_domain_intercept(handle, args[0])),
         "add" if !args.is_empty() => Some(nanbox_handle(js_domain_add(handle, args[0]))),
         "remove" if !args.is_empty() => Some(nanbox_handle(js_domain_remove(handle, args[0]))),
-        "enter" => Some(nanbox_handle(js_domain_enter(handle))),
-        "exit" => Some(nanbox_handle(js_domain_exit(handle))),
+        "enter" => Some(js_domain_enter(handle)),
+        "exit" => Some(js_domain_exit(handle)),
         _ => None,
     }
 }

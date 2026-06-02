@@ -50,7 +50,6 @@
 # getHeapCodeStatistics/cachedDataVersionTag return runtime-specific values
 # (categories 2 + 3). Roundtrips and shapes work; byte-for-byte diffing does not.
 "v8" = "V8-specific introspection + JSC-format serialization; callable but not byte-parity-testable (see #3700)."
-"domain" = "Deprecated since Node 4; not implementing legacy error-routing system."
 
 # Out-of-scope test surface.
 "test/mock" = "Test-runner mocking; covered transitively by node:test if pursued."
