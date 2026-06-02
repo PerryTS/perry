@@ -9,9 +9,9 @@ import * as vm from "node:vm";
 
 // ── Class: vm.Script ──
 // TODO(class-member): new vm.Script(code[, options])
-// SKIP: script.cachedDataRejected — Script cached-data metadata remains open (#3323).
-// SKIP: script.sourceMapURL — Script sourceMapURL metadata remains open (#3321).
-// SKIP: script.createCachedData() — Script cached-data creation remains open (#3323).
+// TODO(class-member): script.cachedDataRejected
+// TODO(class-member): script.sourceMapURL
+// TODO(class-member): script.createCachedData()
 // TODO(class-member): script.runInContext(contextifiedObject[, options])
 // TODO(class-member): script.runInNewContext([contextObject[, options]])
 // TODO(class-member): script.runInThisContext([options])
@@ -28,7 +28,7 @@ import * as vm from "node:vm";
 // SKIP: new vm.SourceTextModule(code[, options]) — Experimental VM module constructor remains gated/open (#3132).
 // SKIP: dependencySpecifiers — SourceTextModule dependency metadata remains gated/open (#3322).
 // SKIP: moduleRequests — SourceTextModule module request helpers remain gated/open (#3322).
-// SKIP: createCachedData() — SourceTextModule cached-data creation remains gated/open (#3323).
+// TODO(class-member): createCachedData()
 // SKIP: hasAsyncGraph() — SourceTextModule graph helper remains gated/open (#3132).
 // SKIP: hasTopLevelAwait() — SourceTextModule graph helper remains gated/open (#3132).
 // SKIP: instantiate() — SourceTextModule instantiation remains gated/open (#3132).
@@ -51,4 +51,4 @@ import * as vm from "node:vm";
 console.log("vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER:", vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER);
 console.log("vm.constants.DONT_CONTEXTIFY:", vm.constants.DONT_CONTEXTIFY);
 
-// Coverage: 2 auto-emitted, 10 TODO, 20 skip-listed.
+// Coverage: 2 auto-emitted, 14 TODO, 16 skip-listed.

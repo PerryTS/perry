@@ -433,6 +433,15 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "vm",
         has_receiver: true,
+        method: "createCachedData",
+        class_filter: Some("SourceTextModule"),
+        runtime: "js_vm_source_text_module_create_cached_data",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "vm",
+        has_receiver: true,
         method: "linkRequests",
         class_filter: Some("SourceTextModule"),
         runtime: "js_vm_source_text_module_link_requests",

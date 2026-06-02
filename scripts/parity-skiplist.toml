@@ -57,9 +57,6 @@
 
 [skip-apis]
 # Architectural — need a JS interpreter.
-"script.cachedDataRejected" = "Script cached-data metadata remains open (#3323)."
-"script.sourceMapURL" = "Script sourceMapURL metadata remains open (#3321)."
-"script.createCachedData()" = "Script cached-data creation remains open (#3323)."
 "module.error" = "Experimental VM module state remains gated/open (#3132)."
 "module.identifier" = "Experimental VM module state remains gated/open (#3132)."
 "module.namespace" = "Experimental VM module namespace remains gated/open (#3132)."
@@ -69,7 +66,6 @@
 "new vm.SourceTextModule(code[, options])" = "Experimental VM module constructor remains gated/open (#3132)."
 "dependencySpecifiers" = "SourceTextModule dependency metadata remains gated/open (#3322)."
 "moduleRequests" = "SourceTextModule module request helpers remain gated/open (#3322)."
-"createCachedData()" = "SourceTextModule cached-data creation remains gated/open (#3323)."
 "hasAsyncGraph()" = "SourceTextModule graph helper remains gated/open (#3132)."
 "hasTopLevelAwait()" = "SourceTextModule graph helper remains gated/open (#3132)."
 "instantiate()" = "SourceTextModule instantiation remains gated/open (#3132)."
