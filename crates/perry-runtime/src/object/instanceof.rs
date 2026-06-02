@@ -197,6 +197,19 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             _ => {}
         }
         let class_id = match name {
+            // Reference-type global constructors used as runtime *values*
+            // (e.g. `Function.prototype[Symbol.hasInstance].call(Map, m)`, or a
+            // dynamic `x instanceof ctorVar`). These mirror the synthetic ids
+            // the compile-time `instanceof` operator emits — see
+            // perry-codegen/src/expr/instance_misc1.rs — which `js_instanceof`
+            // resolves via the per-type registries (#3662). `Array`/`Object`/
+            // `Date` constructor *values* aren't identified here (they are not
+            // noop-thunk closures), so they stay a known gap for the dynamic
+            // path; the literal-RHS operator handles them at compile time.
+            "Map" => 0xFFFF0022,
+            "Set" => 0xFFFF0023,
+            "RegExp" => 0xFFFF0021,
+            "ArrayBuffer" => 0xFFFF0025,
             "Error" => crate::error::CLASS_ID_ERROR,
             "TypeError" => crate::error::CLASS_ID_TYPE_ERROR,
             "RangeError" => crate::error::CLASS_ID_RANGE_ERROR,
@@ -255,6 +268,12 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     // (Callable RHS values never reach here — they resolve to a synthetic
     // class id above — so we don't need to model the arrow-`.prototype`
     // case at this site.)
+    //
+    // #3662: `OrdinaryHasInstance` (the `@@hasInstance` reflective path) wants
+    // `false` here, not a `TypeError`; it sets this flag for the call.
+    if SUPPRESS_INSTANCEOF_RHS_THROW.with(|c| c.get()) {
+        return f64::from_bits(TAG_FALSE);
+    }
     throw_invalid_instanceof_rhs(type_ref)
 }
 
@@ -264,6 +283,49 @@ fn throw_invalid_instanceof_rhs(type_ref: f64) -> ! {
         throw_type_error(b"Right-hand side of 'instanceof' is not callable");
     }
     throw_type_error(b"Right-hand side of 'instanceof' is not an object");
+}
+
+/// `%Function.prototype% [ @@hasInstance ]` (#3662). Spec: return
+/// `OrdinaryHasInstance(this, V)`. Unlike the `instanceof` *operator* — which
+/// throws a `TypeError` on a non-callable right-hand side — `OrdinaryHasInstance`
+/// returns `false` when `this` is not callable, so `Function.prototype[Symbol
+/// .hasInstance].call(undefined, {})` is `false` (not a throw). Installed on
+/// `Function.prototype` under the `@@hasInstance` key; the receiver flows in
+/// through `IMPLICIT_THIS` set by the `.call`/member dispatch.
+pub(crate) extern "C" fn function_prototype_has_instance_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let constructor = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let result = ordinary_has_instance(constructor, value);
+    f64::from_bits(if result {
+        crate::value::TAG_TRUE
+    } else {
+        crate::value::TAG_FALSE
+    })
+}
+
+/// `OrdinaryHasInstance(C, O)` without the throwing semantics of the operator:
+/// a non-callable `C` (or one whose constructor identity Perry cannot resolve)
+/// yields `false` rather than a `TypeError`. Delegates to the operator's full
+/// constructor-resolution path (`js_instanceof_dynamic`) with the unresolved-RHS
+/// throw suppressed for the duration of the call, so every constructor shape the
+/// operator understands (class objects, bound natives like `Array`/`Map`,
+/// INT32 class-refs, synthetic function class ids, …) resolves identically.
+fn ordinary_has_instance(constructor: f64, value: f64) -> bool {
+    let prev = SUPPRESS_INSTANCEOF_RHS_THROW.with(|c| c.replace(true));
+    let result = js_instanceof_dynamic(value, constructor);
+    SUPPRESS_INSTANCEOF_RHS_THROW.with(|c| c.set(prev));
+    result.to_bits() == crate::value::TAG_TRUE
+}
+
+thread_local! {
+    /// When set, `js_instanceof_dynamic` returns `false` instead of throwing on
+    /// an unresolved / non-callable right-hand side. Used by
+    /// `OrdinaryHasInstance` (#3662), whose spec returns `false` there rather
+    /// than the `TypeError` the `instanceof` operator raises.
+    static SUPPRESS_INSTANCEOF_RHS_THROW: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 }
 
 /// Whether `value` is a (non-callable) object for the purposes of the
