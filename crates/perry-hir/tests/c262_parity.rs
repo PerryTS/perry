@@ -3,10 +3,18 @@ use perry_hir::{lower_module, ArrayElement, BinaryOp, Expr, Stmt};
 use perry_parser::parse_typescript_with_cache;
 
 fn lower_src(src: &str) -> perry_hir::Module {
+    lower_src_with_filename(src, "c262_parity.ts")
+}
+
+fn lower_js_src(src: &str) -> perry_hir::Module {
+    lower_src_with_filename(src, "c262_parity.js")
+}
+
+fn lower_src_with_filename(src: &str, filename: &str) -> perry_hir::Module {
     let mut cache = SourceCache::new();
-    let parsed = parse_typescript_with_cache(src, "c262_parity.ts", &mut cache)
-        .expect("parse should succeed");
-    lower_module(&parsed.module, "test", "c262_parity.ts").expect("lower should succeed")
+    let parsed =
+        parse_typescript_with_cache(src, filename, &mut cache).expect("parse should succeed");
+    lower_module(&parsed.module, "test", filename).expect("lower should succeed")
 }
 
 fn top_level_init<'a>(module: &'a perry_hir::Module, name: &str) -> &'a Expr {
@@ -92,4 +100,20 @@ fn sloppy_assignment_expression_creates_storage_before_following_getvalue() {
         "{left:?}"
     );
     assert!(matches!(right.as_ref(), Expr::LocalGet(id) if *id == y_id));
+}
+
+#[test]
+fn sloppy_js_yield_identifier_arrow_parameters_lower() {
+    let module = lower_js_src(
+        r#"
+        var yield = 23;
+        var f = (x = yield) => x;
+        var g = yield => yield;
+        var h = (yield) => yield;
+        "#,
+    );
+
+    assert!(matches!(top_level_init(&module, "f"), Expr::Closure { .. }));
+    assert!(matches!(top_level_init(&module, "g"), Expr::Closure { .. }));
+    assert!(matches!(top_level_init(&module, "h"), Expr::Closure { .. }));
 }
