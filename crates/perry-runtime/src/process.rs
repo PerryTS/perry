@@ -246,9 +246,8 @@ fn supported_builtin_module_name(name: &str) -> Option<&str> {
         | "http" | "http2" | "https" | "net" | "os" | "path" | "perf_hooks" | "process"
         | "punycode" | "querystring" | "readline" | "readline/promises" | "stream"
         | "stream/promises" | "string_decoder" | "sys" | "test" | "test/reporters" | "timers"
-        | "timers/promises" | "tty" | "url" | "util" | "util/types" | "worker_threads" | "zlib" => {
-            Some(name)
-        }
+        | "timers/promises" | "tty" | "url" | "util" | "util/types" | "vm" | "worker_threads"
+        | "zlib" => Some(name),
         _ => None,
     }
 }
@@ -346,12 +345,852 @@ extern "C" fn module_source_map_noop(_closure: *const crate::closure::ClosureHea
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+type ModuleFunction1 = extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64;
+type ModuleFunction2 = extern "C" fn(*const crate::closure::ClosureHeader, f64, f64) -> f64;
+
 fn module_noop_function(name: &str) -> f64 {
     let func_ptr = module_source_map_noop as *const u8;
     crate::closure::js_register_closure_arity(func_ptr, 0);
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::value::js_nanbox_pointer(closure as i64)
+}
+
+fn module_function1(name: &str, thunk: ModuleFunction1, length: u32) -> f64 {
+    let func_ptr = thunk as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 1);
+    crate::closure::js_register_closure_length(func_ptr, length);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    crate::object::set_bound_native_closure_name(closure, name);
+    crate::object::set_builtin_closure_length(closure as usize, length);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+fn module_function2(name: &str, thunk: ModuleFunction2, length: u32) -> f64 {
+    let func_ptr = thunk as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 2);
+    crate::closure::js_register_closure_length(func_ptr, length);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    crate::object::set_bound_native_closure_name(closure, name);
+    crate::object::set_builtin_closure_length(closure as usize, length);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+fn module_array_value(items: &[&str]) -> f64 {
+    let arr = crate::array::js_array_alloc_with_length(items.len() as u32);
+    for (i, item) in items.iter().enumerate() {
+        crate::array::js_array_set_f64(arr, i as u32, module_string_value(item));
+    }
+    f64::from_bits(JSValue::array_ptr(arr).bits())
+}
+
+fn module_set_value(items: &[&str]) -> f64 {
+    let mut set = crate::set::js_set_alloc(items.len() as u32);
+    for item in items {
+        set = crate::set::js_set_add(set, module_string_value(item));
+    }
+    crate::value::js_nanbox_pointer(set as i64)
+}
+
+fn process_argv0_string() -> String {
+    std::env::args().next().unwrap_or_default()
+}
+
+fn node_arch_name() -> &'static str {
+    match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        "arm" => "arm",
+        "x86" | "i386" | "i686" => "ia32",
+        "powerpc64" => "ppc64",
+        "riscv64" => "riscv64",
+        "s390x" => "s390x",
+        _ => std::env::consts::ARCH,
+    }
+}
+
+fn process_release_value() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 3);
+    module_set_field(obj, "name", module_string_value("node"));
+    module_set_field(obj, "sourceUrl", module_string_value(""));
+    module_set_field(obj, "headersUrl", module_string_value(""));
+    module_object_value(obj)
+}
+
+fn process_features_value() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 13);
+    module_set_field(obj, "inspector", bool_value(false));
+    module_set_field(obj, "debug", bool_value(false));
+    module_set_field(obj, "uv", bool_value(true));
+    module_set_field(obj, "ipv6", bool_value(true));
+    module_set_field(obj, "tls_alpn", bool_value(true));
+    module_set_field(obj, "tls_sni", bool_value(true));
+    module_set_field(obj, "tls_ocsp", bool_value(true));
+    module_set_field(obj, "tls", bool_value(true));
+    module_set_field(obj, "openssl_is_boringssl", bool_value(false));
+    module_set_field(obj, "cached_builtins", bool_value(false));
+    module_set_field(obj, "require_module", bool_value(false));
+    module_set_field(obj, "quic", bool_value(false));
+    module_set_field(obj, "typescript", module_string_value("transform"));
+    module_object_value(obj)
+}
+
+fn process_finalization_value() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 3);
+    module_set_field(obj, "register", module_noop_function("register"));
+    module_set_field(
+        obj,
+        "registerBeforeExit",
+        module_noop_function("registerBeforeExit"),
+    );
+    module_set_field(obj, "unregister", module_noop_function("unregister"));
+    module_object_value(obj)
+}
+
+extern "C" fn process_report_function_get_report(
+    _closure: *const crate::closure::ClosureHeader,
+    err: f64,
+) -> f64 {
+    validate_report_error_arg(err);
+    process_report_object("GetReport", None)
+}
+
+extern "C" fn process_report_function_write_report(
+    _closure: *const crate::closure::ClosureHeader,
+    file: f64,
+    err: f64,
+) -> f64 {
+    let mut file_arg = file;
+    let mut err_arg = err;
+    let file_value = JSValue::from_bits(file_arg.to_bits());
+
+    if !file_value.is_undefined() && !file_value.is_any_string() {
+        if module_object_ptr(file_arg).is_some() {
+            err_arg = file_arg;
+            file_arg = undefined_value();
+        } else {
+            throw_report_invalid_arg_type("file", "string", file_arg);
+        }
+    }
+
+    validate_report_error_arg(err_arg);
+
+    let filename = module_value_to_string(file_arg)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(process_report_default_filename);
+    let report_json = process_report_json_string("API", Some(&filename));
+    if let Err(err) = std::fs::write(&filename, report_json) {
+        crate::fs::validate::throw_type_error_with_code(
+            &format!("Failed to write diagnostic report to {filename}: {err}"),
+            "ERR_REPORT_WRITE_FAILED",
+        );
+    }
+
+    eprintln!("\nWriting Node.js report to file: {filename}");
+    eprintln!("Node.js report completed");
+    module_string_value(&filename)
+}
+
+fn validate_report_error_arg(value: f64) {
+    let js = JSValue::from_bits(value.to_bits());
+    if js.is_undefined() {
+        return;
+    }
+    if module_object_ptr(value).is_none() {
+        throw_report_invalid_arg_type("err", "object", value);
+    }
+}
+
+fn throw_report_invalid_arg_type(name: &str, expected: &str, value: f64) -> ! {
+    let message = format!(
+        "The \"{}\" argument must be of type {}. Received {}",
+        name,
+        expected,
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn process_report_default_filename() -> String {
+    format!("report.{}.json", std::process::id())
+}
+
+fn process_report_value() -> f64 {
+    use std::cell::Cell;
+    thread_local! {
+        static CACHED_REPORT: Cell<f64> = const { Cell::new(0.0) };
+    }
+
+    let cached = CACHED_REPORT.with(|c| c.get());
+    if cached != 0.0 {
+        return cached;
+    }
+
+    let obj = process_report_controller_object();
+    CACHED_REPORT.with(|c| c.set(obj));
+    obj
+}
+
+fn process_report_controller_object() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 11);
+    module_set_field(obj, "compact", bool_value(false));
+    module_set_field(obj, "directory", module_string_value(""));
+    module_set_field(obj, "excludeEnv", bool_value(false));
+    module_set_field(obj, "excludeNetwork", bool_value(false));
+    module_set_field(obj, "filename", module_string_value(""));
+    module_set_field(
+        obj,
+        "getReport",
+        module_function1("getReport", process_report_function_get_report, 1),
+    );
+    module_set_field(obj, "reportOnFatalError", bool_value(false));
+    module_set_field(obj, "reportOnSignal", bool_value(false));
+    module_set_field(obj, "reportOnUncaughtException", bool_value(false));
+    module_set_field(obj, "signal", module_string_value("SIGUSR2"));
+    module_set_field(
+        obj,
+        "writeReport",
+        module_function2("writeReport", process_report_function_write_report, 2),
+    );
+    module_object_value(obj)
+}
+
+fn process_report_object(trigger: &str, filename: Option<&str>) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 11);
+    module_set_field(
+        obj,
+        "header",
+        process_report_header_object(trigger, filename),
+    );
+    module_set_field(
+        obj,
+        "javascriptStack",
+        process_report_javascript_stack_object(),
+    );
+    module_set_field(
+        obj,
+        "javascriptHeap",
+        process_report_javascript_heap_object(),
+    );
+    module_set_field(obj, "nativeStack", module_array_value(&[]));
+    module_set_field(obj, "resourceUsage", process_report_resource_usage_object());
+    module_set_field(
+        obj,
+        "uvthreadResourceUsage",
+        process_report_thread_resource_usage_object(),
+    );
+    module_set_field(obj, "libuv", module_array_value(&[]));
+    module_set_field(obj, "workers", module_array_value(&[]));
+    module_set_field(
+        obj,
+        "environmentVariables",
+        module_object_value(crate::object::js_object_alloc(0, 0)),
+    );
+    module_set_field(obj, "userLimits", process_report_user_limits_object());
+    module_set_field(obj, "sharedObjects", module_array_value(&[]));
+    module_object_value(obj)
+}
+
+fn process_report_header_object(trigger: &str, filename: Option<&str>) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 22);
+    let now_ms = process_report_unix_time_ms();
+    module_set_field(obj, "reportVersion", 5.0);
+    module_set_field(obj, "event", module_string_value("JavaScript API"));
+    module_set_field(obj, "trigger", module_string_value(trigger));
+    module_set_field(obj, "filename", module_string_value(filename.unwrap_or("")));
+    module_set_field(
+        obj,
+        "dumpEventTime",
+        module_string_value(&format!("{:.0}", now_ms / 1000.0)),
+    );
+    module_set_field(obj, "dumpEventTimeStamp", now_ms);
+    module_set_field(obj, "processId", std::process::id() as f64);
+    module_set_field(obj, "threadId", 0.0);
+    module_set_field(
+        obj,
+        "cwd",
+        module_string_value(&std::env::current_dir().map_or_else(
+            |_| String::new(),
+            |path| path.to_string_lossy().into_owned(),
+        )),
+    );
+    module_set_field(obj, "commandLine", process_report_command_line_array());
+    module_set_field(obj, "nodejsVersion", module_string_value("v22.0.0"));
+    module_set_field(obj, "wordSize", (std::mem::size_of::<usize>() * 8) as f64);
+    module_set_field(obj, "arch", module_string_value(node_arch_name()));
+    module_set_field(obj, "platform", module_string_value(node_platform_name()));
+    module_set_field(
+        obj,
+        "componentVersions",
+        process_report_component_versions(),
+    );
+    module_set_field(obj, "release", process_release_value());
+    module_set_field(obj, "osName", module_string_value(std::env::consts::OS));
+    module_set_field(obj, "osRelease", module_string_value(""));
+    module_set_field(obj, "osVersion", module_string_value(""));
+    module_set_field(
+        obj,
+        "osMachine",
+        module_string_value(std::env::consts::ARCH),
+    );
+    module_set_field(obj, "host", module_string_value(""));
+    module_object_value(obj)
+}
+
+fn process_report_javascript_stack_object() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 3);
+    module_set_field(obj, "message", module_string_value(""));
+    module_set_field(obj, "stack", module_array_value(&[]));
+    module_set_field(
+        obj,
+        "errorProperties",
+        module_object_value(crate::object::js_object_alloc(0, 0)),
+    );
+    module_object_value(obj)
+}
+
+fn process_report_javascript_heap_object() -> f64 {
+    let mut heap_used: u64 = 0;
+    let mut heap_total: u64 = 0;
+    crate::arena::js_arena_stats(&mut heap_used, &mut heap_total);
+
+    let obj = crate::object::js_object_alloc(0, 8);
+    module_set_field(obj, "totalMemory", heap_total as f64);
+    module_set_field(obj, "executableMemory", 0.0);
+    module_set_field(obj, "totalCommittedMemory", heap_total as f64);
+    module_set_field(obj, "availableMemory", js_process_available_memory());
+    module_set_field(obj, "totalGlobalHandlesMemory", 0.0);
+    module_set_field(obj, "usedGlobalHandlesMemory", 0.0);
+    module_set_field(obj, "usedMemory", heap_used as f64);
+    module_set_field(
+        obj,
+        "heapSpaces",
+        module_object_value(crate::object::js_object_alloc(0, 0)),
+    );
+    module_object_value(obj)
+}
+
+fn process_report_resource_usage_object() -> f64 {
+    let (user, system) = read_process_cpu_micros();
+    let obj = crate::object::js_object_alloc(0, 6);
+    module_set_field(obj, "userCpuSeconds", user / 1_000_000.0);
+    module_set_field(obj, "kernelCpuSeconds", system / 1_000_000.0);
+    module_set_field(obj, "cpuConsumptionPercent", 0.0);
+    module_set_field(obj, "rss", get_rss_bytes() as f64);
+    module_set_field(obj, "maxRss", get_rss_bytes() as f64);
+    module_set_field(
+        obj,
+        "fsActivity",
+        module_object_value(crate::object::js_object_alloc(0, 0)),
+    );
+    module_object_value(obj)
+}
+
+fn process_report_thread_resource_usage_object() -> f64 {
+    let (user, system) = read_thread_cpu_micros();
+    let obj = crate::object::js_object_alloc(0, 3);
+    module_set_field(obj, "userCpuSeconds", user / 1_000_000.0);
+    module_set_field(obj, "kernelCpuSeconds", system / 1_000_000.0);
+    module_set_field(obj, "cpuConsumptionPercent", 0.0);
+    module_object_value(obj)
+}
+
+fn process_report_user_limits_object() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 3);
+    module_set_field(
+        obj,
+        "core_file_size_blocks",
+        module_string_value("unlimited"),
+    );
+    module_set_field(obj, "data_size_kbytes", module_string_value("unlimited"));
+    module_set_field(obj, "file_size_blocks", module_string_value("unlimited"));
+    module_object_value(obj)
+}
+
+fn process_report_command_line_array() -> f64 {
+    let args: Vec<String> = std::env::args().collect();
+    let items = if args.is_empty() {
+        vec![process_argv0_string()]
+    } else {
+        args
+    };
+    let arr = crate::array::js_array_alloc_with_length(items.len() as u32);
+    for (i, item) in items.iter().enumerate() {
+        crate::array::js_array_set_f64(arr, i as u32, module_string_value(item));
+    }
+    f64::from_bits(JSValue::array_ptr(arr).bits())
+}
+
+fn process_report_component_versions() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 4);
+    module_set_field(obj, "node", module_string_value("22.0.0"));
+    module_set_field(obj, "v8", module_string_value("12.4.254.21"));
+    module_set_field(obj, "uv", module_string_value("1.51.0"));
+    module_set_field(obj, "perry", module_string_value("0.4.71"));
+    module_object_value(obj)
+}
+
+fn process_report_unix_time_ms() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as f64)
+        .unwrap_or(0.0)
+}
+
+fn node_platform_name() -> &'static str {
+    match std::env::consts::OS {
+        "macos" | "ios" => "darwin",
+        "windows" => "win32",
+        "linux" => "linux",
+        "freebsd" => "freebsd",
+        other => other,
+    }
+}
+
+fn process_report_json_string(trigger: &str, filename: Option<&str>) -> String {
+    let args: Vec<String> = std::env::args().collect();
+    let command_line = if args.is_empty() {
+        vec![process_argv0_string()]
+    } else {
+        args
+    };
+    let now_ms = process_report_unix_time_ms();
+    let mut heap_used: u64 = 0;
+    let mut heap_total: u64 = 0;
+    crate::arena::js_arena_stats(&mut heap_used, &mut heap_total);
+    let (proc_user, proc_system) = read_process_cpu_micros();
+    let (thread_user, thread_system) = read_thread_cpu_micros();
+
+    let value = serde_json::json!({
+        "header": {
+            "reportVersion": 5,
+            "event": "JavaScript API",
+            "trigger": trigger,
+            "filename": filename.unwrap_or(""),
+            "dumpEventTime": format!("{:.0}", now_ms / 1000.0),
+            "dumpEventTimeStamp": now_ms,
+            "processId": std::process::id(),
+            "threadId": 0,
+            "cwd": std::env::current_dir().map_or_else(
+                |_| String::new(),
+                |path| path.to_string_lossy().into_owned(),
+            ),
+            "commandLine": command_line,
+            "nodejsVersion": "v22.0.0",
+            "wordSize": std::mem::size_of::<usize>() * 8,
+            "arch": node_arch_name(),
+            "platform": node_platform_name(),
+            "componentVersions": {
+                "node": "22.0.0",
+                "v8": "12.4.254.21",
+                "uv": "1.51.0",
+                "perry": "0.4.71"
+            },
+            "release": {
+                "name": "node",
+                "sourceUrl": "",
+                "headersUrl": ""
+            },
+            "osName": std::env::consts::OS,
+            "osRelease": "",
+            "osVersion": "",
+            "osMachine": std::env::consts::ARCH,
+            "host": ""
+        },
+        "javascriptStack": {
+            "message": "",
+            "stack": [],
+            "errorProperties": {}
+        },
+        "javascriptHeap": {
+            "totalMemory": heap_total,
+            "executableMemory": 0,
+            "totalCommittedMemory": heap_total,
+            "availableMemory": js_process_available_memory(),
+            "totalGlobalHandlesMemory": 0,
+            "usedGlobalHandlesMemory": 0,
+            "usedMemory": heap_used,
+            "heapSpaces": {}
+        },
+        "nativeStack": [],
+        "resourceUsage": {
+            "userCpuSeconds": proc_user / 1_000_000.0,
+            "kernelCpuSeconds": proc_system / 1_000_000.0,
+            "cpuConsumptionPercent": 0,
+            "rss": get_rss_bytes(),
+            "maxRss": get_rss_bytes(),
+            "fsActivity": {}
+        },
+        "uvthreadResourceUsage": {
+            "userCpuSeconds": thread_user / 1_000_000.0,
+            "kernelCpuSeconds": thread_system / 1_000_000.0,
+            "cpuConsumptionPercent": 0
+        },
+        "libuv": [],
+        "workers": [],
+        "environmentVariables": {},
+        "userLimits": {
+            "core_file_size_blocks": "unlimited",
+            "data_size_kbytes": "unlimited",
+            "file_size_blocks": "unlimited"
+        },
+        "sharedObjects": []
+    });
+
+    serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string())
+}
+
+fn process_config_value() -> f64 {
+    let config = crate::object::js_object_alloc(0, 2);
+    let variables = crate::object::js_object_alloc(0, 10);
+    let target_defaults = crate::object::js_object_alloc(0, 7);
+    let configurations = crate::object::js_object_alloc(0, 1);
+
+    module_set_field(
+        variables,
+        "target_arch",
+        module_string_value(node_arch_name()),
+    );
+    module_set_field(
+        variables,
+        "host_arch",
+        module_string_value(node_arch_name()),
+    );
+    module_set_field(variables, "node_module_version", 141.0);
+    module_set_field(variables, "node_shared_openssl", bool_value(false));
+    module_set_field(variables, "node_use_openssl", bool_value(true));
+    module_set_field(variables, "node_use_node_code_cache", bool_value(false));
+    module_set_field(variables, "node_use_node_snapshot", bool_value(false));
+    module_set_field(variables, "v8_enable_i18n_support", 1.0);
+    module_set_field(variables, "v8_enable_pointer_compression", 0.0);
+    module_set_field(variables, "uv_parent_path", module_string_value(""));
+
+    module_set_field(target_defaults, "cflags", module_array_value(&[]));
+    module_set_field(target_defaults, "conditions", module_array_value(&[]));
+    module_set_field(target_defaults, "defines", module_array_value(&[]));
+    module_set_field(target_defaults, "include_dirs", module_array_value(&[]));
+    module_set_field(target_defaults, "libraries", module_array_value(&[]));
+    module_set_field(
+        target_defaults,
+        "default_configuration",
+        module_string_value("Release"),
+    );
+    module_set_field(
+        configurations,
+        "Release",
+        module_object_value(crate::object::js_object_alloc(0, 0)),
+    );
+    module_set_field(
+        target_defaults,
+        "configurations",
+        module_object_value(configurations),
+    );
+
+    module_set_field(config, "variables", module_object_value(variables));
+    module_set_field(
+        config,
+        "target_defaults",
+        module_object_value(target_defaults),
+    );
+    module_object_value(config)
+}
+
+fn process_allowed_flags_value() -> f64 {
+    const FLAGS: &[&str] = &[
+        "--abort-on-uncaught-exception",
+        "--addons",
+        "--allow-addons",
+        "--allow-child-process",
+        "--allow-fs-read",
+        "--allow-fs-write",
+        "--allow-inspector",
+        "--allow-net",
+        "--allow-wasi",
+        "--allow-worker",
+        "--async-context-frame",
+        "--conditions",
+        "--cpu-prof",
+        "--cpu-prof-dir",
+        "--cpu-prof-interval",
+        "--cpu-prof-name",
+        "--debug-arraybuffer-allocations",
+        "--debug-port",
+        "--deprecation",
+        "--diagnostic-dir",
+        "--disable-proto",
+        "--disable-sigusr1",
+        "--disable-warning",
+        "--disable-wasm-trap-handler",
+        "--disallow-code-generation-from-strings",
+        "--dns-result-order",
+        "--enable-etw-stack-walking",
+        "--enable-fips",
+        "--enable-network-family-autoselection",
+        "--enable-source-maps",
+        "--entry-url",
+        "--es-module-specifier-resolution",
+        "--experimental-abortcontroller",
+        "--experimental-addon-modules",
+        "--experimental-detect-module",
+        "--experimental-eventsource",
+        "--experimental-fetch",
+        "--experimental-global-customevent",
+        "--experimental-global-navigator",
+        "--experimental-global-webcrypto",
+        "--experimental-import-meta-resolve",
+        "--experimental-json-modules",
+        "--experimental-loader",
+        "--experimental-modules",
+        "--experimental-print-required-tla",
+        "--experimental-quic",
+        "--experimental-repl-await",
+        "--experimental-report",
+        "--experimental-require-module",
+        "--experimental-shadow-realm",
+        "--experimental-specifier-resolution",
+        "--experimental-sqlite",
+        "--experimental-strip-types",
+        "--experimental-test-isolation",
+        "--experimental-top-level-await",
+        "--experimental-transform-types",
+        "--experimental-vm-modules",
+        "--experimental-wasi-unstable-preview1",
+        "--experimental-wasm-modules",
+        "--experimental-websocket",
+        "--experimental-webstorage",
+        "--experimental-worker",
+        "--expose-gc",
+        "--extra-info-on-fatal-exception",
+        "--force-async-hooks-checks",
+        "--force-context-aware",
+        "--force-fips",
+        "--force-node-api-uncaught-exceptions-policy",
+        "--frozen-intrinsics",
+        "--global-search-paths",
+        "--heap-prof",
+        "--heap-prof-dir",
+        "--heap-prof-interval",
+        "--heap-prof-name",
+        "--heapsnapshot-near-heap-limit",
+        "--heapsnapshot-signal",
+        "--http-parser",
+        "--icu-data-dir",
+        "--import",
+        "--input-type",
+        "--insecure-http-parser",
+        "--inspect",
+        "--inspect-brk",
+        "--inspect-port",
+        "--inspect-publish-uid",
+        "--inspect-wait",
+        "--interpreted-frames-native-stack",
+        "--jitless",
+        "--loader",
+        "--localstorage-file",
+        "--max-http-header-size",
+        "--max-old-space-size",
+        "--max-old-space-size-percentage",
+        "--max-semi-space-size",
+        "--napi-modules",
+        "--network-family-autoselection",
+        "--network-family-autoselection-attempt-timeout",
+        "--no-addons",
+        "--no-allow-addons",
+        "--no-allow-child-process",
+        "--no-allow-inspector",
+        "--no-allow-net",
+        "--no-allow-wasi",
+        "--no-allow-worker",
+        "--no-async-context-frame",
+        "--no-cpu-prof",
+        "--no-debug-arraybuffer-allocations",
+        "--no-deprecation",
+        "--no-disable-sigusr1",
+        "--no-disable-wasm-trap-handler",
+        "--no-enable-fips",
+        "--no-enable-source-maps",
+        "--no-entry-url",
+        "--no-experimental-addon-modules",
+        "--no-experimental-detect-module",
+        "--no-experimental-eventsource",
+        "--no-experimental-global-navigator",
+        "--no-experimental-import-meta-resolve",
+        "--no-experimental-print-required-tla",
+        "--no-experimental-repl-await",
+        "--no-experimental-require-module",
+        "--no-experimental-shadow-realm",
+        "--no-experimental-sqlite",
+        "--no-experimental-transform-types",
+        "--no-experimental-vm-modules",
+        "--no-experimental-websocket",
+        "--no-experimental-webstorage",
+        "--no-extra-info-on-fatal-exception",
+        "--no-force-async-hooks-checks",
+        "--no-force-context-aware",
+        "--no-force-fips",
+        "--no-force-node-api-uncaught-exceptions-policy",
+        "--no-frozen-intrinsics",
+        "--no-global-search-paths",
+        "--no-heap-prof",
+        "--no-insecure-http-parser",
+        "--no-inspect",
+        "--no-inspect-brk",
+        "--no-inspect-wait",
+        "--no-network-family-autoselection",
+        "--no-node-snapshot",
+        "--no-openssl-legacy-provider",
+        "--no-openssl-shared-config",
+        "--no-pending-deprecation",
+        "--no-permission",
+        "--no-permission-audit",
+        "--no-preserve-symlinks",
+        "--no-preserve-symlinks-main",
+        "--no-report-compact",
+        "--no-report-exclude-env",
+        "--no-report-exclude-network",
+        "--no-report-on-fatalerror",
+        "--no-report-on-signal",
+        "--no-report-uncaught-exception",
+        "--no-require-module",
+        "--no-strip-types",
+        "--no-test-only",
+        "--no-throw-deprecation",
+        "--no-tls-max-v1.2",
+        "--no-tls-max-v1.3",
+        "--no-tls-min-v1.0",
+        "--no-tls-min-v1.1",
+        "--no-tls-min-v1.2",
+        "--no-tls-min-v1.3",
+        "--no-trace-deprecation",
+        "--no-trace-env",
+        "--no-trace-env-js-stack",
+        "--no-trace-env-native-stack",
+        "--no-trace-exit",
+        "--no-trace-promises",
+        "--no-trace-sigint",
+        "--no-trace-sync-io",
+        "--no-trace-tls",
+        "--no-trace-uncaught",
+        "--no-trace-warnings",
+        "--no-track-heap-objects",
+        "--no-use-bundled-ca",
+        "--no-use-env-proxy",
+        "--no-use-openssl-ca",
+        "--no-use-system-ca",
+        "--no-verify-base-objects",
+        "--no-warnings",
+        "--no-watch",
+        "--no-watch-preserve-output",
+        "--no-zero-fill-buffers",
+        "--node-memory-debug",
+        "--node-snapshot",
+        "--openssl-config",
+        "--openssl-legacy-provider",
+        "--openssl-shared-config",
+        "--pending-deprecation",
+        "--perf-basic-prof",
+        "--perf-basic-prof-only-functions",
+        "--perf-prof",
+        "--perf-prof-unwinding-info",
+        "--permission",
+        "--permission-audit",
+        "--preserve-symlinks",
+        "--preserve-symlinks-main",
+        "--prof-process",
+        "--redirect-warnings",
+        "--report-compact",
+        "--report-dir",
+        "--report-directory",
+        "--report-exclude-env",
+        "--report-exclude-network",
+        "--report-filename",
+        "--report-on-fatalerror",
+        "--report-on-signal",
+        "--report-signal",
+        "--report-uncaught-exception",
+        "--require",
+        "--require-module",
+        "--secure-heap",
+        "--secure-heap-min",
+        "--snapshot-blob",
+        "--stack-trace-limit",
+        "--strip-types",
+        "--test-coverage-branches",
+        "--test-coverage-exclude",
+        "--test-coverage-functions",
+        "--test-coverage-include",
+        "--test-coverage-lines",
+        "--test-global-setup",
+        "--test-isolation",
+        "--test-name-pattern",
+        "--test-only",
+        "--test-reporter",
+        "--test-reporter-destination",
+        "--test-rerun-failures",
+        "--test-shard",
+        "--test-skip-pattern",
+        "--throw-deprecation",
+        "--title",
+        "--tls-cipher-list",
+        "--tls-keylog",
+        "--tls-max-v1.2",
+        "--tls-max-v1.3",
+        "--tls-min-v1.0",
+        "--tls-min-v1.1",
+        "--tls-min-v1.2",
+        "--tls-min-v1.3",
+        "--trace-deprecation",
+        "--trace-env",
+        "--trace-env-js-stack",
+        "--trace-env-native-stack",
+        "--trace-event-categories",
+        "--trace-event-file-pattern",
+        "--trace-events-enabled",
+        "--trace-exit",
+        "--trace-promises",
+        "--trace-require-module",
+        "--trace-sigint",
+        "--trace-sync-io",
+        "--trace-tls",
+        "--trace-uncaught",
+        "--trace-warnings",
+        "--track-heap-objects",
+        "--unhandled-rejections",
+        "--use-bundled-ca",
+        "--use-env-proxy",
+        "--use-largepages",
+        "--use-openssl-ca",
+        "--use-system-ca",
+        "--v8-pool-size",
+        "--verify-base-objects",
+        "--warnings",
+        "--watch",
+        "--watch-kill-signal",
+        "--watch-path",
+        "--watch-preserve-output",
+        "--webstorage",
+        "--zero-fill-buffers",
+        "-C",
+        "-r",
+    ];
+    module_set_value(FLAGS)
+}
+
+pub fn process_metadata_property(property: &str) -> Option<f64> {
+    Some(match property {
+        "allowedNodeEnvironmentFlags" => process_allowed_flags_value(),
+        "argv0" | "execPath" => module_string_value(&process_argv0_string()),
+        "config" => process_config_value(),
+        "debugPort" => 9229.0,
+        "execArgv" | "moduleLoadList" => module_array_value(&[]),
+        "features" => process_features_value(),
+        "finalization" => process_finalization_value(),
+        "release" => process_release_value(),
+        "report" => process_report_value(),
+        "sourceMapsEnabled" => js_process_source_maps_enabled(),
+        "title" => js_process_title(),
+        _ => return None,
+    })
 }
 
 /// `module.builtinModules` — Node exposes this as an Array of builtin module
@@ -385,16 +1224,309 @@ pub extern "C" fn js_module_constants() -> f64 {
     module_object_value(constants)
 }
 
-/// Stub constructor for `new module.SourceMap(payload)`. It preserves the
-/// payload object and exposes method-shaped placeholders, but does not
-/// implement source-map lookup semantics.
+/// Constructor for `new module.SourceMap(payload)`. Preserves the payload
+/// object and exposes working `findEntry`/`findOrigin` lookups. The bound
+/// method closures capture the payload (slot 0) so the lookup thunks can
+/// decode its `mappings`/`sources`/`names` without a separate `this` channel
+/// (mirrors the dgram socket-method pattern). #3675.
 #[no_mangle]
 pub extern "C" fn js_module_source_map_new(payload: f64) -> f64 {
     let obj = crate::object::js_object_alloc(0, 3);
     module_set_field(obj, "payload", payload);
-    module_set_field(obj, "findEntry", module_noop_function("findEntry"));
-    module_set_field(obj, "findOrigin", module_noop_function("findOrigin"));
+    module_set_field(
+        obj,
+        "findEntry",
+        source_map_method(payload, "findEntry", source_map_find_entry_thunk),
+    );
+    module_set_field(
+        obj,
+        "findOrigin",
+        source_map_method(payload, "findOrigin", source_map_find_origin_thunk),
+    );
     module_object_value(obj)
+}
+
+type SourceMapThunk = extern "C" fn(*const ClosureHeader, f64) -> f64;
+
+/// Build a bound SourceMap method closure that captures `payload` in slot 0
+/// and packs all call arguments into a single rest array.
+fn source_map_method(payload: f64, name: &str, thunk: SourceMapThunk) -> f64 {
+    let func_ptr = thunk as *const u8;
+    let closure = js_closure_alloc(func_ptr, 1);
+    js_closure_set_capture_f64(closure, 0, payload);
+    crate::closure::js_register_closure_rest(func_ptr, 0);
+    crate::object::set_bound_native_closure_name(closure, name);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+/// Decode a base64 VLQ alphabet byte to its 0–63 value.
+fn source_map_b64(c: u8) -> Option<i64> {
+    match c {
+        b'A'..=b'Z' => Some((c - b'A') as i64),
+        b'a'..=b'z' => Some((c - b'a' + 26) as i64),
+        b'0'..=b'9' => Some((c - b'0' + 52) as i64),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    }
+}
+
+/// Decode one comma-delimited segment's VLQ fields.
+fn source_map_decode_segment(seg: &[u8]) -> Vec<i64> {
+    let mut out = Vec::new();
+    let mut value: i64 = 0;
+    let mut shift: u32 = 0;
+    for &b in seg {
+        let Some(digit) = source_map_b64(b) else {
+            continue;
+        };
+        let cont = (digit & 0x20) != 0;
+        value += (digit & 0x1f) << shift;
+        if cont {
+            shift += 5;
+        } else {
+            let negative = (value & 1) != 0;
+            let decoded = value >> 1;
+            out.push(if negative { -decoded } else { decoded });
+            value = 0;
+            shift = 0;
+        }
+    }
+    out
+}
+
+#[derive(Clone, Copy)]
+struct SourceMapEntry {
+    generated_line: i64,
+    generated_column: i64,
+    // `None` for genCol-only (1-field) segments that mark an unmapped position.
+    // The inner name index is `Some` only for segments that carried an explicit
+    // 5th VLQ field (a named mapping).
+    original: Option<(i64, i64, i64, Option<i64>)>, // (source_index, line, column, name_index)
+}
+
+/// Decode the full `mappings` string into ordered entries with cumulative
+/// source/line/column/name indices per the Source Map v3 grammar. `name_index`
+/// is attached only to genuinely-named (5-field) segments, matching how a
+/// position with no explicit name resolves (Node returns no `name` for the
+/// names-less mapping in the issue repro).
+fn source_map_decode(mappings: &str) -> Vec<SourceMapEntry> {
+    let mut entries = Vec::new();
+    let (mut src_idx, mut src_line, mut src_col, mut name_idx) = (0i64, 0i64, 0i64, 0i64);
+    for (gen_line, line) in mappings.split(';').enumerate() {
+        let mut gen_col = 0i64;
+        for seg in line.split(',') {
+            if seg.is_empty() {
+                continue;
+            }
+            let fields = source_map_decode_segment(seg.as_bytes());
+            if fields.is_empty() {
+                continue;
+            }
+            gen_col += fields[0];
+            let original = if fields.len() >= 4 {
+                src_idx += fields[1];
+                src_line += fields[2];
+                src_col += fields[3];
+                let name = if fields.len() >= 5 {
+                    name_idx += fields[4];
+                    Some(name_idx)
+                } else {
+                    None
+                };
+                Some((src_idx, src_line, src_col, name))
+            } else {
+                None
+            };
+            entries.push(SourceMapEntry {
+                generated_line: gen_line as i64,
+                generated_column: gen_col,
+                original,
+            });
+        }
+    }
+    entries
+}
+
+/// Read `payload.<field>` as a raw JSValue f64 (undefined when absent or when
+/// the payload is not a heap object).
+fn source_map_field(payload: f64, field: &str) -> f64 {
+    let p = JSValue::from_bits(payload.to_bits());
+    if !p.is_pointer() {
+        return undefined_value();
+    }
+    let obj = crate::value::js_nanbox_get_pointer(payload) as *const crate::object::ObjectHeader;
+    if obj.is_null() {
+        return undefined_value();
+    }
+    let key = js_string_from_bytes(field.as_ptr(), field.len() as u32);
+    let v = crate::object::js_object_get_field_by_name(obj, key);
+    f64::from_bits(v.bits())
+}
+
+/// Read `payload.<field>` as a Rust string, if it is a string value.
+fn source_map_field_string(payload: f64, field: &str) -> Option<String> {
+    let value = JSValue::from_bits(source_map_field(payload, field).to_bits());
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let bytes = unsafe { crate::string::js_string_key_bytes(value, &mut sso) }?;
+    Some(String::from_utf8_lossy(bytes).into_owned())
+}
+
+/// Read `payload.<arrayField>[index]` as a raw JSValue f64 (undefined when out
+/// of range or not an array).
+fn source_map_array_element(payload: f64, field: &str, index: i64) -> f64 {
+    if index < 0 {
+        return undefined_value();
+    }
+    let arr_value = source_map_field(payload, field);
+    let av = JSValue::from_bits(arr_value.to_bits());
+    if !av.is_pointer() {
+        return undefined_value();
+    }
+    let arr = crate::value::js_nanbox_get_pointer(arr_value) as *const crate::array::ArrayHeader;
+    if arr.is_null() {
+        return undefined_value();
+    }
+    let len = crate::array::js_array_length(arr);
+    if index as u32 >= len {
+        return undefined_value();
+    }
+    crate::array::js_array_get_f64(arr, index as u32)
+}
+
+fn source_map_collect_args(rest: f64) -> Vec<f64> {
+    let rv = JSValue::from_bits(rest.to_bits());
+    if !rv.is_pointer() {
+        return Vec::new();
+    }
+    let arr = crate::value::js_nanbox_get_pointer(rest) as *const crate::array::ArrayHeader;
+    if arr.is_null() {
+        return Vec::new();
+    }
+    let len = crate::array::js_array_length(arr);
+    (0..len)
+        .map(|i| crate::array::js_array_get_f64(arr, i))
+        .collect()
+}
+
+/// Coerce call argument `idx` to a finite number, if it is one.
+fn source_map_arg_number(args: &[f64], idx: usize) -> Option<f64> {
+    args.get(idx)
+        .map(|v| JSValue::from_bits(v.to_bits()).to_number())
+        .filter(|n| n.is_finite())
+}
+
+fn source_map_arg_i64(args: &[f64], idx: usize) -> i64 {
+    source_map_arg_number(args, idx)
+        .map(|n| n as i64)
+        .unwrap_or(0)
+}
+
+/// Decode the payload's `mappings` and return the greatest entry whose
+/// generated position is `<=` (line, column). Entries are emitted in
+/// non-decreasing order, so the last non-exceeding one wins.
+fn source_map_lookup(payload: f64, line: i64, col: i64) -> Option<SourceMapEntry> {
+    let mappings = source_map_field_string(payload, "mappings")?;
+    let mut best = None;
+    for entry in source_map_decode(&mappings) {
+        if (entry.generated_line, entry.generated_column) <= (line, col) {
+            best = Some(entry);
+        } else {
+            break;
+        }
+    }
+    best
+}
+
+/// Build the `{ name?, fileName, lineNumber, columnNumber }` shape Node's
+/// `findOrigin` echoes (name/fileName from the matched entry; line/column from
+/// the call arguments). Insertion order matches Node for byte-identical JSON.
+fn source_map_origin_object(
+    payload: f64,
+    entry: Option<SourceMapEntry>,
+    line: Option<f64>,
+    col: Option<f64>,
+) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 4);
+    if let Some(SourceMapEntry {
+        original: Some((source_index, _, _, name_index)),
+        ..
+    }) = entry
+    {
+        if let Some(name_index) = name_index {
+            let name = source_map_array_element(payload, "names", name_index);
+            if JSValue::from_bits(name.to_bits()).is_string() {
+                module_set_field(obj, "name", name);
+            }
+        }
+        module_set_field(
+            obj,
+            "fileName",
+            source_map_array_element(payload, "sources", source_index),
+        );
+    }
+    let null = f64::from_bits(crate::value::TAG_NULL);
+    module_set_field(obj, "lineNumber", line.map_or(null, |n| n));
+    module_set_field(obj, "columnNumber", col.map_or(null, |n| n));
+    module_object_value(obj)
+}
+
+/// `SourceMap#findEntry(lineNumber, columnNumber)` — return the greatest
+/// decoded entry whose generated position is `<=` the query, shaped like
+/// Node's `{ generatedLine, generatedColumn, originalSource, originalLine,
+/// originalColumn, name? }`. Returns `{}` when no entry precedes the query.
+extern "C" fn source_map_find_entry_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    let payload = js_closure_get_capture_f64(closure, 0);
+    let args = source_map_collect_args(rest);
+    let query_line = source_map_arg_i64(&args, 0);
+    let query_col = source_map_arg_i64(&args, 1);
+
+    let Some(entry) = source_map_lookup(payload, query_line, query_col) else {
+        return module_object_value(crate::object::js_object_alloc(0, 0));
+    };
+
+    let obj = crate::object::js_object_alloc(0, 6);
+    module_set_field(obj, "generatedLine", entry.generated_line as f64);
+    module_set_field(obj, "generatedColumn", entry.generated_column as f64);
+    if let Some((source_index, original_line, original_column, name_index)) = entry.original {
+        module_set_field(
+            obj,
+            "originalSource",
+            source_map_array_element(payload, "sources", source_index),
+        );
+        module_set_field(obj, "originalLine", original_line as f64);
+        module_set_field(obj, "originalColumn", original_column as f64);
+        if let Some(name_index) = name_index {
+            let name = source_map_array_element(payload, "names", name_index);
+            if JSValue::from_bits(name.to_bits()).is_string() {
+                module_set_field(obj, "name", name);
+            }
+        }
+    }
+    module_object_value(obj)
+}
+
+/// `SourceMap#findOrigin(lineNumber, columnNumber)`. Node echoes the queried
+/// coordinates (as `lineNumber`/`columnNumber`, or `null` when an argument is
+/// not a finite number) and tags on the `name`/`fileName` of the entry at that
+/// generated position. The lone special case is a numeric `(0, 0)` query, for
+/// which Node returns an empty object.
+extern "C" fn source_map_find_origin_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    let payload = js_closure_get_capture_f64(closure, 0);
+    let args = source_map_collect_args(rest);
+    let line = source_map_arg_number(&args, 0);
+    let col = source_map_arg_number(&args, 1);
+
+    if line == Some(0.0) && col == Some(0.0) {
+        return module_object_value(crate::object::js_object_alloc(0, 0));
+    }
+
+    let entry = source_map_lookup(
+        payload,
+        line.map(|n| n as i64).unwrap_or(0),
+        col.map(|n| n as i64).unwrap_or(0),
+    );
+    source_map_origin_object(payload, entry, line, col)
 }
 
 /// Module.isBuiltin(id) -> boolean
@@ -1038,6 +2170,23 @@ fn warning_value_to_string(v: f64) -> String {
     }
 }
 
+/// Validate the optional `type` positional of `process.emitWarning` (#3662).
+///
+/// Node only type-checks `type` when it is supplied as a non-object value:
+/// `undefined`/`null`, a string, an object (the `{ type, code, detail }`
+/// overload), or a function (custom error ctor) are all accepted. A non-string
+/// *primitive* (number/boolean/bigint/symbol) throws
+/// `TypeError [ERR_INVALID_ARG_TYPE]` with the `"type"` argument message.
+fn validate_emit_warning_type(type_name: f64) {
+    let jv = JSValue::from_bits(type_name.to_bits());
+    if jv.is_undefined() || jv.is_null() || jv.is_any_string() || jv.is_pointer() {
+        return;
+    }
+    let received = crate::fs::validate::describe_received(type_name);
+    let message = format!("The \"type\" argument must be of type string. Received {received}");
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
 fn object_from_value(value: f64) -> Option<*mut crate::object::ObjectHeader> {
     let jv = JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
@@ -1163,6 +2312,23 @@ fn schedule_warning(warning: f64, label: &str, code: &str, msg: &str, detail: &s
 /// after the current synchronous frame.
 #[no_mangle]
 pub extern "C" fn js_process_emit_warning(warning: f64, type_name: f64, code: f64) {
+    // #3662 — Node validates the optional `type` (when supplied as a non-object
+    // positional) and then the `warning` argument before building the warning,
+    // throwing `TypeError [ERR_INVALID_ARG_TYPE]`. The object overload (where
+    // `type_name` carries `{ type, code, detail }`) is exempt, as is the
+    // function (custom ctor) form — both are valid Node usages.
+    validate_emit_warning_type(type_name);
+    let warning_jv = JSValue::from_bits(warning.to_bits());
+    let warning_is_valid = warning_jv.is_any_string()
+        || crate::error::js_error_is_error(warning).to_bits() == crate::value::TAG_TRUE;
+    if !warning_is_valid {
+        let received = crate::fs::validate::describe_received(warning);
+        let message = format!(
+            "The \"warning\" argument must be of type string or an instance of Error. Received {received}"
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+
     let msg = warning_value_to_string(warning);
 
     let (raw_type, raw_code, detail) = if let Some(options) = object_from_value(type_name) {

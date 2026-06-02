@@ -70,8 +70,35 @@ pub(super) fn try_native_module_methods(
         if let ast::Expr::Ident(obj_ident) = unwrap_ts_wrappers(member.obj.as_ref()) {
             let obj_name = obj_ident.sym.to_string();
 
-            // Check for process module methods
-            if obj_name == "process" {
+            if matches!(
+                ctx.lookup_native_module(&obj_name),
+                Some(("stream/web", Some("ReadableStream")))
+                    | Some(("node:stream/web", Some("ReadableStream")))
+            ) {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    if method_ident.sym.as_ref() == "from" {
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "readable_stream".to_string(),
+                            class_name: Some("ReadableStream".to_string()),
+                            object: None,
+                            method: "from".to_string(),
+                            args,
+                        }));
+                    }
+                }
+            }
+
+            // Check for process module methods. `import processModule from
+            // "node:process"` registers as the native `process` object, while
+            // `import * as processNamespace` registers as `process.namespace`;
+            // both must use the same strict method gate as the global object.
+            let is_process_ref = obj_name == "process"
+                || ctx.lookup_builtin_module_alias(&obj_name) == Some("process")
+                || matches!(
+                    ctx.lookup_native_module(&obj_name),
+                    Some(("process", _)) | Some(("process.namespace", _))
+                );
+            if is_process_ref {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
@@ -374,7 +401,23 @@ pub(super) fn try_native_module_methods(
                             };
                             return Ok(Ok(Expr::ProcessHrtime(prior)));
                         }
-                        _ => {} // Fall through to generic handling
+                        _ => {
+                            let allow_unimplemented =
+                                std::env::var_os("PERRY_ALLOW_UNIMPLEMENTED").is_some();
+                            if !allow_unimplemented {
+                                let hint = unimpl_hints::module_member_hint("process", method_name)
+                                    .map(|h| format!(" {h}"))
+                                    .unwrap_or_default();
+                                let msg = format!(
+                                    "`process.{}` is not implemented in Perry — see `perry --print-api-manifest` for the supported surface, \
+                                     or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463){}",
+                                    method_name, hint,
+                                );
+                                if !crate::try_defer_refusal(msg.clone(), member.span.lo.0) {
+                                    crate::lower_bail!(member.span, "{}", msg);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1238,8 +1281,15 @@ pub(super) fn try_native_module_methods(
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
                         "createServer" => {
-                            let options = args.first().cloned().map(Box::new);
-                            let connection_listener = args.get(1).cloned().map(Box::new);
+                            let (options, connection_listener) = match args.as_slice() {
+                                [Expr::Closure { .. }] => {
+                                    (None, args.first().cloned().map(Box::new))
+                                }
+                                _ => (
+                                    args.first().cloned().map(Box::new),
+                                    args.get(1).cloned().map(Box::new),
+                                ),
+                            };
                             return Ok(Ok(Expr::NetCreateServer {
                                 options,
                                 connection_listener,

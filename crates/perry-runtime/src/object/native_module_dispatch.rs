@@ -219,6 +219,11 @@ pub extern "C" fn js_http_setter_noop(_value: f64) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+#[no_mangle]
+pub extern "C" fn js_http_connection_listener_noop(_socket: f64) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 /// Dispatch a method call on a native module namespace object.
 /// Extracts the module name from the object and dispatches to the appropriate
 /// runtime function based on (module_name, method_name).
@@ -256,6 +261,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         "querystring.default" => ("querystring", false),
         "url.default" => ("url", false),
         "util.default" => ("util", false),
+        "vm.default" => ("vm", false),
         // #3987-adjacent: `process.getBuiltinModule("punycode")` returns the
         // CJS-default namespace (`punycode.default`); without this alias its
         // method calls dispatched as `("punycode.default", "decode")` — which
@@ -454,6 +460,29 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
     };
     match (module_name, method_name) {
+        ("async_hooks", "createHook") => {
+            ptr_to_f64(crate::async_hooks::js_async_hooks_create_hook(arg(0)) as *const u8)
+        }
+        ("async_hooks", "executionAsyncId") => {
+            crate::async_hooks::js_async_hooks_execution_async_id()
+        }
+        ("async_hooks", "triggerAsyncId") => crate::async_hooks::js_async_hooks_trigger_async_id(),
+        ("async_hooks", "executionAsyncResource") => {
+            crate::async_hooks::js_async_hooks_execution_async_resource()
+        }
+
+        ("inspector", "open") => {
+            crate::node_inspector::js_node_inspector_open(arg(0), arg(1), arg(2))
+        }
+        ("inspector", "close") => crate::node_inspector::js_node_inspector_close(),
+        ("inspector", "url") => crate::node_inspector::js_node_inspector_url(),
+        ("inspector", "waitForDebugger") => {
+            crate::node_inspector::js_node_inspector_wait_for_debugger()
+        }
+        ("inspector", "Session") => crate::node_inspector::js_node_inspector_session_new(),
+        ("inspector/promises", "Session") => {
+            crate::node_inspector::js_node_inspector_promises_session_new()
+        }
         // ── Buffer constructor static API ──
         // `class MyBuffer extends Buffer {}; MyBuffer.from(...)` reaches this
         // path through js_class_static_method_call's native-superclass
@@ -644,6 +673,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("http", "setMaxIdleHTTPParsers") | ("http", "setGlobalProxyFromEnv") => {
             js_http_setter_noop(arg(0))
         }
+        ("http", "_connectionListener") => js_http_connection_listener_noop(arg(0)),
         ("events", "init") => f64::from_bits(crate::value::TAG_UNDEFINED),
         ("events", "EventEmitterAsyncResource") => {
             let message =
@@ -709,7 +739,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
             let undefined = f64::from_bits(JSValue::undefined().bits());
             crypto_random_fill_sync_dispatch(arg(0), undefined, undefined)
         }
-
+        // node:vm (createContext via #4050; rest #4079/#4087)
+        ("vm", m) => crate::node_vm::dispatch_vm_method(m, arg(0), arg(1), arg(2)),
         // ── tty module ──
         ("tty", "isatty") => crate::tty::js_tty_isatty(arg(0)),
         ("tty", "ReadStream") => crate::tty::js_tty_read_stream_new(arg(0)),
@@ -1511,6 +1542,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("url", "domainToASCII") => crate::url::js_url_domain_to_ascii(arg(0)),
         ("url", "domainToUnicode") => crate::url::js_url_domain_to_unicode(arg(0)),
         ("url", "urlToHttpOptions") => crate::url::js_url_to_http_options(arg(0)),
+        ("url", "URLPattern") => crate::url::js_url_pattern_constructor_call(arg(0), arg(1)),
         ("url", "Url") => crate::url::js_url_legacy_url_new(),
         ("url", "format") => crate::url::js_url_format(arg(0), arg(1)),
         ("url", "parse") => crate::url::js_url_legacy_parse(arg(0), arg(1), arg(2)),
@@ -1839,6 +1871,11 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("v8.GCProfiler", "start") => f64::from_bits(JSValue::undefined().bits()),
         ("v8.GCProfiler", "stop") => crate::node_v8::js_v8_gc_profiler_report(),
 
+        // node:repl non-interactive server and constructor surface.
+        ("repl", "start") => crate::node_repl::js_repl_start(arg(0)),
+        ("repl", "REPLServer") => crate::node_repl::js_repl_repl_server_new(arg(0)),
+        ("repl", "Recoverable") => crate::node_repl::js_repl_recoverable_new(arg(0)),
+
         // #3680: `v8.Serializer` / `v8.DefaultSerializer` instance methods.
         // The registry id lives in field[1] of the namespace object; the
         // runtime re-derives it from the receiver value.
@@ -1889,18 +1926,29 @@ pub(crate) unsafe fn dispatch_native_module_method(
             _ => f64::from_bits(JSValue::undefined().bits()),
         },
 
-        // #3679: `v8.promiseHooks` namespace. Hook registrars return a stop
-        // function (Node returns a callable that removes the hook); we hand
-        // back a no-op callable so `const stop = onInit(fn); stop()` works.
+        // #3139: `v8.promiseHooks` namespace. Hook registrars install real
+        // Promise-lifecycle callbacks (fired from `promise/{then,microtasks,
+        // async_step}.rs`) and return a stop function that removes the hook.
         ("v8.promiseHooks", m) => match m {
-            "onInit" | "onBefore" | "onAfter" | "onSettled" | "createHook" => {
-                let c = crate::closure::js_closure_alloc_singleton(
-                    crate::node_v8::js_v8_noop_undefined as *const u8,
-                );
-                crate::value::js_nanbox_pointer(c as i64)
-            }
+            "onInit" => crate::v8::js_v8_promise_hooks_on_init(arg(0)),
+            "onBefore" => crate::v8::js_v8_promise_hooks_on_before(arg(0)),
+            "onAfter" => crate::v8::js_v8_promise_hooks_on_after(arg(0)),
+            "onSettled" => crate::v8::js_v8_promise_hooks_on_settled(arg(0)),
+            "createHook" => crate::v8::js_v8_promise_hooks_create_hook(arg(0)),
             _ => f64::from_bits(JSValue::undefined().bits()),
         },
+
+        ("tls", _) => {
+            let ptr =
+                crate::value::JS_NATIVE_TLS_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+            if ptr.is_null() {
+                f64::from_bits(JSValue::undefined().bits())
+            } else {
+                let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                    std::mem::transmute(ptr);
+                dispatch(method_name.as_ptr(), method_name.len(), args_ptr, args_len)
+            }
+        }
 
         // #2533: captured / aliased server factories
         // (`const createServer = options.createServer || createServerHTTP;

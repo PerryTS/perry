@@ -115,7 +115,7 @@ mod test;
 mod timers;
 mod trace_events;
 mod zlib;
-pub use zlib::js_zlib_resolve_level;
+pub use zlib::{js_zlib_resolve_level, js_zlib_validate_buffer_arg, js_zlib_validate_options};
 
 // #1671: hono/jsx/server + hono/jsx/streaming. Re-export the stream-creation
 // registration so perry-stdlib's `bundled-streams` init can wire it up.
@@ -133,6 +133,7 @@ use consumers::{
 // `perry_runtime::node_submodules::js_register_stream_consumer_callbacks`
 // call site keeps resolving after the consumers split.
 pub use consumers::js_register_stream_consumer_callbacks;
+pub(crate) use fs_promises::js_readline_promises_readline_new;
 use fs_promises::{
     thunk_fs_promises_access, thunk_fs_promises_appendFile, thunk_fs_promises_chmod,
     thunk_fs_promises_chown, thunk_fs_promises_constants, thunk_fs_promises_copyFile,
@@ -187,9 +188,20 @@ thunk!(
     "Web Streams constructors (node:stream/web) require the 'new' operator."
 );
 
+extern "C" fn thunk_vm_create_context(_closure: *const ClosureHeader, sandbox: f64) -> f64 {
+    crate::object::js_vm_create_context(sandbox)
+}
+
 // ----- submodule table -----
 
 const SUBMODULES: &[SubmoduleSpec] = &[
+    SubmoduleSpec {
+        key: "vm",
+        exports: &[ExportSpec {
+            name: "createContext",
+            thunk: ExportThunk::Fn1(thunk_vm_create_context),
+        }],
+    },
     SubmoduleSpec {
         // node:timers namespace object (`import * as timers`). Named imports
         // bypass this (compile.rs) to keep the global fast-path. (#1213)
@@ -392,7 +404,7 @@ const SUBMODULES: &[SubmoduleSpec] = &[
             },
             ExportSpec {
                 name: "Readline",
-                thunk: ExportThunk::Fn1(thunk_readline_Readline),
+                thunk: ExportThunk::Fn2(thunk_readline_Readline),
             },
         ],
     },

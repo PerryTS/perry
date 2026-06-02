@@ -19,7 +19,10 @@ use anyhow::Result;
 use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
-use crate::analysis::{closure_uses_this, collect_assigned_locals_stmt, collect_local_refs_stmt};
+use crate::analysis::{
+    closure_uses_new_target, closure_uses_this, collect_assigned_locals_stmt,
+    collect_local_refs_stmt,
+};
 use crate::ir::{Expr, Param, Stmt};
 use crate::lower_patterns::{
     generate_param_destructuring_stmts, get_param_default, get_pat_name, get_pat_type,
@@ -27,6 +30,28 @@ use crate::lower_patterns::{
 };
 
 use super::{lower_expr, LoweringContext};
+
+/// #4101: retain a function's original source text keyed by FuncId so
+/// `Function.prototype.toString` can reconstruct it. Slices the installed
+/// module source against `span`; when `is_async` is set but the slice doesn't
+/// already begin with `async` (SWC's `Function.span`/`ArrowExpr.span` start at
+/// the params/`function` keyword, excluding the leading `async`), the modifier
+/// is prepended so the result matches Node. A no-op when no module source is
+/// installed (unit tests / `check`).
+pub(crate) fn capture_function_source(
+    ctx: &mut LoweringContext,
+    func_id: perry_types::FuncId,
+    span: &swc_common::Span,
+    is_async: bool,
+) {
+    let Some(mut src) = crate::ir::current_module_source_slice(span.lo.0, span.hi.0) else {
+        return;
+    };
+    if is_async && !src.trim_start().starts_with("async") {
+        src = format!("async {src}");
+    }
+    ctx.closure_source_text.insert(func_id, src);
+}
 
 fn stmt_is_string_directive(stmt: &ast::Stmt) -> Option<&str> {
     let ast::Stmt::Expr(expr_stmt) = stmt else {
@@ -67,7 +92,17 @@ fn arrow_body_has_use_strict(body: &ast::BlockStmtOrExpr) -> bool {
 pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> Result<Expr> {
     // Lower arrow function to a closure
     let func_id = ctx.fresh_func();
+    // #4101: retain source text for `fn.toString()`.
+    capture_function_source(ctx, func_id, &arrow.span, arrow.is_async);
     let scope_mark = ctx.enter_scope();
+    let strict = ctx.current_strict_mode()
+        || match &*arrow.body {
+            ast::BlockStmtOrExpr::BlockStmt(block) => {
+                crate::lower_decl::body_has_use_strict(&block.stmts)
+            }
+            ast::BlockStmtOrExpr::Expr(_) => false,
+        };
+    ctx.enter_strict_mode(strict);
 
     // Enter a type-parameter scope for arrow generics — `<T extends string>
     // (self: T) => ...`. Without this scope the `T` reference in `self: T`
@@ -98,10 +133,10 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
     for param in &arrow.params {
         let param_name = get_pat_name(param)?;
-        let param_default = get_param_default(ctx, param)?;
         let is_rest = is_rest_param(param);
         let param_ty = get_pat_type(param, ctx);
         let param_id = ctx.define_local(param_name.clone(), param_ty.clone());
+        let param_default = get_param_default(ctx, param)?;
         params.push(Param {
             id: param_id,
             name: param_name,
@@ -109,6 +144,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
             default: param_default,
             decorators: Vec::new(),
             is_rest,
+            arguments_object: None,
         });
         // Track destructuring patterns to generate extraction statements
         if is_destructuring_pattern(param) {
@@ -303,6 +339,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         body = new_body;
     }
 
+    ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
 
     // Exit the type-parameter scope opened at the top of `lower_arrow`.
@@ -314,6 +351,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
 
     // Check if this arrow function uses `this` (needs to capture it from enclosing scope)
     let captures_this = closure_uses_this(&body);
+    let captures_new_target = closure_uses_new_target(&body);
 
     // Store enclosing class name for arrow functions that capture `this`
     let enclosing_class = if captures_this {
@@ -330,7 +368,9 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         captures,
         mutable_captures,
         captures_this,
+        captures_new_target,
         enclosing_class,
+        is_arrow: true,
         is_async: arrow.is_async,
         is_generator: false,
         is_strict,
@@ -342,6 +382,13 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
     // without `this` capture — function expressions have their own
     // `this` binding determined by how they're called).
     let func_id = ctx.fresh_func();
+    // #4101: retain source text for `fn.toString()`.
+    capture_function_source(
+        ctx,
+        func_id,
+        &fn_expr.function.span,
+        fn_expr.function.is_async,
+    );
     let scope_mark = ctx.enter_scope();
 
     // Track which locals exist before entering the closure scope
@@ -380,6 +427,7 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
             default: param_default,
             decorators: Vec::new(),
             is_rest,
+            arguments_object: None,
         });
         // Track destructuring patterns to generate extraction statements
         if is_destructuring_pattern(&param.pat) {
@@ -395,13 +443,16 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
         .params
         .iter()
         .any(|p| get_pat_name(&p.pat).ok().as_deref() == Some("arguments"));
-    let user_has_rest = fn_expr
+    let strict = fn_expr
         .function
-        .params
-        .iter()
-        .any(|p| is_rest_param(&p.pat));
+        .body
+        .as_ref()
+        .map(|b| ctx.current_strict_mode() || crate::lower_decl::body_has_use_strict(&b.stmts))
+        .unwrap_or(false);
+    ctx.enter_strict_mode(strict);
+    let simple_parameters =
+        crate::lower_decl::params_are_simple_arguments_list(&fn_expr.function.params);
     let needs_arguments_synth = !user_has_arguments_param
-        && !user_has_rest
         && fn_expr
             .function
             .body
@@ -409,7 +460,20 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
             .map(|b| crate::lower_decl::body_uses_arguments(&b.stmts))
             .unwrap_or(false);
     if needs_arguments_synth {
-        crate::lower_decl::append_synthetic_arguments_param(ctx, &mut params);
+        let mapped = !strict && simple_parameters;
+        let mapped_parameter_ids = if mapped {
+            crate::lower_decl::mapped_argument_parameter_ids(&params)
+        } else {
+            Vec::new()
+        };
+        crate::lower_decl::append_synthetic_arguments_param(
+            ctx,
+            &mut params,
+            strict,
+            simple_parameters,
+            !mapped,
+            mapped_parameter_ids,
+        );
     }
 
     let outer_strict = ctx.current_strict;
@@ -594,6 +658,7 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
         body = new_body;
     }
 
+    ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
 
     let (captures, mutable_captures) = compute_closure_captures(ctx, &body, &outer_locals, &params);
@@ -616,7 +681,9 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
         captures,
         mutable_captures,
         captures_this: false,
+        captures_new_target: false,
         enclosing_class: None,
+        is_arrow: false,
         is_async: fn_expr.function.is_async,
         is_generator: fn_expr.function.is_generator,
         is_strict,

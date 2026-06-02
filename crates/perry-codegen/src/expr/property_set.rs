@@ -50,6 +50,72 @@ use super::{
     TypedFeedbackKind,
 };
 
+fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &str) -> bool {
+    ctx.classes
+        .get(class_name)
+        .is_some_and(|class| !class.computed_members.is_empty())
+}
+
+fn lower_runtime_property_set_by_name(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    value: &Expr,
+) -> Result<String> {
+    let recv_box = lower_expr(ctx, object)?;
+    let val_double = lower_expr(ctx, value)?;
+    let key_idx = ctx.strings.intern(property);
+    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let blk = ctx.block();
+    let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+    let key_box = blk.load(DOUBLE, &key_handle_global);
+    let key_bits = blk.bitcast_double_to_i64(&key_box);
+    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+    blk.call_void(
+        "js_object_set_field_by_name",
+        &[(I64, &obj_bits), (I64, &key_raw), (DOUBLE, &val_double)],
+    );
+    Ok(val_double)
+}
+
+pub(crate) fn emit_nullish_write_guard(
+    ctx: &mut FnCtx<'_>,
+    obj_bits: &str,
+    property: &str,
+    label_prefix: &str,
+) {
+    let is_undef = ctx
+        .block()
+        .icmp_eq(I64, obj_bits, crate::nanbox::TAG_UNDEFINED_I64);
+    let is_null = ctx
+        .block()
+        .icmp_eq(I64, obj_bits, crate::nanbox::TAG_NULL_I64);
+    let is_nullish = ctx.block().or(I1, &is_undef, &is_null);
+    let throw_idx = ctx.new_block(&format!("{}.throw_nullish", label_prefix));
+    let ok_idx = ctx.new_block(&format!("{}.recv_ok", label_prefix));
+    let throw_label = ctx.block_label(throw_idx);
+    let ok_label = ctx.block_label(ok_idx);
+    ctx.block().cond_br(&is_nullish, &throw_label, &ok_label);
+
+    ctx.current_block = throw_idx;
+    let key_idx = ctx.strings.intern(property);
+    let prop_entry = ctx.strings.entry(key_idx);
+    let prop_bytes_global = format!("@{}", prop_entry.bytes_global);
+    let prop_len_str = prop_entry.byte_len.to_string();
+    let is_null_i32 = ctx.block().zext(I1, &is_null, I32);
+    ctx.block().call_void(
+        "js_throw_type_error_property_access",
+        &[
+            (I32, &is_null_i32),
+            (PTR, &prop_bytes_global),
+            (I64, &prop_len_str),
+        ],
+    );
+    ctx.block().unreachable();
+
+    ctx.current_block = ok_idx;
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::PropertySet {
@@ -190,6 +256,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // store. The setter takes (this, value) and returns
             // undefined; we forward `value` as the expression result.
             if let Some(class_name) = receiver_class_name(ctx, object) {
+                if class_has_computed_runtime_members(ctx, &class_name) {
+                    return lower_runtime_property_set_by_name(ctx, object, property, value);
+                }
                 let setter_key = (class_name.clone(), format!("__set_{}", property));
                 if let Some(fn_name) = ctx.methods.get(&setter_key).cloned() {
                     let recv_box = lower_expr(ctx, object)?;
@@ -395,6 +464,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let key_idx = ctx.strings.intern(property);
             let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
             let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+            emit_nullish_write_guard(ctx, &obj_bits, property, "pset");
             // Issue #618-followup: pass the FULL bits (including NaN-box
             // tag) so the runtime can detect INT32-tagged class refs
             // (`SQL.Aliased = Aliased` IIFE-static-property pattern from

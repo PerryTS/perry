@@ -24,6 +24,7 @@ pub fn rewrite_producer_body(
         default: None,
         decorators: Vec::new(),
         is_rest: false,
+        arguments_object: None,
     });
 
     // 2. Drop the trailing `return out`.

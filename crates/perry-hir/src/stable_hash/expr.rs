@@ -61,6 +61,7 @@ impl SH for Expr {
             Expr::Yield { value, delegate } => { tag(h, 41); value.hash(h); delegate.hash(h); }
             Expr::New { class_name, args, type_args, } => { tag(h, 42); class_name.hash(h); args.hash(h); type_args.hash(h); }
             Expr::NewDynamic { callee, args } => { tag(h, 43); callee.as_ref().hash(h); args.hash(h); }
+            Expr::NewTarget => { tag(h, 12301); }
             Expr::ClassRef(s) => { tag(h, 44); s.hash(h); }
             Expr::EnumMember { enum_name, member_name, } => { tag(h, 45); enum_name.hash(h); member_name.hash(h); }
             Expr::StaticFieldGet { class_name, field_name, } => { tag(h, 46); class_name.hash(h); field_name.hash(h); }
@@ -71,6 +72,8 @@ impl SH for Expr {
             Expr::SuperCall(args) => { tag(h, 51); args.hash(h); }
             Expr::SuperMethodCall { method, args } => { tag(h, 52); method.hash(h); args.hash(h); }
             Expr::SuperPropertyGet { property } => { tag(h, 461); property.hash(h); }
+            Expr::ObjectSuperPropertyGet { home, key, receiver } => { tag(h, 12231); home.as_ref().hash(h); key.as_ref().hash(h); receiver.as_ref().hash(h); }
+            Expr::ObjectSuperMethodCall { home, key, receiver, args } => { tag(h, 12232); home.as_ref().hash(h); key.as_ref().hash(h); receiver.as_ref().hash(h); args.hash(h); }
             Expr::EnvGet(s) => { tag(h, 53); s.hash(h); }
             Expr::EnvGetDynamic(e) => { tag(h, 54); e.as_ref().hash(h); }
             Expr::ProcessEnv => tag(h, 55),
@@ -462,6 +465,7 @@ impl SH for Expr {
             Expr::SyntaxErrorNew(e) => { tag(h, 352); e.as_ref().hash(h); }
             Expr::AggregateErrorNew { errors, message, options } => { tag(h, 353); errors.as_ref().hash(h); message.as_ref().hash(h); options.hash(h); }
             Expr::UrlNew { url, base } => { tag(h, 354); url.as_ref().hash(h); base.hash(h); }
+            Expr::UrlPatternNew { input, base } => { tag(h, 12061); input.as_ref().hash(h); base.hash(h); }
             Expr::UrlGetHref(e) => { tag(h, 355); e.as_ref().hash(h); }
             Expr::UrlGetPathname(e) => { tag(h, 356); e.as_ref().hash(h); }
             Expr::UrlGetProtocol(e) => { tag(h, 357); e.as_ref().hash(h); }
@@ -502,7 +506,8 @@ impl SH for Expr {
             Expr::UrlSearchParamsSort(e) => { tag(h, 703); e.as_ref().hash(h); }
             Expr::UrlSearchParamsForEach { params, callback, this_arg } => { tag(h, 704); params.as_ref().hash(h); callback.as_ref().hash(h); match this_arg { Some(v) => { tag(h, 1); v.as_ref().hash(h); } None => tag(h, 0), } }
             Expr::Delete(e) => { tag(h, 381); e.as_ref().hash(h); }
-            Expr::Closure { func_id, params, return_type, body, captures, mutable_captures, captures_this, enclosing_class, is_async, is_generator, is_strict, } => { tag(h, 382); func_id.hash(h); params.hash(h); return_type.hash(h); body.hash(h); captures.hash(h); mutable_captures.hash(h); captures_this.hash(h); enclosing_class.hash(h); is_async.hash(h); is_generator.hash(h); is_strict.hash(h); }
+            Expr::NewTarget => { tag(h, 12271); }
+            Expr::Closure { func_id, params, return_type, body, captures, mutable_captures, captures_this, captures_new_target, enclosing_class, is_arrow, is_async, is_generator, is_strict, } => { tag(h, 382); func_id.hash(h); params.hash(h); return_type.hash(h); body.hash(h); captures.hash(h); mutable_captures.hash(h); captures_this.hash(h); captures_new_target.hash(h); enclosing_class.hash(h); is_arrow.hash(h); is_async.hash(h); is_generator.hash(h); is_strict.hash(h); }
             Expr::RegExp { pattern, flags } => { tag(h, 383); pattern.hash(h); flags.hash(h); }
             Expr::RegExpDynamic { pattern, flags } => { tag(h, 475); pattern.as_ref().hash(h); if let Some(f_box) = flags { tag(h, 476); f_box.as_ref().hash(h); } else { tag(h, 477); } }
             Expr::RegExpTest { regex, string } => { tag(h, 384); regex.as_ref().hash(h); string.as_ref().hash(h); }
@@ -562,6 +567,7 @@ impl SH for Expr {
             Expr::ProxyRevoke(e) => { tag(h, 432); e.as_ref().hash(h); }
             Expr::ReflectGet { target, key, receiver } => { tag(h, 433); target.as_ref().hash(h); key.as_ref().hash(h); receiver.as_ref().hash(h); }
             Expr::ReflectSet { target, key, value } => { tag(h, 434); target.as_ref().hash(h); key.as_ref().hash(h); value.as_ref().hash(h); }
+            Expr::PutValueSet { target, key, value, receiver, strict } => { tag(h, 12235); target.as_ref().hash(h); key.as_ref().hash(h); value.as_ref().hash(h); receiver.as_ref().hash(h); strict.hash(h); }
             Expr::ReflectHas { target, key } => { tag(h, 435); target.as_ref().hash(h); key.as_ref().hash(h); }
             Expr::ReflectDelete { target, key } => { tag(h, 436); target.as_ref().hash(h); key.as_ref().hash(h); }
             Expr::ReflectOwnKeys(e) => { tag(h, 437); e.as_ref().hash(h); }
@@ -587,6 +593,8 @@ impl SH for Expr {
             Expr::TemplateRaw(e) => { tag(h, 446); e.as_ref().hash(h); }
             Expr::RegisterClassParentDynamic { class_name, parent_expr, } => { tag(h, 447); class_name.hash(h); parent_expr.as_ref().hash(h); }
             Expr::RegisterClassStaticSymbol { class_name, key_expr, value_expr, } => { tag(h, 12025); class_name.hash(h); key_expr.as_ref().hash(h); value_expr.as_ref().hash(h); }
+            Expr::RegisterClassComputedMethod { class_name, key_expr, method_name, is_static, param_count, has_rest } => { tag(h, 12233); class_name.hash(h); key_expr.as_ref().hash(h); method_name.hash(h); is_static.hash(h); param_count.hash(h); has_rest.hash(h); }
+            Expr::RegisterClassComputedAccessor { class_name, key_expr, getter_name, setter_name, is_static } => { tag(h, 12234); class_name.hash(h); key_expr.as_ref().hash(h); getter_name.hash(h); setter_name.hash(h); is_static.hash(h); }
             Expr::ClassExprFresh { template, named_statics, symbol_statics, captured_args, } => { tag(h, 12026); template.hash(h); for (n, v) in named_statics { n.hash(h); v.hash(h); } for (k, v) in symbol_statics { k.hash(h); v.hash(h); } for a in captured_args { a.hash(h); } }
             Expr::SetFunctionPrototype { func, proto } => { tag(h, 448); func.as_ref().hash(h); proto.as_ref().hash(h); }
             Expr::RegisterPrototypeMethod { class_name, method_name, value, } => { tag(h, 463); class_name.hash(h); method_name.hash(h); value.as_ref().hash(h); }

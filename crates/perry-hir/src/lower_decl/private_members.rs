@@ -30,6 +30,7 @@ pub fn lower_private_method(
     ctx.enter_type_param_scope(&type_params);
 
     let scope_mark = ctx.enter_scope();
+    ctx.enter_strict_mode(true);
 
     // Add 'this' for instance methods
     if !method.is_static {
@@ -54,6 +55,7 @@ pub fn lower_private_method(
             default: param_default,
             decorators: Vec::new(),
             is_rest,
+            arguments_object: None,
         });
         let inner_pat = if let ast::Pat::Assign(assign) = &param.pat {
             assign.left.as_ref()
@@ -71,9 +73,7 @@ pub fn lower_private_method(
         .params
         .iter()
         .any(|p| get_pat_name(&p.pat).ok().as_deref() == Some("arguments"));
-    let user_has_rest = method.function.params.iter().any(|p| is_rest_param(&p.pat));
     let needs_arguments_synth = !user_has_arguments_param
-        && !user_has_rest
         && method
             .function
             .body
@@ -81,7 +81,7 @@ pub fn lower_private_method(
             .map(|b| body_uses_arguments(&b.stmts))
             .unwrap_or(false);
     if needs_arguments_synth {
-        append_synthetic_arguments_param(ctx, &mut params);
+        append_synthetic_arguments_param(ctx, &mut params, true, false, true, Vec::new());
     }
 
     // Extract return type
@@ -114,6 +114,7 @@ pub fn lower_private_method(
         body = destructuring_stmts;
     }
 
+    ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
     ctx.exit_type_param_scope();
 
@@ -145,6 +146,7 @@ pub fn lower_private_getter(
 ) -> Result<Function> {
     let name = format!("get_#{}", method.key.name);
     let scope_mark = ctx.enter_scope();
+    ctx.enter_strict_mode(true);
     ctx.define_local("this".to_string(), Type::Any);
 
     let return_type = method
@@ -160,6 +162,7 @@ pub fn lower_private_getter(
         Vec::new()
     };
 
+    ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
 
     Ok(Function {
@@ -187,6 +190,7 @@ pub fn lower_private_setter(
 ) -> Result<Function> {
     let name = format!("set_#{}", method.key.name);
     let scope_mark = ctx.enter_scope();
+    ctx.enter_strict_mode(true);
     ctx.define_local("this".to_string(), Type::Any);
 
     let mut params = Vec::new();
@@ -202,6 +206,7 @@ pub fn lower_private_setter(
             default: None,
             decorators: Vec::new(),
             is_rest: false,
+            arguments_object: None,
         });
         let inner_pat = if let ast::Pat::Assign(assign) = &param.pat {
             assign.left.as_ref()
@@ -231,6 +236,7 @@ pub fn lower_private_setter(
         body = destructuring_stmts;
     }
 
+    ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
 
     Ok(Function {

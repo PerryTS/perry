@@ -192,26 +192,7 @@ pub extern "C" fn js_array_flat(arr: *const ArrayHeader) -> *mut ArrayHeader {
 /// `crates/perry-codegen/src/expr/objects_arrays_lit.rs`.
 #[no_mangle]
 pub extern "C" fn js_array_clone_for_spread(boxed: f64) -> *mut ArrayHeader {
-    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-    const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
-    let bits = boxed.to_bits();
-    if bits == TAG_UNDEFINED || bits == TAG_NULL {
-        let receiver = if bits == TAG_NULL {
-            "null"
-        } else {
-            "undefined"
-        };
-        let msg = format!("{} is not iterable", receiver);
-        let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err_ptr = crate::error::js_typeerror_new(msg_str);
-        let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-        crate::exception::js_throw(f64::from_bits(err_value));
-    }
-    // Strip the NaN-box tag (the same way unbox_to_i64 does in codegen)
-    // and forward to the existing clone path, which already handles
-    // arrays, sets, strings, typed-arrays, Buffers, and iterables.
-    let ptr_bits = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-    js_array_clone(ptr_bits as *const ArrayHeader)
+    super::iterator::array_from_spread_value(boxed)
 }
 
 /// Clone an array from a NaN-boxed f64 pointer value.

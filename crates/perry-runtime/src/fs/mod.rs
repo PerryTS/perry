@@ -567,6 +567,7 @@ pub extern "C" fn js_fs_mkdir_sync(path_value: f64) -> i32 {
 
 pub(crate) unsafe fn js_fs_mkdir_result(path_value: f64, options_value: f64) -> Result<(), f64> {
     validate::validate_path("path", path_value);
+    validate::validate_mkdir_options(options_value);
     let path_str = match decode_path_value(path_value) {
         Some(s) => s,
         None => validate::throw_invalid_path_arg("path", path_value),
@@ -1163,7 +1164,7 @@ pub(crate) unsafe fn js_fs_copy_file_result(
     crate::fs::validate::validate_path("dest", to_value);
     let flags_jv = crate::value::JSValue::from_bits(flags_value.to_bits());
     if !flags_jv.is_undefined() {
-        crate::fs::validate::validate_int32(flags_value, "mode", 0, 7);
+        crate::fs::validate::validate_fs_mode(flags_value);
     }
     let from = match decode_path_value(from_value) {
         Some(s) => s,

@@ -12,16 +12,15 @@ use super::*;
 ///   `{ publicKey, privateKey }` CryptoKeyPair that can be used by
 ///   `subtle.sign` / `subtle.verify`.
 ///
-/// Other asymmetric algorithms (RSA-OAEP, RSA-PSS, ECDH) and HMAC
-/// keygen are TODO follow-ups — `extractable` and `keyUsages` are
-/// accepted but not enforced (perry's threat model treats them as
-/// documentation, matching `importKey`).
+/// `extractable` and `keyUsages` are preserved on the returned
+/// CryptoKey metadata and enforced by later WebCrypto operations.
 #[no_mangle]
 pub unsafe extern "C" fn js_webcrypto_generate_key(
     algo_bits: f64,
-    _extractable_bits: f64,
-    _usages_bits: f64,
+    extractable_bits: f64,
+    usages_bits: f64,
 ) -> *mut Promise {
+    let extractable = bool_from_jsvalue(extractable_bits.to_bits());
     let algo_name = match extract_algo_name(algo_bits.to_bits()) {
         Some(s) => s,
         None => {
@@ -36,6 +35,15 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
             "RSASSA-PKCS1-V1_5" => KeyAlgo::RsassaPkcs1,
             "RSA-PSS" => KeyAlgo::RsaPss,
             _ => unreachable!(),
+        };
+        let (private_usages, public_usages) = match validate_key_pair_usages(
+            key_algo,
+            usages_bits.to_bits(),
+            "Usages cannot be empty when creating a key.",
+            "Unsupported key usage for the requested algorithm",
+        ) {
+            Ok(u) => u,
+            Err((name, message)) => return reject_with_dom_exception(name, message),
         };
         let mut rng = rand::rngs::OsRng;
         let private_key = match RsaPrivateKey::new(&mut rng, 2048) {
@@ -59,19 +67,17 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         }
         register_crypto_key(
             private_buf as usize,
-            CryptoKeyMaterial {
-                algo: key_algo,
+            CryptoKeyMaterial::new(
+                key_algo,
                 hash,
-                kind: KeyKind::Private,
-            },
+                KeyKind::Private,
+                extractable,
+                private_usages,
+            ),
         );
         register_crypto_key(
             public_buf as usize,
-            CryptoKeyMaterial {
-                algo: key_algo,
-                hash,
-                kind: KeyKind::Public,
-            },
+            CryptoKeyMaterial::new(key_algo, hash, KeyKind::Public, true, public_usages),
         );
 
         let obj = js_object_alloc(0, 2);
@@ -93,6 +99,15 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
     }
     if algo_upper == "ED25519" {
+        let (private_usages, public_usages) = match validate_key_pair_usages(
+            KeyAlgo::Ed25519,
+            usages_bits.to_bits(),
+            "Usages cannot be empty when creating a key.",
+            "Unsupported key usage for the requested algorithm",
+        ) {
+            Ok(u) => u,
+            Err((name, message)) => return reject_with_dom_exception(name, message),
+        };
         let mut seed = [0u8; 32];
         rand::rngs::OsRng.fill_bytes(&mut seed);
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
@@ -105,19 +120,23 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         }
         register_crypto_key(
             private_buf as usize,
-            CryptoKeyMaterial {
-                algo: KeyAlgo::Ed25519,
-                hash: HashAlgo::Sha256,
-                kind: KeyKind::Private,
-            },
+            CryptoKeyMaterial::new(
+                KeyAlgo::Ed25519,
+                HashAlgo::Sha256,
+                KeyKind::Private,
+                extractable,
+                private_usages,
+            ),
         );
         register_crypto_key(
             public_buf as usize,
-            CryptoKeyMaterial {
-                algo: KeyAlgo::Ed25519,
-                hash: HashAlgo::Sha256,
-                kind: KeyKind::Public,
-            },
+            CryptoKeyMaterial::new(
+                KeyAlgo::Ed25519,
+                HashAlgo::Sha256,
+                KeyKind::Public,
+                true,
+                public_usages,
+            ),
         );
 
         let obj = js_object_alloc(0, 2);
@@ -139,6 +158,15 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
     }
     if algo_upper == "X25519" {
+        let (private_usages, public_usages) = match validate_key_pair_usages(
+            KeyAlgo::X25519,
+            usages_bits.to_bits(),
+            "Usages cannot be empty when creating a key.",
+            "Unsupported key usage for the requested algorithm",
+        ) {
+            Ok(u) => u,
+            Err((name, message)) => return reject_with_dom_exception(name, message),
+        };
         let mut seed = [0u8; 32];
         rand::rngs::OsRng.fill_bytes(&mut seed);
         let private_key = x25519_dalek::StaticSecret::from(seed);
@@ -153,19 +181,23 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         }
         register_crypto_key(
             private_buf as usize,
-            CryptoKeyMaterial {
-                algo: KeyAlgo::X25519,
-                hash: HashAlgo::Sha256,
-                kind: KeyKind::Private,
-            },
+            CryptoKeyMaterial::new(
+                KeyAlgo::X25519,
+                HashAlgo::Sha256,
+                KeyKind::Private,
+                extractable,
+                private_usages,
+            ),
         );
         register_crypto_key(
             public_buf as usize,
-            CryptoKeyMaterial {
-                algo: KeyAlgo::X25519,
-                hash: HashAlgo::Sha256,
-                kind: KeyKind::Public,
-            },
+            CryptoKeyMaterial::new(
+                KeyAlgo::X25519,
+                HashAlgo::Sha256,
+                KeyKind::Public,
+                true,
+                public_usages,
+            ),
         );
 
         let obj = js_object_alloc(0, 2);
@@ -187,6 +219,15 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
     }
     if algo_upper == "ECDH" {
+        let (private_usages, public_usages) = match validate_key_pair_usages(
+            KeyAlgo::EcdhP256,
+            usages_bits.to_bits(),
+            "Usages cannot be empty when creating a key.",
+            "Unsupported key usage for the requested algorithm",
+        ) {
+            Ok(u) => u,
+            Err((name, message)) => return reject_with_dom_exception(name, message),
+        };
         let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve") {
             Some(c) => c,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
@@ -213,19 +254,23 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         }
         register_crypto_key(
             private_buf as usize,
-            CryptoKeyMaterial {
-                algo: KeyAlgo::EcdhP256,
-                hash: HashAlgo::Sha256,
-                kind: KeyKind::Private,
-            },
+            CryptoKeyMaterial::new(
+                KeyAlgo::EcdhP256,
+                HashAlgo::Sha256,
+                KeyKind::Private,
+                extractable,
+                private_usages,
+            ),
         );
         register_crypto_key(
             public_buf as usize,
-            CryptoKeyMaterial {
-                algo: KeyAlgo::EcdhP256,
-                hash: HashAlgo::Sha256,
-                kind: KeyKind::Public,
-            },
+            CryptoKeyMaterial::new(
+                KeyAlgo::EcdhP256,
+                HashAlgo::Sha256,
+                KeyKind::Public,
+                true,
+                public_usages,
+            ),
         );
 
         let obj = js_object_alloc(0, 2);
@@ -247,6 +292,15 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
     }
     if algo_upper == "ECDSA" {
+        let (private_usages, public_usages) = match validate_key_pair_usages(
+            KeyAlgo::EcdsaP256,
+            usages_bits.to_bits(),
+            "Usages cannot be empty when creating a key.",
+            "Unsupported key usage for the requested algorithm",
+        ) {
+            Ok(u) => u,
+            Err((name, message)) => return reject_with_dom_exception(name, message),
+        };
         let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve") {
             Some(c) => c,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
@@ -273,19 +327,23 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         }
         register_crypto_key(
             private_buf as usize,
-            CryptoKeyMaterial {
-                algo: KeyAlgo::EcdsaP256,
-                hash: HashAlgo::Sha256,
-                kind: KeyKind::Private,
-            },
+            CryptoKeyMaterial::new(
+                KeyAlgo::EcdsaP256,
+                HashAlgo::Sha256,
+                KeyKind::Private,
+                extractable,
+                private_usages,
+            ),
         );
         register_crypto_key(
             public_buf as usize,
-            CryptoKeyMaterial {
-                algo: KeyAlgo::EcdsaP256,
-                hash: HashAlgo::Sha256,
-                kind: KeyKind::Public,
-            },
+            CryptoKeyMaterial::new(
+                KeyAlgo::EcdsaP256,
+                HashAlgo::Sha256,
+                KeyKind::Public,
+                true,
+                public_usages,
+            ),
         );
 
         let obj = js_object_alloc(0, 2);
@@ -307,6 +365,44 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
     }
 
+    if algo_upper == "HMAC" {
+        let hash = match extract_hmac_hash(algo_bits.to_bits()) {
+            Some(h) => h,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        };
+        let usages = match validate_key_usages(
+            KeyAlgo::Hmac,
+            KeyKind::Secret,
+            usages_bits.to_bits(),
+            false,
+            "Usages cannot be empty when creating a key.",
+            "Unsupported key usage for an HMAC key",
+        ) {
+            Ok(u) => u,
+            Err((name, message)) => return reject_with_dom_exception(name, message),
+        };
+        let bit_len = object_field_number(algo_bits.to_bits(), b"length").unwrap_or(match hash {
+            HashAlgo::Sha1 | HashAlgo::Sha256 => 512,
+            HashAlgo::Sha384 | HashAlgo::Sha512 => 1024,
+        });
+        if bit_len == 0 {
+            return reject_with_dom_exception("OperationError", "The operation failed");
+        }
+        let byte_len = ((bit_len + 7) / 8) as usize;
+        let mut key_bytes = vec![0u8; byte_len];
+        use rand::RngCore;
+        rand::rngs::OsRng.fill_bytes(&mut key_bytes);
+        let buf = alloc_uint8array_from_slice(&key_bytes);
+        if buf.is_null() {
+            return reject_with_dom_exception("OperationError", "The operation failed");
+        }
+        register_crypto_key(
+            buf as usize,
+            CryptoKeyMaterial::new(KeyAlgo::Hmac, hash, KeyKind::Secret, extractable, usages),
+        );
+        return resolve_with_bits(JSValue::pointer(buf as *const u8).bits());
+    }
+
     if algo_upper != "AES-GCM"
         && algo_upper != "AES-KW"
         && algo_upper != "AES-CBC"
@@ -316,6 +412,26 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
     }
     // Read `length` from the algorithm object; default to 256 for the
     // string-shorthand form.
+    let key_algo = if algo_upper == "AES-CBC" {
+        KeyAlgo::AesCbc
+    } else if algo_upper == "AES-CTR" {
+        KeyAlgo::AesCtr
+    } else if algo_upper == "AES-KW" {
+        KeyAlgo::AesKw
+    } else {
+        KeyAlgo::AesGcm
+    };
+    let usages = match validate_key_usages(
+        key_algo,
+        KeyKind::Secret,
+        usages_bits.to_bits(),
+        false,
+        "Usages cannot be empty when creating a key.",
+        "Unsupported key usage for the requested algorithm",
+    ) {
+        Ok(u) => u,
+        Err((name, message)) => return reject_with_dom_exception(name, message),
+    };
     let length = object_field_number(algo_bits.to_bits(), b"length").unwrap_or(256);
     let byte_len = match (algo_upper.as_str(), length) {
         (_, 128) => 16,
@@ -336,19 +452,13 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
     }
     register_crypto_key(
         buf as usize,
-        CryptoKeyMaterial {
-            algo: if algo_upper == "AES-CBC" {
-                KeyAlgo::AesCbc
-            } else if algo_upper == "AES-CTR" {
-                KeyAlgo::AesCtr
-            } else if algo_upper == "AES-KW" {
-                KeyAlgo::AesKw
-            } else {
-                KeyAlgo::AesGcm
-            },
-            hash: HashAlgo::Sha256,
-            kind: KeyKind::Secret,
-        },
+        CryptoKeyMaterial::new(
+            key_algo,
+            HashAlgo::Sha256,
+            KeyKind::Secret,
+            extractable,
+            usages,
+        ),
     );
     let val = JSValue::pointer(buf as *const u8).bits();
     resolve_with_bits(val)

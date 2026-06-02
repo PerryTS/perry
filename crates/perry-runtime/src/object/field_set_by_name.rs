@@ -185,6 +185,21 @@ pub extern "C" fn js_object_set_field_by_name(
                     .unwrap_or("")
                     .to_string();
                 if !name.is_empty() {
+                    let has_own_data = CLASS_DYNAMIC_PROPS.with(|m| {
+                        m.borrow()
+                            .get(&class_id)
+                            .is_some_and(|props| props.contains_key(&name))
+                    });
+                    if !has_own_data
+                        && super::class_registry::class_static_accessor_setter_apply(
+                            class_id,
+                            &name,
+                            f64::from_bits(bits),
+                            value,
+                        )
+                    {
+                        return;
+                    }
                     class_dynamic_prop_root_store(class_id, name, value);
                 }
             }
@@ -361,6 +376,16 @@ pub extern "C" fn js_object_set_field_by_name(
                 let name_len = (*key).byte_len as usize;
                 let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
                 if let Ok(name_str) = std::str::from_utf8(name_bytes) {
+                    if matches!(name_str, "caller" | "arguments")
+                        && crate::closure::closure_is_arrow(
+                            obj as *const crate::closure::ClosureHeader,
+                        )
+                    {
+                        crate::fs::validate::throw_type_error_with_code(
+                            "Restricted function property assignment",
+                            "ERR_INVALID_ARG_TYPE",
+                        );
+                    }
                     // #3143: honor a non-writable registered descriptor — a
                     // built-in method's `.name`/`.length` are spec'd
                     // `writable: false`, so a sloppy-mode write must be a silent
@@ -377,6 +402,10 @@ pub extern "C" fn js_object_set_field_by_name(
                     crate::closure::closure_set_dynamic_prop(obj as usize, name_str, value);
                 }
             }
+            return;
+        }
+
+        if super::arguments_object_set_field(obj, key, value) {
             return;
         }
 

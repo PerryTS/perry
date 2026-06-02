@@ -160,6 +160,9 @@ pub struct LoweringContext {
     pub(crate) ui_widget_type_aliases: HashMap<String, String>,
     /// Current class being lowered (for arrow function `this` capture)
     pub(crate) current_class: Option<String>,
+    /// Home-object local for object-literal methods while their bodies are
+    /// lowered. Used to preserve `super` in object methods.
+    pub(crate) object_super_home_stack: Vec<LocalId>,
     /// Extern function types: name -> (param_types, return_type)
     /// Stores type information for declare function statements (FFI)
     pub(crate) extern_func_types: Vec<(String, Vec<Type>, Type)>,
@@ -178,6 +181,10 @@ pub struct LoweringContext {
     /// (static property key); flushed into `Module.closure_display_names`
     /// alongside `pending_functions`.
     pub(crate) closure_display_names: HashMap<FuncId, String>,
+    /// #4101: original source text keyed by FuncId, captured by slicing the
+    /// module source against each function's AST span at lowering time.
+    /// Flushed into `Module.closure_source_text` alongside `pending_functions`.
+    pub(crate) closure_source_text: HashMap<FuncId, String>,
     /// Functions that return native module instances: func_name -> (module_name, class_name)
     /// Tracks user-defined functions whose return type annotation is a native module type
     /// (e.g., initializePool(): mysql.Pool -> ("mysql2/promise", "Pool"))
@@ -194,6 +201,10 @@ pub struct LoweringContext {
     /// Module-level variable names pre-registered in the forward-declaration pass.
     /// Used to avoid duplicate define_local calls when the actual declaration is lowered.
     pub(crate) pre_registered_module_vars: HashSet<String>,
+    /// Subset of `pre_registered_module_vars` that came from syntactic `var`
+    /// declarations. Sloppy assignments before a later `var` need an early
+    /// backing slot; `let`/`const` should not use that path.
+    pub(crate) pre_registered_module_var_decls: HashSet<String>,
     /// LocalIds that are defined at module top level (outside any function or
     /// block). Closure `captures` referencing these IDs are filtered out at
     /// lowering time because codegen loads module-level bindings from their
@@ -441,6 +452,14 @@ pub struct LoweringContext {
     /// module reports `true` and every imported module reports `false`. Set
     /// by `lower_module_with_class_id_types_seed_and_entry`; default false.
     pub(crate) is_entry_module: bool,
+    /// Strictness inherited from the module/script directive prologue or from
+    /// ECMAScript module syntax. Function lowering consults this before
+    /// deciding whether its `arguments` object should be mapped.
+    pub(crate) module_strict: bool,
+    /// Stack of strict-mode state for currently lowered function/arrow bodies.
+    /// Nested ordinary functions inherit strictness from strict parents, while
+    /// a body-level `"use strict"` directive pushes strictness for children.
+    pub(crate) strict_mode_stack: Vec<bool>,
     /// Issue #668: true when this module was reached via an npm-package import
     /// (file lives under a `node_modules/` segment in either the canonical or
     /// the un-canonical resolution path). External libraries are exempt from

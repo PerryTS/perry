@@ -8,6 +8,7 @@ use crate::walker::walk_expr_children;
 pub(crate) fn uses_this_expr(expr: &Expr) -> bool {
     match expr {
         Expr::This => true,
+        Expr::SuperCall(_) | Expr::SuperMethodCall { .. } | Expr::SuperPropertyGet { .. } => true,
         // Nested arrow / closure: if it itself captures `this`, our
         // surrounding scope MUST also capture `this` so the nested closure
         // can inherit it (arrow functions inherit `this` from the enclosing
@@ -108,4 +109,95 @@ pub(crate) fn uses_this_stmt(stmt: &Stmt) -> bool {
 /// Check if a closure body uses `this`
 pub(crate) fn closure_uses_this(body: &[Stmt]) -> bool {
     body.iter().any(uses_this_stmt)
+}
+
+pub(crate) fn uses_new_target_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::NewTarget => true,
+        Expr::Closure {
+            captures_new_target,
+            ..
+        } => *captures_new_target,
+        _ => {
+            let mut found = false;
+            walk_expr_children(expr, &mut |child| {
+                if !found && uses_new_target_expr(child) {
+                    found = true;
+                }
+            });
+            found
+        }
+    }
+}
+
+pub(crate) fn uses_new_target_stmt(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Let {
+            init: Some(expr), ..
+        } => uses_new_target_expr(expr),
+        Stmt::Expr(expr) => uses_new_target_expr(expr),
+        Stmt::Return(Some(expr)) => uses_new_target_expr(expr),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            uses_new_target_expr(condition)
+                || then_branch.iter().any(uses_new_target_stmt)
+                || else_branch
+                    .as_ref()
+                    .map(|b| b.iter().any(uses_new_target_stmt))
+                    .unwrap_or(false)
+        }
+        Stmt::While { condition, body } => {
+            uses_new_target_expr(condition) || body.iter().any(uses_new_target_stmt)
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_ref()
+                .map(|s| uses_new_target_stmt(s.as_ref()))
+                .unwrap_or(false)
+                || condition
+                    .as_ref()
+                    .map(uses_new_target_expr)
+                    .unwrap_or(false)
+                || update.as_ref().map(uses_new_target_expr).unwrap_or(false)
+                || body.iter().any(uses_new_target_stmt)
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            body.iter().any(uses_new_target_stmt)
+                || catch
+                    .as_ref()
+                    .map(|c| c.body.iter().any(uses_new_target_stmt))
+                    .unwrap_or(false)
+                || finally
+                    .as_ref()
+                    .map(|f| f.iter().any(uses_new_target_stmt))
+                    .unwrap_or(false)
+        }
+        Stmt::Throw(expr) => uses_new_target_expr(expr),
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            uses_new_target_expr(discriminant)
+                || cases.iter().any(|c| {
+                    c.test.as_ref().map(uses_new_target_expr).unwrap_or(false)
+                        || c.body.iter().any(uses_new_target_stmt)
+                })
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn closure_uses_new_target(body: &[Stmt]) -> bool {
+    body.iter().any(uses_new_target_stmt)
 }

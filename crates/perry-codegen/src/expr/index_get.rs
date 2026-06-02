@@ -662,12 +662,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Expr::String(literal) = index.as_ref() {
                 // Static string key: use the interned StringPool entry
                 // so we get the same handle as obj["foo"].
+                let preserve_class_ref_bits = matches!(object.as_ref(), Expr::ClassRef(_))
+                    || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name));
                 let obj_box = lower_expr(ctx, object)?;
                 let key_idx = ctx.strings.intern(literal);
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 let blk = ctx.block();
                 let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-                let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+                let obj_handle = if preserve_class_ref_bits {
+                    obj_bits
+                } else {
+                    blk.and(I64, &obj_bits, POINTER_MASK_I64)
+                };
                 let key_box = blk.load(DOUBLE, &key_handle_global);
                 let key_bits = blk.bitcast_double_to_i64(&key_box);
                 let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
@@ -689,10 +695,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // key may be an SSO value (e.g. from JSON.parse, .slice, or
                 // any short-string-producing op); the runtime fn dereferences
                 // it as `*StringHeader`. Issue #214 SSO bug class.
+                let preserve_class_ref_bits = matches!(object.as_ref(), Expr::ClassRef(_))
+                    || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name));
                 let obj_box = lower_expr(ctx, object)?;
                 let key_box = lower_expr(ctx, index)?;
                 let blk = ctx.block();
-                let obj_handle = unbox_to_i64(blk, &obj_box);
+                let obj_bits = blk.bitcast_double_to_i64(&obj_box);
+                let obj_handle = if preserve_class_ref_bits {
+                    obj_bits
+                } else {
+                    blk.and(I64, &obj_bits, POINTER_MASK_I64)
+                };
                 let key_handle = unbox_str_handle(blk, &key_box);
                 let site_id = emit_typed_feedback_register_site(
                     ctx,
@@ -710,10 +723,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // First runtime-check whether the index is a Symbol; if so,
             // dispatch to the symbol-property side table — mirrors the
             // IndexSet branch. Otherwise fall through to string/numeric.
+            let preserve_class_ref_bits = matches!(object.as_ref(), Expr::ClassRef(_))
+                || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name));
             let obj_box = lower_expr(ctx, object)?;
             let idx_box = lower_expr(ctx, index)?;
             let blk = ctx.block();
-            let obj_handle = unbox_to_i64(blk, &obj_box);
+            let obj_bits = blk.bitcast_double_to_i64(&obj_box);
+            let obj_handle = if preserve_class_ref_bits {
+                obj_bits
+            } else {
+                blk.and(I64, &obj_bits, POINTER_MASK_I64)
+            };
             let is_sym_i32 = blk.call(I32, "js_is_symbol", &[(DOUBLE, &idx_box)]);
             let is_sym_bit = blk.icmp_ne(I32, &is_sym_i32, "0");
             let sym_idx = ctx.new_block("iget.sym");

@@ -6,7 +6,8 @@ use crate::analysis::*;
 use crate::destructuring::*;
 use crate::ir::*;
 use crate::lower::{
-    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, lower_expr, LoweringContext,
+    capture_function_source, collect_for_of_pattern_leaves, emit_for_of_pattern_binding,
+    lower_expr, LoweringContext,
 };
 use crate::lower_patterns::*;
 use crate::lower_types::*;
@@ -46,6 +47,19 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
     let name = fn_decl.ident.sym.to_string();
     let func_id = ctx.lookup_func(&name).unwrap_or_else(|| ctx.fresh_func());
 
+    // #4101: retain the original source text so `fn.toString()` reconstructs
+    // it. Slice the module source against the function's AST span; prepend the
+    // `async` keyword when the span starts at `function` (SWC's `Function.span`
+    // excludes the leading `async` modifier).
+    if fn_decl.function.body.is_some() {
+        capture_function_source(
+            ctx,
+            func_id,
+            &fn_decl.function.span,
+            fn_decl.function.is_async,
+        );
+    }
+
     // Extract type parameters from generic function declaration (e.g., function foo<T, U>(...))
     let type_params = fn_decl
         .function
@@ -60,23 +74,24 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
     let scope_mark = ctx.enter_scope();
 
     // Pre-scan body for `arguments` references. If the function references
-    // `arguments`, we synthesize a trailing rest parameter named "arguments"
-    // so callers automatically bundle their args into an array — and
+    // `arguments`, we synthesize a hidden raw-arguments parameter so
     // `Expr::Ident("arguments")` resolves to a LocalGet at lowering time.
-    // Skipped if the user already declared a parameter named `arguments` or
-    // already has a rest param (which would conflict with the synthetic one).
+    // Skipped only if the user already declared a parameter named `arguments`;
+    // user rest/default params still get a real ECMAScript arguments object.
     let user_has_arguments_param = fn_decl
         .function
         .params
         .iter()
         .any(|p| get_pat_name(&p.pat).ok().as_deref() == Some("arguments"));
-    let user_has_rest = fn_decl
+    let strict = fn_decl
         .function
-        .params
-        .iter()
-        .any(|p| is_rest_param(&p.pat));
+        .body
+        .as_ref()
+        .map(|b| ctx.current_strict_mode() || body_has_use_strict(&b.stmts))
+        .unwrap_or(false);
+    ctx.enter_strict_mode(strict);
+    let simple_parameters = params_are_simple_arguments_list(&fn_decl.function.params);
     let needs_arguments_synth = !user_has_arguments_param
-        && !user_has_rest
         && fn_decl
             .function
             .body
@@ -110,6 +125,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
             default: param_default,
             decorators: lower_decorators(ctx, &param.decorators),
             is_rest,
+            arguments_object: None,
         });
         // Track destructuring patterns (or an Assign wrapping one) for extraction stmts
         let inner_pat = if let ast::Pat::Assign(assign) = &param.pat {
@@ -122,12 +138,22 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
         }
     }
 
-    // If the body references `arguments`, append a synthetic trailing
-    // rest parameter named "arguments". The call site already bundles
-    // trailing args into an array for any rest param, and `Expr::Ident("arguments")`
-    // resolves to a LocalGet of this param.
+    // If the body references `arguments`, append the hidden raw-arguments input.
     if needs_arguments_synth {
-        append_synthetic_arguments_param(ctx, &mut params);
+        let mapped = !strict && simple_parameters;
+        let mapped_parameter_ids = if mapped {
+            mapped_argument_parameter_ids(&params)
+        } else {
+            Vec::new()
+        };
+        append_synthetic_arguments_param(
+            ctx,
+            &mut params,
+            strict,
+            simple_parameters,
+            !mapped,
+            mapped_parameter_ids,
+        );
     }
 
     // Register parameters with known native types as native instances
@@ -305,6 +331,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
         }
     }
 
+    ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
 
     // Exit type parameter scope

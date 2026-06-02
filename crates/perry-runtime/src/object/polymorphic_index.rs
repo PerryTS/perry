@@ -10,6 +10,14 @@
 
 use super::*;
 
+unsafe fn property_key_string_ptr(value: f64) -> *mut crate::StringHeader {
+    let key = crate::object::js_to_property_key(value);
+    if crate::symbol::js_is_symbol(key) != 0 {
+        return std::ptr::null_mut();
+    }
+    crate::value::js_jsvalue_to_string(key)
+}
+
 /// Polymorphic numeric-key get: companion of `js_object_set_index_polymorphic`.
 /// Reads `obj[idx]` where `idx` is a number and the receiver type isn't
 /// statically narrowed. Dispatches by GC type:
@@ -70,19 +78,31 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         return f64::from_bits(v.bits());
     }
 
+    if let Some(value) =
+        unsafe { arguments_object_get_index(raw as *const ObjectHeader, idx_i32 as u32) }
+    {
+        return value;
+    }
+
     if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+        if idx_i32 < 0 || idx != (idx_i32 as f64) {
+            let key = unsafe { property_key_string_ptr(idx) };
+            if key.is_null() {
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
+            let v = js_object_get_field_by_name(raw as *mut ObjectHeader, key);
+            return f64::from_bits(v.bits());
+        }
         return crate::array::js_array_get_f64(
             raw as *mut crate::array::ArrayHeader,
             idx_i32 as u32,
         );
     }
     if gc_type == crate::gc::GC_TYPE_OBJECT || gc_type == crate::gc::GC_TYPE_CLOSURE {
-        let s = if idx == (idx_i32 as f64) {
-            idx_i32.to_string()
-        } else {
-            format!("{}", idx)
-        };
-        let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        let key = unsafe { property_key_string_ptr(idx) };
+        if key.is_null() {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
         let v = js_object_get_field_by_name(raw as *mut ObjectHeader, key);
         return f64::from_bits(v.bits());
     }
@@ -128,13 +148,8 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         return;
     }
     let idx_i32 = idx as i32;
-    if idx_i32 < 0 {
-        // Negative indices on objects coerce to e.g. "-1" string keys; on
-        // arrays, JS spec gates them to no-ops. Stringify and delegate so
-        // the object case (rare but possible) still routes correctly.
-        let s = idx_i32.to_string();
-        let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-        js_object_set_field_by_name(raw as *mut ObjectHeader, key, value);
+
+    if unsafe { arguments_object_set_index(raw as *mut ObjectHeader, idx_i32 as u32, value) } {
         return;
     }
 
@@ -165,6 +180,13 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
     };
 
     if gc_type == crate::gc::GC_TYPE_ARRAY {
+        if idx_i32 < 0 || idx != (idx_i32 as f64) {
+            let key = unsafe { property_key_string_ptr(idx) };
+            if !key.is_null() {
+                js_object_set_field_by_name(raw as *mut ObjectHeader, key, value);
+            }
+            return;
+        }
         // Includes lazy/forwarded — js_array_set_f64_extend's clean_arr_ptr_mut
         // walks the forwarding chain and routes buffers/typed-arrays through
         // their per-kind setter.
@@ -179,15 +201,10 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         // Stringify the index and route through the object field setter,
         // which handles shape transitions, frozen/sealed/extensible checks,
         // overflow into out-of-line storage, and accessor descriptors.
-        let s = if idx == (idx_i32 as f64) {
-            // Common integer case — avoid the Display path's allocator hit
-            // and just format an i32 directly.
-            idx_i32.to_string()
-        } else {
-            format!("{}", idx)
-        };
-        let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-        js_object_set_field_by_name(raw as *mut ObjectHeader, key, value);
+        let key = unsafe { property_key_string_ptr(idx) };
+        if !key.is_null() {
+            js_object_set_field_by_name(raw as *mut ObjectHeader, key, value);
+        }
         return;
     }
     // Buffer / Map / Set / other GC types — fall through to the array

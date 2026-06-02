@@ -134,6 +134,16 @@ fn lower_url_encoding_constructor(
             let init_arg = args.into_iter().next();
             Ok(Some(Expr::UrlSearchParamsNew(init_arg.map(Box::new))))
         }
+        "URLPattern" => {
+            let args = lower_optional_args(ctx, args)?;
+            let mut args_iter = args.into_iter();
+            let input = args_iter.next().unwrap_or(Expr::Undefined);
+            let base = args_iter.next();
+            Ok(Some(Expr::UrlPatternNew {
+                input: Box::new(input),
+                base: base.map(Box::new),
+            }))
+        }
         "TextEncoder" => Ok(Some(Expr::TextEncoderNew)),
         "TextDecoder" => Ok(Some(lower_text_decoder_new(ctx, args)?)),
         _ => Ok(None),
@@ -143,7 +153,7 @@ fn lower_url_encoding_constructor(
 fn is_url_encoding_constructor_name(name: &str) -> bool {
     matches!(
         name,
-        "URL" | "URLSearchParams" | "TextEncoder" | "TextDecoder"
+        "URL" | "URLSearchParams" | "URLPattern" | "TextEncoder" | "TextDecoder"
     )
 }
 
@@ -152,6 +162,7 @@ fn module_constructor_name(module_name: &str, method_name: Option<&str>) -> Opti
         ("events", Some("EventEmitterAsyncResource")) => Some("EventEmitterAsyncResource"),
         ("url", Some("URL")) => Some("URL"),
         ("url", Some("URLSearchParams")) => Some("URLSearchParams"),
+        ("url", Some("URLPattern")) => Some("URLPattern"),
         ("util", Some("TextEncoder")) => Some("TextEncoder"),
         ("util", Some("TextDecoder")) => Some("TextDecoder"),
         _ => None,
@@ -167,6 +178,7 @@ fn global_member_constructor_name(
         return match prop_name {
             "URL" => Some("URL"),
             "URLSearchParams" => Some("URLSearchParams"),
+            "URLPattern" => Some("URLPattern"),
             "TextEncoder" => Some("TextEncoder"),
             "TextDecoder" => Some("TextDecoder"),
             _ => None,
@@ -462,6 +474,26 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             if is_worker_threads_module && prop_ident.sym.as_ref() == "Worker" {
                 return lower_worker_new(ctx, new_expr);
             }
+            let inspector_session_module =
+                ctx.lookup_native_module(module_alias)
+                    .and_then(
+                        |(module_name, _)| match (module_name, prop_ident.sym.as_ref()) {
+                            ("inspector" | "inspector/promises", "Session") => {
+                                Some(module_name.to_string())
+                            }
+                            _ => None,
+                        },
+                    );
+            if let Some(module_name) = inspector_session_module {
+                let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                return Ok(Expr::NativeMethodCall {
+                    module: module_name,
+                    class_name: None,
+                    object: None,
+                    method: "Session".to_string(),
+                    args,
+                });
+            }
             if let Some((module_name, _)) = ctx.lookup_native_module(module_alias) {
                 let class_name = prop_ident.sym.as_ref();
                 if matches!(
@@ -632,6 +664,44 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     class_name: None,
                     object: None,
                     method: class_name,
+                    args,
+                });
+            }
+
+            let inspector_session_module = ctx.lookup_native_module(&class_name).and_then(
+                |(module_name, export_name)| match (module_name, export_name) {
+                    ("inspector" | "inspector/promises", Some("Session")) => {
+                        Some(module_name.to_string())
+                    }
+                    _ => None,
+                },
+            );
+            if let Some(module_name) = inspector_session_module {
+                let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                return Ok(Expr::NativeMethodCall {
+                    module: module_name,
+                    class_name: None,
+                    object: None,
+                    method: "Session".to_string(),
+                    args,
+                });
+            }
+
+            let repl_constructor = ctx.lookup_native_module(&class_name).and_then(
+                |(module_name, export_name)| match (module_name, export_name) {
+                    ("repl", Some("Recoverable" | "REPLServer")) => {
+                        export_name.map(|name| (module_name.to_string(), name.to_string()))
+                    }
+                    _ => None,
+                },
+            );
+            if let Some((module_name, method_name)) = repl_constructor {
+                let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                return Ok(Expr::NewDynamic {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::NativeModuleRef(module_name)),
+                        property: method_name,
+                    }),
                     args,
                 });
             }
@@ -1156,11 +1226,11 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 );
             }
 
-            // Handle URLSearchParams class
-            if class_name == "URLSearchParams" {
+            // Handle URLSearchParams / URLPattern classes
+            if matches!(class_name.as_str(), "URLSearchParams" | "URLPattern") {
                 return Ok(lower_url_encoding_constructor(
                     ctx,
-                    "URLSearchParams",
+                    &class_name,
                     new_expr.args.as_deref(),
                 )?
                 .unwrap());

@@ -1,0 +1,268 @@
+//! ECMAScript `ToPropertyKey` conversion and the object-literal computed
+//! property / `super` helpers built on top of it. Split out of
+//! `object_ops.rs` to keep that module under the file-size gate.
+
+use super::*;
+
+/// ECMAScript `ToPropertyKey` for computed member definitions.
+///
+/// Symbols are valid property keys and must be preserved. Every other value
+/// first takes the string-hint ToPrimitive path, then stringifies with Perry's
+/// JS string conversion so numeric keys use JS spelling rather than Rust's
+/// default formatting.
+#[no_mangle]
+pub unsafe extern "C" fn js_to_property_key(value: f64) -> f64 {
+    if crate::symbol::js_is_symbol(value) != 0 {
+        return value;
+    }
+    let primitive = crate::symbol::js_to_primitive(value, 2);
+    if crate::symbol::js_is_symbol(primitive) != 0 {
+        return primitive;
+    }
+    let key = crate::value::js_jsvalue_to_string(primitive);
+    if key.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    crate::value::js_nanbox_string(key as i64)
+}
+
+/// `obj[ToPropertyKey(key)] = value` for object-literal computed definitions.
+#[no_mangle]
+pub unsafe extern "C" fn js_object_set_property_key(
+    obj_value: f64,
+    key_value: f64,
+    value: f64,
+) -> f64 {
+    let key = js_to_property_key(key_value);
+    if crate::symbol::js_is_symbol(key) != 0 {
+        return crate::symbol::js_object_set_symbol_property(obj_value, key, value);
+    }
+    let key_str = crate::value::js_jsvalue_to_string(key);
+    if key_str.is_null() {
+        return value;
+    }
+    let obj = extract_obj_ptr(obj_value);
+    if !obj.is_null() {
+        js_object_set_field_by_name(obj, key_str, value);
+    }
+    value
+}
+
+/// `obj[ToPropertyKey(key)]` using Perry's string and symbol property stores.
+#[no_mangle]
+pub unsafe extern "C" fn js_object_get_property_key(obj_value: f64, key_value: f64) -> f64 {
+    let key = js_to_property_key(key_value);
+    if crate::symbol::js_is_symbol(key) != 0 {
+        return crate::symbol::js_object_get_symbol_property(obj_value, key);
+    }
+    let key_str = crate::value::js_jsvalue_to_string(key);
+    if key_str.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let obj = extract_obj_ptr(obj_value);
+    if obj.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    f64::from_bits(js_object_get_field_by_name(obj as *const ObjectHeader, key_str).bits())
+}
+
+/// Install an object-literal method under a computed property key and bind the
+/// method's reserved `this` capture slot to the home object.
+#[no_mangle]
+pub unsafe extern "C" fn js_object_set_property_key_method(
+    obj_value: f64,
+    key_value: f64,
+    closure: f64,
+) -> f64 {
+    let key = js_to_property_key(key_value);
+    if crate::symbol::js_is_symbol(key) != 0 {
+        return crate::symbol::js_object_set_symbol_method(obj_value, key, closure);
+    }
+    crate::symbol::js_object_set_method_by_name(obj_value, key, closure)
+}
+
+fn object_ptr_from_value(value: f64) -> usize {
+    let bits = value.to_bits();
+    let top = bits >> 48;
+    if top == 0x7FFD {
+        (bits & crate::value::POINTER_MASK) as usize
+    } else if top == 0 && bits > 0x10000 {
+        bits as usize
+    } else {
+        0
+    }
+}
+
+unsafe fn object_super_prototype_value(home: f64) -> Option<f64> {
+    let home_ptr = object_ptr_from_value(home);
+    if home_ptr == 0 {
+        return None;
+    }
+    let proto_bits = super::prototype_chain::object_static_prototype(home_ptr)?;
+    if proto_bits == crate::value::TAG_NULL {
+        return None;
+    }
+    Some(f64::from_bits(proto_bits))
+}
+
+/// Resolve `super[key]` for object-literal methods using the method's captured
+/// home object. The actual prototype is read at call time so
+/// `Object.setPrototypeOf(home, proto)` after literal creation is observed.
+#[no_mangle]
+pub unsafe extern "C" fn js_object_super_get(home: f64, key_value: f64, _receiver: f64) -> f64 {
+    let Some(proto) = object_super_prototype_value(home) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    js_object_get_property_key(proto, key_value)
+}
+
+/// Resolve and call `super[key](...)` for object-literal methods.
+#[no_mangle]
+pub unsafe extern "C" fn js_object_super_call(
+    home: f64,
+    key_value: f64,
+    receiver: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let callee = js_object_super_get(home, key_value, receiver);
+    if callee.to_bits() == crate::value::TAG_UNDEFINED {
+        return callee;
+    }
+    let bound = crate::closure::clone_closure_rebind_this(callee.to_bits(), receiver);
+    let prev_this = crate::object::js_implicit_this_set(receiver);
+    let result = crate::closure::js_native_call_value(f64::from_bits(bound), args_ptr, args_len);
+    crate::object::js_implicit_this_set(prev_this);
+    result
+}
+
+#[cfg(test)]
+mod property_key_tests {
+    use super::*;
+
+    extern "C" fn accessor_getter(_closure: *const crate::closure::ClosureHeader) -> f64 {
+        123.0
+    }
+
+    extern "C" fn computed_class_method(_this_arg: f64) -> f64 {
+        77.0
+    }
+
+    extern "C" fn computed_class_getter(_this_arg: f64) -> f64 {
+        88.0
+    }
+
+    fn string_value_to_rust(value: f64) -> String {
+        unsafe {
+            let ptr =
+                crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader;
+            assert!(!ptr.is_null(), "expected string value");
+            let len = (*ptr).byte_len as usize;
+            let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            String::from_utf8(std::slice::from_raw_parts(data, len).to_vec()).unwrap()
+        }
+    }
+
+    #[test]
+    fn property_key_preserves_symbols_and_stringifies_primitives() {
+        unsafe {
+            let sym = crate::symbol::js_symbol_new_empty();
+            assert_eq!(js_to_property_key(sym).to_bits(), sym.to_bits());
+
+            assert_eq!(string_value_to_rust(js_to_property_key(42.0)), "42");
+            let int_key = f64::from_bits(crate::value::JSValue::int32(7).bits());
+            assert_eq!(string_value_to_rust(js_to_property_key(int_key)), "7");
+            assert_eq!(
+                string_value_to_rust(js_to_property_key(f64::from_bits(crate::value::TAG_TRUE))),
+                "true"
+            );
+        }
+    }
+
+    #[test]
+    fn property_key_object_helpers_use_canonical_key_conversion() {
+        unsafe {
+            let obj = js_object_alloc(0, 0);
+            let obj_value = crate::value::js_nanbox_pointer(obj as i64);
+
+            js_object_set_property_key(obj_value, 7.0, 19.0);
+            assert_eq!(js_object_get_property_key(obj_value, 7.0), 19.0);
+
+            let key = crate::string::js_string_from_bytes(b"7".as_ptr(), 1);
+            let field = js_object_get_field_by_name(obj, key);
+            assert_eq!(field.as_number(), 19.0);
+        }
+    }
+
+    #[test]
+    fn property_key_symbol_accessors_route_through_symbol_storage() {
+        unsafe {
+            crate::symbol::test_clear_symbol_side_table_roots();
+
+            let obj = js_object_alloc(0, 0);
+            let obj_value = crate::value::js_nanbox_pointer(obj as i64);
+            let sym = crate::symbol::js_symbol_new_empty();
+            let getter = crate::closure::js_closure_alloc(accessor_getter as *const u8, 0);
+            let getter_value = crate::value::js_nanbox_pointer(getter as i64);
+
+            js_object_define_accessor(
+                obj_value,
+                sym,
+                getter_value,
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+            );
+
+            assert_eq!(
+                crate::symbol::js_object_get_symbol_property(obj_value, sym),
+                123.0
+            );
+            assert_eq!(js_object_get_property_key(obj_value, sym), 123.0);
+
+            crate::symbol::test_clear_symbol_side_table_roots();
+        }
+    }
+
+    #[test]
+    fn property_key_class_computed_symbol_registration() {
+        unsafe {
+            crate::object::class_registry::test_clear_class_side_table_roots();
+
+            let class_id = 0x3581;
+            let sym = crate::symbol::js_symbol_new_empty();
+            let sym_key = crate::symbol::sym_key_from_f64(sym);
+
+            crate::object::class_registry::js_register_class_computed_method(
+                class_id as i64,
+                sym,
+                computed_class_method as *const () as usize as i64,
+                0,
+                0,
+                0,
+            );
+            let method = crate::object::class_registry::lookup_class_symbol_method_in_chain(
+                class_id, sym_key, false,
+            )
+            .expect("computed symbol method should be registered");
+            assert_eq!(method.1, 0);
+            assert!(!method.2);
+
+            crate::object::class_registry::js_register_class_computed_accessor(
+                class_id as i64,
+                sym,
+                computed_class_getter as *const () as usize as i64,
+                0,
+                0,
+            );
+            let value = crate::object::class_registry::class_symbol_getter_value(
+                class_id,
+                sym_key,
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+                false,
+            )
+            .expect("computed symbol getter should be registered");
+            assert_eq!(value, 88.0);
+
+            crate::object::class_registry::test_clear_class_side_table_roots();
+        }
+    }
+}

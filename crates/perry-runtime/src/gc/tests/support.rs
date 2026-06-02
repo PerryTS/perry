@@ -270,6 +270,7 @@ fn reset_copying_nursery_runtime_test_state() {
     crate::object::test_clear_transition_cache_root();
     crate::object::test_clear_object_cache_roots();
     crate::object::test_clear_class_side_table_roots();
+    crate::object::test_clear_arguments_object_roots();
     crate::symbol::test_clear_symbol_side_table_roots();
     crate::json::test_clear_parse_roots();
     crate::set::test_clear_set_roots();

@@ -29,6 +29,7 @@ pub fn synthesize_class_captures(
     methods: &mut Vec<Function>,
     getters: &mut Vec<(String, Function)>,
     setters: &mut Vec<(String, Function)>,
+    computed_members: &mut Vec<ClassComputedMember>,
     constructor: &mut Option<Function>,
 ) {
     let module_level_ids = ctx.module_level_ids.clone();
@@ -47,6 +48,11 @@ pub fn synthesize_class_captures(
     }
     for (_, s) in setters.iter() {
         for id in collect_method_captures(s, &outer_scope_ids, &module_level_ids) {
+            union_captures.insert(id);
+        }
+    }
+    for member in computed_members.iter().filter(|member| !member.is_static) {
+        for id in collect_method_captures(&member.function, &outer_scope_ids, &module_level_ids) {
             union_captures.insert(id);
         }
     }
@@ -245,6 +251,12 @@ pub fn synthesize_class_captures(
     for (_, s) in setters.iter_mut() {
         rewrite_method_body(ctx, &mut s.body);
     }
+    for member in computed_members
+        .iter_mut()
+        .filter(|member| !member.is_static)
+    {
+        rewrite_method_body(ctx, &mut member.function.body);
+    }
 
     // 3. Constructor.
     let mut ctor = constructor.take().unwrap_or_else(|| Function {
@@ -280,6 +292,7 @@ pub fn synthesize_class_captures(
             default: None,
             decorators: Vec::new(),
             is_rest: false,
+            arguments_object: None,
         });
         assignment_stmts.push(Stmt::Expr(Expr::PropertySet {
             object: Box::new(Expr::This),

@@ -126,6 +126,13 @@ fn collect_assigned_function_binding_candidates(ast_module: &ast::Module) -> Has
                 }
             }
             ast::Stmt::Throw(throw_stmt) => collect_from_expr(&throw_stmt.arg, out),
+            ast::Stmt::Decl(ast::Decl::Var(var_decl)) => {
+                for decl in &var_decl.decls {
+                    if let Some(init) = &decl.init {
+                        collect_from_expr(init, out);
+                    }
+                }
+            }
             ast::Stmt::Decl(_)
             | ast::Stmt::Break(_)
             | ast::Stmt::Continue(_)
@@ -141,7 +148,15 @@ fn collect_assigned_function_binding_candidates(ast_module: &ast::Module) -> Has
                 if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) =
                     &assign.left
                 {
-                    out.insert(ident.id.sym.to_string());
+                    let name = ident.id.sym.as_ref();
+                    let is_self_read = assign.op == ast::AssignOp::Assign
+                        && matches!(
+                            assign.right.as_ref(),
+                            ast::Expr::Ident(rhs) if rhs.sym.as_ref() == name
+                        );
+                    if !is_self_read {
+                        out.insert(name.to_string());
+                    }
                 }
                 collect_from_expr(&assign.right, out);
             }
@@ -201,6 +216,15 @@ fn collect_assigned_function_binding_candidates(ast_module: &ast::Module) -> Has
     for item in &ast_module.body {
         match item {
             ast::ModuleItem::Stmt(stmt) => collect_from_stmt(stmt, &mut out),
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(export_decl)) => {
+                if let ast::Decl::Var(var_decl) = &export_decl.decl {
+                    for decl in &var_decl.decls {
+                        if let Some(init) = &decl.init {
+                            collect_from_expr(init, &mut out);
+                        }
+                    }
+                }
+            }
             ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultExpr(default_expr)) => {
                 collect_from_expr(&default_expr.expr, &mut out);
             }
@@ -307,7 +331,8 @@ pub fn lower_module_full(
     ctx.resolved_types = resolved_types;
     ctx.is_entry_module = is_entry_module;
     ctx.is_external_module = is_external_module;
-    ctx.current_strict = module_has_strict_mode(ast_module);
+    ctx.module_strict = module_has_strict_mode(ast_module);
+    ctx.current_strict = ctx.module_strict;
     if let Some(seed) = imported_class_fields {
         ctx.seed_imported_class_fields(seed);
     }
@@ -460,6 +485,10 @@ pub fn lower_module_full(
                             .unwrap_or(Type::Any);
                         ctx.define_local(name.clone(), ty);
                         ctx.pre_registered_module_vars.insert(name);
+                        if var_decl.kind == ast::VarDeclKind::Var {
+                            ctx.pre_registered_module_var_decls
+                                .insert(ident.id.sym.to_string());
+                        }
                     }
                 }
             }
@@ -540,6 +569,10 @@ pub fn lower_module_full(
         // expressions and object-literal methods.
         for (id, name) in ctx.closure_display_names.drain() {
             module.closure_display_names.insert(id, name);
+        }
+        // #4101: flush captured function source text for `fn.toString()`.
+        for (id, src) in ctx.closure_source_text.drain() {
+            module.closure_source_text.insert(id, src);
         }
         // Flush any pending classes created during expression lowering
         // (e.g., class expressions in `new (class extends Command { ... })()`)

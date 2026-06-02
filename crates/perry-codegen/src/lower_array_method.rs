@@ -63,7 +63,8 @@ pub(crate) fn lower_array_method(
             let cb_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let runtime_fn = if property == "some" {
                 "js_array_some"
             } else {
@@ -236,7 +237,8 @@ pub(crate) fn lower_array_method(
             let cb_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let result = blk.call(
                 I64,
                 "js_array_flatMap",
@@ -257,7 +259,8 @@ pub(crate) fn lower_array_method(
             let cb_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             Ok(blk.call(
                 DOUBLE,
                 "js_array_find",
@@ -274,7 +277,8 @@ pub(crate) fn lower_array_method(
             let cb_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let i32_v = blk.call(
                 I32,
                 "js_array_findIndex",
@@ -292,7 +296,8 @@ pub(crate) fn lower_array_method(
             let cb_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             Ok(blk.call(
                 DOUBLE,
                 "js_array_find_last",
@@ -309,7 +314,8 @@ pub(crate) fn lower_array_method(
             let cb_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let i32_v = blk.call(
                 I32,
                 "js_array_find_last_index",
@@ -333,7 +339,8 @@ pub(crate) fn lower_array_method(
             };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let has_init_str = format!("{}", has_initial);
             Ok(blk.call(
                 DOUBLE,
@@ -362,7 +369,8 @@ pub(crate) fn lower_array_method(
             };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let has_init_str = format!("{}", has_initial);
             Ok(blk.call(
                 DOUBLE,
@@ -382,7 +390,14 @@ pub(crate) fn lower_array_method(
             let cb_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            // `map` uses a receiver-aware validator (TypedArray.map renders its
+            // non-callable message differently than Array.prototype.map).
+            let cb_handle = blk.call(
+                I64,
+                "js_validate_array_map_callback",
+                &[(I64, &recv_handle), (DOUBLE, &cb_box)],
+            );
             let result = blk.call(
                 I64,
                 "js_array_map",
@@ -400,7 +415,8 @@ pub(crate) fn lower_array_method(
             let cb_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let result = blk.call(
                 I64,
                 "js_array_filter",
@@ -418,7 +434,8 @@ pub(crate) fn lower_array_method(
             let cb_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             blk.call_void(
                 "js_array_forEach",
                 &[(I64, &recv_handle), (I64, &cb_handle)],

@@ -6,21 +6,21 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
-| Whole-module gaps (zero coverage) | 16 | 427 | n/a |
-| Partial-module gaps | 31 | 1485 | 578 |
+| Whole-module gaps (zero coverage) | 15 | 410 | n/a |
+| Partial-module gaps | 32 | 1480 | 597 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2194** |  |
+| **Total true gaps** |  | **2172** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
 - `Web / Global APIs` — 282
 - `node:os` — 195
 - `node:crypto` — 128
-- `node:process (and global `process`)` — 99
-- `node:util` — 92
 - `node:http2` — 97
+- `node:process (and global `process`)` — 96
 - `node:test (and node:test/reporters, node:test/mock)` — 93
+- `node:util` — 92
 - `node:http` — 89
 - `node:zlib` — 78
 - `node:stream` — 76
@@ -32,7 +32,7 @@ Issue #3598 ("Node API compatibility epic: globalThis and Web-compatible Node gl
 
 This branch intentionally does **not** cherry-pick or stack those feature PRs. The generated manifest surfaces on current `origin/main` were audited with `./scripts/regen_api_docs.sh`; `docs/src/api/reference.md` and `docs/api/perry.d.ts` produced no diff, and `crates/perry-api-manifest/src/entries.rs` was not changed. That means this closure PR does not truthfully decrement the generated API/type counts for globals that only exist on the open feature branches.
 
-Residual #3598 work that should remain tracked by child issues includes true WeakRef/FinalizationRegistry weak semantics, BroadcastChannel delivery semantics, deeper FormData/File/Blob/multipart/body parity, full WebAssembly Instance/Memory/Table/Global/streaming execution surface beyond the current host-shim shape, full TextEncoderStream/TextDecoderStream transform behavior, and URLPattern behavior tied to the Node 22 target.
+Residual #3598 work that should remain tracked by child issues includes true WeakRef/FinalizationRegistry weak semantics, BroadcastChannel delivery semantics, deeper FormData/File/Blob/multipart/body parity, full WebAssembly Instance/Memory/Table/Global/streaming execution surface beyond the current host-shim shape, and full TextEncoderStream/TextDecoderStream transform behavior.
 
 ## Whole-module gaps
 
@@ -130,7 +130,14 @@ Selected highlights (full list in `runtime-parity.md`):
 
 ### node:vm
 
-**Total APIs: 32** · Perry covers: 0 · Gap: 32
+**Total APIs: 32** · Perry covers: import/require namespace shape, callable
+export metadata, `vm.constants`, `process.getBuiltinModule("vm")`, and
+`vm.isContext({})` · Gap: runtime VM execution, contextification, VM modules,
+context-loader constant behavior, cached data, source-map metadata, and heap
+measurement
+
+Shape coverage is fixture-backed in `test-parity/node-suite/vm`; the generated
+`test_parity_vm` inventory now skip-lists only the still-open behavior leaves.
 
 Selected highlights (full list in `runtime-parity.md`):
 
@@ -197,26 +204,6 @@ Selected highlights (full list in `runtime-parity.md`):
 - `inspector.Network.requestWillBeSent(params)`
 - `inspector.Network.responseReceived(params)`
 - … and 7 more
-
-### node:repl
-
-**Total APIs: 17** · Perry covers: 0 · Gap: 17
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `repl.start([options])`
-- `repl.builtinModules`
-- `repl.REPL_MODE_SLOPPY`
-- `repl.REPL_MODE_STRICT`
-- `repl.Recoverable`
-- `replServer.context`
-- `replServer.editorMode`
-- `replServer.useColors`
-- `replServer.useGlobal`
-- `replServer.ignoreUndefined`
-- `replServer.replMode`
-- `replServer.defineCommand(keyword, cmd)`
-- … and 5 more
 
 ### node:domain
 
@@ -374,7 +361,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 `node:fs` has no remaining public API surface gaps in the manifest-based reconciliation. The current runtime manifest includes the callback and sync functions, constructor/export tail (`Dir`, `Dirent`, `Stats`, `ReadStream`, `WriteStream`, `FileReadStream`, `FileWriteStream`, `Utf8Stream`), `_toUnixTimestamp`, `openAsBlob`, `mkdtempDisposableSync`, `constants`, and `promises`.
 
-Runtime-created fs SystemError metadata is covered by parity fixtures: sync, callback, and promise errors expose negative numeric `err.errno` plus `err.code`, `err.syscall`, `err.path`, and `err.dest` where Node exposes them. Behavior caveats are tracked in `test-parity/node-suite/fs/STATUS.md` rather than as missing API rows. The remaining fs-family public API tail is only under `node:fs/promises` FileHandle: `pull`, `pullSync`, and `writer` (#3952).
+Runtime-created fs SystemError metadata is covered by parity fixtures: sync, callback, and promise errors expose negative numeric `err.errno` plus `err.code`, `err.syscall`, `err.path`, and `err.dest` where Node exposes them. Behavior caveats are tracked in `test-parity/node-suite/fs/STATUS.md` rather than as missing API rows. The `node:fs/promises` FileHandle stream-iter tail (`pull`, `pullSync`, and `writer`) is runtime-backed for direct no-transform source/writer paths (#3952).
 
 #### Covered (sampled)
 
@@ -404,6 +391,36 @@ Runtime-created fs SystemError metadata is covered by parity fixtures: sync, cal
 | `fs.Utf8Stream` | `manifest:fs.Utf8Stream` |
 | `fs._toUnixTimestamp(value)` | `ffi:js_fs_to_unix_timestamp` |
 | … | remaining fs APIs covered by manifest, FFI, or lowering entries |
+
+### node:repl
+
+**Gap APIs: 0** · Already covered: 17
+
+The public `node:repl` inventory rows are covered for deterministic scripted sessions: ESM/CJS module metadata, `start(options)`, `new REPLServer(options)`, mode symbols, `Recoverable`, core server flags/context, custom dot commands, prompt display/reset events, line writes, and `setupHistory`.
+
+Behavior caveats remain around live terminal integration, readline inheritance depth, multiline JavaScript parsing, persistent history files, and advanced interactive editor behavior. Those are semantic parity gaps rather than missing public API rows in `runtime-parity.md`.
+
+#### Covered (sampled)
+
+| API | Coverage source |
+|-----|-----------------|
+| `repl.start([options])` | `ffi:js_repl_start`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
+| `repl.builtinModules` | `rt:crate::process::js_module_builtin_modules`; `test-parity/node-suite/repl/imports/module-metadata.ts` |
+| `repl.REPL_MODE_SLOPPY` | `rt:crate::node_repl::repl_mode_sloppy`; `test-parity/node-suite/repl/imports/module-metadata.ts` |
+| `repl.REPL_MODE_STRICT` | `rt:crate::node_repl::repl_mode_strict`; `test-parity/node-suite/repl/imports/module-metadata.ts` |
+| `repl.Recoverable` | `ffi:js_repl_recoverable_new`; `test-parity/node-suite/repl/imports/module-metadata.ts` |
+| `replServer.context` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
+| `replServer.editorMode` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
+| `replServer.useColors` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
+| `replServer.useGlobal` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
+| `replServer.ignoreUndefined` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
+| `replServer.replMode` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
+| `replServer.defineCommand(keyword, cmd)` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/commands-reset.ts` |
+| `replServer.displayPrompt([preserveCursor])` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/commands-reset.ts` |
+| `replServer.clearBufferedCommand()` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/commands-reset.ts` |
+| `replServer.setupHistory(historyConfig, callback)` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/setup-history.ts` |
+| `'exit'` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
+| `'reset'` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/commands-reset.ts` |
 
 ### node:crypto
 
@@ -480,7 +497,7 @@ Runtime-created fs SystemError metadata is covered by parity fixtures: sync, cal
 
 ### node:process (and global `process`)
 
-**Gap APIs: 97** · Already covered: 21
+**Gap APIs: 92** · Already covered: 26
 
 #### Missing from Perry
 
@@ -522,15 +539,10 @@ Runtime-created fs SystemError metadata is covered by parity fixtures: sync, cal
 - `process.finalization.unregister(ref)`
 - `process.ref(maybeRefable)`
 - `process.unref(maybeRefable)`
-- `process.report.getReport([err])`
-- `process.report.writeReport([filename][, err])`
 - `process.binding(name)`
 - `process.platform`
 - `process.arch`
-- `process.release`
-- `process.argv0`
-- `process.execPath`
-- … and 51 more (see `runtime-parity.md` for the full list)
+- … and 46 more (see `runtime-parity.md` for the full list)
 
 #### Covered (sampled)
 
@@ -686,7 +698,7 @@ Runtime-created fs SystemError metadata is covered by parity fixtures: sync, cal
 
 ### node:http
 
-**Gap APIs: 89** · Already covered: 52
+**Gap APIs: 88** · Already covered: 53
 
 #### Missing from Perry
 
@@ -728,7 +740,6 @@ Runtime-created fs SystemError metadata is covered by parity fixtures: sync, cal
 - `request.socket`
 - `request.writableEnded`
 - `request.writableFinished`
-- `server[Symbol.asyncDispose]()`
 - `server.headersTimeout`
 - `server.keepAliveTimeout`
 - `server.listening`
@@ -1109,7 +1120,6 @@ Runtime-created fs SystemError metadata is covered by parity fixtures: sync, cal
 - `textEncoderStream.encoding`
 - `textEncoderStream.readable`
 - `textEncoderStream.writable`
-- `URLPattern` remains intentionally absent while Perry advertises a Node 22 runtime target; Node 22 latest-jod globals document `URL` and `URLSearchParams` but not `URLPattern`, which was added as a global in Node 24.
 - … and 6 more (see `runtime-parity.md` for the full list)
 
 #### Covered (sampled)
@@ -1260,15 +1270,9 @@ Runtime-created fs SystemError metadata is covered by parity fixtures: sync, cal
 
 ### node:fs/promises
 
-**Gap APIs: 3** · Already covered: 58
+**Gap APIs: 0** · Already covered: 61
 
-#### Missing from Perry
-
-- `filehandle.pull([...transforms][, options])`
-- `filehandle.pullSync([...transforms][, options])`
-- `filehandle.writer([options])`
-
-The runtime manifest intentionally has no rows for these unsupported FileHandle APIs. The direct `fs/promises` submodule rows are present and generated API docs/DTS include the submodule.
+The FileHandle stream-iter tail is runtime-backed for the direct no-transform source/writer paths: `filehandle.pull([options])`, `filehandle.pullSync([options])`, and `filehandle.writer([options])`. Transform pipelines passed to `pull`/`pullSync` remain outside Perry's current support boundary; direct FileHandle byte iteration, writer sync/async methods, options, and auto-close lifecycle are covered by focused parity fixtures.
 
 #### Covered (sampled)
 
@@ -1330,6 +1334,9 @@ The runtime manifest intentionally has no rows for these unsupported FileHandle 
 | `filehandle.write(string[, position[, encoding]])` | `ffi:js_fs_filehandle_open` |
 | `filehandle.writeFile(data, options)` | `manifest:fs.writeFile` |
 | `filehandle.writev(buffers[, position])` | `ffi:js_fs_filehandle_open` |
+| `filehandle.pull([options])` | `manifest:fs/promises.pull` |
+| `filehandle.pullSync([options])` | `manifest:fs/promises.pullSync` |
+| `filehandle.writer([options])` | `manifest:fs/promises.writer` |
 
 ### node:sqlite
 
@@ -1441,8 +1448,6 @@ The runtime manifest intentionally has no rows for these unsupported FileHandle 
 - `params.toString()`
 - `params.values()`
 - `params[Symbol.iterator]()`
-- `urlPattern.exec(input[, baseURL])`
-- `urlPattern.test(input[, baseURL])`
 - `url.domainToASCII(domain)`
 - `url.domainToUnicode(domain)`
 - `url.urlToHttpOptions(url)`

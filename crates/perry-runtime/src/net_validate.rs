@@ -17,7 +17,8 @@
 //! codegen can call it by symbol, mirroring the Buffer factory validators.
 
 use crate::fs::validate::{
-    describe_received, is_numeric, throw_range_error_named, throw_type_error_with_code,
+    describe_received, is_numeric, throw_error_with_code, throw_range_error_named,
+    throw_type_error_with_code,
 };
 use crate::value::JSValue;
 
@@ -115,6 +116,83 @@ pub extern "C" fn js_net_validate_socket_timeout(value: f64) {
         );
         throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
     }
+}
+
+#[no_mangle]
+pub extern "C" fn js_net_validate_tos(value: f64) -> i32 {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !is_numeric(jv) {
+        let message = format!(
+            "The \"tos\" argument must be of type number. Received {}",
+            describe_received(value)
+        );
+        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    let n = if jv.is_int32() {
+        jv.as_int32() as f64
+    } else {
+        jv.as_number()
+    };
+    if n.is_nan() {
+        let message = format!(
+            "The \"tos\" argument must be of type number. Received {}",
+            describe_received(value)
+        );
+        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    if !(n.is_finite() && n.fract() == 0.0) {
+        let message = format!(
+            "The value of \"tos\" is out of range. It must be an integer. Received {}",
+            format_received_number(n)
+        );
+        throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
+    }
+    if !(0.0..=255.0).contains(&n) {
+        let message = format!(
+            "The value of \"tos\" is out of range. It must be >= 0 && <= 255. Received {}",
+            format_received_number(n)
+        );
+        throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
+    }
+    n as i32
+}
+
+#[no_mangle]
+pub extern "C" fn js_net_validate_block_list_prefix(prefix: f64, max: f64) -> i32 {
+    let jv = JSValue::from_bits(prefix.to_bits());
+    if !is_numeric(jv) {
+        let message = format!(
+            "The \"prefix\" argument must be of type number. Received {}",
+            describe_received(prefix)
+        );
+        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    let n = if jv.is_int32() {
+        jv.as_int32() as f64
+    } else {
+        jv.as_number()
+    };
+    if !(n.is_finite() && n.fract() == 0.0) {
+        let message = format!(
+            "The value of \"prefix\" is out of range. It must be an integer. Received {}",
+            format_received_number(n)
+        );
+        throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
+    }
+    if !(0.0..=max).contains(&n) {
+        let message = format!(
+            "The value of \"prefix\" is out of range. It must be >= 0 && <= {}. Received {}",
+            format_received_number(max),
+            format_received_number(n)
+        );
+        throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
+    }
+    n as i32
+}
+
+#[no_mangle]
+pub extern "C" fn js_net_throw_invalid_address() -> ! {
+    throw_error_with_code("Invalid socket address", "ERR_INVALID_ADDRESS")
 }
 
 /// `net.setDefaultAutoSelectFamily(value)` accepts only booleans.
@@ -220,6 +298,15 @@ fn is_function_value(value: f64) -> bool {
     pointer_addr(value)
         .map(crate::closure::is_closure_ptr)
         .unwrap_or(false)
+}
+
+#[no_mangle]
+pub extern "C" fn js_net_callback_ptr(value: f64) -> i64 {
+    if is_function_value(value) {
+        pointer_addr(value).unwrap_or(0) as i64
+    } else {
+        0
+    }
 }
 
 fn boxed_object(ptr: *mut crate::object::ObjectHeader) -> f64 {

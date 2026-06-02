@@ -60,8 +60,8 @@ pub(crate) use tags::{
 pub use tags::{
     JS_HANDLE_CALL_METHOD, JS_HANDLE_TYPEOF, JS_NATIVE_CRYPTO_DISPATCH, JS_NATIVE_DOMAIN_DISPATCH,
     JS_NATIVE_HTTP_DISPATCH, JS_NATIVE_MODULE_JS_LOADER, JS_NATIVE_QUERYSTRING_DISPATCH,
-    JS_NATIVE_SQLITE_DISPATCH, JS_NATIVE_WEBCRYPTO_DISPATCH, JS_NATIVE_ZLIB_DISPATCH,
-    JS_NEW_FROM_HANDLE_V8, SHORT_STRING_MAX_LEN,
+    JS_NATIVE_SQLITE_DISPATCH, JS_NATIVE_TLS_DISPATCH, JS_NATIVE_WEBCRYPTO_DISPATCH,
+    JS_NATIVE_ZLIB_DISPATCH, JS_NEW_FROM_HANDLE_V8, SHORT_STRING_MAX_LEN,
 };
 
 // Crate-internal handle dispatch atomics + callback type aliases (read by
@@ -70,8 +70,8 @@ pub(crate) use tags::{
     JsHandleArrayGetFn, JsHandleArrayLengthFn, JsHandleCallMethodFn, JsHandleObjectGetPropertyFn,
     JsHandleToStringFn, JsHandleTypeofFn, JsNativeCryptoDispatchFn, JsNativeDomainDispatchFn,
     JsNativeHttpDispatchFn, JsNativeModuleJsLoaderFn, JsNativeQuerystringDispatchFn,
-    JsNativeSqliteDispatchFn, JsNativeWebCryptoDispatchFn, JsNativeZlibDispatchFn,
-    JsNewFromHandleV8Fn, JS_HANDLE_ARRAY_GET, JS_HANDLE_ARRAY_LENGTH,
+    JsNativeSqliteDispatchFn, JsNativeTlsDispatchFn, JsNativeWebCryptoDispatchFn,
+    JsNativeZlibDispatchFn, JsNewFromHandleV8Fn, JS_HANDLE_ARRAY_GET, JS_HANDLE_ARRAY_LENGTH,
     JS_HANDLE_OBJECT_GET_PROPERTY, JS_HANDLE_TO_STRING,
 };
 
@@ -85,7 +85,7 @@ pub use handle::{
     js_set_handle_array_length, js_set_handle_call_method, js_set_handle_object_get_property,
     js_set_handle_to_string, js_set_handle_typeof, js_set_native_crypto_dispatch,
     js_set_native_domain_dispatch, js_set_native_http_dispatch, js_set_native_module_js_loader,
-    js_set_native_querystring_dispatch, js_set_native_sqlite_dispatch,
+    js_set_native_querystring_dispatch, js_set_native_sqlite_dispatch, js_set_native_tls_dispatch,
     js_set_native_webcrypto_dispatch, js_set_native_zlib_dispatch, js_set_new_from_handle_v8,
     native_module_try_js_property,
 };

@@ -14,6 +14,38 @@ use crate::lower_types::*;
 use super::helpers::{async_iterator_method_call, is_filehandle_readlines_for_await_target};
 use super::*;
 
+fn class_computed_member_registration_expr(class_name: &str, member: &ClassComputedMember) -> Expr {
+    match member.kind {
+        ClassComputedMemberKind::Method => Expr::RegisterClassComputedMethod {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            method_name: member.function.name.clone(),
+            is_static: member.is_static,
+            param_count: member.function.params.len() as u32,
+            has_rest: member
+                .function
+                .params
+                .last()
+                .map(|p| p.is_rest)
+                .unwrap_or(false),
+        },
+        ClassComputedMemberKind::Getter => Expr::RegisterClassComputedAccessor {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            getter_name: Some(member.function.name.clone()),
+            setter_name: None,
+            is_static: member.is_static,
+        },
+        ClassComputedMemberKind::Setter => Expr::RegisterClassComputedAccessor {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            getter_name: None,
+            setter_name: Some(member.function.name.clone()),
+            is_static: member.is_static,
+        },
+    }
+}
+
 mod nested_fn_decl;
 
 fn unwrap_stream_expr(mut expr: &ast::Expr) -> &ast::Expr {
@@ -194,6 +226,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             result.extend(lower_block_stmt_scoped(ctx, block)?);
         }
         ast::Stmt::Expr(expr_stmt) => {
+            result.extend(predeclare_implicit_assignment_targets(ctx, &expr_stmt.expr));
             // Desugar this.field.splice(...) to:
             //   let __temp = this.field;
             //   __temp.splice(...);
@@ -334,6 +367,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         let native_class = match (mod_name.as_str(), method.as_str()) {
                             ("net", "createConnection" | "connect") => Some(("net", "Socket")),
                             ("tls", "connect") => Some(("net", "Socket")),
+                            ("tls", "createServer" | "Server") => Some(("tls", "Server")),
                             ("net", "Socket") => Some(("net", "Socket")),
                             ("net", "Server") => Some(("net", "Server")),
                             _ => None,
@@ -396,6 +430,18 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 || ctx.classes_index.contains_key(&class_name);
             if !already_exists {
                 let class = lower_class_decl(ctx, class_decl, false)?;
+                if let Some(extends_expr) = &class.extends_expr {
+                    result.push(Stmt::Expr(Expr::RegisterClassParentDynamic {
+                        class_name: class.name.clone(),
+                        parent_expr: extends_expr.clone(),
+                    }));
+                }
+                for member in &class.computed_members {
+                    result.push(Stmt::Expr(class_computed_member_registration_expr(
+                        &class.name,
+                        member,
+                    )));
+                }
                 ctx.pending_classes.push(class);
             }
         }
@@ -526,6 +572,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         if is_var {
                             for decl in var_decl.decls.iter() {
                                 let name = get_binding_name(&decl.name)?;
+                                if let Some(init_ast) = decl.init.as_ref() {
+                                    result.extend(predeclare_implicit_assignment_targets(
+                                        ctx, init_ast,
+                                    ));
+                                }
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
                                 let id = ctx.define_local(name.clone(), Type::Any);
@@ -542,6 +593,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         } else {
                             for decl in var_decl.decls.iter().skip(1) {
                                 let name = get_binding_name(&decl.name)?;
+                                if let Some(init_ast) = decl.init.as_ref() {
+                                    result.extend(predeclare_implicit_assignment_targets(
+                                        ctx, init_ast,
+                                    ));
+                                }
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
                                 let id = ctx.define_local(name.clone(), Type::Any);
@@ -555,6 +611,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                             }
                             if let Some(decl) = var_decl.decls.first() {
                                 let name = get_binding_name(&decl.name)?;
+                                if let Some(init_ast) = decl.init.as_ref() {
+                                    result.extend(predeclare_implicit_assignment_targets(
+                                        ctx, init_ast,
+                                    ));
+                                }
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
                                 let id = ctx.define_local(name.clone(), Type::Any);
@@ -571,6 +632,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         }
                     }
                     ast::VarDeclOrExpr::Expr(expr) => {
+                        result.extend(predeclare_implicit_assignment_targets(ctx, expr));
                         Some(Box::new(Stmt::Expr(lower_expr(ctx, expr)?)))
                     }
                 }

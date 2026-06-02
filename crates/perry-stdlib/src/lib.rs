@@ -83,6 +83,9 @@ pub mod string_decoder;
 // Greenfield implementation (Node ships it deprecated since v11 but
 // many npm packages still import it).
 pub mod querystring;
+// vm — node:vm import/require shape scaffold. Execution remains in open VM
+// issues; the wrappers here retain direct-call FFI symbols.
+pub mod vm;
 pub mod worker_threads;
 
 // Re-export core
@@ -111,6 +114,7 @@ pub use readline::*;
 #[cfg(feature = "bundled-slugify")]
 pub use slugify::*;
 pub use string_decoder::*;
+pub use vm::*;
 pub use worker_threads::*;
 
 // === HTTP Server ===
@@ -187,6 +191,10 @@ pub mod net;
     not(target_os = "android")
 ))]
 pub use net::*;
+#[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+pub mod tls;
+#[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+pub use tls::*;
 
 // === Databases ===
 // pg lives behind `bundled-pg` (v0.5.566); mysql2 lives behind

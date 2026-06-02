@@ -15,7 +15,10 @@ pub(crate) use builtins::{
 };
 
 mod uses_this;
-pub(crate) use uses_this::{closure_uses_this, uses_this_expr, uses_this_stmt};
+pub(crate) use uses_this::{
+    closure_uses_new_target, closure_uses_this, uses_new_target_expr, uses_new_target_stmt,
+    uses_this_expr, uses_this_stmt,
+};
 
 /// Collect every `LocalId` referenced by `expr` (and its sub-expressions).
 ///
@@ -371,6 +374,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
                 match elem {
                     ArrayElement::Expr(e) => collect_assigned_locals_expr(e, assigned),
                     ArrayElement::Spread(e) => collect_assigned_locals_expr(e, assigned),
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -405,6 +409,28 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             }
         }
         Expr::SuperMethodCall { args, .. } => {
+            for arg in args {
+                collect_assigned_locals_expr(arg, assigned);
+            }
+        }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            collect_assigned_locals_expr(home, assigned);
+            collect_assigned_locals_expr(key, assigned);
+            collect_assigned_locals_expr(receiver, assigned);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            collect_assigned_locals_expr(home, assigned);
+            collect_assigned_locals_expr(key, assigned);
+            collect_assigned_locals_expr(receiver, assigned);
             for arg in args {
                 collect_assigned_locals_expr(arg, assigned);
             }
@@ -943,6 +969,12 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
                 collect_assigned_locals_expr(base_expr, assigned);
             }
         }
+        Expr::UrlPatternNew { input, base } => {
+            collect_assigned_locals_expr(input, assigned);
+            if let Some(base_expr) = base {
+                collect_assigned_locals_expr(base_expr, assigned);
+            }
+        }
         Expr::UrlGetHref(url)
         | Expr::UrlGetPathname(url)
         | Expr::UrlGetProtocol(url)
@@ -1045,6 +1077,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::PodLayoutSizeOf { .. }
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. }
+        | Expr::NewTarget
         | Expr::ClassRef(_)
         | Expr::Number(_)
         | Expr::Integer(_)
@@ -1856,6 +1889,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => {
                         replace_this_in_expr(e, this_id)
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -1914,6 +1948,28 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
             }
         }
         Expr::SuperMethodCall { args, .. } => {
+            for a in args {
+                replace_this_in_expr(a, this_id);
+            }
+        }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            replace_this_in_expr(home, this_id);
+            replace_this_in_expr(key, this_id);
+            replace_this_in_expr(receiver, this_id);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            replace_this_in_expr(home, this_id);
+            replace_this_in_expr(key, this_id);
+            replace_this_in_expr(receiver, this_id);
             for a in args {
                 replace_this_in_expr(a, this_id);
             }

@@ -67,11 +67,30 @@ pub(super) fn static_receiver_class(
             return match class_name {
                 "Date" => Some("Date"),
                 "URL" => Some("URL"),
+                "URLPattern" => Some("URLPattern"),
                 "Buffer" => Some("Buffer"),
+                "BlockList" => Some("BlockList"),
+                "SocketAddress" => Some("SocketAddress"),
                 "Uint8Array" => Some("Uint8Array"),
                 "Uint8ClampedArray" => Some("Uint8ClampedArray"),
                 _ => None,
             };
+        }
+        if let ast::Expr::Member(member) = new_expr.callee.as_ref() {
+            if let ast::MemberProp::Ident(prop) = &member.prop {
+                let module_name = match member.obj.as_ref() {
+                    ast::Expr::Ident(obj) => ctx.lookup_builtin_module_alias(obj.sym.as_ref()),
+                    _ => None,
+                };
+                if module_name == Some("net")
+                    && matches!(prop.sym.as_ref(), "BlockList" | "SocketAddress")
+                {
+                    return match prop.sym.as_ref() {
+                        "BlockList" => Some("BlockList"),
+                        _ => Some("SocketAddress"),
+                    };
+                }
+            }
         }
     }
     // #809: an object literal receiver, or `Object.create(...)`, is
@@ -114,7 +133,10 @@ pub(super) fn static_receiver_class(
                 return match n.as_str() {
                     "Date" => Some("Date"),
                     "URL" => Some("URL"),
+                    "URLPattern" => Some("URLPattern"),
                     "Buffer" => Some("Buffer"),
+                    "BlockList" => Some("BlockList"),
+                    "SocketAddress" => Some("SocketAddress"),
                     "Uint8Array" => Some("Uint8Array"),
                     "Uint8ClampedArray" => Some("Uint8ClampedArray"),
                     _ => None,

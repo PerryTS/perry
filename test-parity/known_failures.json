@@ -116,23 +116,11 @@
     "category": "bug-open",
     "reason": "node:stream/web: ws.abort() during active pipeTo \u2014 pipeTo Promise doesn't reject. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/web/from-async-generator-function": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: ReadableStream.from(asyncGen()) \u2014 iteration wrong or fails. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/web/writer-write-resolves-after-sink": {
     "issue": "1545",
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: writer.write() Promise resolution timing \u2014 resolves before sink processes chunk. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/web/from-async-gen-throws-mid": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: RS.from(asyncGen throws mid) \u2014 read() does not reject. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/web/cancel-during-pull": {
     "issue": "1545",

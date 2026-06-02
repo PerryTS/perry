@@ -98,6 +98,41 @@ pub(super) fn x509_colon_hex(bytes: &[u8]) -> String {
         .join(":")
 }
 
+fn x509_string_f64(s: &str) -> f64 {
+    let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+fn x509_time_millis(time: &x509_cert::time::Time) -> f64 {
+    let dt = time.to_date_time();
+    let Some(date) =
+        chrono::NaiveDate::from_ymd_opt(dt.year() as i32, dt.month() as u32, dt.day() as u32)
+    else {
+        return f64::NAN;
+    };
+    let Some(time) =
+        chrono::NaiveTime::from_hms_opt(dt.hour() as u32, dt.minutes() as u32, dt.seconds() as u32)
+    else {
+        return f64::NAN;
+    };
+    let dt = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+        date.and_time(time),
+        chrono::Utc,
+    );
+    dt.timestamp_millis() as f64
+}
+
+fn x509_der_to_pem(der: &[u8]) -> String {
+    let b64 = base64::engine::general_purpose::STANDARD.encode(der);
+    let mut pem = String::from("-----BEGIN CERTIFICATE-----\n");
+    for chunk in b64.as_bytes().chunks(64) {
+        pem.push_str(std::str::from_utf8(chunk).unwrap_or(""));
+        pem.push('\n');
+    }
+    pem.push_str("-----END CERTIFICATE-----\n");
+    pem
+}
+
 fn throw_x509_parse_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = perry_runtime::error::js_error_new_with_message(msg);
@@ -189,21 +224,26 @@ pub unsafe extern "C" fn js_crypto_x509_new(input_ptr: i64) -> f64 {
 /// Read-only property dispatch for an X509Certificate handle.
 pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
     use sha1::Sha1;
-    use sha2::{Digest, Sha256};
+    use sha2::{Digest, Sha256, Sha512};
+    if matches!(property, "toString" | "toJSON") {
+        return dispatch_x509_method_property(handle, property);
+    }
     let h = match get_handle_mut::<X509Handle>(handle) {
         Some(h) => h,
         None => return nanbox_undefined(),
     };
-    let string_f64 = |s: &str| -> f64 {
-        let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
-        f64::from_bits(JSValue::string_ptr(ptr).bits())
-    };
     let tbs = &h.cert.tbs_certificate;
     match property {
-        "subject" => string_f64(&x509_format_name(&tbs.subject)),
-        "issuer" => string_f64(&x509_format_name(&tbs.issuer)),
-        "validFrom" => string_f64(&x509_format_time(&tbs.validity.not_before)),
-        "validTo" => string_f64(&x509_format_time(&tbs.validity.not_after)),
+        "subject" => x509_string_f64(&x509_format_name(&tbs.subject)),
+        "issuer" => x509_string_f64(&x509_format_name(&tbs.issuer)),
+        "validFrom" => x509_string_f64(&x509_format_time(&tbs.validity.not_before)),
+        "validTo" => x509_string_f64(&x509_format_time(&tbs.validity.not_after)),
+        "validFromDate" => perry_runtime::date::js_date_new_from_timestamp(x509_time_millis(
+            &tbs.validity.not_before,
+        )),
+        "validToDate" => perry_runtime::date::js_date_new_from_timestamp(x509_time_millis(
+            &tbs.validity.not_after,
+        )),
         "serialNumber" => {
             let hex_str: String = tbs
                 .serial_number
@@ -211,15 +251,19 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
                 .iter()
                 .map(|b| format!("{:02X}", b))
                 .collect();
-            string_f64(&hex_str)
+            x509_string_f64(&hex_str)
         }
         "fingerprint" => {
             let digest = Sha1::digest(&h.der);
-            string_f64(&x509_colon_hex(&digest))
+            x509_string_f64(&x509_colon_hex(&digest))
         }
         "fingerprint256" => {
             let digest = Sha256::digest(&h.der);
-            string_f64(&x509_colon_hex(&digest))
+            x509_string_f64(&x509_colon_hex(&digest))
+        }
+        "fingerprint512" => {
+            let digest = Sha512::digest(&h.der);
+            x509_string_f64(&x509_colon_hex(&digest))
         }
         "ca" => {
             // BasicConstraints (id-ce 2.5.29.19) cA flag.
@@ -236,6 +280,35 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
         }
         _ => nanbox_undefined(),
     }
+}
+
+pub unsafe fn dispatch_x509_method(handle: i64, method: &str, _args: &[f64]) -> f64 {
+    let h = match get_handle_mut::<X509Handle>(handle) {
+        Some(h) => h,
+        None => return nanbox_undefined(),
+    };
+    match method {
+        "toString" | "toJSON" => x509_string_f64(&x509_der_to_pem(&h.der)),
+        _ => nanbox_undefined(),
+    }
+}
+
+pub unsafe fn dispatch_x509_method_property(handle: i64, property: &str) -> f64 {
+    let name_bytes: &'static [u8] = match property {
+        "toString" => b"toString",
+        "toJSON" => b"toJSON",
+        _ => return nanbox_undefined(),
+    };
+    let this_f64 =
+        f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF));
+    extern "C" {
+        fn js_class_method_bind(
+            instance: f64,
+            method_name_ptr: *const u8,
+            method_name_len: usize,
+        ) -> f64;
+    }
+    js_class_method_bind(this_f64, name_bytes.as_ptr(), name_bytes.len())
 }
 
 /// Extract the BasicConstraints `cA` flag (default false when absent).

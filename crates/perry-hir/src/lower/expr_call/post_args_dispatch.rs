@@ -11,7 +11,7 @@ use swc_ecma_ast as ast;
 
 use crate::ir::*;
 
-use super::super::LoweringContext;
+use super::super::{lower_expr, LoweringContext};
 use super::object_static::build_object_static_method_call;
 
 /// Proxy apply / revoke fast path. If the bare callee ident is a
@@ -78,6 +78,10 @@ pub(super) fn try_object_static_alias_call(
                 let name = ident.sym.to_string();
                 if let Some(id) = ctx.lookup_local(&name) {
                     if let Some(method) = ctx.object_static_method_aliases.get(&id).cloned() {
+                        if method == "Array.isArray" {
+                            let value = args.first().cloned().unwrap_or(Expr::Undefined);
+                            return Ok(Expr::ArrayIsArray(Box::new(value)));
+                        }
                         return Ok(build_object_static_method_call(&method, args));
                     }
                 }
@@ -130,6 +134,38 @@ pub(super) fn try_object_has_own_call(
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+    Err(args)
+}
+
+/// `obj.hasOwnProperty(key)` → `js_object_has_own(obj, key)`.
+pub(super) fn try_direct_has_own_call(
+    ctx: &mut LoweringContext,
+    call: &ast::CallExpr,
+    args: Vec<Expr>,
+    has_spread: bool,
+) -> Result<Expr, Vec<Expr>> {
+    if has_spread || args.len() != 1 {
+        return Err(args);
+    }
+    if let ast::Callee::Expr(callee_expr) = &call.callee {
+        if let ast::Expr::Member(member) = callee_expr.as_ref() {
+            if let ast::MemberProp::Ident(prop) = &member.prop {
+                if prop.sym.as_ref() == "hasOwnProperty" {
+                    let receiver =
+                        lower_expr(ctx, member.obj.as_ref()).map_err(|_| args.clone())?;
+                    return Ok(Expr::Call {
+                        callee: Box::new(Expr::ExternFuncRef {
+                            name: "js_object_has_own".to_string(),
+                            param_types: Vec::new(),
+                            return_type: Type::Any,
+                        }),
+                        args: vec![receiver, args[0].clone()],
+                        type_args: Vec::new(),
+                    });
                 }
             }
         }

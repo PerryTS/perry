@@ -67,7 +67,7 @@ pub fn is_date_cell_addr(addr: usize) -> bool {
     // 0x40000 (past the old 0x1000 floor), any untyped `request.headers.get()`
     // dispatch routed its receiver through `is_date_value` here and segfaulted.
     // Reject the whole small-handle band so this is an exact heap-pointer check.
-    if addr < 0x100000 {
+    if addr < 0x100000 || !crate::object::is_valid_obj_ptr(addr as *const u8) {
         return false;
     }
     unsafe {

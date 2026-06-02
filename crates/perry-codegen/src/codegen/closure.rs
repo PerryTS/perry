@@ -41,7 +41,7 @@ pub(super) fn compile_closure(
     enums: &HashMap<(String, String), perry_hir::EnumValue>,
     static_field_globals: &HashMap<(String, String), String>,
     class_ids: &HashMap<String, u32>,
-    func_signatures: &HashMap<u32, (usize, bool, bool)>,
+    func_signatures: &HashMap<u32, (usize, bool, bool, bool)>,
     func_synthetic_arguments: &std::collections::HashSet<u32>,
     module_prefix: &str,
     module_boxed_vars: &std::collections::HashSet<u32>,
@@ -51,28 +51,38 @@ pub(super) fn compile_closure(
 ) -> Result<()> {
     // Destructure the closure expression. We trust that the caller
     // passes only `Expr::Closure` here (from `collect_closures_*`).
-    let (params, body, captures, captures_this, enclosing_class, is_async, is_strict) =
-        match closure_expr {
-            perry_hir::Expr::Closure {
-                params,
-                body,
-                captures,
-                captures_this,
-                enclosing_class,
-                is_async,
-                is_strict,
-                ..
-            } => (
-                params,
-                body,
-                captures,
-                *captures_this,
-                enclosing_class.clone(),
-                *is_async,
-                *is_strict,
-            ),
-            _ => return Err(anyhow!("compile_closure: expected Expr::Closure")),
-        };
+    let (
+        params,
+        body,
+        captures,
+        captures_this,
+        captures_new_target,
+        enclosing_class,
+        is_async,
+        is_strict,
+    ) = match closure_expr {
+        perry_hir::Expr::Closure {
+            params,
+            body,
+            captures,
+            captures_this,
+            captures_new_target,
+            enclosing_class,
+            is_async,
+            is_strict,
+            ..
+        } => (
+            params,
+            body,
+            captures,
+            *captures_this,
+            *captures_new_target,
+            enclosing_class.clone(),
+            *is_async,
+            *is_strict,
+        ),
+        _ => return Err(anyhow!("compile_closure: expected Expr::Closure")),
+    };
 
     let llvm_name = format!("perry_closure_{}__{}", module_prefix, func_id);
 
@@ -88,14 +98,17 @@ pub(super) fn compile_closure(
     let lf = llmod.define_function(&llvm_name, DOUBLE, llvm_params);
     let _ = lf.create_block("entry");
 
+    let mut closure_boxed_vars = module_boxed_vars.clone();
+    super::arguments::add_arguments_mapped_boxes(params, &mut closure_boxed_vars);
+
     // Allocate slots for the closure's own params (captures don't get
     // alloca slots — they're accessed via the runtime).
     let locals: HashMap<u32, String> = {
         let blk = lf.block_mut(0).unwrap();
         let mut map = HashMap::new();
         for p in params {
-            let slot = blk.alloca(DOUBLE);
-            blk.store(DOUBLE, &format!("%arg{}", p.id), &slot);
+            let arg_name = format!("%arg{}", p.id);
+            let slot = super::arguments::store_param_slot(blk, p, &closure_boxed_vars, &arg_name);
             map.insert(p.id, slot);
         }
         map
@@ -164,8 +177,24 @@ pub(super) fn compile_closure(
     // Arrow-in-class leftover path (`enclosing_class.is_some()` without
     // the object-literal patch) keeps the old 0.0 sentinel — reads
     // return a bogus value but don't crash.
+    let new_target_stack = if captures_new_target {
+        let new_target_cap_idx = auto_captures.len() as u32;
+        let blk = lf.block_mut(0).unwrap();
+        let slot = blk.alloca(DOUBLE);
+        let idx_str = new_target_cap_idx.to_string();
+        let v = blk.call(
+            DOUBLE,
+            "js_closure_get_capture_f64",
+            &[(I64, "%this_closure"), (I32, &idx_str)],
+        );
+        blk.store(DOUBLE, &v, &slot);
+        vec![slot]
+    } else {
+        Vec::new()
+    };
+
     let this_stack = if captures_this || enclosing_class.is_some() {
-        let this_cap_idx = auto_captures.len() as u32;
+        let this_cap_idx = (auto_captures.len() + usize::from(captures_new_target)) as u32;
         let blk = lf.block_mut(0).unwrap();
         let slot = blk.alloca(DOUBLE);
         if captures_this {
@@ -192,8 +221,6 @@ pub(super) fn compile_closure(
     // closure's own let-bindings. We don't add the captured-from-outer
     // ids here because those are already boxed in the outer function;
     // the closure body just sees them via the capture mechanism.
-    let closure_boxed_vars = module_boxed_vars.clone();
-
     let clamp_fn_ids: std::collections::HashSet<u32> = cross_module
         .clamp3_functions
         .union(&cross_module.clamp_u8_functions)
@@ -229,6 +256,7 @@ pub(super) fn compile_closure(
         pending_label: None,
         classes,
         this_stack,
+        new_target_stack,
         class_stack,
         methods,
         module_globals,
@@ -341,6 +369,12 @@ pub(super) fn compile_closure(
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         buffer_alias_base,
     };
+
+    super::arguments::materialize_arguments_object(
+        &mut ctx,
+        params,
+        super::arguments::ArgumentsCallee::CurrentClosure,
+    );
 
     if is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, body)

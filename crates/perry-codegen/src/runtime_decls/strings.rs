@@ -20,6 +20,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Dynamic string coercion: takes any NaN-boxed JSValue and returns a
     // raw string handle (`crates/perry-runtime/src/value.rs:813`).
     module.declare_function("js_jsvalue_to_string", I64, &[DOUBLE]);
+    // #3146: nullish-guarded `.toString()` member-call variant.
+    module.declare_function("js_jsvalue_to_string_method", I64, &[DOUBLE]);
 
     // Fused string+value concat (issue #58): collapses js_jsvalue_to_string +
     // js_string_concat into a single allocation for number operands.
@@ -163,10 +165,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // `arguments.length` in a `function(a, b) { …arguments… }` returned from
     // another function.
     module.declare_function("js_register_closure_synthetic_arguments", VOID, &[PTR, I32]);
+    module.declare_function("js_register_closure_rest_and_arguments", VOID, &[PTR, I32]);
     module.declare_function("js_register_closure_arity", VOID, &[PTR, I32]);
     module.declare_function("js_register_closure_length", VOID, &[PTR, I32]);
+    module.declare_function("js_register_closure_arrow_function", VOID, &[PTR]);
     module.declare_function("js_register_closure_async_function", VOID, &[PTR]);
     module.declare_function("js_register_closure_generator_function", VOID, &[PTR]);
+    module.declare_function("js_register_closure_async_generator_function", VOID, &[PTR]);
     module.declare_function("js_closure_call0", DOUBLE, &[I64]);
     module.declare_function("js_closure_call1", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_closure_call2", DOUBLE, &[I64, DOUBLE, DOUBLE]);
@@ -680,6 +685,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_v8_namespace", DOUBLE, &[PTR, I64]);
     module.declare_function("js_v8_throw_not_building_snapshot", DOUBLE, &[]);
     module.declare_function("js_v8_promise_hook_register", DOUBLE, &[]);
+    module.declare_function("js_v8_promise_hooks_on_init", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_v8_promise_hooks_on_before", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_v8_promise_hooks_on_after", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_v8_promise_hooks_on_settled", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_v8_promise_hooks_create_hook", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_thread_cpu_usage", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_available_memory", DOUBLE, &[]);
     module.declare_function("js_process_constrained_memory", DOUBLE, &[]);
@@ -787,6 +797,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_box_alloc", I64, &[DOUBLE]);
     module.declare_function("js_box_get", DOUBLE, &[I64]);
     module.declare_function("js_box_set", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_arguments_object_alloc", I64, &[DOUBLE, DOUBLE, I32]);
+    module.declare_function("js_arguments_object_map_index", VOID, &[I64, I32, I64]);
+    module.declare_function("js_array_like_to_array", I64, &[DOUBLE]);
     module.declare_function("js_object_get_class_id", I32, &[I64]);
     module.declare_function("js_object_alloc_with_parent", I64, &[I32, I32, I32]);
     // Class instance allocator that pre-populates the keys_array with
@@ -923,6 +936,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_array_sort_with_comparator", I64, &[I64, I64]);
     // #2796: validate sort/toSorted comparator (function | undefined) before sorting.
     module.declare_function("js_validate_array_comparator", I64, &[DOUBLE]);
+    // #4091: non-callable callback validators for higher-order array /
+    // TypedArray methods. Standard form takes the boxed callback; the `map`
+    // form also takes the receiver handle so it can pick the typed-array
+    // message format.
+    module.declare_function("js_validate_array_callback", I64, &[DOUBLE]);
+    module.declare_function("js_validate_array_map_callback", I64, &[I64, DOUBLE]);
     // ES2023 immutable array methods
     module.declare_function("js_array_to_reversed", I64, &[I64]);
     module.declare_function("js_array_to_sorted_default", I64, &[I64]);
@@ -1054,6 +1073,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // invokes the constructor with IMPLICIT_THIS bound to the new
     // instance. Returns the NaN-boxed new instance pointer.
     module.declare_function("js_new_function_construct", DOUBLE, &[DOUBLE, PTR, I64]);
+    module.declare_function("js_new_target_value", DOUBLE, &[]);
     // Read side of #838 followup (b): look up a previously-registered
     // prototype method on a function value by name. Pairs with
     // `js_register_function_prototype_method`. Returns the NaN-boxed
@@ -1072,6 +1092,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_referenceerror_new", I64, &[I64]);
     module.declare_function("js_throw_symbol_constructor_type_error", DOUBLE, &[]);
     module.declare_function("js_throw_bigint_constructor_type_error", DOUBLE, &[]);
+    module.declare_function("js_throw_strict_eval_arguments_syntax_error", DOUBLE, &[]);
     module.declare_function("js_throw_math_constructor_type_error", DOUBLE, &[]);
     module.declare_function("js_webcrypto_illegal_constructor", DOUBLE, &[]);
     module.declare_function("js_throw_type_error_const_assignment", DOUBLE, &[DOUBLE]);

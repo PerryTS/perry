@@ -239,6 +239,9 @@ pub enum Expr {
         args: Vec<Expr>,
     },
 
+    /// Runtime `new.target` value for ordinary functions.
+    NewTarget,
+
     // Class reference (for new expressions)
     ClassRef(String),
 
@@ -301,6 +304,26 @@ pub enum Expr {
         class_name: String,
         key_expr: Box<Expr>,
         value_expr: Box<Expr>,
+    },
+
+    /// Register a computed class method after evaluating the source key
+    /// through runtime `ToPropertyKey` semantics.
+    RegisterClassComputedMethod {
+        class_name: String,
+        key_expr: Box<Expr>,
+        method_name: String,
+        is_static: bool,
+        param_count: u32,
+        has_rest: bool,
+    },
+
+    /// Register one side of a computed class accessor.
+    RegisterClassComputedAccessor {
+        class_name: String,
+        key_expr: Box<Expr>,
+        getter_name: Option<String>,
+        setter_name: Option<String>,
+        is_static: bool,
     },
 
     /// Issue #1772: per-evaluation identity for a class EXPRESSION
@@ -425,6 +448,23 @@ pub enum Expr {
     // codegen by walking the parent class's method table (issue #774).
     SuperPropertyGet {
         property: String,
+    },
+
+    // Object-literal method `super[key]` read. `home` is the hidden home
+    // object captured when the method literal is created; `receiver` is the
+    // dynamic `this` for the current call.
+    ObjectSuperPropertyGet {
+        home: Box<Expr>,
+        key: Box<Expr>,
+        receiver: Box<Expr>,
+    },
+
+    // Object-literal method `super[key](args...)` call.
+    ObjectSuperMethodCall {
+        home: Box<Expr>,
+        key: Box<Expr>,
+        receiver: Box<Expr>,
+        args: Vec<Expr>,
     },
 
     // Environment variable access: process.env.VARNAME
@@ -1638,6 +1678,11 @@ pub enum Expr {
         url: Box<Expr>,
         base: Option<Box<Expr>>,
     },
+    /// new URLPattern(input?, base?) -> URLPattern object
+    UrlPatternNew {
+        input: Box<Expr>,
+        base: Option<Box<Expr>>,
+    },
     /// url.href -> string (full URL)
     UrlGetHref(Box<Expr>),
     /// url.pathname -> string (path portion)
@@ -1817,8 +1862,12 @@ pub enum Expr {
         mutable_captures: Vec<LocalId>,
         /// Whether this closure captures `this` from the enclosing scope (arrow function semantics)
         captures_this: bool,
+        /// Whether this closure captures `new.target` from the enclosing scope.
+        captures_new_target: bool,
         /// The enclosing class name if this closure captures `this` (for field access during codegen)
         enclosing_class: Option<String>,
+        /// Whether this closure came from an arrow function expression.
+        is_arrow: bool,
         /// Whether this is an async closure
         is_async: bool,
         /// Whether this is a generator closure (a `function*(){}` expression).
@@ -2160,6 +2209,17 @@ pub enum Expr {
         target: Box<Expr>,
         key: Box<Expr>,
         value: Box<Expr>,
+    },
+    /// Assignment PutValue for property references. Evaluates target/key/value
+    /// in source order, performs ordinary [[Set]] with an explicit receiver,
+    /// returns the RHS value, and throws when `strict` is true and [[Set]]
+    /// reports false.
+    PutValueSet {
+        target: Box<Expr>,
+        key: Box<Expr>,
+        value: Box<Expr>,
+        receiver: Box<Expr>,
+        strict: bool,
     },
     ReflectHas {
         target: Box<Expr>,

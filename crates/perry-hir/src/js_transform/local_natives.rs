@@ -1179,6 +1179,7 @@ pub fn fix_native_instance_expr_with_locals(
                         native_instances,
                         local_id_instances,
                     ),
+                    crate::ir::ArrayElement::Hole => {}
                 }
             }
         }
@@ -1292,6 +1293,7 @@ pub fn detect_native_instance_creation_with_context(
                 ("mysql2" | "mysql2/promise", "createConnection") => "Connection",
                 ("net", "createConnection" | "connect") => "Socket",
                 ("tls", "connect") => "Socket",
+                ("tls", "createServer" | "Server") => "Server",
                 ("net", "Socket") => "Socket",
                 ("pg", "connect") => "Client",
                 ("http" | "https", "request" | "get") => "ClientRequest",

@@ -95,6 +95,63 @@ pub(crate) fn try_lower_proxy_fn_call_apply(
     )))
 }
 
+fn put_value_static_property_fast_path(
+    ctx: &FnCtx<'_>,
+    target: &Expr,
+    key: &Expr,
+    receiver: &Expr,
+) -> Option<String> {
+    let Expr::String(property) = key else {
+        return None;
+    };
+    match (target, receiver) {
+        (Expr::LocalGet(id), Expr::LocalGet(receiver_id)) if id == receiver_id => {
+            let pod_field = ctx.pod_records.get(id).is_some_and(|local| {
+                local
+                    .layout
+                    .fields
+                    .iter()
+                    .any(|field| field.name == *property)
+            });
+            let scalar_field = ctx
+                .scalar_replaced
+                .get(id)
+                .is_some_and(|fields| fields.contains_key(property));
+            (pod_field || scalar_field).then(|| property.clone())
+        }
+        (Expr::This, Expr::This) => ctx
+            .scalar_ctor_target
+            .last()
+            .and_then(|tid| ctx.scalar_replaced.get(tid))
+            .and_then(|fields| fields.contains_key(property).then(|| property.clone())),
+        _ => None,
+    }
+}
+
+fn same_side_effect_free_receiver(target: &Expr, receiver: &Expr) -> bool {
+    match (target, receiver) {
+        (Expr::LocalGet(id), Expr::LocalGet(receiver_id)) => id == receiver_id,
+        (Expr::This, Expr::This) => true,
+        _ => false,
+    }
+}
+
+fn is_numeric_string_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.chars().all(|c| c.is_ascii_digit())
+        && !(key.len() > 1 && key.starts_with('0'))
+}
+
+fn put_value_index_fast_path(ctx: &FnCtx<'_>, target: &Expr, key: &Expr, receiver: &Expr) -> bool {
+    if !same_side_effect_free_receiver(target, receiver) || !is_array_expr(ctx, target) {
+        return false;
+    }
+    match key {
+        Expr::String(key) => is_numeric_string_key(key),
+        _ => true,
+    }
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::ProxyNew { target, handler } => {
@@ -200,6 +257,51 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 DOUBLE,
                 "js_reflect_set",
                 &[(DOUBLE, &t), (DOUBLE, &k), (DOUBLE, &v)],
+            ))
+        }
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            strict,
+        } => {
+            if let Some(property) = put_value_static_property_fast_path(ctx, target, key, receiver)
+            {
+                return super::property_set::lower(
+                    ctx,
+                    &Expr::PropertySet {
+                        object: target.clone(),
+                        property,
+                        value: value.clone(),
+                    },
+                );
+            }
+            if put_value_index_fast_path(ctx, target, key, receiver) {
+                return super::index_set::lower(
+                    ctx,
+                    &Expr::IndexSet {
+                        object: target.clone(),
+                        index: key.clone(),
+                        value: value.clone(),
+                    },
+                );
+            }
+            let t = lower_expr(ctx, target)?;
+            let k = lower_expr(ctx, key)?;
+            let v = lower_expr(ctx, value)?;
+            let r = lower_expr(ctx, receiver)?;
+            let strict_i32 = if *strict { "1" } else { "0" };
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_put_value_set",
+                &[
+                    (DOUBLE, &t),
+                    (DOUBLE, &k),
+                    (DOUBLE, &v),
+                    (DOUBLE, &r),
+                    (I32, strict_i32),
+                ],
             ))
         }
         Expr::ReflectHas { target, key } => {

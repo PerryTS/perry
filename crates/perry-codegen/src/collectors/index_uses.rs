@@ -473,6 +473,7 @@ pub fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => {
                         walk_index_uses_in_expr(e, out);
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }

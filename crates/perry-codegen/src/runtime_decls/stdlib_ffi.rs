@@ -11,6 +11,14 @@ use super::*;
 /// Signatures cross-checked against `crates/perry-runtime/src/` and
 /// `crates/perry-stdlib/src/`.
 pub fn declare_stdlib_ffi(module: &mut LlModule) {
+    // ========== node:vm ==========
+    module.declare_function("js_vm_create_context", DOUBLE, &[DOUBLE]);
+
+    // ========== node:repl ==========
+    module.declare_function("js_repl_start", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_repl_repl_server_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_repl_recoverable_new", DOUBLE, &[DOUBLE]);
+
     // ========== worker_threads ==========
     module.declare_function("js_worker_threads_worker_new", DOUBLE, &[I64, DOUBLE]);
     module.declare_function(
@@ -461,6 +469,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_async_hooks_create_hook", I64, &[DOUBLE]);
     module.declare_function("js_async_hooks_execution_async_id", DOUBLE, &[]);
     module.declare_function("js_async_hooks_trigger_async_id", DOUBLE, &[]);
+    module.declare_function("js_async_hooks_execution_async_resource", DOUBLE, &[]);
     module.declare_function("js_async_hook_enable", I64, &[I64]);
     module.declare_function("js_async_hook_disable", I64, &[I64]);
     module.declare_function("js_async_resource_new", I64, &[DOUBLE, DOUBLE]);
@@ -657,6 +666,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_get_search_params", DOUBLE, &[I64]);
     module.declare_function("js_url_new", I64, &[I64]);
     module.declare_function("js_url_new_with_base", I64, &[I64, I64]);
+    module.declare_function("js_url_pattern_new", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_url_pattern_constructor_call", DOUBLE, &[DOUBLE, DOUBLE]);
     // Issue #650: URL.canParse / URL.parse static methods (Node 18+ / 22+).
     module.declare_function("js_url_can_parse", I32, &[I64]);
     module.declare_function("js_url_can_parse_with_base", I32, &[I64, I64]);
@@ -1547,10 +1558,41 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // are `DOUBLE` because the codegen passes NA_F64 args as JS
     // numbers without unboxing. address() returns a `*mut StringHeader`
     // — `I64` at the FFI level.
-    module.declare_function("js_net_server_listen", VOID, &[I64, DOUBLE, I64]);
+    module.declare_function("js_net_server_listen", VOID, &[I64, DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_net_server_close", VOID, &[I64, I64]);
     module.declare_function("js_net_server_address", I64, &[I64]);
     module.declare_function("js_net_server_on", VOID, &[I64, I64, I64]);
+    module.declare_function("js_net_server_get_listening", DOUBLE, &[I64]);
+    module.declare_function("js_net_server_get_connections", DOUBLE, &[I64]);
+    module.declare_function("js_net_server_get_max_connections", DOUBLE, &[I64]);
+    module.declare_function("js_net_server_set_max_connections", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_net_server_get_drop_max_connection", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_net_server_set_drop_max_connection",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_net_block_list_new", I64, &[]);
+    module.declare_function("js_net_block_list_is_block_list", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_net_block_list_add_address", DOUBLE, &[I64, I64, I64]);
+    module.declare_function("js_net_block_list_add_range", DOUBLE, &[I64, I64, I64, I64]);
+    module.declare_function(
+        "js_net_block_list_add_subnet",
+        DOUBLE,
+        &[I64, I64, DOUBLE, I64],
+    );
+    module.declare_function("js_net_block_list_check", DOUBLE, &[I64, I64, I64]);
+    module.declare_function("js_net_block_list_to_json", DOUBLE, &[I64]);
+    module.declare_function("js_net_block_list_rules", I64, &[I64]);
+    module.declare_function("js_net_block_list_from_json", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_net_socket_address_new", I64, &[DOUBLE]);
+    module.declare_function("js_net_socket_address_parse", DOUBLE, &[I64]);
+    module.declare_function("js_net_socket_address_get_address", I64, &[I64]);
+    module.declare_function("js_net_socket_address_get_family", I64, &[I64]);
+    module.declare_function("js_net_socket_address_get_port", DOUBLE, &[I64]);
+    module.declare_function("js_net_socket_address_get_flowlabel", DOUBLE, &[I64]);
+    module.declare_function("js_net_socket_get_type_of_service", DOUBLE, &[I64]);
+    module.declare_function("js_net_socket_set_type_of_service", I64, &[I64, DOUBLE]);
     // Issue #2131 — net.Socket / net.Server lifecycle + EventEmitter
     // surface (lifecycle.rs in perry-ext-net). Listener-mutating
     // entry points all return the handle for chaining (Node's
@@ -1639,7 +1681,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_register_class_getter", VOID, &[I64, I64, I64, I64]);
     // Refs #486: per-class setter dispatch — see object.rs::js_register_class_setter.
     module.declare_function("js_register_class_setter", VOID, &[I64, I64, I64, I64]);
-    module.declare_function("js_register_class_method", VOID, &[I64, I64, I64, I64, I64]);
+    module.declare_function(
+        "js_register_class_method",
+        VOID,
+        &[I64, I64, I64, I64, I64, I64],
+    );
     // #1787: register a class's standalone constructor so `new
     // <classObjectValue>()` can replay it on a dynamically-allocated instance.
     module.declare_function("js_register_class_constructor", VOID, &[I64, I64, I64]);
@@ -1667,6 +1713,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_implicit_this_get", DOUBLE, &[]);
     module.declare_function("js_implicit_this_get_sloppy", DOUBLE, &[]);
     module.declare_function("js_implicit_this_set", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_new_target_get", DOUBLE, &[]);
+    module.declare_function("js_new_target_set", DOUBLE, &[DOUBLE]);
 
     // ========== Runtime init / module loader ==========
     module.declare_function("js_get_export", DOUBLE, &[I64, I64, I64]);

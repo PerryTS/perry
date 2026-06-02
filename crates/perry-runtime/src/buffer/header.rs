@@ -41,7 +41,7 @@ use std::sync::{Mutex, OnceLock};
 
 static EXTERNAL_BUFFER_REGISTRY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
 static EXTERNAL_UINT8ARRAY_REGISTRY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
-static EXTERNAL_CRYPTO_KEY_META_REGISTRY: OnceLock<Mutex<HashMap<usize, (u8, u8, u8)>>> =
+static EXTERNAL_CRYPTO_KEY_META_REGISTRY: OnceLock<Mutex<HashMap<usize, CryptoKeyMeta>>> =
     OnceLock::new();
 
 fn external_buffers() -> &'static Mutex<HashSet<usize>> {
@@ -52,9 +52,11 @@ fn external_uint8arrays() -> &'static Mutex<HashSet<usize>> {
     EXTERNAL_UINT8ARRAY_REGISTRY.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-fn external_crypto_keys() -> &'static Mutex<HashMap<usize, (u8, u8, u8)>> {
+fn external_crypto_keys() -> &'static Mutex<HashMap<usize, CryptoKeyMeta>> {
     EXTERNAL_CRYPTO_KEY_META_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
+
+pub type CryptoKeyMeta = (u8, u8, u8, bool, u32);
 
 thread_local! {
     static BUFFER_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
@@ -99,7 +101,9 @@ thread_local! {
     /// algo: 1 HMAC, 2 AES-GCM, 3 AES-KW, 4 AES-CBC, 5 AES-CTR, 6 HKDF, 7 PBKDF2
     /// hash: 1 SHA-1, 2 SHA-256, 3 SHA-384, 4 SHA-512
     /// kind: 1 secret, 2 private, 3 public
-    static CRYPTO_KEY_META_REGISTRY: RefCell<PtrHashMap<usize, (u8, u8, u8)>> =
+    /// extractable: WebCrypto CryptoKey.extractable
+    /// usages: bitset matching WebCrypto usage names
+    static CRYPTO_KEY_META_REGISTRY: RefCell<PtrHashMap<usize, CryptoKeyMeta>> =
         RefCell::new(new_ptr_hash_map());
     /// String-backed asymmetric KeyObject surrogates returned by crypto
     /// helpers. They intentionally keep PEM/internal-string storage so the
@@ -291,16 +295,42 @@ pub fn is_secret_key(addr: usize) -> bool {
 }
 
 pub fn mark_as_crypto_key(addr: usize, algo: u8, hash: u8, kind: u8) {
+    mark_as_crypto_key_with_flags(
+        addr,
+        algo,
+        hash,
+        kind,
+        true,
+        default_crypto_key_usages(algo, kind),
+    );
+}
+
+pub fn mark_as_crypto_key_with_flags(
+    addr: usize,
+    algo: u8,
+    hash: u8,
+    kind: u8,
+    extractable: bool,
+    usages: u32,
+) {
     CRYPTO_KEY_META_REGISTRY.with(|r| {
-        r.borrow_mut().insert(addr, (algo, hash, kind));
+        r.borrow_mut()
+            .insert(addr, (algo, hash, kind, extractable, usages));
     });
 }
 
 #[no_mangle]
-pub extern "C" fn js_buffer_mark_as_crypto_key_external(addr: usize, algo: u8, hash: u8, kind: u8) {
+pub extern "C" fn js_buffer_mark_as_crypto_key_external(
+    addr: usize,
+    algo: u8,
+    hash: u8,
+    kind: u8,
+    extractable: u8,
+    usages: u32,
+) {
     register_buffer(addr as *const BufferHeader);
     mark_as_uint8array(addr);
-    mark_as_crypto_key(addr, algo, hash, kind);
+    mark_as_crypto_key_with_flags(addr, algo, hash, kind, extractable != 0, usages);
     if let Ok(mut r) = external_buffers().lock() {
         r.insert(addr);
     }
@@ -308,11 +338,11 @@ pub extern "C" fn js_buffer_mark_as_crypto_key_external(addr: usize, algo: u8, h
         r.insert(addr);
     }
     if let Ok(mut r) = external_crypto_keys().lock() {
-        r.insert(addr, (algo, hash, kind));
+        r.insert(addr, (algo, hash, kind, extractable != 0, usages));
     }
 }
 
-pub fn crypto_key_meta(addr: usize) -> Option<(u8, u8, u8)> {
+pub fn crypto_key_meta(addr: usize) -> Option<CryptoKeyMeta> {
     CRYPTO_KEY_META_REGISTRY
         .with(|r| r.borrow().get(&addr).copied())
         .or_else(|| {
@@ -321,6 +351,30 @@ pub fn crypto_key_meta(addr: usize) -> Option<(u8, u8, u8)> {
                 .ok()
                 .and_then(|r| r.get(&addr).copied())
         })
+}
+
+fn default_crypto_key_usages(algo: u8, kind: u8) -> u32 {
+    const ENCRYPT: u32 = 1 << 0;
+    const DECRYPT: u32 = 1 << 1;
+    const SIGN: u32 = 1 << 2;
+    const VERIFY: u32 = 1 << 3;
+    const DERIVE_KEY: u32 = 1 << 4;
+    const DERIVE_BITS: u32 = 1 << 5;
+    const WRAP_KEY: u32 = 1 << 6;
+    const UNWRAP_KEY: u32 = 1 << 7;
+
+    match (algo, kind) {
+        (1, 1) => SIGN | VERIFY,
+        (2 | 4 | 5, 1) => ENCRYPT | DECRYPT | WRAP_KEY | UNWRAP_KEY,
+        (3, 1) => WRAP_KEY | UNWRAP_KEY,
+        (6 | 7, 1) => DERIVE_KEY | DERIVE_BITS,
+        (8 | 10 | 12 | 14, 2) => SIGN,
+        (8 | 10 | 12 | 14, 3) => VERIFY,
+        (9 | 11, 2) => DERIVE_KEY | DERIVE_BITS,
+        (13, 2) => DECRYPT | UNWRAP_KEY,
+        (13, 3) => ENCRYPT | WRAP_KEY,
+        _ => 0,
+    }
 }
 
 /// `kind`: 1 public, 2 private. `asym_type`: 1 rsa, 2 ec, 3 ed25519, 4 x25519.

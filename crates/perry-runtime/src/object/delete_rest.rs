@@ -16,6 +16,9 @@ pub extern "C" fn js_object_delete_field(
         return 1;
     }
     unsafe {
+        if let Some(result) = super::arguments_object_before_delete(obj, key) {
+            return result;
+        }
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;

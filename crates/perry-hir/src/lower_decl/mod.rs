@@ -35,17 +35,18 @@ pub(crate) use body_stmt::{find_native_return_in_stmts, lower_body_stmt};
 pub(crate) use class_captures::synthesize_class_captures;
 pub(crate) use class_decl::{lower_class_decl, lower_class_from_ast};
 pub(crate) use class_members::{
-    collect_method_captures, lower_class_method, lower_class_prop,
-    lower_computed_key_method_as_field, lower_constructor, lower_getter_method,
-    lower_setter_method,
+    lower_class_method, lower_class_method_with_name, lower_class_prop, lower_constructor,
+    lower_getter_method, lower_getter_method_with_name, lower_setter_method,
+    lower_setter_method_with_name,
 };
 pub(crate) use class_validation::validate_legacy_decorator_surface;
 pub(crate) use enum_decl::lower_enum_decl;
 pub(crate) use fn_decl::lower_fn_decl;
 pub(crate) use helpers::{
-    append_synthetic_arguments_param, body_uses_arguments, build_default_param_stmts,
-    collect_let_decls_in_stmt, init_is_webassembly_instantiate, is_inspect_custom_key,
-    is_symbol_iterator_key, symbol_well_known_key,
+    append_synthetic_arguments_param, body_has_use_strict, body_uses_arguments,
+    build_default_param_stmts, collect_let_decls_in_stmt, init_is_webassembly_instantiate,
+    is_inspect_custom_key, is_symbol_iterator_key, mapped_argument_parameter_ids,
+    params_are_simple_arguments_list, symbol_well_known_key,
 };
 pub(crate) use interface_decl::lower_interface_decl;
 pub(crate) use private_members::{

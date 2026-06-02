@@ -2,6 +2,34 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1105 — fix(stream/web): ReadableStream.from sources (#4106)
+
+Folds in external contributor PR #4106: lowers `ReadableStream.from(...)` (and the `node:stream/web` alias) to the `readable_stream` native `from` constructor so building a web `ReadableStream` from an iterable/async-iterable source works. Merged on top of current `main`; the only conflict was in `crates/perry-hir/src/lower/expr_call/native_module.rs`, where this PR's `ReadableStream.from` static-call block and main's broadened `is_process_ref` gate (#process namespace/default-import) landed in the same region — both were kept.
+
+## v0.5.1104 — feat(repl): scripted node:repl lifecycle parity (#4116)
+
+Folds in external contributor PR #4116: adds a scripted `node:repl` lifecycle surface (`repl.start`, server `.defineCommand`/`.eval`/`.write`/`.close` and the associated REPLServer shape) so scripted REPL sessions run under Perry. Introduces the `node:repl` module to the manifest (total: 2592 entries across 109 modules; `.d.ts` coverage 1788 entries across 106 modules) plus node-suite parity fixtures. Merged on top of current `main`; only the auto-generated doc count/coverage lines conflicted and were regenerated from the manifest.
+
+## v0.5.1103 — fix(fs): fs.promises FileHandle stream/iterator tail (#4119)
+
+Folds in external contributor PR #4119: completes the `fs.promises` `FileHandle` surface with the streaming/async-iterator tail (`createReadStream`/`createWriteStream`/`readableWebStream` and `for await` iteration over a handle). Adds the corresponding manifest entries (total: 2574 across 108 modules) and node-suite parity fixtures. Merged on top of current `main` (only the auto-generated `docs/src/api/reference.md` entry-count line conflicted; regenerated from the manifest).
+
+## v0.5.1102 — chore(parity): resolve v8 skiplist/manifest triage ambiguity (#3700)
+
+`scripts/parity-skiplist.toml` skiplisted `node:v8` while the API manifest still claimed v8 entries, making compatibility triage ambiguous (a v8 failure could be bucketed as both `Skip` and a manifest/runtime gap). Documented the rule that resolves it: the skiplist and the manifest measure **different axes** — the manifest records whether an API exists and is callable; the skiplist records whether it is a byte-for-byte parity target. A skiplisted-but-manifest-claimed API is not a conflict.
+
+Verified that v8's manifest surface is genuinely callable and matches Node's *shapes* (`serialize`/`deserialize` roundtrip, `getHeapStatistics`/`getHeapSpaceStatistics`/`getHeapCodeStatistics`, `cachedDataVersionTag`, `GCProfiler`), but is not byte-parity-testable: `serialize`/`deserialize` use the JSC wire format (Perry isn't V8, so the bytes differ from Node's V8 format) and the heap-introspection/`cachedDataVersionTag` values are runtime-specific (skip categories 2 + 3). Corrected v8's skiplist reason accordingly and added a header note documenting the skiplist-vs-manifest distinction and the triage rule. `punycode` (the other module named in #3700) was already removed from the skiplist on an earlier change. Config-only; no runtime/manifest/docs impact (the parity sweep is tag-gated).
+
+## v0.5.1101 — fix(module): implement SourceMap.findEntry / findOrigin (#3675)
+
+`new module.SourceMap(payload)` constructed an instance but `findEntry`/`findOrigin` were noop stubs that returned `undefined`. Implemented both against the Source Map v3 mappings grammar (`crates/perry-runtime/src/process.rs`):
+
+- Added a base64 VLQ decoder and a `mappings` parser that tracks cumulative source/original-line/original-column/name indices across segments. `findEntry(lineNumber, columnNumber)` returns the greatest decoded entry whose generated position is `<=` the query, shaped as Node's `{ generatedLine, generatedColumn, originalSource, originalLine, originalColumn, name? }` (the `name` field is attached only for genuinely-named 5-field segments).
+- `findOrigin(lineNumber, columnNumber)` matches Node's behavior: it echoes the queried coordinates (`null` when an argument is not a finite number) and tags on the matched entry's `name`/`fileName`, returning an empty object for the special numeric `(0, 0)` query.
+- The bound method closures capture the payload (slot 0) so the lookup thunks can read its `mappings`/`sources`/`names` (mirrors the dgram socket-method pattern); the old `module_noop_function`/`module_source_map_noop` stubs were removed.
+
+Verified byte-for-byte against `node --experimental-strip-types` across the issue repro, an explicit named (5-field) segment, a multi-source mapping with negative original-line deltas, and nine `findOrigin` argument permutations. New parity fixture: `test-parity/node-suite/module/methods/source-map-find-entry.ts`.
+
 ## v0.5.1100 — fix(check): reconcile stale Node builtin table with modern builtins (#3744)
 
 `perry check --check-deps` reported a clean build for unsupported modern `node:*` imports that `perry compile` rejects. The cause: the hand-maintained `is_node_builtin` table in `crates/perry/src/commands/deps.rs` predated Node's newer builtins, so names like `node:sea` and `node:inspector` were not recognized as builtins at all — and the U-006 dependency diagnostic only fires for recognized-but-unsupported builtins, so they fell through to a clean result.

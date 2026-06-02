@@ -90,6 +90,13 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
     } else {
         bits as usize
     };
+    unsafe {
+        if let Some(arr) =
+            crate::object::arguments_object_to_array(ptr_bits as *const crate::object::ObjectHeader)
+        {
+            return arr;
+        }
+    }
     js_array_clone(ptr_bits as *const ArrayHeader)
 }
 

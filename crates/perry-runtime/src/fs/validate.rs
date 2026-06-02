@@ -546,6 +546,42 @@ pub(crate) fn validate_object_options(arg_name: &str, value: f64) {
     throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
 }
 
+/// Validate the options object passed to `fs.mkdir*` (#3662). Node accepts an
+/// omitted value or a numeric/string `mode` shorthand without inspecting it;
+/// when an options *object* is supplied it requires `recursive` to be a boolean
+/// and `mode` to be a number or string, throwing
+/// `TypeError [ERR_INVALID_ARG_TYPE]` otherwise. `recursive` is checked first,
+/// matching Node's `validateBoolean(recursive, 'options.recursive')` ordering.
+pub(crate) fn validate_mkdir_options(options_value: f64) {
+    if !is_plain_options_object(options_value) {
+        return;
+    }
+    let obj =
+        JSValue::from_bits(options_value.to_bits()).as_pointer::<crate::object::ObjectHeader>();
+
+    let recursive_key = js_string_from_bytes(b"recursive".as_ptr(), 9);
+    let recursive = crate::object::js_object_get_field_by_name_f64(obj, recursive_key);
+    let recursive_jv = JSValue::from_bits(recursive.to_bits());
+    if !is_nullish(recursive_jv) && !recursive_jv.is_bool() {
+        let message = format!(
+            "The \"options.recursive\" property must be of type boolean. Received {}",
+            describe_received(recursive)
+        );
+        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+
+    let mode_key = js_string_from_bytes(b"mode".as_ptr(), 4);
+    let mode = crate::object::js_object_get_field_by_name_f64(obj, mode_key);
+    let mode_jv = JSValue::from_bits(mode.to_bits());
+    if !is_nullish(mode_jv) && !is_numeric(mode_jv) && !mode_jv.is_any_string() {
+        let message = format!(
+            "The \"options.mode\" property must be of type number. Received {}",
+            describe_received(mode)
+        );
+        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+}
+
 /// Validate the `mode` bitmask used by `fs.access*` and `fs.copyFile*`.
 /// Node treats `null`/`undefined` as the default, rejects non-numbers with a
 /// short `ERR_INVALID_ARG_TYPE` message, and rejects values whose integer part

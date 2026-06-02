@@ -814,6 +814,7 @@ pub fn transform_expr(
                 match elem {
                     crate::ir::ArrayElement::Expr(e) => transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker),
                     crate::ir::ArrayElement::Spread(e) => transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker),
+                    crate::ir::ArrayElement::Hole => {}
                 }
             }
         }
@@ -957,6 +958,28 @@ pub fn transform_expr(
             }
         }
         Expr::SuperMethodCall { args, .. } => {
+            for arg in args {
+                transform_expr(arg, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            }
+        }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            transform_expr(home, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(key, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(receiver, js_imports, extern_func_to_js, local_name_to_js, tracker);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            transform_expr(home, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(key, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(receiver, js_imports, extern_func_to_js, local_name_to_js, tracker);
             for arg in args {
                 transform_expr(arg, js_imports, extern_func_to_js, local_name_to_js, tracker);
             }

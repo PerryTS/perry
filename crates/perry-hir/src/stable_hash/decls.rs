@@ -25,6 +25,7 @@ impl SH for Class {
             setters,
             static_fields,
             static_methods,
+            computed_members,
             decorators,
             is_exported,
             aliases,
@@ -43,9 +44,29 @@ impl SH for Class {
         setters.hash(h);
         static_fields.hash(h);
         static_methods.hash(h);
+        computed_members.hash(h);
         decorators.hash(h);
         is_exported.hash(h);
         aliases.hash(h);
+    }
+}
+
+impl SH for ClassComputedMemberKind {
+    fn hash<H: StableHasher>(&self, h: &mut H) {
+        match self {
+            ClassComputedMemberKind::Method => tag(h, 1),
+            ClassComputedMemberKind::Getter => tag(h, 2),
+            ClassComputedMemberKind::Setter => tag(h, 3),
+        }
+    }
+}
+
+impl SH for ClassComputedMember {
+    fn hash<H: StableHasher>(&self, h: &mut H) {
+        self.key_expr.hash(h);
+        self.function.hash(h);
+        self.is_static.hash(h);
+        self.kind.hash(h);
     }
 }
 
@@ -252,6 +273,7 @@ impl SH for Param {
             default,
             decorators,
             is_rest,
+            arguments_object,
         } = self;
         id.hash(h);
         name.hash(h);
@@ -259,5 +281,21 @@ impl SH for Param {
         default.hash(h);
         decorators.hash(h);
         is_rest.hash(h);
+        arguments_object.hash(h);
+    }
+}
+
+impl SH for ArgumentsObjectMeta {
+    fn hash<H: StableHasher>(&self, h: &mut H) {
+        let ArgumentsObjectMeta {
+            strict,
+            simple_parameters,
+            mapped_parameter_ids,
+            restricted_callee,
+        } = self;
+        strict.hash(h);
+        simple_parameters.hash(h);
+        mapped_parameter_ids.hash(h);
+        restricted_callee.hash(h);
     }
 }

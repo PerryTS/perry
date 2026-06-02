@@ -186,6 +186,21 @@ crates/perry-runtime/src/object/global_this.rs
 # (#4039/#4040/#4041). Peeling the cache + root-scanner groups into siblings is
 # tracked under #1435.
 crates/perry-runtime/src/object/mod.rs
+# Symbol subsystem (Symbol primitives + per-object/per-class symbol-keyed
+# property + accessor side tables, with their GC root-scan/rewrite dispatch).
+# Crossed the limit at 2159 LOC after the computed-property-names batch added
+# symbol-accessor descriptors and class-static computed-symbol registration
+# (#3557/#3558/#3559/#3560/#3561). The new helpers are interwoven with the
+# symbol root scanner, so a clean topical split is deferred to the runtime
+# file-size cleanup tracked under #1435.
+crates/perry-runtime/src/symbol.rs
+# Sibling of the #1103 object.rs split (defineProperty/getOwnPropertyNames/
+# descriptor + property-ops machinery). Allowlisted on main at 2004 LOC; this
+# PR peeled `js_to_property_key`/object-super helpers into property_key.rs and
+# `js_create_namespace` into namespace_create.rs to keep it comfortably under
+# the gate. Kept here as a backstop in case the merged dispatch tower creeps
+# back over; further descriptor/ops splits are tracked under #1435.
+crates/perry-runtime/src/object/object_ops.rs
 EOF
 )
 

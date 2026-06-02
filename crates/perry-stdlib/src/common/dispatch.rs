@@ -446,6 +446,13 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return crate::crypto::dispatch_diffie_hellman(handle, method_name, &args);
     }
 
+    #[cfg(feature = "crypto")]
+    if matches!(method_name, "toString" | "toJSON")
+        && with_handle::<crate::crypto::X509Handle, bool, _>(handle, |_| true).unwrap_or(false)
+    {
+        return crate::crypto::dispatch_x509_method(handle, method_name, &args);
+    }
+
     // crypto Cipher handle: createCipheriv(...) / createDecipheriv(...)
     // followed by .update(...).final() / .getAuthTag() / .setAuthTag() —
     // issue #1075. Method-gated like the Hash handle above so handle id
@@ -469,6 +476,11 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         && with_handle::<crate::crypto::SignHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_sign(handle, method_name, &args);
+    }
+
+    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    if crate::tls::should_dispatch_tls_handle(handle, method_name) {
+        return crate::tls::dispatch_tls_handle(handle, method_name, &args);
     }
 
     // SQLite Statement handle: stmt.raw() / .all() / .get() / .run() —
@@ -655,11 +667,13 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             ) -> f64;
         }
 
-        let is_http_server_method =
-            matches!(
-                method_name,
-                "listen" | "close" | "address" | "on" | "addListener"
-            ) || matches!(method_name, "closeAllConnections" | "closeIdleConnections");
+        let is_http_server_method = matches!(
+            method_name,
+            "listen" | "close" | "address" | "on" | "addListener" | "setTimeout"
+        ) || matches!(
+            method_name,
+            "closeAllConnections" | "closeIdleConnections" | "@@__perry_wk_asyncDispose"
+        );
         if is_http_server_method && unsafe { js_ext_http_server_is_handle(handle) } != 0 {
             return unsafe {
                 js_ext_http_server_dispatch_method(
@@ -747,6 +761,13 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             return dispatch_external_net_socket(handle, method_name, &args);
         }
         if let Some(v) = crate::common::net_method_values::dispatch_external_server_method(
+            handle,
+            method_name,
+            &args,
+        ) {
+            return v;
+        }
+        if let Some(v) = crate::common::net_method_values::dispatch_external_block_list_method(
             handle,
             method_name,
             &args,
@@ -1256,6 +1277,8 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
         // cast to i64; NaN-box with POINTER_TAG to surface as a real JS array.
         fn js_net_socket_listeners(handle: i64, event_ptr: i64) -> i64;
         fn js_net_socket_raw_listeners(handle: i64, event_ptr: i64) -> i64;
+        fn js_net_socket_get_type_of_service(handle: i64) -> f64;
+        fn js_net_socket_set_type_of_service(handle: i64, value: f64) -> i64;
     }
 
     // Parse a runtime StringHeader pointer (`address` / `eventNames`
@@ -1352,6 +1375,15 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
             f64::from_bits(0x7FFD_0000_0000_0000u64 | (arr as u64 & 0x0000_FFFF_FFFF_FFFF))
         }
         "address" => json_str_to_value(js_net_socket_address(handle)),
+        "getTypeOfService" => js_net_socket_get_type_of_service(handle),
+        "setTypeOfService" => {
+            let value = args
+                .first()
+                .copied()
+                .unwrap_or(f64::from_bits(0x7FFC_0000_0000_0001));
+            js_net_socket_set_type_of_service(handle, value);
+            nanbox_handle(handle)
+        }
         "resetAndDestroy" => {
             js_net_socket_reset_and_destroy(handle);
             nanbox_handle(handle)
@@ -1394,6 +1426,11 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
 
     #[cfg(feature = "bundled-events")]
     if let Some(value) = dispatch_event_emitter_property(handle, property_name) {
+        return value;
+    }
+
+    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    if let Some(value) = crate::tls::dispatch_tls_property(handle, property_name) {
         return value;
     }
 
@@ -1551,6 +1588,7 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "on"
                 | "addListener"
                 | "setTimeout"
+                | "@@__perry_wk_asyncDispose"
         ) && unsafe { js_ext_http_server_is_handle(handle) } != 0
         {
             return unsafe {
@@ -1846,20 +1884,25 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         return crate::crypto::dispatch_diffie_hellman_property(handle, property_name);
     }
 
-    // #1367: X509Certificate read-only properties (data values, not
-    // bound-method closures).
+    // #1367/#2563: X509Certificate data properties plus bound conversion
+    // methods.
     #[cfg(feature = "crypto")]
     if matches!(
         property_name,
         "subject"
             | "issuer"
             | "validFrom"
+            | "validFromDate"
             | "validTo"
+            | "validToDate"
             | "serialNumber"
             | "fingerprint"
             | "fingerprint256"
+            | "fingerprint512"
             | "ca"
             | "raw"
+            | "toString"
+            | "toJSON"
     ) && with_handle::<crate::crypto::X509Handle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_x509_property(handle, property_name);
@@ -2077,6 +2120,10 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
         return;
     }
 
+    if crate::common::net_method_values::dispatch_property_set(handle, property_name, value) {
+        return;
+    }
+
     // Try Fastify context dispatch (request/reply properties)
     #[cfg(feature = "http-server")]
     if with_handle::<crate::fastify::FastifyContext, bool, _>(handle, |_| true).unwrap_or(false) {
@@ -2284,6 +2331,8 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     #[cfg(feature = "database-sqlite")]
     perry_runtime::js_set_native_sqlite_dispatch(crate::sqlite::js_node_sqlite_native_dispatch);
     perry_runtime::js_set_native_domain_dispatch(crate::domain::js_domain_native_dispatch);
+    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    perry_runtime::js_set_native_tls_dispatch(crate::tls::js_tls_native_dispatch);
 
     // #2533: route captured / aliased http/https/http2 `createServer` back to
     // the perry-ext-http-server factories. Only registered when the http ext

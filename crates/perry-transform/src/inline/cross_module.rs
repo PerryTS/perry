@@ -101,11 +101,11 @@ pub fn is_cross_module_safe(body: &[Stmt]) -> bool {
 /// destination module gets any class definitions referenced by inlined
 /// cross-module method bodies. Hash naming makes dedup-by-name correct
 /// (same shape from any module → same name → identical class definition).
-pub fn gather_cross_module_anon_classes(module: &Module) -> HashMap<String, Class> {
-    let mut out: HashMap<String, Class> = HashMap::new();
+pub fn gather_cross_module_anon_classes(module: &Module) -> HashMap<String, &Class> {
+    let mut out: HashMap<String, &Class> = HashMap::new();
     for class in &module.classes {
         if class.name.starts_with("__AnonShape_") {
-            out.insert(class.name.clone(), class.clone());
+            out.insert(class.name.clone(), class);
         }
     }
     out

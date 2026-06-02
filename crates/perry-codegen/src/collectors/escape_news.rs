@@ -339,6 +339,7 @@ fn collect_used_new_fields_in_expr(
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => {
                         collect_used_new_fields_in_expr(e, non_escaping_news, used)
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -358,6 +359,28 @@ fn collect_used_new_fields_in_expr(
         | Expr::SuperMethodCall { args, .. }
         | Expr::MathMin(args)
         | Expr::MathMax(args) => {
+            for arg in args {
+                collect_used_new_fields_in_expr(arg, non_escaping_news, used);
+            }
+        }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            collect_used_new_fields_in_expr(home, non_escaping_news, used);
+            collect_used_new_fields_in_expr(key, non_escaping_news, used);
+            collect_used_new_fields_in_expr(receiver, non_escaping_news, used);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            collect_used_new_fields_in_expr(home, non_escaping_news, used);
+            collect_used_new_fields_in_expr(key, non_escaping_news, used);
+            collect_used_new_fields_in_expr(receiver, non_escaping_news, used);
             for arg in args {
                 collect_used_new_fields_in_expr(arg, non_escaping_news, used);
             }

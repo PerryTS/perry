@@ -73,14 +73,60 @@ pub fn try_lower_func_ref_call(
     // beyond the rest position) into an array literal and
     // pass that as a single argument.
     let sig = ctx.func_signatures.get(fid).copied();
-    let (declared_count, has_rest, _) = sig.unwrap_or((args.len(), false, false));
+    let (declared_count, has_rest, _, synthetic_is_rest) =
+        sig.unwrap_or((args.len(), false, false, false));
     let mut lowered: Vec<String> = Vec::with_capacity(declared_count);
-    if has_rest && ctx.func_synthetic_arguments.contains(fid) {
+    if ctx.func_synthetic_arguments.contains(fid) && has_rest && !synthetic_is_rest {
+        let lowered_args: Vec<String> = args
+            .iter()
+            .map(|arg| lower_expr(ctx, arg))
+            .collect::<Result<_>>()?;
+        let fixed_count = declared_count.saturating_sub(2);
+        let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        for idx in 0..fixed_count {
+            if let Some(arg) = lowered_args.get(idx) {
+                lowered.push(arg.clone());
+            } else {
+                lowered.push(undef_lit.clone());
+            }
+        }
+
+        let rest_count = args.len().saturating_sub(fixed_count);
+        let cap = (rest_count as u32).to_string();
+        let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+        for v in lowered_args.iter().skip(fixed_count) {
+            let blk = ctx.block();
+            current = blk.call(
+                I64,
+                "js_array_push_f64",
+                &[(I64, &current), (DOUBLE, v.as_str())],
+            );
+        }
+        let rest_box = nanbox_pointer_inline(ctx.block(), &current);
+        lowered.push(rest_box);
+
+        let cap = (args.len() as u32).to_string();
+        let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+        for v in &lowered_args {
+            let blk = ctx.block();
+            current = blk.call(
+                I64,
+                "js_array_push_f64",
+                &[(I64, &current), (DOUBLE, v.as_str())],
+            );
+        }
+        let arguments_box = nanbox_pointer_inline(ctx.block(), &current);
+        lowered.push(arguments_box);
+    } else if has_rest && ctx.func_synthetic_arguments.contains(fid) {
+        let lowered_args: Vec<String> = args
+            .iter()
+            .map(|arg| lower_expr(ctx, arg))
+            .collect::<Result<_>>()?;
         let fixed_count = declared_count.saturating_sub(1);
         let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
         for idx in 0..fixed_count {
-            if let Some(arg) = args.get(idx) {
-                lowered.push(lower_expr(ctx, arg)?);
+            if let Some(arg) = lowered_args.get(idx) {
+                lowered.push(arg.clone());
             } else {
                 lowered.push(undef_lit.clone());
             }
@@ -88,10 +134,13 @@ pub fn try_lower_func_ref_call(
 
         let cap = (args.len() as u32).to_string();
         let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-        for a in args {
-            let v = lower_expr(ctx, a)?;
+        for v in &lowered_args {
             let blk = ctx.block();
-            current = blk.call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, &v)]);
+            current = blk.call(
+                I64,
+                "js_array_push_f64",
+                &[(I64, &current), (DOUBLE, v.as_str())],
+            );
         }
         current = ctx
             .block()

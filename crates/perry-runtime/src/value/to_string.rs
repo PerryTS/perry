@@ -167,18 +167,25 @@ unsafe fn call_method_for_primitive(
     }
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let key_handle = scope.root_string_ptr(key);
-    let method = crate::object::js_object_get_field_by_name(
-        obj_ptr,
-        key_handle.get_raw_const_ptr::<crate::string::StringHeader>(),
-    );
+    let key_ptr = key_handle.get_raw_const_ptr::<crate::string::StringHeader>();
+    let has_own_method_key = crate::object::own_key_present(obj_ptr as *mut _, key_ptr);
+    let method = crate::object::js_object_get_field_by_name(obj_ptr, key_ptr);
     // Must be a callable closure value (POINTER_TAG + CLOSURE_MAGIC).
     let method_bits = method.bits();
     if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
-        return MethodOutcome::Absent;
+        return if has_own_method_key || (!method.is_undefined() && !method.is_null()) {
+            MethodOutcome::NonPrimitive
+        } else {
+            MethodOutcome::Absent
+        };
     }
     let method_ptr = (method_bits & POINTER_MASK) as usize;
     if !crate::closure::is_closure_ptr(method_ptr) {
-        return MethodOutcome::Absent;
+        return if has_own_method_key {
+            MethodOutcome::NonPrimitive
+        } else {
+            MethodOutcome::Absent
+        };
     }
     // Rebind `this` to the receiver: an INHERITED object-literal method
     // (`Object.create(proto)`) bakes its reserved `this` slot to the
@@ -197,7 +204,8 @@ unsafe fn call_method_for_primitive(
         || ret_jsv.is_bool()
         || ret_jsv.is_null()
         || ret_jsv.is_undefined()
-        || ret_jsv.is_bigint();
+        || ret_jsv.is_bigint()
+        || crate::symbol::js_is_symbol(ret) != 0;
     if is_primitive {
         MethodOutcome::Primitive(ret)
     } else {
@@ -283,6 +291,16 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                 return unsafe {
                     crate::symbol::js_symbol_to_string(value) as *mut crate::string::StringHeader
                 };
+            }
+            // #4101: a function/closure stringifies to its source text via
+            // Function.prototype.toString — covers `String(fn)`, `` `${fn}` ``,
+            // and the codegen `fn.toString()` fast-path (which routes through
+            // `js_jsvalue_to_string_method`) rather than "[object Object]".
+            if crate::closure::is_closure_ptr(ptr as usize) {
+                let func_ptr =
+                    unsafe { (*(ptr as *const crate::closure::ClosureHeader)).func_ptr as usize };
+                let s = crate::builtins::function_source_for_func_ptr(func_ptr);
+                return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
             }
             // Consult `[Symbol.toPrimitive]("string")` if the object has a
             // custom toPrimitive method registered in the symbol side-table.
@@ -464,8 +482,44 @@ pub(crate) unsafe fn coerce_validate_radix(radix_value: f64) -> Option<i32> {
     Some(r as i32)
 }
 
+/// `value.toString()` as an explicit METHOD CALL (#3146). Unlike the abstract
+/// `js_jsvalue_to_string` (used for `String(x)`, template literals, and `+`
+/// coercion, where a nullish operand stringifies to "undefined"/"null"), a
+/// member call `u.toString()` on `undefined`/`null` is a property read on a
+/// nullish base and must throw a `TypeError`. For every non-nullish value this
+/// delegates to `js_jsvalue_to_string`, so ordinary `.toString()` behaviour is
+/// unchanged.
+#[no_mangle]
+pub extern "C" fn js_jsvalue_to_string_method(value: f64) -> *mut crate::string::StringHeader {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_undefined() || jsval.is_null() {
+        let is_null = if jsval.is_null() { 1u32 } else { 0u32 };
+        let prop = b"toString";
+        crate::error::js_throw_type_error_property_access(is_null, prop.as_ptr(), prop.len());
+    }
+    if jsval.is_pointer() {
+        let handle = jsval.as_pointer::<u8>() as usize;
+        if (1..0x100000).contains(&handle) {
+            if let Some(dispatch) = crate::object::handle_method_dispatch() {
+                let result = unsafe {
+                    dispatch(handle as i64, b"toString".as_ptr(), 8, std::ptr::null(), 0)
+                };
+                let result_jsval = JSValue::from_bits(result.to_bits());
+                if result_jsval.is_string() {
+                    return result_jsval.as_string_ptr() as *mut crate::string::StringHeader;
+                }
+                if result_jsval.is_short_string() {
+                    return crate::string::js_string_materialize_to_heap(result);
+                }
+            }
+        }
+    }
+    js_jsvalue_to_string(value)
+}
+
 fn throw_radix_range_error() -> ! {
-    let message = b"toString() radix must be between 2 and 36";
+    // Node/V8 message verbatim: includes the word "argument" (#3146).
+    let message = b"toString() radix argument must be between 2 and 36";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = crate::error::js_rangeerror_new(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))

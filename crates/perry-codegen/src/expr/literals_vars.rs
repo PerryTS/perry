@@ -163,6 +163,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `undefined` and `null` lower to their NaN-tagged bit patterns.
         Expr::Undefined => Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
         Expr::Null => Ok(double_literal(f64::from_bits(crate::nanbox::TAG_NULL))),
+        Expr::NewTarget => Ok(ctx.block().call(DOUBLE, "js_new_target_value", &[])),
 
         // `void <expr>` — evaluate the operand for side effects, return
         // undefined. Used both as `void 0` (a common idiom for `undefined`)

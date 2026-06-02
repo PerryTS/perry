@@ -31,6 +31,15 @@ uVylGMusIXcohDauuPEBi/NXk0owHqF6uafjjW5lHK2CnsHKL8U0qHRdcKFJZ4Jx
 /gTV
 -----END CERTIFICATE-----`;
 const cert = new X509Certificate(pem);
+
+function report(label: string, fn: () => unknown) {
+  try {
+    console.log(`${label}:`, fn());
+  } catch (err: any) {
+    console.log(`${label}:`, "err", err.name, err.code ?? "", err.message);
+  }
+}
+
 console.log("typeof X509Certificate:", typeof X509Certificate);
 console.log("subject:", JSON.stringify(cert["subject"]));
 console.log("issuer:", JSON.stringify(cert["issuer"]));
@@ -41,3 +50,9 @@ console.log("fingerprint:", cert["fingerprint"]);
 console.log("fingerprint256:", cert["fingerprint256"]);
 console.log("ca:", cert["ca"]);
 console.log("raw length:", cert["raw"].length);
+report("fingerprint512", () => cert["fingerprint512"]);
+report("validFromDate iso", () => cert["validFromDate"].toISOString());
+report("validToDate iso", () => cert["validToDate"].toISOString());
+report("toString starts", () => cert["toString"]().startsWith("-----BEGIN CERTIFICATE-----\n"));
+report("toString ends", () => cert["toString"]().endsWith("-----END CERTIFICATE-----\n"));
+report("toJSON equals", () => cert["toJSON"]() === cert["toString"]());

@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2518 entries across 109 modules.
+Total: 2649 entries across 113 modules.
 
 ## Modules
 
@@ -44,6 +44,8 @@ Total: 2518 entries across 109 modules.
 - [`http`](#http)
 - [`http2`](#http2)
 - [`https`](#https)
+- [`inspector`](#inspector)
+- [`inspector/promises`](#inspector-promises)
 - [`ioredis`](#ioredis)
 - [`iroh`](#iroh)
 - [`jsonwebtoken`](#jsonwebtoken)
@@ -88,6 +90,7 @@ Total: 2518 entries across 109 modules.
 - [`readline`](#readline)
 - [`readline/promises`](#readline-promises)
 - [`redis`](#redis)
+- [`repl`](#repl)
 - [`sharp`](#sharp)
 - [`slugify`](#slugify)
 - [`sqlite`](#sqlite)
@@ -111,6 +114,7 @@ Total: 2518 entries across 109 modules.
 - [`uuid`](#uuid)
 - [`v8`](#v8)
 - [`validator`](#validator)
+- [`vm`](#vm)
 - [`wasi`](#wasi)
 - [`worker_threads`](#worker-threads)
 - [`ws`](#ws)
@@ -225,6 +229,8 @@ Total: 2518 entries across 109 modules.
 ### Methods
 
 - `asyncId` — instance *(class: `AsyncResource`)*
+- `bind` — module *(class: `AsyncLocalStorage`)*
+- `bind` — module *(class: `AsyncResource`)*
 - `bind` — instance *(class: `AsyncResource`)*
 - `createHook` — module
 - `disable` — instance
@@ -232,15 +238,18 @@ Total: 2518 entries across 109 modules.
 - `enable` — instance *(class: `AsyncHook`)*
 - `enterWith` — instance
 - `executionAsyncId` — module
+- `executionAsyncResource` — module
 - `exit` — instance
 - `getStore` — instance
 - `run` — instance
 - `runInAsyncScope` — instance *(class: `AsyncResource`)*
+- `snapshot` — module *(class: `AsyncLocalStorage`)*
 - `triggerAsyncId` — module
 - `triggerAsyncId` — instance *(class: `AsyncResource`)*
 
 ### Properties
 
+- `asyncWrapProviders`
 - `default`
 
 ## `axios`
@@ -1362,6 +1371,8 @@ Total: 2518 entries across 109 modules.
 - `mkdtempDisposable` — module
 - `open` — module
 - `opendir` — module
+- `pull` — instance *(class: `FileHandle`)*
+- `pullSync` — instance *(class: `FileHandle`)*
 - `readFile` — module
 - `readdir` — module
 - `readlink` — module
@@ -1377,6 +1388,7 @@ Total: 2518 entries across 109 modules.
 - `utimes` — module
 - `watch` — module
 - `writeFile` — module
+- `writer` — instance *(class: `FileHandle`)*
 
 ### Properties
 
@@ -1395,6 +1407,7 @@ Total: 2518 entries across 109 modules.
 - `Server`
 - `ServerResponse`
 - `ServerResponse`
+- `WebSocket`
 
 ### Methods
 
@@ -1455,6 +1468,7 @@ Total: 2518 entries across 109 modules.
 - `__set_statusCode` — instance *(class: `ServerResponse`)*
 - `__set_statusMessage` — instance *(class: `ServerResponse`)*
 - `__set_timeout` — instance *(class: `HttpServer`)*
+- `_connectionListener` — module
 - `addListener` — instance *(class: `HttpServer`)*
 - `addListener` — instance *(class: `IncomingMessage`)*
 - `addListener` — instance *(class: `ServerResponse`)*
@@ -1605,6 +1619,51 @@ Total: 2518 entries across 109 modules.
 ### Properties
 
 - `globalAgent`
+
+## `inspector`
+
+### Classes
+
+- `Session`
+
+### Methods
+
+- `Session` — module
+- `close` — module
+- `connect` — instance *(class: `Session`)*
+- `connectToMainThread` — instance *(class: `Session`)*
+- `disconnect` — instance *(class: `Session`)*
+- `on` — instance *(class: `Session`)*
+- `once` — instance *(class: `Session`)*
+- `open` — module
+- `post` — instance *(class: `Session`)*
+- `url` — module
+- `waitForDebugger` — module
+
+### Properties
+
+- `console`
+- `default`
+
+## `inspector/promises`
+
+### Classes
+
+- `Session`
+
+### Methods
+
+- `Session` — module
+- `connect` — instance *(class: `Session`)*
+- `connectToMainThread` — instance *(class: `Session`)*
+- `disconnect` — instance *(class: `Session`)*
+- `on` — instance *(class: `Session`)*
+- `once` — instance *(class: `Session`)*
+- `post` — instance *(class: `Session`)*
+
+### Properties
+
+- `default`
 
 ## `ioredis`
 
@@ -1809,25 +1868,36 @@ Total: 2518 entries across 109 modules.
 
 ### Classes
 
+- `BlockList`
 - `Server`
 - `Socket`
+- `SocketAddress`
 - `Stream`
 
 ### Methods
 
+- `BlockList` — module
 - `Server` — module
 - `Socket` — module
+- `SocketAddress` — module
 - `Stream` — module
+- `__set_dropMaxConnection` — instance *(class: `Server`)*
+- `__set_maxConnections` — instance *(class: `Server`)*
 - `_createServerHandle` — module
 - `_normalizeArgs` — module
+- `addAddress` — instance *(class: `BlockList`)*
 - `addListener` — instance *(class: `Socket`)*
 - `addListener` — instance *(class: `Server`)*
+- `addRange` — instance *(class: `BlockList`)*
+- `addSubnet` — instance *(class: `BlockList`)*
 - `address` — instance *(class: `Socket`)*
+- `address` — instance *(class: `SocketAddress`)*
 - `address` — instance *(class: `Server`)*
 - `autoSelectFamilyAttemptedAddresses` — instance *(class: `Socket`)*
 - `bufferSize` — instance *(class: `Socket`)*
 - `bytesRead` — instance *(class: `Socket`)*
 - `bytesWritten` — instance *(class: `Socket`)*
+- `check` — instance *(class: `BlockList`)*
 - `close` — instance *(class: `Server`)*
 - `connect` — module
 - `connect` — instance *(class: `Socket`)*
@@ -1837,29 +1907,47 @@ Total: 2518 entries across 109 modules.
 - `createServer` — module
 - `destroy` — instance *(class: `Socket`)*
 - `destroyed` — instance *(class: `Socket`)*
+- `dropMaxConnection` — instance *(class: `Server`)*
 - `end` — instance *(class: `Socket`)*
 - `eventNames` — instance *(class: `Socket`)*
 - `eventNames` — instance *(class: `Server`)*
+- `exportKeyingMaterial` — instance *(class: `Socket`)*
+- `family` — instance *(class: `SocketAddress`)*
+- `flowlabel` — instance *(class: `SocketAddress`)*
+- `fromJSON` — instance *(class: `BlockList`)*
+- `getCertificate` — instance *(class: `Socket`)*
+- `getCipher` — instance *(class: `Socket`)*
+- `getConnections` — instance *(class: `Server`)*
 - `getDefaultAutoSelectFamily` — module
 - `getDefaultAutoSelectFamilyAttemptTimeout` — module
+- `getPeerCertificate` — instance *(class: `Socket`)*
+- `getProtocol` — instance *(class: `Socket`)*
+- `getSession` — instance *(class: `Socket`)*
+- `getTypeOfService` — instance *(class: `Socket`)*
+- `isBlockList` — module *(class: `BlockList`)*
 - `isIP` — module
 - `isIPv4` — module
 - `isIPv6` — module
+- `isSessionReused` — instance *(class: `Socket`)*
 - `listen` — instance *(class: `Server`)*
 - `listenerCount` — instance *(class: `Socket`)*
 - `listenerCount` — instance *(class: `Server`)*
 - `listeners` — instance *(class: `Socket`)*
 - `listeners` — instance *(class: `Server`)*
+- `listening` — instance *(class: `Server`)*
 - `localAddress` — instance *(class: `Socket`)*
 - `localFamily` — instance *(class: `Socket`)*
 - `localPort` — instance *(class: `Socket`)*
+- `maxConnections` — instance *(class: `Server`)*
 - `off` — instance *(class: `Socket`)*
 - `off` — instance *(class: `Server`)*
 - `on` — instance *(class: `Socket`)*
 - `once` — instance *(class: `Socket`)*
 - `once` — instance *(class: `Server`)*
+- `parse` — module *(class: `SocketAddress`)*
 - `pause` — instance *(class: `Socket`)*
 - `pending` — instance *(class: `Socket`)*
+- `port` — instance *(class: `SocketAddress`)*
 - `rawListeners` — instance *(class: `Socket`)*
 - `rawListeners` — instance *(class: `Server`)*
 - `readyState` — instance *(class: `Socket`)*
@@ -1873,14 +1961,18 @@ Total: 2518 entries across 109 modules.
 - `removeListener` — instance *(class: `Server`)*
 - `resetAndDestroy` — instance *(class: `Socket`)*
 - `resume` — instance *(class: `Socket`)*
+- `rules` — instance *(class: `BlockList`)*
 - `setDefaultAutoSelectFamily` — module
 - `setDefaultAutoSelectFamilyAttemptTimeout` — module
 - `setDefaultEncoding` — instance *(class: `Socket`)*
 - `setEncoding` — instance *(class: `Socket`)*
 - `setKeepAlive` — instance *(class: `Socket`)*
+- `setMaxSendFragment` — instance *(class: `Socket`)*
 - `setNoDelay` — instance *(class: `Socket`)*
 - `setTimeout` — instance *(class: `Socket`)*
+- `setTypeOfService` — instance *(class: `Socket`)*
 - `timeout` — instance *(class: `Socket`)*
+- `toJSON` — instance *(class: `BlockList`)*
 - `uncork` — instance *(class: `Socket`)*
 - `unref` — instance *(class: `Socket`)*
 - `upgradeToTLS` — instance *(class: `Socket`)*
@@ -2556,15 +2648,27 @@ Total: 2518 entries across 109 modules.
 
 ### Properties
 
+- `allowedNodeEnvironmentFlags`
 - `arch`
 - `argv`
+- `argv0`
+- `config`
+- `debugPort`
 - `env`
+- `execArgv`
+- `execPath`
+- `features`
+- `finalization`
+- `moduleLoadList`
 - `pid`
 - `platform`
 - `ppid`
+- `release`
+- `report`
 - `stderr`
 - `stdin`
 - `stdout`
+- `title`
 - `version`
 - `versions`
 
@@ -2651,6 +2755,35 @@ Total: 2518 entries across 109 modules.
 ### Methods
 
 - `createClient` — module
+
+## `repl`
+
+### Classes
+
+- `REPLServer`
+- `Recoverable`
+
+### Methods
+
+- `REPLServer` — module
+- `Recoverable` — module
+- `addListener` — instance *(class: `REPLServer`)*
+- `clearBufferedCommand` — instance *(class: `REPLServer`)*
+- `defineCommand` — instance *(class: `REPLServer`)*
+- `displayPrompt` — instance *(class: `REPLServer`)*
+- `emit` — instance *(class: `REPLServer`)*
+- `on` — instance *(class: `REPLServer`)*
+- `once` — instance *(class: `REPLServer`)*
+- `setupHistory` — instance *(class: `REPLServer`)*
+- `start` — module
+- `write` — instance *(class: `REPLServer`)*
+
+### Properties
+
+- `REPL_MODE_SLOPPY`
+- `REPL_MODE_STRICT`
+- `builtinModules`
+- `default`
 
 ## `sharp`
 
@@ -3031,12 +3164,29 @@ Total: 2518 entries across 109 modules.
 ### Methods
 
 - `SecureContext` — module
+- `Server` — module
+- `TLSSocket` — module
+- `addListener` — instance *(class: `Server`)*
+- `address` — instance *(class: `Server`)*
 - `checkServerIdentity` — module
+- `close` — instance *(class: `Server`)*
 - `connect` — module
 - `createSecureContext` — module
+- `createServer` — module
+- `eventNames` — instance *(class: `Server`)*
 - `getCACertificates` — module
 - `getCiphers` — module
+- `getTicketKeys` — instance *(class: `Server`)*
+- `listen` — instance *(class: `Server`)*
+- `listenerCount` — instance *(class: `Server`)*
+- `off` — instance *(class: `Server`)*
+- `on` — instance *(class: `Server`)*
+- `once` — instance *(class: `Server`)*
+- `removeAllListeners` — instance *(class: `Server`)*
+- `removeListener` — instance *(class: `Server`)*
 - `setDefaultCACertificates` — module
+- `setSecureContext` — instance *(class: `Server`)*
+- `setTicketKeys` — instance *(class: `Server`)*
 
 ### Properties
 
@@ -3094,6 +3244,7 @@ Total: 2518 entries across 109 modules.
 ### Classes
 
 - `URL`
+- `URLPattern`
 - `URLSearchParams`
 - `Url`
 
@@ -3102,6 +3253,7 @@ Total: 2518 entries across 109 modules.
 - `Url` — module
 - `domainToASCII` — module
 - `domainToUnicode` — module
+- `exec` — instance *(class: `URLPattern`)*
 - `fileURLToPath` — module
 - `fileURLToPathBuffer` — module
 - `format` — module
@@ -3109,6 +3261,7 @@ Total: 2518 entries across 109 modules.
 - `pathToFileURL` — module
 - `resolve` — module
 - `resolveObject` — module
+- `test` — instance *(class: `URLPattern`)*
 - `urlToHttpOptions` — module
 
 ### Properties
@@ -3288,6 +3441,28 @@ Total: 2518 entries across 109 modules.
 - `isURL` — module
 - `isUUID` — module
 
+## `vm`
+
+### Classes
+
+- `Script`
+
+### Methods
+
+- `compileFunction` — module
+- `createContext` — module
+- `createScript` — module
+- `isContext` — module
+- `measureMemory` — module
+- `runInContext` — module
+- `runInNewContext` — module
+- `runInThisContext` — module
+
+### Properties
+
+- `constants`
+- `default`
+
 ## `wasi`
 
 ### Classes
@@ -3373,6 +3548,13 @@ Total: 2518 entries across 109 modules.
 - `send` — instance
 - `send` — instance *(class: `Client`)*
 - `sendToClient` — module
+
+### Properties
+
+- `CLOSED`
+- `CLOSING`
+- `CONNECTING`
+- `OPEN`
 
 ## `zlib`
 

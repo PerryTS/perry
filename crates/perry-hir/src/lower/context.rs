@@ -61,16 +61,19 @@ impl LoweringContext {
             current_strict: false,
             ui_widget_type_aliases: HashMap::new(),
             current_class: None,
+            object_super_home_stack: Vec::new(),
             extern_func_types: Vec::new(),
             source_file_path: source_file_path.into(),
             exportable_object_vars: HashSet::new(),
             pending_functions: Vec::new(),
             closure_display_names: HashMap::new(),
+            closure_source_text: HashMap::new(),
             func_return_native_instances: Vec::new(),
             pending_classes: Vec::new(),
             func_return_types: Vec::new(),
             resolved_types: None,
             pre_registered_module_vars: HashSet::new(),
+            pre_registered_module_var_decls: HashSet::new(),
             module_level_ids: HashSet::new(),
             scope_depth: 0,
             scope_local_marks: Vec::new(),
@@ -118,6 +121,8 @@ impl LoweringContext {
             prototype_function_locals: HashMap::new(),
             object_static_method_aliases: HashMap::new(),
             is_entry_module: false,
+            module_strict: false,
+            strict_mode_stack: Vec::new(),
             is_external_module: false,
             optional_require_try_depth: 0,
         }
@@ -238,6 +243,21 @@ impl LoweringContext {
         id
     }
 
+    pub(crate) fn current_strict_mode(&self) -> bool {
+        self.strict_mode_stack
+            .last()
+            .copied()
+            .unwrap_or(self.module_strict)
+    }
+
+    pub(crate) fn enter_strict_mode(&mut self, strict: bool) {
+        self.strict_mode_stack.push(strict);
+    }
+
+    pub(crate) fn exit_strict_mode(&mut self) {
+        self.strict_mode_stack.pop();
+    }
+
     /// If `ast_arg` is a bare `Boolean`, `Number`, or `String` identifier, wrap the
     /// already-lowered callback `cb` in a synthetic closure that calls the corresponding
     /// coerce expression.  Otherwise return `cb` unchanged.  This is needed because
@@ -267,13 +287,16 @@ impl LoweringContext {
                         default: None,
                         decorators: Vec::new(),
                         is_rest: false,
+                        arguments_object: None,
                     }],
                     return_type: Type::Any,
                     body: vec![Stmt::Return(Some(coerce_body))],
                     captures: vec![],
                     mutable_captures: vec![],
                     captures_this: false,
+                    captures_new_target: false,
                     enclosing_class: None,
+                    is_arrow: false,
                     is_async: false,
                     is_generator: false,
                     is_strict: self.current_strict,
@@ -639,7 +662,7 @@ impl LoweringContext {
     }
 
     /// Phase 3: synthesize (or retrieve) an anon class for a closed-shape object
-    /// literal. `fields_with_types` is parallel to the literal's source-declared
+    /// literal. `field_shapes` is parallel to the literal's source-declared
     /// properties — source order is preserved so the anon class's field layout
     /// matches JS evaluation order. Returns the synthetic class name.
     ///
@@ -654,7 +677,7 @@ impl LoweringContext {
     /// `[a, a, a, a]`).
     pub(crate) fn synthesize_anon_shape_class(
         &mut self,
-        fields_with_types: &[(String, Type, Expr)],
+        field_shapes: &[(String, Type)],
     ) -> String {
         // Canonical shape key: each field as `name:tag` joined by ',' in source
         // order. Different declaration orders -> different classes (preserves
@@ -679,7 +702,7 @@ impl LoweringContext {
             }
         }
         let mut shape_key = String::new();
-        for (name, ty, _) in fields_with_types {
+        for (name, ty) in field_shapes {
             shape_key.push_str(name);
             shape_key.push(':');
             shape_key.push_str(tag(ty));
@@ -716,9 +739,9 @@ impl LoweringContext {
         // positional constructor args, so the class stays shape-only (no
         // per-literal state). See the method doc comment for why this
         // matters under shape-deduplication.
-        let fields: Vec<ClassField> = fields_with_types
+        let fields: Vec<ClassField> = field_shapes
             .iter()
-            .map(|(name, ty, _init_expr_unused)| ClassField {
+            .map(|(name, ty)| ClassField {
                 name: name.clone(),
                 key_expr: None,
                 ty: ty.clone(),
@@ -735,9 +758,9 @@ impl LoweringContext {
         // PropertySet's direct-GEP path fires because `this` resolves to
         // the anon class via the usual class_stack/this_stack dance in
         // lower_call.rs::lower_new.
-        let mut ctor_params: Vec<Param> = Vec::with_capacity(fields_with_types.len());
-        let mut ctor_body: Vec<Stmt> = Vec::with_capacity(fields_with_types.len());
-        for (name, ty, _value) in fields_with_types {
+        let mut ctor_params: Vec<Param> = Vec::with_capacity(field_shapes.len());
+        let mut ctor_body: Vec<Stmt> = Vec::with_capacity(field_shapes.len());
+        for (name, ty) in field_shapes {
             let param_id = self.fresh_local();
             ctor_params.push(Param {
                 id: param_id,
@@ -746,6 +769,7 @@ impl LoweringContext {
                 default: None,
                 decorators: Vec::new(),
                 is_rest: false,
+                arguments_object: None,
             });
             ctor_body.push(Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::This),
@@ -790,6 +814,7 @@ impl LoweringContext {
             setters: Vec::new(),
             static_fields: Vec::new(),
             static_methods: Vec::new(),
+            computed_members: Vec::new(),
             decorators: Vec::new(),
             is_exported: false,
             aliases: Vec::new(),
@@ -950,6 +975,11 @@ impl LoweringContext {
             .iter()
             .rev()
             .find(|(n, _, _)| n == name)
+            // `node:repl` constructors allocate real heap objects/errors with
+            // bound methods; routing them through handle-dispatch native
+            // getters turns ordinary fields like `Recoverable.err` into
+            // zero-arg FFI calls.
+            .filter(|(_, module, _)| module != "repl")
             .map(|(_, module, class)| (module.as_str(), class.as_str()))
             .or_else(|| {
                 // Check module-level instances (survive scope exits).
@@ -958,6 +988,7 @@ impl LoweringContext {
                     .iter()
                     .rev()
                     .find(|(n, _, _)| n == name)
+                    .filter(|(_, module, _)| module != "repl")
                     .map(|(_, module, class)| (module.as_str(), class.as_str()))
             })
     }

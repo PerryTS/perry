@@ -237,7 +237,7 @@ fn test_write_barrier_young_to_young_skipped() {
     let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     let parent = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
-    let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let child = unsafe { alloc_nursery_test_object(0).0 as usize };
     js_write_barrier(POINTER_TAG | (parent as u64), POINTER_TAG | (child as u64));
     assert_eq!(
         remembered_set_size(),
@@ -1186,7 +1186,7 @@ fn test_incremental_barrier_marks_object_field_store() {
     let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
-    let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let child = unsafe { alloc_nursery_test_object(0).0 as usize };
     let (obj, fields) = unsafe { alloc_old_test_object(1) };
     mark_user_ptr(obj as usize);
     let valid_ptrs = build_valid_pointer_set();
@@ -1208,7 +1208,7 @@ fn test_incremental_barrier_marks_array_element_store() {
     let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
-    let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let child = unsafe { alloc_nursery_test_object(0).0 as usize };
     let (arr, elements) = unsafe { alloc_old_test_array(1) };
     mark_user_ptr(arr as usize);
     let valid_ptrs = build_valid_pointer_set();
@@ -1252,7 +1252,7 @@ fn test_incremental_barrier_marks_closure_static_prototype_store() {
     let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
-    let proto = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let proto = unsafe { alloc_nursery_test_object(0).0 as usize };
     let closure = crate::closure::js_closure_alloc(test_no_capture_singleton_func as *const u8, 0);
     mark_user_ptr(closure as usize);
     let valid_ptrs = build_valid_pointer_set();
@@ -1276,8 +1276,8 @@ fn test_incremental_barrier_marks_external_map_and_set_slots() {
     let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
-    let map_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
-    let set_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let map_child = unsafe { alloc_nursery_test_object(0).0 as usize };
+    let set_child = unsafe { alloc_nursery_test_object(0).0 as usize };
     let (map, entries, map_layout) = unsafe { alloc_old_test_map(1) };
     let (set, elements, set_layout) = unsafe { alloc_old_test_set(1) };
     unsafe {

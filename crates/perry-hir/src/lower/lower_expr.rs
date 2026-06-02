@@ -22,6 +22,38 @@ use super::*;
 use crate::ir::*;
 use crate::lower_types::extract_ts_type_with_ctx;
 
+fn class_computed_member_registration_expr(class_name: &str, member: &ClassComputedMember) -> Expr {
+    match member.kind {
+        ClassComputedMemberKind::Method => Expr::RegisterClassComputedMethod {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            method_name: member.function.name.clone(),
+            is_static: member.is_static,
+            param_count: member.function.params.len() as u32,
+            has_rest: member
+                .function
+                .params
+                .last()
+                .map(|p| p.is_rest)
+                .unwrap_or(false),
+        },
+        ClassComputedMemberKind::Getter => Expr::RegisterClassComputedAccessor {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            getter_name: Some(member.function.name.clone()),
+            setter_name: None,
+            is_static: member.is_static,
+        },
+        ClassComputedMemberKind::Setter => Expr::RegisterClassComputedAccessor {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            getter_name: None,
+            setter_name: Some(member.function.name.clone()),
+            is_static: member.is_static,
+        },
+    }
+}
+
 pub(crate) fn throw_reference_error_expr(helper_name: &str) -> Expr {
     Expr::Call {
         callee: Box::new(Expr::ExternFuncRef {
@@ -175,7 +207,8 @@ pub(crate) fn lower_expr_assignment(
                     }
                 }
             }
-            let object = Box::new(lower_expr(ctx, &member.obj)?);
+            let object_expr = lower_expr(ctx, &member.obj)?;
+            let object = Box::new(object_expr.clone());
             match &member.prop {
                 ast::MemberProp::Ident(ident) => {
                     let property = ident.sym.to_string();
@@ -198,18 +231,22 @@ pub(crate) fn lower_expr_assignment(
                             proto: value,
                         });
                     }
-                    Ok(Expr::PropertySet {
-                        object,
-                        property,
+                    Ok(Expr::PutValueSet {
+                        target: object.clone(),
+                        key: Box::new(Expr::String(property)),
                         value,
+                        receiver: object,
+                        strict: ctx.current_strict,
                     })
                 }
                 ast::MemberProp::Computed(computed) => {
                     let index = Box::new(lower_expr(ctx, &computed.expr)?);
-                    Ok(Expr::IndexSet {
-                        object,
-                        index,
+                    Ok(Expr::PutValueSet {
+                        target: object.clone(),
+                        key: index,
                         value,
+                        receiver: object,
+                        strict: ctx.current_strict,
                     })
                 }
                 ast::MemberProp::PrivateName(private) => {
@@ -475,7 +512,10 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         // route through `js_instanceof_dynamic`, which derives the same
                         // `synthetic_class_id_for_function` that `new Foo()` stamps onto
                         // the instance (see js_new_function_construct).
-                        if ctx.lookup_local(name).is_some() || ctx.lookup_func(name).is_some() {
+                        if ctx.lookup_local(name).is_some()
+                            || ctx.lookup_func(name).is_some()
+                            || ctx.lookup_native_module(name).is_some()
+                        {
                             match lower_expr(ctx, &bin.right) {
                                 Ok(e) => Some(Box::new(e)),
                                 Err(_) => None,
@@ -1176,25 +1216,27 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
         ast::Expr::Assign(assign) => expr_assign::lower_assign(ctx, assign),
         ast::Expr::Cond(cond) => expr_misc::lower_cond(ctx, cond),
         ast::Expr::Array(array) => {
-            // Check if any elements are spread elements
+            // Check if any elements need the spread-aware representation.
             let has_spread = array
                 .elems
                 .iter()
                 .filter_map(|elem| elem.as_ref())
                 .any(|elem| elem.spread.is_some());
+            let has_hole = array.elems.iter().any(|elem| elem.is_none());
 
-            if has_spread {
-                // Use ArraySpread for arrays with spread elements.
-                // If a spread source is a generator call, wrap it in IteratorToArray
-                // so the codegen gets a real array to iterate.
+            if has_spread || has_hole {
+                // Use ArraySpread for arrays with spread elements or elisions.
+                // Elisions must remain holes, not explicit undefined values:
+                // own-property checks and iteration observe the difference.
                 let elements = array
                     .elems
                     .iter()
-                    .filter_map(|elem| elem.as_ref())
                     .map(|elem| {
+                        let Some(elem) = elem.as_ref() else {
+                            return Ok(ArrayElement::Hole);
+                        };
                         let expr = lower_expr(ctx, &elem.expr)?;
                         if elem.spread.is_some() {
-                            // Wrap generator calls in IteratorToArray
                             if is_generator_call_expr(ctx, &expr) {
                                 Ok(ArrayElement::Spread(Expr::IteratorToArray(Box::new(expr))))
                             } else {
@@ -1207,14 +1249,10 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     .collect::<Result<Vec<_>>>()?;
                 Ok(Expr::ArraySpread(elements))
             } else {
-                // No spread elements, use regular Array
                 let elements = array
                     .elems
                     .iter()
-                    .map(|elem| match elem.as_ref() {
-                        Some(elem) => lower_expr(ctx, &elem.expr),
-                        None => Ok(Expr::Undefined),
-                    })
+                    .map(|elem| lower_expr(ctx, &elem.as_ref().unwrap().expr))
                     .collect::<Result<Vec<_>>>()?;
                 Ok(Expr::Array(elements))
             }
@@ -1680,6 +1718,11 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     _ => None,
                 })
                 .collect();
+            let computed_member_registrations: Vec<Expr> = class
+                .computed_members
+                .iter()
+                .map(|member| class_computed_member_registration_expr(&synthetic_name, member))
+                .collect();
             ctx.pending_classes.push(class);
             // #1772: a class EXPRESSION that carries per-evaluation static
             // fields and is NOT a mixin (`class extends <expr>`) lowers to a
@@ -1702,12 +1745,18 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     .lookup_class_captures(&synthetic_name)
                     .map(|ids| ids.iter().map(|id| Expr::LocalGet(*id)).collect())
                     .unwrap_or_default();
-                return Ok(Expr::ClassExprFresh {
+                let fresh_expr = Expr::ClassExprFresh {
                     template: synthetic_name,
                     named_statics,
                     symbol_statics: static_symbol_registrations,
                     captured_args,
-                });
+                };
+                if computed_member_registrations.is_empty() {
+                    return Ok(fresh_expr);
+                }
+                let mut seq = computed_member_registrations;
+                seq.push(fresh_expr);
+                return Ok(Expr::Sequence(seq));
             }
             let mut seq: Vec<Expr> = Vec::new();
             if let Some(p) = parent_expr {
@@ -1716,6 +1765,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     parent_expr: p,
                 });
             }
+            seq.extend(computed_member_registrations);
             for (k, v) in static_symbol_registrations {
                 seq.push(Expr::RegisterClassStaticSymbol {
                     class_name: synthetic_name.clone(),
@@ -1916,6 +1966,7 @@ pub(crate) fn try_desugar_reactive_text(
             default: None,
             decorators: Vec::new(),
             is_rest: false,
+            arguments_object: None,
         };
         let fresh_concat = lower_tpl_to_concat(ctx, tpl)?;
         let set_text_call = Expr::NativeMethodCall {
@@ -1949,7 +2000,9 @@ pub(crate) fn try_desugar_reactive_text(
             captures: inner_captures,
             mutable_captures: Vec::new(),
             captures_this: false,
+            captures_new_target: false,
             enclosing_class: None,
+            is_arrow: false,
             is_async: false,
             is_generator: false,
             is_strict: ctx.current_strict,
@@ -1988,7 +2041,9 @@ pub(crate) fn try_desugar_reactive_text(
         captures: outer_captures,
         mutable_captures: Vec::new(),
         captures_this: false,
+        captures_new_target: false,
         enclosing_class: None,
+        is_arrow: false,
         is_async: false,
         is_generator: false,
         is_strict: ctx.current_strict,

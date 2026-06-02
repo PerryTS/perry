@@ -84,14 +84,16 @@ pub(super) struct ModuleArtifactsCtx<'a> {
     pub static_field_globals: &'a HashMap<(String, String), String>,
     pub method_names: &'a HashMap<(String, String), String>,
     pub func_names: &'a HashMap<u32, String>,
-    pub func_signatures: &'a HashMap<u32, (usize, bool, bool)>,
+    pub func_signatures: &'a HashMap<u32, (usize, bool, bool, bool)>,
     pub func_synthetic_arguments: &'a std::collections::HashSet<u32>,
     pub module_boxed_vars: &'a std::collections::HashSet<u32>,
     pub module_local_types: &'a HashMap<u32, perry_types::Type>,
     pub closure_rest_params: &'a HashMap<u32, usize>,
     pub closure_synthetic_arguments: &'a std::collections::HashSet<u32>,
+    pub closure_rest_and_arguments: &'a std::collections::HashSet<u32>,
     pub closure_arities: &'a HashMap<u32, u32>,
     pub closure_lengths: &'a HashMap<u32, u32>,
+    pub closure_arrow_functions: &'a std::collections::HashSet<u32>,
     pub closures: &'a [(perry_types::FuncId, perry_hir::Expr)],
     pub class_keys_init_data: &'a [(String, String, u32, Vec<u64>, Vec<u64>)],
     pub imported_class_stubs: &'a [perry_hir::Class],
@@ -131,8 +133,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         module_local_types,
         closure_rest_params,
         closure_synthetic_arguments,
+        closure_rest_and_arguments,
         closure_arities,
         closure_lengths,
+        closure_arrow_functions,
         closures,
         class_keys_init_data,
         imported_class_stubs,
@@ -204,6 +208,38 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 cross_module,
             )
             .with_context(|| format!("lowering method '{}::{}'", class.name, method.name))?;
+        }
+        for member in class
+            .computed_members
+            .iter()
+            .filter(|member| !member.is_static)
+        {
+            compile_method(
+                llmod,
+                class,
+                &member.function,
+                func_names,
+                strings,
+                class_table,
+                method_names,
+                module_globals,
+                module_global_types,
+                opts.import_function_prefixes,
+                enum_table,
+                static_field_globals,
+                class_ids,
+                func_signatures,
+                func_synthetic_arguments,
+                module_boxed_vars,
+                closure_rest_params,
+                cross_module,
+            )
+            .with_context(|| {
+                format!(
+                    "lowering computed method '{}::{}'",
+                    class.name, member.function.name
+                )
+            })?;
         }
         // Getters and setters are also methods, just registered under
         // a __get_/__set_ prefix in the registry. Emit their bodies
@@ -310,6 +346,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                                     default: None,
                                     decorators: Vec::new(),
                                     is_rest: false,
+                                    arguments_object: None,
                                 });
                             }
                             break;
@@ -328,6 +365,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                                     default: None,
                                     decorators: Vec::new(),
                                     is_rest: false,
+                                    arguments_object: None,
                                 });
                             }
                         } else {
@@ -406,6 +444,38 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 cross_module,
             )
             .with_context(|| format!("lowering static method '{}::{}'", class.name, sm.name))?;
+        }
+        for member in class
+            .computed_members
+            .iter()
+            .filter(|member| member.is_static)
+        {
+            compile_static_method(
+                llmod,
+                &class.name,
+                &member.function,
+                func_names,
+                strings,
+                class_table,
+                method_names,
+                module_globals,
+                opts.import_function_prefixes,
+                enum_table,
+                static_field_globals,
+                class_ids,
+                func_signatures,
+                func_synthetic_arguments,
+                module_prefix,
+                module_boxed_vars,
+                closure_rest_params,
+                cross_module,
+            )
+            .with_context(|| {
+                format!(
+                    "lowering static computed method '{}::{}'",
+                    class.name, member.function.name
+                )
+            })?;
         }
     }
 
@@ -1194,9 +1264,27 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             let last_is_synth_args = f
                 .params
                 .last()
-                .map(|p| p.is_rest && p.name == "arguments")
+                .map(|p| p.arguments_object.is_some())
                 .unwrap_or(false);
             if last_is_synth_args {
+                func_names
+                    .get(&f.id)
+                    .map(|name| format!("__perry_wrap_{}", name))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let user_fn_wrapper_rest_and_arguments: std::collections::HashSet<String> = hir
+        .functions
+        .iter()
+        .filter_map(|f| {
+            let last = f.params.last()?;
+            let has_user_rest = f
+                .params
+                .iter()
+                .any(|p| p.is_rest && p.arguments_object.is_none());
+            if last.arguments_object.is_some() && has_user_rest {
                 func_names
                     .get(&f.id)
                     .map(|name| format!("__perry_wrap_{}", name))
@@ -1263,6 +1351,28 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 user_fn_wrapper_generator
                     .insert(format!("perry_closure_{}__{}", module_prefix, func_id));
             }
+        }
+    }
+    // #3664: async-generator wrapper symbols, identified by the func_ids the
+    // generator transform recorded (it cleared `is_async` before we get here,
+    // so the body shape alone can't tell async generators from sync ones).
+    // Named declarations use the `__perry_wrap_<name>` singleton symbol;
+    // generator EXPRESSIONS use the inline `perry_closure_<modprefix>__<id>`
+    // symbol — the same two symbol forms as `user_fn_wrapper_generator`.
+    let mut user_fn_wrapper_async_generator: std::collections::HashSet<String> = hir
+        .functions
+        .iter()
+        .filter(|f| hir.async_generator_funcs.contains(&f.id))
+        .filter_map(|f| {
+            func_names
+                .get(&f.id)
+                .map(|name| format!("__perry_wrap_{}", name))
+        })
+        .collect();
+    for (func_id, _expr) in closures {
+        if hir.async_generator_funcs.contains(func_id) {
+            user_fn_wrapper_async_generator
+                .insert(format!("perry_closure_{}__{}", module_prefix, func_id));
         }
     }
 
@@ -1355,6 +1465,28 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         user_fn_display_names.push((sym, display.clone()));
     }
 
+    // #4101: collect retained function source text, keyed by the same
+    // wrapper/closure symbol the name registration uses. Top-level functions
+    // always have a `__perry_wrap_<name>` global (emitted unconditionally
+    // above); inline closures only have a `perry_closure_*` global when
+    // materialized, so gate those on `materialized_closure_ids` to avoid
+    // referencing an undefined global (the #318/#343 clang-failure class).
+    let mut user_fn_source: Vec<(String, String)> = Vec::new();
+    for f in &hir.functions {
+        if let Some(src) = hir.closure_source_text.get(&f.id) {
+            if let Some(sym) = func_names.get(&f.id) {
+                user_fn_source.push((format!("__perry_wrap_{}", sym), src.clone()));
+            }
+        }
+    }
+    for (func_id, src) in &hir.closure_source_text {
+        if registered_fn_ids.contains(func_id) || !materialized_closure_ids.contains(func_id) {
+            continue;
+        }
+        let sym = format!("perry_closure_{}__{}", module_prefix, func_id);
+        user_fn_source.push((sym, src.clone()));
+    }
+
     emit_string_pool(
         llmod,
         strings,
@@ -1365,14 +1497,19 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         closure_rest_params,
         closure_arities,
         closure_lengths,
+        closure_arrow_functions,
         &user_fn_wrapper_rest,
         closure_synthetic_arguments,
         &user_fn_wrapper_synthetic_arguments,
+        closure_rest_and_arguments,
+        &user_fn_wrapper_rest_and_arguments,
         &user_fn_wrapper_arity,
         &user_fn_wrapper_length,
         &user_fn_wrapper_async,
         &user_fn_wrapper_generator,
+        &user_fn_wrapper_async_generator,
         &user_fn_display_names,
+        &user_fn_source,
     );
 
     Ok(())

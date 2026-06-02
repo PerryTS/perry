@@ -29,6 +29,8 @@ fn empty_module() -> Module {
         init_kind: perry_hir::ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        closure_source_text: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
     }
 }
 
@@ -61,7 +63,9 @@ fn closure_stub() -> Expr {
         captures: vec![],
         mutable_captures: vec![],
         captures_this: false,
+        captures_new_target: false,
         enclosing_class: None,
+        is_arrow: false,
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -614,6 +618,7 @@ fn for_each_lowers_array_map_in_vstack() {
         default: None,
         decorators: Vec::new(),
         is_rest: false,
+        arguments_object: None,
     };
     let inner_text = nmc("Text", vec![Expr::LocalGet(42)]);
     let map_expr = Expr::ArrayMap {
@@ -630,7 +635,9 @@ fn for_each_lowers_array_map_in_vstack() {
             captures: vec![],
             mutable_captures: vec![],
             captures_this: false,
+            captures_new_target: false,
             enclosing_class: None,
+            is_arrow: false,
             is_async: false,
             is_generator: false,
             is_strict: false,
@@ -888,7 +895,9 @@ fn navstack_set_in_closure_rewrites_to_settext() {
                 captures: vec![],
                 mutable_captures: vec![],
                 captures_this: false,
+                captures_new_target: false,
                 enclosing_class: None,
+                is_arrow: false,
                 is_async: false,
                 is_generator: false,
                 is_strict: false,
@@ -998,7 +1007,9 @@ fn state_set_in_closure_rewrites_to_settext() {
         captures: vec![],
         mutable_captures: vec![],
         captures_this: false,
+        captures_new_target: false,
         enclosing_class: None,
+        is_arrow: false,
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -1154,6 +1165,7 @@ fn lazyvstack_with_array_map_emits_lazy_for_each() {
         default: None,
         decorators: Vec::new(),
         is_rest: false,
+        arguments_object: None,
     };
     let inner_text = nmc("Text", vec![Expr::LocalGet(99)]);
     let map_expr = Expr::ArrayMap {
@@ -1169,7 +1181,9 @@ fn lazyvstack_with_array_map_emits_lazy_for_each() {
             captures: vec![],
             mutable_captures: vec![],
             captures_this: false,
+            captures_new_target: false,
             enclosing_class: None,
+            is_arrow: false,
             is_async: false,
             is_generator: false,
             is_strict: false,
@@ -1476,7 +1490,9 @@ fn media_call_inside_button_closure_also_triggers_glue() {
         captures: vec![],
         mutable_captures: vec![],
         captures_this: false,
+        captures_new_target: false,
         enclosing_class: None,
+        is_arrow: false,
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -1964,7 +1980,9 @@ fn phase2_v35_widget_set_hidden_in_closure_emits_state_binding() {
         captures: vec![],
         mutable_captures: vec![],
         captures_this: false,
+        captures_new_target: false,
         enclosing_class: None,
+        is_arrow: false,
         is_async: false,
         is_generator: false,
         is_strict: false,

@@ -165,6 +165,21 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
         }
     }
 
+    // Web Streams static factories.
+    if module == "readable_stream" && object.is_none() && method == "from" {
+        let iterable = if !args.is_empty() {
+            lower_expr(ctx, &args[0])?
+        } else {
+            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+        };
+        let handle = ctx.block().call(
+            DOUBLE,
+            "js_readable_stream_from_iterable",
+            &[(DOUBLE, &iterable)],
+        );
+        return Ok(Some(handle));
+    }
+
     // Everything below needs a receiver.
     let Some(recv) = object else {
         return Ok(None);

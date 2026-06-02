@@ -137,6 +137,12 @@ pub(crate) type JsNativeSqliteDispatchFn =
     unsafe extern "C" fn(*const u8, usize, *const f64, usize, i32) -> f64;
 pub(crate) type JsNativeDomainDispatchFn =
     unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
+/// node:tls module-method dispatcher (registered by perry-stdlib). Same
+/// dependency-boundary pattern as crypto/zlib/querystring: captured callable
+/// exports and object-valued properties can reach the rustls-backed stdlib
+/// implementation without perry-runtime depending on perry-stdlib.
+pub(crate) type JsNativeTlsDispatchFn =
+    unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
 /// node:http / node:https / node:http2 server-factory dispatcher (registered
 /// by perry-stdlib under the `external-http-server-pump` feature, which is
 /// enabled whenever a program imports one of those modules). Lets a captured /
@@ -165,4 +171,5 @@ pub static JS_NATIVE_ZLIB_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::nul
 pub static JS_NATIVE_QUERYSTRING_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_SQLITE_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_DOMAIN_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+pub static JS_NATIVE_TLS_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_HTTP_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
