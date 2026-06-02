@@ -269,7 +269,12 @@ pub fn try_lower_property_get_method_call(
                 let _ = lower_expr(ctx, a)?;
             }
             let blk = ctx.block();
-            let handle = blk.call(I64, "js_jsvalue_to_string", &[(DOUBLE, &v)]);
+            // #3146: an explicit `.toString()` member call must throw a
+            // TypeError on a nullish receiver, unlike abstract ToString
+            // (`String(x)` / templates). `js_jsvalue_to_string_method`
+            // adds only that nullish guard and otherwise matches
+            // `js_jsvalue_to_string`.
+            let handle = blk.call(I64, "js_jsvalue_to_string_method", &[(DOUBLE, &v)]);
             return Ok(Some(nanbox_string_inline(blk, &handle)));
         }
     }

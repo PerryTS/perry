@@ -164,6 +164,7 @@ pub(super) fn compile_function(
         pending_label: None,
         classes,
         this_stack: Vec::new(),
+        new_target_stack: Vec::new(),
         class_stack: Vec::new(),
         methods,
         module_globals,

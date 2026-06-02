@@ -137,10 +137,11 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     });
                 }
                 // Outside a constructor: `new.target` is undefined and
-                // `undefined.<prop>` throws TypeError. We model the
-                // observable result as Undefined (matches Node when
-                // wrapped in `new.target?.<prop>` short-circuiting).
-                return Ok(Expr::Undefined);
+                // ordinary functions resolve it dynamically at runtime.
+                return Ok(Expr::PropertyGet {
+                    object: Box::new(Expr::NewTarget),
+                    property: prop_name.to_string(),
+                });
             }
         }
     }

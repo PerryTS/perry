@@ -420,7 +420,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // class_id=0 empty-object baseline.
             let routes_through_function_construct = matches!(
                 callee.as_ref(),
-                Expr::FuncRef(_) | Expr::LocalGet(_) | Expr::PropertyGet { .. }
+                Expr::FuncRef(_)
+                    | Expr::LocalGet(_)
+                    | Expr::PropertyGet { .. }
+                    | Expr::Closure { .. }
             );
             if routes_through_function_construct {
                 let func_double = lower_expr(ctx, callee)?;

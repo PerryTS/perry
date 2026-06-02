@@ -1060,10 +1060,15 @@ pub extern "C" fn js_worker_threads_mark_as_uncloneable(value: f64) -> f64 {
     js_undefined()
 }
 
-/// worker_threads.moveMessagePortToContext(port, context)
 #[no_mangle]
 pub extern "C" fn js_worker_threads_move_message_port_to_context(port: f64, _context: f64) -> f64 {
-    port
+    let Some(port_id) = port_id_from_object(port) else {
+        return js_undefined();
+    };
+    if !MESSAGE_PORTS.with(|ports| ports.borrow().contains_key(&port_id)) {
+        return js_undefined();
+    }
+    object_value(message_port_object(port_id))
 }
 
 /// worker_threads.receiveMessageOnPort(port)

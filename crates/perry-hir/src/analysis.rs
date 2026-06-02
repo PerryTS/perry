@@ -15,7 +15,10 @@ pub(crate) use builtins::{
 };
 
 mod uses_this;
-pub(crate) use uses_this::{closure_uses_this, uses_this_expr, uses_this_stmt};
+pub(crate) use uses_this::{
+    closure_uses_new_target, closure_uses_this, uses_new_target_expr, uses_new_target_stmt,
+    uses_this_expr, uses_this_stmt,
+};
 
 /// Collect every `LocalId` referenced by `expr` (and its sub-expressions).
 ///

@@ -191,6 +191,9 @@ pub(crate) struct FnCtx<'a> {
     /// Stack of `this` slot pointers — set when lowering inside a class
     /// constructor body. `Expr::This` loads from the top entry.
     pub this_stack: Vec<String>,
+    /// Stack of lexical `new.target` slot pointers. Arrow closures that
+    /// reference `new.target` capture the enclosing value here.
+    pub new_target_stack: Vec<String>,
     /// Stack of class names currently being lowered. Pushed when entering
     /// a constructor body. `Expr::SuperCall` looks at the top entry to
     /// find the parent class's constructor to inline. Same depth as
@@ -1424,7 +1427,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::ArrayPush { .. } | Expr::ArrayPushSpread { .. } => array_push::lower(ctx, expr),
         Expr::Closure { .. } => closure::lower(ctx, expr),
         Expr::New { .. } | Expr::NewDynamic { .. } => new_dynamic::lower(ctx, expr),
-        Expr::This | Expr::SuperCall(..) => this_super_call::lower(ctx, expr),
+        Expr::This | Expr::NewTarget | Expr::SuperCall(..) => this_super_call::lower(ctx, expr),
         Expr::IsNaN(..)
         | Expr::MathPow(..)
         | Expr::MathImul(..)

@@ -27,6 +27,7 @@ where
         | Expr::PodLayoutOffsetOf { .. }
         | Expr::ClassRef(_)
         | Expr::This
+        | Expr::NewTarget
         | Expr::SuperPropertyGet { .. }
         | Expr::EnumMember { .. }
         | Expr::StaticFieldGet { .. }

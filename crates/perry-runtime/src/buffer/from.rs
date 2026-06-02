@@ -469,10 +469,15 @@ pub extern "C" fn js_uint8array_from_array(arr_ptr: *const ArrayHeader) -> *mut 
 fn uint8array_length_or_throw(val: f64) -> u32 {
     let integer = if val.is_nan() { 0.0 } else { val.trunc() };
     if integer < 0.0 || integer > 9_007_199_254_740_991.0 {
+        // Node reports the ORIGINAL argument, not the truncated integer
+        // (`new Uint8Array(-1.5)` → "Invalid typed array length: -1.5"), with
+        // integral values shown without a decimal point (#3146).
         let shown = if val.is_infinite() {
             if val > 0.0 { "Infinity" } else { "-Infinity" }.to_string()
+        } else if val.fract() == 0.0 && val.abs() < (i64::MAX as f64) {
+            format!("{}", val as i64)
         } else {
-            format!("{}", integer as i64)
+            format!("{val}")
         };
         let msg = format!("Invalid typed array length: {shown}");
         let m = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);

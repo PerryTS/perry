@@ -1437,6 +1437,14 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
         }
         None
     };
+    let function_prototype_or_null = || {
+        let proto = crate::object::builtin_prototype_value("Function");
+        if proto.to_bits() != crate::value::TAG_UNDEFINED {
+            proto
+        } else {
+            f64::from_bits(TAG_NULL)
+        }
+    };
     if top16 == 0x7FFE {
         let class_id = (bits & 0xFFFF_FFFF) as u32;
         if let Some(parent_id) = get_parent_class_id(class_id) {
@@ -1531,7 +1539,7 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                     {
                         return proto;
                     }
-                    return f64::from_bits(TAG_NULL);
+                    return function_prototype_or_null();
                 }
                 if let Some(proto) = constructor_dynamic_prototype(obj) {
                     return proto;
@@ -1599,7 +1607,7 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                     if let Some(proto) = crate::object::generator_function_proto_of(bits as usize) {
                         return proto;
                     }
-                    return f64::from_bits(TAG_NULL);
+                    return function_prototype_or_null();
                 }
                 if let Some(proto) = constructor_dynamic_prototype(obj) {
                     return proto;
