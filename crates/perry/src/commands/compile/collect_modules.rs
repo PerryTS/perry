@@ -30,6 +30,12 @@ use super::{
     parse_package_specifier, CompilationContext, JsModule, ParseCache,
 };
 
+mod crypto_ns;
+mod parse_error;
+
+use crypto_ns::module_uses_global_crypto_namespace;
+use parse_error::annotate_parse_error;
+
 const MAX_CROSS_MODULE_INLINE_PRIOR_MODULES: usize = 128;
 
 /// Issue #818: scan a JS module's source for static ESM imports /
@@ -176,139 +182,6 @@ pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
         "hono/jsx/streaming" => Some("hono_jsx_streaming"),
         _ => None,
     }
-}
-
-fn expr_uses_global_crypto_namespace(expr: &Expr) -> bool {
-    if matches!(
-        expr,
-        Expr::PropertyGet { object, property }
-            if property == "crypto" && matches!(object.as_ref(), Expr::GlobalGet(0))
-    ) {
-        return true;
-    }
-
-    // The shared expression walker intentionally does not enter closure
-    // bodies; global crypto reads inside closures still need stdlib crypto
-    // linked for runtime-dispatched calls such as `c.randomUUID()`.
-    if let Expr::Closure { body, .. } = expr {
-        if stmts_use_global_crypto_namespace(body) {
-            return true;
-        }
-    }
-
-    let mut found = false;
-    perry_hir::walker::walk_expr_children(expr, &mut |child| {
-        if !found && expr_uses_global_crypto_namespace(child) {
-            found = true;
-        }
-    });
-    found
-}
-
-fn stmts_use_global_crypto_namespace(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(stmt_uses_global_crypto_namespace)
-}
-
-fn stmt_uses_global_crypto_namespace(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Let { init, .. } => init
-            .as_ref()
-            .map(expr_uses_global_crypto_namespace)
-            .unwrap_or(false),
-        Stmt::Expr(expr) | Stmt::Throw(expr) => expr_uses_global_crypto_namespace(expr),
-        Stmt::Return(expr) => expr
-            .as_ref()
-            .map(expr_uses_global_crypto_namespace)
-            .unwrap_or(false),
-        Stmt::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            expr_uses_global_crypto_namespace(condition)
-                || stmts_use_global_crypto_namespace(then_branch)
-                || else_branch
-                    .as_ref()
-                    .map(|branch| stmts_use_global_crypto_namespace(branch))
-                    .unwrap_or(false)
-        }
-        Stmt::While { condition, body } => {
-            expr_uses_global_crypto_namespace(condition) || stmts_use_global_crypto_namespace(body)
-        }
-        Stmt::DoWhile { body, condition } => {
-            stmts_use_global_crypto_namespace(body) || expr_uses_global_crypto_namespace(condition)
-        }
-        Stmt::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            init.as_ref()
-                .map(|stmt| stmt_uses_global_crypto_namespace(stmt))
-                .unwrap_or(false)
-                || condition
-                    .as_ref()
-                    .map(expr_uses_global_crypto_namespace)
-                    .unwrap_or(false)
-                || update
-                    .as_ref()
-                    .map(expr_uses_global_crypto_namespace)
-                    .unwrap_or(false)
-                || stmts_use_global_crypto_namespace(body)
-        }
-        Stmt::Labeled { body, .. } => stmt_uses_global_crypto_namespace(body),
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            stmts_use_global_crypto_namespace(body)
-                || catch
-                    .as_ref()
-                    .map(|catch| stmts_use_global_crypto_namespace(&catch.body))
-                    .unwrap_or(false)
-                || finally
-                    .as_ref()
-                    .map(|body| stmts_use_global_crypto_namespace(body))
-                    .unwrap_or(false)
-        }
-        Stmt::Switch {
-            discriminant,
-            cases,
-        } => {
-            expr_uses_global_crypto_namespace(discriminant)
-                || cases.iter().any(|case| {
-                    case.test
-                        .as_ref()
-                        .map(expr_uses_global_crypto_namespace)
-                        .unwrap_or(false)
-                        || stmts_use_global_crypto_namespace(&case.body)
-                })
-        }
-        Stmt::Break
-        | Stmt::Continue
-        | Stmt::LabeledBreak(_)
-        | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_) => false,
-    }
-}
-
-fn function_uses_global_crypto_namespace(function: &perry_hir::Function) -> bool {
-    function
-        .params
-        .iter()
-        .filter_map(|param| param.default.as_ref())
-        .any(expr_uses_global_crypto_namespace)
-        || stmts_use_global_crypto_namespace(&function.body)
-}
-
-fn module_uses_global_crypto_namespace(module: &perry_hir::Module) -> bool {
-    stmts_use_global_crypto_namespace(&module.init)
-        || module
-            .functions
-            .iter()
-            .any(function_uses_global_crypto_namespace)
 }
 
 /// #1674 sub-part B: expand a dynamic-`import()` glob pattern
@@ -1952,98 +1825,6 @@ fn collect_module_finish(
     });
     ctx.native_modules.insert(canonical, hir_module);
     Ok(())
-}
-
-/// Issue #845: when SWC fails to parse a CJS-wrapped source, the byte
-/// offset in the error refers to the wrap output, not the on-disk file
-/// — so the offset is past EOF of the original. Rewrite the message to
-/// say so, and (when we can parse a `(lo..hi, ...)` span out of SWC's
-/// Debug-formatted error) include an excerpt of the wrap output around
-/// `lo` so the user can see what choked the re-parse. Pass-through for
-/// non-wrapped sources.
-fn annotate_parse_error(
-    e: anyhow::Error,
-    path: &std::path::Path,
-    parsed_source: &str,
-    was_cjs_wrapped: bool,
-) -> anyhow::Error {
-    if !was_cjs_wrapped {
-        return e;
-    }
-    let msg = format!("{}", e);
-    let span_re = regex::Regex::new(r"\((\d+)\.\.(\d+),").ok();
-    let offset = span_re
-        .as_ref()
-        .and_then(|re| re.captures(&msg))
-        .and_then(|cap| cap.get(1)?.as_str().parse::<usize>().ok());
-    let excerpt = offset.and_then(|lo| excerpt_around_offset(parsed_source, lo));
-
-    let mut extra = format!(
-        "\nnote: this file is inside a `compilePackages` target and was rewritten by Perry's CJS-to-ESM wrap before parsing. The error offset above refers to the post-wrap source ({} bytes), NOT the {}-byte file on disk. Re-run with `PERRY_DEBUG_CJS_WRAP=1` to see the full wrap output.",
-        parsed_source.len(),
-        std::fs::metadata(path)
-            .map(|m| m.len().to_string())
-            .unwrap_or_else(|_| "original".to_string()),
-    );
-    if let Some(snippet) = excerpt {
-        extra.push_str("\nwrap-output excerpt around the error offset:\n");
-        extra.push_str(&snippet);
-    }
-    anyhow::anyhow!("{}{}", msg, extra)
-}
-
-/// Render up to 2 lines of context on either side of the byte offset
-/// `lo`, with the offending line highlighted by a `>>>` prefix. Returns
-/// `None` when `lo` is out of range or the source has no newlines.
-fn excerpt_around_offset(source: &str, lo: usize) -> Option<String> {
-    let lo = lo.min(source.len().saturating_sub(1));
-    let line_start = source[..lo].rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let line_end = source[lo..]
-        .find('\n')
-        .map(|i| lo + i)
-        .unwrap_or(source.len());
-    let pre_line = (0..2).fold(line_start, |acc, _| {
-        source[..acc.saturating_sub(1)]
-            .rfind('\n')
-            .map(|i| i + 1)
-            .unwrap_or(0)
-    });
-    let post_line = (0..2).fold(line_end, |acc, _| {
-        source
-            .get(acc + 1..)
-            .and_then(|s| s.find('\n').map(|i| acc + 1 + i))
-            .unwrap_or(source.len())
-    });
-    let line_number_at = |off: usize| source[..off].matches('\n').count() + 1;
-    let mut out = String::new();
-    let mut cursor = pre_line;
-    while cursor < post_line {
-        let next = source[cursor..]
-            .find('\n')
-            .map(|i| cursor + i)
-            .unwrap_or(post_line);
-        let line = &source[cursor..next];
-        let marker = if cursor <= lo && lo <= next {
-            ">>>"
-        } else {
-            "   "
-        };
-        out.push_str(&format!(
-            "{} {:>5} | {}\n",
-            marker,
-            line_number_at(cursor),
-            line
-        ));
-        if next >= post_line {
-            break;
-        }
-        cursor = next + 1;
-    }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
 }
 
 #[cfg(test)]

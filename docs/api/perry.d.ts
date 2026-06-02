@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1739 entries across 102 modules
+// Coverage: 1743 entries across 102 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3720,6 +3720,14 @@ declare module "ws" {
   export class WebSocket { [key: string]: any; }
   /** stdlib */
   export class WebSocketServer { [key: string]: any; }
+  /** stdlib */
+  export const CLOSED: any;
+  /** stdlib */
+  export const CLOSING: any;
+  /** stdlib */
+  export const CONNECTING: any;
+  /** stdlib */
+  export const OPEN: any;
   /** stdlib */
   export function Server(p0: any): any;
   /** stdlib */
