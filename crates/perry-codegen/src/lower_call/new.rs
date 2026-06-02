@@ -5,7 +5,7 @@
 //! the `FieldInitMode` enum, and `apply_field_initializers_recursive`.
 
 use anyhow::Result;
-use perry_hir::Expr;
+use perry_hir::{Expr, Param};
 use perry_types::Type as HirType;
 
 use super::lower_builtin_new;
@@ -39,6 +39,97 @@ fn node_stream_parent_kind(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> Option<
         }
     }
     None
+}
+
+pub(crate) struct InlineConstructorScope {
+    locals: std::collections::HashMap<u32, String>,
+    local_types: std::collections::HashMap<u32, HirType>,
+    boxed_vars: std::collections::HashSet<u32>,
+}
+
+pub(crate) fn restore_inline_constructor_scope(ctx: &mut FnCtx<'_>, saved: InlineConstructorScope) {
+    ctx.locals = saved.locals;
+    ctx.local_types = saved.local_types;
+    ctx.boxed_vars = saved.boxed_vars;
+}
+
+pub(crate) fn bind_inline_constructor_params(
+    ctx: &mut FnCtx<'_>,
+    params: &[Param],
+    lowered_args: &[String],
+) -> InlineConstructorScope {
+    let saved = InlineConstructorScope {
+        locals: ctx.locals.clone(),
+        local_types: ctx.local_types.clone(),
+        boxed_vars: ctx.boxed_vars.clone(),
+    };
+
+    crate::codegen::arguments::add_arguments_mapped_boxes(params, &mut ctx.boxed_vars);
+    let values = inline_constructor_param_values(ctx, params, lowered_args);
+    for (param, arg_val) in params.iter().zip(values.iter()) {
+        let slot = ctx.func.alloca_entry(DOUBLE);
+        if ctx.boxed_vars.contains(&param.id) && param.arguments_object.is_none() {
+            let box_ptr = ctx.block().call(I64, "js_box_alloc", &[(DOUBLE, arg_val)]);
+            let boxed = ctx.block().bitcast_i64_to_double(&box_ptr);
+            ctx.block().store(DOUBLE, &boxed, &slot);
+        } else {
+            ctx.block().store(DOUBLE, arg_val, &slot);
+        }
+        ctx.locals.insert(param.id, slot);
+        ctx.local_types.insert(param.id, param.ty.clone());
+    }
+
+    crate::codegen::arguments::materialize_arguments_object(
+        ctx,
+        params,
+        crate::codegen::arguments::ArgumentsCallee::Undefined,
+    );
+
+    saved
+}
+
+fn inline_constructor_param_values(
+    ctx: &mut FnCtx<'_>,
+    params: &[Param],
+    lowered_args: &[String],
+) -> Vec<String> {
+    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let mut out = Vec::with_capacity(params.len());
+    let mut visible_index = 0usize;
+    for param in params {
+        if param.arguments_object.is_some() {
+            out.push(pack_lowered_args_array(ctx, lowered_args));
+        } else if param.is_rest {
+            let tail = if visible_index < lowered_args.len() {
+                &lowered_args[visible_index..]
+            } else {
+                &[]
+            };
+            out.push(pack_lowered_args_array(ctx, tail));
+        } else {
+            out.push(
+                lowered_args
+                    .get(visible_index)
+                    .cloned()
+                    .unwrap_or_else(|| undef.clone()),
+            );
+            visible_index += 1;
+        }
+    }
+    out
+}
+
+fn pack_lowered_args_array(ctx: &mut FnCtx<'_>, args: &[String]) -> String {
+    let cap = (args.len() as u32).to_string();
+    let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+    for value in args {
+        current = ctx.block().call(
+            I64,
+            "js_array_push_f64",
+            &[(I64, &current), (DOUBLE, value.as_str())],
+        );
+    }
+    nanbox_pointer_inline(ctx.block(), &current)
 }
 
 /// Lower `new ClassName(args…)` — Phase C.1.
@@ -540,18 +631,10 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     // `LocalGet` codegen doesn't return 0.0. Locals/local_types are
     // saved-and-restored around the whole inlined ctor flow below; we
     // mirror that here so the ctor params don't leak out of `new`.
-    let mut saved_locals_for_ctor: Option<std::collections::HashMap<u32, String>> = None;
-    let mut saved_local_types_for_ctor: Option<std::collections::HashMap<u32, HirType>> = None;
-    if let Some(ctor) = &class.constructor {
-        saved_locals_for_ctor = Some(ctx.locals.clone());
-        saved_local_types_for_ctor = Some(ctx.local_types.clone());
-        for (param, arg_val) in ctor.params.iter().zip(lowered_args.iter()) {
-            let slot = ctx.func.alloca_entry(DOUBLE);
-            ctx.block().store(DOUBLE, arg_val, &slot);
-            ctx.locals.insert(param.id, slot);
-            ctx.local_types.insert(param.id, param.ty.clone());
-        }
-    }
+    let mut saved_scope_for_ctor = class
+        .constructor
+        .as_ref()
+        .map(|ctor| bind_inline_constructor_params(ctx, &ctor.params, &lowered_args));
 
     if let Some(stop_at) = inherited_ctor_class.clone() {
         apply_field_initializers_recursive(ctx, class_name, FieldInitMode::UpToInclusive(stop_at))?;
@@ -577,8 +660,9 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         crate::stmt::lower_stmts(ctx, &class.constructor.as_ref().unwrap().body)?;
 
         // Restore the enclosing function's local scope.
-        ctx.locals = saved_locals_for_ctor.take().unwrap_or_default();
-        ctx.local_types = saved_local_types_for_ctor.take().unwrap_or_default();
+        if let Some(saved) = saved_scope_for_ctor.take() {
+            restore_inline_constructor_scope(ctx, saved);
+        }
     } else {
         // No own constructor — walk the parent chain to find an
         // inherited constructor and inline it. TypeScript semantics:
@@ -589,29 +673,8 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         while let Some(pname) = parent_name {
             if let Some(parent_class) = ctx.classes.get(pname).copied() {
                 if let Some(parent_ctor) = &parent_class.constructor {
-                    let saved_locals = ctx.locals.clone();
-                    let saved_local_types = ctx.local_types.clone();
-
-                    // Map constructor params from the parent's ctor to
-                    // the supplied args. If caller passed fewer args
-                    // than the parent expects, extra params get
-                    // undefined.
-                    for (i, param) in parent_ctor.params.iter().enumerate() {
-                        // Parent-ctor params become ctx.locals for the
-                        // inlined body; capturable by nested closures,
-                        // so hoist to the entry block.
-                        let slot = ctx.func.alloca_entry(DOUBLE);
-                        if i < lowered_args.len() {
-                            ctx.block().store(DOUBLE, &lowered_args[i], &slot);
-                        } else {
-                            let undef = crate::nanbox::double_literal(f64::from_bits(
-                                crate::nanbox::TAG_UNDEFINED,
-                            ));
-                            ctx.block().store(DOUBLE, &undef, &slot);
-                        }
-                        ctx.locals.insert(param.id, slot);
-                        ctx.local_types.insert(param.id, param.ty.clone());
-                    }
+                    let saved_scope =
+                        bind_inline_constructor_params(ctx, &parent_ctor.params, &lowered_args);
 
                     // Push the parent class name so `this` inside the
                     // parent ctor body resolves field names via the
@@ -625,8 +688,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                     ctx.class_stack.pop();
                     ctx.class_stack.push(class_name.to_string());
 
-                    ctx.locals = saved_locals;
-                    ctx.local_types = saved_local_types;
+                    restore_inline_constructor_scope(ctx, saved_scope);
                     found_inherited_ctor = true;
                     break; // Found and inlined the parent ctor.
                 }

@@ -474,6 +474,7 @@ fn register_method(class_id: u32, name: &'static str, func_ptr: usize, param_cou
             name.len() as i64,
             func_ptr as i64,
             param_count,
+            0,
         );
     }
 }

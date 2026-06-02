@@ -6,8 +6,8 @@
 use anyhow::Result;
 use perry_diagnostics::{Diagnostic, DiagnosticCode, Diagnostics, FileId, SourceCache, Span};
 use swc_common::{input::StringInput, sync::Lrc, FileName, SourceMap};
-use swc_ecma_ast::Module;
-use swc_ecma_parser::{lexer::Lexer, Parser, Syntax, TsSyntax};
+use swc_ecma_ast::{Module, ModuleItem, Script};
+use swc_ecma_parser::{lexer::Lexer, EsSyntax, Parser, Syntax, TsSyntax};
 
 // Re-export AST types for consumers that need to inspect the AST
 pub use swc_ecma_ast;
@@ -56,26 +56,10 @@ pub fn parse_typescript_with_cache(
         parse_source.clone(),
     );
 
-    // Enable TSX parsing for .tsx files
-    let is_tsx = filename.ends_with(".tsx");
-
-    let lexer = Lexer::new(
-        Syntax::Typescript(TsSyntax {
-            tsx: is_tsx,
-            decorators: true,
-            dts: false,
-            no_early_errors: false,
-            disallow_ambiguous_jsx_like: false,
-        }),
-        swc_ecma_ast::EsVersion::Es2022,
-        StringInput::from(&*source_file),
-        None,
-    );
-
-    let mut parser = Parser::new_from(lexer);
+    let mut parser = parser_for_source_file(&source_file, filename);
     let mut diagnostics = Diagnostics::new();
 
-    let module = parser.parse_module().map_err(|e| {
+    let module = parse_module_or_script(&mut parser, filename, &parse_source).map_err(|e| {
         // Convert SWC error to our diagnostic
         let span = Span::new(file_id, e.span().lo.0, e.span().hi.0);
         let diag = Diagnostic::error(DiagnosticCode::ParseError, format!("{}", e.kind().msg()))
@@ -117,25 +101,9 @@ pub fn parse_typescript(source: &str, filename: &str) -> Result<Module> {
         parse_source,
     );
 
-    let is_tsx = filename.ends_with(".tsx");
+    let mut parser = parser_for_source_file(&source_file, filename);
 
-    let lexer = Lexer::new(
-        Syntax::Typescript(TsSyntax {
-            tsx: is_tsx,
-            decorators: true,
-            dts: false,
-            no_early_errors: false,
-            disallow_ambiguous_jsx_like: false,
-        }),
-        swc_ecma_ast::EsVersion::Es2022,
-        StringInput::from(&*source_file),
-        None,
-    );
-
-    let mut parser = Parser::new_from(lexer);
-
-    let module = parser
-        .parse_module()
+    let module = parse_module_or_script(&mut parser, filename, &source_file.src)
         .map_err(|e| anyhow::anyhow!("Parse error: {:?}", e))?;
 
     // Check for recoverable errors
@@ -144,6 +112,82 @@ pub fn parse_typescript(source: &str, filename: &str) -> Result<Module> {
     }
 
     Ok(module)
+}
+
+fn parser_for_source_file<'a>(
+    source_file: &'a swc_common::SourceFile,
+    filename: &str,
+) -> Parser<Lexer<'a>> {
+    let lexer = Lexer::new(
+        syntax_for_filename(filename),
+        swc_ecma_ast::EsVersion::Es2022,
+        StringInput::from(source_file),
+        None,
+    );
+    Parser::new_from(lexer)
+}
+
+fn syntax_for_filename(filename: &str) -> Syntax {
+    let path = filename.split(['?', '#']).next().unwrap_or(filename);
+    if path.ends_with(".ts")
+        || path.ends_with(".tsx")
+        || path.ends_with(".mts")
+        || path.ends_with(".cts")
+    {
+        Syntax::Typescript(TsSyntax {
+            tsx: path.ends_with(".tsx"),
+            decorators: true,
+            dts: false,
+            no_early_errors: false,
+            disallow_ambiguous_jsx_like: false,
+        })
+    } else {
+        Syntax::Es(EsSyntax {
+            jsx: path.ends_with(".jsx"),
+            decorators: true,
+            decorators_before_export: true,
+            export_default_from: true,
+            import_attributes: true,
+            ..Default::default()
+        })
+    }
+}
+
+fn parse_module_or_script(
+    parser: &mut Parser<Lexer<'_>>,
+    filename: &str,
+    source: &str,
+) -> swc_ecma_parser::PResult<Module> {
+    if should_parse_as_script(filename, source) {
+        parser.parse_script().map(script_to_module)
+    } else {
+        parser.parse_module()
+    }
+}
+
+fn should_parse_as_script(filename: &str, source: &str) -> bool {
+    let path = filename.split(['?', '#']).next().unwrap_or(filename);
+    (path.ends_with(".js") || path.ends_with(".cjs") || path.ends_with(".jsx"))
+        && !looks_like_es_module(source)
+}
+
+fn looks_like_es_module(source: &str) -> bool {
+    source.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("import ")
+            || trimmed.starts_with("import{")
+            || trimmed.starts_with("export ")
+            || trimmed.starts_with("export{")
+            || trimmed.starts_with("export*")
+    })
+}
+
+fn script_to_module(script: Script) -> Module {
+    Module {
+        span: script.span,
+        body: script.body.into_iter().map(ModuleItem::Stmt).collect(),
+        shebang: script.shebang,
+    }
 }
 
 fn normalize_unicode_identifier_escapes(source: &str) -> String {
@@ -328,5 +372,59 @@ mod tests {
         let result = parse_typescript_with_cache(source, "test.ts", &mut cache);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_js_sloppy_with_without_ts_warning() {
+        let source = r#"
+            function foo() {
+                var a = { a: 10 };
+                with (a) {
+                    return () => a;
+                }
+            }
+        "#;
+        let mut cache = SourceCache::new();
+
+        let result = parse_typescript_with_cache(source, "test.js", &mut cache).unwrap();
+
+        assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn test_parse_js_sloppy_yield_arrow_parameter() {
+        let source = r#"
+            var yield = 23;
+            var f = (x = yield) => x;
+            var g = yield => yield;
+            var h = (yield) => yield;
+        "#;
+        let mut cache = SourceCache::new();
+
+        let result = parse_typescript_with_cache(source, "test.js", &mut cache).unwrap();
+
+        assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn test_parse_ts_still_rejects_ts_syntax_errors() {
+        let source = "let x: number = ;";
+        let mut cache = SourceCache::new();
+
+        let result = parse_typescript_with_cache(source, "test.ts", &mut cache);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_js_module_syntax_still_uses_module_parser() {
+        let source = r#"
+            export const value = 1;
+        "#;
+        let mut cache = SourceCache::new();
+
+        let result = parse_typescript_with_cache(source, "test.js", &mut cache).unwrap();
+
+        assert!(result.diagnostics.is_empty());
     }
 }

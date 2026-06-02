@@ -94,6 +94,7 @@ fn param(id: LocalId, name: &str) -> Param {
         default: None,
         decorators: Vec::new(),
         is_rest: false,
+        arguments_object: None,
     }
 }
 

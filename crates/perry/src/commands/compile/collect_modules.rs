@@ -16,7 +16,7 @@ use perry_transform::{
     gather_cross_module_methods_with_extern_imports, inline_finally_into_returns, inline_functions,
     transform_async_to_generator, transform_generators, MethodCandidate,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -29,6 +29,14 @@ use super::{
     is_in_perry_native_package, is_js_file, parse_cached, parse_native_library_manifest,
     parse_package_specifier, CompilationContext, JsModule, ParseCache,
 };
+
+mod crypto_ns;
+mod parse_error;
+
+use crypto_ns::module_uses_global_crypto_namespace;
+use parse_error::annotate_parse_error;
+
+const MAX_CROSS_MODULE_INLINE_PRIOR_MODULES: usize = 128;
 
 /// Issue #818: scan a JS module's source for static ESM imports /
 /// re-exports / string-literal dynamic imports, resolve each one
@@ -177,139 +185,6 @@ pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
     }
 }
 
-fn expr_uses_global_crypto_namespace(expr: &Expr) -> bool {
-    if matches!(
-        expr,
-        Expr::PropertyGet { object, property }
-            if property == "crypto" && matches!(object.as_ref(), Expr::GlobalGet(0))
-    ) {
-        return true;
-    }
-
-    // The shared expression walker intentionally does not enter closure
-    // bodies; global crypto reads inside closures still need stdlib crypto
-    // linked for runtime-dispatched calls such as `c.randomUUID()`.
-    if let Expr::Closure { body, .. } = expr {
-        if stmts_use_global_crypto_namespace(body) {
-            return true;
-        }
-    }
-
-    let mut found = false;
-    perry_hir::walker::walk_expr_children(expr, &mut |child| {
-        if !found && expr_uses_global_crypto_namespace(child) {
-            found = true;
-        }
-    });
-    found
-}
-
-fn stmts_use_global_crypto_namespace(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(stmt_uses_global_crypto_namespace)
-}
-
-fn stmt_uses_global_crypto_namespace(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Let { init, .. } => init
-            .as_ref()
-            .map(expr_uses_global_crypto_namespace)
-            .unwrap_or(false),
-        Stmt::Expr(expr) | Stmt::Throw(expr) => expr_uses_global_crypto_namespace(expr),
-        Stmt::Return(expr) => expr
-            .as_ref()
-            .map(expr_uses_global_crypto_namespace)
-            .unwrap_or(false),
-        Stmt::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            expr_uses_global_crypto_namespace(condition)
-                || stmts_use_global_crypto_namespace(then_branch)
-                || else_branch
-                    .as_ref()
-                    .map(|branch| stmts_use_global_crypto_namespace(branch))
-                    .unwrap_or(false)
-        }
-        Stmt::While { condition, body } => {
-            expr_uses_global_crypto_namespace(condition) || stmts_use_global_crypto_namespace(body)
-        }
-        Stmt::DoWhile { body, condition } => {
-            stmts_use_global_crypto_namespace(body) || expr_uses_global_crypto_namespace(condition)
-        }
-        Stmt::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            init.as_ref()
-                .map(|stmt| stmt_uses_global_crypto_namespace(stmt))
-                .unwrap_or(false)
-                || condition
-                    .as_ref()
-                    .map(expr_uses_global_crypto_namespace)
-                    .unwrap_or(false)
-                || update
-                    .as_ref()
-                    .map(expr_uses_global_crypto_namespace)
-                    .unwrap_or(false)
-                || stmts_use_global_crypto_namespace(body)
-        }
-        Stmt::Labeled { body, .. } => stmt_uses_global_crypto_namespace(body),
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            stmts_use_global_crypto_namespace(body)
-                || catch
-                    .as_ref()
-                    .map(|catch| stmts_use_global_crypto_namespace(&catch.body))
-                    .unwrap_or(false)
-                || finally
-                    .as_ref()
-                    .map(|body| stmts_use_global_crypto_namespace(body))
-                    .unwrap_or(false)
-        }
-        Stmt::Switch {
-            discriminant,
-            cases,
-        } => {
-            expr_uses_global_crypto_namespace(discriminant)
-                || cases.iter().any(|case| {
-                    case.test
-                        .as_ref()
-                        .map(expr_uses_global_crypto_namespace)
-                        .unwrap_or(false)
-                        || stmts_use_global_crypto_namespace(&case.body)
-                })
-        }
-        Stmt::Break
-        | Stmt::Continue
-        | Stmt::LabeledBreak(_)
-        | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_) => false,
-    }
-}
-
-fn function_uses_global_crypto_namespace(function: &perry_hir::Function) -> bool {
-    function
-        .params
-        .iter()
-        .filter_map(|param| param.default.as_ref())
-        .any(expr_uses_global_crypto_namespace)
-        || stmts_use_global_crypto_namespace(&function.body)
-}
-
-fn module_uses_global_crypto_namespace(module: &perry_hir::Module) -> bool {
-    stmts_use_global_crypto_namespace(&module.init)
-        || module
-            .functions
-            .iter()
-            .any(function_uses_global_crypto_namespace)
-}
-
 /// #1674 sub-part B: expand a dynamic-`import()` glob pattern
 /// (`<prefix>*<suffix>`, where `prefix` is a relative, directory-anchored
 /// path) into concrete relative specifiers by reading the importing module's
@@ -377,21 +252,101 @@ pub(super) fn collect_modules(
     progress: &VerboseProgress,
     mut parse_cache: Option<&mut ParseCache>,
 ) -> Result<()> {
-    let canonical = entry_path
-        .canonicalize()
-        .map_err(|e| anyhow!("Failed to canonicalize {}: {}", entry_path.display(), e))?;
+    let mut states: HashMap<PathBuf, VisitState> = HashMap::new();
+    let mut stack = vec![WorkFrame::Enter(entry_path.clone())];
+    while let Some(frame) = stack.pop() {
+        match frame {
+            WorkFrame::Enter(next_path) => {
+                let canonical = next_path.canonicalize().map_err(|e| {
+                    anyhow!("Failed to canonicalize {}: {}", next_path.display(), e)
+                })?;
 
-    if visited.contains(&canonical) {
-        return Ok(());
+                if matches!(
+                    states.get(&canonical),
+                    Some(VisitState::InProgress | VisitState::Done)
+                ) {
+                    continue;
+                }
+                if visited.contains(&canonical) {
+                    states.insert(canonical, VisitState::Done);
+                    continue;
+                }
+
+                states.insert(canonical.clone(), VisitState::InProgress);
+                visited.insert(canonical.clone());
+                progress.record(ProgressSnapshot {
+                    stage: "collect-module",
+                    module_path: Some(&canonical),
+                    visited: Some(visited.len()),
+                    collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+                    ..Default::default()
+                });
+
+                let discovered = collect_module_one(
+                    &next_path,
+                    canonical.clone(),
+                    ctx,
+                    visited,
+                    format,
+                    target,
+                    next_class_id,
+                    progress,
+                    parse_cache.as_deref_mut(),
+                )?;
+
+                if let Some(prepared) = discovered.finish {
+                    stack.push(WorkFrame::Finish(prepared));
+                } else {
+                    states.insert(canonical, VisitState::Done);
+                }
+                for child in discovered.children.into_iter().rev() {
+                    stack.push(WorkFrame::Enter(child));
+                }
+            }
+            WorkFrame::Finish(prepared) => {
+                let canonical = prepared.canonical.clone();
+                collect_module_finish(prepared, ctx, visited, target, skip_transforms, progress)?;
+                states.insert(canonical, VisitState::Done);
+            }
+        }
     }
-    visited.insert(canonical.clone());
-    progress.record(ProgressSnapshot {
-        stage: "collect-module",
-        module_path: Some(&canonical),
-        visited: Some(visited.len()),
-        collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
-        ..Default::default()
-    });
+    Ok(())
+}
+
+enum VisitState {
+    InProgress,
+    Done,
+}
+
+enum WorkFrame {
+    Enter(PathBuf),
+    Finish(PreparedModule),
+}
+
+struct ModuleDiscovery {
+    finish: Option<PreparedModule>,
+    children: Vec<PathBuf>,
+}
+
+struct PreparedModule {
+    canonical: PathBuf,
+    module_name: String,
+    hir_module: perry_hir::Module,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_module_one(
+    entry_path: &PathBuf,
+    canonical: PathBuf,
+    ctx: &mut CompilationContext,
+    visited: &mut HashSet<PathBuf>,
+    format: OutputFormat,
+    target: Option<&str>,
+    next_class_id: &mut perry_hir::ClassId,
+    progress: &VerboseProgress,
+    mut parse_cache: Option<&mut ParseCache>,
+) -> Result<ModuleDiscovery> {
+    let mut pending = Vec::new();
 
     // Check if this file should be handled by JS runtime instead of native compilation
     // This includes: JS files, declaration files (.d.ts), JSON files, or any file in node_modules when JS runtime is enabled
@@ -433,19 +388,28 @@ pub(super) fn collect_modules(
 
     // Skip JSON files — they're data, not code (imported via `with { type: "json" }`)
     if is_json {
-        return Ok(());
+        return Ok(ModuleDiscovery {
+            finish: None,
+            children: pending,
+        });
     }
 
     if should_use_js_runtime {
         // Skip declaration files - they're just type information
         if is_declaration_file(&canonical) {
-            return Ok(());
+            return Ok(ModuleDiscovery {
+                finish: None,
+                children: pending,
+            });
         }
 
         // Perry native extension packages (ioredis, ethers, mysql2, ws, dotenv) are handled
         // entirely by Perry's built-in stdlib — they must NOT be loaded into V8.
         if is_perry_native {
-            return Ok(());
+            return Ok(ModuleDiscovery {
+                finish: None,
+                children: pending,
+            });
         }
 
         let source = fs::read_to_string(&canonical)
@@ -514,19 +478,12 @@ pub(super) fn collect_modules(
         // — covering the case where a JS file re-imports something that
         // resolves to a TypeScript file under a `compilePackages` dir.
         for next in transitive_paths {
-            collect_modules(
-                &next,
-                ctx,
-                visited,
-                format,
-                target,
-                next_class_id,
-                skip_transforms,
-                progress,
-                parse_cache.as_deref_mut(),
-            )?;
+            pending.push(next);
         }
-        return Ok(());
+        return Ok(ModuleDiscovery {
+            finish: None,
+            children: pending,
+        });
     }
 
     // It's a TypeScript file to compile natively
@@ -775,7 +732,8 @@ pub(super) fn collect_modules(
     // the resolver can follow `import(localStringVar)` and
     // `` import(`./prefix_${localStringVar}.ts`) `` paths transitively.
     let module_const_locals = perry_hir::collect_module_const_locals(&hir_module);
-    perry_hir::for_each_dynamic_import_mut(&mut hir_module, &mut |expr| {
+    let mut dynamic_path_sets: Vec<Vec<String>> = Vec::new();
+    perry_hir::for_each_dynamic_import(&hir_module, &mut |expr| {
         if let perry_hir::Expr::DynamicImport { paths, arg } = expr {
             if !paths.is_empty() {
                 // Already resolved (e.g. a second pass on the same module).
@@ -783,7 +741,7 @@ pub(super) fn collect_modules(
             }
             let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
             match perry_hir::resolve_import_path_with_consts(
-                arg,
+                arg.as_ref(),
                 &module_const_locals,
                 &mut visiting,
             ) {
@@ -805,7 +763,7 @@ pub(super) fn collect_modules(
                             new_dyn_imports.push(p.clone());
                         }
                     }
-                    *paths = set;
+                    dynamic_path_sets.push(set);
                 }
                 perry_hir::Resolution::Unresolved(reason) => {
                     // #1674 sub-part B: a non-resolvable template specifier with
@@ -813,7 +771,7 @@ pub(super) fn collect_modules(
                     // (`import(`./plugins/${name}.ts`)`) globs the importing
                     // module's directory for matching files instead of erroring.
                     if let Some((prefix, suffix)) =
-                        perry_hir::dynamic_import_glob_pattern(arg, &module_const_locals)
+                        perry_hir::dynamic_import_glob_pattern(arg.as_ref(), &module_const_locals)
                     {
                         let matches = expand_dynamic_import_glob(
                             &source_file_path,
@@ -840,7 +798,7 @@ pub(super) fn collect_modules(
                                     new_dyn_imports.push(p.clone());
                                 }
                             }
-                            *paths = matches;
+                            dynamic_path_sets.push(matches);
                             return;
                         }
                     }
@@ -854,7 +812,8 @@ pub(super) fn collect_modules(
             }
         }
     });
-    perry_hir::for_each_worker_new_mut(&mut hir_module, &mut |expr| {
+    let mut worker_path_sets: Vec<Vec<String>> = Vec::new();
+    perry_hir::for_each_worker_new(&hir_module, &mut |expr| {
         if let perry_hir::Expr::WorkerNew {
             paths, filename, ..
         } = expr
@@ -864,7 +823,7 @@ pub(super) fn collect_modules(
             }
             let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
             match perry_hir::resolve_import_path_with_consts(
-                filename,
+                filename.as_ref(),
                 &module_const_locals,
                 &mut visiting,
             ) {
@@ -892,7 +851,7 @@ pub(super) fn collect_modules(
                             new_dyn_imports.push(p.clone());
                         }
                     }
-                    *paths = set;
+                    worker_path_sets.push(set);
                 }
                 perry_hir::Resolution::Unresolved(reason) => {
                     dyn_errors.push(format!(
@@ -903,9 +862,30 @@ pub(super) fn collect_modules(
             }
         }
     });
+    drop(module_const_locals);
     if !dyn_errors.is_empty() {
         return Err(anyhow!("{}", dyn_errors.join("\n")));
     }
+    let mut dynamic_path_sets = dynamic_path_sets.into_iter();
+    perry_hir::for_each_dynamic_import_mut(&mut hir_module, &mut |expr| {
+        if let perry_hir::Expr::DynamicImport { paths, .. } = expr {
+            if paths.is_empty() {
+                if let Some(set) = dynamic_path_sets.next() {
+                    *paths = set;
+                }
+            }
+        }
+    });
+    let mut worker_path_sets = worker_path_sets.into_iter();
+    perry_hir::for_each_worker_new_mut(&mut hir_module, &mut |expr| {
+        if let perry_hir::Expr::WorkerNew { paths, .. } = expr {
+            if paths.is_empty() {
+                if let Some(set) = worker_path_sets.next() {
+                    *paths = set;
+                }
+            }
+        }
+    });
     for source in new_dyn_imports {
         // A dynamic edge to the same source as a static import is folded
         // into the existing static edge: that edge already gives us full
@@ -1233,18 +1213,7 @@ pub(super) fn collect_modules(
                             pkg_dir = dir.parent();
                         }
                     }
-                    // Recursively collect TypeScript modules
-                    collect_modules(
-                        &resolved_path,
-                        ctx,
-                        visited,
-                        format,
-                        target,
-                        next_class_id,
-                        skip_transforms,
-                        progress,
-                        parse_cache.as_deref_mut(),
-                    )?;
+                    pending.push(resolved_path);
                 }
                 ModuleKind::Interpreted => {
                     // Perry native extension packages (ioredis, ethers, ws, mysql2, dotenv)
@@ -1357,18 +1326,7 @@ pub(super) fn collect_modules(
                         OutputFormat::Json => {}
                     }
 
-                    // Collect JS module
-                    collect_modules(
-                        &resolved_path,
-                        ctx,
-                        visited,
-                        format,
-                        target,
-                        next_class_id,
-                        skip_transforms,
-                        progress,
-                        parse_cache.as_deref_mut(),
-                    )?;
+                    pending.push(resolved_path);
                 }
                 ModuleKind::NativeRust => {
                     // Native Rust modules are handled by stdlib
@@ -1539,19 +1497,7 @@ pub(super) fn collect_modules(
                 }
 
                 match kind {
-                    ModuleKind::NativeCompiled => {
-                        collect_modules(
-                            &resolved_path,
-                            ctx,
-                            visited,
-                            format,
-                            target,
-                            next_class_id,
-                            skip_transforms,
-                            progress,
-                            parse_cache.as_deref_mut(),
-                        )?;
-                    }
+                    ModuleKind::NativeCompiled => pending.push(resolved_path),
                     ModuleKind::Interpreted => {
                         // JS runtime (V8) support was removed, so interpreted
                         // node_modules dependencies are not followed. A direct
@@ -1564,6 +1510,30 @@ pub(super) fn collect_modules(
             }
         }
     }
+
+    return Ok(ModuleDiscovery {
+        finish: Some(PreparedModule {
+            canonical,
+            module_name,
+            hir_module,
+        }),
+        children: pending,
+    });
+}
+
+fn collect_module_finish(
+    prepared: PreparedModule,
+    ctx: &mut CompilationContext,
+    visited: &HashSet<PathBuf>,
+    target: Option<&str>,
+    skip_transforms: bool,
+    progress: &VerboseProgress,
+) -> Result<()> {
+    let PreparedModule {
+        canonical,
+        module_name,
+        mut hir_module,
+    } = prepared;
 
     // Issue #535 — `perry/ui` `state<T>` desugar pass.
     let is_harmonyos = matches!(target, Some("harmonyos") | Some("harmonyos-simulator"));
@@ -1605,19 +1575,31 @@ pub(super) fn collect_modules(
                     .collect::<Vec<_>>()
             );
         }
-        for prior_module in ctx.native_modules.values() {
-            // The strict harvester rejects ExternFuncRef-using methods.
-            // The loose variant records each required extern name;
-            // `inline_functions` filters by destination imports.
-            // First-write-wins on key collision (rare — issue #309 cycle
-            // breaker). Strict-harvest entries are functionally equivalent
-            // when colliding with the loose variant (same body), so
-            // either ordering is correct.
-            for (k, v) in gather_cross_module_methods_with_extern_imports(prior_module) {
-                extra_methods.entry(k).or_insert(v);
-            }
-            for (k, v) in gather_cross_module_methods(prior_module) {
-                extra_methods.entry(k).or_insert(v);
+        let enable_cross_module_inline =
+            ctx.native_modules.len() <= MAX_CROSS_MODULE_INLINE_PRIOR_MODULES;
+        if std::env::var("PERRY_INLINE_DEBUG").is_ok() && !enable_cross_module_inline {
+            eprintln!(
+                "[INLINE-DRIVER] skipping cross-module inline harvest for {}: prior_modules={} budget={}",
+                hir_module.name,
+                ctx.native_modules.len(),
+                MAX_CROSS_MODULE_INLINE_PRIOR_MODULES
+            );
+        }
+        if enable_cross_module_inline {
+            for prior_module in ctx.native_modules.values() {
+                // The strict harvester rejects ExternFuncRef-using methods.
+                // The loose variant records each required extern name;
+                // `inline_functions` filters by destination imports.
+                // First-write-wins on key collision (rare — issue #309 cycle
+                // breaker). Strict-harvest entries are functionally equivalent
+                // when colliding with the loose variant (same body), so
+                // either ordering is correct.
+                for (k, v) in gather_cross_module_methods_with_extern_imports(prior_module) {
+                    extra_methods.entry(k).or_insert(v);
+                }
+                for (k, v) in gather_cross_module_methods(prior_module) {
+                    extra_methods.entry(k).or_insert(v);
+                }
             }
         }
         // Cross-module field-type info: `(class_name, field_name) ->
@@ -1628,13 +1610,15 @@ pub(super) fn collect_modules(
         // class.fields where the type is `Named(...)`.
         let mut extra_class_fields: std::collections::HashMap<(String, String), String> =
             std::collections::HashMap::new();
-        for prior_module in ctx.native_modules.values() {
-            for class in &prior_module.classes {
-                for f in &class.fields {
-                    if let perry_types::Type::Named(field_class) = &f.ty {
-                        extra_class_fields
-                            .entry((class.name.clone(), f.name.clone()))
-                            .or_insert_with(|| field_class.clone());
+        if enable_cross_module_inline {
+            for prior_module in ctx.native_modules.values() {
+                for class in &prior_module.classes {
+                    for f in &class.fields {
+                        if let perry_types::Type::Named(field_class) = &f.ty {
+                            extra_class_fields
+                                .entry((class.name.clone(), f.name.clone()))
+                                .or_insert_with(|| field_class.clone());
+                        }
                     }
                 }
             }
@@ -1648,11 +1632,13 @@ pub(super) fn collect_modules(
         // `__AnonShape_<hash>` into this module, codegen can resolve the
         // class definition (otherwise the field list is missing and the
         // literal lowers as a bare object with all properties dropped).
-        let mut extra_anon_classes: std::collections::HashMap<String, perry_hir::Class> =
+        let mut extra_anon_classes: std::collections::HashMap<String, &perry_hir::Class> =
             std::collections::HashMap::new();
-        for prior_module in ctx.native_modules.values() {
-            for (k, v) in gather_cross_module_anon_classes(prior_module) {
-                extra_anon_classes.entry(k).or_insert(v);
+        if enable_cross_module_inline {
+            for prior_module in ctx.native_modules.values() {
+                for (k, v) in gather_cross_module_anon_classes(prior_module) {
+                    extra_anon_classes.entry(k).or_insert(v);
+                }
             }
         }
         // Interprocedural deforestation. Runs BEFORE inline_functions
@@ -1661,7 +1647,23 @@ pub(super) fn collect_modules(
         // already use the new shape). Intra-module only — see
         // `deforest::run` doc-comment for limitations and the manual
         // ABC451D validation.
+        progress.record(ProgressSnapshot {
+            stage: "transform-deforest",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         perry_transform::deforest::run(&mut hir_module);
+        progress.record(ProgressSnapshot {
+            stage: "transform-inline-functions",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         inline_functions(
             &mut hir_module,
             &extra_methods,
@@ -1677,6 +1679,14 @@ pub(super) fn collect_modules(
         // become 25 fully-unrolled stmts with `KERNEL[ky+2][kx+2]` collapsed
         // to compile-time integer literals — see crates/perry-transform/
         // src/unroll.rs.
+        progress.record(ProgressSnapshot {
+            stage: "transform-unroll-static-loops",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         perry_transform::unroll_static_loops(&mut hir_module);
         // Inline `finally` bodies before each abrupt completion
         // (`return` / `break` / `continue` / labeled-break / labeled-
@@ -1686,8 +1696,32 @@ pub(super) fn collect_modules(
         // state-machine sequence — an abrupt completion in the body
         // terminates the state, leaving the appended finally as dead
         // code. Issue #536.
+        progress.record(ProgressSnapshot {
+            stage: "transform-inline-finally",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         inline_finally_into_returns(&mut hir_module);
+        progress.record(ProgressSnapshot {
+            stage: "transform-async-to-generator",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         transform_async_to_generator(&mut hir_module);
+        progress.record(ProgressSnapshot {
+            stage: "transform-generators",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         transform_generators(&mut hir_module);
     }
 
@@ -1794,101 +1828,13 @@ pub(super) fn collect_modules(
     Ok(())
 }
 
-/// Issue #845: when SWC fails to parse a CJS-wrapped source, the byte
-/// offset in the error refers to the wrap output, not the on-disk file
-/// — so the offset is past EOF of the original. Rewrite the message to
-/// say so, and (when we can parse a `(lo..hi, ...)` span out of SWC's
-/// Debug-formatted error) include an excerpt of the wrap output around
-/// `lo` so the user can see what choked the re-parse. Pass-through for
-/// non-wrapped sources.
-fn annotate_parse_error(
-    e: anyhow::Error,
-    path: &std::path::Path,
-    parsed_source: &str,
-    was_cjs_wrapped: bool,
-) -> anyhow::Error {
-    if !was_cjs_wrapped {
-        return e;
-    }
-    let msg = format!("{}", e);
-    let span_re = regex::Regex::new(r"\((\d+)\.\.(\d+),").ok();
-    let offset = span_re
-        .as_ref()
-        .and_then(|re| re.captures(&msg))
-        .and_then(|cap| cap.get(1)?.as_str().parse::<usize>().ok());
-    let excerpt = offset.and_then(|lo| excerpt_around_offset(parsed_source, lo));
-
-    let mut extra = format!(
-        "\nnote: this file is inside a `compilePackages` target and was rewritten by Perry's CJS-to-ESM wrap before parsing. The error offset above refers to the post-wrap source ({} bytes), NOT the {}-byte file on disk. Re-run with `PERRY_DEBUG_CJS_WRAP=1` to see the full wrap output.",
-        parsed_source.len(),
-        std::fs::metadata(path)
-            .map(|m| m.len().to_string())
-            .unwrap_or_else(|_| "original".to_string()),
-    );
-    if let Some(snippet) = excerpt {
-        extra.push_str("\nwrap-output excerpt around the error offset:\n");
-        extra.push_str(&snippet);
-    }
-    anyhow::anyhow!("{}{}", msg, extra)
-}
-
-/// Render up to 2 lines of context on either side of the byte offset
-/// `lo`, with the offending line highlighted by a `>>>` prefix. Returns
-/// `None` when `lo` is out of range or the source has no newlines.
-fn excerpt_around_offset(source: &str, lo: usize) -> Option<String> {
-    let lo = lo.min(source.len().saturating_sub(1));
-    let line_start = source[..lo].rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let line_end = source[lo..]
-        .find('\n')
-        .map(|i| lo + i)
-        .unwrap_or(source.len());
-    let pre_line = (0..2).fold(line_start, |acc, _| {
-        source[..acc.saturating_sub(1)]
-            .rfind('\n')
-            .map(|i| i + 1)
-            .unwrap_or(0)
-    });
-    let post_line = (0..2).fold(line_end, |acc, _| {
-        source
-            .get(acc + 1..)
-            .and_then(|s| s.find('\n').map(|i| acc + 1 + i))
-            .unwrap_or(source.len())
-    });
-    let line_number_at = |off: usize| source[..off].matches('\n').count() + 1;
-    let mut out = String::new();
-    let mut cursor = pre_line;
-    while cursor < post_line {
-        let next = source[cursor..]
-            .find('\n')
-            .map(|i| cursor + i)
-            .unwrap_or(post_line);
-        let line = &source[cursor..next];
-        let marker = if cursor <= lo && lo <= next {
-            ">>>"
-        } else {
-            "   "
-        };
-        out.push_str(&format!(
-            "{} {:>5} | {}\n",
-            marker,
-            line_number_at(cursor),
-            line
-        ));
-        if next >= post_line {
-            break;
-        }
-        cursor = next + 1;
-    }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
-}
-
 #[cfg(test)]
-mod glob_expand_tests {
-    use super::expand_dynamic_import_glob;
+mod tests {
+    use super::{collect_modules, expand_dynamic_import_glob};
+    use crate::commands::compile::CompilationContext;
+    use crate::commands::progress::VerboseProgress;
+    use crate::OutputFormat;
+    use std::collections::HashSet;
 
     #[test]
     fn expands_directory_files_matching_suffix() {
@@ -1918,5 +1864,66 @@ mod glob_expand_tests {
         assert!(none.is_empty());
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn dependency_is_transformed_before_importer_for_cross_module_inline() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let dep = root.join("dep.ts");
+        let entry = root.join("entry.ts");
+
+        std::fs::write(
+            &dep,
+            r#"
+export class Dep {
+  marker(): number {
+    return 424242;
+  }
+}
+"#,
+        )
+        .expect("write dep");
+        std::fs::write(
+            &entry,
+            r#"
+import { Dep } from "./dep";
+
+const dep = new Dep();
+const got = dep.marker();
+console.log(got);
+"#,
+        )
+        .expect("write entry");
+
+        let mut ctx = CompilationContext::new(root.to_path_buf());
+        ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+        let mut visited = HashSet::new();
+        let mut next_class_id: perry_hir::ClassId = 1;
+        let progress = VerboseProgress::new(OutputFormat::Text, 0);
+
+        collect_modules(
+            &entry,
+            &mut ctx,
+            &mut visited,
+            OutputFormat::Text,
+            None,
+            &mut next_class_id,
+            false,
+            &progress,
+            None,
+        )
+        .expect("collect modules");
+
+        let entry_hir = ctx
+            .native_modules
+            .get(&entry.canonicalize().unwrap())
+            .expect("entry module collected");
+        let entry_debug = format!("{entry_hir:?}");
+
+        assert!(
+            entry_debug.contains("424242"),
+            "entry HIR should contain the dependency method literal after cross-module inlining:\n{entry_debug}"
+        );
     }
 }

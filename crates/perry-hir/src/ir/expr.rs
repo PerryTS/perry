@@ -239,6 +239,9 @@ pub enum Expr {
         args: Vec<Expr>,
     },
 
+    /// Runtime `new.target` value for ordinary functions.
+    NewTarget,
+
     // Class reference (for new expressions)
     ClassRef(String),
 
@@ -431,10 +434,6 @@ pub enum Expr {
 
     // This expression
     This,
-
-    // `new.target` meta-property. Ordinary function bodies read this from
-    // the runtime constructor-call slot; arrows may capture it lexically.
-    NewTarget,
 
     // Super constructor call: super(args)
     SuperCall(Vec<Expr>),
@@ -1677,6 +1676,11 @@ pub enum Expr {
     /// new URL(url) or new URL(url, base) -> URL object (stored as pointer)
     UrlNew {
         url: Box<Expr>,
+        base: Option<Box<Expr>>,
+    },
+    /// new URLPattern(input?, base?) -> URLPattern object
+    UrlPatternNew {
+        input: Box<Expr>,
         base: Option<Box<Expr>>,
     },
     /// url.href -> string (full URL)

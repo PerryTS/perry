@@ -812,6 +812,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                         .map(|d| substitute_expr(d, substitutions)),
                     decorators: p.decorators.clone(),
                     is_rest: p.is_rest,
+                    arguments_object: p.arguments_object.clone(),
                 })
                 .collect(),
             return_type: substitute_type(return_type, substitutions),

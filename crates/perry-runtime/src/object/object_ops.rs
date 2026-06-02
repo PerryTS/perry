@@ -755,7 +755,7 @@ unsafe fn define_class_prototype_method(target_cid: u32, name: &str, value_bits:
         if (*closure).type_tag == CLOSURE_MAGIC && (*closure).func_ptr == BOUND_METHOD_FUNC_PTR {
             let recv = crate::closure::js_closure_get_capture_f64(closure, 0);
             if let Some(source_cid) = super::class_ref_id(recv) {
-                if let Some((func_ptr, param_count)) =
+                if let Some((func_ptr, param_count, has_synthetic_arguments)) =
                     super::lookup_class_method_in_chain(source_cid, name)
                 {
                     let mut guard = CLASS_VTABLE_REGISTRY.write().unwrap();
@@ -773,6 +773,7 @@ unsafe fn define_class_prototype_method(target_cid: u32, name: &str, value_bits:
                         VTableMethodEntry {
                             func_ptr,
                             param_count,
+                            has_synthetic_arguments,
                         },
                     );
                     drop(guard);
@@ -1034,6 +1035,7 @@ pub extern "C" fn js_object_define_property(
                 PropertyAttrs::new(writable, enumerable, configurable),
             );
         }
+        super::arguments_object_after_define(obj, key_str, descriptor_value);
         // Return the object
         obj_value
     }

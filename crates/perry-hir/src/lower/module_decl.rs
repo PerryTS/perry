@@ -470,7 +470,7 @@ pub(crate) fn lower_module_decl(
                     let has_synth_args = func
                         .params
                         .last()
-                        .is_some_and(|p| p.is_rest && p.name == "arguments");
+                        .is_some_and(|p| p.arguments_object.is_some());
                     ctx.func_defaults.push((
                         func.id,
                         defaults,
@@ -1549,7 +1549,7 @@ pub(crate) fn lower_module_decl(
                             let has_synth_args = func
                                 .params
                                 .last()
-                                .is_some_and(|p| p.is_rest && p.name == "arguments");
+                                .is_some_and(|p| p.arguments_object.is_some());
                             ctx.func_defaults.push((
                                 func.id,
                                 defaults,
@@ -1628,7 +1628,7 @@ pub(crate) fn lower_module_decl(
                         let has_synth_args = func
                             .params
                             .last()
-                            .is_some_and(|p| p.is_rest && p.name == "arguments");
+                            .is_some_and(|p| p.arguments_object.is_some());
                         ctx.func_defaults.push((
                             func.id,
                             defaults,

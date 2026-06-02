@@ -81,6 +81,17 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     } else {
         index as i32
     };
+    if idx_i32 < 0 {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    if let Some(value) = unsafe {
+        crate::object::arguments_object_get_index(
+            raw_ptr as *const crate::object::ObjectHeader,
+            idx_i32 as u32,
+        )
+    } {
+        return value;
+    }
     // Registry-backed Buffer (`Buffer.from(...)`, `js_buffer_alloc`, the
     // `'data'`-event chunk an http/net listener receives). These carry NO
     // GcHeader (see `crates/perry-runtime/src/buffer.rs` — "Buffers carry
@@ -203,6 +214,22 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
     if !jsval.is_pointer() && !crate::object::is_valid_obj_ptr(raw_ptr as *const u8) {
         return value;
     }
+    let idx_i32 = if index.is_nan() || index.is_infinite() {
+        0
+    } else {
+        index as i32
+    };
+    if idx_i32 >= 0
+        && unsafe {
+            crate::object::arguments_object_set_index(
+                raw_ptr as *mut crate::object::ObjectHeader,
+                idx_i32 as u32,
+                value,
+            )
+        }
+    {
+        return value;
+    }
     let is_array = unsafe {
         let gc_header =
             (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -225,11 +252,6 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
         crate::value::js_get_string_pointer_unified(index) as *const crate::StringHeader
     } else {
         // Numeric (or other) index — stringify and intern as a UTF-8 key.
-        let idx_i32 = if index.is_nan() || index.is_infinite() {
-            0
-        } else {
-            index as i32
-        };
         let s = idx_i32.to_string();
         crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
     };

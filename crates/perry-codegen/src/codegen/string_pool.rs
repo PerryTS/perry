@@ -49,6 +49,10 @@ pub(super) fn emit_string_pool(
     // wrapper path: each entry is `wrapper_symbol` whose underlying
     // function has its synthesized `arguments` rest param.
     user_fn_wrapper_synthetic_arguments: &std::collections::HashSet<String>,
+    // Functions with both user `...rest` and a hidden raw-arguments slot need
+    // two arrays at dynamic dispatch: the user rest tail and all arguments.
+    closure_rest_and_arguments: &std::collections::HashSet<u32>,
+    user_fn_wrapper_rest_and_arguments: &std::collections::HashSet<String>,
     // ABI param count for every top-level user-function wrapper
     // (`__perry_wrap_<original_name>`) — used to register the wrapper's
     // declared arity in the runtime's `CLOSURE_ARITY_REGISTRY` so dynamic
@@ -348,7 +352,7 @@ pub(super) fn emit_string_pool(
     // symbols for those live in the defining module's object file.
     // Each module's init registers its own classes; the linker
     // ensures all init functions run before main.
-    let mut method_triples: Vec<(u32, String, String, u32)> = Vec::new();
+    let mut method_triples: Vec<(u32, String, String, u32, bool)> = Vec::new();
     // #1788: (cid, static-method name, perry_static_* symbol, param_count,
     // has_rest). Registered into the runtime CLASS_STATIC_METHODS table so a
     // subclass whose parent is a class-expression value inherits the parent's
@@ -393,11 +397,17 @@ pub(super) fn emit_string_pool(
                 sanitize(class_name),
                 sanitize(&method.name),
             );
+            let has_synth_args = method
+                .params
+                .last()
+                .map(|p| p.arguments_object.is_some())
+                .unwrap_or(false);
             method_triples.push((
                 cid,
                 method.name.clone(),
                 llvm_name,
                 method.params.len() as u32,
+                has_synth_args,
             ));
         }
         // #1788: static methods are emitted as `perry_static_*` (no `this`
@@ -437,7 +447,7 @@ pub(super) fn emit_string_pool(
         ));
     }
     method_triples.sort_unstable();
-    for (cid, method_name, llvm_name, param_count) in method_triples {
+    for (cid, method_name, llvm_name, param_count, has_synth_args) in method_triples {
         // The pre-intern pass before `emit_string_pool` ensured every
         // method name has a string pool entry; look it up here without
         // mutating the pool.
@@ -454,6 +464,7 @@ pub(super) fn emit_string_pool(
         let func_ref = format!("@{}", llvm_name);
         let func_i64 = blk.ptrtoint(&func_ref, I64);
         let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
+        let has_synth_args_str = if has_synth_args { "1" } else { "0" };
         blk.call_void(
             "js_register_class_method",
             &[
@@ -462,6 +473,7 @@ pub(super) fn emit_string_pool(
                 (I64, &len_str),
                 (I64, &func_i64),
                 (I64, &param_count.to_string()),
+                (I64, has_synth_args_str),
             ],
         );
     }
@@ -731,7 +743,9 @@ pub(super) fn emit_string_pool(
         // Refs #915 (gap 1 from #899): closures whose rest param is the
         // synthesized `arguments` use the synthetic-arguments registration
         // so the runtime bundles ALL args into the rest slot.
-        let runtime_fn = if closure_synthetic_arguments.contains(&fid) {
+        let runtime_fn = if closure_rest_and_arguments.contains(&fid) {
+            "js_register_closure_rest_and_arguments"
+        } else if closure_synthetic_arguments.contains(&fid) {
             "js_register_closure_synthetic_arguments"
         } else {
             "js_register_closure_rest"
@@ -801,7 +815,9 @@ pub(super) fn emit_string_pool(
         // Refs #915 (gap 1 from #899): wrappers whose underlying function
         // declared a synthesized `arguments` rest param need the
         // synthetic-arguments registration.
-        let runtime_fn = if user_fn_wrapper_synthetic_arguments.contains(&wrap_sym) {
+        let runtime_fn = if user_fn_wrapper_rest_and_arguments.contains(&wrap_sym) {
+            "js_register_closure_rest_and_arguments"
+        } else if user_fn_wrapper_synthetic_arguments.contains(&wrap_sym) {
             "js_register_closure_synthetic_arguments"
         } else {
             "js_register_closure_rest"

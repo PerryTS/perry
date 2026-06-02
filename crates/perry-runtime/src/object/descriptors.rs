@@ -244,6 +244,9 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
         };
 
+        if let Some(desc) = super::arguments_object_descriptor(obj, key_str) {
+            return desc;
+        }
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;

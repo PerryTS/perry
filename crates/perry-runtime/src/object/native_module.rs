@@ -1984,6 +1984,7 @@ const URL_DEFAULT_KEYS: &[&[u8]] = &[
     b"format",
     b"URL",
     b"URLSearchParams",
+    b"URLPattern",
     b"domainToASCII",
     b"domainToUnicode",
     b"pathToFileURL",
@@ -1995,6 +1996,7 @@ const URL_DEFAULT_KEYS: &[&[u8]] = &[
 const URL_NAMESPACE_KEYS: &[&[u8]] = &[
     b"URL",
     b"URLSearchParams",
+    b"URLPattern",
     b"Url",
     b"default",
     b"domainToASCII",
@@ -2889,6 +2891,9 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
             "URLSearchParams".len(),
         );
     }
+    if module_name == "url" && property_name == "URLPattern" {
+        return js_get_global_this_builtin_value(b"URLPattern".as_ptr(), "URLPattern".len());
+    }
     if module_name == "crypto.webcrypto" {
         if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
             return value;
@@ -3257,6 +3262,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("async_hooks", "triggerAsyncId") => Some(0),
         ("async_hooks", "executionAsyncResource") => Some(0),
         ("url", "URL") => Some(1),
+        ("url", "URLPattern") => Some(0),
         ("tls", "getCiphers") => Some(0),
         ("tls", "getCACertificates" | "setDefaultCACertificates" | "createSecureContext") => {
             Some(1)
@@ -4716,6 +4722,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util/types", "isBoxedPrimitive")
             | ("url", "URL")
             | ("url", "URLSearchParams")
+            | ("url", "URLPattern")
             | ("url", "Url")
             | ("url", "fileURLToPath")
             | ("url", "fileURLToPathBuffer")
@@ -5300,17 +5307,6 @@ pub(crate) unsafe fn get_native_module_constant(
     let cjs_default_base = cjs_default_base_module(module_name);
     let is_cjs_default_object = cjs_default_base.is_some();
     let module_name = cjs_default_base.unwrap_or(module_name);
-    let tls_dispatch_noargs = |method: &str| -> Option<f64> {
-        let ptr = crate::value::JS_NATIVE_TLS_DISPATCH.load(Ordering::SeqCst);
-        if ptr.is_null() {
-            None
-        } else {
-            let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
-                std::mem::transmute(ptr);
-            Some(dispatch(method.as_ptr(), method.len(), std::ptr::null(), 0))
-        }
-    };
-
     if module_name == "process.namespace" && property == "default" {
         return cjs_default_export_value("process");
     }
@@ -6406,6 +6402,18 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         "url" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("url"),
+            "URL" => Some(js_get_global_this_builtin_value(
+                b"URL".as_ptr(),
+                "URL".len(),
+            )),
+            "URLSearchParams" => Some(js_get_global_this_builtin_value(
+                b"URLSearchParams".as_ptr(),
+                "URLSearchParams".len(),
+            )),
+            "URLPattern" => Some(js_get_global_this_builtin_value(
+                b"URLPattern".as_ptr(),
+                "URLPattern".len(),
+            )),
             _ => None,
         },
         "net" => match property {
@@ -6473,8 +6481,7 @@ pub(crate) unsafe fn get_native_module_constant(
             "DEFAULT_CIPHERS" => Some(str_val(crate::tls::DEFAULT_CIPHERS)),
             "CLIENT_RENEG_LIMIT" => Some(3.0),
             "CLIENT_RENEG_WINDOW" => Some(600.0),
-            "rootCertificates" => tls_dispatch_noargs("rootCertificates")
-                .or_else(|| Some(crate::tls::js_tls_root_certificates())),
+            "rootCertificates" => Some(crate::tls::js_tls_root_certificates()),
             _ => None,
         },
         "events" => match property {

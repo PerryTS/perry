@@ -300,6 +300,19 @@ pub struct Function {
 
 /// A function parameter
 #[derive(Debug, Clone)]
+pub struct ArgumentsObjectMeta {
+    /// Whether the containing function body is strict.
+    pub strict: bool,
+    /// Whether the containing function has a simple parameter list.
+    pub simple_parameters: bool,
+    /// Sloppy mapped arguments bind numeric indices to these parameter locals.
+    pub mapped_parameter_ids: Vec<(u32, LocalId)>,
+    /// Whether `arguments.callee` is the restricted throwing accessor.
+    pub restricted_callee: bool,
+}
+
+/// A function parameter
+#[derive(Debug, Clone)]
 pub struct Param {
     pub id: LocalId,
     pub name: String,
@@ -309,4 +322,7 @@ pub struct Param {
     pub decorators: Vec<Decorator>,
     /// True if this is a rest parameter (...args)
     pub is_rest: bool,
+    /// Metadata for the hidden raw-arguments binding used to materialize the
+    /// ECMAScript `arguments` object in the callee prologue.
+    pub arguments_object: Option<ArgumentsObjectMeta>,
 }

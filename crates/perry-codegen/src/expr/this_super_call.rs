@@ -11,7 +11,10 @@ use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
 use perry_types::Type as HirType;
 
 #[allow(unused_imports)]
-use crate::lower_call::{lower_call, lower_native_method_call, lower_new};
+use crate::lower_call::{
+    bind_inline_constructor_params, lower_call, lower_native_method_call, lower_new,
+    restore_inline_constructor_scope,
+};
 #[allow(unused_imports)]
 use crate::lower_conditional::{lower_conditional, lower_logical, lower_truthy};
 #[allow(unused_imports)]
@@ -430,26 +433,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
 
             if let Some(parent_ctor) = &effective_parent_class.constructor {
-                let saved_locals = ctx.locals.clone();
-                let saved_local_types = ctx.local_types.clone();
-
-                for (param, arg_val) in parent_ctor.params.iter().zip(lowered_args.iter()) {
-                    // Parent ctor params become ctx.locals for the
-                    // inlined body; a closure inside the parent ctor
-                    // may capture them, so hoist to the entry block
-                    // for dominance safety.
-                    let slot = ctx.func.alloca_entry(DOUBLE);
-                    ctx.block().store(DOUBLE, arg_val, &slot);
-                    ctx.locals.insert(param.id, slot);
-                    ctx.local_types.insert(param.id, param.ty.clone());
-                }
+                let saved_scope =
+                    bind_inline_constructor_params(ctx, &parent_ctor.params, &lowered_args);
 
                 ctx.class_stack.push(effective_parent_name.clone());
                 crate::stmt::lower_stmts(ctx, &parent_ctor.body)?;
                 ctx.class_stack.pop();
 
-                ctx.locals = saved_locals;
-                ctx.local_types = saved_local_types;
+                restore_inline_constructor_scope(ctx, saved_scope);
             } else if let Some(error_kind) = {
                 // Issue #573: walk the chain from `effective_parent_class`
                 // upward; if it terminates at an Error-like built-in,

@@ -70,6 +70,7 @@ fn build_canonical() -> Module {
             default: None,
             decorators: Vec::new(),
             is_rest: false,
+            arguments_object: None,
         }],
         return_type: Type::Number,
         body: vec![Stmt::Return(Some(Expr::Binary {

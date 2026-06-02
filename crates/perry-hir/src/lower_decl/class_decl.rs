@@ -460,6 +460,7 @@ pub fn lower_class_decl(
                                     default: None,
                                     decorators: Vec::new(),
                                     is_rest: false,
+                                    arguments_object: None,
                                 });
                                 new_params.extend(getter.params.into_iter());
                                 let mut body = getter.body;
@@ -592,6 +593,7 @@ pub fn lower_class_decl(
                                 default: None,
                                 decorators: Vec::new(),
                                 is_rest: false,
+                                arguments_object: None,
                             });
                             new_params.append(&mut func.params);
 

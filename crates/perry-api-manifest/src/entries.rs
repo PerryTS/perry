@@ -731,6 +731,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("ws", "on", true, None),
     method("ws", "send", true, None),
     method("ws", "close", true, None),
+    // Node-compatible WebSocket ready-state constants. The `ws` package
+    // exposes these on both the module/default export and WebSocket class:
+    // CONNECTING=0, OPEN=1, CLOSING=2, CLOSED=3.
+    property("ws", "CONNECTING"),
+    property("ws", "OPEN"),
+    property("ws", "CLOSING"),
+    property("ws", "CLOSED"),
     // #1113 — `wss.handleUpgrade(req, socket, head, cb)` for a
     // `new WebSocketServer({ noServer: true })`.
     method("ws", "handleUpgrade", true, None),
@@ -3470,6 +3477,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("pg", "Client"),
     class("url", "URL"),
     class("url", "URLSearchParams"),
+    class("url", "URLPattern"),
+    internal_method("url", "URLPattern", false, None),
+    internal_method("url", "exec", true, Some("URLPattern")),
+    internal_method("url", "test", true, Some("URLPattern")),
     // Issue #848: string_decoder.StringDecoder — handle-based dispatch
     // for `write` / `end` + `lastNeed` / `lastTotal` / `lastChar` getters.
     class("string_decoder", "StringDecoder"),
@@ -3668,9 +3679,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- node:fs/promises direct submodule (#2728). Only the named exports
     // Perry actually backs with runtime thunks (see
     // `perry-runtime::node_submodules::fs_promises`) are declared. FileHandle
-    // methods (ftruncate/fchown/futimes etc.) are intentionally omitted — they
-    // are tracked separately (#2133). The parent `fs.promises` namespace above
-    // still resolves to the same surface.
+    // receiver-only methods are represented with class filters when runtime
+    // backed; the parent `fs.promises` namespace above still resolves to the
+    // same surface.
     property("fs/promises", "default"),
     property("fs/promises", "constants"),
     method("fs/promises", "access", false, None),
@@ -3705,6 +3716,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fs/promises", "utimes", false, None),
     method("fs/promises", "watch", false, None),
     method("fs/promises", "writeFile", false, None),
+    method("fs/promises", "pull", true, Some("FileHandle")),
+    method("fs/promises", "pullSync", true, Some("FileHandle")),
+    method("fs/promises", "writer", true, Some("FileHandle")),
     // --- console (Node global console exposed as node:console too). ---
     class("console", "Console"),
     method("console", "log", false, None),

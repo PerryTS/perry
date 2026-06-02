@@ -184,6 +184,7 @@ pub(super) fn try_desugar_reactive_animate(
             default: None,
             decorators: Vec::new(),
             is_rest: false,
+            arguments_object: None,
         };
 
         let mut fresh_args: Vec<Expr> = Vec::with_capacity(expected_arity + 1);

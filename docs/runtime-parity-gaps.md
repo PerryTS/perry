@@ -32,7 +32,7 @@ Issue #3598 ("Node API compatibility epic: globalThis and Web-compatible Node gl
 
 This branch intentionally does **not** cherry-pick or stack those feature PRs. The generated manifest surfaces on current `origin/main` were audited with `./scripts/regen_api_docs.sh`; `docs/src/api/reference.md` and `docs/api/perry.d.ts` produced no diff, and `crates/perry-api-manifest/src/entries.rs` was not changed. That means this closure PR does not truthfully decrement the generated API/type counts for globals that only exist on the open feature branches.
 
-Residual #3598 work that should remain tracked by child issues includes true WeakRef/FinalizationRegistry weak semantics, BroadcastChannel delivery semantics, deeper FormData/File/Blob/multipart/body parity, full WebAssembly Instance/Memory/Table/Global/streaming execution surface beyond the current host-shim shape, full TextEncoderStream/TextDecoderStream transform behavior, and URLPattern behavior tied to the Node 22 target.
+Residual #3598 work that should remain tracked by child issues includes true WeakRef/FinalizationRegistry weak semantics, BroadcastChannel delivery semantics, deeper FormData/File/Blob/multipart/body parity, full WebAssembly Instance/Memory/Table/Global/streaming execution surface beyond the current host-shim shape, and full TextEncoderStream/TextDecoderStream transform behavior.
 
 ## Whole-module gaps
 
@@ -354,7 +354,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 `node:fs` has no remaining public API surface gaps in the manifest-based reconciliation. The current runtime manifest includes the callback and sync functions, constructor/export tail (`Dir`, `Dirent`, `Stats`, `ReadStream`, `WriteStream`, `FileReadStream`, `FileWriteStream`, `Utf8Stream`), `_toUnixTimestamp`, `openAsBlob`, `mkdtempDisposableSync`, `constants`, and `promises`.
 
-Runtime-created fs SystemError metadata is covered by parity fixtures: sync, callback, and promise errors expose negative numeric `err.errno` plus `err.code`, `err.syscall`, `err.path`, and `err.dest` where Node exposes them. Behavior caveats are tracked in `test-parity/node-suite/fs/STATUS.md` rather than as missing API rows. The remaining fs-family public API tail is only under `node:fs/promises` FileHandle: `pull`, `pullSync`, and `writer` (#3952).
+Runtime-created fs SystemError metadata is covered by parity fixtures: sync, callback, and promise errors expose negative numeric `err.errno` plus `err.code`, `err.syscall`, `err.path`, and `err.dest` where Node exposes them. Behavior caveats are tracked in `test-parity/node-suite/fs/STATUS.md` rather than as missing API rows. The `node:fs/promises` FileHandle stream-iter tail (`pull`, `pullSync`, and `writer`) is runtime-backed for direct no-transform source/writer paths (#3952).
 
 #### Covered (sampled)
 
@@ -1113,7 +1113,6 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `textEncoderStream.encoding`
 - `textEncoderStream.readable`
 - `textEncoderStream.writable`
-- `URLPattern` remains intentionally absent while Perry advertises a Node 22 runtime target; Node 22 latest-jod globals document `URL` and `URLSearchParams` but not `URLPattern`, which was added as a global in Node 24.
 - … and 6 more (see `runtime-parity.md` for the full list)
 
 #### Covered (sampled)
@@ -1264,15 +1263,9 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 
 ### node:fs/promises
 
-**Gap APIs: 3** · Already covered: 58
+**Gap APIs: 0** · Already covered: 61
 
-#### Missing from Perry
-
-- `filehandle.pull([...transforms][, options])`
-- `filehandle.pullSync([...transforms][, options])`
-- `filehandle.writer([options])`
-
-The runtime manifest intentionally has no rows for these unsupported FileHandle APIs. The direct `fs/promises` submodule rows are present and generated API docs/DTS include the submodule.
+The FileHandle stream-iter tail is runtime-backed for the direct no-transform source/writer paths: `filehandle.pull([options])`, `filehandle.pullSync([options])`, and `filehandle.writer([options])`. Transform pipelines passed to `pull`/`pullSync` remain outside Perry's current support boundary; direct FileHandle byte iteration, writer sync/async methods, options, and auto-close lifecycle are covered by focused parity fixtures.
 
 #### Covered (sampled)
 
@@ -1334,6 +1327,9 @@ The runtime manifest intentionally has no rows for these unsupported FileHandle 
 | `filehandle.write(string[, position[, encoding]])` | `ffi:js_fs_filehandle_open` |
 | `filehandle.writeFile(data, options)` | `manifest:fs.writeFile` |
 | `filehandle.writev(buffers[, position])` | `ffi:js_fs_filehandle_open` |
+| `filehandle.pull([options])` | `manifest:fs/promises.pull` |
+| `filehandle.pullSync([options])` | `manifest:fs/promises.pullSync` |
+| `filehandle.writer([options])` | `manifest:fs/promises.writer` |
 
 ### node:sqlite
 
@@ -1445,8 +1441,6 @@ The runtime manifest intentionally has no rows for these unsupported FileHandle 
 - `params.toString()`
 - `params.values()`
 - `params[Symbol.iterator]()`
-- `urlPattern.exec(input[, baseURL])`
-- `urlPattern.test(input[, baseURL])`
 - `url.domainToASCII(domain)`
 - `url.domainToUnicode(domain)`
 - `url.urlToHttpOptions(url)`

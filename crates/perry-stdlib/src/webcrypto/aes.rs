@@ -337,6 +337,13 @@ pub unsafe extern "C" fn js_webcrypto_encrypt(
                 "The requested operation is not valid for the provided key",
             );
         }
+        if let Err((name, message)) = require_usage(
+            mat,
+            USAGE_ENCRYPT,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
+        }
         let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
         let public_key = match RsaPublicKey::from_public_key_der(&key_bytes) {
             Ok(k) => k,
@@ -365,6 +372,13 @@ pub unsafe extern "C" fn js_webcrypto_encrypt(
                 "InvalidAccessError",
                 "The requested operation is not valid for the provided key",
             );
+        }
+        if let Err((name, message)) = require_usage(
+            mat,
+            USAGE_ENCRYPT,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
         }
         let (key, iv, data) = match extract_aes_cbc_args(
             algo_bits.to_bits(),
@@ -397,6 +411,13 @@ pub unsafe extern "C" fn js_webcrypto_encrypt(
                 "The requested operation is not valid for the provided key",
             );
         }
+        if let Err((name, message)) = require_usage(
+            mat,
+            USAGE_ENCRYPT,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
+        }
         let (key, counter, length, data) = match extract_aes_ctr_args(
             algo_bits.to_bits(),
             key_bits.to_bits(),
@@ -426,6 +447,13 @@ pub unsafe extern "C" fn js_webcrypto_encrypt(
             "InvalidAccessError",
             "The requested operation is not valid for the provided key",
         );
+    }
+    if let Err((name, message)) = require_usage(
+        mat,
+        USAGE_ENCRYPT,
+        "The requested operation is not valid for the provided key",
+    ) {
+        return reject_with_dom_exception(name, message);
     }
     let (key, iv, aad, data) =
         match extract_aes_gcm_args(algo_bits.to_bits(), key_bits.to_bits(), data_bits.to_bits()) {
@@ -470,6 +498,13 @@ pub unsafe extern "C" fn js_webcrypto_decrypt(
                 "The requested operation is not valid for the provided key",
             );
         }
+        if let Err((name, message)) = require_usage(
+            mat,
+            USAGE_DECRYPT,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
+        }
         let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
         let private_key = match RsaPrivateKey::from_pkcs8_der(&key_bytes) {
             Ok(k) => k,
@@ -498,6 +533,13 @@ pub unsafe extern "C" fn js_webcrypto_decrypt(
                 "InvalidAccessError",
                 "The requested operation is not valid for the provided key",
             );
+        }
+        if let Err((name, message)) = require_usage(
+            mat,
+            USAGE_DECRYPT,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
         }
         let (key, iv, data) = match extract_aes_cbc_args(
             algo_bits.to_bits(),
@@ -530,6 +572,13 @@ pub unsafe extern "C" fn js_webcrypto_decrypt(
                 "The requested operation is not valid for the provided key",
             );
         }
+        if let Err((name, message)) = require_usage(
+            mat,
+            USAGE_DECRYPT,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
+        }
         let (key, counter, length, data) = match extract_aes_ctr_args(
             algo_bits.to_bits(),
             key_bits.to_bits(),
@@ -559,6 +608,13 @@ pub unsafe extern "C" fn js_webcrypto_decrypt(
             "InvalidAccessError",
             "The requested operation is not valid for the provided key",
         );
+    }
+    if let Err((name, message)) = require_usage(
+        mat,
+        USAGE_DECRYPT,
+        "The requested operation is not valid for the provided key",
+    ) {
+        return reject_with_dom_exception(name, message);
     }
     let (key, iv, aad, data) =
         match extract_aes_gcm_args(algo_bits.to_bits(), key_bits.to_bits(), data_bits.to_bits()) {

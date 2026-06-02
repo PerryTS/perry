@@ -110,7 +110,7 @@ pub fn inline_functions(
     module: &mut Module,
     extra_methods: &HashMap<(String, String), MethodCandidate>,
     extra_class_fields: &HashMap<(String, String), String>,
-    extra_anon_classes: &HashMap<String, Class>,
+    extra_anon_classes: &HashMap<String, &Class>,
 ) {
     // ── Cross-module anon-class propagation ──
     // Anon-shape classes (`__AnonShape_<hash>`) are content-addressed by
@@ -261,7 +261,7 @@ pub fn inline_functions(
                 continue;
             }
             if let Some(src_cls) = extra_anon_classes.get(&name) {
-                let mut cloned = src_cls.clone();
+                let mut cloned = (**src_cls).clone();
                 if let Some(ctor) = &mut cloned.constructor {
                     let mut remap: HashMap<LocalId, Expr> = HashMap::new();
                     for p in ctor.params.iter_mut() {
@@ -782,15 +782,11 @@ mod tests {
             ("A".to_string(), "m".to_string()),
             candidate(2, vec![anon_new("__AnonShape_aaa")], Vec::new()),
         );
+        let anon_bbb = anon_class(2, "__AnonShape_bbb");
+        let anon_aaa = anon_class(1, "__AnonShape_aaa");
         let mut extra_anon_classes = HashMap::new();
-        extra_anon_classes.insert(
-            "__AnonShape_bbb".to_string(),
-            anon_class(2, "__AnonShape_bbb"),
-        );
-        extra_anon_classes.insert(
-            "__AnonShape_aaa".to_string(),
-            anon_class(1, "__AnonShape_aaa"),
-        );
+        extra_anon_classes.insert("__AnonShape_bbb".to_string(), &anon_bbb);
+        extra_anon_classes.insert("__AnonShape_aaa".to_string(), &anon_aaa);
 
         inline_functions(
             &mut module,
