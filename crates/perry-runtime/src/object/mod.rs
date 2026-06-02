@@ -32,6 +32,7 @@ mod class_gc_roots;
 mod class_handles;
 mod class_registry;
 mod collection_proto_thunks;
+mod data_view_registry;
 mod delete_rest;
 mod descriptors;
 mod field_get_set;
@@ -67,6 +68,7 @@ pub(crate) use class_gc_roots::{
     test_seed_class_parent_closure_root,
 };
 pub use class_registry::*;
+pub(crate) use data_view_registry::extends_builtin_data_view;
 pub use delete_rest::*;
 pub use descriptors::*;
 pub use field_get_set::*;
@@ -1557,10 +1559,6 @@ static CLASS_REGISTRY: RwLock<Option<HashMap<u32, u32>>> = RwLock::new(None);
 /// Global registry of class IDs that extend the built-in Error class
 static EXTENDS_ERROR_REGISTRY: RwLock<Option<std::collections::HashSet<u32>>> = RwLock::new(None);
 
-/// Global registry of class IDs that extend the built-in DataView class
-static EXTENDS_DATA_VIEW_REGISTRY: RwLock<Option<std::collections::HashSet<u32>>> =
-    RwLock::new(None);
-
 /// Per-class `Symbol.hasInstance` static hook. Maps class_id → raw function
 /// pointer with signature `extern "C" fn(value: f64) -> f64` (NaN-boxed
 /// TAG_TRUE / TAG_FALSE result). Populated at module init from
@@ -1804,42 +1802,6 @@ pub extern "C" fn js_register_class_extends_error(class_id: u32) {
 /// Check if a class id extends the built-in Error class
 pub(crate) fn extends_builtin_error(class_id: u32) -> bool {
     let registry = EXTENDS_ERROR_REGISTRY.read().unwrap();
-    if let Some(reg) = registry.as_ref() {
-        if reg.contains(&class_id) {
-            return true;
-        }
-        let mut current = class_id;
-        let parent_reg = CLASS_REGISTRY.read().unwrap();
-        if let Some(pr) = parent_reg.as_ref() {
-            for _ in 0..32 {
-                match pr.get(&current).copied() {
-                    Some(parent) if parent != 0 => {
-                        if reg.contains(&parent) {
-                            return true;
-                        }
-                        current = parent;
-                    }
-                    _ => break,
-                }
-            }
-        }
-    }
-    false
-}
-
-/// Mark a user-defined class as extending the built-in DataView class.
-#[no_mangle]
-pub extern "C" fn js_register_class_extends_data_view(class_id: u32) {
-    let mut registry = EXTENDS_DATA_VIEW_REGISTRY.write().unwrap();
-    if registry.is_none() {
-        *registry = Some(std::collections::HashSet::new());
-    }
-    registry.as_mut().unwrap().insert(class_id);
-}
-
-/// Check if a class id extends the built-in DataView class.
-pub(crate) fn extends_builtin_data_view(class_id: u32) -> bool {
-    let registry = EXTENDS_DATA_VIEW_REGISTRY.read().unwrap();
     if let Some(reg) = registry.as_ref() {
         if reg.contains(&class_id) {
             return true;
