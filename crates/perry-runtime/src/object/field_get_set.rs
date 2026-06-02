@@ -2738,6 +2738,20 @@ pub extern "C" fn js_object_get_field_by_name(
                 if let Some(value) = native_module_own_field_by_key(obj, key) {
                     return value;
                 }
+                // #3687: node:cluster default-import EventEmitter methods on the
+                // distinct `cluster.default` namespace. Mirror the
+                // NativeModuleRef fast path (`js_native_module_property_by_name`)
+                // — this dynamic `obj[key]` read must resolve `on`/`emit`/… to
+                // bound methods *before* `get_native_module_constant` (which
+                // normalizes to `cluster` and returns `undefined` for `on`).
+                if module_name == "cluster.default"
+                    && super::is_cluster_emitter_method(property_name)
+                {
+                    return JSValue::from_bits(
+                        super::bound_native_callable_export_value(module_name, property_name)
+                            .to_bits(),
+                    );
+                }
                 if let Some(val) = get_native_module_constant(module_name, property_name, nb_ptr) {
                     return JSValue::from_bits(val.to_bits());
                 }

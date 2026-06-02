@@ -837,6 +837,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("dns/promises", "setLocalAddress", true, Some("Resolver")),
     // node:dgram has deterministic in-process loopback coverage for the
     // unicast subset; multicast/queue option methods remain shape-compatible.
+    // #3693: default import (`import dgram from "node:dgram"`) === the module
+    // namespace (CJS `module.exports`).
+    property("dgram", "default"),
     method("dgram", "createSocket", false, None),
     class("dgram", "Socket"),
     method("dgram", "Socket", false, None),
@@ -854,6 +857,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("dgram", "removeListener", true, Some("Socket")),
     method("dgram", "emit", true, Some("Socket")),
     method("dgram", "listenerCount", true, Some("Socket")),
+    method("dgram", "eventNames", true, Some("Socket")),
     method("dgram", "addMembership", true, Some("Socket")),
     method("dgram", "dropMembership", true, Some("Socket")),
     method("dgram", "addSourceSpecificMembership", true, Some("Socket")),
@@ -3307,6 +3311,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `setupMaster`, `fork`, and `disconnect` route through the native
     // module bound-method path; handle sharing/listening distribution is
     // outside this manifest entry.
+    // #3687: default import (`import cluster from "node:cluster"`) is the
+    // EventEmitter-shaped `cluster.default` namespace; the `import * as`
+    // namespace keeps the shape-only surface.
+    property("cluster", "default"),
     method("cluster", "fork", false, None),
     method("cluster", "disconnect", false, None),
     method("cluster", "setupPrimary", false, None),
@@ -3329,8 +3337,21 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // as properties so the #463 strict gate doesn't bail out at compile
     // time; `get_native_module_constant` returns `undefined` at
     // runtime.
+    // #3687: the EventEmitter method surface. On the `import * as` namespace
+    // these all read `undefined` (they are not named exports); on the default
+    // import they resolve to bound methods. Registered so the #463 strict gate
+    // accepts reads/calls at compile time.
     internal_property("cluster", "on"),
     internal_property("cluster", "addListener"),
+    internal_property("cluster", "once"),
+    internal_property("cluster", "prependListener"),
+    internal_property("cluster", "prependOnceListener"),
+    internal_property("cluster", "off"),
+    internal_property("cluster", "removeListener"),
+    internal_property("cluster", "removeAllListeners"),
+    internal_property("cluster", "emit"),
+    internal_property("cluster", "eventNames"),
+    internal_property("cluster", "listenerCount"),
     // ===========================================================
     // #513 Phase A: backfill receiver-less surface for modules that
     // previously had zero entries. Without these, `module_has_any_entries`

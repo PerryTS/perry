@@ -246,6 +246,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
         "path/posix" => ("path.posix", false),
         "path/win32" => ("path.win32", false),
         "async_hooks.default" => ("async_hooks", false),
+        // #3687: cluster default-import method calls (`cluster.fork()`,
+        // `cluster.emit(...)`) dispatch against the base `cluster` arms.
+        "cluster.default" => ("cluster", false),
         "os.default" => ("os", false),
         "path.default" => ("path", false),
         "path.posix.default" => ("path.posix", false),
@@ -1695,6 +1698,26 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("cluster", "fork") => crate::cluster::js_cluster_fork(arg(0)),
         ("cluster", "disconnect") => crate::cluster::js_cluster_disconnect(arg(0)),
         ("cluster", "Worker") => f64::from_bits(JSValue::undefined().bits()),
+        // #3687: node:cluster default-import EventEmitter surface.
+        ("cluster", "on") | ("cluster", "addListener") => {
+            crate::cluster::js_cluster_on(arg(0), arg(1))
+        }
+        ("cluster", "once") => crate::cluster::js_cluster_once(arg(0), arg(1)),
+        ("cluster", "prependListener") => {
+            crate::cluster::js_cluster_prepend_listener(arg(0), arg(1))
+        }
+        ("cluster", "prependOnceListener") => {
+            crate::cluster::js_cluster_prepend_once_listener(arg(0), arg(1))
+        }
+        ("cluster", "emit") => crate::cluster::js_cluster_emit(arg(0), pack_args_from(1)),
+        ("cluster", "eventNames") => crate::cluster::js_cluster_event_names(),
+        ("cluster", "listenerCount") => crate::cluster::js_cluster_listener_count(arg(0)),
+        ("cluster", "removeListener") | ("cluster", "off") => {
+            crate::cluster::js_cluster_remove_listener(arg(0), arg(1))
+        }
+        ("cluster", "removeAllListeners") => {
+            crate::cluster::js_cluster_remove_all_listeners(arg(0))
+        }
 
         // #1577: captured-then-called crypto methods (`const f =
         // crypto.createHash; f(...)`). The impls live in perry-stdlib (which

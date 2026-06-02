@@ -1775,6 +1775,7 @@ fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
     match module_name {
         "async_hooks.default" => Some("async_hooks"),
         "child_process.default" => Some("child_process"),
+        "cluster.default" => Some("cluster"),
         "constants.default" => Some("constants"),
         "dns.default" => Some("dns"),
         "dns/promises.default" => Some("dns/promises"),
@@ -1794,6 +1795,7 @@ fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
     match module_name {
         "async_hooks" => Some("async_hooks.default"),
         "child_process" => Some("child_process.default"),
+        "cluster" => Some("cluster.default"),
         "constants" => Some("constants.default"),
         "dns" => Some("dns.default"),
         "dns/promises" => Some("dns/promises.default"),
@@ -1817,6 +1819,16 @@ fn create_cjs_default_namespace(module_name: &str) -> Option<f64> {
 fn cjs_default_export_value(module_name: &str) -> Option<f64> {
     match module_name {
         "events" => Some(bound_native_callable_export_value("events", "EventEmitter")),
+        // #3687: `node:cluster` default import is a distinct EventEmitter-shaped
+        // `cluster.default` namespace (its `on`/`emit`/… reads diverge from the
+        // bare `import * as` namespace).
+        "cluster" => create_cjs_default_namespace("cluster"),
+        // #3693: `node:dgram` default === the module namespace (CJS
+        // `module.exports`); a cached singleton makes `dgram === ns.default`.
+        "dgram" => Some(js_create_native_module_namespace(
+            b"dgram".as_ptr(),
+            "dgram".len(),
+        )),
         "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "os" | "path"
         | "path.posix" | "path.win32" | "punycode" | "querystring" | "url" | "util" => {
             create_cjs_default_namespace(module_name)
@@ -1861,6 +1873,9 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "dns.default"
             | "dns/promises.default"
             | "child_process.default"
+            | "cluster"
+            | "cluster.default"
+            | "dgram"
             | "events"
             | "fs.constants"
             | "os"
@@ -1990,6 +2005,17 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
         if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
             return value;
         }
+    }
+
+    // #3687: `node:cluster` is a singleton EventEmitter. Its EventEmitter
+    // method surface is exposed ONLY on the default import (the distinct
+    // `cluster.default` namespace) — `import * as cluster` reads these as
+    // `undefined` (they live on EventEmitter.prototype, not as named exports).
+    // Resolve them to bound methods here, before the generic
+    // `get_native_module_constant` path (where `cluster_property` would return
+    // `undefined` for `on`/`addListener`).
+    if module_name == "cluster.default" && is_cluster_emitter_method(property_name) {
+        return bound_native_callable_export_value("cluster.default", property_name);
     }
 
     if let Some(val) = get_native_module_constant(module_name, property_name, 0.0) {
@@ -2234,8 +2260,42 @@ pub(crate) fn fs_namespace_descriptor_setter_value(property_name: &str) -> f64 {
     value
 }
 
+/// The EventEmitter method names `node:cluster`'s default import exposes
+/// (#3687). Kept narrow so a typo'd `cluster.foo` still reads `undefined`.
+pub(crate) fn is_cluster_emitter_method(prop: &str) -> bool {
+    matches!(
+        prop,
+        "on" | "addListener"
+            | "once"
+            | "prependListener"
+            | "prependOnceListener"
+            | "off"
+            | "removeListener"
+            | "removeAllListeners"
+            | "emit"
+            | "eventNames"
+            | "listenerCount"
+    )
+}
+
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
+        // #3687: node:cluster — module-method `.length` matches Node.
+        ("cluster", "fork" | "disconnect" | "setupPrimary" | "setupMaster" | "Worker") => Some(1),
+        ("cluster", "emit") => Some(1),
+        ("cluster", "eventNames") => Some(0),
+        (
+            "cluster",
+            "on"
+            | "addListener"
+            | "once"
+            | "prependListener"
+            | "prependOnceListener"
+            | "removeListener"
+            | "off"
+            | "listenerCount",
+        ) => Some(2),
+        ("cluster", "removeAllListeners") => Some(1),
         ("events", "EventEmitter") => Some(1),
         ("events", "EventEmitterAsyncResource") => Some(0),
         ("events", "addAbortListener") => Some(2),

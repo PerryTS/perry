@@ -106,6 +106,7 @@ fn is_cjs_style_native_default_import(module_name: &str) -> bool {
         module_name,
         "async_hooks"
             | "child_process"
+            | "cluster"
             | "constants"
             | "dns"
             | "dns/promises"
