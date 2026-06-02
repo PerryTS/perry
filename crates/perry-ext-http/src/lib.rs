@@ -1718,6 +1718,21 @@ mod force_link_http_server {
         pub fn js_node_http_server_has_active();
         pub fn js_node_http_server_close_all_connections();
         pub fn js_node_http_server_close_idle_connections();
+        pub fn js_node_http_server_headers_timeout();
+        pub fn js_node_http_server_set_headers_timeout();
+        pub fn js_node_http_server_keep_alive_timeout();
+        pub fn js_node_http_server_set_keep_alive_timeout();
+        pub fn js_node_http_server_keep_alive_timeout_buffer();
+        pub fn js_node_http_server_set_keep_alive_timeout_buffer();
+        pub fn js_node_http_server_request_timeout();
+        pub fn js_node_http_server_set_request_timeout();
+        pub fn js_node_http_server_idle_timeout();
+        pub fn js_node_http_server_set_idle_timeout();
+        pub fn js_node_http_server_max_headers_count();
+        pub fn js_node_http_server_set_max_headers_count();
+        pub fn js_node_http_server_max_requests_per_socket();
+        pub fn js_node_http_server_set_max_requests_per_socket();
+        pub fn js_node_http_server_set_timeout_method();
         pub fn js_node_http_res_end();
         pub fn js_node_http_res_write();
         pub fn js_node_http_res_write_head();
@@ -1764,6 +1779,8 @@ mod force_link_http_server {
         pub fn js_node_https_server_set_headers_timeout();
         pub fn js_node_https_server_keep_alive_timeout();
         pub fn js_node_https_server_set_keep_alive_timeout();
+        pub fn js_node_https_server_keep_alive_timeout_buffer();
+        pub fn js_node_https_server_set_keep_alive_timeout_buffer();
         pub fn js_node_https_server_request_timeout();
         pub fn js_node_https_server_set_request_timeout();
         pub fn js_node_https_server_idle_timeout();
@@ -1805,6 +1822,21 @@ static FORCE_LINK_HTTP_SERVER: &[unsafe extern "C" fn()] = {
         js_node_http_server_has_active,
         js_node_http_server_close_all_connections,
         js_node_http_server_close_idle_connections,
+        js_node_http_server_headers_timeout,
+        js_node_http_server_set_headers_timeout,
+        js_node_http_server_keep_alive_timeout,
+        js_node_http_server_set_keep_alive_timeout,
+        js_node_http_server_keep_alive_timeout_buffer,
+        js_node_http_server_set_keep_alive_timeout_buffer,
+        js_node_http_server_request_timeout,
+        js_node_http_server_set_request_timeout,
+        js_node_http_server_idle_timeout,
+        js_node_http_server_set_idle_timeout,
+        js_node_http_server_max_headers_count,
+        js_node_http_server_set_max_headers_count,
+        js_node_http_server_max_requests_per_socket,
+        js_node_http_server_set_max_requests_per_socket,
+        js_node_http_server_set_timeout_method,
         js_node_http_res_end,
         js_node_http_res_write,
         js_node_http_res_write_head,
@@ -1850,6 +1882,8 @@ static FORCE_LINK_HTTP_SERVER: &[unsafe extern "C" fn()] = {
         js_node_https_server_set_headers_timeout,
         js_node_https_server_keep_alive_timeout,
         js_node_https_server_set_keep_alive_timeout,
+        js_node_https_server_keep_alive_timeout_buffer,
+        js_node_https_server_set_keep_alive_timeout_buffer,
         js_node_https_server_request_timeout,
         js_node_https_server_set_request_timeout,
         js_node_https_server_idle_timeout,

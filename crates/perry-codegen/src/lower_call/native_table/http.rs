@@ -569,31 +569,30 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         ret: NR_PTR,
     },
     // ========== node:http server (issue #577) ==========
-    // Module-level: `import { createServer } from "node:http"; createServer(handler)`
+    // Module-level: `import { createServer } from "node:http"; createServer(options?, handler?)`
     // Issue #2210 — accepts an optional 2nd `options` arg (Node 18.4+):
-    //   `createServer(handler, { headersTimeout, keepAliveTimeout, ... })`
-    // The runtime distinguishes the no-args / handler-only / handler+opts
-    // cases by the JsValue tag on the second arg (UNDEFINED vs pointer);
-    // a 0-arg call leaves both NA_PTR / NA_JSV slots as `undefined`.
+    //   `createServer({ headersTimeout, keepAliveTimeout, ... }, handler)`
+    // Pass both user args as full NaN-boxed values: the runtime normalizes
+    // handler-first and options-first overloads before storing options.
     NativeModSig {
         module: "http",
         has_receiver: false,
         method: "createServer",
         class_filter: None,
         runtime: "js_node_http_create_server_with_options",
-        args: &[NA_PTR, NA_JSV],
+        args: &[NA_F64, NA_F64],
         ret: NR_PTR,
     },
     // `http.Server(handler)` is Node's callable-constructor alias for
     // `http.createServer` (works with or without `new`). #2132.
-    // Same `(handler, options?)` shape as `createServer` above (#2210).
+    // Same overloaded shape as `createServer` above (#2210).
     NativeModSig {
         module: "http",
         has_receiver: false,
         method: "Server",
         class_filter: None,
         runtime: "js_node_http_create_server_with_options",
-        args: &[NA_PTR, NA_JSV],
+        args: &[NA_F64, NA_F64],
         ret: NR_PTR,
     },
     // HttpServer instance methods (class_filter: HttpServer)
@@ -723,6 +722,24 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "http",
         has_receiver: true,
+        method: "__get_keepAliveTimeoutBuffer",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_keep_alive_timeout_buffer",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_keepAliveTimeoutBuffer",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_set_keep_alive_timeout_buffer",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
         method: "__get_requestTimeout",
         class_filter: Some("HttpServer"),
         runtime: "js_node_http_server_request_timeout",
@@ -809,6 +826,15 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         method: "keepAliveTimeout",
         class_filter: Some("HttpServer"),
         runtime: "js_node_http_server_keep_alive_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "keepAliveTimeoutBuffer",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_keep_alive_timeout_buffer",
         args: &[],
         ret: NR_F64,
     },
@@ -1417,6 +1443,24 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "https",
         has_receiver: true,
+        method: "__get_keepAliveTimeoutBuffer",
+        class_filter: Some("HttpsServer"),
+        runtime: "js_node_https_server_keep_alive_timeout_buffer",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "https",
+        has_receiver: true,
+        method: "__set_keepAliveTimeoutBuffer",
+        class_filter: Some("HttpsServer"),
+        runtime: "js_node_https_server_set_keep_alive_timeout_buffer",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "https",
+        has_receiver: true,
         method: "__get_requestTimeout",
         class_filter: Some("HttpsServer"),
         runtime: "js_node_https_server_request_timeout",
@@ -1501,6 +1545,15 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         method: "keepAliveTimeout",
         class_filter: Some("HttpsServer"),
         runtime: "js_node_https_server_keep_alive_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "https",
+        has_receiver: true,
+        method: "keepAliveTimeoutBuffer",
+        class_filter: Some("HttpsServer"),
+        runtime: "js_node_https_server_keep_alive_timeout_buffer",
         args: &[],
         ret: NR_F64,
     },

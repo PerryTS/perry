@@ -123,6 +123,7 @@ console.log(
 );
 server.headersTimeout = 123;
 server.keepAliveTimeout = 234;
+server.keepAliveTimeoutBuffer = 250;
 server.requestTimeout = 345;
 server.timeout = 456;
 server.maxHeadersCount = 789;
@@ -131,6 +132,7 @@ console.log(
   "https server knobs:",
   server.headersTimeout,
   server.keepAliveTimeout,
+  server.keepAliveTimeoutBuffer,
   server.requestTimeout,
   server.timeout,
   server.maxHeadersCount,
