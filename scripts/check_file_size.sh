@@ -186,6 +186,14 @@ crates/perry-runtime/src/object/global_this.rs
 # (#4039/#4040/#4041). Peeling the cache + root-scanner groups into siblings is
 # tracked under #1435.
 crates/perry-runtime/src/object/mod.rs
+# Symbol subsystem (Symbol primitives + per-object/per-class symbol-keyed
+# property + accessor side tables, with their GC root-scan/rewrite dispatch).
+# Crossed the limit at 2159 LOC after the computed-property-names batch added
+# symbol-accessor descriptors and class-static computed-symbol registration
+# (#3557/#3558/#3559/#3560/#3561). The new helpers are interwoven with the
+# private SYMBOL_ACCESSORS side table and the symbol root scanner, so a clean
+# topical split is deferred to the runtime file-size cleanup tracked under #1435.
+crates/perry-runtime/src/symbol.rs
 EOF
 )
 
