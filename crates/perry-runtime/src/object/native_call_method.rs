@@ -648,6 +648,43 @@ pub(crate) unsafe fn try_dispatch_value_called_proto_method(
     ))
 }
 
+/// #3662: classify a `Function.prototype.{apply,call,bind}` receiver. Returns
+/// `true` when the receiver is *definitively not callable* — any primitive
+/// (`undefined`/`null`/number/bool/string/bigint/symbol) or a recognized
+/// ordinary heap object — so the spec brand check must throw a `TypeError`.
+/// An *ambiguous* pointer (e.g. a native-callable value that isn't a real
+/// closure) returns `false` so the caller keeps its prior conservative
+/// behavior, mirroring the additive collection-thunk approach in #3662.
+unsafe fn fn_proto_receiver_not_callable(object: f64) -> bool {
+    let jsval = JSValue::from_bits(object.to_bits());
+    if !jsval.is_pointer() {
+        return true; // primitive — never callable
+    }
+    let raw = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+    if crate::closure::is_closure_ptr(raw) {
+        return false; // a real closure is callable
+    }
+    // A recognized ordinary object (plain object, array, Map, …) is not
+    // callable. Unrecognized pointers stay ambiguous (return false).
+    is_valid_obj_ptr(raw as *const u8)
+}
+
+/// #3662: throw the spec `TypeError` for a `Function.prototype.{apply,call,
+/// bind}` invoked on a non-callable `this`. Test262's brand-check tests assert
+/// only the error *type*; the wording mirrors V8/Node (`bind` has its own
+/// distinct message). Never returns.
+#[cold]
+fn throw_fn_proto_not_callable(method: &str) -> ! {
+    let message = if method == "bind" {
+        "Bind must be called on a function".to_string()
+    } else {
+        format!("Function.prototype.{method} was called on a value that is not a function")
+    };
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_native_call_method(
     object: f64,
@@ -2762,6 +2799,13 @@ pub unsafe extern "C" fn js_native_call_method(
             if jsval.is_pointer() && crate::closure::is_closure_ptr(raw_ptr) {
                 return crate::closure::js_function_bind(object, args_ptr, args_len);
             }
+            // #3662: a non-callable `this` (primitive or recognized plain
+            // object) is a spec `TypeError` — `Function.prototype.bind.call(x)`.
+            // Ambiguous pointers (possible native callables) keep the prior
+            // conservative return-unchanged behavior.
+            if fn_proto_receiver_not_callable(object) {
+                throw_fn_proto_not_callable("bind");
+            }
             return object;
         }
 
@@ -2981,7 +3025,7 @@ pub unsafe extern "C" fn js_native_call_method(
         // `_curry3`) build their dispatch chain around
         // `fn.apply(this, arguments)` / `fn.call(this, x)`, so without these
         // arms ramda fails immediately on the first curried export.
-        "call" if jsval.is_pointer() => {
+        "call" => {
             // Proxy receiver (#3656): `p.call(thisArg, ...args)` routes through
             // the proxy `apply` trap (or, absent a trap, forwards to the target).
             if crate::proxy::js_proxy_is_proxy(object) == 1 {
@@ -3018,6 +3062,11 @@ pub unsafe extern "C" fn js_native_call_method(
                 IMPLICIT_THIS.with(|c| c.set(prev_this));
                 return result;
             }
+            // #3662: `Function.prototype.call.call(x, …)` on a non-callable
+            // `this` throws a `TypeError`; ambiguous pointers fall through.
+            if fn_proto_receiver_not_callable(object) {
+                throw_fn_proto_not_callable("call");
+            }
         }
 
         // Function.prototype.apply(thisArg, argsArray) — invoke the receiver
@@ -3026,7 +3075,7 @@ pub unsafe extern "C" fn js_native_call_method(
         // null / undefined (treat as no args). Mirrors `js_native_call_method_apply`
         // but for the `Function.prototype.apply` path rather than the
         // dynamic-spread method-call codegen path.
-        "apply" if jsval.is_pointer() => {
+        "apply" => {
             // Proxy receiver (#3656): `p.apply(thisArg, argsArray)` routes
             // through the proxy `apply` trap (or forwards to the target).
             if crate::proxy::js_proxy_is_proxy(object) == 1 {
@@ -3094,6 +3143,11 @@ pub unsafe extern "C" fn js_native_call_method(
                 IMPLICIT_THIS.with(|c| c.set(prev_this));
                 return result;
             }
+            // #3662: `Function.prototype.apply.call(x, …)` on a non-callable
+            // `this` throws a `TypeError`; ambiguous pointers fall through.
+            if fn_proto_receiver_not_callable(object) {
+                throw_fn_proto_not_callable("apply");
+            }
         }
 
         // Common string methods on string values
@@ -3147,6 +3201,22 @@ pub unsafe extern "C" fn js_native_call_method(
                 return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
             } else if jsval.is_number() {
                 let n = jsval.as_number();
+                // #3146 + #2864: honour an explicit radix argument. With no
+                // argument (or an explicit `undefined`) use the default decimal
+                // formatting; otherwise delegate to the canonical radix path,
+                // which ToNumber/ToInteger-coerces + validates the radix (spec
+                // `RangeError` outside 2..=36) and formats via the shortest-
+                // round-trip V8 algorithm (`double_to_radix_string`).
+                let radix_arg = refreshed_args().first().copied();
+                let has_radix = match radix_arg {
+                    None => false,
+                    Some(r) => !JSValue::from_bits(r.to_bits()).is_undefined(),
+                };
+                if has_radix {
+                    let str_ptr =
+                        crate::value::js_jsvalue_to_string_radix(object, radix_arg.unwrap());
+                    return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
+                }
                 let s = if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
                     (n as i64).to_string()
                 } else {
@@ -3158,15 +3228,12 @@ pub unsafe extern "C" fn js_native_call_method(
                 let s = if jsval.as_bool() { "true" } else { "false" };
                 let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
                 return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
-            } else if jsval.is_undefined() {
-                let s = "undefined";
-                let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
-            } else if jsval.is_null() {
-                let s = "null";
-                let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
             }
+            // #3146: `undefined.toString()` / `null.toString()` must throw a
+            // TypeError (property read on a nullish base), not return the
+            // string "undefined"/"null". Falling through this arm without a
+            // `return` reaches the nullish-receiver throw below, which raises
+            // `Cannot read properties of <undefined|null> (reading 'toString')`.
         }
 
         // Array methods - delegate to array runtime

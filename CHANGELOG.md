@@ -2,6 +2,28 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1102 — chore(parity): resolve v8 skiplist/manifest triage ambiguity (#3700)
+
+`scripts/parity-skiplist.toml` skiplisted `node:v8` while the API manifest still claimed v8 entries, making compatibility triage ambiguous (a v8 failure could be bucketed as both `Skip` and a manifest/runtime gap). Documented the rule that resolves it: the skiplist and the manifest measure **different axes** — the manifest records whether an API exists and is callable; the skiplist records whether it is a byte-for-byte parity target. A skiplisted-but-manifest-claimed API is not a conflict.
+
+Verified that v8's manifest surface is genuinely callable and matches Node's *shapes* (`serialize`/`deserialize` roundtrip, `getHeapStatistics`/`getHeapSpaceStatistics`/`getHeapCodeStatistics`, `cachedDataVersionTag`, `GCProfiler`), but is not byte-parity-testable: `serialize`/`deserialize` use the JSC wire format (Perry isn't V8, so the bytes differ from Node's V8 format) and the heap-introspection/`cachedDataVersionTag` values are runtime-specific (skip categories 2 + 3). Corrected v8's skiplist reason accordingly and added a header note documenting the skiplist-vs-manifest distinction and the triage rule. `punycode` (the other module named in #3700) was already removed from the skiplist on an earlier change. Config-only; no runtime/manifest/docs impact (the parity sweep is tag-gated).
+
+## v0.5.1101 — fix(module): implement SourceMap.findEntry / findOrigin (#3675)
+
+`new module.SourceMap(payload)` constructed an instance but `findEntry`/`findOrigin` were noop stubs that returned `undefined`. Implemented both against the Source Map v3 mappings grammar (`crates/perry-runtime/src/process.rs`):
+
+- Added a base64 VLQ decoder and a `mappings` parser that tracks cumulative source/original-line/original-column/name indices across segments. `findEntry(lineNumber, columnNumber)` returns the greatest decoded entry whose generated position is `<=` the query, shaped as Node's `{ generatedLine, generatedColumn, originalSource, originalLine, originalColumn, name? }` (the `name` field is attached only for genuinely-named 5-field segments).
+- `findOrigin(lineNumber, columnNumber)` matches Node's behavior: it echoes the queried coordinates (`null` when an argument is not a finite number) and tags on the matched entry's `name`/`fileName`, returning an empty object for the special numeric `(0, 0)` query.
+- The bound method closures capture the payload (slot 0) so the lookup thunks can read its `mappings`/`sources`/`names` (mirrors the dgram socket-method pattern); the old `module_noop_function`/`module_source_map_noop` stubs were removed.
+
+Verified byte-for-byte against `node --experimental-strip-types` across the issue repro, an explicit named (5-field) segment, a multi-source mapping with negative original-line deltas, and nine `findOrigin` argument permutations. New parity fixture: `test-parity/node-suite/module/methods/source-map-find-entry.ts`.
+
+## v0.5.1100 — fix(check): reconcile stale Node builtin table with modern builtins (#3744)
+
+`perry check --check-deps` reported a clean build for unsupported modern `node:*` imports that `perry compile` rejects. The cause: the hand-maintained `is_node_builtin` table in `crates/perry/src/commands/deps.rs` predated Node's newer builtins, so names like `node:sea` and `node:inspector` were not recognized as builtins at all — and the U-006 dependency diagnostic only fires for recognized-but-unsupported builtins, so they fell through to a clean result.
+
+Reconciled the table against Node v25's builtin set: added `async_hooks`, `diagnostics_channel`, `http2`, `inspector`, `sea`, `sqlite`, `test`, `trace_events`, and `wasi` to `is_node_builtin`. Each was classified by the real gate (`perry compile` of `import * as m from "node:<name>"`): the compile-accepted ones (`async_hooks`, `diagnostics_channel`, `http2`, `sqlite`, `test`/`test/reporters`, `trace_events`, `wasi`) were also added to `is_supported_node_builtin` so check does not false-positive on them, while the compile-rejected ones (`inspector`, `inspector/promises`, `sea`) are intentionally left out of the allowlist so `check --check-deps` now surfaces the `U006` diagnostic instead of a false clean bill. Added three regression tests asserting the contract (unsupported→flagged, supported→recognized+allowed, supported⊆recognized). CLI-only change; no runtime/manifest/docs impact.
+
 ## v0.5.1099 — fix(crypto): unblock crypto.getCipherInfo (manifest gate)
 
 `crypto.getCipherInfo(name[, options])` threw the #463 "not implemented in Perry" error, even though its runtime (`js_crypto_get_cipher_info`) and native-module dispatch (`object/native_module.rs`) were already complete — the manifest just lacked the method row, so the U-006 import/dispatch gate rejected the call. Added `method("crypto", "getCipherInfo", false, None)` to the API manifest (`entries.rs`), beside `getCiphers`. `crypto.getCipherInfo("aes-128-cbc")` now returns `{ name, nid, blockSize, ivLength, keyLength, mode }` matching Node across the standard AES cbc/gcm/ecb/wrap ciphers (by name and by NID). Advances the crypto argument/surface parity work (#3955). Same shape as the v0.5.1063 `generateKeySync` fix.

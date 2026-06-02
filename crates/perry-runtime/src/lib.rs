@@ -68,7 +68,9 @@ pub mod node_test;
 pub mod node_v8;
 // #2935: surface the zlib option-level resolver at the crate root so
 // perry-stdlib's bundled codecs (and the `perry-ext-zlib` extern) can reach it.
-pub use node_submodules::js_zlib_resolve_level;
+pub use node_submodules::{
+    js_zlib_resolve_level, js_zlib_validate_buffer_arg, js_zlib_validate_options,
+};
 pub mod object;
 pub mod os;
 pub mod path;
@@ -224,8 +226,8 @@ pub use value::{
     js_set_handle_object_get_property, js_set_handle_to_string, js_set_handle_typeof,
     js_set_native_crypto_dispatch, js_set_native_domain_dispatch, js_set_native_http_dispatch,
     js_set_native_module_js_loader, js_set_native_querystring_dispatch,
-    js_set_native_sqlite_dispatch, js_set_native_webcrypto_dispatch, js_set_native_zlib_dispatch,
-    js_set_new_from_handle_v8,
+    js_set_native_sqlite_dispatch, js_set_native_tls_dispatch, js_set_native_webcrypto_dispatch,
+    js_set_native_zlib_dispatch, js_set_new_from_handle_v8,
 };
 
 // Extension pump registration — allows extensions to register pump functions

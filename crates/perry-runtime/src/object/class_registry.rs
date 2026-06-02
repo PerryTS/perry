@@ -1145,6 +1145,36 @@ pub unsafe extern "C" fn js_new_function_construct(
             };
             return crate::wasi::js_wasi_new(options);
         }
+        // #3663: `new Readable(opts)` (and Writable/Duplex/Transform/PassThrough)
+        // where the constructor binding came through any aliasing path the
+        // compiler can't resolve to a bare `Expr::New` — `const { Readable } =
+        // require('stream')`, `const s = require('stream'); new s.Readable()`,
+        // or `const R = stream.Readable; new R()`. In each case the callee
+        // value is the `stream.<Ctor>` bound-method closure, so dispatch to the
+        // same runtime constructors the named-import path uses. Without this the
+        // call falls through to the empty-object baseline and the resulting
+        // object has no EventEmitter/Writable methods, so `.on()`/`.write()`/
+        // `.pipe()` throw "is not a function".
+        if module == "stream"
+            && matches!(
+                method.as_str(),
+                "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
+            )
+        {
+            let opts = if !args_ptr.is_null() && args_len > 0 {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return match method.as_str() {
+                "Readable" => crate::node_stream::js_node_stream_readable_new(opts),
+                "Writable" => crate::node_stream::js_node_stream_writable_new(opts),
+                "Duplex" => crate::node_stream::js_node_stream_duplex_new(opts),
+                "Transform" => crate::node_stream::js_node_stream_transform_new(opts),
+                "PassThrough" => crate::node_stream::js_node_stream_passthrough_new(opts),
+                _ => unreachable!(),
+            };
+        }
     }
 
     // date-fns `constructFrom` clones a Date via
@@ -1452,6 +1482,12 @@ pub unsafe extern "C" fn js_new_function_construct(
             }
         }
     }
+    if is_arrow_function_value(func_value) {
+        crate::fs::validate::throw_type_error_with_code(
+            "Arrow function is not a constructor",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
     let cid = synthetic_class_id_for_function(func_value);
     // Allocate the instance with the synthetic class id (or 0 if the
     // value isn't callable). The object starts with no own props; the
@@ -1480,10 +1516,14 @@ pub unsafe extern "C" fn js_new_function_construct(
         // not the returned value (object returns would override, but
         // dayjs and siblings rely on the receiver mutation pattern).
         let prev_this = crate::object::js_implicit_this_get();
+        let prev_new_target = crate::object::js_new_target_get();
         crate::object::js_implicit_this_set(nan_boxed);
-        let prev_new_target = CURRENT_NEW_TARGET.with(|value| value.replace(func_value.to_bits()));
+        crate::object::js_new_target_set(func_value);
+        let prev_current_new_target =
+            CURRENT_NEW_TARGET.with(|value| value.replace(func_value.to_bits()));
         let result = crate::closure::js_native_call_value(func_value, args_ptr, args_len);
-        CURRENT_NEW_TARGET.with(|value| value.set(prev_new_target));
+        CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target));
+        crate::object::js_new_target_set(prev_new_target);
         crate::object::js_implicit_this_set(prev_this);
         if constructor_return_overrides_this(result) {
             return result;
@@ -1548,6 +1588,24 @@ fn is_callable_function_value(value: f64) -> bool {
         return false;
     }
     unsafe { (*ptr).type_tag == crate::closure::CLOSURE_MAGIC }
+}
+
+fn is_arrow_function_value(value: f64) -> bool {
+    use crate::value::JSValue;
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let ptr = jv.as_pointer() as *const crate::closure::ClosureHeader;
+    if ptr.is_null() || !is_valid_obj_ptr(ptr as *const u8) {
+        return false;
+    }
+    unsafe {
+        if (*ptr).type_tag != crate::closure::CLOSURE_MAGIC {
+            return false;
+        }
+    }
+    crate::closure::closure_is_arrow(ptr)
 }
 
 /// Lookup helper: returns the registered prototype-method value for

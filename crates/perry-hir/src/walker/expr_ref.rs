@@ -29,6 +29,7 @@ where
         | Expr::NewTarget
         | Expr::ClassRef(_)
         | Expr::This
+        | Expr::NewTarget
         | Expr::SuperPropertyGet { .. }
         | Expr::EnumMember { .. }
         | Expr::StaticFieldGet { .. }
@@ -798,6 +799,7 @@ where
             for el in elements {
                 match el {
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => f(e),
+                    ArrayElement::Hole => {}
                 }
             }
         }

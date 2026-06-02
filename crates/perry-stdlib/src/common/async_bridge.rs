@@ -460,6 +460,11 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
         count += net_count;
     }
 
+    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    {
+        count += unsafe { crate::tls::js_tls_process_pending() };
+    }
+
     // Process pending HTTP server requests + WS upgrades (perry-ext-http-server).
     // Closes #604 — pre-fix `js_node_http_server_listen` blocked the
     // main TS thread inside an inner event_loop, so axios.get/etc.
@@ -628,6 +633,12 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
     {
         let has_net = crate::net::js_net_has_active_handles();
         if has_net != 0 {
+            return 1;
+        }
+    }
+    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    {
+        if crate::tls::js_tls_has_active_handles() != 0 {
             return 1;
         }
     }

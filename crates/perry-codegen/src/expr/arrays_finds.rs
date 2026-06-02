@@ -854,9 +854,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     Ok(ctx.block().bitcast_i64_to_double(&p))
                 }
                 Some(arg_expr) => match arg_expr.as_ref() {
-                    // Literal integer length: `new Int32Array(3)`.
+                    // Literal integer length: `new Int32Array(3)`. A negative
+                    // literal (`new Int32Array(-1)`) is passed through verbatim
+                    // so the runtime throws the spec RangeError (#3662).
                     Expr::Integer(n) => {
-                        let len_str = (*n as i32).max(0).to_string();
+                        let len_str = (*n as i32).to_string();
                         let p = ctx.block().call(
                             I64,
                             "js_typed_array_new_empty",

@@ -878,6 +878,27 @@ pub extern "C" fn js_object_define_property(
             {
                 let desc_ptr = extract_obj_ptr(descriptor_value);
                 if !desc_ptr.is_null() {
+                    let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
+                    let set_key = crate::string::js_string_from_bytes(b"set".as_ptr(), 3);
+                    let get_field =
+                        js_object_get_field_by_name(desc_ptr as *const ObjectHeader, get_key);
+                    let set_field =
+                        js_object_get_field_by_name(desc_ptr as *const ObjectHeader, set_key);
+                    if !get_field.is_undefined() || !set_field.is_undefined() {
+                        let get_bits = if get_field.is_undefined() {
+                            0
+                        } else {
+                            crate::closure::clone_closure_rebind_this(get_field.bits(), obj_value)
+                        };
+                        let set_bits = if set_field.is_undefined() {
+                            0
+                        } else {
+                            crate::closure::clone_closure_rebind_this(set_field.bits(), obj_value)
+                        };
+                        crate::symbol::set_symbol_accessor_property(
+                            obj_value, key_value, get_bits, set_bits,
+                        );
+                    }
                     let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
                     let value_field =
                         js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);
@@ -1418,6 +1439,14 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
         }
         None
     };
+    let function_prototype_or_null = || {
+        let proto = crate::object::builtin_prototype_value("Function");
+        if proto.to_bits() != crate::value::TAG_UNDEFINED {
+            proto
+        } else {
+            f64::from_bits(TAG_NULL)
+        }
+    };
     if top16 == 0x7FFE {
         let class_id = (bits & 0xFFFF_FFFF) as u32;
         if let Some(parent_id) = get_parent_class_id(class_id) {
@@ -1505,7 +1534,14 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                     {
                         return f64::from_bits(proto_bits);
                     }
-                    return f64::from_bits(TAG_NULL);
+                    // #3664: a generator/async-generator function's
+                    // [[Prototype]] is `%Generator%` / `%AsyncGenerator%`.
+                    if let Some(proto) =
+                        crate::object::generator_function_proto_of(raw_addr as usize)
+                    {
+                        return proto;
+                    }
+                    return function_prototype_or_null();
                 }
                 if let Some(proto) = constructor_dynamic_prototype(obj) {
                     return proto;
@@ -1569,7 +1605,11 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                     {
                         return f64::from_bits(proto_bits);
                     }
-                    return f64::from_bits(TAG_NULL);
+                    // #3664: generator/async-generator [[Prototype]] resolution.
+                    if let Some(proto) = crate::object::generator_function_proto_of(bits as usize) {
+                        return proto;
+                    }
+                    return function_prototype_or_null();
                 }
                 if let Some(proto) = constructor_dynamic_prototype(obj) {
                     return proto;

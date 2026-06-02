@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1739 entries across 102 modules
+// Coverage: 1749 entries across 103 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -177,12 +177,16 @@ declare module "async_hooks" {
   /** stdlib */
   export class AsyncResource { [key: string]: any; }
   /** stdlib */
+  export const asyncWrapProviders: any;
+  /** stdlib */
   const _default: any;
   export default _default;
   /** stdlib */
   export function createHook(...args: any[]): any;
   /** stdlib */
   export function executionAsyncId(...args: any[]): any;
+  /** stdlib */
+  export function executionAsyncResource(...args: any[]): any;
   /** stdlib */
   export function triggerAsyncId(...args: any[]): any;
 }
@@ -1925,15 +1929,23 @@ declare module "nanoid" {
 
 declare module "net" {
   /** stdlib */
+  export class BlockList { [key: string]: any; }
+  /** stdlib */
   export class Server { [key: string]: any; }
   /** stdlib */
   export class Socket { [key: string]: any; }
   /** stdlib */
+  export class SocketAddress { [key: string]: any; }
+  /** stdlib */
   export class Stream { [key: string]: any; }
+  /** stdlib */
+  export function BlockList(...args: any[]): any;
   /** stdlib */
   export function Server(p0: any, p1: any): any;
   /** stdlib */
   export function Socket(...args: any[]): any;
+  /** stdlib */
+  export function SocketAddress(options: any): any;
   /** stdlib */
   export function Stream(...args: any[]): any;
   /** stdlib */
@@ -3348,19 +3360,25 @@ declare module "tls" {
   /** stdlib */
   export const rootCertificates: any;
   /** stdlib */
-  export function SecureContext(...args: any[]): any;
+  export function SecureContext(options: any): any;
   /** stdlib */
-  export function checkServerIdentity(...args: any[]): any;
+  export function Server(options: any, secureConnectionListener: any): any;
+  /** stdlib */
+  export function TLSSocket(socket: any, options: any): any;
+  /** stdlib */
+  export function checkServerIdentity(hostname: any, cert: any): any;
   /** stdlib */
   export function connect(p0: string, p1: any, p2: string, p3: any): any;
   /** stdlib */
-  export function createSecureContext(...args: any[]): any;
+  export function createSecureContext(options: any): any;
   /** stdlib */
-  export function getCACertificates(...args: any[]): any;
+  export function createServer(options: any, secureConnectionListener: any): any;
+  /** stdlib */
+  export function getCACertificates(type: any): any;
   /** stdlib */
   export function getCiphers(...args: any[]): any;
   /** stdlib */
-  export function setDefaultCACertificates(...args: any[]): any;
+  export function setDefaultCACertificates(certs: any): any;
 }
 
 declare module "tty" {
@@ -3653,6 +3671,11 @@ declare module "validator" {
   export function isURL(s: string): boolean;
   /** stdlib */
   export function isUUID(s: string): boolean;
+}
+
+declare module "vm" {
+  /** stdlib */
+  export function createContext(p0: any): any;
 }
 
 declare module "wasi" {

@@ -471,6 +471,11 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return crate::crypto::dispatch_sign(handle, method_name, &args);
     }
 
+    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    if crate::tls::should_dispatch_tls_handle(handle, method_name) {
+        return crate::tls::dispatch_tls_handle(handle, method_name, &args);
+    }
+
     // SQLite Statement handle: stmt.raw() / .all() / .get() / .run() —
     // routes the dynamic-receiver path used by drizzle's
     // `this.stmt.raw().all(...params)` chain (where `this.stmt` is
@@ -747,6 +752,13 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             return dispatch_external_net_socket(handle, method_name, &args);
         }
         if let Some(v) = crate::common::net_method_values::dispatch_external_server_method(
+            handle,
+            method_name,
+            &args,
+        ) {
+            return v;
+        }
+        if let Some(v) = crate::common::net_method_values::dispatch_external_block_list_method(
             handle,
             method_name,
             &args,
@@ -1256,6 +1268,8 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
         // cast to i64; NaN-box with POINTER_TAG to surface as a real JS array.
         fn js_net_socket_listeners(handle: i64, event_ptr: i64) -> i64;
         fn js_net_socket_raw_listeners(handle: i64, event_ptr: i64) -> i64;
+        fn js_net_socket_get_type_of_service(handle: i64) -> f64;
+        fn js_net_socket_set_type_of_service(handle: i64, value: f64) -> i64;
     }
 
     // Parse a runtime StringHeader pointer (`address` / `eventNames`
@@ -1352,6 +1366,15 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
             f64::from_bits(0x7FFD_0000_0000_0000u64 | (arr as u64 & 0x0000_FFFF_FFFF_FFFF))
         }
         "address" => json_str_to_value(js_net_socket_address(handle)),
+        "getTypeOfService" => js_net_socket_get_type_of_service(handle),
+        "setTypeOfService" => {
+            let value = args
+                .first()
+                .copied()
+                .unwrap_or(f64::from_bits(0x7FFC_0000_0000_0001));
+            js_net_socket_set_type_of_service(handle, value);
+            nanbox_handle(handle)
+        }
         "resetAndDestroy" => {
             js_net_socket_reset_and_destroy(handle);
             nanbox_handle(handle)
@@ -1394,6 +1417,11 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
 
     #[cfg(feature = "bundled-events")]
     if let Some(value) = dispatch_event_emitter_property(handle, property_name) {
+        return value;
+    }
+
+    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    if let Some(value) = crate::tls::dispatch_tls_property(handle, property_name) {
         return value;
     }
 
@@ -2077,6 +2105,10 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
         return;
     }
 
+    if crate::common::net_method_values::dispatch_property_set(handle, property_name, value) {
+        return;
+    }
+
     // Try Fastify context dispatch (request/reply properties)
     #[cfg(feature = "http-server")]
     if with_handle::<crate::fastify::FastifyContext, bool, _>(handle, |_| true).unwrap_or(false) {
@@ -2153,7 +2185,7 @@ unsafe extern "C" fn js_node_http_native_dispatch(
 ) -> f64 {
     use perry_runtime::JSValue;
     extern "C" {
-        fn js_node_http_create_server_with_options(handler: i64, options_f64: f64) -> i64;
+        fn js_node_http_create_server_with_options(first_arg: f64, second_arg: f64) -> i64;
         fn js_node_https_create_server(opts_f64: f64, handler: i64) -> i64;
         fn js_node_http2_create_secure_server(opts_f64: f64, handler: i64) -> i64;
         fn js_value_is_closure(value_bits: i64) -> i32;
@@ -2183,8 +2215,13 @@ unsafe extern "C" fn js_node_http_native_dispatch(
             options_f64 = a;
         }
     }
+    let handler_f64 = if handler_ptr == 0 {
+        undefined
+    } else {
+        perry_runtime::js_nanbox_pointer(handler_ptr)
+    };
     let handle = match module {
-        "http" => js_node_http_create_server_with_options(handler_ptr, options_f64),
+        "http" => js_node_http_create_server_with_options(options_f64, handler_f64),
         "https" => js_node_https_create_server(options_f64, handler_ptr),
         "http2" => js_node_http2_create_secure_server(options_f64, handler_ptr),
         _ => return undefined,
@@ -2279,6 +2316,8 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     #[cfg(feature = "database-sqlite")]
     perry_runtime::js_set_native_sqlite_dispatch(crate::sqlite::js_node_sqlite_native_dispatch);
     perry_runtime::js_set_native_domain_dispatch(crate::domain::js_domain_native_dispatch);
+    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    perry_runtime::js_set_native_tls_dispatch(crate::tls::js_tls_native_dispatch);
 
     // #2533: route captured / aliased http/https/http2 `createServer` back to
     // the perry-ext-http-server factories. Only registered when the http ext

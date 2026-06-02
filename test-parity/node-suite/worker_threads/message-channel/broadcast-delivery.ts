@@ -15,9 +15,11 @@ const finish = () => {
   }
   const afterEvent = receiveMessageOnPort(syncReceiver);
   console.log("broadcast after event:", afterEvent ? afterEvent.message : afterEvent);
-  sender.close();
-  listener.close();
-  syncReceiver.close();
+  setTimeout(() => {
+    sender.close();
+    listener.close();
+    syncReceiver.close();
+  }, 25);
 };
 
 listener.onmessage = (event: any) => {

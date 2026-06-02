@@ -122,6 +122,11 @@ pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut A
 }
 
 #[no_mangle]
+pub extern "C" fn js_array_push_hole(arr: *mut ArrayHeader) -> *mut ArrayHeader {
+    js_array_push_f64(arr, f64::from_bits(crate::value::TAG_HOLE))
+}
+
+#[no_mangle]
 pub extern "C" fn js_array_numeric_push_f64_unboxed(
     arr: *mut ArrayHeader,
     value: f64,

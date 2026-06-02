@@ -337,6 +337,7 @@ fn collect_instantiations_in_expr(
                     ArrayElement::Spread(expr) => {
                         collect_instantiations_in_expr(expr, ctx, module, idx)
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }

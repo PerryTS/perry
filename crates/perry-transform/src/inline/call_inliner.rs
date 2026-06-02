@@ -874,6 +874,7 @@ pub fn inline_calls_in_expr(
                         ));
                         kill_referenced_exact_receivers(e, exact_receiver_facts);
                     }
+                    perry_hir::ArrayElement::Hole => {}
                 }
             }
         }

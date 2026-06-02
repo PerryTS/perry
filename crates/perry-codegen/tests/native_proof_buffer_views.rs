@@ -105,6 +105,7 @@ fn module_with_classes_and_params(
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
     }
 }
 
@@ -1266,7 +1267,9 @@ fn native_owned_closure_capture_through_owner_alias_invalidates_views() {
                     captures: vec![3],
                     mutable_captures: Vec::new(),
                     captures_this: false,
+                    captures_new_target: false,
                     enclosing_class: None,
+                    is_arrow: false,
                     is_async: false,
                     is_generator: false,
                     is_strict: false,

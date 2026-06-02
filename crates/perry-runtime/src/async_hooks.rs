@@ -42,6 +42,7 @@ struct ResourceMeta {
     #[allow(dead_code)]
     trigger_async_id: u64,
     resource: f64,
+    context: crate::async_context::AsyncContextSnapshot,
     destroyed: bool,
 }
 
@@ -87,6 +88,11 @@ static RESOURCES: LazyLock<Mutex<HashMap<u64, ResourceMeta>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static GC_DESTROY_QUEUE: LazyLock<Mutex<VecDeque<u64>>> =
     LazyLock::new(|| Mutex::new(VecDeque::new()));
+static NEXT_CONTEXT_SNAPSHOT_ID: AtomicUsize = AtomicUsize::new(1);
+static CONTEXT_SNAPSHOTS: LazyLock<
+    Mutex<HashMap<usize, crate::async_context::AsyncContextSnapshot>>,
+> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static ASYNC_WRAP_PROVIDERS: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
     static EXECUTION_STACK: RefCell<Vec<(u64, u64)>> = const { RefCell::new(Vec::new()) };
@@ -126,6 +132,116 @@ pub extern "C" fn js_async_hooks_execution_async_id() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_async_hooks_trigger_async_id() -> f64 {
     async_id_to_js_number(trigger_async_id_u64())
+}
+
+#[no_mangle]
+pub extern "C" fn js_async_hooks_execution_async_resource() -> f64 {
+    let current_id = execution_async_id_u64();
+    if current_id != 0 {
+        if let Some(resource) = RESOURCES
+            .lock()
+            .unwrap()
+            .get(&current_id)
+            .map(|meta| meta.resource)
+        {
+            if !JSValue::from_bits(resource.to_bits()).is_undefined() {
+                return resource;
+            }
+        }
+    }
+
+    let obj = crate::object::js_object_alloc(0, 0);
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+const ASYNC_WRAP_PROVIDER_CONSTANTS: &[(&str, f64)] = &[
+    ("NONE", 0.0),
+    ("DIRHANDLE", 1.0),
+    ("DNSCHANNEL", 2.0),
+    ("ELDHISTOGRAM", 3.0),
+    ("FILEHANDLE", 4.0),
+    ("FILEHANDLECLOSEREQ", 5.0),
+    ("BLOBREADER", 6.0),
+    ("FSEVENTWRAP", 7.0),
+    ("FSREQCALLBACK", 8.0),
+    ("FSREQPROMISE", 9.0),
+    ("GETADDRINFOREQWRAP", 10.0),
+    ("GETNAMEINFOREQWRAP", 11.0),
+    ("HEAPSNAPSHOT", 12.0),
+    ("HTTP2SESSION", 13.0),
+    ("HTTP2STREAM", 14.0),
+    ("HTTP2PING", 15.0),
+    ("HTTP2SETTINGS", 16.0),
+    ("HTTPINCOMINGMESSAGE", 17.0),
+    ("HTTPCLIENTREQUEST", 18.0),
+    ("LOCKS", 19.0),
+    ("JSSTREAM", 20.0),
+    ("JSUDPWRAP", 21.0),
+    ("MESSAGEPORT", 22.0),
+    ("PIPECONNECTWRAP", 23.0),
+    ("PIPESERVERWRAP", 24.0),
+    ("PIPEWRAP", 25.0),
+    ("PROCESSWRAP", 26.0),
+    ("PROMISE", 27.0),
+    ("QUERYWRAP", 28.0),
+    ("QUIC_ENDPOINT", 29.0),
+    ("QUIC_LOGSTREAM", 30.0),
+    ("QUIC_PACKET", 31.0),
+    ("QUIC_SESSION", 32.0),
+    ("QUIC_STREAM", 33.0),
+    ("QUIC_UDP", 34.0),
+    ("SHUTDOWNWRAP", 35.0),
+    ("SIGNALWRAP", 36.0),
+    ("STATWATCHER", 37.0),
+    ("STREAMPIPE", 38.0),
+    ("TCPCONNECTWRAP", 39.0),
+    ("TCPSERVERWRAP", 40.0),
+    ("TCPWRAP", 41.0),
+    ("TTYWRAP", 42.0),
+    ("UDPSENDWRAP", 43.0),
+    ("UDPWRAP", 44.0),
+    ("SIGINTWATCHDOG", 45.0),
+    ("WORKER", 46.0),
+    ("WORKERCPUPROFILE", 47.0),
+    ("WORKERCPUUSAGE", 48.0),
+    ("WORKERHEAPPROFILE", 49.0),
+    ("WORKERHEAPSNAPSHOT", 50.0),
+    ("WORKERHEAPSTATISTICS", 51.0),
+    ("WRITEWRAP", 52.0),
+    ("ZLIB", 53.0),
+    ("CHECKPRIMEREQUEST", 54.0),
+    ("PBKDF2REQUEST", 55.0),
+    ("KEYPAIRGENREQUEST", 56.0),
+    ("KEYGENREQUEST", 57.0),
+    ("KEYEXPORTREQUEST", 58.0),
+    ("ARGON2REQUEST", 59.0),
+    ("CIPHERREQUEST", 60.0),
+    ("DERIVEBITSREQUEST", 61.0),
+    ("HASHREQUEST", 62.0),
+    ("RANDOMBYTESREQUEST", 63.0),
+    ("RANDOMPRIMEREQUEST", 64.0),
+    ("SCRYPTREQUEST", 65.0),
+    ("SIGNREQUEST", 66.0),
+    ("TLSWRAP", 67.0),
+    ("VERIFYREQUEST", 68.0),
+];
+
+pub fn js_async_hooks_async_wrap_providers() -> f64 {
+    let cached = ASYNC_WRAP_PROVIDERS.load(Ordering::Acquire);
+    if cached != 0 {
+        return f64::from_bits(cached);
+    }
+
+    let obj = crate::object::js_object_alloc(0, ASYNC_WRAP_PROVIDER_CONSTANTS.len() as u32);
+    for (name, value) in ASYNC_WRAP_PROVIDER_CONSTANTS {
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        crate::object::js_object_set_field_by_name(obj, key, *value);
+    }
+    let value = crate::value::js_nanbox_pointer(obj as i64);
+    let value = crate::object::js_object_freeze(value);
+    ASYNC_WRAP_PROVIDERS.store(value.to_bits(), Ordering::Release);
+    crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    value
 }
 
 // #854: pointer-boxing helper retained for async_hooks resource tracking (#789)
@@ -329,6 +445,7 @@ pub fn init_resource_with_trigger(
             type_name: type_name.to_string(),
             trigger_async_id,
             resource,
+            context: crate::async_context::capture_context(),
             destroyed: false,
         },
     );
@@ -694,7 +811,12 @@ pub extern "C" fn js_async_resource_new(type_value: f64, options: f64) -> i64 {
     let type_name = require_string_arg("type", type_handle.get_nanbox_f64());
     let trigger_async_id = trigger_id_from_options(options_handle.get_nanbox_f64());
     let ids = init_resource_with_trigger(&type_name, TAG_UNDEFINED_F64, true, trigger_async_id);
-    Box::into_raw(Box::new(AsyncResourceHandle { ids })) as i64
+    let handle = Box::into_raw(Box::new(AsyncResourceHandle { ids })) as i64;
+    let resource_value = crate::value::js_nanbox_pointer(handle);
+    if let Some(meta) = RESOURCES.lock().unwrap().get_mut(&ids.async_id) {
+        meta.resource = resource_value;
+    }
+    handle
 }
 
 #[no_mangle]
@@ -751,10 +873,17 @@ pub extern "C" fn js_async_resource_run_in_async_scope(
     }
     let args_array_handle = scope.root_raw_const_ptr(args_array as *const ArrayHeader);
     let resource = unsafe { &*(handle as *const AsyncResourceHandle) };
-    let previous = crate::async_context::enter_context(&crate::async_context::capture_context());
+    let resource_context = RESOURCES
+        .lock()
+        .unwrap()
+        .get(&resource.ids.async_id)
+        .map(|meta| meta.context.clone())
+        .unwrap_or_default();
+    let mut resource_context = resource_context;
+    let resource_context_roots = crate::async_context::root_snapshot(&scope, &resource_context);
+    let previous = crate::async_context::enter_context(&resource_context);
     let mut previous = previous;
     let previous_roots = crate::async_context::root_snapshot(&scope, &previous);
-    crate::async_context::restore_context(previous.clone());
     before(resource.ids.async_id, resource.ids.trigger_async_id);
     let prev_this = crate::object::js_implicit_this_set(this_arg_handle.get_nanbox_f64());
     let result = if args_array == 0 {
@@ -772,7 +901,12 @@ pub extern "C" fn js_async_resource_run_in_async_scope(
     crate::object::js_implicit_this_set(prev_this);
     let result_handle = scope.root_nanbox_f64(result);
     after(resource.ids.async_id);
+    crate::async_context::refresh_snapshot_from_roots(
+        &mut resource_context,
+        &resource_context_roots,
+    );
     crate::async_context::refresh_snapshot_from_roots(&mut previous, &previous_roots);
+    crate::async_context::restore_context(previous);
     result_handle.get_nanbox_f64()
 }
 
@@ -786,9 +920,12 @@ extern "C" fn async_resource_bind_trampoline(closure: *const ClosureHeader, rest
     }
     let handle = js_closure_get_capture_ptr(closure, 0);
     let callback = js_closure_get_capture_f64(closure, 1);
-    let this_arg = js_closure_get_capture_f64(closure, 2);
+    let mut this_arg = js_closure_get_capture_f64(closure, 2);
     if handle == 0 {
         return TAG_UNDEFINED_F64;
+    }
+    if JSValue::from_bits(this_arg.to_bits()).is_undefined() {
+        this_arg = crate::object::js_implicit_this_get();
     }
     let args_array_ptr = ptr_from_nanboxed(rest) as i64;
     js_async_resource_run_in_async_scope(handle, callback, this_arg, args_array_ptr)
@@ -836,6 +973,18 @@ pub extern "C" fn js_async_resource_bind(handle: i64, callback_value: f64, this_
         2,
         this_arg_handle.get_nanbox_f64(),
     );
+    if let Some(length) =
+        crate::closure::closure_length(crate::fs::extract_closure_ptr(callback_value))
+    {
+        crate::object::set_builtin_closure_length(
+            closure_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
+            length,
+        );
+    }
+    crate::object::set_bound_native_closure_name(
+        closure_handle.get_raw_mut_ptr::<ClosureHeader>(),
+        "bound",
+    );
     closure_handle.get_raw_mut_ptr::<ClosureHeader>() as i64
 }
 
@@ -843,15 +992,6 @@ pub extern "C" fn js_async_resource_bind(handle: i64, callback_value: f64, this_
 pub extern "C" fn js_async_resource_static_bind(callback: i64, type_value: f64) -> i64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback_handle = scope.root_raw_const_ptr(callback as *const ClosureHeader);
-    let type_value = if JSValue::from_bits(type_value.to_bits()).is_undefined() {
-        let default_type = b"AsyncResource";
-        box_string(
-            js_string_from_bytes(default_type.as_ptr(), default_type.len() as u32) as *const u8,
-        )
-    } else {
-        type_value
-    };
-    let type_handle = scope.root_nanbox_f64(type_value);
     let callback_value = if callback_handle
         .get_raw_const_ptr::<ClosureHeader>()
         .is_null()
@@ -861,12 +1001,192 @@ pub extern "C" fn js_async_resource_static_bind(callback: i64, type_value: f64) 
         box_ptr(callback_handle.get_raw_const_ptr::<ClosureHeader>() as *const u8)
     };
     let callback_value_handle = scope.root_nanbox_f64(callback_value);
-    let handle = js_async_resource_new(type_handle.get_nanbox_f64(), TAG_UNDEFINED_F64);
-    js_async_resource_bind(
-        handle,
+    let type_handle = scope.root_nanbox_f64(type_value);
+    let bound = js_async_resource_static_bind_value(
         callback_value_handle.get_nanbox_f64(),
+        type_handle.get_nanbox_f64(),
         TAG_UNDEFINED_F64,
-    )
+    );
+    ptr_from_nanboxed(bound) as i64
+}
+
+pub extern "C" fn js_async_resource_static_bind_value(
+    callback_value: f64,
+    type_value: f64,
+    this_arg: f64,
+) -> f64 {
+    validate_bind_callback(callback_value);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callback_handle = scope.root_nanbox_f64(callback_value);
+    let type_value = if JSValue::from_bits(type_value.to_bits()).is_undefined() {
+        let default_type = b"AsyncResource";
+        box_string(
+            js_string_from_bytes(default_type.as_ptr(), default_type.len() as u32) as *const u8,
+        )
+    } else {
+        type_value
+    };
+    let type_handle = scope.root_nanbox_f64(type_value);
+    let this_arg_handle = scope.root_nanbox_f64(this_arg);
+    let handle = js_async_resource_new(type_handle.get_nanbox_f64(), TAG_UNDEFINED_F64);
+    let bound = js_async_resource_bind(
+        handle,
+        callback_handle.get_nanbox_f64(),
+        this_arg_handle.get_nanbox_f64(),
+    );
+    if bound == 0 {
+        TAG_UNDEFINED_F64
+    } else {
+        crate::value::js_nanbox_pointer(bound)
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_async_resource_static_bind_direct(
+    callback_value: f64,
+    type_value: f64,
+    this_arg: f64,
+    _rest: i64,
+) -> f64 {
+    js_async_resource_static_bind_value(callback_value, type_value, this_arg)
+}
+
+pub extern "C" fn js_async_resource_static_bind_method(
+    _closure: *const ClosureHeader,
+    callback_value: f64,
+    type_value: f64,
+    this_arg: f64,
+    _rest: f64,
+) -> f64 {
+    js_async_resource_static_bind_value(callback_value, type_value, this_arg)
+}
+
+pub extern "C" fn js_async_local_storage_static_bind_method(
+    _closure: *const ClosureHeader,
+    callback_value: f64,
+    _rest: f64,
+) -> f64 {
+    js_async_resource_static_bind_value(callback_value, TAG_UNDEFINED_F64, TAG_UNDEFINED_F64)
+}
+
+#[no_mangle]
+pub extern "C" fn js_async_local_storage_static_bind_direct(
+    callback_value: f64,
+    _rest: i64,
+) -> f64 {
+    js_async_resource_static_bind_value(callback_value, TAG_UNDEFINED_F64, TAG_UNDEFINED_F64)
+}
+
+fn register_context_snapshot(snapshot: crate::async_context::AsyncContextSnapshot) -> usize {
+    let id = NEXT_CONTEXT_SNAPSHOT_ID.fetch_add(1, Ordering::Relaxed);
+    CONTEXT_SNAPSHOTS.lock().unwrap().insert(id, snapshot);
+    id
+}
+
+fn run_with_context_snapshot(snapshot_id: usize, f: impl FnOnce() -> f64) -> f64 {
+    let snapshot = CONTEXT_SNAPSHOTS
+        .lock()
+        .unwrap()
+        .get(&snapshot_id)
+        .cloned()
+        .unwrap_or_default();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let mut snapshot = snapshot;
+    let snapshot_roots = crate::async_context::root_snapshot(&scope, &snapshot);
+    let previous = crate::async_context::enter_context(&snapshot);
+    let mut previous = previous;
+    let previous_roots = crate::async_context::root_snapshot(&scope, &previous);
+    let result = f();
+    let result_handle = scope.root_nanbox_f64(result);
+    crate::async_context::refresh_snapshot_from_roots(&mut snapshot, &snapshot_roots);
+    crate::async_context::refresh_snapshot_from_roots(&mut previous, &previous_roots);
+    crate::async_context::restore_context(previous);
+    result_handle.get_nanbox_f64()
+}
+
+fn call_callback_with_rest(callback_value: f64, this_arg: f64, rest: f64) -> f64 {
+    if !is_callable_value(callback_value) {
+        throw_apply_not_function(callback_value);
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callback_handle = scope.root_nanbox_f64(callback_value);
+    let this_arg_handle = scope.root_nanbox_f64(this_arg);
+    let rebound_bits = crate::closure::clone_closure_rebind_this(
+        callback_handle.get_nanbox_f64().to_bits(),
+        this_arg_handle.get_nanbox_f64(),
+    );
+    let rebound_handle = scope.root_nanbox_f64(f64::from_bits(rebound_bits));
+    let callback = crate::fs::extract_closure_ptr(rebound_handle.get_nanbox_f64());
+    if callback.is_null() {
+        throw_apply_not_function(callback_handle.get_nanbox_f64());
+    }
+    let args_array = ptr_from_nanboxed(rest) as *const ArrayHeader;
+    let args_array_handle = scope.root_raw_const_ptr(args_array);
+    let prev_this = crate::object::js_implicit_this_set(this_arg_handle.get_nanbox_f64());
+    let result = if args_array.is_null() {
+        unsafe { js_closure_call_array(callback as i64, ptr::null(), 0) }
+    } else {
+        let arr = args_array_handle.get_raw_const_ptr::<ArrayHeader>();
+        let len = js_array_length(arr) as i64;
+        let data = if arr.is_null() || len == 0 {
+            ptr::null()
+        } else {
+            unsafe { (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64 }
+        };
+        unsafe { js_closure_call_array(callback as i64, data, len) }
+    };
+    crate::object::js_implicit_this_set(prev_this);
+    result
+}
+
+extern "C" fn async_local_storage_snapshot_trampoline(
+    closure: *const ClosureHeader,
+    callback_value: f64,
+    rest: f64,
+) -> f64 {
+    validate_bind_callback(callback_value);
+    let snapshot_id = js_closure_get_capture_ptr(closure, 0) as usize;
+    let this_arg = crate::object::js_implicit_this_get();
+    run_with_context_snapshot(snapshot_id, || {
+        call_callback_with_rest(callback_value, this_arg, rest)
+    })
+}
+
+fn register_snapshot_trampoline_once() {
+    thread_local! {
+        static REGISTERED: Cell<bool> = const { Cell::new(false) };
+    }
+    REGISTERED.with(|flag| {
+        if !flag.get() {
+            js_register_closure_rest(async_local_storage_snapshot_trampoline as *const u8, 1);
+            flag.set(true);
+        }
+    });
+}
+
+fn async_local_storage_static_snapshot_value() -> f64 {
+    register_snapshot_trampoline_once();
+    let snapshot_id = register_context_snapshot(crate::async_context::capture_context());
+    let closure = js_closure_alloc(async_local_storage_snapshot_trampoline as *const u8, 1);
+    if closure.is_null() {
+        return TAG_UNDEFINED_F64;
+    }
+    js_closure_set_capture_ptr(closure, 0, snapshot_id as i64);
+    crate::object::set_builtin_closure_length(closure as usize, 1);
+    crate::object::set_bound_native_closure_name(closure, "bound");
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+pub extern "C" fn js_async_local_storage_static_snapshot_method(
+    _closure: *const ClosureHeader,
+    _rest: f64,
+) -> f64 {
+    async_local_storage_static_snapshot_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_async_local_storage_static_snapshot_direct(_rest: i64) -> f64 {
+    async_local_storage_static_snapshot_value()
 }
 
 pub fn scan_async_hooks_roots(mark: &mut dyn FnMut(f64)) {
@@ -887,6 +1207,20 @@ pub fn scan_async_hooks_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_
     let mut resources = RESOURCES.lock().unwrap();
     for meta in resources.values_mut() {
         visitor.visit_nanbox_f64_slot(&mut meta.resource);
+        crate::async_context::scan_snapshot_roots_mut(&mut meta.context, visitor);
+    }
+    drop(resources);
+
+    let mut snapshots = CONTEXT_SNAPSHOTS.lock().unwrap();
+    for snapshot in snapshots.values_mut() {
+        crate::async_context::scan_snapshot_roots_mut(snapshot, visitor);
+    }
+    drop(snapshots);
+
+    let mut providers_bits = ASYNC_WRAP_PROVIDERS.load(Ordering::Relaxed);
+    if providers_bits != 0 {
+        visitor.visit_nanbox_u64_slot(&mut providers_bits);
+        ASYNC_WRAP_PROVIDERS.store(providers_bits, Ordering::Relaxed);
     }
 }
 
@@ -895,8 +1229,11 @@ pub fn reset_for_tests() {
     HOOKS.lock().unwrap().clear();
     RESOURCES.lock().unwrap().clear();
     GC_DESTROY_QUEUE.lock().unwrap().clear();
+    CONTEXT_SNAPSHOTS.lock().unwrap().clear();
+    ASYNC_WRAP_PROVIDERS.store(0, Ordering::Relaxed);
     HOOKS_ACTIVE.store(0, Ordering::Relaxed);
     NEXT_ASYNC_ID.store(1, Ordering::Relaxed);
+    NEXT_CONTEXT_SNAPSHOT_ID.store(1, Ordering::Relaxed);
     CURRENT_EXECUTION_ID.with(|c| c.set(0));
     CURRENT_TRIGGER_ID.with(|c| c.set(0));
     IN_HOOK_CALLBACK.with(|c| c.set(false));
@@ -923,6 +1260,7 @@ pub(crate) fn test_seed_async_hooks_scanner_roots(callback: *const ClosureHeader
             type_name: "test".to_string(),
             trigger_async_id: 0,
             resource,
+            context: crate::async_context::AsyncContextSnapshot::default(),
             destroyed: false,
         },
     );

@@ -27,6 +27,8 @@ pub(super) fn emit_string_pool(
     closure_arities: &HashMap<u32, u32>,
     // ECMAScript-visible `.length` for all closures.
     closure_lengths: &HashMap<u32, u32>,
+    // Closure body func_ids that came from arrow function syntax.
+    closure_arrow_functions: &std::collections::HashSet<u32>,
     // Issue #653: wrappers (`__perry_wrap_<name>`) for top-level user functions
     // that declare a rest param. Each entry is `(wrapper_symbol, fixed_arity)`
     // — the runtime side-table is keyed on the wrapper's func_ptr, NOT the
@@ -68,6 +70,11 @@ pub(super) fn emit_string_pool(
     // function. Registered so util.types.isGeneratorFunction can distinguish
     // lowered generator state-machine closures from ordinary functions.
     user_fn_wrapper_generator: &std::collections::HashSet<String>,
+    // #3664: wrapper/closure symbols whose source form was `async function*`.
+    // Registered in the runtime's async-generator registry so the
+    // `%AsyncGeneratorFunction%`/`%AsyncGenerator%` intrinsic chain (and
+    // `util.types.isAsyncFunction`) resolve correctly for them.
+    user_fn_wrapper_async_generator: &std::collections::HashSet<String>,
     // `(wrapper_symbol, display_name)` for every top-level user function
     // we want `console.log` / `util.inspect` to label with the original
     // JS name. Each entry produces one `js_register_function_name` call
@@ -757,6 +764,14 @@ pub(super) fn emit_string_pool(
         );
     }
 
+    let mut sorted_arrows: Vec<u32> = closure_arrow_functions.iter().copied().collect();
+    sorted_arrows.sort_unstable();
+    for fid in sorted_arrows {
+        let closure_sym = format!("perry_closure_{}__{}", module_prefix, fid);
+        let func_ref = format!("@{}", closure_sym);
+        blk.call_void("js_register_closure_arrow_function", &[(PTR, &func_ref)]);
+    }
+
     // Issue #653: register `__perry_wrap_<name>` wrappers for top-level user
     // functions whose source signature includes a rest param. Mirrors the
     // closure-rest loop above but keyed on the wrapper's symbol rather than
@@ -827,6 +842,21 @@ pub(super) fn emit_string_pool(
         let func_ref = format!("@{}", wrap_sym);
         blk.call_void(
             "js_register_closure_generator_function",
+            &[(PTR, &func_ref)],
+        );
+    }
+
+    // #3664: async-generator wrappers. These are ALSO in
+    // `user_fn_wrapper_generator` above (they share the sync generator
+    // lowering); this extra registration is what lets the runtime tell an
+    // `async function*` apart from a `function*`.
+    let mut sorted_async_generator_wrappers: Vec<String> =
+        user_fn_wrapper_async_generator.iter().cloned().collect();
+    sorted_async_generator_wrappers.sort();
+    for wrap_sym in sorted_async_generator_wrappers {
+        let func_ref = format!("@{}", wrap_sym);
+        blk.call_void(
+            "js_register_closure_async_generator_function",
             &[(PTR, &func_ref)],
         );
     }
