@@ -2437,7 +2437,7 @@ declare module "perry/thread" {
   /** stdlib */
   export function parallelMap(p0: any, p1: any): any;
   /** stdlib */
-  export function spawn(p0: any): any;
+  export function spawn(p0: any): Promise<any>;
 }
 
 declare module "perry/tui" {

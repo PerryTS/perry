@@ -1516,13 +1516,16 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_any("p0"), p_any("p1")],
         TypeSpec::Any,
     ),
+    // `spawn(fn)` runs `fn` on a background OS thread and hands back a
+    // Promise that resolves to the closure's return value (#4022). The
+    // resolved value's type isn't statically known, so `Promise<any>`.
     method_sig(
         "perry/thread",
         "spawn",
         false,
         None,
         &[p_any("p0")],
-        TypeSpec::Any,
+        TypeSpec::Promise,
     ),
     method_sig(
         "lodash",

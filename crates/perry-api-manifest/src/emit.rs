@@ -539,6 +539,7 @@ fn render_type(ty: &TypeSpec) -> &'static str {
         TypeSpec::Handle => "any",
         TypeSpec::Void => "void",
         TypeSpec::Any => "any",
+        TypeSpec::Promise => "Promise<any>",
     }
 }
 
