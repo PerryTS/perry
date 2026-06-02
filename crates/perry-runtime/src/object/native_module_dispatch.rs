@@ -510,6 +510,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         ("process", "getBuiltinModule") => crate::process::js_process_get_builtin_module(arg(0)),
         ("process", "execve") => crate::process::js_process_execve(arg(0), arg(1), arg(2)),
+        ("module", "createRequire") => crate::module_require::js_module_create_require(arg(0)),
         ("module", "enableCompileCache") => crate::process::js_module_enable_compile_cache(arg(0)),
         ("module", "flushCompileCache") => crate::process::js_module_flush_compile_cache(),
         ("module", "getCompileCacheDir") => crate::process::js_module_get_compile_cache_dir(),

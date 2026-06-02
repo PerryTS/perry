@@ -2815,6 +2815,7 @@ fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
         "dns/promises.default" => Some("dns/promises"),
         "inspector.default" => Some("inspector"),
         "inspector/promises.default" => Some("inspector/promises"),
+        "module.default" => Some("module"),
         "os.default" => Some("os"),
         "path.default" => Some("path"),
         "path.posix.default" => Some("path.posix"),
@@ -2839,6 +2840,7 @@ fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
         "dns/promises" => Some("dns/promises.default"),
         "inspector" => Some("inspector.default"),
         "inspector/promises" => Some("inspector/promises.default"),
+        "module" => Some("module.default"),
         "os" => Some("os.default"),
         "path" => Some("path.default"),
         "path.posix" => Some("path.posix.default"),
@@ -2875,6 +2877,7 @@ fn cjs_default_export_value(module_name: &str) -> Option<f64> {
             b"process".as_ptr(),
             "process".len(),
         )),
+        "module" => Some(bound_native_callable_export_value("module", "Module")),
         "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "os" | "path"
         | "path.posix" | "path.win32" | "punycode" | "querystring" | "repl" | "url" | "util"
         | "inspector" | "inspector/promises" => create_cjs_default_namespace(module_name),
@@ -3607,6 +3610,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("perf_hooks", "PerformanceResourceTiming") => Some(0),
         // #3119/#3126/#3263 node:module helpers.
         ("module", "createRequire") => Some(1),
+        ("module", "Module") => Some(0),
         ("module", "enableCompileCache") => Some(1),
         ("module", "flushCompileCache") => Some(0),
         ("module", "getCompileCacheDir") => Some(0),
@@ -4495,6 +4499,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("http", "setGlobalProxyFromEnv")
             | ("http", "_connectionListener")
             | ("module", "createRequire")
+            | ("module", "Module")
             | ("module", "findPackageJSON")
             | ("module", "findSourceMap")
             | ("module", "flushCompileCache")

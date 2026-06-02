@@ -3338,6 +3338,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("module", "constants"),
     property("module", "wrap"),
     property("module", "wrapper"),
+    class("module", "Module"),
+    method("module", "Module", false, None),
     method("module", "createRequire", false, None),
     method("module", "findPackageJSON", false, None),
     method("module", "findSourceMap", false, None),

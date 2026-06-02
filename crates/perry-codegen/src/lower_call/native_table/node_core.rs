@@ -578,6 +578,15 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "module",
         has_receiver: false,
+        method: "createRequire",
+        class_filter: None,
+        runtime: "js_module_create_require",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "module",
+        has_receiver: false,
         method: "enableCompileCache",
         class_filter: None,
         runtime: "js_module_enable_compile_cache",
