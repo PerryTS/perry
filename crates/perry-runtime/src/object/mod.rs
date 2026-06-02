@@ -15,13 +15,8 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::RwLock;
 
-// ---------------------------------------------------------------------------
 // Submodules (issue #1103): behavior-preserving split of the former
-// 11.2k-line object.rs. Each submodule does `use super::*;` so the
-// shared state/helpers that remain in this trunk module stay reachable;
-// everything public is re-exported here so no symbol moves in the public
-// surface (all `#[no_mangle]` FFI entry points keep their exact symbol).
-// ---------------------------------------------------------------------------
+// 11.2k-line object.rs. Public re-exports keep FFI symbols stable.
 mod alloc;
 mod array_object_ops;
 mod assert;
@@ -51,6 +46,7 @@ mod object_ops;
 mod object_ops_frozen;
 mod polymorphic_index;
 pub(crate) mod prototype_chain;
+mod prototype_helpers;
 mod reflect_support;
 mod util_types;
 mod websocket_global;
@@ -84,6 +80,7 @@ pub(crate) use native_module_stream::*;
 pub use object_ops::*;
 pub use object_ops_frozen::*;
 pub use polymorphic_index::*;
+pub(crate) use prototype_helpers::*;
 pub(crate) use reflect_support::*;
 pub use util_types::*;
 
