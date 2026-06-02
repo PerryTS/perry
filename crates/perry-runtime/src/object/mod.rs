@@ -15,13 +15,8 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::RwLock;
 
-// ---------------------------------------------------------------------------
-// Submodules (issue #1103): behavior-preserving split of the former
-// 11.2k-line object.rs. Each submodule does `use super::*;` so the
-// shared state/helpers that remain in this trunk module stay reachable;
-// everything public is re-exported here so no symbol moves in the public
-// surface (all `#[no_mangle]` FFI entry points keep their exact symbol).
-// ---------------------------------------------------------------------------
+// Submodules split from the former 11.2k-line object.rs. Children use
+// `super::*`; public items are re-exported here to preserve the surface.
 mod alloc;
 mod array_object_ops;
 mod assert;
@@ -96,13 +91,8 @@ static OS_CONSTANTS_PRIORITY_CACHE: AtomicU64 = AtomicU64::new(0);
 static OS_CONSTANTS_DLOPEN_CACHE: AtomicU64 = AtomicU64::new(0);
 static GLOBAL_THIS_PTR: AtomicI64 = AtomicI64::new(0);
 static GLOBAL_THIS_READY: AtomicBool = AtomicBool::new(false);
-// #2145: the `%TypedArray%` intrinsic constructor (a closure) and its
-// `.prototype` (an object). Lazily allocated by
-// `populate_global_this_builtins` so the per-kind typed-array constructors
-// (`Int8Array`, ...) can chain `__proto__` to `%TypedArray%`, and each per-kind
-// `.prototype` carries `OBJ_FLAG_TYPED_ARRAY_PROTO` whose
-// `js_object_get_prototype_of` returns the shared `%TypedArray%.prototype` here.
-// Both are mutable roots scanned by `scan_object_cache_roots_mut`.
+// `%TypedArray%` intrinsic constructor/prototype roots used by per-kind typed
+// array constructors and scanned by `scan_object_cache_roots_mut`.
 pub(crate) static TYPED_ARRAY_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
 pub(crate) static TYPED_ARRAY_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
 pub(crate) static LOCAL_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
