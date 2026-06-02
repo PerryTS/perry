@@ -39,7 +39,7 @@ pub(super) unsafe fn boxed_primitive_base_for_object(
 unsafe fn boxed_primitive_payload_for_object(
     obj_ptr: *const crate::object::ObjectHeader,
 ) -> Option<(u32, f64)> {
-    if !crate::object::is_valid_obj_ptr(obj_ptr as *const u8) {
+    if (obj_ptr as usize) < 0x100000 || !crate::object::is_valid_obj_ptr(obj_ptr as *const u8) {
         return None;
     }
     let class_id = (*obj_ptr).class_id;
@@ -173,8 +173,11 @@ pub(crate) fn boxed_primitive_payload(value: f64) -> Option<(u32, f64)> {
     // that isn't a real heap object must be rejected *before* the `class_id`
     // read — otherwise a small subnormal double (e.g. raw bits `0x2800000207`)
     // that slips through the `>= 0x100000` raw-pointer heuristic is dereferenced
-    // as an `ObjectHeader` and faults. Gate on the actual heap range (#4099).
-    if !crate::object::is_valid_obj_ptr(ptr as *const u8) {
+    // as an `ObjectHeader` and faults. Keep the `0x100000` small-handle floor
+    // (the fetch/Headers id-space lives below it and `is_valid_obj_ptr`'s Linux
+    // `HEAP_MIN` of `0x1000` would otherwise let those handles through), and
+    // additionally gate on the real heap range (#4099).
+    if (ptr as usize) < 0x100000 || !crate::object::is_valid_obj_ptr(ptr as *const u8) {
         return None;
     }
     unsafe { boxed_primitive_payload_for_object(ptr) }
