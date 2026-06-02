@@ -874,6 +874,10 @@ pub(crate) fn lower_module_decl(
                                                     "AsyncLocalStorage" | "AsyncResource"
                                                 ) | ("dns" | "dns/promises", "Resolver")
                                                     | (
+                                                        "inspector" | "inspector/promises",
+                                                        "Session"
+                                                    )
+                                                    | (
                                                         "sqlite",
                                                         "DatabaseSync"
                                                             | "Session"

@@ -1161,6 +1161,18 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if matches!(module_name.as_str(), "inspector" | "inspector/promises")
+                    && class_name == "Session"
+                    && matches!(
+                        property_name.as_str(),
+                        "connect" | "connectToMainThread" | "disconnect" | "post" | "on" | "once"
+                    )
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "net"
                     && ((class_name == "Socket" && is_net_socket_method_name(&property_name))
                         || (class_name == "Server" && is_net_server_method_name(&property_name)))

@@ -2487,6 +2487,8 @@ fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
         "constants.default" => Some("constants"),
         "dns.default" => Some("dns"),
         "dns/promises.default" => Some("dns/promises"),
+        "inspector.default" => Some("inspector"),
+        "inspector/promises.default" => Some("inspector/promises"),
         "os.default" => Some("os"),
         "path.default" => Some("path"),
         "path.posix.default" => Some("path.posix"),
@@ -2507,6 +2509,8 @@ fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
         "constants" => Some("constants.default"),
         "dns" => Some("dns.default"),
         "dns/promises" => Some("dns/promises.default"),
+        "inspector" => Some("inspector.default"),
+        "inspector/promises" => Some("inspector/promises.default"),
         "os" => Some("os.default"),
         "path" => Some("path.default"),
         "path.posix" => Some("path.posix.default"),
@@ -2538,9 +2542,8 @@ fn cjs_default_export_value(module_name: &str) -> Option<f64> {
             "dgram".len(),
         )),
         "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "os" | "path"
-        | "path.posix" | "path.win32" | "punycode" | "querystring" | "url" | "util" => {
-            create_cjs_default_namespace(module_name)
-        }
+        | "path.posix" | "path.win32" | "punycode" | "querystring" | "url" | "util"
+        | "inspector" | "inspector/promises" => create_cjs_default_namespace(module_name),
         _ => None,
     }
 }
@@ -2586,6 +2589,10 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "dgram"
             | "events"
             | "fs.constants"
+            | "inspector"
+            | "inspector.default"
+            | "inspector/promises"
+            | "inspector/promises.default"
             | "os"
             | "os.default"
             | "path"
@@ -3970,6 +3977,15 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | (
                 "readline/promises",
                 "createInterface" | "Interface" | "Readline",
+            )
+            | (
+                "inspector",
+                "open" | "close" | "url" | "waitForDebugger" | "Session",
+            )
+            | ("inspector/promises", "Session")
+            | (
+                "inspector.Session" | "inspector/promises.Session",
+                "connect" | "connectToMainThread" | "disconnect" | "post" | "on" | "once",
             )
             // #3712: node:http module-level helper exports. `validateHeaderName`
             // / `validateHeaderValue` perform Node's HTTP-token / header-value
@@ -5909,6 +5925,20 @@ pub(crate) unsafe fn get_native_module_constant(
         "module" => match property {
             "builtinModules" => Some(crate::process::js_module_builtin_modules()),
             "constants" => Some(crate::process::js_module_constants()),
+            _ => None,
+        },
+        "inspector" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("inspector"),
+            "console" => Some(crate::node_inspector::js_node_inspector_console_object()),
+            "Session" => Some(bound_native_callable_export_value("inspector", "Session")),
+            _ => None,
+        },
+        "inspector/promises" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("inspector/promises"),
+            "Session" => Some(bound_native_callable_export_value(
+                "inspector/promises",
+                "Session",
+            )),
             _ => None,
         },
         "process" => match property {

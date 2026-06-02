@@ -465,6 +465,18 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::async_hooks::js_async_hooks_execution_async_resource()
         }
 
+        ("inspector", "open") => {
+            crate::node_inspector::js_node_inspector_open(arg(0), arg(1), arg(2))
+        }
+        ("inspector", "close") => crate::node_inspector::js_node_inspector_close(),
+        ("inspector", "url") => crate::node_inspector::js_node_inspector_url(),
+        ("inspector", "waitForDebugger") => {
+            crate::node_inspector::js_node_inspector_wait_for_debugger()
+        }
+        ("inspector", "Session") => crate::node_inspector::js_node_inspector_session_new(),
+        ("inspector/promises", "Session") => {
+            crate::node_inspector::js_node_inspector_promises_session_new()
+        }
         // ── Buffer constructor static API ──
         // `class MyBuffer extends Buffer {}; MyBuffer.from(...)` reaches this
         // path through js_class_static_method_call's native-superclass
