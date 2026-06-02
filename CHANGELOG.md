@@ -2,6 +2,10 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1103 — fix(fs): fs.promises FileHandle stream/iterator tail (#4119)
+
+Folds in external contributor PR #4119: completes the `fs.promises` `FileHandle` surface with the streaming/async-iterator tail (`createReadStream`/`createWriteStream`/`readableWebStream` and `for await` iteration over a handle). Adds the corresponding manifest entries (total: 2574 across 108 modules) and node-suite parity fixtures. Merged on top of current `main` (only the auto-generated `docs/src/api/reference.md` entry-count line conflicted; regenerated from the manifest).
+
 ## v0.5.1102 — chore(parity): resolve v8 skiplist/manifest triage ambiguity (#3700)
 
 `scripts/parity-skiplist.toml` skiplisted `node:v8` while the API manifest still claimed v8 entries, making compatibility triage ambiguous (a v8 failure could be bucketed as both `Skip` and a manifest/runtime gap). Documented the rule that resolves it: the skiplist and the manifest measure **different axes** — the manifest records whether an API exists and is callable; the skiplist records whether it is a byte-for-byte parity target. A skiplisted-but-manifest-claimed API is not a conflict.
