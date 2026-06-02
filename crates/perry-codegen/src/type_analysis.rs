@@ -205,6 +205,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // below. Refining to `Named("URL")` lets `u.searchParams.get(k)` and
         // friends hit the `is_url_search_params_expr` fast paths.
         Expr::UrlNew { .. } => Some(HirType::Named("URL".to_string())),
+        Expr::UrlPatternNew { .. } => Some(HirType::Named("URLPattern".to_string())),
         Expr::UrlSearchParamsNew(_) => Some(HirType::Named("URLSearchParams".to_string())),
         // `url.searchParams` getter on a typed URL: refining lets a chained
         // `const sp = url.searchParams; sp.append(...)` keep the typed

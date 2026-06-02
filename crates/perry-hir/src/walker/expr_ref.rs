@@ -942,6 +942,12 @@ where
                 f(b);
             }
         }
+        Expr::UrlPatternNew { input, base } => {
+            f(input);
+            if let Some(b) = base {
+                f(b);
+            }
+        }
         Expr::UrlSearchParamsNew(opt) => {
             if let Some(v) = opt {
                 f(v);

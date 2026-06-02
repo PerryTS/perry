@@ -78,6 +78,7 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "Navigator"
             | "URL"
             | "URLSearchParams"
+            | "URLPattern"
             | "AbortController"
             | "AbortSignal"
             | "EventTarget"

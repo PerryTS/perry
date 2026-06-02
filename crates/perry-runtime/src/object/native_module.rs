@@ -1879,6 +1879,7 @@ const URL_DEFAULT_KEYS: &[&[u8]] = &[
     b"format",
     b"URL",
     b"URLSearchParams",
+    b"URLPattern",
     b"domainToASCII",
     b"domainToUnicode",
     b"pathToFileURL",
@@ -1890,6 +1891,7 @@ const URL_DEFAULT_KEYS: &[&[u8]] = &[
 const URL_NAMESPACE_KEYS: &[&[u8]] = &[
     b"URL",
     b"URLSearchParams",
+    b"URLPattern",
     b"Url",
     b"default",
     b"domainToASCII",
@@ -2723,6 +2725,9 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
             "URLSearchParams".len(),
         );
     }
+    if module_name == "url" && property_name == "URLPattern" {
+        return js_get_global_this_builtin_value(b"URLPattern".as_ptr(), "URLPattern".len());
+    }
     if module_name == "crypto.webcrypto" {
         if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
             return value;
@@ -3089,6 +3094,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("async_hooks", "triggerAsyncId") => Some(0),
         ("async_hooks", "executionAsyncResource") => Some(0),
         ("url", "URL") => Some(1),
+        ("url", "URLPattern") => Some(0),
         ("tls", "getCiphers") => Some(0),
         ("tls", "getCACertificates" | "setDefaultCACertificates" | "createSecureContext") => {
             Some(1)
@@ -4535,6 +4541,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util/types", "isBoxedPrimitive")
             | ("url", "URL")
             | ("url", "URLSearchParams")
+            | ("url", "URLPattern")
             | ("url", "Url")
             | ("url", "fileURLToPath")
             | ("url", "fileURLToPathBuffer")
@@ -6169,6 +6176,18 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         "url" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("url"),
+            "URL" => Some(js_get_global_this_builtin_value(
+                b"URL".as_ptr(),
+                "URL".len(),
+            )),
+            "URLSearchParams" => Some(js_get_global_this_builtin_value(
+                b"URLSearchParams".as_ptr(),
+                "URLSearchParams".len(),
+            )),
+            "URLPattern" => Some(js_get_global_this_builtin_value(
+                b"URLPattern".as_ptr(),
+                "URLPattern".len(),
+            )),
             _ => None,
         },
         "net" => match property {

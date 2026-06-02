@@ -462,6 +462,7 @@ impl SH for Expr {
             Expr::SyntaxErrorNew(e) => { tag(h, 352); e.as_ref().hash(h); }
             Expr::AggregateErrorNew { errors, message, options } => { tag(h, 353); errors.as_ref().hash(h); message.as_ref().hash(h); options.hash(h); }
             Expr::UrlNew { url, base } => { tag(h, 354); url.as_ref().hash(h); base.hash(h); }
+            Expr::UrlPatternNew { input, base } => { tag(h, 12061); input.as_ref().hash(h); base.hash(h); }
             Expr::UrlGetHref(e) => { tag(h, 355); e.as_ref().hash(h); }
             Expr::UrlGetPathname(e) => { tag(h, 356); e.as_ref().hash(h); }
             Expr::UrlGetProtocol(e) => { tag(h, 357); e.as_ref().hash(h); }

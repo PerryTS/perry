@@ -114,6 +114,7 @@ pub(crate) fn lower_let(
                     property.as_str(),
                     "URL"
                         | "URLSearchParams"
+                        | "URLPattern"
                         | "TextEncoder"
                         | "TextDecoder"
                         | "TextEncoderStream"
