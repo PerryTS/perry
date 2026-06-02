@@ -737,15 +737,16 @@ pub(crate) fn lower_stmt(
                                     // dispatches via the class-filtered entries.
                                     ("net", "Socket") => Some("Socket"),
                                     ("net", "Server") => Some("Server"),
+                                    ("vm", "SourceTextModule") => Some("SourceTextModule"),
+                                    ("vm", "SyntheticModule") => Some("SyntheticModule"),
                                     _ => None,
                                 };
                                 if let Some(cn) = class_name {
-                                    // Register under `"net"` (the module the Socket class belongs to)
-                                    // regardless of which module the factory lived in, so method
-                                    // dispatch resolves correctly.
+                                    let instance_module =
+                                        if mod_name == "vm" { "vm" } else { "net" };
                                     ctx.register_native_instance(
                                         name.clone(),
-                                        "net".to_string(),
+                                        instance_module.to_string(),
                                         cn.to_string(),
                                     );
                                     let _ = mod_name; // suppress unused on tls branch
