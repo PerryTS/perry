@@ -206,6 +206,16 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         DOUBLE,
         &[I64, DOUBLE],
     );
+    module.declare_function(
+        "js_node_https_server_keep_alive_timeout_buffer",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function(
+        "js_node_https_server_set_keep_alive_timeout_buffer",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
     module.declare_function("js_node_https_server_request_timeout", DOUBLE, &[I64]);
     module.declare_function(
         "js_node_https_server_set_request_timeout",

@@ -477,7 +477,7 @@ Available via `require('node:path/win32')` or `path.win32`. Exposes the same sur
 | `server[Symbol.asyncDispose]()` | ✓ | ✓ |  |
 | `server.headersTimeout` | ✓ | ✓ |  |
 | `server.keepAliveTimeout` | ✓ | ✓ |  |
-| `server.keepAliveTimeoutBuffer` | ✓ | ⚠ | Newer Node addition |
+| `server.keepAliveTimeoutBuffer` | ✓ | ✓ |  |
 | `server.listening` | ✓ | ✓ |  |
 | `server.maxHeadersCount` | ✓ | ✓ |  |
 | `server.maxRequestsPerSocket` | ✓ | ✓ |  |
@@ -629,6 +629,7 @@ Available via `require('node:path/win32')` or `path.win32`. Exposes the same sur
 | `server.requestTimeout` | ✓ | ✓ |  |
 | `server.timeout` | ✓ | ✓ |  |
 | `server.keepAliveTimeout` | ✓ | ✓ |  |
+| `server.keepAliveTimeoutBuffer` | ✓ | ✓ |  |
 | `server[Symbol.asyncDispose]()` | ✓ | ✓ |  |
 
 #### Events
