@@ -1315,6 +1315,26 @@ pub(crate) fn lower_stmt(
         ast::Stmt::ForIn(for_in_stmt) => {
             lower_stmt_for_in(ctx, module, for_in_stmt)?;
         }
+        ast::Stmt::With(with_stmt) => {
+            if ctx.current_strict_mode() || ctx.current_strict {
+                crate::lower_bail!(
+                    with_stmt.span,
+                    "`with` statement is forbidden in strict mode"
+                );
+            }
+            let env_id = ctx.define_local("__perry_with_env".to_string(), Type::Any);
+            module.init.push(Stmt::Let {
+                id: env_id,
+                name: format!("__perry_with_env_{}", env_id),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(lower_expr(ctx, &with_stmt.obj)?),
+            });
+            ctx.push_with_env(env_id);
+            let body_result = lower_body_stmt(ctx, &with_stmt.body);
+            ctx.pop_with_env();
+            module.init.extend(body_result?);
+        }
         _ => {}
     }
     Ok(())

@@ -44,6 +44,14 @@ const capturedArrow = () => captured;
 captured = 10;
 check("closure capture observes later write", capturedArrow(), 10);
 
+function makeWithReader(): () => any {
+  var a = { a: 10 };
+  with (a) {
+    return () => a;
+  }
+}
+check("arrow captures with object environment", makeWithReader()(), 10);
+
 function makeReader(value: any): () => any {
   let local = value;
   return () => local;

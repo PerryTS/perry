@@ -58,6 +58,7 @@ mod prototype_helpers;
 mod reflect_support;
 mod util_types;
 mod websocket_global;
+mod with_env;
 pub use alloc::*;
 pub use arguments::*;
 pub(crate) use array_object_ops::*;
@@ -97,6 +98,7 @@ pub use property_key::*;
 pub(crate) use prototype_helpers::*;
 pub(crate) use reflect_support::*;
 pub use util_types::*;
+pub use with_env::*;
 
 static HTTP_METHODS_CACHE: AtomicU64 = AtomicU64::new(0);
 static FS_CONSTANTS_CACHE: AtomicU64 = AtomicU64::new(0);

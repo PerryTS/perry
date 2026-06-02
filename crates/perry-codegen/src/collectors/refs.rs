@@ -1,4 +1,4 @@
-use perry_hir::{BinaryOp, Expr, Function, Stmt};
+use perry_hir::{BinaryOp, Expr, Function, Stmt, WithSetFallback};
 use std::collections::HashSet;
 
 use super::*;
@@ -175,6 +175,24 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         Expr::LocalSet(id, value) => {
             out.insert(*id);
             walk(value, out);
+        }
+        Expr::WithGet {
+            object, fallback, ..
+        } => {
+            walk(object, out);
+            walk(fallback, out);
+        }
+        Expr::WithSet {
+            object,
+            value,
+            fallback,
+            ..
+        } => {
+            walk(object, out);
+            walk(value, out);
+            if let WithSetFallback::Local(id) | WithSetFallback::SloppyImplicit(id) = fallback {
+                out.insert(*id);
+            }
         }
         Expr::Update { id, .. } => {
             out.insert(*id);

@@ -1796,13 +1796,25 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 "namespace/module declared inside a function body is not supported; declare it at module scope"
             );
         }
-        // `with` is forbidden under TS strict-mode (the implicit default for
-        // ES modules) — Perry does not implement dynamic scope chains.
         ast::Stmt::With(with_stmt) => {
-            crate::lower_bail!(
-                with_stmt.span,
-                "`with` statement is not supported (also forbidden in strict mode)"
-            );
+            if ctx.current_strict_mode() || ctx.current_strict {
+                crate::lower_bail!(
+                    with_stmt.span,
+                    "`with` statement is forbidden in strict mode"
+                );
+            }
+            let env_id = ctx.define_local("__perry_with_env".to_string(), Type::Any);
+            result.push(Stmt::Let {
+                id: env_id,
+                name: format!("__perry_with_env_{}", env_id),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(lower_expr(ctx, &with_stmt.obj)?),
+            });
+            ctx.push_with_env(env_id);
+            let body_result = lower_body_stmt(ctx, &with_stmt.body);
+            ctx.pop_with_env();
+            result.extend(body_result?);
         }
         // Final catch-all: any genuinely unexpected variant (e.g. a future
         // swc Stmt variant we haven't enumerated) bails instead of silently

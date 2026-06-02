@@ -155,6 +155,40 @@ fn is_cjs_style_native_default_import(module_name: &str) -> bool {
     )
 }
 
+fn wrap_with_gets(property: &str, fallback: Expr, envs: Vec<LocalId>) -> Expr {
+    envs.into_iter()
+        .rev()
+        .fold(fallback, |fallback, env_id| Expr::WithGet {
+            object: Box::new(Expr::LocalGet(env_id)),
+            property: property.to_string(),
+            fallback: Box::new(fallback),
+        })
+}
+
+pub(crate) fn with_set_fallback_for_ident(
+    ctx: &mut LoweringContext,
+    name: &str,
+) -> WithSetFallback {
+    if let Some(id) = ctx.lookup_local(name) {
+        if ctx.is_local_immutable(id) {
+            WithSetFallback::ThrowConstAssignment
+        } else {
+            WithSetFallback::Local(id)
+        }
+    } else if ctx.lookup_class(name).is_some() || ctx.lookup_func(name).is_some() {
+        WithSetFallback::Ignore
+    } else if ctx.current_strict {
+        WithSetFallback::ThrowReferenceError
+    } else {
+        eprintln!(
+            "  Warning: Assignment to undeclared variable '{}', creating implicit local",
+            name
+        );
+        let id = ctx.define_local(name.to_string(), Type::Any);
+        WithSetFallback::SloppyImplicit(id)
+    }
+}
+
 pub(crate) fn lower_expr_assignment(
     ctx: &mut LoweringContext,
     expr: &ast::Expr,
@@ -163,6 +197,16 @@ pub(crate) fn lower_expr_assignment(
     match expr {
         ast::Expr::Ident(ident) => {
             let name = ident.sym.to_string();
+            if let Some(env_id) = ctx.active_with_envs_for_ident(&name).into_iter().next() {
+                let fallback = with_set_fallback_for_ident(ctx, &name);
+                return Ok(Expr::WithSet {
+                    object: Box::new(Expr::LocalGet(env_id)),
+                    property: name,
+                    value,
+                    fallback,
+                    strict: ctx.current_strict,
+                });
+            }
             if let Some(id) = ctx.lookup_local(&name) {
                 Ok(Expr::LocalSet(id, value))
             } else if ctx.lookup_class(&name).is_some() || ctx.lookup_func(&name).is_some() {
@@ -277,6 +321,13 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
         ast::Expr::Lit(lit) => lower_lit(lit),
         ast::Expr::Ident(ident) => {
             let name = ident.sym.to_string();
+            let with_envs = ctx.active_with_envs_for_ident(&name);
+            if !with_envs.is_empty() {
+                let saved_with_envs = std::mem::take(&mut ctx.with_env_stack);
+                let fallback = lower_expr(ctx, expr);
+                ctx.with_env_stack = saved_with_envs;
+                return Ok(wrap_with_gets(&name, fallback?, with_envs));
+            }
             if let Some(id) = ctx.lookup_local(&name) {
                 Ok(Expr::LocalGet(id))
             } else if let Some(id) = ctx.lookup_func(&name) {

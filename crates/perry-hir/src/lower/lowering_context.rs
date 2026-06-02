@@ -11,6 +11,12 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ir::*;
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WithEnvFrame {
+    pub(crate) local_id: LocalId,
+    pub(crate) local_mark: usize,
+}
+
 pub struct LoweringContext {
     /// Counter for generating unique local IDs
     pub(crate) next_local_id: LocalId,
@@ -256,6 +262,11 @@ pub struct LoweringContext {
     /// unresolvable identifiers throw ReferenceError, but member receivers are
     /// still allowed to use the existing GlobalGet sentinel path.
     pub(crate) unresolved_ident_as_global: bool,
+    /// Active `with` object environment records. Each frame points at the
+    /// synthetic local that stores the object value and the locals length when
+    /// the frame was entered, so declarations inside the block/function can
+    /// continue to lexically shadow the object environment.
+    pub(crate) with_env_stack: Vec<WithEnvFrame>,
     pub(crate) var_hoisted_ids: HashSet<LocalId>,
     /// Shadow index: function name -> index in `functions` Vec (last entry for shadowing)
     pub(crate) functions_index: HashMap<String, usize>,

@@ -167,6 +167,24 @@ try {
 }
 check(caught, "unresolved assignment evaluates RHS reference before PutValue");
 
+count = 0;
+caught = false;
+var scope = { withPutValueBinding: 1 };
+with (scope) {
+  (function() {
+    "use strict";
+    try {
+      count++;
+      withPutValueBinding = (delete scope.withPutValueBinding, 2);
+      count++;
+    } catch (e) {
+      caught = e instanceof ReferenceError;
+    }
+    count++;
+  })();
+}
+check(caught && count === 2 && !("withPutValueBinding" in scope), "with PutValue rechecks deleted binding in strict mode");
+
 if (failures.length !== 0) {
   throw new Error(failures);
 }

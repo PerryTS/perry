@@ -6,6 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::collectors::{collect_let_ids, collect_ref_ids_in_stmts};
+use perry_hir::WithSetFallback;
 
 /// Determine which local ids in the given statement sequence need
 /// heap-boxed storage. An id gets boxed when:
@@ -957,6 +958,18 @@ fn collect_outer_writes_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) 
             out.insert(*id);
             collect_outer_writes_in_expr(v, out);
         }
+        Expr::WithSet {
+            object,
+            value,
+            fallback,
+            ..
+        } => {
+            if let WithSetFallback::Local(id) | WithSetFallback::SloppyImplicit(id) = fallback {
+                out.insert(*id);
+            }
+            collect_outer_writes_in_expr(object, out);
+            collect_outer_writes_in_expr(value, out);
+        }
         Expr::Update { id, .. } => {
             out.insert(*id);
         }
@@ -1151,6 +1164,18 @@ fn collect_write_ids_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) {
         Expr::LocalSet(id, v) => {
             out.insert(*id);
             collect_write_ids_in_expr(v, out);
+        }
+        Expr::WithSet {
+            object,
+            value,
+            fallback,
+            ..
+        } => {
+            if let WithSetFallback::Local(id) | WithSetFallback::SloppyImplicit(id) = fallback {
+                out.insert(*id);
+            }
+            collect_write_ids_in_expr(object, out);
+            collect_write_ids_in_expr(value, out);
         }
         Expr::Update { id, .. } => {
             out.insert(*id);

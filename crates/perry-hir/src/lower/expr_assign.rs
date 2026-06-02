@@ -14,7 +14,7 @@ use crate::destructuring::lower_destructuring_assignment;
 use crate::ir::{BinaryOp, Expr, LogicalOp};
 use crate::lower_patterns::lower_assign_target_to_expr;
 
-use super::{lower_expr, lower_expr_assignment, LoweringContext};
+use super::{lower_expr, lower_expr_assignment, with_set_fallback_for_ident, LoweringContext};
 
 fn throw_type_error_const_assignment(name: &str) -> Expr {
     Expr::Call {
@@ -300,6 +300,16 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
     match &assign.left {
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) => {
             let name = ident.id.sym.to_string();
+            if let Some(env_id) = ctx.active_with_envs_for_ident(&name).into_iter().next() {
+                let fallback = with_set_fallback_for_ident(ctx, &name);
+                return Ok(Expr::WithSet {
+                    object: Box::new(Expr::LocalGet(env_id)),
+                    property: name,
+                    value,
+                    fallback,
+                    strict: ctx.current_strict,
+                });
+            }
             if let Some(id) = ctx.lookup_local(&name) {
                 if ctx.is_local_immutable(id) {
                     return Ok(throw_type_error_const_assignment(&name));

@@ -1,0 +1,89 @@
+//! Minimal ECMAScript ObjectEnvironmentRecord helpers for `with`.
+//!
+//! The compiler lowers `with (obj) { ident }` reads/writes into explicit
+//! probes of the captured object value. These helpers provide the runtime
+//! pieces that are genuinely dynamic: prototype-chain HasProperty,
+//! `Symbol.unscopables`, property reads, and strict PutValue rechecks.
+
+use super::*;
+use crate::string::{js_string_from_bytes, StringHeader};
+use crate::value::{js_is_truthy, js_nanbox_pointer, js_nanbox_string, JSValue};
+
+fn throw_type_error(message: &'static [u8]) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+#[inline]
+fn key_as_value(key: *const StringHeader) -> f64 {
+    js_nanbox_string(key as i64)
+}
+
+#[inline]
+fn object_ptr(bindings: f64) -> *mut ObjectHeader {
+    let value = JSValue::from_bits(bindings.to_bits());
+    if value.is_null() || value.is_undefined() {
+        throw_type_error(b"Cannot convert undefined or null to object");
+    }
+    if !value.is_pointer() {
+        throw_type_error(b"with object environment requires an object");
+    }
+    let ptr = value.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+    if ptr.is_null() || (ptr as usize) < 0x10000 {
+        throw_type_error(b"with object environment requires an object");
+    }
+    ptr
+}
+
+#[inline]
+fn has_property(bindings: f64, key: *const StringHeader) -> bool {
+    !key.is_null() && js_is_truthy(js_object_has_property(bindings, key_as_value(key))) != 0
+}
+
+#[no_mangle]
+pub extern "C" fn js_with_has_binding(bindings: f64, key: *const StringHeader) -> i32 {
+    if key.is_null() {
+        return 0;
+    }
+    let _ = object_ptr(bindings);
+    if !has_property(bindings, key) {
+        return 0;
+    }
+
+    let unscopables_symbol = crate::symbol::well_known_symbol("unscopables");
+    let unscopables_symbol_value = js_nanbox_pointer(unscopables_symbol as i64);
+    let unscopables =
+        unsafe { crate::symbol::js_object_get_symbol_property(bindings, unscopables_symbol_value) };
+    let unscopables_value = JSValue::from_bits(unscopables.to_bits());
+    if unscopables_value.is_pointer() {
+        let unscopables_ptr = unscopables_value.as_pointer::<ObjectHeader>();
+        let blocked = js_object_get_field_by_name_f64(unscopables_ptr, key);
+        if js_is_truthy(blocked) != 0 {
+            return 0;
+        }
+    }
+
+    1
+}
+
+#[no_mangle]
+pub extern "C" fn js_with_get_binding(bindings: f64, key: *const StringHeader) -> f64 {
+    let ptr = object_ptr(bindings);
+    js_object_get_field_by_name_f64(ptr as *const ObjectHeader, key)
+}
+
+#[no_mangle]
+pub extern "C" fn js_with_set_binding(
+    bindings: f64,
+    key: *const StringHeader,
+    value: f64,
+    strict: i32,
+) -> f64 {
+    let ptr = object_ptr(bindings);
+    if strict != 0 && !has_property(bindings, key) {
+        crate::error::js_throw_reference_error_unresolvable_assignment(key_as_value(key));
+    }
+    js_object_set_field_by_name(ptr, key, value);
+    value
+}

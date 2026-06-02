@@ -5,6 +5,18 @@
 use super::*;
 use perry_types::{FuncId, GlobalId, LocalId, Type};
 
+/// Fallback when a dynamic `with` object environment does not bind the
+/// assignment target. The object lookup is performed before the RHS is
+/// evaluated, matching ECMAScript Reference resolution order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WithSetFallback {
+    Local(LocalId),
+    ThrowReferenceError,
+    ThrowConstAssignment,
+    Ignore,
+    SloppyImplicit(LocalId),
+}
+
 /// Expression
 #[derive(Debug, Clone)]
 pub enum Expr {
@@ -44,6 +56,24 @@ pub enum Expr {
     LocalSet(LocalId, Box<Expr>),
     GlobalGet(GlobalId),
     GlobalSet(GlobalId, Box<Expr>),
+    /// Dynamic object-environment read produced by `with (obj) { name }`.
+    /// If `obj` has a non-unscopable property named `property`, read it;
+    /// otherwise evaluate `fallback` (outer lexical/global resolution).
+    WithGet {
+        object: Box<Expr>,
+        property: String,
+        fallback: Box<Expr>,
+    },
+    /// Dynamic object-environment write produced by `with (obj) { name = v }`.
+    /// Codegen probes the object before lowering `value`; strict PutValue then
+    /// re-checks that the property survived RHS side effects.
+    WithSet {
+        object: Box<Expr>,
+        property: String,
+        value: Box<Expr>,
+        fallback: WithSetFallback,
+        strict: bool,
+    },
 
     // Update (++/--)
     Update {

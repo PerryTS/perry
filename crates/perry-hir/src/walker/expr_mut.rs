@@ -1651,6 +1651,16 @@ where
             f(value);
             f(receiver);
         }
+        Expr::WithGet {
+            object, fallback, ..
+        } => {
+            f(object);
+            f(fallback);
+        }
+        Expr::WithSet { object, value, .. } => {
+            f(object);
+            f(value);
+        }
         Expr::ReflectSetPrototypeOf { target, proto } => {
             f(target);
             f(proto);

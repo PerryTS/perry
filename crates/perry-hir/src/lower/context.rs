@@ -86,6 +86,7 @@ impl LoweringContext {
             suppress_stdlib_dispatch_guard_once: false,
             lowering_call_callee: false,
             unresolved_ident_as_global: false,
+            with_env_stack: Vec::new(),
             var_hoisted_ids: HashSet::new(),
             functions_index: HashMap::new(),
             classes_index: HashMap::new(),
@@ -633,6 +634,34 @@ impl LoweringContext {
             .rev()
             .find(|(n, _, _)| n == name)
             .map(|(_, id, _)| *id)
+    }
+
+    fn lookup_local_index(&self, name: &str) -> Option<usize> {
+        self.locals.iter().rposition(|(n, _, _)| n == name)
+    }
+
+    pub(crate) fn push_with_env(&mut self, local_id: LocalId) {
+        let local_mark = self.locals.len();
+        self.with_env_stack.push(WithEnvFrame {
+            local_id,
+            local_mark,
+        });
+    }
+
+    pub(crate) fn pop_with_env(&mut self) {
+        self.with_env_stack.pop();
+    }
+
+    pub(crate) fn active_with_envs_for_ident(&self, name: &str) -> Vec<LocalId> {
+        let nearest_local_index = self.lookup_local_index(name);
+        let mut envs = Vec::new();
+        for frame in self.with_env_stack.iter().rev() {
+            if nearest_local_index.is_some_and(|idx| idx >= frame.local_mark) {
+                break;
+            }
+            envs.push(frame.local_id);
+        }
+        envs
     }
 
     pub(crate) fn lookup_local_type(&self, name: &str) -> Option<&Type> {
