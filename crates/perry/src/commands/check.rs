@@ -17,6 +17,7 @@ use super::deps::{
 };
 use super::fix_applier::FixApplier;
 use super::fixer::{Confidence, Fixer};
+use super::progress::{ProgressSnapshot, VerboseProgress};
 use crate::OutputFormat;
 
 #[derive(Args, Debug)]
@@ -148,6 +149,7 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
     let mut visited = HashSet::new();
     let mut dep_resolver = DependencyResolver::new(project_root.clone());
     let mut fix_applier = FixApplier::new();
+    let progress = VerboseProgress::new(format, verbose);
     let min_confidence = if args.fix_unsafe {
         Confidence::Medium
     } else {
@@ -178,6 +180,13 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
         let filename = canonical.to_string_lossy().to_string();
 
         // Parse with diagnostics
+        progress.record(ProgressSnapshot {
+            stage: "check-parse",
+            module_path: Some(&canonical),
+            visited: Some(checked_files + 1),
+            total: Some(files.len()),
+            ..Default::default()
+        });
         let parse_result = match perry_parser::parse_typescript_with_cache(
             &source,
             &filename,
@@ -222,7 +231,14 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
 
         // Extract imports from AST even before lowering (for dependency checking)
         if args.check_deps {
-            extract_imports_from_ast(&parse_result.module, &canonical, &mut dep_resolver);
+            extract_imports_from_ast(
+                &parse_result.module,
+                &canonical,
+                &mut dep_resolver,
+                &progress,
+                checked_files + 1,
+                files.len(),
+            );
         }
 
         // Stub scan (#464): warn on imports of `perry/ui` /
@@ -251,6 +267,13 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
         // #503: stash the source text so the dynamic-dispatch check can
         // resolve `// @perry-allow-dynamic` annotations during `perry check`
         // the same way it does during a real build.
+        progress.record(ProgressSnapshot {
+            stage: "check-lower",
+            module_path: Some(&canonical),
+            visited: Some(checked_files + 1),
+            total: Some(files.len()),
+            ..Default::default()
+        });
         perry_hir::set_current_module_source(source.clone());
         let lower_outcome = perry_hir::lower_module(&parse_result.module, &filename, &filename);
         perry_hir::clear_current_module_source();
@@ -533,6 +556,9 @@ fn extract_imports_from_ast(
     module: &perry_parser::swc_ecma_ast::Module,
     file_path: &PathBuf,
     dep_resolver: &mut DependencyResolver,
+    progress: &VerboseProgress,
+    visited: usize,
+    total: usize,
 ) {
     use perry_parser::swc_ecma_ast::{ModuleDecl, ModuleItem};
 
@@ -542,16 +568,40 @@ fn extract_imports_from_ast(
                 ModuleDecl::Import(import) => {
                     // Use as_str() to get &str from the Wtf8Atom
                     let source = import.src.value.as_str().unwrap_or("");
+                    progress.record(ProgressSnapshot {
+                        stage: "check-resolve-import",
+                        module_path: Some(file_path),
+                        import_specifier: Some(source),
+                        visited: Some(visited),
+                        total: Some(total),
+                        ..Default::default()
+                    });
                     dep_resolver.record_import(source, file_path);
                 }
                 ModuleDecl::ExportNamed(export) => {
                     if let Some(src) = &export.src {
                         let source = src.value.as_str().unwrap_or("");
+                        progress.record(ProgressSnapshot {
+                            stage: "check-resolve-import",
+                            module_path: Some(file_path),
+                            import_specifier: Some(source),
+                            visited: Some(visited),
+                            total: Some(total),
+                            ..Default::default()
+                        });
                         dep_resolver.record_import(source, file_path);
                     }
                 }
                 ModuleDecl::ExportAll(export) => {
                     let source = export.src.value.as_str().unwrap_or("");
+                    progress.record(ProgressSnapshot {
+                        stage: "check-resolve-import",
+                        module_path: Some(file_path),
+                        import_specifier: Some(source),
+                        visited: Some(visited),
+                        total: Some(total),
+                        ..Default::default()
+                    });
                     dep_resolver.record_import(source, file_path);
                 }
                 _ => {}

@@ -140,14 +140,21 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::Undefined));
                         }
                         "setSourceMapsEnabled" => {
-                            // #1400: process.setSourceMapsEnabled(bool) —
-                            // toggles runtime source-map resolution in Node.
-                            // Perry compiles AOT and has no resolver to
-                            // toggle, so the call is a no-op returning
-                            // undefined. Without this, framework startup
-                            // code that conditionally enables maps crashes
-                            // on "value is not a function".
-                            return Ok(Ok(Expr::Undefined));
+                            // #1400 / #3108: process.setSourceMapsEnabled(bool)
+                            // toggles the live source-map flag. Perry compiles
+                            // AOT and has no resolver, so the flag drives
+                            // nothing observable — but it round-trips through
+                            // process.sourceMapsEnabled and validates that the
+                            // argument is a boolean (else ERR_INVALID_ARG_TYPE),
+                            // matching Node. Lower to the runtime setter,
+                            // passing the original argument for validation.
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "setSourceMapsEnabled".to_string(),
+                                args,
+                            }));
                         }
                         "getBuiltinModule" => {
                             return Ok(Ok(Expr::NativeMethodCall {
@@ -174,20 +181,24 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::Undefined));
                         }
                         "hasUncaughtExceptionCaptureCallback" => {
-                            // #1406: returns a boolean indicating whether
-                            // a capture callback has been installed via
-                            // setUncaughtExceptionCaptureCallback. Perry
-                            // doesn't expose that hook, so the answer is
-                            // always `false`.
-                            return Ok(Ok(Expr::Bool(false)));
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "hasUncaughtExceptionCaptureCallback".to_string(),
+                                args,
+                            }));
                         }
-                        "setUncaughtExceptionCaptureCallback" => {
-                            // #1406: installs a single callback that
-                            // intercepts uncaught exceptions before they
-                            // reach the `uncaughtException` event. Perry
-                            // doesn't have the hook to install — the call
-                            // is a no-op returning undefined.
-                            return Ok(Ok(Expr::Undefined));
+                        "setUncaughtExceptionCaptureCallback"
+                        | "addUncaughtExceptionCaptureCallback" => {
+                            let method_name = method_ident.sym.as_ref().to_string();
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name,
+                                args,
+                            }));
                         }
                         "loadEnvFile" => {
                             // #1399 / #2135: process.loadEnvFile(path?)
@@ -404,7 +415,7 @@ pub(super) fn try_native_module_methods(
                         "version" => return Ok(Ok(Expr::OsVersion)),
                         "cpus" => return Ok(Ok(Expr::OsCpus)),
                         "networkInterfaces" => return Ok(Ok(Expr::OsNetworkInterfaces)),
-                        "userInfo" => return Ok(Ok(user_info_expr_for_call(call))),
+                        "userInfo" => return Ok(Ok(user_info_expr_for_call(call, args))),
                         "getPriority" | "setPriority" => {
                             return Ok(Ok(Expr::NativeMethodCall {
                                 module: "os".to_string(),
@@ -815,27 +826,26 @@ pub(super) fn try_native_module_methods(
                             )));
                         }
                         "getOwnPropertyDescriptor" => {
-                            // #2144: built-in function `.name` descriptor.
+                            // #2144/#3655: built-in function `.name` /
+                            // `.length` descriptors.
                             //
                             // `Object.getOwnPropertyDescriptor(<BuiltinCtor>,
-                            // "name")` and `…(<BuiltinNs>.<staticFn>, "name")`
-                            // — the runtime path returns `undefined` because
-                            // the bare ctor/static-fn lowers to a
-                            // `PropertyGet { GlobalGet(0), … }` whose value
-                            // is the 0 sentinel (no closure to read the
-                            // built-in `name` slot off of). Per spec the
-                            // descriptor is a non-writable, non-enumerable,
-                            // configurable data property whose value is the
-                            // function's name. Fold to an inline object
-                            // literal when we can statically recognize the
-                            // shape — same gating logic as the `.name` fold
-                            // in `expr_member.rs`.
+                            // "name"|"length")` and
+                            // `…(<BuiltinNs>.<staticFn>, "name"|"length")`
+                            // need a compile-time fold because those builtin
+                            // values are often intrinsic sentinels rather than
+                            // first-class closures. Per spec both descriptors
+                            // are non-writable, non-enumerable, configurable
+                            // data properties. Fold when we can statically
+                            // recognize the receiver shape — same gating logic
+                            // as the direct `.name` / `.length` folds in
+                            // `expr_member.rs`.
                             if call.args.len() >= 2 && args.len() >= 2 {
-                                let key_is_name = matches!(
-                                    call.args[1].expr.as_ref(),
-                                    ast::Expr::Lit(ast::Lit::Str(s)) if s.value.as_str() == Some("name")
-                                );
-                                if key_is_name {
+                                let key_name = match call.args[1].expr.as_ref() {
+                                    ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str(),
+                                    _ => None,
+                                };
+                                if matches!(key_name, Some("name" | "length")) {
                                     let lowered_obj_is_global_intrinsic = match &args[0] {
                                         Expr::GlobalGet(0) => true,
                                         Expr::PropertyGet { object: inner, .. } => {
@@ -844,13 +854,44 @@ pub(super) fn try_native_module_methods(
                                         _ => false,
                                     };
                                     if lowered_obj_is_global_intrinsic {
-                                        let folded = super::name_fold::builtin_fn_name_for_arg(
-                                            call.args[0].expr.as_ref(),
-                                        );
-                                        if let Some(fname) = folded {
-                                            return Ok(Ok(super::name_fold::name_data_descriptor(
-                                                fname,
-                                            )));
+                                        match key_name {
+                                            Some("name") => {
+                                                let folded =
+                                                    super::name_fold::builtin_fn_name_for_arg(
+                                                        call.args[0].expr.as_ref(),
+                                                    );
+                                                if let Some(fname) = folded {
+                                                    return Ok(Ok(
+                                                        super::name_fold::name_data_descriptor(
+                                                            fname,
+                                                        ),
+                                                    ));
+                                                }
+                                            }
+                                            Some("length") => {
+                                                let folded =
+                                                    super::name_fold::builtin_fn_length_for_arg(
+                                                        call.args[0].expr.as_ref(),
+                                                    )
+                                                    .or_else(|| {
+                                                        super::name_fold::builtin_fn_name_for_arg(
+                                                            call.args[0].expr.as_ref(),
+                                                        )
+                                                        .and_then(|name| {
+                                                            crate::analysis::builtin_constructor_length(
+                                                                &name,
+                                                            )
+                                                        })
+                                                    });
+                                                if let Some(len) = folded {
+                                                    return Ok(Ok(
+                                                        super::name_fold::builtin_data_descriptor(
+                                                            Expr::Number(len as f64),
+                                                        ),
+                                                    ));
+                                                }
+                                            }
+                                            _ => {}
                                         }
                                     }
                                 }
@@ -1019,9 +1060,13 @@ pub(super) fn try_native_module_methods(
                             let mut it = args.into_iter();
                             let target = it.next().unwrap_or(Expr::Undefined);
                             let args_arr = it.next().unwrap_or(Expr::Array(vec![]));
+                            // 3rd arg = newTarget; defaults to `undefined` so the
+                            // runtime falls back to the target/proxy itself.
+                            let new_target = it.next().unwrap_or(Expr::Undefined);
                             return Ok(Ok(Expr::ReflectConstruct {
                                 target: Box::new(target),
                                 args: Box::new(args_arr),
+                                new_target: Box::new(new_target),
                             }));
                         }
                         "defineProperty" => {
@@ -1276,6 +1321,9 @@ pub(super) fn try_native_module_methods(
                     // This is a call on a native module (e.g., mysql.createConnection)
                     if let ast::MemberProp::Ident(method_ident) = &member.prop {
                         let method_name = method_ident.sym.to_string();
+                        if module_name == "worker_threads" && method_name == "workerData" {
+                            return Ok(Err(args));
+                        }
                         // Unimplemented-API gate (#463 / #525) for the 2-deep
                         // `mod.method()` call form. Without this, perry/* and
                         // other native-module call sites short-circuited past
@@ -1287,10 +1335,11 @@ pub(super) fn try_native_module_methods(
                         // 3-deep gate above for `mod.X.Y()`.
                         let allow_unimplemented =
                             std::env::var_os("PERRY_ALLOW_UNIMPLEMENTED").is_some();
+                        let manifest_entry =
+                            perry_api_manifest::module_has_symbol(module_name, &method_name);
                         if !allow_unimplemented
                             && perry_api_manifest::module_has_any_entries(module_name)
-                            && perry_api_manifest::module_has_symbol(module_name, &method_name)
-                                .is_none()
+                            && manifest_entry.is_none()
                         {
                             // #925: this is the gate that fires
                             // for `crypto.hmacSha256(data, key)`.
@@ -1309,6 +1358,17 @@ pub(super) fn try_native_module_methods(
                             // if the module survives pruning.
                             if !crate::try_defer_refusal(msg.clone(), member.span.lo.0) {
                                 crate::lower_bail!(member.span, "{}", msg);
+                            }
+                        }
+                        if let Some(entry) = manifest_entry {
+                            if !matches!(
+                                entry.kind,
+                                perry_api_manifest::ApiKind::Method {
+                                    has_receiver: false,
+                                    class_filter: None
+                                }
+                            ) {
+                                return Ok(Err(args));
                             }
                         }
                         let class_name = if module_name == "stream"

@@ -68,7 +68,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ));
             }
             if let Some((submod_key, exported_name)) = ctx.import_function_node_submodule.get(ty) {
-                if submod_key == "diagnostics_channel" && exported_name == "Channel" {
+                if submod_key == "diagnostics_channel"
+                    && matches!(exported_name.as_str(), "Channel" | "BoundedChannel")
+                {
                     let submod_label = emit_string_literal_global(ctx, submod_key);
                     let name_label = emit_string_literal_global(ctx, exported_name);
                     let submod_len = submod_key.len();
@@ -95,6 +97,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // in the runtime (see crates/perry-runtime/src/error.rs). Map
             // them by name here so `e instanceof TypeError` works even
             // though there's no user class definition.
+            let imported_from_fs = ctx
+                .imported_class_sources
+                .get(ty)
+                .map(|source| source.strip_prefix("node:").unwrap_or(source) == "fs")
+                .unwrap_or(false);
             let cid = match ty.as_str() {
                 "Error" => 0xFFFF0001u32,
                 "TypeError" => 0xFFFF0010u32,
@@ -144,6 +151,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // Promise values are raw promise allocations, not ObjectHeader
                 // instances with a class_id field.
                 "Promise" => 0xFFFF0027u32,
+                // WHATWG fetch types. Like Blob/streams these are pointer-tagged
+                // small-int handles; the runtime resolves them via the stdlib
+                // fetch kind-probe (`res instanceof Response`, etc.).
+                "Response" => 0xFFFF0028u32,
+                "Request" => 0xFFFF0029u32,
+                "Headers" => 0xFFFF002Au32,
                 // #1545: Web Streams. Handles are numeric ids; the runtime
                 // resolves these via the stdlib stream-kind probe rather than
                 // the class chain (`ts.readable instanceof ReadableStream`,
@@ -153,13 +166,41 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "TransformStream" => 0xFFFF0062u32,
                 // node:perf_hooks entry classes. Runtime classifies the
                 // shaped entry objects returned by performance.mark/measure.
+                // #3871: Performance / PerformanceObserverEntryList /
+                // PerformanceResourceTiming moved off 0x87/0x88/0x86 (which
+                // collided with fs Dirent/ReadStream/Dir) to 0x8E/0x8F/0x8D.
+                // Keep in sync with perry-runtime/src/perf_hooks.rs.
+                "Performance" => 0xFFFF008Eu32,
                 "PerformanceEntry" => 0xFFFF0080u32,
                 "PerformanceMark" => 0xFFFF0081u32,
                 "PerformanceMeasure" => 0xFFFF0082u32,
+                "PerformanceObserverEntryList" => 0xFFFF008Fu32,
+                "PerformanceResourceTiming" => 0xFFFF008Du32,
                 "Console" => 0xFFFF0083u32,
+                "Event" | "globalThis.Event" => 0xFFFF2403u32,
+                "CustomEvent" | "globalThis.CustomEvent" => 0xFFFF2404u32,
+                "DOMException" | "globalThis.DOMException" => 0xFFFF2405u32,
+                // node:fs constructor exports. Keep these ids in sync with
+                // perry-runtime/src/fs/mod.rs and instanceof.rs.
+                "fs.Dir" => 0xFFFF0086u32,
+                "Dir" if imported_from_fs => 0xFFFF0086u32,
+                "fs.Dirent" => 0xFFFF0087u32,
+                "Dirent" if imported_from_fs => 0xFFFF0087u32,
+                "fs.ReadStream" | "fs.FileReadStream" => 0xFFFF0088u32,
+                "ReadStream" | "FileReadStream" if imported_from_fs => 0xFFFF0088u32,
+                "fs.WriteStream" | "fs.FileWriteStream" => 0xFFFF0089u32,
+                "WriteStream" | "FileWriteStream" if imported_from_fs => 0xFFFF0089u32,
+                "fs.Stats" => 0xFFFF008Au32,
+                "Stats" if imported_from_fs => 0xFFFF008Au32,
+                "fs.Utf8Stream" => 0xFFFF008Bu32,
+                "Utf8Stream" if imported_from_fs => 0xFFFF008Bu32,
                 "ReadStream" | "tty.ReadStream" => 0xFFFF0084u32,
                 "WriteStream" | "tty.WriteStream" => 0xFFFF0085u32,
+                "SecureContext" | "tls.SecureContext" => 0xFFFF00B5u32,
                 "WASI" | "wasi.WASI" => 0xFFFF00B2u32,
+                "Crypto" => 0xFFFF00C0u32,
+                "SubtleCrypto" => 0xFFFF00C1u32,
+                "CryptoKey" => 0xFFFF00C2u32,
                 // `Object` — every non-primitive matches per ECMAScript;
                 // reserved id mapped in the runtime. Pre-#585 this fell
                 // into the `cid = 0` fallback and matched accidentally
@@ -185,6 +226,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let native_event_cid = match ty.as_str() {
                         // Keep in sync with perry-runtime/src/object/instanceof.rs.
                         "EventEmitter" => Some(0xFFFF0076u32),
+                        "EventEmitterAsyncResource" => Some(0xFFFF0077u32),
                         _ => None,
                     };
                     if let Some(cid) = native_event_cid {
@@ -316,7 +358,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
                 _ => {
                     let _ = lower_expr(ctx, operand)?;
-                    Ok(double_literal(1.0))
+                    Ok(ctx
+                        .block()
+                        .bitcast_i64_to_double(crate::nanbox::TAG_TRUE_I64))
                 }
             }
         }
@@ -925,12 +969,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 {
                     let blk = ctx.block();
                     let old = blk.load(DOUBLE, &slot);
+                    let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
                     let new = match op {
-                        BinaryOp::Sub => blk.fsub(&old, "1.0"),
-                        _ => blk.fadd(&old, "1.0"),
+                        BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
+                        _ => blk.fadd(&old_num, "1.0"),
                     };
                     blk.store(DOUBLE, &new, &slot);
-                    return Ok(if *prefix { new } else { old });
+                    return Ok(if *prefix { new } else { old_num });
                 }
             }
             if let Expr::This = object.as_ref() {
@@ -943,12 +988,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 {
                     let blk = ctx.block();
                     let old = blk.load(DOUBLE, &slot);
+                    let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
                     let new = match op {
-                        BinaryOp::Sub => blk.fsub(&old, "1.0"),
-                        _ => blk.fadd(&old, "1.0"),
+                        BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
+                        _ => blk.fadd(&old_num, "1.0"),
                     };
                     blk.store(DOUBLE, &new, &slot);
-                    return Ok(if *prefix { new } else { old });
+                    return Ok(if *prefix { new } else { old_num });
                 }
             }
             let obj_box = lower_expr(ctx, object)?;
@@ -965,15 +1011,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_object_get_field_by_name_f64",
                 &[(I64, &obj_handle), (I64, &key_handle)],
             );
+            let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
             let new = match op {
-                BinaryOp::Sub => blk.fsub(&old, "1.0"),
-                _ => blk.fadd(&old, "1.0"),
+                BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
+                _ => blk.fadd(&old_num, "1.0"),
             };
             blk.call_void(
                 "js_object_set_field_by_name",
                 &[(I64, &obj_handle), (I64, &key_handle), (DOUBLE, &new)],
             );
-            Ok(if *prefix { new } else { old })
+            Ok(if *prefix { new } else { old_num })
         }
 
         // -------- arr[idx]++ / arr[idx]-- / ++arr[idx] / --arr[idx] --------
@@ -1001,16 +1048,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_dyn_index_get",
                 &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
             );
+            let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
             let new = match op {
-                BinaryOp::Sub => blk.fsub(&old, "1.0"),
-                _ => blk.fadd(&old, "1.0"),
+                BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
+                _ => blk.fadd(&old_num, "1.0"),
             };
             blk.call(
                 DOUBLE,
                 "js_dyn_index_set",
                 &[(DOUBLE, &obj_box), (DOUBLE, &idx_box), (DOUBLE, &new)],
             );
-            Ok(if *prefix { new } else { old })
+            Ok(if *prefix { new } else { old_num })
         }
 
         // -------- path.basename --------
@@ -1051,7 +1099,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::JsonParse(text) => {
             let s_box = lower_expr(ctx, text)?;
             let blk = ctx.block();
-            let s_handle = unbox_to_i64(blk, &s_box);
+            // Materialize the operand to a real heap `*StringHeader`. A bare
+            // `unbox_to_i64` passes an SSO short-string's INLINE bytes as the
+            // pointer, and `js_json_parse` then dereferences them as a
+            // StringHeader → SIGSEGV (e.g. `JSON.parse('e' + 'n')`, or any
+            // short runtime/`.slice`-derived string). `js_get_string_pointer_
+            // unified` returns the heap pointer for heap strings and
+            // materializes SSO / number receivers to the heap. Refs #214.
+            let s_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &s_box)]);
             let result_i64 = blk.call(I64, "js_json_parse", &[(I64, &s_handle)]);
             Ok(blk.bitcast_i64_to_double(&result_i64))
         }
@@ -1082,7 +1137,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let packed = extract_array_of_object_shape(ty, ordered_keys.as_deref());
             let s_box = lower_expr(ctx, text)?;
             let blk = ctx.block();
-            let s_handle = unbox_to_i64(blk, &s_box);
+            // Same SSO-materialization fix as the generic JSON.parse arm above:
+            // a raw unbox would pass SSO inline bytes as a StringHeader pointer.
+            let s_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &s_box)]);
             let result_i64 = match packed {
                 Some((packed_bytes, field_count)) if field_count > 0 => {
                     // Emit a per-call-site rodata constant. The IR

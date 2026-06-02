@@ -85,7 +85,13 @@ pub fn is_registered_map(addr: usize) -> bool {
     // Profile (samply, perf-comprehensive): ~5.7% inclusive samples
     // were attributed to is_registered_map's HashSet lookup before
     // this fast path landed.
-    if addr < 0x1000 + crate::gc::GC_HEADER_SIZE {
+    // #4004: small-handle registry ids (Web Fetch, perry-ffi/node:http, timers,
+    // …) are NaN-boxed POINTER_TAG values living below the `0x100000`
+    // small-handle cutoff; they are not heap addresses. Managed Maps are
+    // arena-allocated above it, so reject the whole small-handle band before
+    // dereferencing `addr - GC_HEADER_SIZE` (deref'ing e.g. a 0x40000 fetch
+    // handle reads unmapped memory and segfaults — see is_date_cell_addr).
+    if addr < 0x100000 {
         return false;
     }
     unsafe {
@@ -95,6 +101,27 @@ pub fn is_registered_map(addr: usize) -> bool {
         }
     }
     MAP_REGISTRY.with(|r| r.borrow().contains(&addr))
+}
+
+/// Resolve a NaN-boxed (or raw-i64) `this` receiver to a registered `Map`
+/// pointer, or `None` if the receiver is not a `Map`. Backs the reflective
+/// `Map.prototype.*` thunks so they can perform the spec brand check
+/// (`TypeError` on a non-`Map` receiver) before dispatching. See
+/// `set::set_ptr_from_receiver_bits` for the receiver-extraction rationale.
+pub fn map_ptr_from_receiver_bits(bits: u64) -> Option<*mut MapHeader> {
+    let jsv = crate::value::JSValue::from_bits(bits);
+    let addr = if jsv.is_pointer() {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if bits >> 48 == 0 && bits > 0x10000 {
+        bits as usize
+    } else {
+        return None;
+    };
+    if is_registered_map(addr) {
+        Some(addr as *mut MapHeader)
+    } else {
+        None
+    }
 }
 
 /// Numeric-key index entry: hashed/compared by raw f64 bits only.
@@ -1265,43 +1292,97 @@ pub extern "C" fn js_map_from_array(arr: *const crate::array::ArrayHeader) -> *m
 /// (Maps materialize to their `[k, v]` pair arrays) inside `classify_init`.
 #[no_mangle]
 pub extern "C" fn js_map_from_iterable(value: f64) -> *mut MapHeader {
-    use crate::collection_iter::{classify_init, InitIter};
+    use crate::collection_iter::{constructor_iter, ConstructorIter};
 
     let scope = crate::gc::RuntimeHandleScope::new();
-    let arr_ptr = match classify_init(value) {
-        InitIter::Empty => return js_map_alloc(4),
-        InitIter::Values(p) => p,
-    };
-    let arr_handle = if arr_ptr.is_null() {
-        None
-    } else {
-        Some(scope.root_raw_mut_ptr(arr_ptr))
-    };
-    let map = js_map_alloc(4);
-    let map_handle = scope.root_raw_mut_ptr(map);
-    let Some(arr_handle) = arr_handle.as_ref() else {
-        return map_handle.get_raw_mut_ptr::<MapHeader>();
-    };
-    let len = {
-        let arr = arr_handle.get_raw_const_ptr::<crate::array::ArrayHeader>();
-        crate::array::js_array_length(arr)
-    };
-    for i in 0..len {
-        let entry = {
-            let arr = arr_handle.get_raw_const_ptr::<crate::array::ArrayHeader>();
-            crate::array::js_array_get_f64(arr, i)
-        };
-        // Each yielded value must be an object (array or plain object).
+    let value_handle = scope.root_nanbox_f64(value);
+
+    let adder = crate::collection_iter::require_callable(
+        crate::collection_iter::builtin_prototype_method("Map", "set"),
+        "Map.prototype.set",
+    );
+    let adder = crate::collection_iter::normalize_callable_value(adder);
+    let adder_handle = scope.root_nanbox_f64(adder);
+
+    fn add_entry(
+        map_handle: crate::gc::RuntimeHandle<'_>,
+        adder_handle: crate::gc::RuntimeHandle<'_>,
+        entry: f64,
+        iter_to_close: Option<f64>,
+    ) {
         if !crate::collection_iter::is_entry_object(entry) {
+            if let Some(iter) = iter_to_close {
+                crate::collection_iter::iterator_close(iter);
+            }
             crate::collection_iter::throw_not_entry_object(entry);
         }
         let entry_bits = entry.to_bits() as i64;
-        let key = crate::object::js_object_get_index_polymorphic(entry_bits, 0.0);
-        let val = crate::object::js_object_get_index_polymorphic(entry_bits, 1.0);
-        let map = map_handle.get_raw_mut_ptr::<MapHeader>();
-        js_map_set(map, key, val);
+        let pair = crate::collection_iter::call_capturing_throw(|| {
+            let key = crate::object::js_object_get_index_polymorphic(entry_bits, 0.0);
+            let val = crate::object::js_object_get_index_polymorphic(entry_bits, 1.0);
+            let args = [key, val];
+            let adder = adder_handle.get_nanbox_f64();
+            let map = map_handle.get_raw_mut_ptr::<MapHeader>();
+            if crate::object::is_builtin_map_set_value(adder) {
+                crate::map::js_map_set(map, key, val);
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            } else {
+                let map_value = crate::value::js_nanbox_pointer(map as i64);
+                crate::collection_iter::call_with_this_capturing_throw(adder, map_value, &args)
+                    .unwrap_or_else(|exc| crate::exception::js_throw(exc))
+            }
+        });
+        if let Err(exc) = pair {
+            if let Some(iter) = iter_to_close {
+                crate::collection_iter::iterator_close(iter);
+            }
+            crate::exception::js_throw(exc);
+        }
     }
-    map_handle.get_raw_mut_ptr::<MapHeader>()
+
+    match constructor_iter(value_handle.get_nanbox_f64()) {
+        ConstructorIter::Empty => {
+            let map = js_map_alloc(4);
+            return map;
+        }
+        ConstructorIter::Array(arr_value) => {
+            let arr_handle = scope.root_nanbox_f64(arr_value);
+            let map = js_map_alloc(4);
+            let map_handle = scope.root_raw_mut_ptr(map);
+            let arr_ptr = crate::value::js_nanbox_get_pointer(arr_handle.get_nanbox_f64())
+                as *mut crate::array::ArrayHeader;
+            if !arr_ptr.is_null() {
+                let len = {
+                    let arr = crate::value::js_nanbox_get_pointer(arr_handle.get_nanbox_f64())
+                        as *const crate::array::ArrayHeader;
+                    crate::array::js_array_length(arr)
+                };
+                for i in 0..len {
+                    let entry = {
+                        let arr = crate::value::js_nanbox_get_pointer(arr_handle.get_nanbox_f64())
+                            as *const crate::array::ArrayHeader;
+                        crate::array::js_array_get_f64(arr, i)
+                    };
+                    add_entry(map_handle, adder_handle, entry, None);
+                }
+            }
+            map_handle.get_raw_mut_ptr::<MapHeader>()
+        }
+        ConstructorIter::Iterator(iter) => {
+            let iter_handle = scope.root_nanbox_f64(iter);
+            let map = js_map_alloc(4);
+            let map_handle = scope.root_raw_mut_ptr(map);
+            loop {
+                let iter = iter_handle.get_nanbox_f64();
+                let next = crate::collection_iter::iterator_next_value(iter);
+                let Some(entry) = next else {
+                    break;
+                };
+                add_entry(map_handle, adder_handle, entry, Some(iter));
+            }
+            map_handle.get_raw_mut_ptr::<MapHeader>()
+        }
+    }
 }
 
 // #2770: `js_map_from_iterable` is only invoked from generated LLVM IR

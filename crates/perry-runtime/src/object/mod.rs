@@ -15,15 +15,11 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::RwLock;
 
-// ---------------------------------------------------------------------------
 // Submodules (issue #1103): behavior-preserving split of the former
-// 11.2k-line object.rs. Each submodule does `use super::*;` so the
-// shared state/helpers that remain in this trunk module stay reachable;
-// everything public is re-exported here so no symbol moves in the public
-// surface (all `#[no_mangle]` FFI entry points keep their exact symbol).
-// ---------------------------------------------------------------------------
+// 11.2k-line object.rs. Public re-exports keep FFI symbols stable.
 mod alloc;
 mod arguments;
+mod array_object_ops;
 mod assert;
 mod bigint_dispatch;
 mod buffer_dispatch;
@@ -31,11 +27,15 @@ mod class_constructors;
 mod class_gc_roots;
 mod class_handles;
 mod class_registry;
+mod collection_proto_thunks;
+mod data_view_registry;
 mod delete_rest;
 mod descriptors;
 mod field_get_set;
 mod field_set_by_name;
+mod global_fetch;
 mod global_this;
+mod global_this_tables;
 mod groupby;
 pub(crate) mod has_own_helpers;
 mod instanceof;
@@ -43,13 +43,18 @@ mod native_call_method;
 mod native_module;
 mod native_module_dispatch;
 mod native_module_stream;
+mod object_literal_ops;
 mod object_ops;
+mod object_ops_frozen;
 mod polymorphic_index;
 pub(crate) mod prototype_chain;
+mod prototype_helpers;
 mod reflect_support;
 mod util_types;
+mod websocket_global;
 pub use alloc::*;
 pub use arguments::*;
+pub(crate) use array_object_ops::*;
 pub use assert::*;
 pub(crate) use bigint_dispatch::*;
 pub use buffer_dispatch::*;
@@ -62,19 +67,25 @@ pub(crate) use class_gc_roots::{
     test_seed_class_parent_closure_root,
 };
 pub use class_registry::*;
+pub(crate) use collection_proto_thunks::{is_builtin_map_set_value, is_builtin_set_add_value};
+pub(crate) use data_view_registry::extends_builtin_data_view;
 pub use delete_rest::*;
 pub use descriptors::*;
 pub use field_get_set::*;
 pub use field_set_by_name::*;
 pub use global_this::*;
+pub(crate) use global_this_tables::*;
 pub use groupby::*;
 pub use instanceof::*;
 pub use native_call_method::*;
 pub use native_module::*;
 pub(crate) use native_module_dispatch::*;
 pub(crate) use native_module_stream::*;
+pub use object_literal_ops::*;
 pub use object_ops::*;
+pub use object_ops_frozen::*;
 pub use polymorphic_index::*;
+pub(crate) use prototype_helpers::*;
 pub(crate) use reflect_support::*;
 pub use util_types::*;
 
@@ -86,15 +97,13 @@ static OS_CONSTANTS_ERRNO_CACHE: AtomicU64 = AtomicU64::new(0);
 static OS_CONSTANTS_PRIORITY_CACHE: AtomicU64 = AtomicU64::new(0);
 static OS_CONSTANTS_DLOPEN_CACHE: AtomicU64 = AtomicU64::new(0);
 static GLOBAL_THIS_PTR: AtomicI64 = AtomicI64::new(0);
-// #2145: the `%TypedArray%` intrinsic constructor (a closure) and its
-// `.prototype` (an object). Lazily allocated by
-// `populate_global_this_builtins` so the per-kind typed-array constructors
-// (`Int8Array`, ...) can chain `__proto__` to `%TypedArray%`, and each per-kind
-// `.prototype` carries `OBJ_FLAG_TYPED_ARRAY_PROTO` whose
-// `js_object_get_prototype_of` returns the shared `%TypedArray%.prototype` here.
-// Both are mutable roots scanned by `scan_object_cache_roots_mut`.
+static GLOBAL_THIS_READY: AtomicBool = AtomicBool::new(false);
+// `%TypedArray%` intrinsic constructor/prototype roots used by per-kind typed
+// array constructors and scanned by `scan_object_cache_roots_mut`.
 pub(crate) static TYPED_ARRAY_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
 pub(crate) static TYPED_ARRAY_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static LOCAL_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static SESSION_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
 
 // Overflow field storage for objects that exceed their pre-allocated inline slot count.
 // Keyed by (obj_ptr as usize) -> Vec<JSValue bits> indexed by absolute field_index
@@ -304,6 +313,29 @@ thread_local! {
 #[no_mangle]
 pub extern "C" fn js_implicit_this_get() -> f64 {
     IMPLICIT_THIS.with(|c| f64::from_bits(c.get()))
+}
+
+/// Read implicit `this` using ordinary (non-strict) function binding rules.
+#[no_mangle]
+pub extern "C" fn js_implicit_this_get_sloppy() -> f64 {
+    let value = js_implicit_this_get();
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() || jv.is_null() {
+        return js_get_global_this();
+    }
+    if jv.is_bool() {
+        return crate::builtins::js_boxed_boolean_new(value);
+    }
+    if jv.is_any_string() {
+        return crate::builtins::js_boxed_string_new(value);
+    }
+    let bits = value.to_bits();
+    if jv.is_int32()
+        || (jv.is_number() && ((bits >> 48) != 0 || bits <= crate::gc::GC_HEADER_SIZE as u64))
+    {
+        return crate::builtins::js_boxed_number_new(value);
+    }
+    value
 }
 
 /// Set the implicit `this` and return the previous value.
@@ -1264,6 +1296,8 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         Ordering::Acquire,
         Ordering::Release,
     );
+    visitor.visit_atomic_i64_slot(&LOCAL_STORAGE_PTR, Ordering::Acquire, Ordering::Release);
+    visitor.visit_atomic_i64_slot(&SESSION_STORAGE_PTR, Ordering::Acquire, Ordering::Release);
 }
 
 #[cfg(test)]
@@ -1426,6 +1460,7 @@ pub(crate) fn test_seed_object_cache_roots(object_cache_bits: [u64; 7], global_t
         global_this_ptr,
         Ordering::Release,
     );
+    GLOBAL_THIS_READY.store(true, Ordering::Release);
 }
 
 #[cfg(test)]
@@ -1478,6 +1513,7 @@ pub(crate) fn test_clear_object_cache_roots() {
     );
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinel into scanned GLOBAL_THIS_PTR.
     crate::gc::runtime_store_root_atomic_raw_i64(&GLOBAL_THIS_PTR, 0, Ordering::Release);
+    GLOBAL_THIS_READY.store(false, Ordering::Release);
 }
 
 /// Remove OVERFLOW_FIELDS entry for a freed object pointer.
@@ -1619,6 +1655,13 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }
+    if jsv.is_bigint() {
+        // BigInt is BIGINT_TAG-tagged (not POINTER_TAG), so it bypasses the
+        // pointer brand block below; Node tags it `[object BigInt]`.
+        let bytes = b"[object BigInt]";
+        let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
     let raw_addr = if jsv.is_pointer() {
         (bits & POINTER_MASK) as usize
     } else if bits > 0x1000 && (bits >> 48) == 0 {
@@ -1626,8 +1669,14 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     } else {
         0
     };
+    if raw_addr >= 0x1000 && crate::date::is_date_cell_addr(raw_addr) {
+        let str_ptr = crate::string::js_string_from_bytes(b"[object Date]".as_ptr(), 13);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
     if raw_addr >= 0x1000 && crate::buffer::is_registered_buffer(raw_addr) {
-        let tag = if crate::buffer::is_array_buffer(raw_addr) {
+        let tag = if crate::buffer::crypto_key_meta(raw_addr).is_some() {
+            "CryptoKey"
+        } else if crate::buffer::is_array_buffer(raw_addr) {
             "ArrayBuffer"
         } else if crate::buffer::is_shared_array_buffer(raw_addr) {
             "SharedArrayBuffer"
@@ -1641,7 +1690,59 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }
+    // Map / Set / WeakMap / WeakSet / Promise brands. Node tags these
+    // `[object Map]` / `[object Set]` / `[object WeakMap]` / `[object WeakSet]`
+    // / `[object Promise]`; without per-type detection they fall through to the
+    // generic `[object Object]`. Map/Set are raw-alloc'd (no GcHeader) so detect
+    // via their registries before the GC-header object discrimination below.
+    if raw_addr >= 0x1000 {
+        let tag: Option<&str> = if crate::map::is_registered_map(raw_addr) {
+            Some("Map")
+        } else if crate::set::is_registered_set(raw_addr) {
+            Some("Set")
+        } else if crate::regex::is_regex_pointer(raw_addr as *const u8) {
+            // `Object.prototype.toString.call(/a/)` is `[object RegExp]` (the
+            // brand) — distinct from `/a/.toString()` which is `/a/` (the value).
+            Some("RegExp")
+        } else if crate::symbol::is_registered_symbol(raw_addr) {
+            Some("Symbol")
+        } else if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw_addr) {
+            // Typed arrays are raw-i64 pointers with no brand arm; without this
+            // they fall through to the `is_number()` fallback below (a small
+            // raw-pointer bit pattern reads as a finite f64) → `[object Number]`.
+            Some(crate::typedarray::name_for_kind(kind))
+        } else {
+            None
+        };
+        if let Some(tag) = tag {
+            let formatted = format!("[object {}]", tag);
+            let str_ptr =
+                crate::string::js_string_from_bytes(formatted.as_ptr(), formatted.len() as u32);
+            return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+        }
+    }
+    if let Some(cid) = crate::weakref::weak_class_id_from_receiver(value) {
+        let tag = if cid == crate::weakref::CLASS_ID_WEAKSET {
+            "WeakSet"
+        } else {
+            "WeakMap"
+        };
+        let formatted = format!("[object {}]", tag);
+        let str_ptr =
+            crate::string::js_string_from_bytes(formatted.as_ptr(), formatted.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
+    if crate::promise::js_value_is_promise(value) != 0 {
+        let str_ptr = crate::string::js_string_from_bytes(b"[object Promise]".as_ptr(), 16);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
     if let Some(tag) = web_stream_to_string_tag(value) {
+        let formatted = format!("[object {}]", tag);
+        let bytes = formatted.as_bytes();
+        let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
+    if let Some(tag) = crate::builtins::boxed_primitive_to_string_tag(value) {
         let formatted = format!("[object {}]", tag);
         let bytes = formatted.as_bytes();
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
@@ -1649,6 +1750,13 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     }
     if jsv.is_int32() || jsv.is_number() {
         let bytes = b"[object Number]";
+        let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
+    // A Date is a NaN-boxed pointer to a `DateCell` (#2089). Node tags it
+    // `[object Date]`; without this it falls through to `[object Object]`.
+    if crate::date::is_date_value(value) {
+        let bytes = b"[object Date]";
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }
@@ -1662,7 +1770,16 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         let gc_header = raw_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
         if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
-            let bytes = b"[object Array]";
+            // #3553: a function's `arguments` object is represented as an array
+            // carrying the GC_ARRAY_ARGUMENTS_OBJECT flag. Node tags it
+            // `[object Arguments]`, not `[object Array]`.
+            let bytes: &[u8] = if crate::array::array_has_arguments_object_flag(
+                raw_addr as *const crate::array::ArrayHeader,
+            ) {
+                b"[object Arguments]"
+            } else {
+                b"[object Array]"
+            };
             let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
             return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
         }
@@ -1730,6 +1847,8 @@ fn native_module_to_string_tag(module: &str) -> Option<&'static str> {
         // `Object.prototype.toString.call(performance)` is
         // "[object Performance]" in Node.
         "perf_hooks" => Some("Performance"),
+        "crypto.webcrypto" => Some("Crypto"),
+        "crypto.subtle" => Some("SubtleCrypto"),
         _ => None,
     }
 }

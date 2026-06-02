@@ -100,10 +100,12 @@ pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
         // from being mis-driven as sync iterators.
         _ => {
             let iter = crate::symbol::js_get_iterator(val_f64);
-            let arr = if iter.to_bits() != val_f64.to_bits() || has_named_next(iter) {
+            let arr = if iter.to_bits() != val_f64.to_bits() {
                 js_iterator_to_array(iter)
             } else if let Some(async_iter) = call_symbol_async_iterator(val_f64) {
                 js_async_iterator_to_array(async_iter)
+            } else if has_named_next(iter) {
+                js_iterator_to_array(iter)
             } else {
                 js_iterator_to_array(iter)
             };

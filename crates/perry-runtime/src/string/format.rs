@@ -48,7 +48,23 @@ pub extern "C" fn js_number_to_string(value: f64) -> *mut StringHeader {
     }
 
     // Format the number as a string per JS semantics.
-    let s = if value.is_nan() {
+    let s = js_format_f64(value);
+
+    let bytes = s.as_bytes();
+    js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+}
+
+/// ECMAScript `Number::toString` formatting, returning the Rust `String`.
+///
+/// Shared by `js_number_to_string` (the `.toString()` path) and the
+/// string-concat fast paths so `String(n)`, `"" + n`, and `` `${n}` `` all
+/// match Node — notably scientific notation when `|n| >= 1e21` or
+/// `|n| < 1e-6` (#3987). Previously the concat fast paths used a bare
+/// `format!("{}", n)`, which emits the full decimal form (e.g.
+/// `1000000000000000000000` for `1e21`) and could even truncate
+/// `Number.MAX_VALUE`'s ~309-digit decimal into a fixed stack buffer.
+pub(crate) fn js_format_f64(value: f64) -> String {
+    if value.is_nan() {
         "NaN".to_string()
     } else if value.is_infinite() {
         if value > 0.0 {
@@ -74,10 +90,7 @@ pub extern "C" fn js_number_to_string(value: f64) -> *mut StringHeader {
         } else {
             format!("{}", value)
         }
-    };
-
-    let bytes = s.as_bytes();
-    js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+    }
 }
 
 /// GC root scanner for the small-integer string cache.

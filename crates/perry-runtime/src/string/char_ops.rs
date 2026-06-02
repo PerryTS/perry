@@ -68,6 +68,73 @@ pub extern "C" fn js_string_char_code_at(s: *const StringHeader, index: i32) -> 
     f64::NAN
 }
 
+/// `s[key]` indexed read with ECMAScript CanonicalNumericIndexString semantics
+/// (#3987): returns the single-UTF-16-code-unit string at `key` only when `key`
+/// is a canonical array index — a non-negative integer (or a numeric string
+/// that round-trips, e.g. `"1"`) within `[0, length)`. Every other key returns
+/// `undefined`: `NaN`, `Infinity`, negatives, fractions like `1.5`,
+/// out-of-range indices, non-canonical strings like `"01"` / `" 1"` / `"1.0"`,
+/// and non-numeric keys. Previously codegen `fptosi`'d the key and called
+/// `js_string_char_at`, which truncated `1.5`→`1`, mapped `NaN`→`0`, returned
+/// `""` (not `undefined`) for OOB/negatives, and mis-resolved string keys.
+#[no_mangle]
+pub extern "C" fn js_string_index_get(s: *const StringHeader, key: f64) -> f64 {
+    const UNDEFINED: f64 = f64::from_bits(crate::value::TAG_UNDEFINED);
+    if !is_valid_string_ptr(s) {
+        return UNDEFINED;
+    }
+    let len = unsafe { (*s).utf16_len } as u64;
+    let jsval = crate::value::JSValue::from_bits(key.to_bits());
+
+    let idx: u64 = if jsval.is_int32() {
+        let i = jsval.as_int32();
+        if i < 0 {
+            return UNDEFINED;
+        }
+        i as u64
+    } else if jsval.is_number() {
+        // Real double: only a finite, non-negative integer is an array index.
+        if !key.is_finite() || key < 0.0 || key.fract() != 0.0 {
+            return UNDEFINED;
+        }
+        key as u64 // saturating; an out-of-range magnitude fails the bound below
+    } else if jsval.is_any_string() {
+        match crate::builtins::jsvalue_string_content(key).and_then(|k| canonical_string_index(&k))
+        {
+            Some(i) => i,
+            None => return UNDEFINED,
+        }
+    } else {
+        return UNDEFINED;
+    };
+
+    if idx >= len {
+        return UNDEFINED;
+    }
+    let ptr = js_string_char_at(s, idx as i32);
+    crate::value::js_nanbox_string(ptr as i64)
+}
+
+/// Parse a property-key string into a canonical array index per
+/// `CanonicalNumericIndexString`: the string must equal the exact `ToString` of
+/// the resulting non-negative integer, so `"0"`→0 and `"12"`→12 are canonical
+/// but `"01"`, `"1.0"`, `"+1"`, `" 1"`, `"1e0"`, and `""` are not. Indices must
+/// be below `2^32 - 1` (the array-index ceiling).
+fn canonical_string_index(s: &str) -> Option<u64> {
+    if s == "0" {
+        return Some(0);
+    }
+    let bytes = s.as_bytes();
+    if bytes.is_empty() || bytes[0] == b'0' || !bytes.iter().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n: u64 = s.parse().ok()?;
+    if n >= u32::MAX as u64 {
+        return None;
+    }
+    Some(n)
+}
+
 /// Get character at UTF-16 code unit index (returns single-character string).
 /// For a BMP character this returns the character itself; for a surrogate half
 /// of an astral character this returns the lone surrogate (matching JS behavior).

@@ -89,6 +89,7 @@ pub(super) unsafe fn alloc_old_test_error() -> *mut crate::error::ErrorHeader {
         crate::error::ErrorHeader {
             object_type: crate::error::OBJECT_TYPE_ERROR,
             error_kind: crate::error::ERROR_KIND_ERROR,
+            flags: 0,
             message: std::ptr::null_mut(),
             name: std::ptr::null_mut(),
             stack: std::ptr::null_mut(),

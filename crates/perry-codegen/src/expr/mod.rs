@@ -276,6 +276,8 @@ pub(crate) struct FnCtx<'a> {
     /// `Stmt::Return(value)` wraps `value` in `js_promise_resolved`
     /// before returning, so callers can `await` the result.
     pub is_async_fn: bool,
+    /// Whether `this` reads should preserve exact strict-mode receiver values.
+    pub is_strict_fn: bool,
     /// Static class fields: `(class_name, field_name) → llvm global
     /// symbol`. Built once in `compile_module`. Used by
     /// `Expr::StaticFieldGet/Set` to load/store the global.
@@ -1378,7 +1380,7 @@ mod objects_arrays_lit;
 mod os_uri_dates;
 mod property_get;
 mod property_set;
-mod proxy_reflect;
+pub(crate) mod proxy_reflect;
 mod static_field_meta;
 mod static_method;
 mod string_regex_proc;
@@ -1444,6 +1446,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::MathLog1p(..)
         | Expr::MathRandom
         | Expr::WebAssemblyValidate(..)
+        | Expr::WebAssemblyCompile(..)
+        | Expr::WebAssemblyModuleNew(..)
+        | Expr::WebAssemblyModuleExports(..)
+        | Expr::WebAssemblyModuleImports(..)
+        | Expr::WebAssemblyModuleCustomSections { .. }
         | Expr::WebAssemblyInstantiate(..)
         | Expr::WebAssemblyCallExport { .. }
         | Expr::JsonStringifyFull(..)
@@ -1620,6 +1627,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ProcessOnce { .. }
         | Expr::ProcessStdinSetRawMode(..)
         | Expr::ProcessStdinOn { .. }
+        | Expr::ProcessStdinRemoveListener { .. }
+        | Expr::ProcessStdinLifecycle(..)
         | Expr::ProcessStdoutOn { .. }
         | Expr::TtyIsAtty(..)
         | Expr::ProcessStdinIsTTY
@@ -1815,7 +1824,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ProcessPid
         | Expr::ProcessPpid
         | Expr::ProcessArgv
-        | Expr::StructuredClone(..)
+        | Expr::StructuredClone { .. }
         | Expr::WeakRefNew(..) => env_clones::lower(ctx, expr),
         Expr::FsUnlinkSync(..) | Expr::Await(..) => fs_await::lower(ctx, expr),
         Expr::StaticFieldGet { .. }
@@ -1877,9 +1886,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ReflectGetMetadataKeys { .. }
         | Expr::ReflectGetOwnMetadataKeys { .. }
         | Expr::ReflectDeleteMetadata { .. } => proxy_reflect::lower(ctx, expr),
-        Expr::DynamicImport { .. } | Expr::ExternFuncRef { .. } | Expr::I18nString { .. } => {
-            dyn_extern_i18n::lower(ctx, expr)
-        }
+        Expr::DynamicImport { .. }
+        | Expr::WorkerNew { .. }
+        | Expr::ExternFuncRef { .. }
+        | Expr::I18nString { .. } => dyn_extern_i18n::lower(ctx, expr),
         Expr::ChildProcessExecSync { .. }
         | Expr::ChildProcessSpawnSync { .. }
         | Expr::ChildProcessSpawnBackground { .. }

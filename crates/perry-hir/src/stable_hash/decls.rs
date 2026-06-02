@@ -219,6 +219,7 @@ impl SH for Function {
             body,
             is_async,
             is_generator,
+            is_strict,
             is_exported,
             captures,
             decorators,
@@ -233,6 +234,7 @@ impl SH for Function {
         body.hash(h);
         is_async.hash(h);
         is_generator.hash(h);
+        is_strict.hash(h);
         is_exported.hash(h);
         captures.hash(h);
         decorators.hash(h);

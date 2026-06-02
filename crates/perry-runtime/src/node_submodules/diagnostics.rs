@@ -43,7 +43,7 @@ use super::*;
 //   - `channel(name)` mirrors the same shape with `hasSubscribers: false`
 //     and a `publish` no-op — same minimal "satisfies type probe" goal.
 //
-// Other entries (`subscribe`, `unsubscribe`, `publish`, `hasSubscribers`)
+// Other entries (`subscribe`, `unsubscribe`, `hasSubscribers`)
 // surface as no-op thrower thunks the same way the other submodules do —
 // real-tracing semantics are a follow-up under #793.
 
@@ -63,13 +63,14 @@ pub(crate) enum DiagChannelKey {
 
 /// The `transform` argument remembered by `bindStore(store, transform)`.
 ///
-/// Node distinguishes three cases (#3085): an omitted/`undefined` transform
-/// (the store context is just the published `data`), a callable transform
-/// (its return value becomes the context), and a *non-callable, non-undefined*
-/// transform value (`null`, a number, a string, …). The last case is retained
-/// — during `runStores` Node attempts to call it, fails, runs the callback
-/// with no store context, and reports an uncaught `TypeError: transform is not
-/// a function`. Discarding it (treating it like `undefined`) was the bug.
+/// Node distinguishes three cases (#3085): an omitted/`undefined`/`null`
+/// transform (the store context is just the published `data`), a callable
+/// transform (its return value becomes the context), and a *non-callable,
+/// non-nullish* transform value (a number, a string, …). The last case is
+/// retained — during `runStores` Node attempts to call it, fails, runs the
+/// callback with no store context, and reports an uncaught
+/// `TypeError: transform is not a function`. Discarding it (treating it like
+/// `undefined`) was the bug.
 #[derive(Clone, Copy)]
 pub(crate) enum StoreTransform {
     /// No transform: context is the published `data` value.
@@ -413,6 +414,8 @@ pub fn error_code_for_message(message_ptr: *const StringHeader) -> Option<&'stat
 thread_local! {
     pub(crate) static ERROR_MESSAGE_SYSCALLS: RefCell<HashMap<usize, &'static str>> =
         RefCell::new(HashMap::new());
+    pub(crate) static ERROR_MESSAGE_ERRNOS: RefCell<HashMap<usize, i32>> =
+        RefCell::new(HashMap::new());
     pub(crate) static ERROR_MESSAGE_PATHS: RefCell<HashMap<usize, String>> =
         RefCell::new(HashMap::new());
     pub(crate) static ERROR_MESSAGE_DESTS: RefCell<HashMap<usize, String>> =
@@ -436,6 +439,24 @@ pub fn error_syscall_for_message(message_ptr: *const StringHeader) -> Option<&'s
         return None;
     }
     ERROR_MESSAGE_SYSCALLS.with(|m| m.borrow().get(&(message_ptr as usize)).copied())
+}
+
+/// Attach a Node-style negative libuv errno to an Error keyed by its message
+/// StringHeader. Read back from the `.errno` getter in `field_get_set`.
+pub fn register_error_errno(message_ptr: *const StringHeader, errno: i32) {
+    if message_ptr.is_null() {
+        return;
+    }
+    ERROR_MESSAGE_ERRNOS.with(|m| {
+        m.borrow_mut().insert(message_ptr as usize, errno);
+    });
+}
+
+pub fn error_errno_for_message(message_ptr: *const StringHeader) -> Option<i32> {
+    if message_ptr.is_null() {
+        return None;
+    }
+    ERROR_MESSAGE_ERRNOS.with(|m| m.borrow().get(&(message_ptr as usize)).copied())
 }
 
 /// Attach a Node-style `path` string to an Error keyed by its message
@@ -744,6 +765,7 @@ pub(crate) fn update_channel_active(id: i64) {
         }
     });
     update_all_tracing_active();
+    super::diagnostics_tail::update_all_bounded_active();
 }
 
 pub(crate) fn update_all_tracing_active() {
@@ -825,7 +847,7 @@ pub(crate) fn ensure_channel(name: f64) -> i64 {
     }
     evict_inactive_diag_channels_if_needed();
     let id = next_diag_id();
-    let obj = js_object_alloc(0, 9);
+    let obj = js_object_alloc(0, 10);
     let has_global_subscribers = global_active_count(&key) > 0;
     set_field_value(obj, "name", name);
     set_field_value(obj, "hasSubscribers", bool_value(has_global_subscribers));
@@ -855,6 +877,11 @@ pub(crate) fn ensure_channel(name: f64) -> i64 {
         method_closure(cast1(diag_channel_unbind_store), 1, id),
     );
     set_field_value(obj, "runStores", run_stores_method_closure(id));
+    // Node's diagnostics_channel Channel prototype is exactly
+    // {subscribe, unsubscribe, publish, bindStore, unbindStore, runStores,
+    // hasSubscribers} — there is no `withStoreScope`. Exposing one made
+    // `typeof ch.withStoreScope` "function" where Node has "undefined" and let
+    // `using scope = ch.withStoreScope(...)` run instead of throwing.
     DIAG_CHANNEL_BY_KEY.with(|m| {
         m.borrow_mut().insert(key, id);
     });
@@ -1081,10 +1108,13 @@ pub(crate) extern "C" fn diag_channel_bind_store(
 ) -> f64 {
     ensure_subscriber_owner_thread();
     let id = method_id(closure);
-    // An omitted or explicit `undefined` transform is the no-transform case;
-    // a callable is stored as-is; any other value is remembered as a
-    // non-callable transform so `runStores` can reproduce Node's uncaught
-    // `TypeError: transform is not a function` (#3085).
+    // Only an omitted or explicit `undefined` transform is the no-transform
+    // case; a callable is stored as-is; ANY other value — including `null` —
+    // is remembered as a non-callable transform so `runStores` reproduces
+    // Node's uncaught `TypeError: transform is not a function` (verified
+    // against Node v25.x: `bindStore(s, null)` throws when runStores invokes
+    // it, leaving the store unset, whereas `bindStore(s, undefined)` passes
+    // the data through).
     let transform = if transform.to_bits() == TAG_UNDEFINED {
         StoreTransform::None
     } else if valid_closure_value(transform) {
@@ -1559,6 +1589,10 @@ pub(crate) extern "C" fn diag_trace_promise(
             return result;
         }
     } else {
+        // Node's `tracePromise` does `Promise.resolve(fn())`, so a non-thenable
+        // return value is wrapped in an already-resolved promise: `asyncStart`
+        // and `asyncEnd` still publish, mirroring the fulfilled-promise path
+        // above (start, end, asyncStart, asyncEnd).
         publish_channel(events[1], context);
         set_field_value(
             crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader,

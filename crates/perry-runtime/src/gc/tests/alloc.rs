@@ -652,6 +652,7 @@ fn alloc_malloc_kind_test_object(obj_type: u8) -> *mut u8 {
                     crate::error::ErrorHeader {
                         object_type: crate::error::OBJECT_TYPE_ERROR,
                         error_kind: crate::error::ERROR_KIND_ERROR,
+                        flags: 0,
                         message: std::ptr::null_mut(),
                         name: std::ptr::null_mut(),
                         stack: std::ptr::null_mut(),

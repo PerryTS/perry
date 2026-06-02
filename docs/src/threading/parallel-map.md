@@ -45,6 +45,11 @@ The mapping function can reference variables from the outer scope. Captured valu
 | `const` variables | Yes | Copied |
 | `let`/`var` variables | Only if not reassigned | Copied |
 
+Numeric fds and `fs.promises.FileHandle` objects are thread-affine. A captured fd
+is not registered in worker threads, and a captured `FileHandle` is detached
+with `fd === -1`. For file-backed parallel work, capture path strings and open
+the file inside the mapper.
+
 ### What Cannot Be Captured
 
 Mutable variables — variables that are reassigned anywhere in the enclosing scope — are rejected at compile time:

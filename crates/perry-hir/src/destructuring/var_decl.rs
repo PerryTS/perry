@@ -2,12 +2,23 @@
 
 use super::*;
 
+fn is_global_this_value(expr: &Expr) -> bool {
+    matches!(expr, Expr::GlobalGet(_))
+        || matches!(
+            expr,
+            Expr::PropertyGet { object, property }
+                if matches!(object.as_ref(), Expr::GlobalGet(_))
+                    && property == "globalThis"
+        )
+}
+
 /// Lower a variable declaration, handling array destructuring patterns.
 /// Returns a vector of statements (multiple for destructuring, single for simple bindings).
 pub(crate) fn lower_var_decl_with_destructuring(
     ctx: &mut LoweringContext,
     decl: &ast::VarDeclarator,
     mutable: bool,
+    is_var_decl: bool,
 ) -> Result<Vec<Stmt>> {
     let mut result = Vec::new();
 
@@ -101,6 +112,11 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 ty = Type::Named("TextEncoder".to_string());
                             } else if class_name == "TextDecoder" {
                                 ty = Type::Named("TextDecoder".to_string());
+                            } else if matches!(
+                                class_name,
+                                "EventTarget" | "Event" | "CustomEvent" | "DOMException"
+                            ) {
+                                ty = Type::Named(class_name.to_string());
                             } else if matches!(
                                 class_name,
                                 "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
@@ -215,46 +231,52 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         let user_class_defined = ctx.classes_index.contains_key(class_name)
                             || ctx.pending_classes.iter().any(|c| c.name == class_name);
                         // First try the general native module lookup (covers all imported native classes)
-                        let module_name = if let Some((m, _)) = ctx.lookup_native_module(class_name)
-                        {
-                            Some(m.to_string())
-                        } else if user_class_defined {
-                            None
-                        } else {
-                            // Fallback to hardcoded map for known classes.
-                            // Pool/Client/MongoClient are intentionally NOT
-                            // listed here: those names collide with user
-                            // classes and TS-source npm packages (e.g.
-                            // `@perryts/mysql` exports its own `Pool`), so
-                            // an unconditional mapping misclassified them
-                            // as `pg`/`mongodb` and routed `.query()` /
-                            // `.end()` to `js_pg_*` runtime symbols that
-                            // don't exist in user TS code, failing at link
-                            // time. The legitimate `import { Pool } from
-                            // "pg"` flow is caught by the general lookup
-                            // above. (Issue #536.)
-                            match class_name {
-                                "EventEmitter" => Some("events".to_string()),
-                                "AsyncLocalStorage" => Some("async_hooks".to_string()),
-                                "AsyncResource" => Some("async_hooks".to_string()),
-                                // #2875: explicit-resource-management stacks.
-                                // Registering the binding as a native instance
-                                // routes `stack.use/.adopt/.defer/.dispose/
-                                // .move/.disposed` through the
-                                // `__disposable__` dispatch rows.
-                                "DisposableStack" | "AsyncDisposableStack" => {
-                                    Some("__disposable__".to_string())
+                        let module_name =
+                            if let Some((m, method)) = ctx.lookup_native_module(class_name) {
+                                match (m, method) {
+                                    ("url", Some("URL" | "URLSearchParams"))
+                                    | ("util", Some("TextEncoder" | "TextDecoder")) => None,
+                                    _ => Some(m.to_string()),
                                 }
-                                "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
-                                "Redis" => Some("ioredis".to_string()),
-                                "LRUCache" => Some("lru-cache".to_string()),
-                                "Command" => Some("commander".to_string()),
-                                "Big" => Some("big.js".to_string()),
-                                "Decimal" => Some("decimal.js".to_string()),
-                                "BigNumber" => Some("bignumber.js".to_string()),
-                                _ => None,
-                            }
-                        };
+                            } else if user_class_defined {
+                                None
+                            } else {
+                                // Fallback to hardcoded map for known classes.
+                                // Pool/Client/MongoClient are intentionally NOT
+                                // listed here: those names collide with user
+                                // classes and TS-source npm packages (e.g.
+                                // `@perryts/mysql` exports its own `Pool`), so
+                                // an unconditional mapping misclassified them
+                                // as `pg`/`mongodb` and routed `.query()` /
+                                // `.end()` to `js_pg_*` runtime symbols that
+                                // don't exist in user TS code, failing at link
+                                // time. The legitimate `import { Pool } from
+                                // "pg"` flow is caught by the general lookup
+                                // above. (Issue #536.)
+                                match class_name {
+                                    "EventEmitter" | "EventEmitterAsyncResource" => {
+                                        Some("events".to_string())
+                                    }
+                                    "AsyncLocalStorage" => Some("async_hooks".to_string()),
+                                    "AsyncResource" => Some("async_hooks".to_string()),
+                                    // #2875: explicit-resource-management stacks.
+                                    // Registering the binding as a native instance
+                                    // routes `stack.use/.adopt/.defer/.dispose/
+                                    // .move/.disposed` through the
+                                    // `__disposable__` dispatch rows.
+                                    "DisposableStack" | "AsyncDisposableStack" => {
+                                        Some("__disposable__".to_string())
+                                    }
+                                    "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
+                                    "Redis" => Some("ioredis".to_string()),
+                                    "LRUCache" => Some("lru-cache".to_string()),
+                                    "Command" => Some("commander".to_string()),
+                                    "Big" => Some("big.js".to_string()),
+                                    "Decimal" => Some("decimal.js".to_string()),
+                                    "BigNumber" => Some("bignumber.js".to_string()),
+                                    _ => None,
+                                }
+                            };
                         // Issue #848: StringDecoder dispatches entirely through
                         // HANDLE_*_DISPATCH; don't register as a typed native
                         // instance (see the mirroring gate in lower.rs).
@@ -291,6 +313,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         | ("http", "Agent")
                                         | ("https", "Agent")
                                         | ("dns" | "dns/promises", "Resolver")
+                                        | ("sqlite", "DatabaseSync")
                                 );
                                 if is_known_native_class {
                                     let (mod_for_class, cls_for_class) = if class_name == "Agent" {
@@ -365,13 +388,19 @@ pub(crate) fn lower_var_decl_with_destructuring(
                             // in the fallback map — see the sync `new` arm
                             // above for the rationale (issue #536).
                             let module_name =
-                                if let Some((m, _)) = ctx.lookup_native_module(class_name) {
-                                    Some(m.to_string())
+                                if let Some((m, method)) = ctx.lookup_native_module(class_name) {
+                                    match (m, method) {
+                                        ("url", Some("URL" | "URLSearchParams"))
+                                        | ("util", Some("TextEncoder" | "TextDecoder")) => None,
+                                        _ => Some(m.to_string()),
+                                    }
                                 } else if user_class_defined {
                                     None
                                 } else {
                                     match class_name {
-                                        "EventEmitter" => Some("events".to_string()),
+                                        "EventEmitter" | "EventEmitterAsyncResource" => {
+                                            Some("events".to_string())
+                                        }
                                         "AsyncLocalStorage" => Some("async_hooks".to_string()),
                                         "AsyncResource" => Some("async_hooks".to_string()),
                                         "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
@@ -680,6 +709,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                                 ("mysql2" | "mysql2/promise", "getConnection") => {
                                                     Some("PoolConnection")
                                                 }
+                                                ("better-sqlite3", "prepare") => Some("Statement"),
+                                                ("sqlite", "prepare") => Some("StatementSync"),
+                                                ("sqlite", "createSession") => Some("Session"),
                                                 _ => None,
                                             };
                                         if let Some(class_name) = returns_handle {
@@ -865,7 +897,8 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     }
                 }
 
-                // Web Fetch API: new Response(...) / new Headers(...) / new Request(...)
+                // Web Fetch API: new Response(...) / new Headers(...) /
+                // new Request(...) / new FormData(...)
                 // Also handle Response.json(...) and Response.redirect(...) static factories.
                 if let ast::Expr::New(new_expr) = init_expr.as_ref() {
                     if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
@@ -891,6 +924,14 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     name.clone(),
                                     "Request".to_string(),
                                     "Request".to_string(),
+                                );
+                                ctx.uses_fetch = true;
+                            }
+                            "FormData" => {
+                                ctx.register_native_instance(
+                                    name.clone(),
+                                    "FormData".to_string(),
+                                    "FormData".to_string(),
                                 );
                                 ctx.uses_fetch = true;
                             }
@@ -1404,25 +1445,34 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     *existing_ty = ty.clone();
                 }
                 id
-            } else if ctx.var_hoisted_ids.iter().any(|hid| {
-                // Issue #838 followup (b): when the closure-body hoist
-                // in `lower_fn_expr` / `lower_arrow` pre-registered this
-                // `var` (so forward references like `var O = function(){
-                // … _ … }; var _ = …;` resolve before `_`'s let runs),
-                // reuse that pre-hoisted id here. Otherwise the let
-                // defines a fresh id and the pre-hoisted slot stays
-                // uninitialised — closures created before the let see
-                // value-zero through the capture box and dispatch
-                // misses entirely. dayjs's outer IIFE hits this with
-                // `var O = function(t){ return new _(n); }; var _ = ((
-                // function(){ function M(){…}; … return M; })());`.
-                ctx.locals
-                    .iter()
-                    .any(|(n, lid, _)| n == &name && lid == hid)
-            }) {
-                let id = ctx.lookup_local(&name).unwrap();
+            } else if let Some(id) = is_var_decl
+                .then(|| {
+                    // Issue #838 followup (b): when the closure-body hoist
+                    // in `lower_fn_expr` / `lower_arrow` pre-registered this
+                    // `var` (so forward references like `var O = function(){
+                    // … _ … }; var _ = …;` resolve before `_`'s let runs),
+                    // reuse that pre-hoisted id here. Otherwise the let
+                    // defines a fresh id and the pre-hoisted slot stays
+                    // uninitialised — closures created before the let see
+                    // value-zero through the capture box and dispatch
+                    // misses entirely. dayjs's outer IIFE hits this with
+                    // `var O = function(t){ return new _(n); }; var _ = ((
+                    // function(){ function M(){…}; … return M; })());`.
+                    //
+                    // Restrict this path to syntactic `var`. A block-scoped
+                    // `let`/`const` with the same name must create a fresh
+                    // lexical binding, and using `lookup_local(name)` here
+                    // would accidentally grab a shadowing catch parameter.
+                    ctx.locals
+                        .iter()
+                        .rev()
+                        .find(|(n, lid, _)| n == &name && ctx.var_hoisted_ids.contains(lid))
+                        .map(|(_, lid, _)| *lid)
+                })
+                .flatten()
+            {
                 if let Some((_, _, existing_ty)) =
-                    ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)
+                    ctx.locals.iter_mut().rev().find(|(_, lid, _)| *lid == id)
                 {
                     *existing_ty = ty.clone();
                 }
@@ -1430,6 +1480,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
             } else {
                 ctx.define_local(name.clone(), ty.clone())
             };
+            if !mutable {
+                ctx.mark_local_immutable(id);
+            }
             // Issue #886: detect `let/const/var <name> = Object.<staticMethod>`
             // from the raw AST so a subsequent indirect call `<name>(args)`
             // can route to the dedicated HIR variant the literal
@@ -1570,11 +1623,22 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         }
                     }
                     Expr::PropertyGet { object, property }
-                        if matches!(object.as_ref(), Expr::GlobalGet(_))
-                            && matches!(property.as_str(), "Blob" | "File") =>
+                        if is_global_this_value(object.as_ref())
+                            && matches!(
+                                property.as_str(),
+                                "URL"
+                                    | "URLSearchParams"
+                                    | "TextEncoder"
+                                    | "TextDecoder"
+                                    | "Blob"
+                                    | "File"
+                                    | "WebSocket"
+                            ) =>
                     {
                         ctx.register_let_class_alias(name.clone(), property.clone());
-                        ctx.uses_fetch = true;
+                        if matches!(property.as_str(), "Blob" | "File") {
+                            ctx.uses_fetch = true;
+                        }
                     }
                     Expr::PropertyGet { object, property }
                         if matches!(object.as_ref(), Expr::NativeModuleRef(module)
@@ -1703,6 +1767,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
             } else {
                 ctx.define_local(name.clone(), ty.clone())
             };
+            if !mutable {
+                ctx.mark_local_immutable(id);
+            }
             result.push(Stmt::Let {
                 id,
                 name,

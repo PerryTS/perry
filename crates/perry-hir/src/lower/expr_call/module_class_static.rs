@@ -127,7 +127,7 @@ pub(super) fn try_module_class_static(
         }
     }
 
-    // process.stdin.setRawMode/.on and process.stdout.on — methods
+    // process.stdin.setRawMode/.on and lifecycle methods, plus process.stdout.on — methods
     // we recognize on the stdin/stdout stream objects. (#347
     // Phases 2 & 3.) Recognized BEFORE the generic
     // module.Class.staticMethod() arm because process.std{in,out}
@@ -150,7 +150,7 @@ pub(super) fn try_module_class_static(
                                         return Ok(Ok(Expr::ProcessStdinSetRawMode(Box::new(arg))));
                                     }
                                 }
-                                ("stdin", "on") => {
+                                ("stdin", "on") | ("stdin", "addListener") => {
                                     if args.len() >= 2 {
                                         let mut iter = args.into_iter();
                                         let event = iter.next().unwrap();
@@ -160,6 +160,42 @@ pub(super) fn try_module_class_static(
                                             handler: Box::new(handler),
                                         }));
                                     }
+                                }
+                                ("stdin", "removeListener") | ("stdin", "off") => {
+                                    if args.len() >= 2 {
+                                        let mut iter = args.into_iter();
+                                        let event = iter.next().unwrap();
+                                        let handler = iter.next().unwrap();
+                                        return Ok(Ok(Expr::ProcessStdinRemoveListener {
+                                            event: Box::new(event),
+                                            handler: Box::new(handler),
+                                        }));
+                                    }
+                                }
+                                ("stdin", "pause") => {
+                                    return Ok(Ok(Expr::ProcessStdinLifecycle(
+                                        ProcessStdinLifecycleMethod::Pause,
+                                    )));
+                                }
+                                ("stdin", "resume") => {
+                                    return Ok(Ok(Expr::ProcessStdinLifecycle(
+                                        ProcessStdinLifecycleMethod::Resume,
+                                    )));
+                                }
+                                ("stdin", "unref") => {
+                                    return Ok(Ok(Expr::ProcessStdinLifecycle(
+                                        ProcessStdinLifecycleMethod::Unref,
+                                    )));
+                                }
+                                ("stdin", "ref") => {
+                                    return Ok(Ok(Expr::ProcessStdinLifecycle(
+                                        ProcessStdinLifecycleMethod::Ref,
+                                    )));
+                                }
+                                ("stdin", "destroy") => {
+                                    return Ok(Ok(Expr::ProcessStdinLifecycle(
+                                        ProcessStdinLifecycleMethod::Destroy,
+                                    )));
                                 }
                                 ("stdout", "on") => {
                                     if args.len() >= 2 {

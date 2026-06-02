@@ -105,13 +105,42 @@ fn has_refed_promise_timer() -> bool {
         .any(|timer| timer.has_ref)
 }
 
+fn timer_has_ref_state(id: i64) -> bool {
+    TIMER_REF_STATES
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|map| map.get(&id).copied())
+        .unwrap_or(true)
+}
+
+fn has_refed_callback_timer() -> bool {
+    CALLBACK_TIMERS
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|timer| !timer.cleared && timer_has_ref_state(timer.id))
+}
+
+fn has_refed_interval_timer() -> bool {
+    INTERVAL_TIMERS
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|timer| !timer.cleared && timer_has_ref_state(timer.id))
+}
+
 fn other_event_sources_keep_loop_alive() -> bool {
-    js_callback_timer_has_pending() != 0
-        || js_interval_timer_has_pending() != 0
+    has_refed_callback_timer()
+        || has_refed_interval_timer()
         || unsafe { js_stdlib_has_active_handles() != 0 }
 }
 
 fn should_run_unref_promise_timers() -> bool {
+    has_refed_promise_timer() || other_event_sources_keep_loop_alive()
+}
+
+fn should_run_unref_callback_interval_timers() -> bool {
     has_refed_promise_timer() || other_event_sources_keep_loop_alive()
 }
 
@@ -302,7 +331,27 @@ static NEXT_TIMER_ID: Mutex<i64> = Mutex::new(1);
 static TIMER_REF_STATES: Mutex<Option<HashMap<i64, bool>>> = Mutex::new(None);
 static WARNED_NEGATIVE_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
 static WARNED_NAN_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
-static WARNED_TIMER_TRACE_HINT: AtomicBool = AtomicBool::new(false);
+
+thread_local! {
+    static TIMER_CALLBACK_DISPATCH_DEPTH: std::cell::Cell<u32> =
+        const { std::cell::Cell::new(0) };
+}
+
+fn in_timer_callback_dispatch() -> bool {
+    TIMER_CALLBACK_DISPATCH_DEPTH.with(|depth| depth.get() > 0)
+}
+
+fn enter_timer_callback_dispatch() {
+    TIMER_CALLBACK_DISPATCH_DEPTH.with(|depth| {
+        depth.set(depth.get().saturating_add(1));
+    });
+}
+
+fn leave_timer_callback_dispatch() {
+    TIMER_CALLBACK_DISPATCH_DEPTH.with(|depth| {
+        depth.set(depth.get().saturating_sub(1));
+    });
+}
 
 fn timer_handle_value(id: i64) -> f64 {
     f64::from_bits(crate::value::JSValue::pointer(id as *mut u8).bits())
@@ -365,11 +414,20 @@ fn timer_delay_text(delay_ms: f64) -> String {
     }
 }
 
+fn timer_warning_string(s: &str) -> f64 {
+    let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
+}
+
 fn emit_timer_delay_warning(kind: &str, message: String) {
-    eprintln!("(node:{}) {}: {}", std::process::id(), kind, message);
-    if !WARNED_TIMER_TRACE_HINT.swap(true, Ordering::AcqRel) {
-        eprintln!("(Use `node --trace-warnings ...` to show where the warning was created)");
-    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let message_handle = scope.root_nanbox_f64(timer_warning_string(&message));
+    let kind_handle = scope.root_nanbox_f64(timer_warning_string(kind));
+    crate::process::js_process_emit_warning(
+        message_handle.get_nanbox_f64(),
+        kind_handle.get_nanbox_f64(),
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
 }
 
 fn coerce_timer_delay(delay_value: f64) -> f64 {
@@ -964,7 +1022,12 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
         js_closure_call5, js_closure_call6, js_closure_call7, js_closure_call8, js_closure_call9,
     };
 
+    if in_timer_callback_dispatch() {
+        return 0;
+    }
+
     let now = Instant::now();
+    let allow_unref = should_run_unref_callback_interval_timers();
 
     // Collect expired, non-cleared timers
     let expired: Vec<CallbackTimer> = {
@@ -974,7 +1037,8 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
         while i < queue.len() {
             if queue[i].cleared {
                 queue.remove(i);
-            } else if queue[i].deadline <= now {
+            } else if queue[i].deadline <= now && (timer_has_ref_state(queue[i].id) || allow_unref)
+            {
                 expired.push(queue.remove(i));
             } else {
                 i += 1;
@@ -999,6 +1063,7 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
             let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
             let cb = cb_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
             let prev_this = crate::object::js_implicit_this_set(timer_handle_value(timer.id));
+            enter_timer_callback_dispatch();
             with_timer_uncaught_trap(|| {
                 match a.len() {
                     0 => {
@@ -1036,6 +1101,14 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
                     }
                 }
             });
+            // #3870: Node runs a microtask checkpoint after *each* timer
+            // callback (every callback is its own macrotask). Drain here —
+            // rather than only once after the whole expired batch in the outer
+            // pump — so a microtask queued inside a timer callback (e.g.
+            // `queueMicrotask`/`Promise.then`) runs before the next timer fires,
+            // matching Node's `setTimeout1 → micro → setTimeout2` ordering.
+            crate::promise::microtasks::js_promise_run_microtasks_checkpoint();
+            leave_timer_callback_dispatch();
             crate::object::js_implicit_this_set(prev_this);
             crate::async_hooks::after(timer.async_id);
             crate::async_hooks::destroy(timer.async_id);
@@ -1054,12 +1127,36 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
 /// Check if there are any pending callback timers
 #[no_mangle]
 pub extern "C" fn js_callback_timer_has_pending() -> i32 {
-    let q = CALLBACK_TIMERS.lock().unwrap();
-    if q.iter().any(|t| !t.cleared) {
-        1
-    } else {
-        0
-    }
+    i32::from(has_refed_callback_timer())
+}
+
+pub fn active_timeout_resource_count() -> usize {
+    let callback_count = CALLBACK_TIMERS
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|timer| !timer.cleared && timer.kind == CallbackTimerKind::Timeout)
+        .count();
+    let interval_count = INTERVAL_TIMERS
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|timer| !timer.cleared)
+        .count();
+    let mock_count = {
+        let state = MOCK_TIMERS.lock().unwrap();
+        state
+            .callbacks
+            .iter()
+            .filter(|timer| !timer.cleared && timer.kind == CallbackTimerKind::Timeout)
+            .count()
+            + state
+                .intervals
+                .iter()
+                .filter(|timer| !timer.cleared)
+                .count()
+    };
+    callback_count + interval_count + mock_count
 }
 
 /// Get the time until the next callback timer fires (in ms), or -1 if
@@ -1070,12 +1167,13 @@ pub extern "C" fn js_callback_timer_has_pending() -> i32 {
 #[no_mangle]
 pub extern "C" fn js_callback_timer_next_deadline() -> f64 {
     let now = Instant::now();
+    let allow_unref = should_run_unref_callback_interval_timers();
 
     CALLBACK_TIMERS
         .lock()
         .unwrap()
         .iter()
-        .filter(|t| !t.cleared)
+        .filter(|t| !t.cleared && (timer_has_ref_state(t.id) || allow_unref))
         .map(|t| {
             if t.deadline <= now {
                 0.0
@@ -1286,7 +1384,12 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
         js_closure_call5, js_closure_call6, js_closure_call7, js_closure_call8, js_closure_call9,
     };
 
+    if in_timer_callback_dispatch() {
+        return 0;
+    }
+
     let now = Instant::now();
+    let allow_unref = should_run_unref_callback_interval_timers();
 
     // Collect callbacks to call and update deadlines
     let callbacks_to_call: Vec<(
@@ -1299,7 +1402,10 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
         let mut callbacks = Vec::new();
 
         for timer in timers.iter_mut() {
-            if !timer.cleared && timer.next_deadline <= now {
+            if !timer.cleared
+                && timer.next_deadline <= now
+                && (timer_has_ref_state(timer.id) || allow_unref)
+            {
                 callbacks.push((
                     timer.id,
                     timer.callback,
@@ -1328,6 +1434,7 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
         let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
         let cb = callback_handle.get_raw_const_ptr();
         let prev_this = crate::object::js_implicit_this_set(timer_handle_value(id));
+        enter_timer_callback_dispatch();
         with_timer_uncaught_trap(|| {
             match a.len() {
                 0 => js_closure_call0(cb),
@@ -1342,6 +1449,7 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
                 _ => js_closure_call9(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]),
             };
         });
+        leave_timer_callback_dispatch();
         crate::object::js_implicit_this_set(prev_this);
         crate::async_context::refresh_snapshot_from_roots(&mut previous, &previous_roots);
         crate::async_context::restore_context(previous);
@@ -1362,24 +1470,20 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
 /// Check if there are any pending interval timers
 #[no_mangle]
 pub extern "C" fn js_interval_timer_has_pending() -> i32 {
-    let timers = INTERVAL_TIMERS.lock().unwrap();
-    if timers.iter().any(|t| !t.cleared) {
-        1
-    } else {
-        0
-    }
+    i32::from(has_refed_interval_timer())
 }
 
 /// Get the time until the next interval timer fires (in ms), or -1 if no timers
 #[no_mangle]
 pub extern "C" fn js_interval_timer_next_deadline() -> f64 {
     let now = Instant::now();
+    let allow_unref = should_run_unref_callback_interval_timers();
 
     INTERVAL_TIMERS
         .lock()
         .unwrap()
         .iter()
-        .filter(|t| !t.cleared)
+        .filter(|t| !t.cleared && (timer_has_ref_state(t.id) || allow_unref))
         .map(|t| {
             if t.next_deadline <= now {
                 0.0

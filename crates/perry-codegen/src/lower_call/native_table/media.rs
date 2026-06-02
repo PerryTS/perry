@@ -451,7 +451,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         ret: NR_VOID,
     },
     // zlib Transform-stream factories (#1843 cluster 1). Each returns an i64
-    // stream handle (0x60000+ range) NaN-boxed with POINTER_TAG; subsequent
+    // stream handle (zlib small-handle range) NaN-boxed with POINTER_TAG; subsequent
     // `.write`/`.end`/`.on`/`.pipe`/`.flush`/`.close` lose their static type
     // and route through HANDLE_METHOD_DISPATCH → `dispatch_zlib_stream`
     // (crates/perry-stdlib/src/common/dispatch.rs). `options` is NaN-boxed f64.

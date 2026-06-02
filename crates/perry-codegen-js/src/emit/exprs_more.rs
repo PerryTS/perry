@@ -1200,9 +1200,13 @@ impl JsEmitter {
                 self.emit_expr(inner);
                 self.output.push(')');
             }
-            Expr::StructuredClone(inner) => {
+            Expr::StructuredClone { value, options } => {
                 self.output.push_str("structuredClone(");
-                self.emit_expr(inner);
+                self.emit_expr(value);
+                if !matches!(options.as_ref(), Expr::Undefined) {
+                    self.output.push_str(", ");
+                    self.emit_expr(options);
+                }
                 self.output.push(')');
             }
             Expr::QueueMicrotask(inner) => {
@@ -1610,11 +1614,19 @@ impl JsEmitter {
                 self.emit_expr(args);
                 self.output.push(')');
             }
-            Expr::ReflectConstruct { target, args } => {
+            Expr::ReflectConstruct {
+                target,
+                args,
+                new_target,
+            } => {
                 self.output.push_str("Reflect.construct(");
                 self.emit_expr(target);
                 self.output.push_str(", ");
                 self.emit_expr(args);
+                if !matches!(new_target.as_ref(), Expr::Undefined) {
+                    self.output.push_str(", ");
+                    self.emit_expr(new_target);
+                }
                 self.output.push(')');
             }
             Expr::ReflectDefineProperty {

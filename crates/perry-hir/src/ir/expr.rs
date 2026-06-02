@@ -518,6 +518,13 @@ pub enum Expr {
         event: Box<Expr>,
         handler: Box<Expr>,
     },
+    // process.stdin.removeListener/off(event, handler) -> stdin (#3962)
+    ProcessStdinRemoveListener {
+        event: Box<Expr>,
+        handler: Box<Expr>,
+    },
+    // process.stdin.pause/resume/unref/ref/destroy() -> stdin (#3962)
+    ProcessStdinLifecycle(ProcessStdinLifecycleMethod),
     // process.stdout.on('resize', handler) -> stdout (#347 Phase 3)
     // Registers a SIGWINCH handler that fires when the terminal is
     // resized. Other events fall through to the generic dispatch.
@@ -727,6 +734,19 @@ pub enum Expr {
     // `crates/perry-runtime/src/webassembly.rs` for the FFI shape.
     /// `WebAssembly.validate(bytes)` -> boolean
     WebAssemblyValidate(Box<Expr>),
+    /// `WebAssembly.compile(bytes)` -> Promise<WebAssembly.Module>
+    WebAssemblyCompile(Box<Expr>),
+    /// `new WebAssembly.Module(bytes)` -> WebAssembly.Module wrapper
+    WebAssemblyModuleNew(Box<Expr>),
+    /// `WebAssembly.Module.exports(module)` -> export descriptors
+    WebAssemblyModuleExports(Box<Expr>),
+    /// `WebAssembly.Module.imports(module)` -> import descriptors
+    WebAssemblyModuleImports(Box<Expr>),
+    /// `WebAssembly.Module.customSections(module, name)` -> ArrayBuffer[]
+    WebAssemblyModuleCustomSections {
+        module: Box<Expr>,
+        name: Box<Expr>,
+    },
     /// `WebAssembly.instantiate(bytes)` -> opaque instance handle (Perry
     /// MVP shape — sync, no Promise, no `{module, instance}` pair).
     WebAssemblyInstantiate(Box<Expr>),
@@ -781,8 +801,11 @@ pub enum Expr {
     /// decodeURIComponent(string) -> string
     DecodeURIComponent(Box<Expr>),
 
-    /// structuredClone(value) -> deep-cloned value
-    StructuredClone(Box<Expr>),
+    /// structuredClone(value[, options]) -> deep-cloned value
+    StructuredClone {
+        value: Box<Expr>,
+        options: Box<Expr>,
+    },
     /// queueMicrotask(callback) -> void
     QueueMicrotask(Box<Expr>),
 
@@ -1807,6 +1830,8 @@ pub enum Expr {
         /// calling the closure returns a `{next,return,throw}` generator, then
         /// clears the flag. Refs #321 (effect's `Effect.gen(function*(){...})`).
         is_generator: bool,
+        /// Whether this closure body is strict mode code.
+        is_strict: bool,
     },
 
     // RegExp operations
@@ -2156,6 +2181,10 @@ pub enum Expr {
     ReflectConstruct {
         target: Box<Expr>,
         args: Box<Expr>,
+        /// Optional `newTarget` (the 3rd `Reflect.construct` argument). When the
+        /// call omits it, this lowers to `Expr::Undefined` and the runtime
+        /// defaults `newTarget` to the target/proxy itself.
+        new_target: Box<Expr>,
     },
     ReflectDefineProperty {
         target: Box<Expr>,
@@ -2228,6 +2257,24 @@ pub enum Expr {
         paths: Vec<String>,
         arg: Box<Expr>,
     },
+    /// Compile-time-resolved `new Worker(filename, options?)` from
+    /// `node:worker_threads`. The filename expression follows the same
+    /// deterministic subset as dynamic `import()`: lowering leaves `paths`
+    /// empty, and the module collector resolves it before codegen.
+    WorkerNew {
+        paths: Vec<String>,
+        filename: Box<Expr>,
+        options: Option<Box<Expr>>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessStdinLifecycleMethod {
+    Pause,
+    Resume,
+    Unref,
+    Ref,
+    Destroy,
 }
 
 /// Which primitive the `new X(...)` form is wrapping. Used by

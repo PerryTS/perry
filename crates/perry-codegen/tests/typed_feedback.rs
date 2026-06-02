@@ -125,6 +125,7 @@ fn module_with_classes(
             body,
             is_async: false,
             is_generator: false,
+            is_strict: false,
             is_exported: false,
             captures: Vec::new(),
             decorators: Vec::new(),
@@ -265,6 +266,7 @@ fn typed_feedback_guards_direct_class_method_specialization() {
         body: vec![Stmt::Return(Some(Expr::LocalGet(2)))],
         is_async: false,
         is_generator: false,
+        is_strict: false,
         is_exported: false,
         captures: Vec::new(),
         decorators: Vec::new(),
@@ -323,6 +325,7 @@ fn typed_feedback_guards_direct_closure_call_specialization() {
                     enclosing_class: None,
                     is_async: false,
                     is_generator: false,
+                    is_strict: false,
                 }),
             },
             Stmt::Return(Some(Expr::Call {

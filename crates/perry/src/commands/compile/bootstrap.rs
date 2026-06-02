@@ -32,6 +32,8 @@ use crate::OutputFormat;
 use super::audit_manifest::write_audit_manifest_logging_failures;
 use super::collect_modules::collect_modules;
 use super::resolve::discover_extension_entries;
+use crate::commands::progress::VerboseProgress;
+
 use super::{CompilationContext, CompileArgs, ParseCache};
 
 // ============================================================================
@@ -101,6 +103,7 @@ pub(super) fn bundle_extensions_into_ctx(
     visited: &mut HashSet<PathBuf>,
     next_class_id: &mut perry_hir::ClassId,
     skip_transforms: bool,
+    progress: &VerboseProgress,
     mut parse_cache: Option<&mut ParseCache>,
     format: OutputFormat,
 ) -> Result<Vec<(PathBuf, String)>> {
@@ -125,6 +128,7 @@ pub(super) fn bundle_extensions_into_ctx(
             args.target.as_deref(),
             next_class_id,
             skip_transforms,
+            progress,
             parse_cache.as_deref_mut(),
         )?;
         bundled_extensions.push((entry_path.canonicalize()?, plugin_id.clone()));
@@ -151,6 +155,7 @@ pub(super) fn rerun_collect_with_class_field_types(
     visited: &mut HashSet<PathBuf>,
     next_class_id: &mut perry_hir::ClassId,
     skip_transforms: bool,
+    progress: &VerboseProgress,
     mut parse_cache: Option<&mut ParseCache>,
     format: OutputFormat,
 ) -> Result<()> {
@@ -183,6 +188,7 @@ pub(super) fn rerun_collect_with_class_field_types(
         args.target.as_deref(),
         next_class_id,
         skip_transforms,
+        progress,
         parse_cache.as_deref_mut(),
     )?;
     if let Some(ext_dir) = &args.bundle_extensions {
@@ -196,6 +202,7 @@ pub(super) fn rerun_collect_with_class_field_types(
                 args.target.as_deref(),
                 next_class_id,
                 skip_transforms,
+                progress,
                 parse_cache.as_deref_mut(),
             )?;
         }

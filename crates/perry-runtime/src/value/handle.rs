@@ -48,6 +48,14 @@ pub extern "C" fn js_set_native_crypto_dispatch(func: JsNativeCryptoDispatchFn) 
     JS_NATIVE_CRYPTO_DISPATCH.store(func as *mut (), Ordering::SeqCst);
 }
 
+/// Set the WebCrypto `crypto.subtle` module-method dispatcher. This mirrors
+/// `js_set_native_crypto_dispatch`, but avoids top-level crypto name
+/// collisions such as `crypto.generateKey` versus `crypto.subtle.generateKey`.
+#[no_mangle]
+pub extern "C" fn js_set_native_webcrypto_dispatch(func: JsNativeWebCryptoDispatchFn) {
+    JS_NATIVE_WEBCRYPTO_DISPATCH.store(func as *mut (), Ordering::SeqCst);
+}
+
 /// Set the node:zlib module-method dispatcher. Same contract as
 /// `js_set_native_crypto_dispatch` above — registered by perry-stdlib at
 /// program start so a bound-then-called `zlib.gzip` reaches the stdlib FFI.
@@ -62,6 +70,18 @@ pub extern "C" fn js_set_native_zlib_dispatch(func: JsNativeZlibDispatchFn) {
 #[no_mangle]
 pub extern "C" fn js_set_native_querystring_dispatch(func: JsNativeQuerystringDispatchFn) {
     JS_NATIVE_QUERYSTRING_DISPATCH.store(func as *mut (), Ordering::SeqCst);
+}
+
+/// Set the node:sqlite module dispatcher. Registered by perry-stdlib at
+/// startup so captured and dynamic-imported sqlite exports reach stdlib.
+#[no_mangle]
+pub extern "C" fn js_set_native_sqlite_dispatch(func: JsNativeSqliteDispatchFn) {
+    JS_NATIVE_SQLITE_DISPATCH.store(func as *mut (), Ordering::SeqCst);
+}
+
+#[no_mangle]
+pub extern "C" fn js_set_native_domain_dispatch(func: JsNativeDomainDispatchFn) {
+    JS_NATIVE_DOMAIN_DISPATCH.store(func as *mut (), Ordering::SeqCst);
 }
 
 /// Set the node:http/https/http2 server-factory dispatcher. Registered by

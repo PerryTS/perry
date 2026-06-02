@@ -48,6 +48,11 @@ extern crate perry_ext_http_server as _server_link;
 mod agent;
 pub use agent::*;
 
+// Client factory overload normalization (#3226 / #3227 / #3228) —
+// extracted from this file to stay under the 2000-line lint cap.
+mod client_overload;
+use client_overload::{merge_url_and_options, method_for_overload, parse_client_args};
+
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
@@ -425,6 +430,7 @@ pub struct IncomingMessageHandle {
     pub trailers: HashMap<String, String>,
     pub body: Vec<u8>,
     pub listeners: HashMap<String, Vec<i64>>,
+    pub encoding: Option<String>,
 }
 
 unsafe impl Send for IncomingMessageHandle {}
@@ -1072,6 +1078,53 @@ pub unsafe extern "C" fn js_https_get(arg_f64: f64, callback_i64: i64) -> Handle
     get_common(arg_f64, callback_i64, "https")
 }
 
+// ------------------------------------------------------------------
+// FFI: overload-normalizing client factories (#3226 / #3227 / #3228)
+//
+// Codegen routes `http.request` / `http.get` / `https.request` /
+// `https.get` to these `*_overload` entry points with a single
+// `NA_VARARGS` argument — a JS array holding every user argument.
+// `parse_client_args` resolves `(url, options, callback)` by value
+// type so all overloads work: `(url[, cb])`, `(options[, cb])`, and
+// `(url, options[, cb])`. The URL supplies protocol/host/port/path;
+// options override method/headers/timeout/agent (and any explicitly
+// set protocol/host/port/path).
+// ------------------------------------------------------------------
+
+unsafe fn request_overload(args_array: i64, default_protocol: &str, force_get: bool) -> Handle {
+    ensure_gc_scanner_registered();
+    let parsed = parse_client_args(args_array);
+    let method = method_for_overload(parsed.opts);
+    let (url, headers, timeout, agent_handle) =
+        merge_url_and_options(parsed.url, parsed.opts, default_protocol);
+    let handle = make_request_handle(method, url, headers, timeout, parsed.callback, agent_handle);
+    if force_get {
+        // `get()` auto-`end()`s, kicking off the request.
+        js_http_client_request_end(handle, f64::from_bits(TAG_UNDEFINED));
+    }
+    handle
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_http_request_overload(args_array: i64) -> Handle {
+    request_overload(args_array, "http", false)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_https_request_overload(args_array: i64) -> Handle {
+    request_overload(args_array, "https", false)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_http_get_overload(args_array: i64) -> Handle {
+    request_overload(args_array, "http", true)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_https_get_overload(args_array: i64) -> Handle {
+    request_overload(args_array, "https", true)
+}
+
 // http.Agent / https.Agent (#2129 / #2154) lives in `agent.rs`.
 
 // ------------------------------------------------------------------
@@ -1242,6 +1295,120 @@ pub unsafe extern "C" fn js_http_set_timeout(handle: Handle, ms: f64) -> Handle 
     handle
 }
 
+/// `IncomingMessage.setEncoding(encoding)` for client responses. The same
+/// static `IncomingMessage` class tag is used for server requests, so a client
+/// registry miss is forwarded to the server-side handle implementation.
+#[no_mangle]
+pub unsafe extern "C" fn js_http_incoming_message_set_encoding(
+    handle: Handle,
+    encoding_ptr: *const StringHeader,
+) -> Handle {
+    let encoding = read_str(encoding_ptr).unwrap_or_else(|| "utf8".to_string());
+    let mut matched = false;
+    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
+        res.encoding = Some(encoding.clone());
+        matched = true;
+    });
+    if matched {
+        return handle;
+    }
+
+    extern "C" {
+        fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
+        fn js_node_http_im_set_encoding(handle: i64, encoding_ptr: *const StringHeader) -> i64;
+    }
+    if js_ext_http_incoming_message_is_handle(handle) != 0 {
+        js_node_http_im_set_encoding(handle, encoding_ptr);
+    }
+    handle
+}
+
+/// Distinct external-client setter for stdlib fallback dispatch. The legacy
+/// `js_http_incoming_message_set_encoding` symbol is shared with perry-stdlib.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_http_client_incoming_message_set_encoding(
+    handle: Handle,
+    encoding_ptr: *const StringHeader,
+) -> Handle {
+    let encoding = read_str(encoding_ptr).unwrap_or_else(|| "utf8".to_string());
+    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
+        res.encoding = Some(encoding);
+    });
+    handle
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_client_request_method(handle: Handle) -> *mut StringHeader {
+    let method = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| req.method.clone())
+        .unwrap_or_default();
+    alloc_string(&method).as_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_client_request_protocol(handle: Handle) -> *mut StringHeader {
+    let protocol = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        reqwest::Url::parse(&req.url)
+            .map(|u| format!("{}:", u.scheme()))
+            .unwrap_or_default()
+    })
+    .unwrap_or_default();
+    alloc_string(&protocol).as_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_client_request_host(handle: Handle) -> *mut StringHeader {
+    let host = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        reqwest::Url::parse(&req.url)
+            .ok()
+            .and_then(|u| u.host_str().map(|s| s.to_string()))
+            .unwrap_or_default()
+    })
+    .unwrap_or_default();
+    alloc_string(&host).as_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_client_request_path(handle: Handle) -> *mut StringHeader {
+    let path = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        reqwest::Url::parse(&req.url)
+            .map(|u| {
+                let mut path = u.path().to_string();
+                if path.is_empty() {
+                    path.push('/');
+                }
+                if let Some(q) = u.query() {
+                    path.push('?');
+                    path.push_str(q);
+                }
+                path
+            })
+            .unwrap_or_default()
+    })
+    .unwrap_or_default();
+    alloc_string(&path).as_raw()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_http_client_request_listener_count(
+    handle: Handle,
+    event_ptr: *const StringHeader,
+) -> f64 {
+    let event = match read_str(event_ptr) {
+        Some(e) => e,
+        None => return 0.0,
+    };
+    with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        let explicit = req.listeners.get(&event).map(|v| v.len()).unwrap_or(0);
+        let implicit_response = if event == "response" && req.response_callback != 0 {
+            1
+        } else {
+            0
+        };
+        (explicit + implicit_response) as f64
+    })
+    .unwrap_or(0.0)
+}
+
 // ------------------------------------------------------------------
 // FFI: IncomingMessage accessors
 // ------------------------------------------------------------------
@@ -1256,6 +1423,12 @@ pub extern "C" fn js_http_is_incoming_message(handle: Handle) -> i32 {
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |_| ())
         .map(|_| 1)
         .unwrap_or(0)
+}
+
+/// Distinct external-client probe for stdlib fallback dispatch.
+#[no_mangle]
+pub extern "C" fn js_ext_http_client_incoming_message_is_handle(handle: Handle) -> i32 {
+    js_http_is_incoming_message(handle)
 }
 
 /// `res.statusCode`.
@@ -1291,6 +1464,11 @@ pub extern "C" fn js_http_response_headers(handle: Handle) -> f64 {
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
         out = map_to_js_object(&res.headers);
     });
+    if out.to_bits() == TAG_UNDEFINED {
+        if let Some(server_out) = server_incoming_property(handle, "headers") {
+            return server_out;
+        }
+    }
     out
 }
 
@@ -1302,6 +1480,45 @@ pub extern "C" fn js_http_response_trailers(handle: Handle) -> f64 {
         out = map_to_js_object(&res.trailers);
     });
     out
+}
+
+fn server_incoming_property(handle: Handle, property_name: &str) -> Option<f64> {
+    extern "C" {
+        fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
+        fn js_ext_http_incoming_message_dispatch_property(
+            handle: i64,
+            property_ptr: *const u8,
+            property_len: usize,
+        ) -> f64;
+    }
+    unsafe {
+        if js_ext_http_incoming_message_is_handle(handle) == 0 {
+            return None;
+        }
+        Some(js_ext_http_incoming_message_dispatch_property(
+            handle,
+            property_name.as_ptr(),
+            property_name.len(),
+        ))
+    }
+}
+
+fn body_chunk_value(body: &[u8], encoding: Option<&str>) -> f64 {
+    match encoding {
+        Some(_) => {
+            let s = String::from_utf8_lossy(body).into_owned();
+            let header = alloc_string(&s);
+            f64::from_bits(STRING_TAG | (header.as_raw() as u64 & PTR_MASK))
+        }
+        None => {
+            let buf = perry_ffi::alloc_buffer(body);
+            if buf.is_null() {
+                f64::from_bits(TAG_UNDEFINED)
+            } else {
+                f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK))
+            }
+        }
+    }
 }
 
 // ------------------------------------------------------------------
@@ -1359,6 +1576,7 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                     trailers: trailers_map,
                     body,
                     listeners: HashMap::new(),
+                    encoding: None,
                 });
 
                 if response_callback != 0 {
@@ -1370,9 +1588,9 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                     let _ = closure.call1(arg);
                 }
 
-                // `'data'` listeners — body is delivered as a single
-                // Buffer chunk. True streaming requires a cooperative
-                // spawn_async perry-ffi surface (v0.6.0 followup).
+                // `'data'` listeners — body is delivered as a single chunk.
+                // True streaming requires a cooperative spawn_async
+                // perry-ffi surface (v0.6.0 followup).
                 //
                 // Issue #1124 followup: pre-fix this allocated a JS
                 // string via `alloc_string(str::from_utf8(&body).unwrap_or(""))`,
@@ -1389,20 +1607,20 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                 // `Buffer.concat(...)` surface lights up on the
                 // returned value.
                 //
-                // TODO: encoding-aware data events — Node lets users
-                // call `res.setEncoding('utf8')` to get string chunks
-                // instead of Buffers. Perry-ext-http doesn't yet
-                // track a per-response encoding flag; default to
-                // Buffer (matches Node behavior when no encoding is
-                // set) and revisit when a caller demands the string
-                // form.
-                let data_listeners = get_handle_mut::<IncomingMessageHandle>(incoming)
-                    .and_then(|r| r.listeners.get("data").cloned())
+                // When `res.setEncoding(enc)` was called in the response
+                // callback, mirror Readable's string-chunk behavior. Without
+                // an encoding, preserve Node's default Buffer chunks.
+                let (data_listeners, encoding) = get_handle_mut::<IncomingMessageHandle>(incoming)
+                    .map(|r| {
+                        (
+                            r.listeners.get("data").cloned().unwrap_or_default(),
+                            r.encoding.clone(),
+                        )
+                    })
                     .unwrap_or_default();
                 if !data_listeners.is_empty() && !body_clone.is_empty() {
-                    let buf = perry_ffi::alloc_buffer(&body_clone);
-                    if !buf.is_null() {
-                        let arg = f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK));
+                    let arg = body_chunk_value(&body_clone, encoding.as_deref());
+                    if arg.to_bits() != TAG_UNDEFINED {
                         for cb in data_listeners {
                             if cb != 0 {
                                 let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
@@ -1452,147 +1670,7 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
 // ------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use perry_ffi::{drop_handle, get_handle, register_handle};
-    use std::collections::HashMap;
-    use std::sync::{Mutex, MutexGuard};
-
-    static GC_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-    struct GcTestGuard {
-        frame: u64,
-        _lock: MutexGuard<'static, ()>,
-    }
-
-    impl GcTestGuard {
-        fn new() -> Self {
-            let lock = GC_TEST_LOCK
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            perry_runtime::gc::js_gc_write_barriers_emitted(1);
-            let frame = perry_runtime::gc::js_shadow_frame_push(0);
-            Self { frame, _lock: lock }
-        }
-    }
-
-    impl Drop for GcTestGuard {
-        fn drop(&mut self) {
-            perry_runtime::gc::js_shadow_frame_pop(self.frame);
-            perry_runtime::gc::js_gc_write_barriers_emitted(0);
-        }
-    }
-
-    fn young_gc_root() -> i64 {
-        perry_runtime::arena::arena_alloc_gc(32, 8, perry_runtime::gc::GC_TYPE_STRING) as i64
-    }
-
-    fn assert_rewritten(before: i64, after: i64) {
-        assert_ne!(after, before);
-        assert!(perry_runtime::arena::pointer_in_nursery(after as usize));
-    }
-
-    #[test]
-    fn gc_scanner_registers_idempotently() {
-        // Calling ensure_gc_scanner_registered twice must not panic
-        // and must not register the scanner twice (Once guarantees).
-        ensure_gc_scanner_registered();
-        ensure_gc_scanner_registered();
-        ensure_gc_scanner_registered();
-    }
-
-    #[test]
-    fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
-        let _guard = GcTestGuard::new();
-        perry_ffi::gc_register_mutable_root_scanner_named("perry-ext-http", scan_http_roots);
-
-        let response_callback = young_gc_root();
-        let request_listener = young_gc_root();
-        let incoming_listener = young_gc_root();
-        let mut request_listeners = HashMap::new();
-        request_listeners.insert("error".to_string(), vec![request_listener]);
-        let request_handle = register_handle(ClientRequestHandle {
-            method: "GET".to_string(),
-            url: "http://localhost/".to_string(),
-            headers: HashMap::new(),
-            body: Vec::new(),
-            response_callback,
-            listeners: request_listeners,
-            timeout_ms: None,
-            ended: false,
-            agent_handle: 0,
-        });
-
-        let mut incoming_listeners = HashMap::new();
-        incoming_listeners.insert("data".to_string(), vec![incoming_listener]);
-        let incoming_handle = register_handle(IncomingMessageHandle {
-            status_code: 200,
-            status_message: "OK".to_string(),
-            headers: HashMap::new(),
-            trailers: HashMap::new(),
-            body: Vec::new(),
-            listeners: incoming_listeners,
-        });
-
-        let _ = perry_runtime::gc::gc_collect_minor();
-
-        {
-            let req = get_handle::<ClientRequestHandle>(request_handle)
-                .expect("request handle should remain live");
-            assert_rewritten(response_callback, req.response_callback);
-            assert_rewritten(request_listener, req.listeners["error"][0]);
-            let msg = get_handle::<IncomingMessageHandle>(incoming_handle)
-                .expect("incoming message handle should remain live");
-            assert_rewritten(incoming_listener, msg.listeners["data"][0]);
-        }
-        drop_handle(request_handle);
-        drop_handle(incoming_handle);
-    }
-
-    #[test]
-    fn has_pending_zero_when_idle() {
-        // Drain anything other tests left; then assert zero.
-        let _ = HTTP_PENDING_EVENTS.lock().map(|mut q| q.clear());
-        assert_eq!(js_http_has_pending(), 0);
-    }
-
-    #[test]
-    fn parse_options_safe_defaults() {
-        // Null pointer / undefined value → safe defaults from
-        // url_from_options + headers_from_options + timeout_from_options.
-        let null_val = f64::from_bits(TAG_UNDEFINED);
-        let parsed = unsafe { parse_options_object(null_val) };
-        assert!(parsed.is_none());
-
-        let synth = serde_json::Value::Null;
-        assert_eq!(url_from_options(&synth, "http"), "http://localhost/");
-        assert!(headers_from_options(&synth).is_empty());
-        assert!(timeout_from_options(&synth).is_none());
-        assert_eq!(method_from_options(&synth), "GET");
-    }
-
-    #[test]
-    fn url_from_options_with_port_and_path() {
-        let v: serde_json::Value = serde_json::from_str(
-            r#"{"hostname":"api.example.com","port":8080,"path":"/v1/resource"}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            url_from_options(&v, "https"),
-            "https://api.example.com:8080/v1/resource"
-        );
-    }
-
-    #[test]
-    fn headers_from_options_extracts() {
-        let v: serde_json::Value =
-            serde_json::from_str(r#"{"headers":{"X-Foo":"bar","Authorization":"Bearer x"}}"#)
-                .unwrap();
-        let h = headers_from_options(&v);
-        assert_eq!(h.get("X-Foo"), Some(&"bar".to_string()));
-        assert_eq!(h.get("Authorization"), Some(&"Bearer x".to_string()));
-    }
-}
+mod tests;
 
 // Suppress unused-import warnings for FFI-only types.
 #[allow(dead_code)]
@@ -1678,8 +1756,23 @@ mod force_link_http_server {
         pub fn js_node_https_create_server();
         pub fn js_node_https_server_listen();
         pub fn js_node_https_server_close();
+        pub fn js_node_https_server_close_all_connections();
+        pub fn js_node_https_server_close_idle_connections();
         pub fn js_node_https_server_on();
         pub fn js_node_https_server_address_json();
+        pub fn js_node_https_server_headers_timeout();
+        pub fn js_node_https_server_set_headers_timeout();
+        pub fn js_node_https_server_keep_alive_timeout();
+        pub fn js_node_https_server_set_keep_alive_timeout();
+        pub fn js_node_https_server_request_timeout();
+        pub fn js_node_https_server_set_request_timeout();
+        pub fn js_node_https_server_idle_timeout();
+        pub fn js_node_https_server_set_idle_timeout();
+        pub fn js_node_https_server_max_headers_count();
+        pub fn js_node_https_server_set_max_headers_count();
+        pub fn js_node_https_server_max_requests_per_socket();
+        pub fn js_node_https_server_set_max_requests_per_socket();
+        pub fn js_node_https_server_set_timeout_method();
         // http2 secure server.
         pub fn js_node_http2_create_secure_server();
         pub fn js_node_http2_server_listen();
@@ -1749,8 +1842,23 @@ static FORCE_LINK_HTTP_SERVER: &[unsafe extern "C" fn()] = {
         js_node_https_create_server,
         js_node_https_server_listen,
         js_node_https_server_close,
+        js_node_https_server_close_all_connections,
+        js_node_https_server_close_idle_connections,
         js_node_https_server_on,
         js_node_https_server_address_json,
+        js_node_https_server_headers_timeout,
+        js_node_https_server_set_headers_timeout,
+        js_node_https_server_keep_alive_timeout,
+        js_node_https_server_set_keep_alive_timeout,
+        js_node_https_server_request_timeout,
+        js_node_https_server_set_request_timeout,
+        js_node_https_server_idle_timeout,
+        js_node_https_server_set_idle_timeout,
+        js_node_https_server_max_headers_count,
+        js_node_https_server_set_max_headers_count,
+        js_node_https_server_max_requests_per_socket,
+        js_node_https_server_set_max_requests_per_socket,
+        js_node_https_server_set_timeout_method,
         js_node_http2_create_secure_server,
         js_node_http2_server_listen,
         js_node_http2_server_close,

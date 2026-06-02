@@ -63,6 +63,10 @@ pub fn lower_class_decl(
             // First check if it's a native module class
             let native_parent = match parent_name.as_str() {
                 "EventEmitter" => Some(("events".to_string(), "EventEmitter".to_string())),
+                "EventEmitterAsyncResource" => Some((
+                    "events".to_string(),
+                    "EventEmitterAsyncResource".to_string(),
+                )),
                 "AsyncLocalStorage" => {
                     Some(("async_hooks".to_string(), "AsyncLocalStorage".to_string()))
                 }
@@ -389,6 +393,7 @@ pub fn lower_class_decl(
                                     body,
                                     is_async: false,
                                     is_generator: false,
+                                    is_strict: true,
                                     was_plain_async: false,
                                     was_unrolled: false,
                                     is_exported: false,
@@ -515,6 +520,7 @@ pub fn lower_class_decl(
                                 body,
                                 is_async: false,
                                 is_generator: true,
+                                is_strict: true,
                                 was_plain_async: false,
                                 was_unrolled: false,
                                 is_exported: false,
@@ -611,6 +617,7 @@ pub fn lower_class_decl(
                     body,
                     is_async: false,
                     is_generator: false,
+                    is_strict: true,
                     was_plain_async: false,
                     was_unrolled: false,
                     is_exported: false,
@@ -922,6 +929,10 @@ pub fn lower_class_from_ast(
             let parent_name = ident.sym.to_string();
             let native_parent = match parent_name.as_str() {
                 "EventEmitter" => Some(("events".to_string(), "EventEmitter".to_string())),
+                "EventEmitterAsyncResource" => Some((
+                    "events".to_string(),
+                    "EventEmitterAsyncResource".to_string(),
+                )),
                 "AsyncLocalStorage" => {
                     Some(("async_hooks".to_string(), "AsyncLocalStorage".to_string()))
                 }
@@ -1143,6 +1154,7 @@ pub fn lower_class_from_ast(
                     body,
                     is_async: false,
                     is_generator: false,
+                    is_strict: true,
                     was_plain_async: false,
                     was_unrolled: false,
                     is_exported: false,

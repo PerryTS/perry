@@ -7,25 +7,32 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
 | Whole-module gaps (zero coverage) | 16 | 427 | n/a |
-| Partial-module gaps | 31 | 1672 | 390 |
+| Partial-module gaps | 31 | 1485 | 578 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2381** |  |
+| **Total true gaps** |  | **2194** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
 - `Web / Global APIs` — 282
 - `node:os` — 195
-- `node:fs` — 133
 - `node:crypto` — 128
 - `node:process (and global `process`)` — 99
 - `node:util` — 92
 - `node:http2` — 97
 - `node:test (and node:test/reporters, node:test/mock)` — 93
 - `node:http` — 89
-- `node:zlib` — 79
+- `node:zlib` — 78
 - `node:stream` — 76
 - `node:worker_threads` — 60
+
+### Issue #3598 docs/API closure note
+
+Issue #3598 ("Node API compatibility epic: globalThis and Web-compatible Node globals") was closed on 2026-05-31 as superseded by granular child issues. The submitted child PRs cover runtime slices for DOM events, WebSocket, URL/encoding/microtasks, fetch/body globals and methods, MessageChannel delivery, WebAssembly shape/metadata, WebCrypto, Navigator/URLPattern/encoding streams, structuredClone transfer options, and abort/weakref-related DOM globals.
+
+This branch intentionally does **not** cherry-pick or stack those feature PRs. The generated manifest surfaces on current `origin/main` were audited with `./scripts/regen_api_docs.sh`; `docs/src/api/reference.md` and `docs/api/perry.d.ts` produced no diff, and `crates/perry-api-manifest/src/entries.rs` was not changed. That means this closure PR does not truthfully decrement the generated API/type counts for globals that only exist on the open feature branches.
+
+Residual #3598 work that should remain tracked by child issues includes true WeakRef/FinalizationRegistry weak semantics, BroadcastChannel delivery semantics, deeper FormData/File/Blob/multipart/body parity, full WebAssembly Instance/Memory/Table/Global/streaming execution surface beyond the current host-shim shape, full TextEncoderStream/TextDecoderStream transform behavior, and URLPattern behavior tied to the Node 22 target.
 
 ## Whole-module gaps
 
@@ -93,7 +100,15 @@ Selected highlights (full list in `runtime-parity.md`):
 
 ### node:cluster
 
-**Total APIs: 35** · Perry covers: primary lifecycle subset · Gap: worker handle distribution and remaining events
+**Total APIs: 35** · Perry covers: primary lifecycle subset + default-import EventEmitter surface · Gap: worker handle distribution and remaining lifecycle events
+
+The default import (`import cluster from "node:cluster"`) is an EventEmitter:
+`on`/`addListener`/`once`/`off`/`removeListener`/`removeAllListeners`/`emit`/
+`eventNames`/`listenerCount` register and fire module-level listeners (a
+synchronous `fork` event is emitted when a worker object is created). The
+`import * as cluster` namespace keeps the shape-only surface and reads those
+EventEmitter names as `undefined`, matching Node. Real worker `online`/`exit`/
+`listening`/`disconnect` events remain deferred (#3605).
 
 Selected highlights (full list in `runtime-parity.md`):
 
@@ -133,45 +148,15 @@ Selected highlights (full list in `runtime-parity.md`):
 - `module.evaluate([options])`
 - … and 20 more
 
-### node:diagnostics_channel
-
-**Total APIs: 30** · Perry covers: 0 · Gap: 30
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `diagnostics_channel.hasSubscribers(name)`
-- `diagnostics_channel.channel(name)`
-- `diagnostics_channel.subscribe(name, onMessage)`
-- `diagnostics_channel.unsubscribe(name, onMessage)`
-- `diagnostics_channel.tracingChannel(nameOrChannels)`
-- `diagnostics_channel.boundedChannel(nameOrChannels)`
-- `channel.hasSubscribers`
-- `channel.publish(message)`
-- `channel.subscribe(onMessage)`
-- `channel.unsubscribe(onMessage)`
-- `channel.bindStore(store[, transform])`
-- `channel.unbindStore(store)`
-- … and 18 more
-
 ### node:dgram
 
-**Total APIs: 28** · Perry covers: 0 · Gap: 28
+**Total APIs: 28** · Perry covers: 27 · Gap: 1
 
 Selected highlights (full list in `runtime-parity.md`):
 
-- `dgram.createSocket(options[, callback])`
-- `dgram.createSocket(type[, callback])`
-- `socket.addMembership(multicastAddress[, multicastInterface])`
-- `socket.addSourceSpecificMembership(sourceAddress, groupAddress[, multicastInterface])`
-- `socket.address()`
-- `socket.bind([port][, address][, callback])`
-- `socket.bind(options[, callback])`
-- `socket.close([callback])`
-- `socket.connect(port[, address][, callback])`
-- `socket.disconnect()`
-- `socket.dropMembership(multicastAddress[, multicastInterface])`
-- `socket.dropSourceSpecificMembership(sourceAddress, groupAddress[, multicastInterface])`
-- … and 16 more
+- Deterministic loopback coverage: `createSocket`, `bind`, `address`, `send`, `message`, `connect`, `remoteAddress`, `disconnect`, `close`, `ref` / `unref`, buffer-size and send-queue getters, socket option validation/returns, and multicast/source-specific membership validation/returns.
+- Remaining gaps: real host UDP IO, OS-level multicast membership side effects, host socket option side effects, and `socket[Symbol.asyncDispose]()`.
+- `socket[Symbol.asyncDispose]()`
 
 ### node:dns/promises
 
@@ -385,57 +370,11 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:fs
 
-**Gap APIs: 133** · Already covered: 46
+**Gap APIs: 0** · Already covered: 180
 
-#### Missing from Perry
+`node:fs` has no remaining public API surface gaps in the manifest-based reconciliation. The current runtime manifest includes the callback and sync functions, constructor/export tail (`Dir`, `Dirent`, `Stats`, `ReadStream`, `WriteStream`, `FileReadStream`, `FileWriteStream`, `Utf8Stream`), `_toUnixTimestamp`, `openAsBlob`, `mkdtempDisposableSync`, `constants`, and `promises`.
 
-- `fs.chown(path, uid, gid, callback)`
-- `fs.close(fd[, callback])`
-- `fs.cp(src, dest[, options], callback)`
-- `fs.fchmod(fd, mode, callback)`
-- `fs.fchown(fd, uid, gid, callback)`
-- `fs.fdatasync(fd, callback)`
-- `fs.fstat(fd[, options], callback)`
-- `fs.fsync(fd, callback)`
-- `fs.ftruncate(fd[, len], callback)`
-- `fs.futimes(fd, atime, mtime, callback)`
-- `fs.glob(pattern[, options], callback)`
-- `fs.lchmod(path, mode, callback)`
-- `fs.lchown(path, uid, gid, callback)`
-- `fs.lstat(path[, options], callback)`
-- `fs.lutimes(path, atime, mtime, callback)`
-- `fs.open(path[, flags[, mode]], callback)`
-- `fs.openAsBlob(path[, options])`
-- `fs.opendir(path[, options], callback)`
-- `fs.read(fd, buffer, offset, length, position, callback)`
-- `fs.read(fd[, options], callback)`
-- `fs.read(fd, buffer[, options], callback)`
-- `fs.readv(fd, buffers[, position], callback)`
-- `fs.realpath.native(path[, options], callback)`
-- `fs.statfs(path[, options], callback)`
-- `fs.truncate(path[, len], callback)`
-- `fs.utimes(path, atime, mtime, callback)`
-- `fs.watch(filename[, options][, listener])`
-- `fs.write(fd, buffer, offset[, length[, position]], callback)`
-- `fs.write(fd, buffer[, options], callback)`
-- `fs.write(fd, string[, position[, encoding]], callback)`
-- `fs.writev(fd, buffers[, position], callback)`
-- `fs.chownSync(path, uid, gid)`
-- `fs.closeSync(fd)`
-- `fs.cpSync(src, dest[, options])`
-- `fs.fchmodSync(fd, mode)`
-- `fs.fchownSync(fd, uid, gid)`
-- `fs.fdatasyncSync(fd)`
-- `fs.fstatSync(fd[, options])`
-- `fs.fsyncSync(fd)`
-- `fs.ftruncateSync(fd[, len])`
-- `fs.futimesSync(fd, atime, mtime)`
-- `fs.globSync(pattern[, options])`
-- `fs.lchmodSync(path, mode)`
-- `fs.lchownSync(path, uid, gid)`
-- `fs.lutimesSync(path, atime, mtime)`
-- `fs.mkdtempDisposableSync(prefix[, options])`
-- … and 87 more (see `runtime-parity.md` for the full list)
+Runtime-created fs SystemError metadata is covered by parity fixtures: sync, callback, and promise errors expose negative numeric `err.errno` plus `err.code`, `err.syscall`, `err.path`, and `err.dest` where Node exposes them. Behavior caveats are tracked in `test-parity/node-suite/fs/STATUS.md` rather than as missing API rows. The remaining fs-family public API tail is only under `node:fs/promises` FileHandle: `pull`, `pullSync`, and `writer` (#3952).
 
 #### Covered (sampled)
 
@@ -462,7 +401,9 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `fs.rmdir(path[, options], callback)` | `ffi:js_fs_rmdir_sync` |
 | `fs.symlink(target, path[, type], callback)` | `ffi:js_fs_symlink_sync` |
 | `fs.symlinkSync(target, path[, type])` | `ffi:js_fs_symlink_sync` |
-| … | 25 more covered APIs |
+| `fs.Utf8Stream` | `manifest:fs.Utf8Stream` |
+| `fs._toUnixTimestamp(value)` | `ffi:js_fs_to_unix_timestamp` |
+| … | remaining fs APIs covered by manifest, FFI, or lowering entries |
 
 ### node:crypto
 
@@ -539,7 +480,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:process (and global `process`)
 
-**Gap APIs: 99** · Already covered: 19
+**Gap APIs: 97** · Already covered: 21
 
 #### Missing from Perry
 
@@ -572,7 +513,6 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `process.hasUncaughtExceptionCaptureCallback()`
 - `process.dlopen(module, filename[, flags])`
 - `process.loadEnvFile(path)`
-- `process.setSourceMapsEnabled(val)`
 - `process.hrtime([time])`
 - `process.permission.has(scope[, reference])`
 - `process.umask()`
@@ -613,6 +553,8 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `process.argv` | `expr:ProcessArgv` |
 | `process.env` | `expr:ProcessEnv` |
 | `process.stdin` | `expr:ProcessStdin` |
+| `process.sourceMapsEnabled` | `manifest:process.sourceMapsEnabled` |
+| `process.setSourceMapsEnabled(val)` | `manifest:process.setSourceMapsEnabled` |
 | … | 2 more covered APIs |
 
 ### node:util
@@ -680,17 +622,13 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:http2
 
-**Gap APIs: 97** · Already covered: 5
+**Gap APIs: 93** · Already covered: 9
 
 #### Missing from Perry
 
 - `http2.createServer([options][, onRequestHandler])`
 - `http2.connect(authority[, options][, listener])`
-- `http2.getDefaultSettings()`
-- `http2.getPackedSettings([settings])`
-- `http2.getUnpackedSettings(buf)`
 - `http2.performServerHandshake(socket[, options])`
-- `http2.constants`
 - `session.alpnProtocol`
 - `session.closed`
 - `session.connecting`
@@ -827,7 +765,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:zlib
 
-**Gap APIs: 79** · Already covered: 12
+**Gap APIs: 78** · Already covered: 13
 
 #### Missing from Perry
 
@@ -881,7 +819,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `Z_OK`
 - `Z_STREAM_END`
 - `Z_NEED_DICT`
-- … and 29 more (see `runtime-parity.md` for the full list)
+- … and 28 more (see `runtime-parity.md` for the full list)
 
 #### Covered (sampled)
 
@@ -891,6 +829,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `zlib.Gzip` | `ffi:js_zlib_gzip` |
 | `zlib.Gunzip` | `ffi:js_zlib_gunzip` |
 | `zlib.Inflate` | `ffi:js_zlib_inflate` |
+| `zlib.codes` | `manifest:zlib.codes` |
 | `zlib.deflate(buffer[, options], callback)` | `ffi:js_zlib_deflate` |
 | `zlib.deflateSync(buffer[, options])` | `ffi:js_zlib_deflate_sync` |
 | `zlib.gzip(buffer[, options], callback)` | `manifest:zlib.gzip` |
@@ -1031,13 +970,13 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | API | Coverage source |
 |-----|-----------------|
 | `worker_threads.parentPort` | `ffi:js_worker_threads_parent_port` |
-| `worker.postMessage(value[, transferList])` | `manifest:worker_threads.postMessage` |
-| `port.postMessage(value[, transferList])` | `manifest:worker_threads.postMessage` |
-| `bc.postMessage(message)` | `manifest:worker_threads.postMessage` |
+| `worker.postMessage(value[, transferList])` | `stdlib worker_threads receiver methods` |
+| `port.postMessage(value[, transferList])` | `stdlib worker_threads receiver methods` |
+| `bc.postMessage(message)` | `stdlib worker_threads receiver methods` |
 
 ### node:net
 
-**Gap APIs: 56** · Already covered: 22
+**Gap APIs: 55** · Already covered: 23
 
 #### Missing from Perry
 
@@ -1091,7 +1030,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `socket.connecting`
 - `socket.destroyed`
 - `socket.localAddress`
-- … and 6 more (see `runtime-parity.md` for the full list)
+- … and 5 more (see `runtime-parity.md` for the full list)
 
 #### Covered (sampled)
 
@@ -1111,6 +1050,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `server.listen(path[, backlog][, callback])` | `ffi:js_net_server_listen` |
 | `server.listen([port[, host[, backlog]]][, callback])` | `ffi:js_net_server_listen` |
 | `new net.Socket([options])` | `manifest:net.Socket` |
+| `new net.Stream([options])` | `manifest:net.Stream` |
 | `socket.connect(options[, connectListener])` | `manifest:net.connect` |
 | … | 7 more covered APIs |
 
@@ -1170,6 +1110,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `textEncoderStream.encoding`
 - `textEncoderStream.readable`
 - `textEncoderStream.writable`
+- `URLPattern` remains intentionally absent while Perry advertises a Node 22 runtime target; Node 22 latest-jod globals document `URL` and `URLSearchParams` but not `URLPattern`, which was added as a global in Node 24.
 - … and 6 more (see `runtime-parity.md` for the full list)
 
 #### Covered (sampled)
@@ -1255,24 +1196,12 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:tls
 
-**Gap APIs: 50** · Already covered: 3
+**Gap APIs: 38** · Already covered: 15
 
 #### Missing from Perry
 
-- `tls.checkServerIdentity(hostname, cert)`
-- `tls.createSecureContext([options])`
 - `tls.createSecurePair([context][, isServer][, requestCert][, rejectUnauthorized][, options])`
 - `tls.createServer([options][, secureConnectionListener])`
-- `tls.setDefaultCACertificates(certs)`
-- `tls.getCACertificates([type])`
-- `tls.getCiphers()`
-- `tls.DEFAULT_ECDH_CURVE`
-- `tls.DEFAULT_MAX_VERSION`
-- `tls.DEFAULT_MIN_VERSION`
-- `tls.DEFAULT_CIPHERS`
-- `tls.rootCertificates`
-- `tls.CLIENT_RENEG_LIMIT`
-- `tls.CLIENT_RENEG_WINDOW`
 - `server.addContext(hostname, context)`
 - `server.address()`
 - `server.close([callback])`
@@ -1317,87 +1246,106 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `tls.connect(options[, callback])` | `ffi:js_tls_connect` |
 | `tls.connect(port[, host][, options][, callback])` | `ffi:js_tls_connect` |
 | `tls.connect(path[, options][, callback])` | `ffi:js_tls_connect` |
+| `tls.checkServerIdentity(hostname, cert)` | `manifest:tls.checkServerIdentity`; `test-parity/node-suite/tls/identity/check-server-identity.ts` |
+| `tls.createSecureContext([options])` | `manifest:tls.createSecureContext`; `test-parity/node-suite/tls/context/secure-context.ts` |
+| `tls.setDefaultCACertificates(certs)` | `manifest:tls.setDefaultCACertificates`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.getCACertificates([type])` | `manifest:tls.getCACertificates`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.getCiphers()` | `manifest:tls.getCiphers`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.DEFAULT_ECDH_CURVE` | `manifest:tls.DEFAULT_ECDH_CURVE`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.DEFAULT_MAX_VERSION` | `manifest:tls.DEFAULT_MAX_VERSION`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.DEFAULT_MIN_VERSION` | `manifest:tls.DEFAULT_MIN_VERSION`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.DEFAULT_CIPHERS` | `manifest:tls.DEFAULT_CIPHERS`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.rootCertificates` | `manifest:tls.rootCertificates`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.CLIENT_RENEG_LIMIT` | `manifest:tls.CLIENT_RENEG_LIMIT`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.CLIENT_RENEG_WINDOW` | `manifest:tls.CLIENT_RENEG_WINDOW`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
 
 ### node:fs/promises
 
-**Gap APIs: 41** · Already covered: 20
+**Gap APIs: 3** · Already covered: 58
 
 #### Missing from Perry
 
-- `fsPromises.access(path[, mode])`
-- `fsPromises.chmod(path, mode)`
-- `fsPromises.chown(path, uid, gid)`
-- `fsPromises.cp(src, dest[, options])`
-- `fsPromises.glob(pattern[, options])`
-- `fsPromises.lchmod(path, mode)`
-- `fsPromises.lchown(path, uid, gid)`
-- `fsPromises.lstat(path[, options])`
-- `fsPromises.lutimes(path, atime, mtime)`
-- `fsPromises.mkdtemp(prefix[, options])`
-- `fsPromises.mkdtempDisposable(prefix[, options])`
-- `fsPromises.open(path, flags[, mode])`
-- `fsPromises.opendir(path[, options])`
-- `fsPromises.realpath(path[, options])`
-- `fsPromises.rmdir(path[, options])`
-- `fsPromises.statfs(path[, options])`
-- `fsPromises.truncate(path[, len])`
-- `fsPromises.utimes(path, atime, mtime)`
-- `fsPromises.watch(filename[, options])`
-- `fsPromises.constants`
-- `filehandle.fd`
-- `filehandle.chmod(mode)`
-- `filehandle.chown(uid, gid)`
-- `filehandle.close()`
-- `filehandle.datasync()`
 - `filehandle.pull([...transforms][, options])`
 - `filehandle.pullSync([...transforms][, options])`
-- `filehandle.read(buffer, offset, length, position)`
-- `filehandle.read([options])`
-- `filehandle.read(buffer[, options])`
-- `filehandle.readableWebStream([options])`
-- `filehandle.readv(buffers[, position])`
-- `filehandle.sync()`
-- `filehandle.truncate(len)`
-- `filehandle.utimes(atime, mtime)`
-- `filehandle.write(buffer, offset[, length[, position]])`
-- `filehandle.write(buffer[, options])`
-- `filehandle.write(string[, position[, encoding]])`
-- `filehandle.writev(buffers[, position])`
 - `filehandle.writer([options])`
-- `filehandle[Symbol.asyncDispose]()`
+
+The runtime manifest intentionally has no rows for these unsupported FileHandle APIs. The direct `fs/promises` submodule rows are present and generated API docs/DTS include the submodule.
 
 #### Covered (sampled)
 
 | API | Coverage source |
 |-----|-----------------|
-| `fsPromises.appendFile(path, data[, options])` | `manifest:fs.appendFile` |
-| `fsPromises.copyFile(src, dest[, mode])` | `manifest:fs.copyFile` |
-| `fsPromises.link(existingPath, newPath)` | `manifest:fs.link` |
-| `fsPromises.mkdir(path[, options])` | `manifest:fs.mkdir` |
-| `fsPromises.readdir(path[, options])` | `manifest:fs.readdir` |
-| `fsPromises.readFile(path[, options])` | `manifest:fs.readFile` |
-| `fsPromises.readlink(path[, options])` | `manifest:fs.readlink` |
-| `fsPromises.rename(oldPath, newPath)` | `manifest:fs.rename` |
-| `fsPromises.rm(path[, options])` | `manifest:fs.rm` |
-| `fsPromises.stat(path[, options])` | `manifest:fs.stat` |
-| `fsPromises.symlink(target, path[, type])` | `manifest:fs.symlink` |
-| `fsPromises.unlink(path)` | `manifest:fs.unlink` |
-| `fsPromises.writeFile(file, data[, options])` | `manifest:fs.writeFile` |
+| `fsPromises.access(path[, mode])` | `manifest:fs/promises.access` |
+| `fsPromises.appendFile(path, data[, options])` | `manifest:fs/promises.appendFile` |
+| `fsPromises.chmod(path, mode)` | `manifest:fs/promises.chmod` |
+| `fsPromises.chown(path, uid, gid)` | `manifest:fs/promises.chown` |
+| `fsPromises.copyFile(src, dest[, mode])` | `manifest:fs/promises.copyFile` |
+| `fsPromises.cp(src, dest[, options])` | `manifest:fs/promises.cp` |
+| `fsPromises.glob(pattern[, options])` | `manifest:fs/promises.glob` |
+| `fsPromises.lchmod(path, mode)` | `manifest:fs/promises.lchmod` |
+| `fsPromises.lchown(path, uid, gid)` | `manifest:fs/promises.lchown` |
+| `fsPromises.link(existingPath, newPath)` | `manifest:fs/promises.link` |
+| `fsPromises.lstat(path[, options])` | `manifest:fs/promises.lstat` |
+| `fsPromises.lutimes(path, atime, mtime)` | `manifest:fs/promises.lutimes` |
+| `fsPromises.mkdir(path[, options])` | `manifest:fs/promises.mkdir` |
+| `fsPromises.mkdtemp(prefix[, options])` | `manifest:fs/promises.mkdtemp` |
+| `fsPromises.mkdtempDisposable(prefix[, options])` | `manifest:fs/promises.mkdtempDisposable` |
+| `fsPromises.open(path, flags[, mode])` | `manifest:fs/promises.open` |
+| `fsPromises.opendir(path[, options])` | `manifest:fs/promises.opendir` |
+| `fsPromises.readdir(path[, options])` | `manifest:fs/promises.readdir` |
+| `fsPromises.readFile(path[, options])` | `manifest:fs/promises.readFile` |
+| `fsPromises.readlink(path[, options])` | `manifest:fs/promises.readlink` |
+| `fsPromises.realpath(path[, options])` | `manifest:fs/promises.realpath` |
+| `fsPromises.rename(oldPath, newPath)` | `manifest:fs/promises.rename` |
+| `fsPromises.rm(path[, options])` | `manifest:fs/promises.rm` |
+| `fsPromises.rmdir(path[, options])` | `manifest:fs/promises.rmdir` |
+| `fsPromises.stat(path[, options])` | `manifest:fs/promises.stat` |
+| `fsPromises.statfs(path[, options])` | `manifest:fs/promises.statfs` |
+| `fsPromises.symlink(target, path[, type])` | `manifest:fs/promises.symlink` |
+| `fsPromises.truncate(path[, len])` | `manifest:fs/promises.truncate` |
+| `fsPromises.unlink(path)` | `manifest:fs/promises.unlink` |
+| `fsPromises.utimes(path, atime, mtime)` | `manifest:fs/promises.utimes` |
+| `fsPromises.watch(filename[, options])` | `manifest:fs/promises.watch` |
+| `fsPromises.writeFile(file, data[, options])` | `manifest:fs/promises.writeFile` |
+| `fsPromises.constants` | `manifest:fs/promises.constants` |
 | `filehandle.appendFile(data[, options])` | `manifest:fs.appendFile` |
+| `filehandle.fd` | `ffi:js_fs_filehandle_open` |
+| `filehandle.chmod(mode)` | `ffi:js_fs_filehandle_open` |
+| `filehandle.chown(uid, gid)` | `ffi:js_fs_filehandle_open` |
+| `filehandle.close()` | `ffi:js_fs_filehandle_open` |
 | `filehandle.createReadStream([options])` | `manifest:fs.createReadStream` |
 | `filehandle.createWriteStream([options])` | `manifest:fs.createWriteStream` |
+| `filehandle.datasync()` | `ffi:js_fs_filehandle_open` |
+| `filehandle.read(buffer, offset, length, position)` | `ffi:js_fs_filehandle_open` |
+| `filehandle.read([options])` | `ffi:js_fs_filehandle_open` |
+| `filehandle.read(buffer[, options])` | `ffi:js_fs_filehandle_open` |
 | `filehandle.readLines([options])` | `ffi:js_fs_filehandle_open` |
 | `filehandle.readFile(options)` | `manifest:fs.readFile` |
+| `filehandle.readv(buffers[, position])` | `ffi:js_fs_filehandle_open` |
 | `filehandle.stat([options])` | `manifest:fs.stat` |
+| `filehandle.sync()` | `ffi:js_fs_filehandle_open` |
+| `filehandle.truncate(len)` | `ffi:js_fs_filehandle_open` |
+| `filehandle.utimes(atime, mtime)` | `ffi:js_fs_filehandle_open` |
+| `filehandle.write(buffer, offset[, length[, position]])` | `ffi:js_fs_filehandle_open` |
+| `filehandle.write(buffer[, options])` | `ffi:js_fs_filehandle_open` |
+| `filehandle.write(string[, position[, encoding]])` | `ffi:js_fs_filehandle_open` |
 | `filehandle.writeFile(data, options)` | `manifest:fs.writeFile` |
+| `filehandle.writev(buffers[, position])` | `ffi:js_fs_filehandle_open` |
 
 ### node:sqlite
 
 **Gap APIs: 44** · Already covered: 8
 
+#### Covered by Perry (#3183/#3184)
+
+- `new DatabaseSync(path)` (incl. `:memory:`) → rusqlite connection
+- `db.exec(sql)` / `db.prepare(sql)` → `StatementSync` / `db.close()`
+- `stmt.run(...params)` → `{ changes, lastInsertRowid }`
+- `stmt.get(...params)` / `stmt.all(...params)` → row object(s)
+- `stmt.iterate(...params)` (array-backed) / `stmt.columns()` metadata
+
 #### Missing from Perry
 
-- `new DatabaseSync(path[, options])`
 - `db.function(name[, options], fn)`
 - `db.aggregate(name, options)`
 - `db.applyChangeset(changeset[, options])`
@@ -1414,8 +1362,6 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `db.isTransaction`
 - `db.limits`
 - `db[Symbol.dispose]()`
-- `stmt.iterate([namedParameters][, ...anonymousParameters])`
-- `stmt.columns()`
 - `stmt.setAllowBareNamedParameters(enabled)`
 - `stmt.setAllowUnknownNamedParameters(enabled)`
 - `stmt.setReadBigInts(enabled)`
@@ -1727,29 +1673,13 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:readline
 
-**Gap APIs: 26** · Already covered: 3
+**Gap APIs: 10** · Already covered: 19
 
 #### Missing from Perry
 
-- `readline.clearLine(stream, dir[, callback])`
-- `readline.clearScreenDown(stream[, callback])`
-- `readline.cursorTo(stream, x[, y][, callback])`
-- `readline.moveCursor(stream, dx, dy[, callback])`
-- `readline.emitKeypressEvents(stream[, interface])`
 - `rl[Symbol.dispose]()`
-- `rl.pause()`
-- `rl.resume()`
-- `rl.prompt([preserveCursor])`
-- `rl.setPrompt(prompt)`
-- `rl.getPrompt()`
-- `rl.write(data[, key])`
-- `rl.getCursorPos()`
 - `rl[Symbol.asyncIterator]()`
-- `rl.line`
 - `rl.cursor`
-- `rl.terminal`
-- `'line'`
-- `'close'`
 - `'pause'`
 - `'resume'`
 - `'history'`
@@ -1763,8 +1693,24 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | API | Coverage source |
 |-----|-----------------|
 | `readline.createInterface(options)` | `ffi:js_readline_create_interface` |
+| `readline.clearLine(stream, dir[, callback])` | `rt:js_readline_clear_line_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
+| `readline.clearScreenDown(stream[, callback])` | `rt:js_readline_clear_screen_down_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
+| `readline.cursorTo(stream, x[, y][, callback])` | `rt:js_readline_cursor_to_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
+| `readline.moveCursor(stream, dx, dy[, callback])` | `rt:js_readline_move_cursor_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
+| `readline.emitKeypressEvents(stream[, interface])` | `rt:js_readline_emit_keypress_events_args`; `test-parity/node-suite/readline/helpers/emit-keypress-events.ts` |
 | `rl.close()` | `manifest:readline.close` |
+| `rl.pause()` | `ffi:js_readline_pause`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.resume()` | `ffi:js_readline_resume`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.prompt([preserveCursor])` | `ffi:js_readline_prompt`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.setPrompt(prompt)` | `ffi:js_readline_set_prompt`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.getPrompt()` | `ffi:js_readline_get_prompt`; `test-parity/node-suite/readline/interface/control-methods.ts` |
 | `rl.question(query[, options], callback)` | `manifest:readline.question` |
+| `rl.write(data[, key])` | `ffi:js_readline_write`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.getCursorPos()` | `ffi:js_readline_get_cursor_pos`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.line` | `ffi:js_readline_line`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.terminal` | `ffi:js_readline_terminal`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `'line'` | `ffi:js_readline_on`; `test-parity/node-suite/readline/interface/stream-line-close-events.ts` |
+| `'close'` | `ffi:js_readline_on`; `test-parity/node-suite/readline/interface/stream-line-close-events.ts` |
 
 ### node:async_hooks
 
@@ -1944,12 +1890,10 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:timers
 
-**Gap APIs: 13** · Already covered: 4
+**Gap APIs: 11** · Already covered: 7
 
 #### Missing from Perry
 
-- `setImmediate(callback[, ...args])`
-- `clearImmediate(immediate)`
 - `immediate.ref()`
 - `immediate.unref()`
 - `immediate.hasRef()`
@@ -1966,8 +1910,11 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 | API | Coverage source |
 |-----|-----------------|
+| `setImmediate(callback[, ...args])` | `manifest:timers.setImmediate` |
 | `setInterval(callback[, delay[, ...args]])` | `ffi:js_interval_timer_*` |
 | `setTimeout(callback[, delay[, ...args]])` | `ffi:js_set_timeout` |
+| `clearImmediate(immediate)` | `manifest:timers.clearImmediate` |
+| `timers.promises` | `manifest:timers.promises` |
 | `clearInterval(timeout)` | `rt:js_interval_timer_*` |
 | `clearTimeout(timeout)` | `rt:js_timer_*` |
 
@@ -2007,11 +1954,10 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:path
 
-**Gap APIs: 4** · Already covered: 12
+**Gap APIs: 3** · Already covered: 13
 
 #### Missing from Perry
 
-- `path.matchesGlob(path, pattern)`
 - `path.toNamespacedPath(path)`
 - `path.posix`
 - `path.win32`
@@ -2026,6 +1972,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `path.format(pathObject)` | `manifest:path.format` |
 | `path.isAbsolute(path)` | `manifest:path.isAbsolute` |
 | `path.join([...paths])` | `manifest:path.join` |
+| `path.matchesGlob(path, pattern)` | `manifest:path.matchesGlob`; `test-parity/node-suite/path/matchesGlob/extglob-globstar.ts`; `test-parity/node-suite/path/matchesGlob/win32-separators.ts` |
 | `path.normalize(path)` | `manifest:path.normalize` |
 | `path.parse(path)` | `manifest:path.parse` |
 | `path.relative(from, to)` | `manifest:path.relative` |
@@ -2039,6 +1986,8 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 Web-global coverage is determined heuristically — Perry implements many of these via dedicated `Expr::*` lowering (e.g. `Expr::FetchWithOptions`, `Expr::TextEncoderEncode`, `Expr::UrlNew`) and `js_*` FFI surfaces (Headers/Request/Response/Blob via perry-ext-fetch and perry-stdlib). The covered list below is curated; the gap list is everything else in the parity reference's Web / Global APIs section.
 
+The counts above are the last generated parity-gap counts on this branch. They were not manually decremented for #3598 draft PRs because those runtime changes are deliberately not stacked here. Regenerate this section after the child PRs land on `main` so the Web/global counts can move with the code that actually exposes the globals.
+
 ### Web globals — covered (sampled)
 
 | API | Coverage source |
@@ -2047,7 +1996,7 @@ Web-global coverage is determined heuristically — Perry implements many of the
 | `console` | `builtin` |
 | `performance` | `expr:PerformanceNow` |
 | `queueMicrotask(cb)` | `rt:promise microtask queue` |
-| `structuredClone(value, options?)` | `rt:js_structured_clone` |
+| `structuredClone(value, options?)` | `rt:js_structured_clone_with_options` |
 | `atob(b64)` | `expr:Atob` |
 | `btoa(str)` | `expr:Btoa` |
 | `fetch(input, init?)` | `expr:FetchWithOptions` |
@@ -2132,9 +2081,9 @@ Web-global coverage is determined heuristically — Perry implements many of the
 | `AbortSignal.timeout(ms)` | `ffi:js_abort_signal_timeout` |
 | `new TextEncoder()` | `expr:TextEncoderNew` |
 | `new TextDecoder(label?, options?)` | `expr:TextDecoderNew` |
-| `new MessageChannel()` | `partial via worker_threads` |
-| `new BroadcastChannel(name)` | `partial` |
-| `new WebSocket(url, protocols?)` | `ffi:js_ws_connect` |
+| `new MessageChannel()` | `rt:js_message_channel_new` |
+| `new BroadcastChannel(name)` | `rt:js_broadcast_channel_new` |
+| `globalThis.WebSocket` / `new WebSocket(url, protocols?)` | `ffi:js_ws_connect` + global constructor shape |
 | `crypto.getRandomValues(typedArray)` | `manifest:crypto.getRandomValues` |
 | `crypto.randomUUID()` | `expr:CryptoRandomUUID` |
 | `performance.now()` | `expr:PerformanceNow` |
@@ -2324,7 +2273,7 @@ High-visibility entries (full list in `runtime-parity.md`):
 
 **Methodology decisions:**
 
-- Module aliasing: `node:fs` and `fs` treated as the same module. `node:fs/promises` is its own module key but falls back to `fs` for manifest lookup.
+- Module aliasing: `node:fs` and `fs` treated as the same module. `node:fs/promises` is its own module key; older rows may still be cross-checked against `fs` when documenting FileHandle-derived coverage.
 - Sync/async variants are checked separately: `fs.readFileSync` does not credit `fs.readFile`. The FFI heuristic does try the `_sync` suffix to handle the common pattern.
 - For instance methods (`dir.read`, `socket.write`): the matcher first treats the leading segment as the class name and tries `js_<module>_<class>_<method>`; if that fails it falls through to the generic dispatch table.
 - A small builtin overlay covers symbols like `setTimeout`, `clearTimeout`, `console.error` that ship as `js_set_timeout` / `js_console_*` rather than `js_timers_*` / `js_console_*` — without it the matcher would mis-report those as gaps.

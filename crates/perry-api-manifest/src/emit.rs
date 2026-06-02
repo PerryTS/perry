@@ -6,7 +6,10 @@
 //! alphabetically, entries within a module sort by kind then name —
 //! so regenerated docs produce stable diffs in CI.
 
-use crate::{ApiEntry, ApiKind, ApiSource, ParamSpec, TypeSpec, API_MANIFEST};
+use crate::{
+    entry_is_public_named_export, is_node_core_private_named_export, ApiEntry, ApiKind, ApiSource,
+    ParamSpec, TypeSpec, API_MANIFEST,
+};
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
@@ -15,7 +18,7 @@ use std::fmt::Write;
 /// tell at a glance which Perry release the doc was generated from.
 pub fn emit_markdown(_perry_version: &str) -> String {
     let mut out = String::new();
-    let by_module = group_by_module();
+    let by_module = group_by_module(entry_visible_in_markdown);
 
     let _ = writeln!(out, "# Supported API Reference");
     let _ = writeln!(out);
@@ -56,17 +59,27 @@ pub fn emit_markdown(_perry_version: &str) -> String {
         let methods: Vec<&ApiEntry> = entries
             .iter()
             .copied()
-            .filter(|e| matches!(e.kind, ApiKind::Method { .. }))
+            .filter(|e| match e.kind {
+                ApiKind::Method {
+                    has_receiver: true, ..
+                } => !is_node_core_private_named_export(e.module, e.name),
+                ApiKind::Method {
+                    class_filter: Some(_),
+                    ..
+                } => !is_node_core_private_named_export(e.module, e.name),
+                ApiKind::Method { .. } => entry_is_public_named_export(e),
+                _ => false,
+            })
             .collect();
         let properties: Vec<&ApiEntry> = entries
             .iter()
             .copied()
-            .filter(|e| matches!(e.kind, ApiKind::Property))
+            .filter(|e| matches!(e.kind, ApiKind::Property) && entry_is_public_named_export(e))
             .collect();
         let classes: Vec<&ApiEntry> = entries
             .iter()
             .copied()
-            .filter(|e| matches!(e.kind, ApiKind::Class))
+            .filter(|e| matches!(e.kind, ApiKind::Class) && entry_is_public_named_export(e))
             .collect();
 
         if !classes.is_empty() {
@@ -130,7 +143,7 @@ pub fn emit_markdown(_perry_version: &str) -> String {
 /// follow-up that threads receiver-type info through HIR.
 pub fn emit_dts(_perry_version: &str) -> String {
     let mut out = String::new();
-    let by_module = group_by_module();
+    let by_module = group_by_module(entry_visible_in_dts);
 
     let _ = writeln!(
         out,
@@ -156,7 +169,10 @@ pub fn emit_dts(_perry_version: &str) -> String {
         let _ = writeln!(out, "declare module \"{}\" {{", module_decl);
 
         // Classes first — methods may reference them via class_filter.
-        for e in entries.iter().filter(|e| matches!(e.kind, ApiKind::Class)) {
+        for e in entries
+            .iter()
+            .filter(|e| matches!(e.kind, ApiKind::Class) && entry_is_public_named_export(e))
+        {
             let _ = writeln!(
                 out,
                 "  /** {}{} */",
@@ -177,7 +193,7 @@ pub fn emit_dts(_perry_version: &str) -> String {
         // Properties.
         for e in entries
             .iter()
-            .filter(|e| matches!(e.kind, ApiKind::Property))
+            .filter(|e| matches!(e.kind, ApiKind::Property) && entry_is_public_named_export(e))
         {
             let _ = writeln!(
                 out,
@@ -185,7 +201,12 @@ pub fn emit_dts(_perry_version: &str) -> String {
                 source_dts_tag(e),
                 if e.stub { " — stub" } else { "" }
             );
-            let _ = writeln!(out, "  export const {}: any;", ts_ident(e.name));
+            if e.name == "default" {
+                let _ = writeln!(out, "  const _default: any;");
+                let _ = writeln!(out, "  export default _default;");
+            } else {
+                let _ = writeln!(out, "  export const {}: any;", ts_ident(e.name));
+            }
         }
 
         // Module-level functions (has_receiver: false, no class_filter).
@@ -203,7 +224,7 @@ pub fn emit_dts(_perry_version: &str) -> String {
                     has_receiver: false,
                     class_filter: None,
                 }
-            )
+            ) && entry_is_public_named_export(e)
         }) {
             // Same name can appear with multiple class_filter rows in
             // the dispatch table; the manifest collapses them but a
@@ -257,15 +278,47 @@ fn trim_trailing_blank_line(mut out: String) -> String {
     out
 }
 
-fn group_by_module() -> BTreeMap<&'static str, Vec<&'static ApiEntry>> {
+fn group_by_module(
+    include: fn(&ApiEntry) -> bool,
+) -> BTreeMap<&'static str, Vec<&'static ApiEntry>> {
     let mut by_module: BTreeMap<&'static str, Vec<&'static ApiEntry>> = BTreeMap::new();
     for entry in API_MANIFEST {
+        if !include(entry) {
+            continue;
+        }
         by_module.entry(entry.module).or_default().push(entry);
     }
     for entries in by_module.values_mut() {
         entries.sort_by_key(|e| (kind_order(&e.kind), e.name));
     }
     by_module
+}
+
+fn entry_visible_in_markdown(entry: &ApiEntry) -> bool {
+    match entry.kind {
+        ApiKind::Method {
+            has_receiver: true, ..
+        }
+        | ApiKind::Method {
+            class_filter: Some(_),
+            ..
+        } => true,
+        ApiKind::Method { .. } | ApiKind::Property | ApiKind::Class => {
+            entry_is_public_named_export(entry)
+        }
+    }
+}
+
+fn entry_visible_in_dts(entry: &ApiEntry) -> bool {
+    match entry.kind {
+        ApiKind::Method {
+            has_receiver: false,
+            class_filter: None,
+        }
+        | ApiKind::Property
+        | ApiKind::Class => entry_is_public_named_export(entry),
+        ApiKind::Method { .. } => false,
+    }
 }
 
 fn emit_native_memory_globals(out: &mut String) {
@@ -486,6 +539,7 @@ fn render_type(ty: &TypeSpec) -> &'static str {
         TypeSpec::Handle => "any",
         TypeSpec::Void => "void",
         TypeSpec::Any => "any",
+        TypeSpec::Promise => "Promise<any>",
     }
 }
 
@@ -580,10 +634,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn markdown_contains_every_module() {
+    fn markdown_contains_every_visible_module() {
         let md = emit_markdown("test");
-        let modules: std::collections::HashSet<&'static str> =
-            API_MANIFEST.iter().map(|e| e.module).collect();
+        let modules: std::collections::HashSet<&'static str> = API_MANIFEST
+            .iter()
+            .filter(|entry| entry_visible_in_markdown(entry))
+            .map(|e| e.module)
+            .collect();
         for m in &modules {
             // Modules render as `## `<name>``.
             assert!(
@@ -595,10 +652,13 @@ mod tests {
     }
 
     #[test]
-    fn dts_declares_every_module() {
+    fn dts_declares_every_visible_module() {
         let dts = emit_dts("test");
-        let modules: std::collections::HashSet<&'static str> =
-            API_MANIFEST.iter().map(|e| e.module).collect();
+        let modules: std::collections::HashSet<&'static str> = API_MANIFEST
+            .iter()
+            .filter(|entry| entry_visible_in_dts(entry))
+            .map(|e| e.module)
+            .collect();
         for m in &modules {
             assert!(
                 dts.contains(&format!("declare module \"{}\"", m)),
@@ -606,6 +666,14 @@ mod tests {
                 m
             );
         }
+    }
+
+    #[test]
+    fn emitters_omit_internal_punycode_ucs2_module() {
+        let md = emit_markdown("test");
+        let dts = emit_dts("test");
+        assert!(!md.contains("## `punycode.ucs2`"));
+        assert!(!dts.contains("declare module \"punycode.ucs2\""));
     }
 
     #[test]
@@ -635,6 +703,20 @@ mod tests {
         assert!(
             crypto_block.contains("export function randomUUID"),
             "crypto.randomUUID missing from .d.ts"
+        );
+    }
+
+    #[test]
+    fn worker_threads_internal_receiver_methods_stay_out_of_docs() {
+        let md = emit_markdown("test");
+        let dts = emit_dts("test");
+        assert!(
+            !md.contains("`postMessage` — instance"),
+            "worker_threads.postMessage should stay receiver-dispatch-only"
+        );
+        assert!(
+            !dts.contains("export function postMessage("),
+            "worker_threads.postMessage should not be emitted as a module function"
         );
     }
 

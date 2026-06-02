@@ -30,7 +30,8 @@ use crate::request::{
 use crate::response::{alloc_server_response, HyperResponseShape, ResponseBody};
 use crate::server::{HttpPendingRequest, HttpServer};
 use crate::tls::{
-    build_server_config, json_value_to_pem_bytes, parse_cert_chain, parse_private_key,
+    build_server_config, has_pem_material, json_value_to_pem_bytes, parse_cert_chain,
+    parse_private_key,
 };
 
 /// Decode `{ key, cert, alpnProtocols? }` from a NaN-boxed JsValue
@@ -87,19 +88,24 @@ pub unsafe extern "C" fn js_node_https_create_server(opts_f64: f64, handler: i64
     ensure_gc_scanner_registered();
 
     let (key_pem, cert_pem, enable_http2_alpn) = parse_https_opts(opts_f64);
+    let mut base = HttpServer::with_handler(handler);
+    crate::server::apply_server_options(&mut base, opts_f64);
 
     let cert_chain = parse_cert_chain(&cert_pem);
+    let has_tls_material = has_pem_material(&key_pem, &cert_pem);
     let private_key = match parse_private_key(&key_pem) {
         Some(k) => k,
         None => {
-            eprintln!("[node:https] no recognized PEM private key");
+            if has_tls_material {
+                eprintln!("[node:https] no recognized PEM private key");
+            }
             // Still register the handle so the user gets a `.listen`
             // call that fails with a clear bind error rather than a
             // silent zero-handle.
             return register_handle(HttpsServer {
                 handler,
                 tls_config: None,
-                base: HttpServer::with_handler(handler),
+                base,
             });
         }
     };
@@ -114,7 +120,7 @@ pub unsafe extern "C" fn js_node_https_create_server(opts_f64: f64, handler: i64
     register_handle(HttpsServer {
         handler,
         tls_config,
-        base: HttpServer::with_handler(handler),
+        base,
     })
 }
 
@@ -448,4 +454,77 @@ pub unsafe extern "C" fn js_node_https_server_on(
         s.base.listeners.entry(event).or_default().push(callback);
     }
     f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_https_server_close_all_connections(_handle: i64) {}
+
+#[no_mangle]
+pub extern "C" fn js_node_https_server_close_idle_connections(_handle: i64) {}
+
+macro_rules! https_server_getter {
+    ($name:ident, $field:ident) => {
+        #[no_mangle]
+        pub extern "C" fn $name(handle: i64) -> f64 {
+            get_handle::<HttpsServer>(handle)
+                .map(|s| s.base.$field)
+                .unwrap_or(0.0)
+        }
+    };
+}
+
+macro_rules! https_server_setter {
+    ($name:ident, $field:ident) => {
+        #[no_mangle]
+        pub extern "C" fn $name(handle: i64, value: f64) -> f64 {
+            if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
+                s.base.$field = value;
+            }
+            value
+        }
+    };
+}
+
+https_server_getter!(js_node_https_server_headers_timeout, headers_timeout);
+https_server_setter!(js_node_https_server_set_headers_timeout, headers_timeout);
+https_server_getter!(js_node_https_server_keep_alive_timeout, keep_alive_timeout);
+https_server_setter!(
+    js_node_https_server_set_keep_alive_timeout,
+    keep_alive_timeout
+);
+https_server_getter!(js_node_https_server_request_timeout, request_timeout);
+https_server_setter!(js_node_https_server_set_request_timeout, request_timeout);
+https_server_getter!(js_node_https_server_idle_timeout, idle_timeout);
+https_server_setter!(js_node_https_server_set_idle_timeout, idle_timeout);
+https_server_getter!(js_node_https_server_max_headers_count, max_headers_count);
+https_server_setter!(
+    js_node_https_server_set_max_headers_count,
+    max_headers_count
+);
+https_server_getter!(
+    js_node_https_server_max_requests_per_socket,
+    max_requests_per_socket
+);
+https_server_setter!(
+    js_node_https_server_set_max_requests_per_socket,
+    max_requests_per_socket
+);
+
+#[no_mangle]
+pub extern "C" fn js_node_https_server_set_timeout_method(
+    handle: i64,
+    msecs: f64,
+    callback: i64,
+) -> i64 {
+    if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
+        s.base.idle_timeout = msecs;
+        if callback != 0 {
+            s.base
+                .listeners
+                .entry("timeout".to_string())
+                .or_default()
+                .push(callback);
+        }
+    }
+    handle
 }

@@ -51,25 +51,28 @@ pub(super) fn compile_closure(
 ) -> Result<()> {
     // Destructure the closure expression. We trust that the caller
     // passes only `Expr::Closure` here (from `collect_closures_*`).
-    let (params, body, captures, captures_this, enclosing_class, is_async) = match closure_expr {
-        perry_hir::Expr::Closure {
-            params,
-            body,
-            captures,
-            captures_this,
-            enclosing_class,
-            is_async,
-            ..
-        } => (
-            params,
-            body,
-            captures,
-            *captures_this,
-            enclosing_class.clone(),
-            *is_async,
-        ),
-        _ => return Err(anyhow!("compile_closure: expected Expr::Closure")),
-    };
+    let (params, body, captures, captures_this, enclosing_class, is_async, is_strict) =
+        match closure_expr {
+            perry_hir::Expr::Closure {
+                params,
+                body,
+                captures,
+                captures_this,
+                enclosing_class,
+                is_async,
+                is_strict,
+                ..
+            } => (
+                params,
+                body,
+                captures,
+                *captures_this,
+                enclosing_class.clone(),
+                *is_async,
+                *is_strict,
+            ),
+            _ => return Err(anyhow!("compile_closure: expected Expr::Closure")),
+        };
 
     let llvm_name = format!("perry_closure_{}__{}", module_prefix, func_id);
 
@@ -248,6 +251,7 @@ pub(super) fn compile_closure(
         // break if a raw object pointer (or any non-Promise) is handed
         // back. Issue #125.
         is_async_fn: is_async,
+        is_strict_fn: is_strict,
         static_field_globals,
         class_ids,
         class_keys_globals: &cross_module.class_keys_globals,
@@ -345,8 +349,13 @@ pub(super) fn compile_closure(
         super::arguments::ArgumentsCallee::CurrentClosure,
     );
 
-    stmt::lower_stmts(&mut ctx, body)
-        .with_context(|| format!("lowering closure body func_id={}", func_id))?;
+    if is_async {
+        stmt::lower_async_rejecting_stmts(&mut ctx, body)
+            .with_context(|| format!("lowering async closure body func_id={}", func_id))?;
+    } else {
+        stmt::lower_stmts(&mut ctx, body)
+            .with_context(|| format!("lowering closure body func_id={}", func_id))?;
+    }
 
     if !ctx.block().is_terminated() {
         let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));

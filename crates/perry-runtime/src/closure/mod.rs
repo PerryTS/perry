@@ -25,13 +25,14 @@ pub use alloc::{
 };
 
 pub use registry::{
-    build_rest_array, closure_arity, dispatch_rest_bundled, dispatch_with_arity,
+    build_rest_array, closure_arity, closure_length, dispatch_rest_bundled, dispatch_with_arity,
     is_registered_async_function, is_registered_generator_function, js_register_closure_arity,
     js_register_closure_async_function, js_register_closure_generator_function,
-    js_register_closure_rest, js_register_closure_rest_and_arguments,
-    js_register_closure_synthetic_arguments, lookup_closure_arity, lookup_closure_rest,
-    lookup_closure_rest_full, real_capture_count, resolve_strategy, DispatchStrategy,
-    BOUND_FUNCTION_FUNC_PTR, BOUND_METHOD_FUNC_PTR, CAPTURES_THIS_FLAG, CLOSURE_MAGIC,
+    js_register_closure_length, js_register_closure_rest, js_register_closure_synthetic_arguments,
+    js_register_closure_rest_and_arguments,
+    lookup_closure_arity, lookup_closure_length, lookup_closure_rest, lookup_closure_rest_full,
+    real_capture_count, resolve_strategy, DispatchStrategy, BOUND_FUNCTION_FUNC_PTR,
+    BOUND_METHOD_FUNC_PTR, CAPTURES_THIS_FLAG, CLOSURE_MAGIC,
 };
 
 pub use dispatch::{
@@ -42,7 +43,9 @@ pub use dispatch::{
     js_closure_call8, js_closure_call9, js_closure_call_apply_with_spread, js_closure_call_array,
     js_function_bind, js_native_call_value, throw_not_callable,
 };
-pub(crate) use dispatch::{reset_throw_not_callable_counter, resolve_call2_direct};
+pub(crate) use dispatch::{
+    reify_function_method_value, reset_throw_not_callable_counter, resolve_call2_direct,
+};
 
 #[cfg(test)]
 pub(crate) use dynamic_props::test_clear_closure_side_tables;
@@ -52,9 +55,10 @@ pub(crate) use dynamic_props::{
     visit_closure_static_prototype_slot_mut,
 };
 pub use dynamic_props::{
-    closure_dynamic_props_snapshot, closure_get_dynamic_prop, closure_set_dynamic_prop,
-    closure_set_static_prototype, closure_static_prototype, is_closure_ptr, js_closure_unbind_this,
-    scan_closure_dynamic_props_roots_mut,
+    closure_delete_own_dynamic_prop, closure_dynamic_props_snapshot, closure_get_dynamic_prop,
+    closure_has_own_dynamic_prop, closure_is_key_deleted, closure_mark_key_deleted,
+    closure_set_dynamic_prop, closure_set_static_prototype, closure_static_prototype,
+    is_closure_ptr, js_closure_unbind_this, scan_closure_dynamic_props_roots_mut,
 };
 
 // v8_stubs re-exports the AOT stubs + non-macOS Rust V8-interop stubs.

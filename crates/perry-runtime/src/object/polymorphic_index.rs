@@ -35,6 +35,32 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     if raw < 0x1000 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    if crate::buffer::is_registered_buffer(raw as usize) {
+        let idx_i32 = idx as i32;
+        let byte_val =
+            crate::buffer::js_buffer_get(raw as *const crate::buffer::BufferHeader, idx_i32);
+        return byte_val as f64;
+    }
+    if crate::typedarray::lookup_typed_array_kind(raw as usize).is_some() {
+        let idx_i32 = idx as i32;
+        return crate::typedarray::js_typed_array_get(
+            raw as *const crate::typedarray::TypedArrayHeader,
+            idx_i32,
+        );
+    }
+
+    let gc_type = unsafe {
+        let gc_header_addr = raw.wrapping_sub(crate::gc::GC_HEADER_SIZE as u64) as usize;
+        if gc_header_addr < 0x1000 {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+        *(gc_header_addr as *const u8)
+    };
+
+    if gc_type == crate::gc::GC_TYPE_STRING {
+        return crate::string::js_string_index_get(raw as *const crate::StringHeader, idx);
+    }
+
     let idx_i32 = idx as i32;
     if idx_i32 < 0 {
         // Negative numeric keys → string keys on the object path.
@@ -49,26 +75,6 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     {
         return value;
     }
-
-    if crate::buffer::is_registered_buffer(raw as usize) {
-        let byte_val =
-            crate::buffer::js_buffer_get(raw as *const crate::buffer::BufferHeader, idx_i32);
-        return byte_val as f64;
-    }
-    if crate::typedarray::lookup_typed_array_kind(raw as usize).is_some() {
-        return crate::typedarray::js_typed_array_get(
-            raw as *const crate::typedarray::TypedArrayHeader,
-            idx_i32,
-        );
-    }
-
-    let gc_type = unsafe {
-        let gc_header_addr = raw.wrapping_sub(crate::gc::GC_HEADER_SIZE as u64) as usize;
-        if gc_header_addr < 0x1000 {
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
-        }
-        *(gc_header_addr as *const u8)
-    };
 
     if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
         return crate::array::js_array_get_f64(

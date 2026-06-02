@@ -256,6 +256,7 @@ pub fn synthesize_class_captures(
         body: Vec::new(),
         is_async: false,
         is_generator: false,
+        is_strict: true,
         was_plain_async: false,
         was_unrolled: false,
         is_exported: false,

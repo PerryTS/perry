@@ -93,6 +93,14 @@ fn resolve_keyvalue_key(ctx: &mut LoweringContext, key: &ast::PropName) -> KeyRe
     }
 }
 
+fn is_noncomputed_proto_key(key: &ast::PropName) -> bool {
+    match key {
+        ast::PropName::Ident(ident) => ident.sym == *"__proto__",
+        ast::PropName::Str(s) => s.value.as_str().unwrap_or("") == "__proto__",
+        _ => false,
+    }
+}
+
 /// Resolution of an object-literal `Method` property key.
 enum MethodKeyKind {
     Static(String),
@@ -255,6 +263,7 @@ fn lower_method_prop(
             body,
             is_async: method.function.is_async,
             is_generator: method.function.is_generator,
+            is_strict: ctx.current_strict,
             was_plain_async: false,
             was_unrolled: false,
             is_exported: false,
@@ -291,6 +300,7 @@ fn lower_method_prop(
             enclosing_class,
             is_async: method.function.is_async,
             is_generator: method.function.is_generator,
+            is_strict: ctx.current_strict,
         }
     };
     Ok(Some((method_key, value_expr, uses_this)))
@@ -414,6 +424,7 @@ fn lower_accessor_prop(
         enclosing_class,
         is_async: false,
         is_generator: false,
+        is_strict: ctx.current_strict,
     };
     Ok(Some((accessor_key, closure)))
 }
@@ -443,18 +454,23 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         if obj.props.is_empty() {
             return false;
         }
-        for p in &obj.props {
-            match p {
-                ast::PropOrSpread::Spread(_) => return false,
-                ast::PropOrSpread::Prop(prop) => match prop.as_ref() {
-                    ast::Prop::KeyValue(kv) => match &kv.key {
+        for prop in &obj.props {
+            let ast::PropOrSpread::Prop(p) = prop else {
+                return false;
+            };
+            match p.as_ref() {
+                ast::Prop::KeyValue(kv) => {
+                    if is_noncomputed_proto_key(&kv.key) {
+                        return false;
+                    }
+                    match &kv.key {
                         ast::PropName::Ident(_) | ast::PropName::Str(_) | ast::PropName::Num(_) => {
                         }
                         _ => return false,
-                    },
-                    ast::Prop::Shorthand(_) => {}
-                    _ => return false,
-                },
+                    }
+                }
+                ast::Prop::Shorthand(_) => {}
+                _ => return false,
             }
         }
         true
@@ -537,6 +553,29 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         .props
         .iter()
         .any(|p| matches!(p, ast::PropOrSpread::Spread(_)));
+    let has_computed = obj.props.iter().any(|p| {
+        matches!(
+            p,
+            ast::PropOrSpread::Prop(prop)
+                if match prop.as_ref() {
+                    ast::Prop::KeyValue(kv) => matches!(kv.key, ast::PropName::Computed(_)),
+                    ast::Prop::Method(method) => matches!(method.key, ast::PropName::Computed(_)),
+                    ast::Prop::Getter(getter) => matches!(getter.key, ast::PropName::Computed(_)),
+                    ast::Prop::Setter(setter) => matches!(setter.key, ast::PropName::Computed(_)),
+                    _ => false,
+                }
+        )
+    });
+    let has_proto_setter = obj.props.iter().any(|p| {
+        matches!(
+            p,
+            ast::PropOrSpread::Prop(prop)
+                if match prop.as_ref() {
+                    ast::Prop::KeyValue(kv) => is_noncomputed_proto_key(&kv.key),
+                    _ => false,
+                }
+        )
+    });
     // #2442: object literals containing getters/setters also go through the
     // fully source-ordered IIFE so the accessor key lands in its source
     // position (`{a, get x(){}, b}` → keys `[a, x, b]`, not `[a, b, x]`).
@@ -549,7 +588,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 if matches!(prop.as_ref(), ast::Prop::Getter(_) | ast::Prop::Setter(_))
         )
     });
-    if has_spread || has_accessor {
+    if has_spread || has_accessor || has_computed || has_proto_setter {
         // #809: an object literal that mixes a `...spread` with computed
         // keys, methods, and `this`-binding methods. The old code lowered
         // this to `Expr::ObjectSpread { parts }`, whose `parts` list can
@@ -594,6 +633,8 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 getter: Expr,
                 setter: Expr,
             },
+            /// Non-computed `__proto__: value` special form.
+            SetPrototype { value: Expr },
             /// `...src` — copy src's own enumerable string+symbol props.
             Assign { src: Expr },
         }
@@ -613,11 +654,15 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         KeyResolution::Skip => {}
                         KeyResolution::Static(key) => {
                             let value = lower_expr(ctx, &kv.value)?;
-                            ops.push(SpreadOp::Set {
-                                key: Expr::String(key),
-                                value,
-                                infer_name: false,
-                            });
+                            if is_noncomputed_proto_key(&kv.key) {
+                                ops.push(SpreadOp::SetPrototype { value });
+                            } else {
+                                ops.push(SpreadOp::Set {
+                                    key: Expr::String(key),
+                                    value,
+                                    infer_name: false,
+                                });
+                            }
                         }
                         KeyResolution::Dynamic(key_expr) => {
                             let value = lower_expr(ctx, &kv.value)?;
@@ -758,6 +803,19 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             mutable: false,
                             init: Some(key),
                         });
+                        let prop_key_name = format!("__perry_obj_iife_prop_key_{}", body.len());
+                        let prop_key_id = ctx.define_local(prop_key_name.clone(), Type::Any);
+                        inner_local_ids.push(prop_key_id);
+                        body.push(Stmt::Let {
+                            id: prop_key_id,
+                            name: prop_key_name,
+                            ty: Type::Any,
+                            mutable: false,
+                            init: Some(extern_call(
+                                "js_object_literal_to_property_key",
+                                vec![Expr::LocalGet(key_id)],
+                            )),
+                        });
                         let value_name = format!("__perry_obj_iife_value_{}", body.len());
                         let value_id = ctx.define_local(value_name.clone(), Type::Any);
                         inner_local_ids.push(value_id);
@@ -768,14 +826,17 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             mutable: false,
                             init: Some(value),
                         });
-                        body.push(Stmt::Expr(Expr::IndexSet {
-                            object: Box::new(Expr::LocalGet(param_id)),
-                            index: Box::new(Expr::LocalGet(key_id)),
-                            value: Box::new(Expr::LocalGet(value_id)),
-                        }));
+                        body.push(Stmt::Expr(extern_call(
+                            "js_object_literal_set_computed",
+                            vec![
+                                Expr::LocalGet(param_id),
+                                Expr::LocalGet(prop_key_id),
+                                Expr::LocalGet(value_id),
+                            ],
+                        )));
                         body.push(Stmt::Expr(extern_call(
                             "js_object_literal_infer_computed_function_name",
-                            vec![Expr::LocalGet(key_id), Expr::LocalGet(value_id)],
+                            vec![Expr::LocalGet(prop_key_id), Expr::LocalGet(value_id)],
                         )));
                     } else {
                         body.push(Stmt::Expr(Expr::IndexSet {
@@ -805,6 +866,12 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                     body.push(Stmt::Expr(extern_call(
                         "js_object_define_accessor",
                         vec![Expr::LocalGet(param_id), key, getter, setter],
+                    )));
+                }
+                SpreadOp::SetPrototype { value } => {
+                    body.push(Stmt::Expr(extern_call(
+                        "js_object_literal_set_prototype",
+                        vec![Expr::LocalGet(param_id), value],
                     )));
                 }
                 SpreadOp::Assign { src } => {
@@ -843,6 +910,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             enclosing_class: None,
             is_async: false,
             is_generator: false,
+            is_strict: ctx.current_strict,
         };
         return Ok(Expr::Call {
             callee: Box::new(closure),
@@ -964,6 +1032,15 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
     };
     let mut body: Vec<Stmt> = Vec::with_capacity(computed_post_init.len() * 4 + 1);
     let mut inner_local_ids = vec![param_id];
+    let extern_call = |name: &str, args: Vec<Expr>| Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: name.to_string(),
+            param_types: Vec::new(),
+            return_type: Type::Any,
+        }),
+        args,
+        type_args: Vec::new(),
+    };
     for init in computed_post_init {
         match init {
             PostInit::SetValue { key, value } => {
@@ -977,6 +1054,19 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                     mutable: false,
                     init: Some(key),
                 });
+                let prop_key_name = format!("__perry_obj_iife_prop_key_{}", body.len());
+                let prop_key_id = ctx.define_local(prop_key_name.clone(), Type::Any);
+                inner_local_ids.push(prop_key_id);
+                body.push(Stmt::Let {
+                    id: prop_key_id,
+                    name: prop_key_name,
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(extern_call(
+                        "js_object_literal_to_property_key",
+                        vec![Expr::LocalGet(key_id)],
+                    )),
+                });
                 let value_name = format!("__perry_obj_iife_value_{}", body.len());
                 let value_id = ctx.define_local(value_name.clone(), Type::Any);
                 inner_local_ids.push(value_id);
@@ -987,20 +1077,18 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                     mutable: false,
                     init: Some(value),
                 });
-                body.push(Stmt::Expr(Expr::IndexSet {
-                    object: Box::new(Expr::LocalGet(param_id)),
-                    index: Box::new(Expr::LocalGet(key_id)),
-                    value: Box::new(Expr::LocalGet(value_id)),
-                }));
-                body.push(Stmt::Expr(Expr::Call {
-                    callee: Box::new(Expr::ExternFuncRef {
-                        name: "js_object_literal_infer_computed_function_name".to_string(),
-                        param_types: Vec::new(),
-                        return_type: Type::Any,
-                    }),
-                    args: vec![Expr::LocalGet(key_id), Expr::LocalGet(value_id)],
-                    type_args: Vec::new(),
-                }));
+                body.push(Stmt::Expr(extern_call(
+                    "js_object_literal_set_computed",
+                    vec![
+                        Expr::LocalGet(param_id),
+                        Expr::LocalGet(prop_key_id),
+                        Expr::LocalGet(value_id),
+                    ],
+                )));
+                body.push(Stmt::Expr(extern_call(
+                    "js_object_literal_infer_computed_function_name",
+                    vec![Expr::LocalGet(prop_key_id), Expr::LocalGet(value_id)],
+                )));
             }
             PostInit::SetMethodWithThis { key, closure } => {
                 // Emit a direct call to the runtime helper that
@@ -1057,6 +1145,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         enclosing_class: None,
         is_async: false,
         is_generator: false,
+        is_strict: ctx.current_strict,
     };
     Ok(Expr::Call {
         callee: Box::new(closure),

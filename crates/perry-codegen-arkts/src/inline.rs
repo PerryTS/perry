@@ -286,21 +286,27 @@ pub(crate) fn inline_calls_in_expr(
     if *budget == 0 {
         return;
     }
-    let (params, body, args) = match expr {
+    let (params, body, args, is_strict) = match expr {
         Expr::Call { callee, args, .. } => match callee.as_ref() {
             Expr::FuncRef(id) => match function_map.get(id) {
-                Some(func) if func.params.len() == args.len() => {
-                    (func.params.clone(), func.body.clone(), args.clone())
-                }
+                Some(func) if func.params.len() == args.len() => (
+                    func.params.clone(),
+                    func.body.clone(),
+                    args.clone(),
+                    func.is_strict,
+                ),
                 _ => return,
             },
             Expr::LocalGet(local_id) => match bindings.get(local_id) {
                 Some(Expr::Closure {
                     params,
                     body,
+                    is_strict,
                     is_async: false,
                     ..
-                }) if params.len() == args.len() => (params.clone(), body.clone(), args.clone()),
+                }) if params.len() == args.len() => {
+                    (params.clone(), body.clone(), args.clone(), *is_strict)
+                }
                 _ => return,
             },
             _ => return,
@@ -323,6 +329,7 @@ pub(crate) fn inline_calls_in_expr(
         params,
         return_type: perry_types::Type::Any,
         body,
+        is_strict,
         is_async: false,
         is_generator: false,
         is_exported: false,

@@ -1,0 +1,3 @@
+captured filehandle worker fd: -1
+captured filehandle as fd: EBADF:read
+captured original usable: true true

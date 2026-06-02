@@ -1,0 +1,4 @@
+returned filehandle fd: -1
+returned filehandle stat: EBADF:fstat
+returned original still open: true
+returned close fd: -1

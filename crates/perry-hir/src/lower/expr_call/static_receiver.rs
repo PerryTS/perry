@@ -50,8 +50,21 @@ pub(super) fn static_receiver_class(
         }
     }
     if let ast::Expr::New(new_expr) = obj {
-        if let ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
-            return match ident.sym.as_ref() {
+        let class_name = match new_expr.callee.as_ref() {
+            ast::Expr::Ident(ident) => Some(ident.sym.as_ref()),
+            ast::Expr::Member(member)
+                if matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if obj.sym.as_ref() == "globalThis")
+                    && ctx.lookup_local("globalThis").is_none() =>
+            {
+                match &member.prop {
+                    ast::MemberProp::Ident(prop) => Some(prop.sym.as_ref()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some(class_name) = class_name {
+            return match class_name {
                 "Date" => Some("Date"),
                 "URL" => Some("URL"),
                 "Buffer" => Some("Buffer"),

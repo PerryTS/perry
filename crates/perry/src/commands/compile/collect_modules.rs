@@ -10,7 +10,7 @@
 //! V2.2 codegen cache key derivation.
 
 use anyhow::{anyhow, Result};
-use perry_hir::ModuleKind;
+use perry_hir::{Expr, ModuleKind, Stmt};
 use perry_transform::{
     gather_cross_module_anon_classes, gather_cross_module_methods,
     gather_cross_module_methods_with_extern_imports, inline_finally_into_returns, inline_functions,
@@ -20,6 +20,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
+use crate::commands::progress::{ProgressSnapshot, VerboseProgress};
 use crate::OutputFormat;
 
 use super::{
@@ -175,6 +176,139 @@ pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
     }
 }
 
+fn expr_uses_global_crypto_namespace(expr: &Expr) -> bool {
+    if matches!(
+        expr,
+        Expr::PropertyGet { object, property }
+            if property == "crypto" && matches!(object.as_ref(), Expr::GlobalGet(0))
+    ) {
+        return true;
+    }
+
+    // The shared expression walker intentionally does not enter closure
+    // bodies; global crypto reads inside closures still need stdlib crypto
+    // linked for runtime-dispatched calls such as `c.randomUUID()`.
+    if let Expr::Closure { body, .. } = expr {
+        if stmts_use_global_crypto_namespace(body) {
+            return true;
+        }
+    }
+
+    let mut found = false;
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        if !found && expr_uses_global_crypto_namespace(child) {
+            found = true;
+        }
+    });
+    found
+}
+
+fn stmts_use_global_crypto_namespace(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(stmt_uses_global_crypto_namespace)
+}
+
+fn stmt_uses_global_crypto_namespace(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Let { init, .. } => init
+            .as_ref()
+            .map(expr_uses_global_crypto_namespace)
+            .unwrap_or(false),
+        Stmt::Expr(expr) | Stmt::Throw(expr) => expr_uses_global_crypto_namespace(expr),
+        Stmt::Return(expr) => expr
+            .as_ref()
+            .map(expr_uses_global_crypto_namespace)
+            .unwrap_or(false),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_uses_global_crypto_namespace(condition)
+                || stmts_use_global_crypto_namespace(then_branch)
+                || else_branch
+                    .as_ref()
+                    .map(|branch| stmts_use_global_crypto_namespace(branch))
+                    .unwrap_or(false)
+        }
+        Stmt::While { condition, body } => {
+            expr_uses_global_crypto_namespace(condition) || stmts_use_global_crypto_namespace(body)
+        }
+        Stmt::DoWhile { body, condition } => {
+            stmts_use_global_crypto_namespace(body) || expr_uses_global_crypto_namespace(condition)
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_ref()
+                .map(|stmt| stmt_uses_global_crypto_namespace(stmt))
+                .unwrap_or(false)
+                || condition
+                    .as_ref()
+                    .map(expr_uses_global_crypto_namespace)
+                    .unwrap_or(false)
+                || update
+                    .as_ref()
+                    .map(expr_uses_global_crypto_namespace)
+                    .unwrap_or(false)
+                || stmts_use_global_crypto_namespace(body)
+        }
+        Stmt::Labeled { body, .. } => stmt_uses_global_crypto_namespace(body),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            stmts_use_global_crypto_namespace(body)
+                || catch
+                    .as_ref()
+                    .map(|catch| stmts_use_global_crypto_namespace(&catch.body))
+                    .unwrap_or(false)
+                || finally
+                    .as_ref()
+                    .map(|body| stmts_use_global_crypto_namespace(body))
+                    .unwrap_or(false)
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            expr_uses_global_crypto_namespace(discriminant)
+                || cases.iter().any(|case| {
+                    case.test
+                        .as_ref()
+                        .map(expr_uses_global_crypto_namespace)
+                        .unwrap_or(false)
+                        || stmts_use_global_crypto_namespace(&case.body)
+                })
+        }
+        Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => false,
+    }
+}
+
+fn function_uses_global_crypto_namespace(function: &perry_hir::Function) -> bool {
+    function
+        .params
+        .iter()
+        .filter_map(|param| param.default.as_ref())
+        .any(expr_uses_global_crypto_namespace)
+        || stmts_use_global_crypto_namespace(&function.body)
+}
+
+fn module_uses_global_crypto_namespace(module: &perry_hir::Module) -> bool {
+    stmts_use_global_crypto_namespace(&module.init)
+        || module
+            .functions
+            .iter()
+            .any(function_uses_global_crypto_namespace)
+}
+
 /// #1674 sub-part B: expand a dynamic-`import()` glob pattern
 /// (`<prefix>*<suffix>`, where `prefix` is a relative, directory-anchored
 /// path) into concrete relative specifiers by reading the importing module's
@@ -239,6 +373,7 @@ pub(super) fn collect_modules(
     target: Option<&str>,
     next_class_id: &mut perry_hir::ClassId,
     skip_transforms: bool,
+    progress: &VerboseProgress,
     mut parse_cache: Option<&mut ParseCache>,
 ) -> Result<()> {
     let canonical = entry_path
@@ -249,6 +384,13 @@ pub(super) fn collect_modules(
         return Ok(());
     }
     visited.insert(canonical.clone());
+    progress.record(ProgressSnapshot {
+        stage: "collect-module",
+        module_path: Some(&canonical),
+        visited: Some(visited.len()),
+        collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+        ..Default::default()
+    });
 
     // Check if this file should be handled by JS runtime instead of native compilation
     // This includes: JS files, declaration files (.d.ts), JSON files, or any file in node_modules when JS runtime is enabled
@@ -307,6 +449,13 @@ pub(super) fn collect_modules(
 
         let source = fs::read_to_string(&canonical)
             .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
+        progress.record(ProgressSnapshot {
+            stage: "collect-js-module",
+            module_path: Some(&canonical),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
 
         let specifier = canonical.to_string_lossy().to_string();
         // Issue #818: walk transitive ESM imports for JS modules so the
@@ -372,6 +521,7 @@ pub(super) fn collect_modules(
                 target,
                 next_class_id,
                 skip_transforms,
+                progress,
                 parse_cache.as_deref_mut(),
             )?;
         }
@@ -426,6 +576,14 @@ pub(super) fn collect_modules(
     // Parse via the optional in-memory cache (only populated by `perry dev`).
     // On a cache hit, we reuse the AST from the previous rebuild — the single
     // largest time sink in the hot rebuild path on unchanged files.
+    progress.record(ProgressSnapshot {
+        stage: "parse",
+        module_path: Some(&canonical),
+        module_name: Some(&module_name),
+        visited: Some(visited.len()),
+        collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+        ..Default::default()
+    });
     let ast_module_owned: swc_ecma_ast::Module;
     let ast_module: &swc_ecma_ast::Module = match parse_cache.as_deref_mut() {
         Some(cache) => match parse_cached(cache, &canonical, &source, filename) {
@@ -553,6 +711,14 @@ pub(super) fn collect_modules(
     if !ctx.precompile_results.is_empty() {
         perry_hir::set_precompile_results(ctx.precompile_results.clone());
     }
+    progress.record(ProgressSnapshot {
+        stage: "lower",
+        module_path: Some(&canonical),
+        module_name: Some(&module_name),
+        visited: Some(visited.len()),
+        collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+        ..Default::default()
+    });
     let lower_result = perry_hir::lower_module_full(
         ast_module,
         &module_name,
@@ -563,6 +729,14 @@ pub(super) fn collect_modules(
         is_entry_module,
         is_external_module,
     );
+    progress.heartbeat(ProgressSnapshot {
+        stage: "lower",
+        module_path: Some(&canonical),
+        module_name: Some(&module_name),
+        visited: Some(visited.len()),
+        collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+        ..Default::default()
+    });
     perry_hir::clear_compile_packages_override();
     perry_hir::clear_current_module_source();
     perry_hir::clear_precompile_state();
@@ -615,10 +789,11 @@ pub(super) fn collect_modules(
                 perry_hir::Resolution::Set(set) => {
                     if set.len() > perry_hir::DYNAMIC_IMPORT_PATH_CAP {
                         dyn_errors.push(format!(
-                            "dynamic import() in module {}: resolves to {} possible paths \
+                            "dynamic import() in module {} ({}): resolves to {} possible paths \
                              (limit: {})\n  note: consider enumerating with a ternary or \
                              registry object",
                             module_name,
+                            canonical.display(),
                             set.len(),
                             perry_hir::DYNAMIC_IMPORT_PATH_CAP
                         ));
@@ -647,9 +822,10 @@ pub(super) fn collect_modules(
                         );
                         if matches.len() > perry_hir::DYNAMIC_IMPORT_PATH_CAP {
                             dyn_errors.push(format!(
-                                "dynamic import() in module {}: glob '{}*{}' matched {} files \
+                                "dynamic import() in module {} ({}): glob '{}*{}' matched {} files \
                                  (limit: {})",
                                 module_name,
+                                canonical.display(),
                                 prefix,
                                 suffix,
                                 matches.len(),
@@ -668,7 +844,58 @@ pub(super) fn collect_modules(
                         }
                     }
                     dyn_errors.push(format!(
-                        "dynamic import() in module {}: {}",
+                        "dynamic import() in module {} ({}): {}",
+                        module_name,
+                        canonical.display(),
+                        reason
+                    ));
+                }
+            }
+        }
+    });
+    perry_hir::for_each_worker_new_mut(&mut hir_module, &mut |expr| {
+        if let perry_hir::Expr::WorkerNew {
+            paths, filename, ..
+        } = expr
+        {
+            if !paths.is_empty() {
+                return;
+            }
+            let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
+            match perry_hir::resolve_import_path_with_consts(
+                filename,
+                &module_const_locals,
+                &mut visiting,
+            ) {
+                perry_hir::Resolution::Set(set) => {
+                    if set.len() > perry_hir::DYNAMIC_IMPORT_PATH_CAP {
+                        dyn_errors.push(format!(
+                            "worker_threads Worker in module {}: filename resolves to {} possible paths \
+                             (limit: {})",
+                            module_name,
+                            set.len(),
+                            perry_hir::DYNAMIC_IMPORT_PATH_CAP
+                        ));
+                        return;
+                    }
+                    if set.len() != 1 {
+                        dyn_errors.push(format!(
+                            "worker_threads Worker in module {}: filename must resolve to exactly one path for now, got {}",
+                            module_name,
+                            set.len()
+                        ));
+                        return;
+                    }
+                    for p in &set {
+                        if !new_dyn_imports.contains(p) {
+                            new_dyn_imports.push(p.clone());
+                        }
+                    }
+                    *paths = set;
+                }
+                perry_hir::Resolution::Unresolved(reason) => {
+                    dyn_errors.push(format!(
+                        "worker_threads Worker in module {}: {}",
                         module_name, reason
                     ));
                 }
@@ -733,6 +960,15 @@ pub(super) fn collect_modules(
         if import.type_only {
             continue;
         }
+        progress.record(ProgressSnapshot {
+            stage: "resolve-import",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            import_specifier: Some(&import.source),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
 
         // Apply package alias (e.g., @parse/node-apn → perry-push from perry.packageAliases)
         if let Some(alias) = ctx.package_aliases.get(import.source.as_str()).cloned() {
@@ -753,6 +989,19 @@ pub(super) fn collect_modules(
         {
             ctx.needs_stdlib = true;
             ctx.native_module_imports.insert("stream/web".to_string());
+        }
+
+        // `node:fs/promises` itself is runtime-backed, but
+        // FileHandle.readableWebStream() needs perry-stdlib's Web Streams
+        // factory even when user code never imports `node:stream/web`.
+        if import
+            .source
+            .strip_prefix("node:")
+            .unwrap_or(&import.source)
+            == "fs/promises"
+        {
+            ctx.needs_stdlib = true;
+            ctx.native_module_imports.insert("fs/promises".to_string());
         }
 
         // Refs #665: an opt-in via `perry.compilePackages` overrides the
@@ -924,7 +1173,12 @@ pub(super) fn collect_modules(
                                     if let Err(msg) =
                                         super::resolve::validate_abi_version(&manifest)
                                     {
-                                        return Err(anyhow::anyhow!("{}", msg));
+                                        return Err(anyhow::anyhow!(
+                                            "{}\n  in module: {}\n  import: {}",
+                                            msg,
+                                            canonical.display(),
+                                            import.source
+                                        ));
                                     }
                                     // #497: gate transitive
                                     // `perry.nativeLibrary` linkage on
@@ -954,9 +1208,13 @@ pub(super) fn collect_modules(
                                              \n\
                                              For a one-off build, set \
                                              `PERRY_ALLOW_PERRY_FEATURES=1` in the environment. \
-                                             (#497)",
+                                             (#497)\n\
+                                             \n\
+                                             Caused by import `{}` in module `{}`.",
                                             manifest.module,
                                             manifest.module,
+                                            import.source,
+                                            canonical.display(),
                                         );
                                     }
                                     match format {
@@ -983,6 +1241,7 @@ pub(super) fn collect_modules(
                         target,
                         next_class_id,
                         skip_transforms,
+                        progress,
                         parse_cache.as_deref_mut(),
                     )?;
                 }
@@ -1026,7 +1285,12 @@ pub(super) fn collect_modules(
                                     if let Err(msg) =
                                         super::resolve::validate_abi_version(&manifest)
                                     {
-                                        return Err(anyhow::anyhow!("{}", msg));
+                                        return Err(anyhow::anyhow!(
+                                            "{}\n  in module: {}\n  import: {}",
+                                            msg,
+                                            canonical.display(),
+                                            module_name
+                                        ));
                                     }
                                     // #497: gate transitive
                                     // `perry.nativeLibrary` linkage on
@@ -1056,9 +1320,13 @@ pub(super) fn collect_modules(
                                              \n\
                                              For a one-off build, set \
                                              `PERRY_ALLOW_PERRY_FEATURES=1` in the environment. \
-                                             (#497)",
+                                             (#497)\n\
+                                             \n\
+                                             Caused by import `{}` in module `{}`.",
                                             manifest.module,
                                             manifest.module,
+                                            module_name,
+                                            canonical.display(),
                                         );
                                     }
                                     match format {
@@ -1097,6 +1365,7 @@ pub(super) fn collect_modules(
                         target,
                         next_class_id,
                         skip_transforms,
+                        progress,
                         parse_cache.as_deref_mut(),
                     )?;
                 }
@@ -1129,7 +1398,7 @@ pub(super) fn collect_modules(
             // through to that runtime helper.
             if has_namespace_specifier && known_node_submodule_key(&import.source).is_none() {
                 return Err(anyhow::anyhow!(
-                    "Could not resolve namespace import `import * as ... from \"{source}\"` in {filename}.\n\
+                    "Could not resolve namespace import `import * as ... from \"{source}\"` in {filename} ({path}).\n\
                      Perry has no stdlib bindings for this module path, so the namespace would compile to an empty object \
                      — every method call on it would silently no-op at runtime. Pick one:\n  \
                        • switch to named imports: `import {{ foo }} from \"{source}\"` (still resolves through whatever backing exists, but fails fast at the actual missing binding),\n  \
@@ -1137,6 +1406,7 @@ pub(super) fn collect_modules(
                        • or add the module to perry-stdlib / perry-ext-* / perry.compilePackages.",
                     source = import.source,
                     filename = filename,
+                    path = canonical.display(),
                 ));
             }
             if !import.is_native && known_node_submodule_key(&import.source).is_none() {
@@ -1168,6 +1438,15 @@ pub(super) fn collect_modules(
             perry_hir::Export::Named { .. } => None,
         };
         if let Some(src) = source {
+            progress.record(ProgressSnapshot {
+                stage: "resolve-re-export",
+                module_path: Some(&canonical),
+                module_name: Some(&module_name),
+                import_specifier: Some(src),
+                visited: Some(visited.len()),
+                collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+                ..Default::default()
+            });
             if let Some((resolved_path, kind)) =
                 cached_resolve_import(src.as_str(), &canonical, ctx)
             {
@@ -1204,7 +1483,12 @@ pub(super) fn collect_modules(
                                 parse_native_library_manifest(dir, &src_str, target)?
                             {
                                 if let Err(msg) = super::resolve::validate_abi_version(&manifest) {
-                                    return Err(anyhow::anyhow!("{}", msg));
+                                    return Err(anyhow::anyhow!(
+                                        "{}\n  in module: {}\n  re-export: {}",
+                                        msg,
+                                        canonical.display(),
+                                        src_str
+                                    ));
                                 }
                                 if !super::allowlist_matches(
                                     &manifest.module,
@@ -1228,9 +1512,13 @@ pub(super) fn collect_modules(
                                          \n\
                                          For a one-off build, set \
                                          `PERRY_ALLOW_PERRY_FEATURES=1` in the environment. \
-                                         (#497)",
+                                         (#497)\n\
+                                         \n\
+                                         Caused by re-export `{}` in module `{}`.",
                                         manifest.module,
                                         manifest.module,
+                                        src_str,
+                                        canonical.display(),
                                     );
                                 }
                                 match format {
@@ -1259,6 +1547,7 @@ pub(super) fn collect_modules(
                             target,
                             next_class_id,
                             skip_transforms,
+                            progress,
                             parse_cache.as_deref_mut(),
                         )?;
                     }
@@ -1295,6 +1584,14 @@ pub(super) fn collect_modules(
     // and BEFORE `transform_generators` (which consumes the generator
     // shape it produces). Issue #256.
     if !skip_transforms {
+        progress.record(ProgressSnapshot {
+            stage: "transform",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         let mut extra_methods: std::collections::HashMap<(String, String), MethodCandidate> =
             std::collections::HashMap::new();
         if std::env::var("PERRY_INLINE_DEBUG").is_ok() {
@@ -1411,11 +1708,12 @@ pub(super) fn collect_modules(
     // Detect crypto.* builtin usage (randomBytes/randomUUID/sha256/md5 used
     // without `import crypto`). The runtime symbols live behind the
     // perry-stdlib `crypto` Cargo feature, so we need to flip that on for
-    // auto-optimize. Text-grep the serialized Debug form of the HIR — these
-    // variants are rare enough that the cost is negligible and avoids
-    // writing a new visitor.
+    // auto-optimize. Text-grep the serialized Debug form for the established
+    // dedicated HIR variants. The global WebCrypto namespace path below uses
+    // a structured walk because it is an ordinary `PropertyGet`.
     {
         let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
+        let uses_global_crypto_namespace = module_uses_global_crypto_namespace(&hir_module);
         if hir_debug.contains("CryptoRandomBytes")
             || hir_debug.contains("CryptoRandomUUID")
             || hir_debug.contains("CryptoSha256")
@@ -1435,22 +1733,27 @@ pub(super) fn collect_modules(
             || hir_debug.contains("WebCryptoGenerateKey")
             || hir_debug.contains("WebCryptoWrapKey")
             || hir_debug.contains("WebCryptoUnwrapKey")
+            // `globalThis.crypto` / bare `crypto` now materializes the
+            // WebCrypto singleton. Its `randomUUID` property dispatches
+            // through perry-stdlib's crypto bridge when called via a
+            // runtime property read rather than the direct HIR variant.
+            || uses_global_crypto_namespace
         {
             ctx.needs_stdlib = true;
             ctx.uses_crypto_builtins = true;
         }
     }
 
-    // Detect readline usage via process.stdin.setRawMode / .on (#347
-    // Phase 2). These don't go through an `import 'readline'` statement,
-    // so the import-based needs_stdlib detection above misses them.
-    // The codegen lowers ProcessStdinSetRawMode / ProcessStdinOn to direct
-    // extern calls to js_readline_set_raw_mode / js_readline_stdin_on
-    // which live in perry-stdlib::readline; without stdlib linked, those
-    // symbols are unresolved.
+    // Detect readline usage via process.stdin raw/lifecycle methods. These
+    // don't go through an `import 'readline'` statement, so the import-based
+    // needs_stdlib detection above misses them.
     {
         let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
-        if hir_debug.contains("ProcessStdinSetRawMode") || hir_debug.contains("ProcessStdinOn") {
+        if hir_debug.contains("ProcessStdinSetRawMode")
+            || hir_debug.contains("ProcessStdinOn")
+            || hir_debug.contains("ProcessStdinRemoveListener")
+            || hir_debug.contains("ProcessStdinLifecycle")
+        {
             ctx.needs_stdlib = true;
             ctx.native_module_imports.insert("readline".to_string());
         }
@@ -1477,6 +1780,15 @@ pub(super) fn collect_modules(
         ctx.native_module_imports.insert("ioredis".to_string());
     }
 
+    let collected_after_insert = ctx.native_modules.len() + ctx.js_modules.len() + 1;
+    progress.record(ProgressSnapshot {
+        stage: "collected",
+        module_path: Some(&canonical),
+        module_name: Some(&module_name),
+        visited: Some(visited.len()),
+        collected: Some(collected_after_insert),
+        ..Default::default()
+    });
     ctx.native_modules.insert(canonical, hir_module);
     Ok(())
 }

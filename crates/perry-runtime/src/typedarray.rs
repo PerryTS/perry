@@ -100,6 +100,25 @@ pub fn name_for_kind(kind: u8) -> &'static str {
     }
 }
 
+#[inline]
+pub fn kind_for_name(name: &str) -> Option<u8> {
+    match name {
+        "Int8Array" => Some(KIND_INT8),
+        "Uint8Array" => Some(KIND_UINT8),
+        "Int16Array" => Some(KIND_INT16),
+        "Uint16Array" => Some(KIND_UINT16),
+        "Int32Array" => Some(KIND_INT32),
+        "Uint32Array" => Some(KIND_UINT32),
+        "Float32Array" => Some(KIND_FLOAT32),
+        "Float64Array" => Some(KIND_FLOAT64),
+        "Uint8ClampedArray" => Some(KIND_UINT8_CLAMPED),
+        "BigInt64Array" => Some(KIND_BIGINT64),
+        "BigUint64Array" => Some(KIND_BIGUINT64),
+        "Float16Array" => Some(KIND_FLOAT16),
+        _ => None,
+    }
+}
+
 /// TypedArrayHeader. The data region follows the header inline.
 #[repr(C)]
 pub struct TypedArrayHeader {
@@ -220,6 +239,30 @@ pub unsafe fn typed_array_bytes_mut<'a>(ta: *mut TypedArrayHeader) -> Option<&'a
         return None;
     }
     Some(std::slice::from_raw_parts_mut(data, len))
+}
+
+pub fn typed_array_to_array_buffer(
+    ta: *const TypedArrayHeader,
+) -> *mut crate::buffer::BufferHeader {
+    let Some(bytes) = (unsafe { typed_array_bytes(ta) }) else {
+        return std::ptr::null_mut();
+    };
+    let buf = crate::buffer::buffer_alloc(bytes.len() as u32);
+    if buf.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe {
+        (*buf).length = bytes.len() as u32;
+        if !bytes.is_empty() {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                crate::buffer::buffer_data_mut(buf),
+                bytes.len(),
+            );
+        }
+    }
+    crate::buffer::mark_as_array_buffer(buf as usize);
+    buf
 }
 
 unsafe fn typed_array_for_byte_helper(

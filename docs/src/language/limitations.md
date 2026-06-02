@@ -29,6 +29,13 @@ eval("console.log('hi')");
 new Function("return 42");
 ```
 
+Test262 rows that only observe parsing or executing a code string remain
+intentional AOT exclusions, not runtime dynamic-code work. This includes the
+`language/white-space/comment-{multi,single}-{form-feed,horizontal-tab,nbsp,space,vertical-tab}.js`
+rows and the direct-eval reference row `language/types/reference/8.7.2-1-s.js`;
+they map to the AOT eval tracker (#1677), eval classifier diagnostics (#1678),
+and the limited literal `Function` folding work (#1679).
+
 ## Decorators
 
 Perry parses decorator syntax, supports compile-time-only transforms
@@ -103,8 +110,11 @@ their APIs behave as expected — `set` / `get` / `has` / `delete`, `add`,
 never collide on the same slot.
 
 The one caveat is that Perry's garbage collector does not yet treat these
-references as *weak*, so targets are **retained rather than collected**. In
-practice:
+references as *weak*, so targets are **retained rather than collected**. The
+current runtime stores `WeakRef` targets and `FinalizationRegistry`
+registrations in ordinary object/array fields (`crates/perry-runtime/src/weakref.rs`),
+and the adjacent GC root scanners do not have a weak-slot clearing/finalizer
+queue hook yet. In practice:
 
 - `WeakRef.deref()` always returns the original target (it is never reported as
   collected).

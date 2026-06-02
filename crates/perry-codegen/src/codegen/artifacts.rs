@@ -22,6 +22,7 @@ use super::entry::compile_module_entry;
 use super::helpers::{sanitize, scoped_fn_name};
 use super::method::{compile_method, compile_static_method};
 use super::opts::CrossModuleCtx;
+use super::spec_function_length;
 
 /// Read-only view of the `CompileOptions` fields that the artifact
 /// emission step references via `opts.X`. Bundled into a struct so the
@@ -91,6 +92,7 @@ pub(super) struct ModuleArtifactsCtx<'a> {
     pub closure_synthetic_arguments: &'a std::collections::HashSet<u32>,
     pub closure_rest_and_arguments: &'a std::collections::HashSet<u32>,
     pub closure_arities: &'a HashMap<u32, u32>,
+    pub closure_lengths: &'a HashMap<u32, u32>,
     pub closures: &'a [(perry_types::FuncId, perry_hir::Expr)],
     pub class_keys_init_data: &'a [(String, String, u32, Vec<u64>, Vec<u64>)],
     pub imported_class_stubs: &'a [perry_hir::Class],
@@ -132,6 +134,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         closure_synthetic_arguments,
         closure_rest_and_arguments,
         closure_arities,
+        closure_lengths,
         closures,
         class_keys_init_data,
         imported_class_stubs,
@@ -353,6 +356,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 body: ctor_body.1,
                 is_async: false,
                 is_generator: false,
+                is_strict: true,
                 was_plain_async: false,
                 was_unrolled: false,
                 is_exported: false,
@@ -1075,6 +1079,17 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             }
         }
         for prefix in foreign_prefixes {
+            // #3938: `__native_mod__<name>` / `__node_submod__<key>` sentinel
+            // prefixes are resolved at the `Expr::DynamicImport` dispatch site
+            // via runtime namespace builders (`js_create_native_module_namespace`
+            // / `js_node_submodule_namespace`); they have no compiled-module
+            // `@__perry_ns_<prefix>` global or `<prefix>__init` function, so the
+            // extern decls below are dead. Worse, for slash-bearing submodule
+            // names (`node:path/posix`, `node:util/types`) the `/` is illegal in
+            // an LLVM global identifier and broke the whole module. Skip them.
+            if prefix.starts_with("__native_mod__") || prefix.starts_with("__node_submod__") {
+                continue;
+            }
             let ns_name = format!("__perry_ns_{}", prefix);
             llmod.add_external_global(&ns_name, DOUBLE);
             // Issue #753: declare each dynamic-import target's `__init`
@@ -1213,11 +1228,9 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         })
         .collect();
 
-    // Wrapper arities — declared param count per top-level user-function
-    // wrapper. Used to register `fn.length` for `FuncRef` values that
-    // codegen materialises through `__perry_wrap_<name>`. Refs
-    // ramda's `converge` / `juxt` / `useWith` chain that reads
-    // `.length` off function values to compute curry arities.
+    // Wrapper arities — ABI param count per top-level user-function wrapper.
+    // Used by dynamic closure dispatch to pad omitted trailing parameters
+    // before invoking the wrapper.
     let user_fn_wrapper_arity: Vec<(String, u32)> = hir
         .functions
         .iter()
@@ -1225,6 +1238,23 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             func_names
                 .get(&f.id)
                 .map(|name| (format!("__perry_wrap_{}", name), f.params.len() as u32))
+        })
+        .collect();
+
+    // Wrapper lengths — ECMAScript-visible `.length`, which stops at the
+    // first default parameter and before rest. Refs ramda's `converge` /
+    // `juxt` / `useWith` chain that reads `.length` off function values to
+    // compute curry arities.
+    let user_fn_wrapper_length: Vec<(String, u32)> = hir
+        .functions
+        .iter()
+        .filter_map(|f| {
+            func_names.get(&f.id).map(|name| {
+                (
+                    format!("__perry_wrap_{}", name),
+                    spec_function_length(&f.params) as u32,
+                )
+            })
         })
         .collect();
 
@@ -1356,12 +1386,14 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         class_table,
         closure_rest_params,
         closure_arities,
+        closure_lengths,
         &user_fn_wrapper_rest,
         closure_synthetic_arguments,
         &user_fn_wrapper_synthetic_arguments,
         closure_rest_and_arguments,
         &user_fn_wrapper_rest_and_arguments,
         &user_fn_wrapper_arity,
+        &user_fn_wrapper_length,
         &user_fn_wrapper_async,
         &user_fn_wrapper_generator,
         &user_fn_display_names,

@@ -54,11 +54,13 @@ pub mod gc;
 pub mod iterator_helpers;
 pub mod map;
 pub mod math;
+pub mod messaging;
 pub mod native_abi;
 pub mod native_arena;
 pub mod native_handle;
 pub mod navigator;
 pub mod net_validate;
+pub mod node_http2_constants;
 pub mod node_stream;
 pub mod node_submodules;
 pub mod node_test;
@@ -75,6 +77,7 @@ pub mod pointer_event;
 pub mod process;
 pub mod promise;
 pub mod punycode;
+pub mod readline_helpers;
 pub mod regex;
 pub mod safe_area;
 pub mod set;
@@ -88,6 +91,7 @@ pub mod typedarray_half;
 pub mod url;
 pub mod value;
 pub mod wasi;
+pub mod web_storage;
 /// WebAssembly host shims (issue #76). Forward-declares the
 /// `perry_wasm_host_*` C ABI; the wasmi-backed implementation lives in
 /// the separate `perry-wasm-host` crate and is linked in only when the
@@ -135,6 +139,7 @@ pub mod stdlib_stubs;
 /// derived from `build.rs`'s dispatch-table walk.
 pub mod stub_diag;
 pub mod thread;
+pub mod tls;
 /// TTY support (#347 Phase 3): tty.isatty, process.std{in,out,err}.isTTY,
 /// process.stdout.columns/.rows, SIGWINCH 'resize' event handler. Lives
 /// in runtime (not stdlib) because it's a thin libc wrapper with no
@@ -162,6 +167,8 @@ pub mod util_abort;
 pub mod util_call_sites;
 pub mod util_debuglog;
 pub mod util_diff;
+pub mod util_inherits;
+pub mod util_mime;
 pub mod util_parse_args;
 pub mod util_parse_env;
 pub mod util_promisify;
@@ -215,8 +222,10 @@ pub use value::{
 pub use value::{
     js_set_handle_array_get, js_set_handle_array_length, js_set_handle_call_method,
     js_set_handle_object_get_property, js_set_handle_to_string, js_set_handle_typeof,
-    js_set_native_crypto_dispatch, js_set_native_http_dispatch, js_set_native_module_js_loader,
-    js_set_native_querystring_dispatch, js_set_native_zlib_dispatch, js_set_new_from_handle_v8,
+    js_set_native_crypto_dispatch, js_set_native_domain_dispatch, js_set_native_http_dispatch,
+    js_set_native_module_js_loader, js_set_native_querystring_dispatch,
+    js_set_native_sqlite_dispatch, js_set_native_webcrypto_dispatch, js_set_native_zlib_dispatch,
+    js_set_new_from_handle_v8,
 };
 
 // Extension pump registration — allows extensions to register pump functions
@@ -342,6 +351,7 @@ mod stdlib_pump {
     #[no_mangle]
     pub extern "C" fn js_run_stdlib_pump() {
         crate::promise::js_native_async_process_pending();
+        crate::os::js_process_signal_drain();
         // Drain the tty resize-pending flag (#347 Phase 3). Lives in
         // perry-runtime, not stdlib, so it runs even when stdlib isn't
         // linked — a TUI program that uses process.stdout.on('resize')
@@ -386,6 +396,9 @@ mod stdlib_pump {
         // #1934: a live spawn-reactor child keeps the event loop alive even when
         // perry-stdlib isn't linked (or reports no handles).
         if crate::child_process::reactor::cp_reactor_has_live() {
+            return 1;
+        }
+        if crate::os::js_process_signal_has_active() != 0 {
             return 1;
         }
         // #2532 — a live `perry-ext-*` handle (e.g. a listening HTTP

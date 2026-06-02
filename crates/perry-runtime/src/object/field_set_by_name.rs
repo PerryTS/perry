@@ -191,6 +191,23 @@ pub extern "C" fn js_object_set_field_by_name(
             return;
         }
     }
+    // Property writes to primitive values operate on temporary wrapper objects
+    // and do not persist. More importantly for Perry's raw-f64 numbers, they
+    // must never fall through to the ObjectHeader dereference path below.
+    {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        let jv = JSValue::from_bits(bits);
+        if (jv.is_number() && top16 != 0)
+            || jv.is_bool()
+            || jv.is_any_string()
+            || jv.is_undefined()
+            || jv.is_null()
+            || jv.is_bigint()
+        {
+            return;
+        }
+    }
     // #2089: a `Date` is a NaN-boxed pointer to an 8-byte `DateCell`. Setting
     // an arbitrary property on it (`date.foo = x`) must NOT deref the small
     // cell as an `ObjectHeader` below (memory corruption). Perry doesn't model
@@ -275,6 +292,34 @@ pub extern "C" fn js_object_set_field_by_name(
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
+        if gc_type == crate::gc::GC_TYPE_ARRAY {
+            if key.is_null() {
+                return;
+            }
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+            let name = match std::str::from_utf8(key_bytes) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            let arr = obj as *mut crate::array::ArrayHeader;
+            if name == "length" {
+                crate::array::js_array_set_length(arr, value);
+                return;
+            }
+            if let Some(index) = super::canonical_array_index(name) {
+                crate::array::js_array_set_f64_extend(arr, index, value);
+                return;
+            }
+            if let Some(attrs) = super::get_property_attrs(obj as usize, name) {
+                if !attrs.writable() {
+                    return;
+                }
+            }
+            crate::array::array_named_property_set(arr, key, value);
+            return;
+        }
         // Error objects have a fixed `#[repr(C)]` layout with no field-storage
         // region (`message`/`name`/`stack`/`cause`/`errors` are dedicated
         // slots), so a user assignment like `err.code = "X"` or
@@ -764,8 +809,8 @@ pub extern "C" fn js_object_set_field_by_name(
                     crate::error::throw_immutable_write(0, &key_str);
                 }
                 // Accessor short-circuit: if a setter is registered, invoke
-                // it instead of writing the slot. A property with `get` but
-                // no `set` silently ignores the write (non-strict mode).
+                // it instead of writing the slot. A getter-only accessor is
+                // read-only under Perry's strict-by-default TS semantics.
                 if ACCESSORS_IN_USE.with(|c| c.get()) {
                     if let Some(ref k) = incoming_key_str {
                         if let Some(acc) = get_accessor_descriptor(obj as usize, k) {
@@ -775,6 +820,8 @@ pub extern "C" fn js_object_set_field_by_name(
                                 if !closure.is_null() {
                                     crate::closure::js_closure_call1(closure, value);
                                 }
+                            } else {
+                                crate::error::throw_immutable_write(0, k);
                             }
                             return;
                         }

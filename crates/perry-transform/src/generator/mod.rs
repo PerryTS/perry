@@ -40,7 +40,7 @@ pub(crate) use id_scan::{
     scan_stmts_for_max_local,
 };
 pub(crate) use iter_result_rewrite::{rewrite_expr, rewrite_expr_children, rewrite_stmt};
-pub(crate) use linearize::{linearize_body, State, StateExit};
+pub(crate) use linearize::{linearize_body, CatchRoute, State, StateExit};
 pub(crate) use lower::{
     build_async_step_driver_direct, transform_generator_function,
     transform_generator_function_with_extra_captures,
@@ -48,10 +48,10 @@ pub(crate) use lower::{
 pub(crate) use rewrite_returns::{
     body_contains_return, is_iter_result, prepend_done_before_returns,
     rewrite_catch_returns_to_iter_result, rewrite_catch_returns_to_iter_result_in_stmt,
-    rewrite_iter_results_in_stmts, rewrite_iter_results_to_scratch, rewrite_returns_as_done,
-    rewrite_returns_to_labeled_break, rewrite_returns_to_labeled_break_in_stmt,
-    rewrite_yield_to_await_in_expr, rewrite_yield_to_await_in_expr_children,
-    rewrite_yield_to_await_in_stmt, rewrite_yield_to_await_in_stmts,
+    rewrite_iter_results_in_stmts, rewrite_returns_as_done, rewrite_returns_to_labeled_break,
+    rewrite_returns_to_labeled_break_in_stmt, rewrite_yield_to_await_in_expr,
+    rewrite_yield_to_await_in_expr_children, rewrite_yield_to_await_in_stmt,
+    rewrite_yield_to_await_in_stmts,
 };
 
 /// Transform all generator functions in a module into state machine form.
@@ -244,6 +244,7 @@ fn transform_generator_closures_in_expr(
         mutable_captures,
         captures_this,
         enclosing_class,
+        is_strict,
         is_async,
         ..
     } = expr
@@ -261,6 +262,7 @@ fn transform_generator_closures_in_expr(
                 params: params.clone(),
                 return_type: Type::Any,
                 body: std::mem::take(body),
+                is_strict: *is_strict,
                 is_async: *is_async,
                 is_generator: true,
                 is_exported: false,
@@ -310,6 +312,7 @@ pub fn transform_plain_async_closure_body(
     outer_mutable_captures: &[LocalId],
     outer_captures_this: bool,
     outer_enclosing_class: Option<String>,
+    is_strict: bool,
     next_local_id: &mut LocalId,
     next_func_id: &mut FuncId,
 ) -> Vec<Stmt> {
@@ -328,6 +331,7 @@ pub fn transform_plain_async_closure_body(
         params: params.to_vec(),
         return_type: Type::Any,
         body,
+        is_strict,
         is_async: false,
         is_generator: true,
         is_exported: false,

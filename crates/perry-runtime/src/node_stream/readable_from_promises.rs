@@ -66,7 +66,11 @@ pub(super) fn consume_readable_buffered_front(stream: f64, chunk: f64) {
         clear_readable_buffer(stream);
         return;
     }
-    let consumed = chunk_byte_len(chunk) as f64;
+    let consumed = if readable_object_mode(stream) {
+        1.0
+    } else {
+        chunk_byte_len(chunk) as f64
+    };
     let remaining =
         (get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0) - consumed).max(0.0);
     set_hidden_value(stream, hidden_buffered_key(), remaining);

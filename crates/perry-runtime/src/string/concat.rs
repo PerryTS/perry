@@ -244,7 +244,9 @@ pub extern "C" fn js_string_concat_value(
             num_buf[0] = b'0';
             num_len = 1;
         } else {
-            let s = format!("{}", value);
+            // #3987: match ECMAScript NumberToString (scientific notation for
+            // |n| >= 1e21 / < 1e-6) instead of Rust's full-decimal `{}`.
+            let s = super::format::js_format_f64(value);
             let len = s.len().min(num_buf.len());
             num_buf[..len].copy_from_slice(&s.as_bytes()[..len]);
             num_len = len;
@@ -495,7 +497,9 @@ pub(crate) fn format_number_into(value: f64, buf: &mut [u8; 32]) -> usize {
         buf[0] = b'0';
         return 1;
     }
-    let s = format!("{}", value);
+    // #3987: match ECMAScript NumberToString (scientific notation for
+    // |n| >= 1e21 / < 1e-6) instead of Rust's full-decimal `{}`.
+    let s = super::format::js_format_f64(value);
     let len = s.len().min(buf.len());
     buf[..len].copy_from_slice(&s.as_bytes()[..len]);
     len
@@ -552,7 +556,9 @@ pub extern "C" fn js_value_concat_string(
             num_buf[0] = b'0';
             num_len = 1;
         } else {
-            let s = format!("{}", value);
+            // #3987: match ECMAScript NumberToString (scientific notation for
+            // |n| >= 1e21 / < 1e-6) instead of Rust's full-decimal `{}`.
+            let s = super::format::js_format_f64(value);
             let len = s.len().min(num_buf.len());
             num_buf[..len].copy_from_slice(&s.as_bytes()[..len]);
             num_len = len;

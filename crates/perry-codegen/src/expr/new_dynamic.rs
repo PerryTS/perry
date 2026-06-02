@@ -142,13 +142,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
                         if mod_name == "assert" || mod_name == "assert/strict" {
                             let opts = if args.is_empty() {
-                                "double 0x7FFC000000000001".to_string()
+                                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                             } else {
                                 lower_expr(ctx, &args[0])?
                             };
                             return Ok(ctx.block().call(
                                 DOUBLE,
                                 "js_assert_assertion_error_ctor",
+                                &[(DOUBLE, &opts)],
+                            ));
+                        }
+                    }
+                }
+                if property == "Assert" {
+                    if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
+                        if mod_name == "assert" || mod_name == "assert/strict" {
+                            let opts = if args.is_empty() {
+                                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                            } else {
+                                lower_expr(ctx, &args[0])?
+                            };
+                            return Ok(ctx.block().call(
+                                DOUBLE,
+                                "js_assert_assert_ctor",
                                 &[(DOUBLE, &opts)],
                             ));
                         }
@@ -201,6 +217,54 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 "js_create_native_module_namespace",
                                 &[(PTR, &mod_bytes_global), (I64, &mod_len_str)],
                             ));
+                        }
+                    }
+                }
+            }
+
+            // `new v8.Serializer()` / `new v8.Deserializer(buf)` (and the
+            // `Default*` subclasses) (#3680) — route to the runtime
+            // constructors that allocate a codec-backed instance object whose
+            // methods dispatch through the native-module method table.
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
+                    if mod_name == "v8" {
+                        match property.as_str() {
+                            "Serializer" | "DefaultSerializer" => {
+                                for a in args {
+                                    let _ = lower_expr(ctx, a)?;
+                                }
+                                let is_default = property == "DefaultSerializer";
+                                let flag =
+                                    crate::nanbox::double_literal(f64::from_bits(if is_default {
+                                        0x7FFC_0000_0000_0004 // TAG_TRUE
+                                    } else {
+                                        crate::nanbox::TAG_UNDEFINED
+                                    }));
+                                return Ok(ctx.block().call(
+                                    DOUBLE,
+                                    "js_v8_serializer_new",
+                                    &[(DOUBLE, &flag)],
+                                ));
+                            }
+                            "Deserializer" | "DefaultDeserializer" => {
+                                let buf = if let Some(first) = args.first() {
+                                    lower_expr(ctx, first)?
+                                } else {
+                                    crate::nanbox::double_literal(f64::from_bits(
+                                        crate::nanbox::TAG_UNDEFINED,
+                                    ))
+                                };
+                                for extra in args.iter().skip(1) {
+                                    let _ = lower_expr(ctx, extra)?;
+                                }
+                                return Ok(ctx.block().call(
+                                    DOUBLE,
+                                    "js_v8_deserializer_new",
+                                    &[(DOUBLE, &buf)],
+                                ));
+                            }
+                            _ => {}
                         }
                     }
                 }

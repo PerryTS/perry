@@ -14,6 +14,28 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
+fn is_cjs_style_native_default_import(module_name: &str) -> bool {
+    matches!(
+        module_name,
+        "async_hooks"
+            | "child_process"
+            | "cluster"
+            | "constants"
+            | "dns"
+            | "dns/promises"
+            | "events"
+            | "os"
+            | "path"
+            | "path/posix"
+            | "path/win32"
+            | "punycode"
+            | "querystring"
+            | "sys"
+            | "url"
+            | "util"
+    )
+}
+
 pub(crate) fn lower_module_decl(
     ctx: &mut LoweringContext,
     module: &mut Module,
@@ -29,6 +51,14 @@ pub(crate) fn lower_module_decl(
                 .unwrap_or(&raw_source)
                 .to_string();
 
+            if raw_source.starts_with("node:") && source == "punycode.ucs2" {
+                crate::lower_bail!(
+                    import_decl.src.span,
+                    "No such built-in module: {}",
+                    raw_source
+                );
+            }
+
             if source == "reflect-metadata" {
                 emit_reflect_metadata_shim_note();
                 return Ok(());
@@ -36,6 +66,27 @@ pub(crate) fn lower_module_decl(
 
             // Check if this is a native module import
             let is_native = is_native_module(&source);
+
+            // #3925: a `node:`-prefixed specifier must name a real Node
+            // built-in module. Node throws `ERR_UNKNOWN_BUILTIN_MODULE` for
+            // anything else — e.g. `node:punycode.ucs2`, where `ucs2` is a
+            // *property* of `node:punycode`, not a module. (`punycode.ucs2`
+            // stays in `NODE_SUBMODULES` as a Perry-internal dispatch namespace,
+            // so the check keys off `NODE_BUILTIN_MODULES` — the real Node
+            // surface — not `is_known_module`.) `is_native` keeps any
+            // node:-prefixed NATIVE_MODULES entry resolvable.
+            if raw_source.starts_with("node:")
+                && !import_decl.type_only
+                && !is_node_builtin_module(&source)
+                && !is_native
+            {
+                crate::lower_bail!(
+                    import_decl.span,
+                    "Cannot find module '{}'. No such built-in module: {}",
+                    raw_source,
+                    raw_source
+                );
+            }
 
             // Native modules have no class metadata to extract — `node:fs`,
             // `node:path`, etc. produce no `ImportedClass` entries and the
@@ -114,6 +165,19 @@ pub(crate) fn lower_module_decl(
                             })
                             .unwrap_or_else(|| local.clone());
                         if is_native {
+                            let is_node_core = perry_api_manifest::is_node_core_module(&source);
+                            if is_node_core
+                                && !perry_api_manifest::module_has_public_named_export(
+                                    &source, &imported,
+                                )
+                            {
+                                crate::lower_bail!(
+                                    named.span,
+                                    "The requested module '{}' does not provide an export named '{}'",
+                                    raw_source,
+                                    imported
+                                );
+                            }
                             // Register as native module function with the original method name
                             // e.g., import { v4 as uuid } from 'uuid' -> uuid maps to uuid.v4.
                             //
@@ -122,8 +186,12 @@ pub(crate) fn lower_module_decl(
                             // `import { types } from "node:util"; types.isX()` uses the same
                             // dispatch as `node:util/types` and `util.types.isX()`.
                             let (native_module, native_method) =
-                                if source == "util" && imported == "types" {
-                                    ("util/types".to_string(), None)
+                                if is_node_core && imported == "default" {
+                                    (source.clone(), None)
+                                } else if source == "util" && imported == "types" {
+                                    ("util.types".to_string(), None)
+                                } else if source == "punycode" && imported == "ucs2" {
+                                    ("punycode.ucs2".to_string(), None)
                                 } else {
                                     (source.clone(), Some(imported.clone()))
                                 };
@@ -162,15 +230,6 @@ pub(crate) fn lower_module_decl(
                                         is_exported: false,
                                     });
                                 }
-                            }
-                            // Auto-register parentPort from worker_threads as a native instance
-                            // (it's a singleton, not created via `new`)
-                            if source == "worker_threads" && imported == "parentPort" {
-                                ctx.register_native_instance(
-                                    local.clone(),
-                                    "worker_threads".to_string(),
-                                    "MessagePort".to_string(),
-                                );
                             }
                         } else {
                             // Register as imported function. Issue #35 (#321):
@@ -211,8 +270,48 @@ pub(crate) fn lower_module_decl(
                         let local = default.local.sym.to_string();
                         if is_native {
                             // Default import of native module (e.g., import mysql from 'mysql2/promise')
-                            // Default exports don't have a method name
-                            ctx.register_native_module(local.clone(), source.clone(), None);
+                            // CommonJS-shaped Node builtins expose an actual
+                            // `default` binding; node:test does too for its
+                            // registration function. Other native modules keep
+                            // the historical namespace-object default.
+                            let native_method = if source == "test"
+                                || is_cjs_style_native_default_import(&source)
+                            {
+                                Some("default".to_string())
+                            } else {
+                                None
+                            };
+                            ctx.register_native_module(
+                                local.clone(),
+                                source.clone(),
+                                native_method,
+                            );
+                        } else if is_node_builtin_module(&source) {
+                            // #3906: a CJS-backed Node builtin *submodule* that
+                            // isn't in NATIVE_MODULES (e.g. `node:timers/promises`,
+                            // `node:stream/promises`). Its default export is the
+                            // module object — CJS `default === module.exports`,
+                            // the same value as the `import * as` namespace shape.
+                            // Without this it fell to the JS-module default path
+                            // below and resolved to an `ExternFuncRef` boolean
+                            // stub (`typeof === "boolean"`). Mirror the namespace
+                            // handling so the default binding is the module object.
+                            ctx.register_imported_func(local.clone(), local.clone());
+                            ctx.namespace_import_locals.insert(local.clone());
+                            if source == "fs/promises" {
+                                ctx.register_builtin_module_alias(local.clone(), source.clone());
+                            }
+                            // Treat the default binding as the module-namespace
+                            // object (CJS default === module.exports). Pushing a
+                            // Namespace specifier (not Default) puts `local` into
+                            // the driver's `namespace_imports`, so `typeof local`
+                            // folds to "object" and `local.member(...)` dispatches
+                            // through the submodule namespace — exactly like the
+                            // `import * as local` shape.
+                            specifiers.push(ImportSpecifier::Namespace {
+                                local: local.clone(),
+                            });
+                            continue;
                         } else {
                             // Default import from JS module — register so calls resolve to
                             // ExternFuncRef. Use the LOCAL name as the original-name marker
@@ -339,7 +438,7 @@ pub(crate) fn lower_module_decl(
                         rest_idx,
                         has_synth_args,
                     ));
-                    module.functions.push(func);
+                    push_function_decl_dedup(module, func);
                     // Track in exports
                     module.exports.push(Export::Named {
                         local: func_name.clone(),
@@ -391,7 +490,9 @@ pub(crate) fn lower_module_decl(
                                         None
                                     } else {
                                         match class_name {
-                                            "EventEmitter" => Some("events".to_string()),
+                                            "EventEmitter" | "EventEmitterAsyncResource" => {
+                                                Some("events".to_string())
+                                            }
                                             "AsyncLocalStorage" => Some("async_hooks".to_string()),
                                             "AsyncResource" => Some("async_hooks".to_string()),
                                             "WebSocket" | "WebSocketServer" => {
@@ -457,7 +558,9 @@ pub(crate) fn lower_module_decl(
                                             None
                                         } else {
                                             match class_name {
-                                                "EventEmitter" => Some("events".to_string()),
+                                                "EventEmitter" | "EventEmitterAsyncResource" => {
+                                                    Some("events".to_string())
+                                                }
                                                 "AsyncLocalStorage" => {
                                                     Some("async_hooks".to_string())
                                                 }
@@ -766,6 +869,12 @@ pub(crate) fn lower_module_decl(
                                                     "async_hooks",
                                                     "AsyncLocalStorage" | "AsyncResource"
                                                 ) | ("dns" | "dns/promises", "Resolver")
+                                                    | (
+                                                        "sqlite",
+                                                        "DatabaseSync"
+                                                            | "Session"
+                                                            | "StatementSync"
+                                                    )
                                             );
                                             if is_known_native_class {
                                                 ctx.register_native_instance(
@@ -824,6 +933,15 @@ pub(crate) fn lower_module_decl(
                                                             ("better-sqlite3", "prepare") => {
                                                                 Some("Statement")
                                                             }
+                                                            ("sqlite", "prepare") => {
+                                                                Some("StatementSync")
+                                                            }
+                                                            ("sqlite", "createTagStore") => {
+                                                                Some("SQLTagStore")
+                                                            }
+                                                            ("sqlite", "createSession") => {
+                                                                Some("Session")
+                                                            }
                                                             _ => None,
                                                         };
                                                         if let Some(class_name) = returns_handle {
@@ -859,6 +977,9 @@ pub(crate) fn lower_module_decl(
                                         let module_info = match type_name.as_str() {
                                             "Redis" => Some(("ioredis", "Redis")),
                                             "EventEmitter" => Some(("events", "EventEmitter")),
+                                            "EventEmitterAsyncResource" => {
+                                                Some(("events", "EventEmitterAsyncResource"))
+                                            }
                                             "Pool" => Some(("mysql2/promise", "Pool")),
                                             "PoolConnection" => {
                                                 Some(("mysql2/promise", "PoolConnection"))
@@ -1248,6 +1369,15 @@ pub(crate) fn lower_module_decl(
                                             // pick it up via `imported_vars` (and route through the
                                             // getter, not as a closure pointer).
                                             | Expr::SymbolFor(_)
+                                            // Plain `const X = Symbol(); export { X }` — same as
+                                            // SymbolFor above, but for unregistered symbols. Without
+                                            // this the local isn't promoted to a shared module global,
+                                            // so an importer gets a DIFFERENT symbol than the defining
+                                            // module's binding and `imported === X` is false. Hono's
+                                            // RegExpRouter does exactly this with `PATH_ERROR`, so its
+                                            // `e === PATH_ERROR` route-fallback check failed and a bare
+                                            // Symbol escaped `app.fetch`.
+                                            | Expr::SymbolNew(_)
                                             // Issue #923: `const pool = mysql.createPool(...)`
                                             // followed by `export { pool }` lowers the init to
                                             // `Expr::NativeMethodCall` (not `Expr::Call`) because
@@ -1366,7 +1496,7 @@ pub(crate) fn lower_module_decl(
                                 rest_idx,
                                 has_synth_args,
                             ));
-                            module.functions.push(func);
+                            push_function_decl_dedup(module, func);
                             // Register under both names: callable locally as
                             // `<ident>` (some modules also `export { foo }`
                             // or call themselves by name) AND as the
@@ -1445,7 +1575,7 @@ pub(crate) fn lower_module_decl(
                             rest_idx,
                             has_synth_args,
                         ));
-                        module.functions.push(func);
+                        push_function_decl_dedup(module, func);
                         // Both the named export entry (so the importer's
                         // namespace populator sees `default`) and the
                         // `exported_functions` registry (so codegen's

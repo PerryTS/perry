@@ -13,6 +13,35 @@ use crate::lower_types::*;
 
 use super::*;
 
+fn stmt_is_string_directive(stmt: &ast::Stmt) -> Option<&str> {
+    let ast::Stmt::Expr(expr_stmt) = stmt else {
+        return None;
+    };
+    let mut expr = expr_stmt.expr.as_ref();
+    while let ast::Expr::Paren(paren) = expr {
+        expr = paren.expr.as_ref();
+    }
+    let ast::Expr::Lit(ast::Lit::Str(s)) = expr else {
+        return None;
+    };
+    s.value.as_str()
+}
+
+fn function_has_use_strict(func: &ast::Function) -> bool {
+    let Some(block) = func.body.as_ref() else {
+        return false;
+    };
+    for stmt in &block.stmts {
+        let Some(directive) = stmt_is_string_directive(stmt) else {
+            break;
+        };
+        if directive == "use strict" {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result<Function> {
     let name = fn_decl.ident.sym.to_string();
     let func_id = ctx.lookup_func(&name).unwrap_or_else(|| ctx.fresh_func());
@@ -121,6 +150,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
                 "WebSocket" | "WebSocketServer" => Some(("ws", type_name.as_str())),
                 "Redis" => Some(("ioredis", "Redis")),
                 "EventEmitter" => Some(("events", "EventEmitter")),
+                "EventEmitterAsyncResource" => Some(("events", "EventEmitterAsyncResource")),
                 // Web Fetch API: Request / Response / Headers as function
                 // params — same registration the local-init paths get
                 // (destructuring.rs:1457+ for `const r = new Request(…)`).
@@ -201,6 +231,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
             let module_info = match type_name.as_str() {
                 "Redis" => Some(("ioredis", "Redis")),
                 "EventEmitter" => Some(("events", "EventEmitter")),
+                "EventEmitterAsyncResource" => Some(("events", "EventEmitterAsyncResource")),
                 "Pool" => Some(("mysql2/promise", "Pool")),
                 "PoolConnection" => Some(("mysql2/promise", "PoolConnection")),
                 "WebSocket" | "WebSocketServer" => Some(("ws", type_name.as_str())),
@@ -223,6 +254,10 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
         destructuring_stmts.extend(stmts);
     }
 
+    let outer_strict = ctx.current_strict;
+    let is_strict = outer_strict || function_has_use_strict(&fn_decl.function);
+    ctx.current_strict = is_strict;
+
     // Lower body — `lower_fn_body_block_stmt` handles ECMAScript function-
     // declaration hoisting (issue #569): inner `function name() {...}`
     // statements are pulled to the top of the result so forward references
@@ -233,6 +268,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
     } else {
         Vec::new()
     };
+    ctx.current_strict = outer_strict;
 
     // Prepend destructuring statements to body
     if !destructuring_stmts.is_empty() {
@@ -307,6 +343,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
         body,
         is_async: fn_decl.function.is_async,
         is_generator: fn_decl.function.is_generator,
+        is_strict,
         was_plain_async: false,
         was_unrolled: false,
         is_exported: false,

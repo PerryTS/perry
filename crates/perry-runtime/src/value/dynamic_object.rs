@@ -17,6 +17,16 @@ use std::sync::atomic::Ordering;
 /// results without another conversion.
 #[no_mangle]
 pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
+    if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(value) {
+        if matches!(
+            crate::builtins::boxed_primitive_to_string_tag(value),
+            Some("String")
+        ) {
+            return js_value_length_f64(payload);
+        }
+        return 0.0;
+    }
+
     let bits = value.to_bits();
     let top16 = bits >> 48;
 
