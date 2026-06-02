@@ -127,6 +127,7 @@ fn module_with_large_pointer_array_literal(element_count: usize) -> Module {
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
     }
 }
 
@@ -190,6 +191,7 @@ fn module_with_large_local_array_push(element_count: usize) -> Module {
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
     }
 }
 

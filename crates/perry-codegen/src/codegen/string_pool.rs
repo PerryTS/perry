@@ -64,6 +64,11 @@ pub(super) fn emit_string_pool(
     // function. Registered so util.types.isGeneratorFunction can distinguish
     // lowered generator state-machine closures from ordinary functions.
     user_fn_wrapper_generator: &std::collections::HashSet<String>,
+    // #3664: wrapper/closure symbols whose source form was `async function*`.
+    // Registered in the runtime's async-generator registry so the
+    // `%AsyncGeneratorFunction%`/`%AsyncGenerator%` intrinsic chain (and
+    // `util.types.isAsyncFunction`) resolve correctly for them.
+    user_fn_wrapper_async_generator: &std::collections::HashSet<String>,
     // `(wrapper_symbol, display_name)` for every top-level user function
     // we want `console.log` / `util.inspect` to label with the original
     // JS name. Each entry produces one `js_register_function_name` call
@@ -811,6 +816,21 @@ pub(super) fn emit_string_pool(
         let func_ref = format!("@{}", wrap_sym);
         blk.call_void(
             "js_register_closure_generator_function",
+            &[(PTR, &func_ref)],
+        );
+    }
+
+    // #3664: async-generator wrappers. These are ALSO in
+    // `user_fn_wrapper_generator` above (they share the sync generator
+    // lowering); this extra registration is what lets the runtime tell an
+    // `async function*` apart from a `function*`.
+    let mut sorted_async_generator_wrappers: Vec<String> =
+        user_fn_wrapper_async_generator.iter().cloned().collect();
+    sorted_async_generator_wrappers.sort();
+    for wrap_sym in sorted_async_generator_wrappers {
+        let func_ref = format!("@{}", wrap_sym);
+        blk.call_void(
+            "js_register_closure_async_generator_function",
             &[(PTR, &func_ref)],
         );
     }

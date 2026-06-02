@@ -1225,13 +1225,18 @@ enum GeneratorKind {
 fn closure_generator_kind(closure_ptr: usize) -> Option<GeneratorKind> {
     let closure = closure_ptr as *const crate::closure::ClosureHeader;
     let func_ptr = crate::closure::get_valid_func_ptr(closure);
-    if func_ptr.is_null() || !crate::closure::is_registered_generator_function(func_ptr) {
+    if func_ptr.is_null() {
         return None;
     }
-    if crate::closure::is_registered_async_function(func_ptr) {
+    // Async generators are registered in BOTH registries (they share the sync
+    // generator's `{next,return,throw}` lowering), so check the async-generator
+    // registry first — it's the only signal that disambiguates the two.
+    if crate::closure::is_registered_async_generator_function(func_ptr) {
         Some(GeneratorKind::Async)
-    } else {
+    } else if crate::closure::is_registered_generator_function(func_ptr) {
         Some(GeneratorKind::Sync)
+    } else {
+        None
     }
 }
 
@@ -1248,7 +1253,12 @@ fn intrinsic_pointer_value(slot: i64) -> Option<f64> {
 /// `None` for non-generator closures so the caller keeps its existing
 /// `closure_static_prototype` / null resolution. (#3664)
 pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
-    let slot = match closure_generator_kind(closure_ptr)? {
+    let kind = closure_generator_kind(closure_ptr)?;
+    // The towers are normally built in `populate_global_this_builtins`, but a
+    // program that reflects on a generator without ever touching `globalThis`
+    // would otherwise see null. Build lazily (idempotent) on first use.
+    ensure_generator_intrinsics();
+    let slot = match kind {
         GeneratorKind::Sync => crate::object::GENERATOR_INTRINSIC_PROTO_PTR.load(Ordering::Acquire),
         GeneratorKind::Async => {
             crate::object::ASYNC_GENERATOR_INTRINSIC_PROTO_PTR.load(Ordering::Acquire)
@@ -1260,7 +1270,9 @@ pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
 /// `g.constructor` for a generator-function closure `g` → `%GeneratorFunction%`
 /// / `%AsyncGeneratorFunction%`. `None` for non-generator closures. (#3664)
 pub(crate) fn generator_function_constructor_of(closure_ptr: usize) -> Option<f64> {
-    let slot = match closure_generator_kind(closure_ptr)? {
+    let kind = closure_generator_kind(closure_ptr)?;
+    ensure_generator_intrinsics();
+    let slot = match kind {
         GeneratorKind::Sync => {
             crate::object::GENERATOR_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire)
         }
@@ -1276,6 +1288,7 @@ pub(crate) fn generator_function_constructor_of(closure_ptr: usize) -> Option<f6
 /// `[[Prototype]]` and the live generator-object chain. Null until
 /// `populate_global_this_builtins` has run. (#3664)
 pub(crate) fn generator_prototype_ptr(is_async: bool) -> *mut ObjectHeader {
+    ensure_generator_intrinsics();
     let slot = if is_async {
         crate::object::ASYNC_GENERATOR_PROTOTYPE_PTR.load(Ordering::Acquire)
     } else {

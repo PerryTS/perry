@@ -1265,6 +1265,28 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             }
         }
     }
+    // #3664: async-generator wrapper symbols, identified by the func_ids the
+    // generator transform recorded (it cleared `is_async` before we get here,
+    // so the body shape alone can't tell async generators from sync ones).
+    // Named declarations use the `__perry_wrap_<name>` singleton symbol;
+    // generator EXPRESSIONS use the inline `perry_closure_<modprefix>__<id>`
+    // symbol — the same two symbol forms as `user_fn_wrapper_generator`.
+    let mut user_fn_wrapper_async_generator: std::collections::HashSet<String> = hir
+        .functions
+        .iter()
+        .filter(|f| hir.async_generator_funcs.contains(&f.id))
+        .filter_map(|f| {
+            func_names
+                .get(&f.id)
+                .map(|name| format!("__perry_wrap_{}", name))
+        })
+        .collect();
+    for (func_id, _expr) in closures {
+        if hir.async_generator_funcs.contains(func_id) {
+            user_fn_wrapper_async_generator
+                .insert(format!("perry_closure_{}__{}", module_prefix, func_id));
+        }
+    }
 
     // Display names so `console.log` / `util.inspect` print `[Function:
     // <name>]` instead of `[Function (anonymous)]` (#1202). Two kinds:
@@ -1372,6 +1394,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         &user_fn_wrapper_length,
         &user_fn_wrapper_async,
         &user_fn_wrapper_generator,
+        &user_fn_wrapper_async_generator,
         &user_fn_display_names,
     );
 

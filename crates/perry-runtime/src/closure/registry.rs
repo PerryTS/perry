@@ -70,6 +70,16 @@ thread_local! {
     static CLOSURE_GENERATOR_FUNCTION_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, bool>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 
+    /// #3664: side-table marking closure body `func_ptr`s that came from an
+    /// `async function*`. Async generators also live in
+    /// `CLOSURE_GENERATOR_FUNCTION_REGISTRY` (they lower to the same
+    /// `{next,return,throw}` wrapper as sync generators), so this registry is
+    /// what distinguishes the two — it drives `%AsyncGeneratorFunction%` vs
+    /// `%GeneratorFunction%` intrinsic resolution.
+    static CLOSURE_ASYNC_GENERATOR_FUNCTION_REGISTRY:
+        RefCell<crate::fast_hash::PtrHashMap<usize, ()>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+
     /// Unified dispatch lookup, populated lazily on first call to a func_ptr.
     /// Cuts the per-call cost from TWO RefCell::borrow + HashMap::get
     /// (one each for rest and arity) down to ONE — material on hot paths
@@ -288,6 +298,31 @@ pub fn is_registered_generator_function(func_ptr: *const u8) -> bool {
     CLOSURE_GENERATOR_FUNCTION_REGISTRY
         .with(|r| r.borrow().get(&(func_ptr as usize)).copied())
         .unwrap_or(false)
+}
+
+/// #3664: register a closure body `func_ptr` as an `async function*`. Also
+/// marks it in the async-function registry so `util.types.isAsyncFunction`
+/// reports `true` for async generators (matching Node).
+#[no_mangle]
+pub extern "C" fn js_register_closure_async_generator_function(func_ptr: *const u8) {
+    if func_ptr.is_null() {
+        return;
+    }
+    CLOSURE_ASYNC_GENERATOR_FUNCTION_REGISTRY.with(|r| {
+        r.borrow_mut().insert(func_ptr as usize, ());
+    });
+    CLOSURE_ASYNC_FUNCTION_REGISTRY.with(|r| {
+        r.borrow_mut().insert(func_ptr as usize, ());
+    });
+}
+
+#[inline(always)]
+pub fn is_registered_async_generator_function(func_ptr: *const u8) -> bool {
+    if func_ptr.is_null() {
+        return false;
+    }
+    CLOSURE_ASYNC_GENERATOR_FUNCTION_REGISTRY
+        .with(|r| r.borrow().contains_key(&(func_ptr as usize)))
 }
 
 /// Public helper: given a `*const ClosureHeader` pointer, return the
