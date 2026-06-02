@@ -24,6 +24,23 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_worker_threads_worker_terminate", DOUBLE, &[I64]);
     module.declare_function("js_worker_threads_worker_ref", DOUBLE, &[I64]);
     module.declare_function("js_worker_threads_worker_unref", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_worker_threads_worker_get_heap_statistics",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function("js_worker_threads_worker_cpu_usage", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_worker_threads_worker_get_heap_snapshot",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_worker_threads_worker_start_cpu_profile", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_worker_threads_worker_start_heap_profile",
+        DOUBLE,
+        &[I64],
+    );
 
     // ========== HTTP server ==========
     module.declare_function("js_http_client_request_end", I64, &[I64, DOUBLE]);

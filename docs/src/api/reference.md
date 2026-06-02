@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2456 entries across 105 modules.
+Total: 2461 entries across 105 modules.
 
 ## Modules
 
@@ -3232,7 +3232,10 @@ Total: 2456 entries across 105 modules.
 
 - `BroadcastChannel` — module
 - `MessageChannel` — module
+- `cpuUsage` — instance *(class: `Worker`)*
 - `getEnvironmentData` — module
+- `getHeapSnapshot` — instance *(class: `Worker`)*
+- `getHeapStatistics` — instance *(class: `Worker`)*
 - `isMarkedAsUntransferable` — module
 - `markAsUncloneable` — module
 - `markAsUntransferable` — module
@@ -3244,6 +3247,8 @@ Total: 2456 entries across 105 modules.
 - `receiveMessageOnPort` — module
 - `ref` — instance *(class: `Worker`)*
 - `setEnvironmentData` — module
+- `startCpuProfile` — instance *(class: `Worker`)*
+- `startHeapProfile` — instance *(class: `Worker`)*
 - `terminate` — instance *(class: `Worker`)*
 - `unref` — instance *(class: `Worker`)*
 

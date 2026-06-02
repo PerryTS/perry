@@ -2231,6 +2231,8 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
             worker_data: extern "C" fn() -> f64,
             is_main_thread: extern "C" fn() -> f64,
             parent_port: extern "C" fn() -> f64,
+            thread_name: extern "C" fn() -> f64,
+            resource_limits: extern "C" fn() -> f64,
         );
     }
     js_register_handle_method_dispatch(js_handle_method_dispatch);
@@ -2260,6 +2262,8 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         crate::worker_threads::js_worker_threads_get_worker_data,
         crate::worker_threads::js_worker_threads_is_main_thread,
         crate::worker_threads::js_worker_threads_parent_port,
+        crate::worker_threads::js_worker_threads_thread_name,
+        crate::worker_threads::js_worker_threads_resource_limits,
     );
     // #1577: route captured-then-called `crypto.*` methods (which reach the
     // runtime's native-module dispatch) back to the stdlib crypto impls.

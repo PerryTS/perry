@@ -122,16 +122,22 @@ type WorkerThreadsValueGetter = extern "C" fn() -> f64;
 static WORKER_THREADS_WORKER_DATA_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
 static WORKER_THREADS_IS_MAIN_THREAD_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
 static WORKER_THREADS_PARENT_PORT_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static WORKER_THREADS_THREAD_NAME_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static WORKER_THREADS_RESOURCE_LIMITS_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
 
 #[no_mangle]
 pub extern "C" fn js_register_worker_threads_namespace_getters(
     worker_data: WorkerThreadsValueGetter,
     is_main_thread: WorkerThreadsValueGetter,
     parent_port: WorkerThreadsValueGetter,
+    thread_name: WorkerThreadsValueGetter,
+    resource_limits: WorkerThreadsValueGetter,
 ) {
     WORKER_THREADS_WORKER_DATA_GETTER.store(worker_data as *mut (), Ordering::Release);
     WORKER_THREADS_IS_MAIN_THREAD_GETTER.store(is_main_thread as *mut (), Ordering::Release);
     WORKER_THREADS_PARENT_PORT_GETTER.store(parent_port as *mut (), Ordering::Release);
+    WORKER_THREADS_THREAD_NAME_GETTER.store(thread_name as *mut (), Ordering::Release);
+    WORKER_THREADS_RESOURCE_LIMITS_GETTER.store(resource_limits as *mut (), Ordering::Release);
 }
 
 fn call_worker_threads_getter(slot: &AtomicPtr<()>, fallback: impl FnOnce() -> f64) -> f64 {
@@ -5313,11 +5319,17 @@ pub(crate) unsafe fn get_native_module_constant(
                 || f64::from_bits(crate::value::TAG_NULL),
             )),
             "threadId" => Some(0.0),
-            "threadName" => Some(str_val("")),
-            "resourceLimits" => {
-                let obj = crate::object::js_object_alloc(0, 0);
-                Some(crate::value::js_nanbox_pointer(obj as i64))
-            }
+            "threadName" => Some(call_worker_threads_getter(
+                &WORKER_THREADS_THREAD_NAME_GETTER,
+                || str_val(""),
+            )),
+            "resourceLimits" => Some(call_worker_threads_getter(
+                &WORKER_THREADS_RESOURCE_LIMITS_GETTER,
+                || {
+                    let obj = crate::object::js_object_alloc(0, 0);
+                    crate::value::js_nanbox_pointer(obj as i64)
+                },
+            )),
             "locks" => Some(worker_threads_locks_value()),
             "SHARE_ENV" => Some(crate::symbol::js_symbol_for(str_val(
                 "nodejs.worker_threads.SHARE_ENV",
