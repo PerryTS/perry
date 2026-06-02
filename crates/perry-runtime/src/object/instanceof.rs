@@ -584,6 +584,16 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
                 }
             }
         }
+        // A Blob can also be a real heap object allocated with CLASS_ID_BLOB
+        // (e.g. `stream/consumers`.`blob()` and `blob_value_from_bytes`), not
+        // just a small fetch-registry handle. Match it by its own class id so
+        // `blob instanceof Blob` is true for that representation too.
+        if class_id == CLASS_ID_BLOB && jsval.is_pointer() {
+            let obj = jsval.as_pointer::<ObjectHeader>();
+            if (obj as usize) >= 0x100000 && unsafe { (*obj).class_id } == CLASS_ID_BLOB {
+                return true_val;
+            }
+        }
         return false_val;
     }
 

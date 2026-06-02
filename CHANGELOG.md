@@ -2,6 +2,10 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1086 — fix(stream/consumers): blob() result is a real Blob (instanceof)
+
+`await consumers.blob(stream)` (from `node:stream/consumers`) returned a heap object allocated with `CLASS_ID_BLOB` and working `.size`/`.text()`/`.slice()`, but `value instanceof Blob` was `false` and `value.constructor.name` was `undefined`. The `instanceof` fast-path for `Blob`/`Response`/`Request`/`Headers` only recognized the small fetch-registry-handle representation and `return`ed false for any other value — so a real heap-object Blob (what `blob_value_from_bytes` and the `stream/consumers` `blob()` consumer produce) never matched. Added a heap-object class-id check to the `Blob` arm in `instanceof.rs`: a pointer value whose own `class_id == CLASS_ID_BLOB` now matches `instanceof Blob`. `new Blob([...])`, `Response.blob()`, and plain-object negatives are unaffected. Advances the `node:stream/consumers` semantic-parity epic (#3837).
+
 ## v0.5.1085 — fix(worker_threads): parentPort is null on the main thread
 
 `worker_threads.parentPort` returned a `{}` object on the **main thread**, where Node exposes `null` (only a spawned `Worker` has a `MessagePort` back to its parent). This made `if (parentPort) { … }` truthy on the main thread and `parentPort === null` false, diverging from Node.
