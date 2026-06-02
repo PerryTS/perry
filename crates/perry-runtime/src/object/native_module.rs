@@ -2607,6 +2607,33 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "buffer" => Some(BUFFER_NAMESPACE_KEYS),
         "querystring" => Some(QUERYSTRING_NAMESPACE_KEYS),
         "querystring.default" => Some(QUERYSTRING_DEFAULT_KEYS),
+        "console" | "console.default" => Some(&[
+            b"log",
+            b"info",
+            b"debug",
+            b"warn",
+            b"error",
+            b"dir",
+            b"time",
+            b"timeEnd",
+            b"timeLog",
+            b"trace",
+            b"assert",
+            b"clear",
+            b"count",
+            b"countReset",
+            b"group",
+            b"groupEnd",
+            b"table",
+            b"dirxml",
+            b"groupCollapsed",
+            b"Console",
+            b"profile",
+            b"profileEnd",
+            b"timeStamp",
+            b"context",
+            b"createTask",
+        ]),
         "punycode" => Some(PUNYCODE_NAMESPACE_KEYS),
         "punycode.default" => Some(PUNYCODE_DEFAULT_KEYS),
         "punycode.ucs2" => Some(PUNYCODE_UCS2_KEYS),
@@ -3150,6 +3177,9 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
         property_name
     };
     set_bound_native_closure_name(closure, exposed_name);
+    if let Some(length) = native_callable_export_arity(export_module_name, property_name) {
+        set_builtin_closure_length(closure as usize, length);
+    }
     let value = crate::value::js_nanbox_pointer(closure as i64);
     let closure_addr = closure as usize;
 
@@ -3510,6 +3540,8 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("process", "hasUncaughtExceptionCaptureCallback") => Some(0),
         ("fs", "_toUnixTimestamp") => Some(1),
         ("util", "debug" | "debuglog" | "inherits") => Some(2),
+        ("console", "context") => Some(1),
+        ("console", "createTask") => Some(0),
         ("util", "MIMEParams") => Some(0),
         ("util", "MIMEType") => Some(1),
         ("stream", "pipeline" | "compose") => Some(0),
@@ -4324,12 +4356,13 @@ pub(crate) unsafe fn bound_native_callable_module_and_method(
 
 pub(crate) unsafe fn bound_native_callable_value_arity(value: f64) -> Option<u32> {
     let (module, method) = bound_native_callable_module_and_method(value)?;
-    match (module.as_str(), method.as_str()) {
+    let module = normalize_native_module_alias(&module);
+    match (module, method.as_str()) {
         ("console", "Console") => Some(1),
         ("util", "isArray") => Some(1),
         ("module", "isBuiltin") => Some(1),
         ("process", "getBuiltinModule") => Some(1),
-        _ => native_callable_export_arity(module.as_str(), method.as_str()),
+        _ => native_callable_export_arity(module, method.as_str()),
     }
 }
 
@@ -5117,6 +5150,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("console", "profile")
             | ("console", "profileEnd")
             | ("console", "timeStamp")
+            | ("console", "context")
+            | ("console", "createTask")
             | ("crypto", "createHash")
             | ("crypto", "Hash")
             | ("crypto", "createSign")

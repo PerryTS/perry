@@ -3839,6 +3839,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("console", "profile", false, None),
     method("console", "profileEnd", false, None),
     method("console", "timeStamp", false, None),
+    method("console", "context", false, None),
+    method("console", "createTask", false, None),
     // --- util (a small surface — Perry implements util.inspect /
     //     util.format / util.promisify shapes through builtins.rs;
     //     the rest are documented stubs) ---

@@ -1,5 +1,4 @@
-//! Dispatch table for `(native_module_namespace).method(...)` calls
-//! that escape into the runtime tower from
+//! Dispatch table for native module method calls that escape into the runtime tower from
 //! `js_native_call_method`.
 //!
 //! Split out of `object/mod.rs` (issue #1103). Pure relocation — no
@@ -7,6 +6,7 @@
 
 use super::native_module_dispatch_crypto::crypto_random_fill_sync_dispatch;
 use super::*;
+use crate::value::TAG_UNDEFINED;
 
 /// #3712: coerce a NaN-boxed value to an owned UTF-8 `String`, matching the
 /// `${val}` coercion Node applies before building HTTP error messages.
@@ -1574,6 +1574,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("console", "profile") | ("console", "profileEnd") | ("console", "timeStamp") => {
             f64::from_bits(JSValue::undefined().bits())
         }
+        ("console", "context") => crate::builtins::js_console_context(arg(0)),
+        ("console", "createTask") => crate::builtins::js_console_create_task(arg(0)),
         ("stream", _) => dispatch_stream_native_module_method(method_name, args_ptr, args_len)
             .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits())),
         ("readline", "clearLine") => {

@@ -1762,6 +1762,24 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_VOID,
     },
+    NativeModSig {
+        module: "console",
+        has_receiver: false,
+        method: "context",
+        class_filter: None,
+        runtime: "js_console_context",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "console",
+        has_receiver: false,
+        method: "createTask",
+        class_filter: None,
+        runtime: "js_console_create_task",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ========== Node assert ==========
     // Root-callable `assert(value, message?)` — HIR lowers
     // `import assert from "node:assert"; assert(x, m)` to a

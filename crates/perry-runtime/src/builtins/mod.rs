@@ -55,18 +55,18 @@ pub use arithmetic::{
 };
 
 pub use console::{
-    js_console_assert, js_console_assert_spread, js_console_clear, js_console_count,
-    js_console_count_reset, js_console_count_reset_value, js_console_count_value,
-    js_console_dir_with_options, js_console_error_dynamic, js_console_error_i32,
-    js_console_error_number, js_console_error_spread, js_console_group, js_console_group_begin,
-    js_console_group_end, js_console_log, js_console_log_as_closure, js_console_log_dynamic,
-    js_console_log_i32, js_console_log_i64, js_console_log_number, js_console_log_spread,
-    js_console_new, js_console_new2, js_console_noop, js_console_time, js_console_time_end,
-    js_console_time_end_value, js_console_time_log, js_console_time_log_spread,
-    js_console_time_log_value, js_console_time_value, js_console_trace, js_console_trace_spread,
-    js_console_warn_dynamic, js_console_warn_i32, js_console_warn_number, js_console_warn_spread,
-    perry_debug_trace_init, perry_debug_trace_init_done, scan_console_log_singleton_roots,
-    scan_console_log_singleton_roots_mut,
+    js_console_assert, js_console_assert_spread, js_console_clear, js_console_context,
+    js_console_count, js_console_count_reset, js_console_count_reset_value, js_console_count_value,
+    js_console_create_task, js_console_dir_with_options, js_console_error_dynamic,
+    js_console_error_i32, js_console_error_number, js_console_error_spread, js_console_group,
+    js_console_group_begin, js_console_group_end, js_console_log, js_console_log_as_closure,
+    js_console_log_dynamic, js_console_log_i32, js_console_log_i64, js_console_log_number,
+    js_console_log_spread, js_console_new, js_console_new2, js_console_noop, js_console_time,
+    js_console_time_end, js_console_time_end_value, js_console_time_log,
+    js_console_time_log_spread, js_console_time_log_value, js_console_time_value, js_console_trace,
+    js_console_trace_spread, js_console_warn_dynamic, js_console_warn_i32, js_console_warn_number,
+    js_console_warn_spread, perry_debug_trace_init, perry_debug_trace_init_done,
+    scan_console_log_singleton_roots, scan_console_log_singleton_roots_mut,
 };
 
 pub(crate) use console::{

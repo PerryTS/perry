@@ -1534,6 +1534,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_console_assert", VOID, &[DOUBLE, I64]);
     module.declare_function("js_console_assert_spread", VOID, &[DOUBLE, I64]);
     module.declare_function("js_console_group", VOID, &[I64]);
+    module.declare_function("js_console_context", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_console_create_task", DOUBLE, &[DOUBLE]);
 
     // ========== Fetch ==========
     module.declare_function("js_fetch_get", I64, &[I64]);
