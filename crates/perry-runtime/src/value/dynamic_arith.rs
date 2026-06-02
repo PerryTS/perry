@@ -55,23 +55,18 @@ unsafe fn throw_add_type_error(message: &[u8]) -> ! {
 }
 
 #[inline]
-fn is_symbol_value(value: f64) -> bool {
-    let jsval = JSValue::from_bits(value.to_bits());
-    if !jsval.is_pointer() {
-        return false;
-    }
-    let ptr = jsval.as_pointer::<u8>() as usize;
-    ptr >= 0x1000 && crate::symbol::is_registered_symbol(ptr)
+unsafe fn is_symbol_value(value: f64) -> bool {
+    crate::symbol::js_is_symbol(value) != 0
 }
 
 #[inline]
-fn is_nonprimitive_object_value(value: f64) -> bool {
+unsafe fn is_nonprimitive_object_value(value: f64) -> bool {
     let jsval = JSValue::from_bits(value.to_bits());
     if !jsval.is_pointer() {
         return false;
     }
     let ptr = jsval.as_pointer::<u8>() as usize;
-    ptr >= 0x1000 && !crate::symbol::is_registered_symbol(ptr)
+    ptr >= 0x1000 && !is_symbol_value(value)
 }
 
 unsafe fn to_primitive_default_for_add(value: f64) -> f64 {

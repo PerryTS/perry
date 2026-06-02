@@ -87,6 +87,36 @@ fn test_array_alloc_and_access() {
 }
 
 #[test]
+fn test_array_hole_is_not_own_property_but_undefined_value_is() {
+    let mut holey = js_array_alloc(0);
+    holey = js_array_push_hole(holey);
+    assert_eq!(js_array_length(holey), 1);
+    assert_eq!(
+        js_array_get_f64(holey, 0).to_bits(),
+        crate::value::TAG_UNDEFINED
+    );
+    assert_eq!(
+        crate::object::js_object_has_own(
+            boxed_pointer(holey as *mut u8),
+            string_value(string_key(b"0"))
+        )
+        .to_bits(),
+        crate::value::TAG_FALSE
+    );
+
+    let mut explicit = js_array_alloc(0);
+    explicit = js_array_push_f64(explicit, f64::from_bits(crate::value::TAG_UNDEFINED));
+    assert_eq!(
+        crate::object::js_object_has_own(
+            boxed_pointer(explicit as *mut u8),
+            string_value(string_key(b"0"))
+        )
+        .to_bits(),
+        crate::value::TAG_TRUE
+    );
+}
+
+#[test]
 fn test_array_exotic_named_indices_and_boundary_props() {
     let mut arr = js_array_alloc(0);
     let arr_obj = arr as *mut crate::object::ObjectHeader;

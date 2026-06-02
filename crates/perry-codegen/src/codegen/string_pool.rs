@@ -27,6 +27,8 @@ pub(super) fn emit_string_pool(
     closure_arities: &HashMap<u32, u32>,
     // ECMAScript-visible `.length` for all closures.
     closure_lengths: &HashMap<u32, u32>,
+    // Closure body func_ids that came from arrow function syntax.
+    closure_arrow_functions: &std::collections::HashSet<u32>,
     // Issue #653: wrappers (`__perry_wrap_<name>`) for top-level user functions
     // that declare a rest param. Each entry is `(wrapper_symbol, fixed_arity)`
     // — the runtime side-table is keyed on the wrapper's func_ptr, NOT the
@@ -746,6 +748,14 @@ pub(super) fn emit_string_pool(
             "js_register_closure_length",
             &[(PTR, &func_ref), (I32, &length.to_string())],
         );
+    }
+
+    let mut sorted_arrows: Vec<u32> = closure_arrow_functions.iter().copied().collect();
+    sorted_arrows.sort_unstable();
+    for fid in sorted_arrows {
+        let closure_sym = format!("perry_closure_{}__{}", module_prefix, fid);
+        let func_ref = format!("@{}", closure_sym);
+        blk.call_void("js_register_closure_arrow_function", &[(PTR, &func_ref)]);
     }
 
     // Issue #653: register `__perry_wrap_<name>` wrappers for top-level user

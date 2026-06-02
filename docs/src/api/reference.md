@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2549 entries across 107 modules.
+Total: 2550 entries across 108 modules.
 
 ## Modules
 
@@ -109,6 +109,7 @@ Total: 2549 entries across 107 modules.
 - [`uuid`](#uuid)
 - [`v8`](#v8)
 - [`validator`](#validator)
+- [`vm`](#vm)
 - [`wasi`](#wasi)
 - [`worker_threads`](#worker-threads)
 - [`ws`](#ws)
@@ -3315,6 +3316,12 @@ Total: 2549 entries across 107 modules.
 - `isJSON` — module
 - `isURL` — module
 - `isUUID` — module
+
+## `vm`
+
+### Methods
+
+- `createContext` — module
 
 ## `wasi`
 

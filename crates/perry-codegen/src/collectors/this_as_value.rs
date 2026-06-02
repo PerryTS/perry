@@ -294,6 +294,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
         Expr::Array(elements) => elements.iter().any(|e| expr_uses_this_as_value(e, fields)),
         Expr::ArraySpread(elements) => elements.iter().any(|el| match el {
             ArrayElement::Expr(e) | ArrayElement::Spread(e) => expr_uses_this_as_value(e, fields),
+            ArrayElement::Hole => false,
         }),
         Expr::Object(props) => props
             .iter()

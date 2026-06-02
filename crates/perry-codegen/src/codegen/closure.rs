@@ -51,28 +51,38 @@ pub(super) fn compile_closure(
 ) -> Result<()> {
     // Destructure the closure expression. We trust that the caller
     // passes only `Expr::Closure` here (from `collect_closures_*`).
-    let (params, body, captures, captures_this, enclosing_class, is_async, is_strict) =
-        match closure_expr {
-            perry_hir::Expr::Closure {
-                params,
-                body,
-                captures,
-                captures_this,
-                enclosing_class,
-                is_async,
-                is_strict,
-                ..
-            } => (
-                params,
-                body,
-                captures,
-                *captures_this,
-                enclosing_class.clone(),
-                *is_async,
-                *is_strict,
-            ),
-            _ => return Err(anyhow!("compile_closure: expected Expr::Closure")),
-        };
+    let (
+        params,
+        body,
+        captures,
+        captures_this,
+        captures_new_target,
+        enclosing_class,
+        is_async,
+        is_strict,
+    ) = match closure_expr {
+        perry_hir::Expr::Closure {
+            params,
+            body,
+            captures,
+            captures_this,
+            captures_new_target,
+            enclosing_class,
+            is_async,
+            is_strict,
+            ..
+        } => (
+            params,
+            body,
+            captures,
+            *captures_this,
+            *captures_new_target,
+            enclosing_class.clone(),
+            *is_async,
+            *is_strict,
+        ),
+        _ => return Err(anyhow!("compile_closure: expected Expr::Closure")),
+    };
 
     let llvm_name = format!("perry_closure_{}__{}", module_prefix, func_id);
 
@@ -164,8 +174,24 @@ pub(super) fn compile_closure(
     // Arrow-in-class leftover path (`enclosing_class.is_some()` without
     // the object-literal patch) keeps the old 0.0 sentinel — reads
     // return a bogus value but don't crash.
+    let new_target_stack = if captures_new_target {
+        let new_target_cap_idx = auto_captures.len() as u32;
+        let blk = lf.block_mut(0).unwrap();
+        let slot = blk.alloca(DOUBLE);
+        let idx_str = new_target_cap_idx.to_string();
+        let v = blk.call(
+            DOUBLE,
+            "js_closure_get_capture_f64",
+            &[(I64, "%this_closure"), (I32, &idx_str)],
+        );
+        blk.store(DOUBLE, &v, &slot);
+        vec![slot]
+    } else {
+        Vec::new()
+    };
+
     let this_stack = if captures_this || enclosing_class.is_some() {
-        let this_cap_idx = auto_captures.len() as u32;
+        let this_cap_idx = (auto_captures.len() + usize::from(captures_new_target)) as u32;
         let blk = lf.block_mut(0).unwrap();
         let slot = blk.alloca(DOUBLE);
         if captures_this {
@@ -229,6 +255,7 @@ pub(super) fn compile_closure(
         pending_label: None,
         classes,
         this_stack,
+        new_target_stack,
         class_stack,
         methods,
         module_globals,

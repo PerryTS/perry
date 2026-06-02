@@ -19,6 +19,10 @@
 //! `Object.getOwnPropertySymbols(obj)` calls and routing them to the
 //! functions in this module.
 
+mod accessors;
+
+pub(crate) use accessors::set_symbol_accessor_property;
+
 use crate::string::{js_string_from_bytes, StringHeader};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -194,19 +198,9 @@ pub(crate) fn is_global_registered_symbol(ptr: usize) -> bool {
     }
 }
 
-// Side-table for symbol-keyed properties on objects. The object pointer is
-// the key (as usize); the value is a list of (symbol_ptr, value_bits) pairs.
-// Storage is intentionally simple (linear scan per lookup) — symbol-keyed
-// properties on a single object are rare.
-//
-// GC invariant:
-// - SYMBOL_PROPERTIES outer object keys are metadata-only raw pointers. They
-//   are rewritten when an owner moves but do not keep that owner alive.
-// - SYMBOL_PROPERTIES inner symbol keys are raw-pointer roots.
-// - SYMBOL_PROPERTIES values and CLASS_STATIC_SYMBOLS values are NaN-box roots.
-// - CLASS_STATIC_SYMBOLS symbol keys are raw-pointer roots.
-// - SYMBOL_POINTERS is metadata-only: moved symbol addresses are rewritten, but
-//   tracking a pointer there does not by itself keep the symbol alive.
+// Symbol-keyed property side tables. Object keys are metadata-only and get
+// rewritten when owners move; symbol keys and NaN-boxed values are GC roots.
+// Storage stays intentionally linear because per-object symbol keys are rare.
 static SYMBOL_PROPERTIES: Mutex<Option<HashMap<usize, Vec<(usize, u64)>>>> = Mutex::new(None);
 
 // Monotonic id counter for fresh symbols. Not thread-safe per-thread but
@@ -592,6 +586,7 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     if obj_key == 0 || sym_key == 0 {
         return value_f64;
     }
+    accessors::clear_symbol_accessor_property(obj_key, sym_key);
     store_object_symbol_property_root(obj_key, sym_key, value_f64.to_bits());
     value_f64
 }
@@ -683,6 +678,7 @@ pub fn scan_symbol_side_table_roots(mark: &mut dyn FnMut(f64)) {
 
 pub fn scan_symbol_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     scan_symbol_property_roots_mut(visitor);
+    accessors::scan_symbol_accessor_roots_mut(visitor);
     scan_class_static_symbol_roots_mut(visitor);
     scan_symbol_pointer_metadata_roots_mut(visitor);
 }
@@ -932,6 +928,7 @@ fn rewrite_symbol_pointer_metadata_if_forwarded(
 pub(crate) fn test_clear_symbol_side_table_roots() {
     *crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES) = None;
     *crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS) = None;
+    accessors::test_clear_symbol_accessor_roots();
 
     let mut persistent = Vec::new();
     {
@@ -1047,6 +1044,9 @@ pub unsafe extern "C" fn js_object_has_own_symbol(obj_f64: f64, sym_f64: f64) ->
     let sym_key = sym_key_from_f64(sym_f64);
     if obj_key == 0 || sym_key == 0 {
         return false;
+    }
+    if accessors::has_own_symbol_accessor(obj_key, sym_key) {
+        return true;
     }
     let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
     if let Some(map) = guard.as_ref() {
@@ -1277,6 +1277,9 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                 }
             }
         }
+    }
+    if let Some(acc) = accessors::symbol_accessor_property(obj_f64, sym_f64) {
+        return accessors::invoke_symbol_accessor_getter(acc.get, obj_f64);
     }
     if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
         return v;

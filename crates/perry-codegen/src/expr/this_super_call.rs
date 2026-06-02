@@ -60,6 +60,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 Ok(ctx.block().call(DOUBLE, helper, &[]))
             }
         }
+        Expr::NewTarget => {
+            if let Some(slot) = ctx.new_target_stack.last().cloned() {
+                Ok(ctx.block().load(DOUBLE, &slot))
+            } else {
+                Ok(ctx.block().call(DOUBLE, "js_new_target_get", &[]))
+            }
+        }
 
         // `super(args…)` — Phase C.2 inheritance. Look up the current
         // class's parent and inline the parent's constructor body

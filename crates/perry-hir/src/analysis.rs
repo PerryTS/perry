@@ -15,7 +15,10 @@ pub(crate) use builtins::{
 };
 
 mod uses_this;
-pub(crate) use uses_this::{closure_uses_this, uses_this_expr, uses_this_stmt};
+pub(crate) use uses_this::{
+    closure_uses_new_target, closure_uses_this, uses_new_target_expr, uses_new_target_stmt,
+    uses_this_expr, uses_this_stmt,
+};
 
 /// Collect every `LocalId` referenced by `expr` (and its sub-expressions).
 ///
@@ -371,6 +374,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
                 match elem {
                     ArrayElement::Expr(e) => collect_assigned_locals_expr(e, assigned),
                     ArrayElement::Spread(e) => collect_assigned_locals_expr(e, assigned),
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -1856,6 +1860,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => {
                         replace_this_in_expr(e, this_id)
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }

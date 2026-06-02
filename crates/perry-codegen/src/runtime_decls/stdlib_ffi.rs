@@ -11,6 +11,9 @@ use super::*;
 /// Signatures cross-checked against `crates/perry-runtime/src/` and
 /// `crates/perry-stdlib/src/`.
 pub fn declare_stdlib_ffi(module: &mut LlModule) {
+    // ========== node:vm ==========
+    module.declare_function("js_vm_create_context", DOUBLE, &[DOUBLE]);
+
     // ========== worker_threads ==========
     module.declare_function("js_worker_threads_worker_new", DOUBLE, &[I64, DOUBLE]);
     module.declare_function(
@@ -1699,6 +1702,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_implicit_this_get", DOUBLE, &[]);
     module.declare_function("js_implicit_this_get_sloppy", DOUBLE, &[]);
     module.declare_function("js_implicit_this_set", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_new_target_get", DOUBLE, &[]);
+    module.declare_function("js_new_target_set", DOUBLE, &[DOUBLE]);
 
     // ========== Runtime init / module loader ==========
     module.declare_function("js_get_export", DOUBLE, &[I64, I64, I64]);

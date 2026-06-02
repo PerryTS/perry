@@ -319,6 +319,7 @@ thread_local! {
 // in strict mode, which matches.
 thread_local! {
     static IMPLICIT_THIS: Cell<u64> = const { Cell::new(crate::value::TAG_UNDEFINED) };
+    static NEW_TARGET: Cell<u64> = const { Cell::new(crate::value::TAG_UNDEFINED) };
 }
 
 /// Read the current implicit `this` (issue #519).
@@ -358,6 +359,18 @@ pub extern "C" fn js_implicit_this_set(value: f64) -> f64 {
     IMPLICIT_THIS.with(|c| f64::from_bits(c.replace(value.to_bits())))
 }
 
+/// Read the current `new.target` value for ordinary function bodies.
+#[no_mangle]
+pub extern "C" fn js_new_target_get() -> f64 {
+    NEW_TARGET.with(|c| f64::from_bits(c.get()))
+}
+
+/// Set `new.target` and return the previous value.
+#[no_mangle]
+pub extern "C" fn js_new_target_set(value: f64) -> f64 {
+    NEW_TARGET.with(|c| f64::from_bits(c.replace(value.to_bits())))
+}
+
 /// GC mutable-root scanner for the implicit-`this` cell (issue #1813).
 ///
 /// `IMPLICIT_THIS` holds the NaN-boxed receiver for the duration of a
@@ -383,6 +396,12 @@ pub extern "C" fn js_implicit_this_set(value: f64) -> f64 {
 /// is safe.
 pub fn scan_implicit_this_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     IMPLICIT_THIS.with(|c| {
+        let mut bits = c.get();
+        if visitor.visit_nanbox_u64_slot(&mut bits) {
+            c.set(bits);
+        }
+    });
+    NEW_TARGET.with(|c| {
         let mut bits = c.get();
         if visitor.visit_nanbox_u64_slot(&mut bits) {
             c.set(bits);
