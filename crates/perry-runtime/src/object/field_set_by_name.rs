@@ -361,6 +361,16 @@ pub extern "C" fn js_object_set_field_by_name(
                 let name_len = (*key).byte_len as usize;
                 let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
                 if let Ok(name_str) = std::str::from_utf8(name_bytes) {
+                    if matches!(name_str, "caller" | "arguments")
+                        && crate::closure::closure_is_arrow(
+                            obj as *const crate::closure::ClosureHeader,
+                        )
+                    {
+                        crate::fs::validate::throw_type_error_with_code(
+                            "Restricted function property assignment",
+                            "ERR_INVALID_ARG_TYPE",
+                        );
+                    }
                     // #3143: honor a non-writable registered descriptor — a
                     // built-in method's `.name`/`.length` are spec'd
                     // `writable: false`, so a sloppy-mode write must be a silent

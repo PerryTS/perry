@@ -151,6 +151,7 @@ pub(super) fn compile_method(
         pending_label: None,
         classes,
         this_stack: vec![this_slot],
+        new_target_stack: Vec::new(),
         class_stack: vec![class.name.clone()],
         methods,
         module_globals,
@@ -621,6 +622,7 @@ pub(super) fn compile_static_method(
         pending_label: None,
         classes,
         this_stack: Vec::new(),
+        new_target_stack: Vec::new(),
         // Static methods have no `this` but they CAN reference
         // sibling static methods/fields via the class name (which
         // they handle via StaticFieldGet/StaticMethodCall, not via

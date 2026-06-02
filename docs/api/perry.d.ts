@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1750 entries across 102 modules
+// Coverage: 1760 entries across 105 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1692,8 +1692,6 @@ declare module "http" {
   /** stdlib */
   export class ServerResponse { [key: string]: any; }
   /** stdlib */
-  export class WebSocket { [key: string]: any; }
-  /** stdlib */
   export const METHODS: any;
   /** stdlib */
   export const STATUS_CODES: any;
@@ -1705,8 +1703,6 @@ declare module "http" {
   export function Agent(...args: any[]): any;
   /** stdlib */
   export function Server(...args: any[]): any;
-  /** stdlib */
-  export function _connectionListener(...args: any[]): any;
   /** stdlib */
   export function createServer(...args: any[]): any;
   /** stdlib */
@@ -1770,6 +1766,36 @@ declare module "https" {
   export function get(...args: any[]): any;
   /** stdlib */
   export function request(...args: any[]): any;
+}
+
+declare module "inspector" {
+  /** stdlib */
+  export class Session { [key: string]: any; }
+  /** stdlib */
+  export const console: any;
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function Session(...args: any[]): any;
+  /** stdlib */
+  export function close(...args: any[]): any;
+  /** stdlib */
+  export function open(...args: any[]): any;
+  /** stdlib */
+  export function url(...args: any[]): any;
+  /** stdlib */
+  export function waitForDebugger(...args: any[]): any;
+}
+
+declare module "inspector/promises" {
+  /** stdlib */
+  export class Session { [key: string]: any; }
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function Session(...args: any[]): any;
 }
 
 declare module "ioredis" {
@@ -3675,6 +3701,11 @@ declare module "validator" {
   export function isURL(s: string): boolean;
   /** stdlib */
   export function isUUID(s: string): boolean;
+}
+
+declare module "vm" {
+  /** stdlib */
+  export function createContext(p0: any): any;
 }
 
 declare module "wasi" {

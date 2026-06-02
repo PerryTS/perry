@@ -2247,6 +2247,16 @@ pub extern "C" fn js_object_get_field_by_name(
                     if crate::closure::closure_is_key_deleted(obj as usize, name_str) {
                         return JSValue::undefined();
                     }
+                    if matches!(name_str, "caller" | "arguments")
+                        && crate::closure::closure_is_arrow(
+                            obj as *const crate::closure::ClosureHeader,
+                        )
+                    {
+                        crate::fs::validate::throw_type_error_with_code(
+                            "Restricted function property access",
+                            "ERR_INVALID_ARG_TYPE",
+                        );
+                    }
                 }
                 // `fn.length` — return the registered ECMAScript-visible
                 // length for the underlying function. Ramda's

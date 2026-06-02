@@ -1093,6 +1093,36 @@ fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
     }
 }
 
+/// Install `%Function.prototype% [ @@hasInstance ]` (#3662). Pre-fix this was
+/// `undefined` — `typeof Function.prototype[Symbol.hasInstance]` reported
+/// "undefined", a reflective `.call` threw, and a class with a custom
+/// `static [Symbol.hasInstance]` was the only way to reach the protocol. The
+/// method is keyed by the real well-known `Symbol.hasInstance` (not an
+/// `@@`-string own property, which would leak into `getOwnPropertyNames`).
+fn install_function_has_instance_symbol(proto_obj: *mut ObjectHeader) {
+    if proto_obj.is_null() {
+        return;
+    }
+    unsafe {
+        let func_ptr = super::instanceof::function_prototype_has_instance_thunk as *const u8;
+        crate::closure::js_register_closure_arity(func_ptr, 1);
+        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+        if closure.is_null() {
+            return;
+        }
+        super::native_module::set_bound_native_closure_name(closure, "[Symbol.hasInstance]");
+        super::native_module::set_builtin_closure_length(closure as usize, 1);
+        let sym = crate::symbol::well_known_symbol("hasInstance");
+        if sym.is_null() {
+            return;
+        }
+        let proto_value = crate::value::js_nanbox_pointer(proto_obj as i64);
+        let sym_value = f64::from_bits(crate::value::JSValue::pointer(sym as *const u8).bits());
+        let fn_value = f64::from_bits(crate::value::js_nanbox_pointer(closure as i64).to_bits());
+        crate::symbol::js_object_set_symbol_property(proto_value, sym_value, fn_value);
+    }
+}
+
 fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
     if proto_obj.is_null() {
         return;
@@ -2712,6 +2742,7 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                 1,
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_function_has_instance_symbol(proto_obj);
         }
         "String" => {
             install_noop_proto_methods(

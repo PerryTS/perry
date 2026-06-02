@@ -25,9 +25,10 @@ pub use alloc::{
 };
 
 pub use registry::{
-    build_rest_array, closure_arity, closure_length, dispatch_rest_bundled, dispatch_with_arity,
-    is_registered_async_function, is_registered_async_generator_function,
-    is_registered_generator_function, js_register_closure_arity,
+    build_rest_array, closure_arity, closure_is_arrow, closure_length, dispatch_rest_bundled,
+    dispatch_with_arity, is_registered_arrow_function, is_registered_async_function,
+    is_registered_async_generator_function, is_registered_generator_function,
+    js_register_closure_arity, js_register_closure_arrow_function,
     js_register_closure_async_function, js_register_closure_async_generator_function,
     js_register_closure_generator_function, js_register_closure_length, js_register_closure_rest,
     js_register_closure_synthetic_arguments, lookup_closure_arity, lookup_closure_length,

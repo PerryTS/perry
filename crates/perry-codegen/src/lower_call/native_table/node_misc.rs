@@ -41,6 +41,18 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // ========== node:vm ==========
+    // Minimal contextification surface for APIs that require a vm context
+    // object but do not execute code inside it yet.
+    NativeModSig {
+        module: "vm",
+        has_receiver: false,
+        method: "createContext",
+        class_filter: None,
+        runtime: "js_vm_create_context",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ========== node:querystring ==========
     // Module-level functions. `decode` / `encode` route to the same
     // runtime symbols as `parse` / `stringify` so the test's

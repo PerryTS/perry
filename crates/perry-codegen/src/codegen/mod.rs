@@ -2005,6 +2005,16 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
         })
         .collect();
+    let closure_arrow_functions: std::collections::HashSet<u32> = closures
+        .iter()
+        .filter_map(|(fid, expr)| {
+            if let perry_hir::Expr::Closure { is_arrow, .. } = expr {
+                is_arrow.then_some(*fid)
+            } else {
+                None
+            }
+        })
+        .collect();
 
     // Integer specialization: for pure numeric recursive functions (like
     // fibonacci), emit an i64 variant that uses integer registers and
@@ -2208,6 +2218,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         closure_synthetic_arguments: &closure_synthetic_arguments,
         closure_arities: &closure_arities,
         closure_lengths: &closure_lengths,
+        closure_arrow_functions: &closure_arrow_functions,
         closures: &closures,
         class_keys_init_data: &class_keys_init_data,
         imported_class_stubs: &imported_class_stubs,

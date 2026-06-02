@@ -1471,6 +1471,12 @@ pub unsafe extern "C" fn js_new_function_construct(
             }
         }
     }
+    if is_arrow_function_value(func_value) {
+        crate::fs::validate::throw_type_error_with_code(
+            "Arrow function is not a constructor",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
     let cid = synthetic_class_id_for_function(func_value);
     // Allocate the instance with the synthetic class id (or 0 if the
     // value isn't callable). The object starts with no own props; the
@@ -1499,8 +1505,11 @@ pub unsafe extern "C" fn js_new_function_construct(
         // not the returned value (object returns would override, but
         // dayjs and siblings rely on the receiver mutation pattern).
         let prev_this = crate::object::js_implicit_this_get();
+        let prev_new_target = crate::object::js_new_target_get();
         crate::object::js_implicit_this_set(nan_boxed);
+        crate::object::js_new_target_set(func_value);
         let _ = crate::closure::js_native_call_value(func_value, args_ptr, args_len);
+        crate::object::js_new_target_set(prev_new_target);
         crate::object::js_implicit_this_set(prev_this);
     }
     nan_boxed
@@ -1529,6 +1538,24 @@ fn is_callable_function_value(value: f64) -> bool {
         return false;
     }
     unsafe { (*ptr).type_tag == crate::closure::CLOSURE_MAGIC }
+}
+
+fn is_arrow_function_value(value: f64) -> bool {
+    use crate::value::JSValue;
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let ptr = jv.as_pointer() as *const crate::closure::ClosureHeader;
+    if ptr.is_null() || !is_valid_obj_ptr(ptr as *const u8) {
+        return false;
+    }
+    unsafe {
+        if (*ptr).type_tag != crate::closure::CLOSURE_MAGIC {
+            return false;
+        }
+    }
+    crate::closure::closure_is_arrow(ptr)
 }
 
 /// Lookup helper: returns the registered prototype-method value for

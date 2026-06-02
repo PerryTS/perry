@@ -1,7 +1,7 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::{
-    BinaryOp, CompareOp, Expr, Function, Interface, InterfaceProperty, Module, ModuleInitKind,
-    Stmt, UpdateOp,
+    ArrayElement, BinaryOp, CompareOp, Expr, Function, Interface, InterfaceProperty, Module,
+    ModuleInitKind, Stmt, UpdateOp,
 };
 use perry_types::{ObjectType, PropertyInfo, Type};
 
@@ -281,6 +281,97 @@ fn number_typed_local_array_push_keeps_layout_note_and_barrier() {
         ir.contains("call void @js_typed_feedback_record_fallback_call")
             && ir.contains("call i64 @js_array_push_f64"),
         "wrong runtime values must keep a boxed runtime push fallback"
+    );
+}
+
+#[test]
+fn c262_array_spread_uses_strict_iterator_append_and_preserves_holes() {
+    let module = base_module(
+        "c262_array_spread.ts",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "iter".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Array(vec![Expr::Number(2.0)])),
+            },
+            Stmt::Return(Some(Expr::ArraySpread(vec![
+                ArrayElement::Expr(Expr::Number(1.0)),
+                ArrayElement::Hole,
+                ArrayElement::Spread(Expr::LocalGet(1)),
+            ]))),
+        ],
+        Vec::new(),
+    );
+
+    let ir = ir_for(module);
+    assert!(
+        ir.contains("call i64 @js_array_push_hole"),
+        "elisions should append a hole sentinel, not undefined"
+    );
+    assert!(
+        ir.contains("call i64 @js_array_spread_append"),
+        "spread operands should go through strict iterator materialization"
+    );
+}
+
+#[test]
+fn c262_array_has_own_property_uses_object_prototype_dispatch() {
+    let module = base_module(
+        "c262_array_has_own_property.ts",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "arr".to_string(),
+                ty: Type::Array(Box::new(Type::Any)),
+                mutable: false,
+                init: Some(Expr::Array(vec![Expr::Bool(true)])),
+            },
+            Stmt::Return(Some(Expr::Call {
+                callee: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    property: "hasOwnProperty".to_string(),
+                }),
+                args: vec![Expr::String("0".to_string())],
+                type_args: vec![],
+            })),
+        ],
+        Vec::new(),
+    );
+
+    let ir = ir_for(module);
+    assert!(
+        ir.contains("call double @js_typed_feedback_native_call_method"),
+        "array hasOwnProperty should dispatch through Object.prototype semantics"
+    );
+}
+
+#[test]
+fn c262_addition_assignment_operands_use_dynamic_add_helper() {
+    let module = base_module(
+        "c262_addition_order.ts",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "y".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Number(0.0)),
+            },
+            Stmt::Return(Some(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalSet(1, Box::new(Expr::Number(1.0)))),
+                right: Box::new(Expr::LocalGet(1)),
+            })),
+        ],
+        Vec::new(),
+    );
+
+    let ir = ir_for(module);
+    assert!(
+        ir.contains("call double @js_dynamic_string_or_number_add"),
+        "addition with assignment/GetValue operands should preserve ToPrimitive ordering"
     );
 }
 

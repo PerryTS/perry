@@ -19,7 +19,10 @@ use anyhow::Result;
 use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
-use crate::analysis::{closure_uses_this, collect_assigned_locals_stmt, collect_local_refs_stmt};
+use crate::analysis::{
+    closure_uses_new_target, closure_uses_this, collect_assigned_locals_stmt,
+    collect_local_refs_stmt,
+};
 use crate::ir::{Expr, Param, Stmt};
 use crate::lower_patterns::{
     generate_param_destructuring_stmts, get_param_default, get_pat_name, get_pat_type,
@@ -314,6 +317,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
 
     // Check if this arrow function uses `this` (needs to capture it from enclosing scope)
     let captures_this = closure_uses_this(&body);
+    let captures_new_target = closure_uses_new_target(&body);
 
     // Store enclosing class name for arrow functions that capture `this`
     let enclosing_class = if captures_this {
@@ -330,7 +334,9 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         captures,
         mutable_captures,
         captures_this,
+        captures_new_target,
         enclosing_class,
+        is_arrow: true,
         is_async: arrow.is_async,
         is_generator: false,
         is_strict,
@@ -616,7 +622,9 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
         captures,
         mutable_captures,
         captures_this: false,
+        captures_new_target: false,
         enclosing_class: None,
+        is_arrow: false,
         is_async: fn_expr.function.is_async,
         is_generator: fn_expr.function.is_generator,
         is_strict,

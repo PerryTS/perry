@@ -57,6 +57,12 @@ thread_local! {
     static CLOSURE_LENGTH_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, u32>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 
+    /// Side-table marking closure body `func_ptr`s that came from arrow
+    /// functions. Arrows are callable but not constructable and inherit the
+    /// restricted Function.prototype caller/arguments accessors.
+    static CLOSURE_ARROW_FUNCTION_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, ()>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+
     /// Side-table marking closure body `func_ptr`s that came from async
     /// functions. `util.types.isAsyncFunction` uses this when the predicate
     /// sees a runtime closure value instead of a statically-known HIR node.
@@ -281,6 +287,32 @@ pub extern "C" fn js_register_closure_length(func_ptr: *const u8, length: u32) {
 #[inline(always)]
 pub fn lookup_closure_length(func_ptr: *const u8) -> Option<u32> {
     CLOSURE_LENGTH_REGISTRY.with(|r| r.borrow().get(&(func_ptr as usize)).copied())
+}
+
+#[no_mangle]
+pub extern "C" fn js_register_closure_arrow_function(func_ptr: *const u8) {
+    if func_ptr.is_null() {
+        return;
+    }
+    CLOSURE_ARROW_FUNCTION_REGISTRY.with(|r| {
+        r.borrow_mut().insert(func_ptr as usize, ());
+    });
+}
+
+#[inline(always)]
+pub fn is_registered_arrow_function(func_ptr: *const u8) -> bool {
+    if func_ptr.is_null() {
+        return false;
+    }
+    CLOSURE_ARROW_FUNCTION_REGISTRY.with(|r| r.borrow().contains_key(&(func_ptr as usize)))
+}
+
+pub fn closure_is_arrow(closure: *const ClosureHeader) -> bool {
+    let func_ptr = get_valid_func_ptr(closure);
+    if func_ptr.is_null() {
+        return false;
+    }
+    is_registered_arrow_function(func_ptr)
 }
 
 #[no_mangle]

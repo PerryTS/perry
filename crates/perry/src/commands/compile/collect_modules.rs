@@ -136,6 +136,7 @@ pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
         // through the submodule namespace; named imports keep the global
         // fast-path (gated in compile.rs). (#1213)
         "timers" => Some("timers"),
+        "vm" => Some("vm"),
         "timers/promises" => Some("timers_promises"),
         "fs/promises" => Some("fs_promises"),
         "readline/promises" => Some("readline_promises"),
