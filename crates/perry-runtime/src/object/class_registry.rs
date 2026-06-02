@@ -702,6 +702,9 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
             || func_ptr == global_this_headers_thunk as *const u8 as usize
             || func_ptr == global_this_request_thunk as *const u8 as usize
             || func_ptr == global_this_response_thunk as *const u8 as usize
+            || func_ptr == global_this_string_thunk as *const u8 as usize
+            || func_ptr == global_this_number_thunk as *const u8 as usize
+            || func_ptr == global_this_boolean_thunk as *const u8 as usize
             || func_ptr == webcrypto_illegal_constructor_thunk as *const u8 as usize
             || func_ptr
                 == crate::messaging::js_message_channel_constructor_call_error as *const u8

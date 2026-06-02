@@ -38,6 +38,65 @@ fn push_unique_name(names: &mut Vec<String>, name: String) {
     }
 }
 
+fn boxed_string_payload(value: f64) -> Option<f64> {
+    if crate::builtins::boxed_primitive_to_string_tag(value) != Some("String") {
+        return None;
+    }
+    crate::builtins::boxed_primitive_payload(value).map(|(_, payload)| payload)
+}
+
+unsafe fn string_value_utf16_len(str_value: f64) -> Option<u32> {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let (ptr, blen) = crate::string::str_bytes_from_jsvalue(str_value, &mut scratch)?;
+    if ptr.is_null() {
+        return Some(0);
+    }
+    Some(crate::string::compute_utf16_len(ptr, blen))
+}
+
+unsafe fn boxed_string_own_property_names(obj_value: f64, str_value: f64) -> f64 {
+    let mut names: Vec<String> = Vec::new();
+    let utf16_len = string_value_utf16_len(str_value).unwrap_or(0);
+    for i in 0..utf16_len {
+        names.push(i.to_string());
+    }
+    names.push("length".to_string());
+
+    let obj = extract_obj_ptr(obj_value);
+    if !obj.is_null() {
+        let keys = (*obj).keys_array;
+        if !keys.is_null() {
+            let len = crate::array::js_array_length(keys) as usize;
+            let order = ecma_own_key_order(keys);
+            let pos = |j: usize| -> u32 {
+                match &order {
+                    Some(ord) => ord[j],
+                    None => j as u32,
+                }
+            };
+            let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            for j in 0..len {
+                let key_val = crate::array::js_array_get(keys, pos(j));
+                let Some(name_bytes) = crate::string::js_string_key_bytes(key_val, &mut sso_buf)
+                else {
+                    continue;
+                };
+                if let Ok(name) = std::str::from_utf8(name_bytes) {
+                    push_unique_name(&mut names, name.to_string());
+                }
+            }
+        }
+    }
+
+    sort_property_names_ecma(&mut names);
+    let result = crate::array::js_array_alloc(names.len() as u32);
+    for name in names {
+        let str_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        crate::array::js_array_push(result, JSValue::string_ptr(str_ptr));
+    }
+    f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000)
+}
+
 /// Object.getOwnPropertyDescriptor(obj, key) — returns a data descriptor
 /// `{ value, writable, enumerable, configurable }` for data properties, or an
 /// accessor descriptor `{ get, set, enumerable, configurable }` for properties
@@ -60,6 +119,12 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         // (writable:false, enumerable:false, configurable:false).
         if obj_jv.is_any_string() {
             return string_primitive_descriptor(obj_value, key_value);
+        }
+        if let Some(str_value) = boxed_string_payload(obj_value) {
+            let desc = string_primitive_descriptor(str_value, key_value);
+            if desc.to_bits() != crate::value::TAG_UNDEFINED {
+                return desc;
+            }
         }
 
         if let Some(class_id) = class_ref_id(obj_value) {
@@ -555,6 +620,9 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                 let empty = crate::array::js_array_alloc(0);
                 return f64::from_bits((empty as u64) | 0x7FFD_0000_0000_0000);
             }
+        }
+        if let Some(str_value) = boxed_string_payload(obj_value) {
+            return boxed_string_own_property_names(obj_value, str_value);
         }
         if let Some(class_id) = class_ref_id(obj_value) {
             let is_prototype_ref = super::class_prototype_ref_id(obj_value).is_some();

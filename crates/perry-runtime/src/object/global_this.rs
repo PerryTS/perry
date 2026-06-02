@@ -525,7 +525,7 @@ pub(crate) extern "C" fn global_this_array_thunk(
     crate::value::js_nanbox_pointer(arr as i64)
 }
 
-extern "C" fn global_this_string_thunk(
+pub(crate) extern "C" fn global_this_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
 ) -> f64 {
@@ -642,7 +642,7 @@ extern "C" fn global_this_decode_uri_component_thunk(
 // `Object`/`String` already have dedicated thunks above; these mirror the
 // bare-call HIR lowering (`Expr::NumberCoerce` / `Expr::BooleanCoerce`) so
 // `const N = Number; N("42")` and `const B = Boolean; B(0)` match Node.
-extern "C" fn global_this_number_thunk(
+pub(crate) extern "C" fn global_this_number_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
 ) -> f64 {
@@ -656,7 +656,7 @@ extern "C" fn global_this_number_thunk(
     crate::builtins::js_number_coerce(value)
 }
 
-extern "C" fn global_this_boolean_thunk(
+pub(crate) extern "C" fn global_this_boolean_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
 ) -> f64 {

@@ -7,10 +7,10 @@
 
 use super::*;
 
-const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_0060;
-const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_0062;
-const CLASS_ID_BOXED_BIGINT: u32 = 0xFFFF_0063;
-const CLASS_ID_BOXED_SYMBOL: u32 = 0xFFFF_0064;
+const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_00D0;
+const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_00D2;
+const CLASS_ID_BOXED_BIGINT: u32 = 0xFFFF_00D3;
+const CLASS_ID_BOXED_SYMBOL: u32 = 0xFFFF_00D4;
 
 pub(super) fn install_primitive_proto_methods(
     builtin_name: &str,

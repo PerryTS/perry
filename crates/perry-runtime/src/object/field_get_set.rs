@@ -8,11 +8,11 @@
 
 use super::*;
 
-const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_0060;
-const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_0061;
-const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_0062;
-const CLASS_ID_BOXED_BIGINT: u32 = 0xFFFF_0063;
-const CLASS_ID_BOXED_SYMBOL: u32 = 0xFFFF_0064;
+const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_00D0;
+const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_00D1;
+const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_00D2;
+const CLASS_ID_BOXED_BIGINT: u32 = 0xFFFF_00D3;
+const CLASS_ID_BOXED_SYMBOL: u32 = 0xFFFF_00D4;
 
 const CRYPTO_USAGE_ENCRYPT: u32 = 1 << 0;
 const CRYPTO_USAGE_DECRYPT: u32 = 1 << 1;
@@ -424,6 +424,67 @@ unsafe fn primitive_object_prototype_accessor(name: &str, receiver: f64) -> Opti
         return Some(JSValue::undefined());
     }
     Some(invoke_accessor_getter(acc.get, receiver))
+}
+
+unsafe fn bind_closure_value_to_receiver(value: JSValue, receiver: f64) -> JSValue {
+    let bits = value.bits();
+    if (bits & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
+        return value;
+    }
+    let ptr = (bits & crate::value::POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(ptr) {
+        return value;
+    }
+    JSValue::from_bits(crate::closure::clone_closure_rebind_this(bits, receiver))
+}
+
+unsafe fn primitive_builtin_prototype_property(
+    builtin_name: &[u8],
+    key: *const crate::StringHeader,
+    receiver: f64,
+) -> Option<JSValue> {
+    if key.is_null() {
+        return None;
+    }
+    let ctor = js_get_global_this_builtin_value(builtin_name.as_ptr(), builtin_name.len());
+    let ctor_value = JSValue::from_bits(ctor.to_bits());
+    if !ctor_value.is_pointer() {
+        return None;
+    }
+    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto_value = JSValue::from_bits(proto.to_bits());
+    if !proto_value.is_pointer() {
+        return None;
+    }
+    let proto_ptr = proto_value.as_pointer::<ObjectHeader>();
+    if proto_ptr.is_null() {
+        return None;
+    }
+    let value = js_object_get_field_by_name(proto_ptr, key);
+    if value.is_undefined() {
+        return None;
+    }
+    Some(bind_closure_value_to_receiver(value, receiver))
+}
+
+unsafe fn string_index_value(str_value: f64, key: *const crate::StringHeader) -> Option<JSValue> {
+    if key.is_null() {
+        return None;
+    }
+    let str_ptr =
+        crate::value::js_get_string_pointer_unified(str_value) as *const crate::StringHeader;
+    if str_ptr.is_null() {
+        return None;
+    }
+    let key_value = JSValue::string_ptr(key as *mut crate::StringHeader);
+    let value = crate::string::js_string_index_get(str_ptr, f64::from_bits(key_value.bits()));
+    let js_value = JSValue::from_bits(value.to_bits());
+    if js_value.is_undefined() {
+        None
+    } else {
+        Some(js_value)
+    }
 }
 
 unsafe fn array_prototype_property_value(name: &str, receiver_addr: usize) -> Option<JSValue> {
@@ -853,6 +914,33 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
             crate::array::js_array_push(arr, JSValue::string_ptr(k));
         }
         return arr;
+    }
+    if crate::builtins::boxed_primitive_to_string_tag(value) == Some("String") {
+        if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(value) {
+            let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            let len = match crate::string::str_bytes_from_jsvalue(payload, &mut scratch) {
+                Some((ptr, blen)) if !ptr.is_null() => unsafe {
+                    crate::string::compute_utf16_len(ptr, blen)
+                },
+                _ => 0,
+            };
+            let arr = crate::array::js_array_alloc(len.max(1));
+            for i in 0..len {
+                let s = i.to_string();
+                let k = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                crate::array::js_array_push(arr, JSValue::string_ptr(k));
+            }
+            if jv.is_pointer() {
+                let ptr = jv.as_pointer::<ObjectHeader>();
+                let own = js_object_keys(ptr);
+                let own_len = crate::array::js_array_length(own);
+                for i in 0..own_len {
+                    let key_val = crate::array::js_array_get(own, i);
+                    crate::array::js_array_push_f64(arr, f64::from_bits(key_val.bits()));
+                }
+            }
+            return arr;
+        }
     }
     if jv.is_pointer() {
         let ptr = jv.as_pointer::<u8>() as usize;
@@ -1809,16 +1897,17 @@ pub extern "C" fn js_object_get_field_by_name(
                         (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                     let key_len = (*key).byte_len as usize;
                     let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                    if key_bytes == b"constructor" {
-                        let v = js_get_global_this_builtin_value(b"Number".as_ptr(), 6);
-                        return JSValue::from_bits(v.to_bits());
-                    }
                     if let Ok(name) = std::str::from_utf8(key_bytes) {
                         if let Some(v) =
                             primitive_object_prototype_accessor(name, f64::from_bits(bits))
                         {
                             return v;
                         }
+                    }
+                    if let Some(v) =
+                        primitive_builtin_prototype_property(b"Number", key, f64::from_bits(bits))
+                    {
+                        return v;
                     }
                 }
             }
@@ -2218,6 +2307,9 @@ pub extern "C" fn js_object_get_field_by_name(
                     if let Some(v) = primitive_object_prototype_accessor(name, f) {
                         return v;
                     }
+                }
+                if let Some(v) = primitive_builtin_prototype_property(b"Number", key, f) {
+                    return v;
                 }
                 if is_primitive_proto_method(name_bytes) {
                     let result = super::js_class_method_bind(f, name_ptr, name_len);
@@ -3271,6 +3363,15 @@ pub extern "C" fn js_object_get_field_by_name(
             let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
             let key_len = (*key).byte_len as usize;
             let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+            if (*obj).class_id == CLASS_ID_BOXED_STRING {
+                if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(
+                    f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits()),
+                ) {
+                    if let Some(value) = string_index_value(payload, key) {
+                        return value;
+                    }
+                }
+            }
             if key_bytes == b"constructor" {
                 if let Some(v) = own_data_field_by_name(obj, key) {
                     return v;

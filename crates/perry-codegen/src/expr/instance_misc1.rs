@@ -323,6 +323,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "Set" => 0xFFFF0023u32,
                 // `Array` — runtime detects via GC_TYPE_ARRAY at obj-8.
                 "Array" => 0xFFFF0024u32,
+                "Number" => 0xFFFF00D0u32,
+                "String" => 0xFFFF00D1u32,
+                "Boolean" => 0xFFFF00D2u32,
+                "BigInt" => 0xFFFF00D3u32,
+                "Symbol" => 0xFFFF00D4u32,
                 // `ArrayBuffer` — runtime detects BufferHeader storage marked
                 // with Perry's ArrayBuffer side registry.
                 "ArrayBuffer" => 0xFFFF0025u32,

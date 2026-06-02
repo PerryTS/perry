@@ -8,6 +8,72 @@
 
 use super::*;
 
+unsafe fn call_primitive_closure_value(
+    receiver: f64,
+    value: JSValue,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if value.is_undefined() {
+        return None;
+    }
+    let bits = value.bits();
+    if (bits & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
+        return None;
+    }
+    let ptr = (bits & crate::value::POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(ptr) {
+        return None;
+    }
+    let bound = crate::closure::clone_closure_rebind_this(bits, receiver);
+    let this_receiver = crate::object::js_object_coerce(receiver);
+    let prev_this = crate::object::js_implicit_this_set(this_receiver);
+    let result = crate::closure::js_native_call_value(f64::from_bits(bound), args_ptr, args_len);
+    crate::object::js_implicit_this_set(prev_this);
+    Some(result)
+}
+
+unsafe fn call_primitive_builtin_prototype_method(
+    receiver: f64,
+    builtin_name: &[u8],
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    let ctor =
+        crate::object::js_get_global_this_builtin_value(builtin_name.as_ptr(), builtin_name.len());
+    let ctor_value = JSValue::from_bits(ctor.to_bits());
+    if !ctor_value.is_pointer() {
+        return None;
+    }
+    let registered = crate::object::class_registry::js_get_function_prototype_method(
+        ctor,
+        method_name.as_ptr(),
+        method_name.len(),
+    );
+    if let Some(result) = call_primitive_closure_value(
+        receiver,
+        JSValue::from_bits(registered.to_bits()),
+        args_ptr,
+        args_len,
+    ) {
+        return Some(result);
+    }
+    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto_value = JSValue::from_bits(proto.to_bits());
+    if !proto_value.is_pointer() {
+        return None;
+    }
+    let proto_ptr = proto_value.as_pointer::<ObjectHeader>();
+    if proto_ptr.is_null() {
+        return None;
+    }
+    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    let value = js_object_get_field_by_name(proto_ptr, key);
+    call_primitive_closure_value(receiver, value, args_ptr, args_len)
+}
+
 /// Call a method on an object with dynamic dispatch
 /// This is used for runtime method calls when the method cannot be resolved statically.
 /// object: NaN-boxed f64 containing an object pointer
@@ -1322,6 +1388,15 @@ pub unsafe extern "C" fn js_native_call_method(
         let s_ptr = crate::value::js_get_string_pointer_unified(object_handle.get_nanbox_f64())
             as *const crate::StringHeader;
         if !s_ptr.is_null() {
+            if let Some(result) = call_primitive_builtin_prototype_method(
+                object,
+                b"String",
+                method_name,
+                args_ptr,
+                args_len,
+            ) {
+                return result;
+            }
             let s_handle = root_scope.root_string_ptr(s_ptr);
             let receiver_string = || s_handle.get_raw_const_ptr::<crate::StringHeader>();
             let arg_at = |i: usize| -> Option<f64> {
@@ -3779,6 +3854,24 @@ pub unsafe extern "C" fn js_native_call_method(
         None
     };
     if let Some(kind) = primitive_kind {
+        let builtin_name = match kind {
+            "string" => Some(b"String".as_slice()),
+            "number" => Some(b"Number".as_slice()),
+            "boolean" => Some(b"Boolean".as_slice()),
+            "bigint" => Some(b"BigInt".as_slice()),
+            _ => None,
+        };
+        if let Some(name) = builtin_name {
+            if let Some(result) = call_primitive_builtin_prototype_method(
+                object,
+                name,
+                method_name,
+                args_ptr,
+                args_len,
+            ) {
+                return result;
+            }
+        }
         crate::error::js_throw_type_error_not_a_function(
             kind.as_ptr(),
             kind.len(),

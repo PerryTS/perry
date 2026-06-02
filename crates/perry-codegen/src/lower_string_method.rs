@@ -22,6 +22,45 @@ fn regexp_search_method_id(property: &str) -> String {
     }
 }
 
+pub(crate) fn is_known_string_method_name(name: &str) -> bool {
+    matches!(
+        name,
+        "at" | "charAt"
+            | "charCodeAt"
+            | "codePointAt"
+            | "concat"
+            | "endsWith"
+            | "includes"
+            | "indexOf"
+            | "isWellFormed"
+            | "lastIndexOf"
+            | "localeCompare"
+            | "match"
+            | "matchAll"
+            | "normalize"
+            | "padEnd"
+            | "padStart"
+            | "repeat"
+            | "replace"
+            | "replaceAll"
+            | "search"
+            | "slice"
+            | "split"
+            | "startsWith"
+            | "substr"
+            | "substring"
+            | "toLocaleLowerCase"
+            | "toLocaleUpperCase"
+            | "toLowerCase"
+            | "toString"
+            | "toUpperCase"
+            | "toWellFormed"
+            | "trim"
+            | "trimEnd"
+            | "trimStart"
+    )
+}
+
 /// Lower `s.method(args…)` for a string-typed receiver. Currently
 /// supported methods: `indexOf` (1 or 2 args), `slice`, `substring`,
 /// `startsWith`, `endsWith`. Anything else bails with an actionable
