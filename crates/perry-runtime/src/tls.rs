@@ -3,6 +3,8 @@
 //! Live TLS sockets are implemented in the net/stdlib path. This module covers
 //! Node-compatible helper APIs and SecureContext shape used for feature checks.
 
+mod roots;
+
 use crate::array::ArrayHeader;
 use crate::object::ObjectHeader;
 use crate::string::StringHeader;
@@ -83,8 +85,6 @@ const TLS_CIPHERS: &[&str] = &[
     "tls_aes_256_gcm_sha384",
     "tls_chacha20_poly1305_sha256",
 ];
-
-const SAMPLE_ROOT_CERT: &str = "-----BEGIN CERTIFICATE-----\nMIIDdzCCAl+gAwIBAgIEbmhJVTANBgkqhkiG9w0BAQsFADBvMQswCQYDVQQGEwJVUzETMBEGA1UEChMKUGVycnkgVGVzdDEUMBIGA1UECxMLTm9kZSBQYXJpdHkxHzAdBgNVBAMTFlBlcnJ5IFJ1bnRpbWUgUm9vdCBDQTEUMBIGA1UEBRMLMDAwMDAwMDAwMDAwHhcNMjAwMTAxMDAwMDAwWhcNMzAwMTAxMDAwMDAwWjBvMQswCQYDVQQGEwJVUzETMBEGA1UEChMKUGVycnkgVGVzdDEUMBIGA1UECxMLTm9kZSBQYXJpdHkxHzAdBgNVBAMTFlBlcnJ5IFJ1bnRpbWUgUm9vdCBDQTEUMBIGA1UEBRMLMDAwMDAwMDAwMDAwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC7V8v2F7GQ0Hf4dYhH2NQ+0VvYk3+K3q3q4r1KjC8a6Q0jL8q7cF2c9eQ6x2Yq8Q+Jc7T6Z6bYx7k9X2J3K1M8n9Q4Y5z3b6d8n1p0f3h5j7k9l2m4n6p8r0t2v4x6z8A0B2C4D6E8F1G3H5J7K9L2M4N6P8R0T2V4X6Z8A1B3C5D7E9F0G2H4J6K8L0M2N4P6R8T1V3X5Z7A9B0C2D4E6F8G1H3J5K7L9M0N2P4R6T8V0X2Z4A6B8C1D3E5F7G9H0J2K4L6M8N0P2R4T6V8X0Z2A4B6C8D0E2F4G6H8J0K2L4M6N8P0R2T4V6X8Z0AgMBAAGjITAfMB0GA1UdDgQWBBS5cGVycnktbm9kZS10bHMtcm9vdDANBgkqhkiG9w0BAQsFAAOCAQEAK7rY5nXl9T0s5T8w7Q9z2P4m6N8r0T2v4X6z8A0B2C4D6E8F1G3H5J7K9L2M4N6P8R0T2V4X6Z8A1B3C5D7E9F0G2H4J6K8L0M2N4P6R8T1V3X5Z7A9B0C2D4E6F8G1H3J5K7L9M0N2P4R6T8V0X2Z4A6B8C1D3E5F7G9H0J2K4L6M8N0P2R4T6V8X0Z2A4B6C8D0E2F4G6H8J0K2L4M6N8P0R2T4V6X8Z0\n-----END CERTIFICATE-----";
 
 fn string_value(s: &str) -> f64 {
     let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
@@ -196,12 +196,12 @@ fn owned_string_array(items: &[String]) -> f64 {
     ptr_value(arr)
 }
 
-fn cached_cert_array(cache: &AtomicU64, certs: &[&str]) -> f64 {
+fn cached_owned_cert_array(cache: &AtomicU64, certs: &[String]) -> f64 {
     let cached = cache.load(Ordering::Relaxed);
     if cached != 0 {
         return f64::from_bits(cached);
     }
-    let arr = freeze_heap_value(string_array(certs));
+    let arr = freeze_heap_value(owned_string_array(certs));
     crate::gc::runtime_store_root_atomic_nanbox_u64(cache, arr.to_bits(), Ordering::Relaxed);
     arr
 }
@@ -214,7 +214,7 @@ pub fn scan_tls_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
 }
 
 pub fn js_tls_root_certificates() -> f64 {
-    cached_cert_array(&ROOT_CERTS_CACHE, &[SAMPLE_ROOT_CERT])
+    cached_owned_cert_array(&ROOT_CERTS_CACHE, roots::bundled_certificates())
 }
 
 #[no_mangle]
@@ -237,10 +237,10 @@ pub extern "C" fn js_tls_get_ca_certificates(ca_type: f64) -> f64 {
         crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     };
     match ca_type.as_str() {
-        "default" => cached_cert_array(&DEFAULT_CA_CACHE, &[SAMPLE_ROOT_CERT]),
-        "system" => cached_cert_array(&SYSTEM_CA_CACHE, &[SAMPLE_ROOT_CERT]),
+        "default" => cached_owned_cert_array(&DEFAULT_CA_CACHE, roots::bundled_certificates()),
+        "system" => cached_owned_cert_array(&SYSTEM_CA_CACHE, roots::system_certificates()),
         "bundled" => js_tls_root_certificates(),
-        "extra" => cached_cert_array(&EXTRA_CA_CACHE, &[]),
+        "extra" => cached_owned_cert_array(&EXTRA_CA_CACHE, roots::extra_certificates()),
         _ => {
             let message = format!("The argument 'type' is invalid. Received '{}'", ca_type);
             crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE");

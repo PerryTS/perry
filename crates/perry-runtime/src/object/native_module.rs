@@ -5281,17 +5281,6 @@ pub(crate) unsafe fn get_native_module_constant(
     let cjs_default_base = cjs_default_base_module(module_name);
     let is_cjs_default_object = cjs_default_base.is_some();
     let module_name = cjs_default_base.unwrap_or(module_name);
-    let tls_dispatch_noargs = |method: &str| -> Option<f64> {
-        let ptr = crate::value::JS_NATIVE_TLS_DISPATCH.load(Ordering::SeqCst);
-        if ptr.is_null() {
-            None
-        } else {
-            let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
-                std::mem::transmute(ptr);
-            Some(dispatch(method.as_ptr(), method.len(), std::ptr::null(), 0))
-        }
-    };
-
     if module_name == "process.namespace" && property == "default" {
         return cjs_default_export_value("process");
     }
@@ -6444,8 +6433,7 @@ pub(crate) unsafe fn get_native_module_constant(
             "DEFAULT_CIPHERS" => Some(str_val(crate::tls::DEFAULT_CIPHERS)),
             "CLIENT_RENEG_LIMIT" => Some(3.0),
             "CLIENT_RENEG_WINDOW" => Some(600.0),
-            "rootCertificates" => tls_dispatch_noargs("rootCertificates")
-                .or_else(|| Some(crate::tls::js_tls_root_certificates())),
+            "rootCertificates" => Some(crate::tls::js_tls_root_certificates()),
             _ => None,
         },
         "events" => match property {
