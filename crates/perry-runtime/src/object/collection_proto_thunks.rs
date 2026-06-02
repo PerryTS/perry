@@ -78,6 +78,18 @@ pub(super) fn install_collection_proto_methods(
     use super::global_this::install_proto_method as ipm;
     match builtin_name {
         "Map" => {
+            // #4099: install the `size` *accessor* BEFORE the data methods.
+            // Installing an accessor descriptor onto a prototype that already
+            // holds data properties corrupts one of those data slots (the
+            // accessor/data-field bookkeeping desyncs), which left
+            // `Map.prototype.set` reading back as a garbage number — a later
+            // `Map.prototype.set.call(...)` then dereferenced it and crashed
+            // (SIGBUS). Installing the lone accessor first sidesteps the desync.
+            install_collection_size_getter(
+                proto_obj,
+                "size",
+                map_proto_size_getter_thunk as *const u8,
+            );
             ipm(proto_obj, "clear", map_proto_clear_thunk as *const u8, 0);
             ipm(proto_obj, "delete", map_proto_delete_thunk as *const u8, 1);
             ipm(
@@ -97,11 +109,6 @@ pub(super) fn install_collection_proto_methods(
             ipm(proto_obj, "keys", map_proto_keys_thunk as *const u8, 0);
             let set_value = ipm(proto_obj, "set", map_proto_set_thunk as *const u8, 2);
             ipm(proto_obj, "values", map_proto_values_thunk as *const u8, 0);
-            install_collection_size_getter(
-                proto_obj,
-                "size",
-                map_proto_size_getter_thunk as *const u8,
-            );
             remember_builtin_collection_method(
                 proto_obj,
                 "set",
@@ -110,6 +117,12 @@ pub(super) fn install_collection_proto_methods(
             );
         }
         "Set" => {
+            // #4099: install the `size` accessor first (see the Map arm).
+            install_collection_size_getter(
+                proto_obj,
+                "size",
+                set_proto_size_getter_thunk as *const u8,
+            );
             let add_value = ipm(proto_obj, "add", set_proto_add_thunk as *const u8, 1);
             ipm(proto_obj, "clear", set_proto_clear_thunk as *const u8, 0);
             ipm(proto_obj, "delete", set_proto_delete_thunk as *const u8, 1);
@@ -128,11 +141,6 @@ pub(super) fn install_collection_proto_methods(
             ipm(proto_obj, "has", set_proto_has_thunk as *const u8, 1);
             ipm(proto_obj, "keys", set_proto_keys_thunk as *const u8, 0);
             ipm(proto_obj, "values", set_proto_values_thunk as *const u8, 0);
-            install_collection_size_getter(
-                proto_obj,
-                "size",
-                set_proto_size_getter_thunk as *const u8,
-            );
             remember_builtin_collection_method(
                 proto_obj,
                 "add",
