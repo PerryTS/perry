@@ -9,6 +9,8 @@
 
 use super::*;
 use std::cell::{Cell, RefCell};
+use std::ptr::null_mut;
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 thread_local! {
     static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64>> =
@@ -103,6 +105,7 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
             visitor.visit_nanbox_u64_slot(value_bits);
         }
     });
+    crate::node_http2_constants::scan_roots_mut(visitor);
     scan_stream_event_emitter_prototype_roots_mut(visitor);
 }
 
@@ -113,6 +116,32 @@ const WORKER_THREADS_LOCK_MANAGER_CLASS_ID: u32 = 0xFFFF_00B1;
 
 static BUFFER_POOL_SIZE_BITS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(8192f64.to_bits());
+
+type WorkerThreadsValueGetter = extern "C" fn() -> f64;
+
+static WORKER_THREADS_WORKER_DATA_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static WORKER_THREADS_IS_MAIN_THREAD_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static WORKER_THREADS_PARENT_PORT_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
+
+#[no_mangle]
+pub extern "C" fn js_register_worker_threads_namespace_getters(
+    worker_data: WorkerThreadsValueGetter,
+    is_main_thread: WorkerThreadsValueGetter,
+    parent_port: WorkerThreadsValueGetter,
+) {
+    WORKER_THREADS_WORKER_DATA_GETTER.store(worker_data as *mut (), Ordering::Release);
+    WORKER_THREADS_IS_MAIN_THREAD_GETTER.store(is_main_thread as *mut (), Ordering::Release);
+    WORKER_THREADS_PARENT_PORT_GETTER.store(parent_port as *mut (), Ordering::Release);
+}
+
+fn call_worker_threads_getter(slot: &AtomicPtr<()>, fallback: impl FnOnce() -> f64) -> f64 {
+    let ptr = slot.load(Ordering::Acquire);
+    if ptr.is_null() {
+        return fallback();
+    }
+    let getter: WorkerThreadsValueGetter = unsafe { std::mem::transmute(ptr) };
+    getter()
+}
 
 pub(crate) fn buffer_pool_size() -> f64 {
     f64::from_bits(BUFFER_POOL_SIZE_BITS.load(std::sync::atomic::Ordering::Relaxed))
@@ -658,6 +687,235 @@ const ASYNC_HOOKS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"triggerAsyncId",
 ];
 
+const DNS_DEFAULT_KEYS: &[&[u8]] = &[
+    b"lookup",
+    b"lookupService",
+    b"Resolver",
+    b"getDefaultResultOrder",
+    b"setDefaultResultOrder",
+    b"setServers",
+    b"ADDRCONFIG",
+    b"ALL",
+    b"V4MAPPED",
+    b"NODATA",
+    b"FORMERR",
+    b"SERVFAIL",
+    b"NOTFOUND",
+    b"NOTIMP",
+    b"REFUSED",
+    b"BADQUERY",
+    b"BADNAME",
+    b"BADFAMILY",
+    b"BADRESP",
+    b"CONNREFUSED",
+    b"TIMEOUT",
+    b"EOF",
+    b"FILE",
+    b"NOMEM",
+    b"DESTRUCTION",
+    b"BADSTR",
+    b"BADFLAGS",
+    b"NONAME",
+    b"BADHINTS",
+    b"NOTINITIALIZED",
+    b"LOADIPHLPAPI",
+    b"ADDRGETNETWORKPARAMS",
+    b"CANCELLED",
+    b"getServers",
+    b"resolve",
+    b"resolve4",
+    b"resolve6",
+    b"resolveAny",
+    b"resolveCaa",
+    b"resolveCname",
+    b"resolveMx",
+    b"resolveNaptr",
+    b"resolveNs",
+    b"resolvePtr",
+    b"resolveSoa",
+    b"resolveSrv",
+    b"resolveTlsa",
+    b"resolveTxt",
+    b"reverse",
+    b"promises",
+];
+
+const DNS_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"ADDRCONFIG",
+    b"ADDRGETNETWORKPARAMS",
+    b"ALL",
+    b"BADFAMILY",
+    b"BADFLAGS",
+    b"BADHINTS",
+    b"BADNAME",
+    b"BADQUERY",
+    b"BADRESP",
+    b"BADSTR",
+    b"CANCELLED",
+    b"CONNREFUSED",
+    b"DESTRUCTION",
+    b"EOF",
+    b"FILE",
+    b"FORMERR",
+    b"LOADIPHLPAPI",
+    b"NODATA",
+    b"NOMEM",
+    b"NONAME",
+    b"NOTFOUND",
+    b"NOTIMP",
+    b"NOTINITIALIZED",
+    b"REFUSED",
+    b"Resolver",
+    b"SERVFAIL",
+    b"TIMEOUT",
+    b"V4MAPPED",
+    b"default",
+    b"getDefaultResultOrder",
+    b"getServers",
+    b"lookup",
+    b"lookupService",
+    b"promises",
+    b"resolve",
+    b"resolve4",
+    b"resolve6",
+    b"resolveAny",
+    b"resolveCaa",
+    b"resolveCname",
+    b"resolveMx",
+    b"resolveNaptr",
+    b"resolveNs",
+    b"resolvePtr",
+    b"resolveSoa",
+    b"resolveSrv",
+    b"resolveTlsa",
+    b"resolveTxt",
+    b"reverse",
+    b"setDefaultResultOrder",
+    b"setServers",
+];
+
+const DNS_PROMISES_DEFAULT_KEYS: &[&[u8]] = &[
+    b"lookup",
+    b"lookupService",
+    b"Resolver",
+    b"getDefaultResultOrder",
+    b"setDefaultResultOrder",
+    b"setServers",
+    b"NODATA",
+    b"FORMERR",
+    b"SERVFAIL",
+    b"NOTFOUND",
+    b"NOTIMP",
+    b"REFUSED",
+    b"BADQUERY",
+    b"BADNAME",
+    b"BADFAMILY",
+    b"BADRESP",
+    b"CONNREFUSED",
+    b"TIMEOUT",
+    b"EOF",
+    b"FILE",
+    b"NOMEM",
+    b"DESTRUCTION",
+    b"BADSTR",
+    b"BADFLAGS",
+    b"NONAME",
+    b"BADHINTS",
+    b"NOTINITIALIZED",
+    b"LOADIPHLPAPI",
+    b"ADDRGETNETWORKPARAMS",
+    b"CANCELLED",
+    b"getServers",
+    b"resolve",
+    b"resolve4",
+    b"resolve6",
+    b"resolveAny",
+    b"resolveCaa",
+    b"resolveCname",
+    b"resolveMx",
+    b"resolveNaptr",
+    b"resolveNs",
+    b"resolvePtr",
+    b"resolveSoa",
+    b"resolveSrv",
+    b"resolveTlsa",
+    b"resolveTxt",
+    b"reverse",
+];
+
+const DNS_PROMISES_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"ADDRGETNETWORKPARAMS",
+    b"BADFAMILY",
+    b"BADFLAGS",
+    b"BADHINTS",
+    b"BADNAME",
+    b"BADQUERY",
+    b"BADRESP",
+    b"BADSTR",
+    b"CANCELLED",
+    b"CONNREFUSED",
+    b"DESTRUCTION",
+    b"EOF",
+    b"FILE",
+    b"FORMERR",
+    b"LOADIPHLPAPI",
+    b"NODATA",
+    b"NOMEM",
+    b"NONAME",
+    b"NOTFOUND",
+    b"NOTIMP",
+    b"NOTINITIALIZED",
+    b"REFUSED",
+    b"Resolver",
+    b"SERVFAIL",
+    b"TIMEOUT",
+    b"default",
+    b"getDefaultResultOrder",
+    b"getServers",
+    b"lookup",
+    b"lookupService",
+    b"resolve",
+    b"resolve4",
+    b"resolve6",
+    b"resolveAny",
+    b"resolveCaa",
+    b"resolveCname",
+    b"resolveMx",
+    b"resolveNaptr",
+    b"resolveNs",
+    b"resolvePtr",
+    b"resolveSoa",
+    b"resolveSrv",
+    b"resolveTlsa",
+    b"resolveTxt",
+    b"reverse",
+    b"setDefaultResultOrder",
+    b"setServers",
+];
+
+const CHILD_PROCESS_DEFAULT_KEYS: &[&[u8]] = &[
+    b"ChildProcess",
+    b"exec",
+    b"execFile",
+    b"execFileSync",
+    b"execSync",
+    b"fork",
+    b"spawn",
+    b"spawnSync",
+];
+
+const CHILD_PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"ChildProcess",
+    b"default",
+    b"exec",
+    b"execFile",
+    b"execFileSync",
+    b"execSync",
+    b"fork",
+    b"spawn",
+    b"spawnSync",
+];
+
 const BUFFER_NAMESPACE_KEYS: &[&[u8]] = &[
     b"Buffer",
     b"transcode",
@@ -1020,6 +1278,7 @@ const UTIL_NAMESPACE_KEYS: &[&[u8]] = &[
 
 const EVENTS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"EventEmitter",
+    b"EventEmitterAsyncResource",
     b"default",
     b"defaultMaxListeners",
     b"usingDomains",
@@ -1034,6 +1293,30 @@ const EVENTS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"getEventListeners",
     b"getMaxListeners",
     b"setMaxListeners",
+];
+
+const WORKER_THREADS_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"BroadcastChannel",
+    b"MessageChannel",
+    b"MessagePort",
+    b"SHARE_ENV",
+    b"Worker",
+    b"getEnvironmentData",
+    b"isInternalThread",
+    b"isMainThread",
+    b"isMarkedAsUntransferable",
+    b"locks",
+    b"markAsUncloneable",
+    b"markAsUntransferable",
+    b"moveMessagePortToContext",
+    b"parentPort",
+    b"postMessageToThread",
+    b"receiveMessageOnPort",
+    b"resourceLimits",
+    b"setEnvironmentData",
+    b"threadId",
+    b"threadName",
+    b"workerData",
 ];
 
 // Linux-only open() flags: Node only enumerates these on platforms whose libc
@@ -1110,12 +1393,8 @@ fn deprecated_constants_namespace_keys() -> &'static [&'static [u8]] {
         .get_or_init(|| {
             let keys = deprecated_constants_keys();
             let mut v: Vec<&'static [u8]> = Vec::with_capacity(keys.len() + 1);
-            for &k in keys {
-                if k == b"defaultCoreCipherList" {
-                    v.push(b"default");
-                }
-                v.push(k);
-            }
+            v.extend_from_slice(keys);
+            v.push(b"default");
             v
         })
         .as_slice()
@@ -1299,6 +1578,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "async_hooks" => Some(ASYNC_HOOKS_NAMESPACE_KEYS),
         "async_hooks.default" => Some(ASYNC_HOOKS_DEFAULT_KEYS),
         "assert/strict" => Some(&[
+            b"Assert",
             b"AssertionError",
             b"ok",
             b"fail",
@@ -1336,11 +1616,17 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         // Deprecated path alias enumerable on the top-level and style
         // sub-namespaces, matching Node's `Object.keys(...).includes`.
         "path" => Some(PATH_NAMESPACE_KEYS),
-        "path.default" => Some(PATH_DEFAULT_KEYS),
-        "path.posix" | "path.win32" => Some(&[b"_makeLong"]),
+        "path.default" | "path.posix.default" | "path.win32.default" => Some(PATH_DEFAULT_KEYS),
+        "path.posix" | "path.win32" => Some(PATH_NAMESPACE_KEYS),
         "fs" => Some(FS_NAMESPACE_KEYS),
         "constants" => Some(deprecated_constants_namespace_keys()),
         "constants.default" => Some(deprecated_constants_keys()),
+        "dns" => Some(DNS_NAMESPACE_KEYS),
+        "dns.default" => Some(DNS_DEFAULT_KEYS),
+        "dns/promises" => Some(DNS_PROMISES_NAMESPACE_KEYS),
+        "dns/promises.default" => Some(DNS_PROMISES_DEFAULT_KEYS),
+        "child_process" => Some(CHILD_PROCESS_NAMESPACE_KEYS),
+        "child_process.default" => Some(CHILD_PROCESS_DEFAULT_KEYS),
         "buffer" => Some(BUFFER_NAMESPACE_KEYS),
         "querystring" => Some(QUERYSTRING_NAMESPACE_KEYS),
         "querystring.default" => Some(QUERYSTRING_DEFAULT_KEYS),
@@ -1379,16 +1665,10 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"request",
             b"globalAgent",
         ]),
+        "http2" => Some(crate::node_http2_constants::HTTP2_NAMESPACE_KEYS),
+        "http2.constants" => Some(crate::node_http2_constants::HTTP2_CONSTANTS_KEYS),
         "events" => Some(EVENTS_NAMESPACE_KEYS),
-        "timers" => Some(&[
-            b"setTimeout",
-            b"clearTimeout",
-            b"setImmediate",
-            b"clearImmediate",
-            b"setInterval",
-            b"clearInterval",
-            b"promises",
-        ]),
+        "worker_threads" => Some(WORKER_THREADS_NAMESPACE_KEYS),
         "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
         "readline/promises" => Some(&[b"Interface", b"Readline", b"createInterface"]),
         "zlib" => Some(&[b"codes"]),
@@ -1404,9 +1684,14 @@ pub(crate) fn native_module_has_enumerable_key(module_name: &str, key: &str) -> 
 fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
     match module_name {
         "async_hooks.default" => Some("async_hooks"),
+        "child_process.default" => Some("child_process"),
         "constants.default" => Some("constants"),
+        "dns.default" => Some("dns"),
+        "dns/promises.default" => Some("dns/promises"),
         "os.default" => Some("os"),
         "path.default" => Some("path"),
+        "path.posix.default" => Some("path.posix"),
+        "path.win32.default" => Some("path.win32"),
         "punycode.default" => Some("punycode"),
         "querystring.default" => Some("querystring"),
         "url.default" => Some("url"),
@@ -1418,9 +1703,14 @@ fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
 fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
     match module_name {
         "async_hooks" => Some("async_hooks.default"),
+        "child_process" => Some("child_process.default"),
         "constants" => Some("constants.default"),
+        "dns" => Some("dns.default"),
+        "dns/promises" => Some("dns/promises.default"),
         "os" => Some("os.default"),
         "path" => Some("path.default"),
+        "path.posix" => Some("path.posix.default"),
+        "path.win32" => Some("path.win32.default"),
         "punycode" => Some("punycode.default"),
         "querystring" => Some("querystring.default"),
         "url" => Some("url.default"),
@@ -1437,10 +1727,18 @@ fn create_cjs_default_namespace(module_name: &str) -> Option<f64> {
 fn cjs_default_export_value(module_name: &str) -> Option<f64> {
     match module_name {
         "events" => Some(bound_native_callable_export_value("events", "EventEmitter")),
-        "async_hooks" | "constants" | "os" | "path" | "punycode" | "querystring" | "url"
-        | "util" => create_cjs_default_namespace(module_name),
+        "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "os" | "path"
+        | "path.posix" | "path.win32" | "punycode" | "querystring" | "url" | "util" => {
+            create_cjs_default_namespace(module_name)
+        }
         _ => None,
     }
+}
+
+pub(crate) fn native_module_get_builtin_module_value(module_name: &str) -> f64 {
+    cjs_default_export_value(module_name).unwrap_or_else(|| {
+        js_create_native_module_namespace(module_name.as_ptr(), module_name.len())
+    })
 }
 
 fn canonical_native_callable_property<'a>(module_name: &str, property_name: &'a str) -> &'a str {
@@ -1454,6 +1752,14 @@ fn canonical_native_callable_property<'a>(module_name: &str, property_name: &'a 
     }
 }
 
+fn assert_instance_base_module(module_name: &str) -> Option<&'static str> {
+    match module_name {
+        "assert.instance" | "assert.instance.skip" => Some("assert"),
+        "assert/strict.instance" | "assert/strict.instance.skip" => Some("assert/strict"),
+        _ => None,
+    }
+}
+
 fn should_cache_native_module_namespace(module_name: &str) -> bool {
     matches!(
         module_name,
@@ -1462,12 +1768,17 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "async_hooks.default"
             | "constants"
             | "constants.default"
+            | "dns.default"
+            | "dns/promises.default"
+            | "child_process.default"
             | "events"
             | "fs.constants"
             | "os"
             | "os.default"
             | "path"
             | "path.default"
+            | "path.posix.default"
+            | "path.win32.default"
             | "punycode"
             | "punycode.default"
             | "punycode.ucs2"
@@ -1568,8 +1879,10 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     }
     if module_name == "dns" && property_name == "promises" {
         crate::dns::dns_promises_init_servers_from_callback_if_unset();
-        let submodule = "dns/promises";
-        return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
+        return cjs_default_export_value("dns/promises").unwrap_or_else(|| {
+            let submodule = "dns/promises";
+            js_create_native_module_namespace(submodule.as_ptr(), submodule.len())
+        });
     }
 
     if module_name == "util" && property_name == "debug" {
@@ -1583,6 +1896,11 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
             b"URLSearchParams".as_ptr(),
             "URLSearchParams".len(),
         );
+    }
+    if module_name == "crypto.webcrypto" {
+        if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
+            return value;
+        }
     }
 
     // #3679: node:v8 lifecycle namespaces. `v8.startupSnapshot` /
@@ -1620,11 +1938,17 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
 
 pub(crate) fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
     let module_name = cjs_default_base_module(module_name).unwrap_or(module_name);
+    let module_name = assert_instance_base_module(module_name).unwrap_or(module_name);
     let property_name = canonical_native_callable_property(module_name, property_name);
-    let callable_module_name = if module_name == "util.types" {
-        "util/types"
+    let export_module_name = if property_name == "Assert" && module_name == "assert/strict" {
+        "assert"
     } else {
         module_name
+    };
+    let callable_module_name = if export_module_name == "util.types" {
+        "util/types"
+    } else {
+        export_module_name
     };
     let key = format!("{callable_module_name}\0{property_name}");
     if let Some(bits) = NATIVE_CALLABLE_EXPORTS.with(|c| c.borrow().get(&key).copied()) {
@@ -1640,11 +1964,11 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     crate::closure::js_closure_set_capture_f64(closure, 0, ns);
     crate::closure::js_closure_set_capture_ptr(closure, 1, method_bytes.as_ptr() as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 2, method_bytes.len() as i64);
-    let exposed_name = if module_name == "fs" {
-        native_callable_export_display_name(module_name, property_name)
-    } else if module_name == "url" && property_name == "resolveObject" {
+    let exposed_name = if export_module_name == "fs" {
+        native_callable_export_display_name(export_module_name, property_name)
+    } else if export_module_name == "url" && property_name == "resolveObject" {
         "urlResolveObject"
-    } else if module_name == "fs" && property_name == "_toUnixTimestamp" {
+    } else if export_module_name == "fs" && property_name == "_toUnixTimestamp" {
         "toUnixTimestamp"
     } else {
         property_name
@@ -1653,19 +1977,19 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     let value = crate::value::js_nanbox_pointer(closure as i64);
     let closure_addr = closure as usize;
 
-    if module_name == "tty" && matches!(property_name, "ReadStream" | "WriteStream") {
+    if export_module_name == "tty" && matches!(property_name, "ReadStream" | "WriteStream") {
         attach_tty_stream_prototype(value, property_name);
     }
-    if module_name == "tls" && property_name == "SecureContext" {
+    if export_module_name == "tls" && property_name == "SecureContext" {
         attach_tls_secure_context_prototype(value);
     }
-    if module_name == "wasi" && property_name == "WASI" {
+    if export_module_name == "wasi" && property_name == "WASI" {
         crate::wasi::attach_wasi_constructor_prototype(value);
     }
-    if module_name == "stream" && property_name == "Stream" {
+    if export_module_name == "stream" && property_name == "Stream" {
         attach_stream_legacy_prototype(value);
     }
-    if module_name == "stream"
+    if export_module_name == "stream"
         && matches!(
             property_name,
             "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
@@ -1673,23 +1997,28 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     {
         attach_stream_constructor_prototype(value, property_name);
     }
-    if module_name == "sqlite" && property_name == "DatabaseSync" {
+    if export_module_name == "sqlite" && property_name == "DatabaseSync" {
         attach_sqlite_database_sync_prototype(value);
     }
-    if module_name == "sqlite" && property_name == "Session" {
+    if export_module_name == "sqlite" && property_name == "Session" {
         attach_sqlite_session_prototype(value);
+    }
+    if export_module_name == "assert" && property_name == "Assert" {
+        attach_assert_prototype(value);
     }
 
     // `PerformanceObserver.supportedEntryTypes` is a static array on the
     // constructor. `PerformanceObserver` is a function value (a bound-method
     // closure), so hang the array off it as a dynamic property — keeps
     // `typeof PerformanceObserver === "function"` while the static read works.
-    if module_name == "perf_hooks" && property_name == "PerformanceObserver" {
+    if export_module_name == "perf_hooks" && property_name == "PerformanceObserver" {
         let arr = crate::perf_hooks::js_perf_supported_entry_types();
         crate::closure::closure_set_dynamic_prop(closure_addr, "supportedEntryTypes", arr);
     }
 
-    if module_name == "events" && property_name == "EventEmitter" {
+    if export_module_name == "events" && property_name == "EventEmitter" {
+        let async_resource_ctor =
+            bound_native_callable_export_value("events", "EventEmitterAsyncResource");
         for method in [
             "addAbortListener",
             "once",
@@ -1703,6 +2032,11 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
             crate::closure::closure_set_dynamic_prop(closure_addr, method, method_value);
         }
         crate::closure::closure_set_dynamic_prop(closure_addr, "EventEmitter", value);
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "EventEmitterAsyncResource",
+            async_resource_ctor,
+        );
         crate::closure::closure_set_dynamic_prop(closure_addr, "defaultMaxListeners", 10.0);
         crate::closure::closure_set_dynamic_prop(
             closure_addr,
@@ -1731,14 +2065,14 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
         );
     }
 
-    if module_name == "util" && property_name == "promisify" {
+    if export_module_name == "util" && property_name == "promisify" {
         crate::closure::closure_set_dynamic_prop(
             closure_addr,
             "custom",
             crate::util_promisify::promisify_custom_symbol(),
         );
     }
-    if module_name == "util" && property_name == "inspect" {
+    if export_module_name == "util" && property_name == "inspect" {
         crate::closure::closure_set_dynamic_prop(
             closure_addr,
             "custom",
@@ -1827,6 +2161,7 @@ pub(crate) fn fs_namespace_descriptor_setter_value(property_name: &str) -> f64 {
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
         ("events", "EventEmitter") => Some(1),
+        ("events", "EventEmitterAsyncResource") => Some(0),
         ("events", "addAbortListener") => Some(2),
         ("events", "once") => Some(2),
         ("events", "on") => Some(2),
@@ -1844,6 +2179,9 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         }
         ("tls", "checkServerIdentity") => Some(2),
         ("tls", "SecureContext") => Some(1),
+        // #3726: `crypto.Cipheriv` / `crypto.Decipheriv` constructor exports —
+        // `(cipher, key, iv, options)` arity matches Node's length 4.
+        ("crypto", "Cipheriv" | "Decipheriv") => Some(4),
         ("url", "Url") => Some(0),
         ("url", "resolveObject") => Some(2),
         ("process", "setSourceMapsEnabled") => Some(1),
@@ -1853,11 +2191,28 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ) => Some(1),
         ("process", "hasUncaughtExceptionCaptureCallback") => Some(0),
         ("fs", "_toUnixTimestamp") => Some(1),
-        ("util", "debug" | "debuglog") => Some(2),
+        ("util", "debug" | "debuglog" | "inherits") => Some(2),
         ("util", "MIMEParams") => Some(0),
         ("util", "MIMEType") => Some(1),
         ("net", "createServer" | "Server") => Some(2),
         ("net", "Socket") => Some(1),
+        // #3720: `http2.performServerHandshake(socket[, options])` — length 1.
+        ("http2", "performServerHandshake") => Some(1),
+        // #3905: Node `.length` — connect(authority,options,listener)=3,
+        // createServer(options,handler)=2.
+        ("http2", "connect") => Some(3),
+        ("http2", "createServer") => Some(2),
+        // #3697: node:https module-level exports (Node `.length`).
+        ("https", "request") => Some(0),
+        ("https", "get") => Some(3),
+        ("https", "Agent") => Some(1),
+        // #3712: node:http module-level helper exports.
+        ("http", "validateHeaderName" | "validateHeaderValue") => Some(2),
+        ("http", "setMaxIdleHTTPParsers" | "setGlobalProxyFromEnv") => Some(1),
+        // #3904: modern V8 diagnostics/profiler exports (Node .length values).
+        ("v8", "getCppHeapStatistics" | "startCpuProfile") => Some(0),
+        ("v8", "getHeapSnapshot" | "isStringOneByteRepresentation" | "queryObjects") => Some(1),
+        ("v8", "writeHeapSnapshot") => Some(2),
         ("net", "_normalizeArgs") => Some(1),
         ("net", "_createServerHandle") => Some(5),
         ("domain", "Domain" | "createDomain" | "create") => Some(0),
@@ -2055,6 +2410,72 @@ const SQLITE_DATABASE_SYNC_PROTOTYPE_METHODS: &[&str] = &[
 ];
 
 const SQLITE_SESSION_PROTOTYPE_METHODS: &[&str] = &["changeset", "patchset", "close"];
+
+const ASSERT_PROTOTYPE_METHODS: &[&str] = &[
+    "fail",
+    "ok",
+    "equal",
+    "notEqual",
+    "deepEqual",
+    "notDeepEqual",
+    "deepStrictEqual",
+    "notDeepStrictEqual",
+    "strictEqual",
+    "notStrictEqual",
+    "partialDeepStrictEqual",
+    "throws",
+    "rejects",
+    "doesNotThrow",
+    "doesNotReject",
+    "ifError",
+    "match",
+    "doesNotMatch",
+];
+
+fn attach_assert_prototype(constructor_value: f64) {
+    let constructor_js = JSValue::from_bits(constructor_value.to_bits());
+    if !constructor_js.is_pointer() {
+        return;
+    }
+    let closure = constructor_js.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    if closure == 0 {
+        return;
+    }
+
+    let proto = js_object_alloc(0, 0);
+    if proto.is_null() {
+        return;
+    }
+
+    let constructor = "constructor";
+    let constructor_key =
+        crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
+    js_object_set_field_by_name(proto, constructor_key, constructor_value);
+    super::set_builtin_property_attrs(
+        proto as usize,
+        constructor.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+
+    for method in ASSERT_PROTOTYPE_METHODS {
+        let method_value = bound_native_callable_export_value("assert", method);
+        let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
+        js_object_set_field_by_name(proto, key, method_value);
+        super::set_builtin_property_attrs(
+            proto as usize,
+            (*method).to_string(),
+            super::PropertyAttrs::new(true, false, true),
+        );
+    }
+
+    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    crate::closure::closure_set_dynamic_prop(closure, "prototype", proto_value);
+    super::set_builtin_property_attrs(
+        closure,
+        "prototype".to_string(),
+        super::PropertyAttrs::new(true, false, false),
+    );
+}
 
 extern "C" fn sqlite_database_sync_prototype_method_thunk(
     closure: *const crate::closure::ClosureHeader,
@@ -2558,6 +2979,7 @@ pub(crate) fn builtin_closure_length(closure: usize) -> Option<u32> {
 /// `EventEmitterHandle`, so dispatch coherence is preserved.
 pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool {
     let module = cjs_default_base_module(module).unwrap_or(module);
+    let module = assert_instance_base_module(module).unwrap_or(module);
     let prop = canonical_native_callable_property(module, prop);
     if module == "fs" && matches!(prop, "lchmod" | "lchmodSync") {
         return crate::fs::lchmod_is_callable_on_this_platform();
@@ -2638,6 +3060,14 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             // (#3196-#3200); only `connect` is in the api-manifest today, so
             // it's the only tls symbol exposed here.
             | ("tls", "connect")
+            // #3712: node:http module-level helper exports. `validateHeaderName`
+            // / `validateHeaderValue` perform Node's HTTP-token / header-value
+            // validation (throwing the matching error codes); the parser/proxy
+            // setters are deterministic no-ops in Perry's runtime.
+            | ("http", "validateHeaderName")
+            | ("http", "validateHeaderValue")
+            | ("http", "setMaxIdleHTTPParsers")
+            | ("http", "setGlobalProxyFromEnv")
             | ("module", "createRequire")
             | ("module", "findPackageJSON")
             | ("module", "findSourceMap")
@@ -2753,6 +3183,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("child_process", "spawnSync")
             | ("child_process", "fork")
             | ("events", "EventEmitter")
+            | ("events", "EventEmitterAsyncResource")
             | ("events", "on")
             | ("sqlite", "backup")
             | ("events", "once")
@@ -2778,6 +3209,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("stream", "PassThrough")
             | ("stream", "Stream")
             | ("string_decoder", "StringDecoder")
+            | ("assert", "Assert")
             | ("assert", "ok")
             | ("assert", "fail")
             | ("assert", "equal")
@@ -2796,6 +3228,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("assert", "rejects")
             | ("assert", "doesNotReject")
             | ("assert", "ifError")
+            | ("assert/strict", "Assert")
             | ("assert/strict", "ok")
             | ("assert/strict", "fail")
             | ("assert/strict", "equal")
@@ -2965,6 +3398,21 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             // for feature checks and rebound calls.
             | ("crypto.webcrypto", "getRandomValues")
             | ("crypto.webcrypto", "randomUUID")
+            | (
+                "crypto.subtle",
+                "digest"
+                    | "importKey"
+                    | "exportKey"
+                    | "sign"
+                    | "verify"
+                    | "deriveBits"
+                    | "deriveKey"
+                    | "encrypt"
+                    | "decrypt"
+                    | "generateKey"
+                    | "wrapKey"
+                    | "unwrapKey",
+            )
             | ("buffer.Buffer", "from")
             | ("buffer.Buffer", "alloc")
             | ("buffer.Buffer", "allocUnsafe")
@@ -3253,6 +3701,10 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("crypto", "getRandomValues")
             | ("crypto", "createCipheriv")
             | ("crypto", "createDecipheriv")
+            // #3726: the constructor exports behind the factories read as
+            // callable functions so `typeof crypto.Cipheriv === "function"`.
+            | ("crypto", "Cipheriv")
+            | ("crypto", "Decipheriv")
             | ("crypto", "createSecretKey")
             | ("crypto.Certificate", "verifySpkac")
             | ("crypto.Certificate", "exportPublicKey")
@@ -3315,9 +3767,21 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("http", "Server")
             | ("https", "createServer")
             | ("https", "Server")
+            // #3697: `https.request` / `https.get` / `https.Agent` value reads
+            // (named/namespace imports) must be function-valued. The call form
+            // already lowers through the codegen NATIVE_MODULE_TABLE; without
+            // these the bound-value read returned `undefined`.
+            | ("https", "request")
+            | ("https", "get")
+            | ("https", "Agent")
             | ("http2", "createServer")
             | ("http2", "createSecureServer")
             | ("http2", "Server")
+            // #3905: `http2.connect(authority[, options][, listener])` client
+            // session factory reads as a function.
+            | ("http2", "connect")
+            // #3720: module-level handshake helper reads as a function.
+            | ("http2", "performServerHandshake")
             // #3680/#3679: node:v8 class constructors + diagnostic-control
             // helpers read as callable values (`typeof v8.Serializer ===
             // "function"`). Construction routes through new_dynamic.rs; the
@@ -3330,6 +3794,13 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("v8", "takeCoverage")
             | ("v8", "stopCoverage")
             | ("v8", "setHeapSnapshotNearHeapLimit")
+            // #3904: modern V8 diagnostics/profiler named exports (function-valued).
+            | ("v8", "getCppHeapStatistics")
+            | ("v8", "getHeapSnapshot")
+            | ("v8", "isStringOneByteRepresentation")
+            | ("v8", "queryObjects")
+            | ("v8", "startCpuProfile")
+            | ("v8", "writeHeapSnapshot")
             // #3679: v8.startupSnapshot / v8.promiseHooks namespace methods read
             // as callable values (`typeof v8.startupSnapshot.isBuildingSnapshot
             // === "function"`). Invocation routes through
@@ -3364,6 +3835,12 @@ pub extern "C" fn js_native_module_bind_method(
 
     // Extract module name from the namespace object's first field
     let module_name = unsafe { get_module_name_from_namespace(_namespace_obj) };
+
+    if module_name == "crypto.webcrypto" {
+        if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
+            return value;
+        }
+    }
 
     // Check for known constant properties first
     if let Some(val) =
@@ -3672,6 +4149,12 @@ pub(crate) unsafe fn get_native_module_constant(
     let cjs_default_base = cjs_default_base_module(module_name);
     let is_cjs_default_object = cjs_default_base.is_some();
     let module_name = cjs_default_base.unwrap_or(module_name);
+
+    if property == "default" && !is_cjs_default_object {
+        if let Some(value) = cjs_default_export_value(module_name) {
+            return Some(value);
+        }
+    }
 
     let o_nofollow: f64 = {
         #[cfg(target_os = "macos")]
@@ -4350,83 +4833,6 @@ pub(crate) unsafe fn get_native_module_constant(
         Some(v as f64)
     };
 
-    // `http2.constants` — the subset of Node's `require('node:http2').constants`
-    // that real code reads: the `:`-prefixed pseudo-header names, the common
-    // header-name string constants, the NGHTTP2 error/session codes, and the
-    // HTTP_STATUS_* numbers. `@hono/node-server` reaches for these by name
-    // (#1651). Mixed string/number values, so this closure returns the f64
-    // directly rather than going through the `i64 as f64` shape used above.
-    let http2_const = |prop: &str| -> Option<f64> {
-        Some(match prop {
-            // Pseudo-headers (HTTP/2 request/response framing).
-            "HTTP2_HEADER_STATUS" => str_val(":status"),
-            "HTTP2_HEADER_METHOD" => str_val(":method"),
-            "HTTP2_HEADER_AUTHORITY" => str_val(":authority"),
-            "HTTP2_HEADER_SCHEME" => str_val(":scheme"),
-            "HTTP2_HEADER_PATH" => str_val(":path"),
-            "HTTP2_HEADER_PROTOCOL" => str_val(":protocol"),
-            // Common header-name constants.
-            "HTTP2_HEADER_ACCEPT" => str_val("accept"),
-            "HTTP2_HEADER_ACCEPT_ENCODING" => str_val("accept-encoding"),
-            "HTTP2_HEADER_AUTHORIZATION" => str_val("authorization"),
-            "HTTP2_HEADER_CACHE_CONTROL" => str_val("cache-control"),
-            "HTTP2_HEADER_CONNECTION" => str_val("connection"),
-            "HTTP2_HEADER_CONTENT_ENCODING" => str_val("content-encoding"),
-            "HTTP2_HEADER_CONTENT_LENGTH" => str_val("content-length"),
-            "HTTP2_HEADER_CONTENT_TYPE" => str_val("content-type"),
-            "HTTP2_HEADER_COOKIE" => str_val("cookie"),
-            "HTTP2_HEADER_DATE" => str_val("date"),
-            "HTTP2_HEADER_ETAG" => str_val("etag"),
-            "HTTP2_HEADER_HOST" => str_val("host"),
-            "HTTP2_HEADER_LOCATION" => str_val("location"),
-            "HTTP2_HEADER_SET_COOKIE" => str_val("set-cookie"),
-            "HTTP2_HEADER_USER_AGENT" => str_val("user-agent"),
-            // Default HPACK dynamic-table / frame sizes.
-            "DEFAULT_SETTINGS_HEADER_TABLE_SIZE" => 4096.0,
-            "DEFAULT_SETTINGS_ENABLE_PUSH" => 1.0,
-            "DEFAULT_SETTINGS_INITIAL_WINDOW_SIZE" => 65535.0,
-            "DEFAULT_SETTINGS_MAX_FRAME_SIZE" => 16384.0,
-            // NGHTTP2 error codes (RST_STREAM / GOAWAY).
-            "NGHTTP2_NO_ERROR" => 0.0,
-            "NGHTTP2_PROTOCOL_ERROR" => 1.0,
-            "NGHTTP2_INTERNAL_ERROR" => 2.0,
-            "NGHTTP2_FLOW_CONTROL_ERROR" => 3.0,
-            "NGHTTP2_SETTINGS_TIMEOUT" => 4.0,
-            "NGHTTP2_STREAM_CLOSED" => 5.0,
-            "NGHTTP2_FRAME_SIZE_ERROR" => 6.0,
-            "NGHTTP2_REFUSED_STREAM" => 7.0,
-            "NGHTTP2_CANCEL" => 8.0,
-            "NGHTTP2_COMPRESSION_ERROR" => 9.0,
-            "NGHTTP2_CONNECT_ERROR" => 10.0,
-            "NGHTTP2_ENHANCE_YOUR_CALM" => 11.0,
-            "NGHTTP2_INADEQUATE_SECURITY" => 12.0,
-            "NGHTTP2_HTTP_1_1_REQUIRED" => 13.0,
-            // Session/flag constants.
-            "NGHTTP2_SESSION_SERVER" => 0.0,
-            "NGHTTP2_SESSION_CLIENT" => 1.0,
-            "NGHTTP2_FLAG_NONE" => 0.0,
-            "NGHTTP2_FLAG_END_STREAM" => 1.0,
-            "NGHTTP2_FLAG_END_HEADERS" => 4.0,
-            "NGHTTP2_FLAG_ACK" => 1.0,
-            // The HTTP_STATUS_* numbers code commonly branches on.
-            "HTTP_STATUS_OK" => 200.0,
-            "HTTP_STATUS_CREATED" => 201.0,
-            "HTTP_STATUS_ACCEPTED" => 202.0,
-            "HTTP_STATUS_NO_CONTENT" => 204.0,
-            "HTTP_STATUS_NOT_MODIFIED" => 304.0,
-            "HTTP_STATUS_BAD_REQUEST" => 400.0,
-            "HTTP_STATUS_UNAUTHORIZED" => 401.0,
-            "HTTP_STATUS_FORBIDDEN" => 403.0,
-            "HTTP_STATUS_NOT_FOUND" => 404.0,
-            "HTTP_STATUS_METHOD_NOT_ALLOWED" => 405.0,
-            "HTTP_STATUS_INTERNAL_SERVER_ERROR" => 500.0,
-            "HTTP_STATUS_NOT_IMPLEMENTED" => 501.0,
-            "HTTP_STATUS_BAD_GATEWAY" => 502.0,
-            "HTTP_STATUS_SERVICE_UNAVAILABLE" => 503.0,
-            _ => return None,
-        })
-    };
-
     let dns_const = |prop: &str| -> Option<f64> {
         Some(match prop {
             "ADDRCONFIG" => 1024.0,
@@ -4552,7 +4958,7 @@ pub(crate) unsafe fn get_native_module_constant(
         "dns" => match property {
             "promises" => {
                 crate::dns::dns_promises_init_servers_from_callback_if_unset();
-                Some(create_sub_namespace("dns/promises"))
+                cjs_default_export_value("dns/promises")
             }
             _ => dns_lookup_flag_constant(property)
                 .or_else(|| dns_error_alias(property).map(|alias| str_val(alias))),
@@ -4610,30 +5016,32 @@ pub(crate) unsafe fn get_native_module_constant(
                 "path",
                 "toNamespacedPath",
             )),
-            "posix" => Some(create_sub_namespace("path.posix")),
-            "win32" => Some(create_sub_namespace("path.win32")),
+            "posix" => cjs_default_export_value("path.posix"),
+            "win32" => cjs_default_export_value("path.win32"),
             _ => None,
         },
         "path.posix" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("path.posix"),
             "sep" => Some(str_val("/")),
             "delimiter" => Some(str_val(":")),
             "toNamespacedPath" | "_makeLong" => Some(bound_native_callable_export_value(
                 "path.posix",
                 "toNamespacedPath",
             )),
-            "posix" => Some(native_namespace_or_create("path.posix", namespace_obj)),
-            "win32" => Some(create_sub_namespace("path.win32")),
+            "posix" => cjs_default_export_value("path.posix"),
+            "win32" => cjs_default_export_value("path.win32"),
             _ => None,
         },
         "path.win32" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("path.win32"),
             "sep" => Some(str_val("\\")),
             "delimiter" => Some(str_val(";")),
             "toNamespacedPath" | "_makeLong" => Some(bound_native_callable_export_value(
                 "path.win32",
                 "toNamespacedPath",
             )),
-            "posix" => Some(create_sub_namespace("path.posix")),
-            "win32" => Some(native_namespace_or_create("path.win32", namespace_obj)),
+            "posix" => cjs_default_export_value("path.posix"),
+            "win32" => cjs_default_export_value("path.win32"),
             _ => None,
         },
         "fs" => match property {
@@ -4866,11 +5274,15 @@ pub(crate) unsafe fn get_native_module_constant(
                 Some(crate::symbol::js_symbol_for(str_val("nodejs.rejection")))
             }
             "init" => Some(bound_native_callable_export_value("events", "init")),
+            "EventEmitterAsyncResource" => Some(bound_native_callable_export_value(
+                "events",
+                "EventEmitterAsyncResource",
+            )),
             _ => None,
         },
-        // node:worker_threads value-shaped exports. Perry doesn't spawn JS
-        // workers, so the main thread is the only thread — `isMainThread`
-        // is always true, `threadId` is 0, `resourceLimits` is empty.
+        // node:worker_threads value-shaped exports. `workerData` and
+        // `parentPort` are dynamic for compiled Worker modules, so the
+        // namespace object must agree with the named-import getter lowering.
         // Pre-fix `const { isMainThread } = require('worker_threads')` read
         // `undefined`, which made the `if (!isMainThread) common.skip(...)`
         // guard Node uses in main-thread-only tests fire under Perry, so
@@ -4892,9 +5304,19 @@ pub(crate) unsafe fn get_native_module_constant(
                     ))
                 }
             }
-            "isMainThread" => Some(f64::from_bits(JSValue::bool(true).bits())),
+            "isMainThread" => Some(call_worker_threads_getter(
+                &WORKER_THREADS_IS_MAIN_THREAD_GETTER,
+                || f64::from_bits(JSValue::bool(true).bits()),
+            )),
             "isInternalThread" => Some(f64::from_bits(JSValue::bool(false).bits())),
-            "parentPort" | "workerData" => Some(f64::from_bits(crate::value::TAG_NULL)),
+            "parentPort" => Some(call_worker_threads_getter(
+                &WORKER_THREADS_PARENT_PORT_GETTER,
+                || f64::from_bits(crate::value::TAG_NULL),
+            )),
+            "workerData" => Some(call_worker_threads_getter(
+                &WORKER_THREADS_WORKER_DATA_GETTER,
+                || f64::from_bits(crate::value::TAG_NULL),
+            )),
             "threadId" => Some(0.0),
             "threadName" => Some(str_val("")),
             "resourceLimits" => {
@@ -4926,23 +5348,34 @@ pub(crate) unsafe fn get_native_module_constant(
         // pointer) and hand it back for every read.
         "http" => match property {
             "METHODS" => Some(unsafe { http_methods_array() }),
+            // #3712: Node's `http.maxHeaderSize` default is 16 KiB (16384).
+            "maxHeaderSize" => Some(16384.0),
+            // #3712: `http.globalAgent` is an http.Agent with protocol "http:"
+            // and defaultPort 80 (distinct from https.globalAgent above).
+            "globalAgent" => Some(unsafe { http_global_agent_object() }),
+            // #2519: `http.STATUS_CODES` maps status codes to reason phrases.
+            "STATUS_CODES" => Some(unsafe { http_status_codes_object() }),
             _ => None,
         },
         "https" => match property {
             "globalAgent" => Some(unsafe { https_global_agent_object() }),
             _ => None,
         },
-        // node:http2 — `constants` is a sub-namespace object (the spec exposes
-        // it as a single frozen object, not loose top-level constants), so
+        // node:http2 — `constants` is a sub-namespace object (Node exposes it
+        // as a single object, not loose top-level constants), so
         // `import { constants } from 'node:http2'` binds to a real object and
         // `constants.HTTP2_HEADER_PATH` resolves through `http2.constants`
         // below. The `Http2ServerRequest` / `Http2ServerResponse` /
         // `createSecureServer` exports are handled elsewhere (#1651).
         "http2" => match property {
             "constants" => Some(create_sub_namespace("http2.constants")),
+            "sensitiveHeaders" => Some(crate::node_http2_constants::sensitive_headers_symbol()),
+            // #3905: `import http2 from "node:http2"` — default is the module
+            // namespace object.
+            "default" => Some(native_namespace_or_create("http2", namespace_obj)),
             _ => None,
         },
-        "http2.constants" => http2_const(property),
+        "http2.constants" => crate::node_http2_constants::constant(property),
         "dns" => dns_const(property),
         // node:cluster — primary-side settings and Worker handles are backed
         // by `crate::cluster`; scheduling/identity constants remain static.
@@ -5106,6 +5539,153 @@ unsafe fn https_global_agent_object() -> f64 {
         cache
             .borrow_mut()
             .insert("https.globalAgent".to_string(), result.to_bits());
+    });
+    result
+}
+
+/// #3712: `http.globalAgent` shape. Mirrors `https_global_agent_object` but
+/// with the http defaults (protocol "http:", defaultPort 80). Node 19+ ships
+/// the global agent with keep-alive enabled, so basic field reads match Node.
+unsafe fn http_global_agent_object() -> f64 {
+    if let Some(bits) =
+        NATIVE_MODULE_NAMESPACES.with(|cache| cache.borrow().get("http.globalAgent").copied())
+    {
+        return f64::from_bits(bits);
+    }
+
+    let field_names = [
+        "defaultPort",
+        "protocol",
+        "keepAlive",
+        "maxSockets",
+        "maxFreeSockets",
+    ];
+    let packed = field_names.join("\0");
+    let obj = js_object_alloc_with_shape(
+        0x7FFF_FF12,
+        field_names.len() as u32,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+    if obj.is_null() {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    js_object_set_field(obj, 0, JSValue::number(80.0));
+    let protocol = crate::string::js_string_from_bytes(b"http:".as_ptr(), 5);
+    js_object_set_field(obj, 1, JSValue::string_ptr(protocol));
+    // Node 19+ enables HTTP keep-alive on the global agent by default.
+    js_object_set_field(obj, 2, JSValue::bool(true));
+    js_object_set_field(obj, 3, JSValue::number(f64::INFINITY));
+    js_object_set_field(obj, 4, JSValue::number(256.0));
+
+    let result = crate::value::js_nanbox_pointer(obj as i64);
+    NATIVE_MODULE_NAMESPACES.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert("http.globalAgent".to_string(), result.to_bits());
+    });
+    result
+}
+
+/// #2519: `http.STATUS_CODES` — the standard HTTP status-code → reason-phrase
+/// map. Keys are the numeric codes as strings (so `STATUS_CODES[200]` resolves
+/// via the usual number→string index coercion). Cached as a scanned root in
+/// `NATIVE_MODULE_NAMESPACES` (mirrors `http_global_agent_object`).
+unsafe fn http_status_codes_object() -> f64 {
+    if let Some(bits) =
+        NATIVE_MODULE_NAMESPACES.with(|cache| cache.borrow().get("http.STATUS_CODES").copied())
+    {
+        return f64::from_bits(bits);
+    }
+
+    // Node 22 `require('node:http').STATUS_CODES` snapshot (63 entries).
+    const STATUS_CODES: &[(u32, &str)] = &[
+        (100, "Continue"),
+        (101, "Switching Protocols"),
+        (102, "Processing"),
+        (103, "Early Hints"),
+        (200, "OK"),
+        (201, "Created"),
+        (202, "Accepted"),
+        (203, "Non-Authoritative Information"),
+        (204, "No Content"),
+        (205, "Reset Content"),
+        (206, "Partial Content"),
+        (207, "Multi-Status"),
+        (208, "Already Reported"),
+        (226, "IM Used"),
+        (300, "Multiple Choices"),
+        (301, "Moved Permanently"),
+        (302, "Found"),
+        (303, "See Other"),
+        (304, "Not Modified"),
+        (305, "Use Proxy"),
+        (307, "Temporary Redirect"),
+        (308, "Permanent Redirect"),
+        (400, "Bad Request"),
+        (401, "Unauthorized"),
+        (402, "Payment Required"),
+        (403, "Forbidden"),
+        (404, "Not Found"),
+        (405, "Method Not Allowed"),
+        (406, "Not Acceptable"),
+        (407, "Proxy Authentication Required"),
+        (408, "Request Timeout"),
+        (409, "Conflict"),
+        (410, "Gone"),
+        (411, "Length Required"),
+        (412, "Precondition Failed"),
+        (413, "Payload Too Large"),
+        (414, "URI Too Long"),
+        (415, "Unsupported Media Type"),
+        (416, "Range Not Satisfiable"),
+        (417, "Expectation Failed"),
+        (418, "I'm a Teapot"),
+        (421, "Misdirected Request"),
+        (422, "Unprocessable Entity"),
+        (423, "Locked"),
+        (424, "Failed Dependency"),
+        (425, "Too Early"),
+        (426, "Upgrade Required"),
+        (428, "Precondition Required"),
+        (429, "Too Many Requests"),
+        (431, "Request Header Fields Too Large"),
+        (451, "Unavailable For Legal Reasons"),
+        (500, "Internal Server Error"),
+        (501, "Not Implemented"),
+        (502, "Bad Gateway"),
+        (503, "Service Unavailable"),
+        (504, "Gateway Timeout"),
+        (505, "HTTP Version Not Supported"),
+        (506, "Variant Also Negotiates"),
+        (507, "Insufficient Storage"),
+        (508, "Loop Detected"),
+        (509, "Bandwidth Limit Exceeded"),
+        (510, "Not Extended"),
+        (511, "Network Authentication Required"),
+    ];
+
+    let keys: Vec<String> = STATUS_CODES.iter().map(|(c, _)| c.to_string()).collect();
+    let packed = keys.join("\0");
+    let obj = js_object_alloc_with_shape(
+        0x7FFF_FF13,
+        keys.len() as u32,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+    if obj.is_null() {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    for (i, (_, msg)) in STATUS_CODES.iter().enumerate() {
+        let str_ptr = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        js_object_set_field(obj, i as u32, JSValue::string_ptr(str_ptr));
+    }
+
+    let result = crate::value::js_nanbox_pointer(obj as i64);
+    NATIVE_MODULE_NAMESPACES.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert("http.STATUS_CODES".to_string(), result.to_bits());
     });
     result
 }

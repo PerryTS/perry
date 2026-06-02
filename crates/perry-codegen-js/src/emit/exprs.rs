@@ -573,6 +573,39 @@ impl JsEmitter {
                 self.emit_expr(handler);
                 self.output.push_str(") : undefined)");
             }
+            Expr::ProcessStdinSetRawMode(enabled) => {
+                self.output.push_str("(typeof process !== 'undefined' && process.stdin && typeof process.stdin.setRawMode === 'function' ? process.stdin.setRawMode(");
+                self.emit_expr(enabled);
+                self.output.push_str(") : undefined)");
+            }
+            Expr::ProcessStdinOn { event, handler } => {
+                self.output.push_str("(typeof process !== 'undefined' && process.stdin ? process.stdin.on(");
+                self.emit_expr(event);
+                self.output.push_str(", ");
+                self.emit_expr(handler);
+                self.output.push_str(") : undefined)");
+            }
+            Expr::ProcessStdinRemoveListener { event, handler } => {
+                self.output.push_str("(typeof process !== 'undefined' && process.stdin ? (process.stdin.removeListener || process.stdin.off).call(process.stdin, ");
+                self.emit_expr(event);
+                self.output.push_str(", ");
+                self.emit_expr(handler);
+                self.output.push_str(") : undefined)");
+            }
+            Expr::ProcessStdinLifecycle(method) => {
+                let name = match method {
+                    perry_hir::ProcessStdinLifecycleMethod::Pause => "pause",
+                    perry_hir::ProcessStdinLifecycleMethod::Resume => "resume",
+                    perry_hir::ProcessStdinLifecycleMethod::Unref => "unref",
+                    perry_hir::ProcessStdinLifecycleMethod::Ref => "ref",
+                    perry_hir::ProcessStdinLifecycleMethod::Destroy => "destroy",
+                };
+                self.output.push_str("(typeof process !== 'undefined' && process.stdin && typeof process.stdin.");
+                self.output.push_str(name);
+                self.output.push_str(" === 'function' ? process.stdin.");
+                self.output.push_str(name);
+                self.output.push_str("() : undefined)");
+            }
             Expr::ProcessChdir(dir) => {
                 self.output.push_str("(typeof process !== 'undefined' ? process.chdir(");
                 self.emit_expr(dir);

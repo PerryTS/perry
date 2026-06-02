@@ -21,12 +21,25 @@ pub const INVALID_HANDLE: Handle = 0;
 /// Global handle registry using DashMap for concurrent access
 static HANDLES: Lazy<DashMap<Handle, Box<dyn Any + Send + Sync>>> = Lazy::new(DashMap::new);
 
-/// Next handle ID (0 is reserved for invalid/null)
-static NEXT_HANDLE: AtomicI64 = AtomicI64::new(1);
+const COMMON_HANDLE_ID_START: Handle = 1;
+const COMMON_HANDLE_ID_END: Handle = 0x40000;
+
+/// Next handle ID (0 is reserved for invalid/null). The visible low range stops
+/// before Web Fetch's pointer-tagged handle band so generic dispatch cannot
+/// confuse native wrappers with Fetch Request/Headers/Response handles.
+static NEXT_HANDLE: AtomicI64 = AtomicI64::new(COMMON_HANDLE_ID_START);
+
+fn next_handle_id() -> Handle {
+    let handle = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
+    if handle >= COMMON_HANDLE_ID_END {
+        panic!("common native handle id range exhausted before reserved Web handle bands");
+    }
+    handle
+}
 
 /// Register an object and get a handle to it
 pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
-    let handle = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
+    let handle = next_handle_id();
     HANDLES.insert(handle, Box::new(value));
     handle
 }
@@ -161,6 +174,7 @@ mod tests {
         let handle = register_handle(value);
 
         assert!(handle != INVALID_HANDLE);
+        assert!(handle < COMMON_HANDLE_ID_END);
 
         let retrieved: Option<&String> = get_handle(handle);
         assert!(retrieved.is_some());

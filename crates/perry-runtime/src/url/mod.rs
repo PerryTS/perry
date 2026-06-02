@@ -231,6 +231,22 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_file_url_host() {
+        let (protocol, host, hostname, _, pathname, _, _) =
+            parse_url("file://example.com/Users/test/file.ts");
+        assert_eq!(protocol, "file:");
+        assert_eq!(host, "example.com");
+        assert_eq!(hostname, "example.com");
+        assert_eq!(pathname, "/Users/test/file.ts");
+
+        let (_, host, hostname, _, pathname, _, _) =
+            parse_url("file://localhost/Users/test/file.ts");
+        assert_eq!(host, "");
+        assert_eq!(hostname, "");
+        assert_eq!(pathname, "/Users/test/file.ts");
+    }
+
+    #[test]
     fn test_resolve_relative_url() {
         let resolved = resolve_url(".", "file:///Users/test/lib/file.ts");
         assert_eq!(resolved, "file:/Users/test/lib");

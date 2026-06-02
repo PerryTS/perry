@@ -588,6 +588,25 @@ fn zeroed_array_buffer_storage(size: i32) -> *mut BufferHeader {
     buf
 }
 
+fn throw_array_buffer_range_error() -> ! {
+    crate::fs::validate::throw_range_error_with_code("Invalid array buffer length")
+}
+
+fn array_buffer_to_index(value: f64) -> i32 {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() {
+        return 0;
+    }
+    let n = jv.to_number();
+    if n.is_nan() {
+        return 0;
+    }
+    if n < 0.0 || n > i32::MAX as f64 {
+        throw_array_buffer_range_error();
+    }
+    n.trunc() as i32
+}
+
 /// `new ArrayBuffer(size)` — allocate a zero-filled buffer of `size` bytes.
 /// Issue #579: pre-fix, `ArrayBuffer` had no constructor handler so it fell
 /// through to the empty-ObjectHeader placeholder path, and `new Uint8Array(ab)`
@@ -604,6 +623,11 @@ pub extern "C" fn js_array_buffer_new(size: i32) -> *mut BufferHeader {
     buf
 }
 
+#[no_mangle]
+pub extern "C" fn js_array_buffer_new_value(size_value: f64) -> *mut BufferHeader {
+    js_array_buffer_new(array_buffer_to_index(size_value))
+}
+
 /// `new SharedArrayBuffer(size)` — same BufferHeader backing store as
 /// ArrayBuffer, tracked in a distinct side registry for util.types predicates.
 #[no_mangle]
@@ -611,6 +635,11 @@ pub extern "C" fn js_shared_array_buffer_new(size: i32) -> *mut BufferHeader {
     let buf = zeroed_array_buffer_storage(size);
     mark_as_shared_array_buffer(buf as usize);
     buf
+}
+
+#[no_mangle]
+pub extern "C" fn js_shared_array_buffer_new_value(size_value: f64) -> *mut BufferHeader {
+    js_shared_array_buffer_new(array_buffer_to_index(size_value))
 }
 
 /// `Type(buffer) is not Object` → `TypeError` (DataView spec step 2). Also
@@ -656,11 +685,10 @@ fn dataview_to_index(value: f64, what: &str) -> i64 {
 }
 
 /// `new DataView(buffer, byteOffset?, byteLength?)` — Perry models a DataView
-/// as a `BufferHeader` over the backing `ArrayBuffer`. With `byteOffset == 0`
-/// and no explicit length the view aliases the backing pointer directly
-/// (zero-copy; writes are visible through sibling `Uint8Array` views). A
-/// non-zero offset or explicit length produces a registered slice view so the
-/// numeric accessors index relative to the view start (#2878).
+/// as a `BufferHeader` view over the backing `ArrayBuffer`. Even a full-span
+/// `new DataView(buffer)` gets its own registered view header so brand checks
+/// can distinguish the DataView receiver from the backing ArrayBuffer while
+/// preserving write propagation through the shared view registry.
 ///
 /// `offset_value` / `length_value` are NaN-boxed JS values (the raw arguments,
 /// `undefined` when absent) so the spec's `ToIndex`/range validation can run
@@ -702,14 +730,7 @@ pub extern "C" fn js_data_view_new(value: f64, offset_value: f64, length_value: 
         requested
     };
 
-    // Fast path: full-buffer zero-offset view aliases the backing pointer
-    // directly (zero-copy; preserves the existing StringDecoder consumer).
-    if offset == 0 && view_len == total_len {
-        mark_as_data_view(addr);
-        return value;
-    }
-
-    // Otherwise build a registered slice view so the numeric accessors index
+    // Build a registered view so the numeric accessors index
     // relative to the view start and `.byteOffset`/`.byteLength`/`.buffer`
     // report the right values — including the zero-length edge cases
     // (`offset == total_len`) that `js_buffer_slice` would otherwise collapse

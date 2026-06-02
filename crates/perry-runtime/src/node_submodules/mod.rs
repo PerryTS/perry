@@ -37,6 +37,8 @@ use crate::value::JSValue;
 
 pub(crate) mod diagnostics;
 pub use diagnostics::*;
+pub(crate) mod diagnostics_tail;
+pub(crate) use diagnostics_tail::*;
 
 /// One entry per named export of one submodule.
 struct ExportSpec {
@@ -599,6 +601,10 @@ const SUBMODULES: &[SubmoduleSpec] = &[
                 thunk: ExportThunk::Fn1(thunk_diag_tracing_channel),
             },
             ExportSpec {
+                name: "boundedChannel",
+                thunk: ExportThunk::Fn1(thunk_diag_bounded_channel),
+            },
+            ExportSpec {
                 name: "channel",
                 thunk: ExportThunk::Fn1(thunk_diag_channel),
             },
@@ -617,6 +623,10 @@ const SUBMODULES: &[SubmoduleSpec] = &[
             ExportSpec {
                 name: "Channel",
                 thunk: ExportThunk::Fn1(thunk_diag_noop),
+            },
+            ExportSpec {
+                name: "BoundedChannel",
+                thunk: ExportThunk::Fn1(thunk_diag_bounded_channel),
             },
         ],
     },
@@ -780,7 +790,9 @@ pub(crate) fn emit_sys_deprecation_warning_once() {
         return;
     }
     let pid = std::process::id();
-    eprintln!("(node:{pid}) [DEP0025] DeprecationWarning: sys is deprecated. Use util instead.");
+    eprintln!(
+        "(node:{pid}) [DEP0025] DeprecationWarning: sys is deprecated. Use `node:util` instead."
+    );
     eprintln!("(Use `node --trace-deprecation ...` to show where the warning was created)");
 }
 
@@ -1024,6 +1036,22 @@ pub(crate) fn is_diagnostics_channel_constructor_value(value: f64) -> bool {
     EXPORT_SINGLETONS.with(|m| m.borrow().get(&key).copied() == Some(ptr))
 }
 
+pub(crate) fn is_diagnostics_bounded_channel_constructor_value(value: f64) -> bool {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if !js_value.is_pointer() {
+        return false;
+    }
+    let ptr = js_value.as_pointer::<ClosureHeader>() as *mut ClosureHeader;
+    let Some(submod) = find_submodule("diagnostics_channel") else {
+        return false;
+    };
+    let Some(export) = find_export(submod, "BoundedChannel") else {
+        return false;
+    };
+    let key = (submod.key.as_ptr() as usize, export.name.as_ptr() as usize);
+    EXPORT_SINGLETONS.with(|m| m.borrow().get(&key).copied() == Some(ptr))
+}
+
 fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHeader {
     let key = submod.key.as_ptr() as usize;
     if let Some(cached) = NAMESPACE_SINGLETONS.with(|m| m.borrow().get(&key).copied()) {
@@ -1151,6 +1179,7 @@ pub fn scan_node_submodule_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
             visitor.visit_raw_mut_ptr_slot(&mut trace.obj);
         }
     });
+    diagnostics_tail::scan_diagnostics_tail_roots_mut(visitor);
     trace_events::scan_trace_events_roots_mut(visitor);
     test::scan_test_module_roots_mut(visitor);
 }

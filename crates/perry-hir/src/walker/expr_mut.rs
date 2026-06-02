@@ -1209,6 +1209,11 @@ where
             f(event);
             f(handler);
         }
+        Expr::ProcessStdinRemoveListener { event, handler } => {
+            f(event);
+            f(handler);
+        }
+        Expr::ProcessStdinLifecycle(_) => {}
         Expr::ProcessStdoutOn { event, handler } => {
             f(event);
             f(handler);
@@ -1612,9 +1617,14 @@ where
             f(this_arg);
             f(args);
         }
-        Expr::ReflectConstruct { target, args } => {
+        Expr::ReflectConstruct {
+            target,
+            args,
+            new_target,
+        } => {
             f(target);
             f(args);
+            f(new_target);
         }
         Expr::ReflectDefineProperty {
             target,
@@ -1720,6 +1730,14 @@ where
         // Issue #100: dynamic import() — descend into the path arg.
         Expr::DynamicImport { arg, .. } => {
             f(arg);
+        }
+        Expr::WorkerNew {
+            filename, options, ..
+        } => {
+            f(filename);
+            if let Some(options) = options {
+                f(options);
+            }
         }
     }
 }

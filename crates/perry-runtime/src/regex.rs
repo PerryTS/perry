@@ -15,7 +15,9 @@ use crate::value::js_nanbox_string;
 
 use crate::object::ObjectHeader;
 
+mod grammar;
 mod replace_fn;
+use grammar::{has_invalid_repeated_quantifier, js_regex_to_rust};
 use replace_fn::call_replace_callback;
 pub use replace_fn::{js_string_replace_all_string_fn, js_string_replace_string_fn};
 
@@ -196,6 +198,19 @@ fn throw_replace_all_non_global_regex() -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+fn set_exec_array_metadata(arr: *mut ArrayHeader, input: &str, index: f64) {
+    if arr.is_null() {
+        return;
+    }
+    let index_key = js_string_from_str("index");
+    crate::array::js_array_set_string_key(arr, index_key, index);
+
+    let input_key = js_string_from_str("input");
+    let input_str = js_string_from_str(input);
+    let input_value = js_nanbox_string(input_str as i64);
+    crate::array::js_array_set_string_key(arr, input_key, input_value);
+}
+
 #[inline]
 fn ensure_replace_all_regex_global(re: *const RegExpHeader) {
     unsafe {
@@ -203,50 +218,6 @@ fn ensure_replace_all_regex_global(re: *const RegExpHeader) {
             throw_replace_all_non_global_regex();
         }
     }
-}
-
-/// Translate a JavaScript regex pattern to a Rust regex-crate compatible pattern.
-/// Handles JS-specific escape sequences not supported by the Rust regex crate.
-/// Also converts JS-style named groups `(?<name>...)` to Rust-style `(?P<name>...)`.
-fn js_regex_to_rust(pattern: &str) -> String {
-    let mut result = String::with_capacity(pattern.len());
-    let chars: Vec<char> = pattern.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '\\' && i + 1 < chars.len() {
-            match chars[i + 1] {
-                // JS allows \/ to escape forward slash — Rust regex doesn't need it
-                '/' => {
-                    result.push('/');
-                    i += 2;
-                }
-                // Pass through all other backslash sequences as-is
-                _ => {
-                    result.push('\\');
-                    result.push(chars[i + 1]);
-                    i += 2;
-                }
-            }
-        } else if chars[i] == '(' && i + 2 < chars.len() && chars[i + 1] == '?' {
-            // Check for JS named group (?<name>...) — convert to (?P<name>...)
-            // But NOT (?<=...) (lookbehind) or (?<!...) (negative lookbehind)
-            if chars[i + 2] == '<'
-                && i + 3 < chars.len()
-                && chars[i + 3] != '='
-                && chars[i + 3] != '!'
-            {
-                result.push_str("(?P<");
-                i += 3; // skip past "(?<"
-            } else {
-                result.push(chars[i]);
-                i += 1;
-            }
-        } else {
-            result.push(chars[i]);
-            i += 1;
-        }
-    }
-    result
 }
 
 /// Throw a `SyntaxError` with the given message and never return.
@@ -338,6 +309,12 @@ pub extern "C" fn js_regexp_new(
     // the fancy fallback. `get_or_compile_regex` populates FANCY_CACHE when
     // the regex crate fails but fancy-regex succeeds; check both here.
     {
+        if has_invalid_repeated_quantifier(pattern_str) {
+            throw_regexp_syntax_error(&format!(
+                "Invalid regular expression: /{}/: invalid pattern",
+                pattern_str
+            ));
+        }
         let translated = js_regex_to_rust(pattern_str);
         if regex::Regex::new(&translated).is_err() && fancy_regex::Regex::new(&translated).is_err()
         {
@@ -1107,26 +1084,36 @@ pub extern "C" fn js_regexp_exec(
             if let Some(fre) = fc.get(&(pat.to_string(), flags_str.to_string())) {
                 if let Ok(Some(caps)) = fre.captures(search_str) {
                     let full = caps.get(0).unwrap();
-                    // Build result: just the full match for now
                     let match_byte_offset = full.start() + search_start_byte;
                     let match_char_offset = str_data[..match_byte_offset].chars().count();
-                    let match_str = full.as_str();
-                    let arr = crate::array::js_array_alloc_with_length(1);
+                    let arr = crate::array::js_array_alloc(caps.len() as u32);
                     let scope = crate::gc::RuntimeHandleScope::new();
                     let arr_handle = scope.root_raw_mut_ptr(arr);
-                    let match_ptr = crate::string::js_string_from_bytes(
-                        match_str.as_ptr(),
-                        match_str.len() as u32,
-                    );
-                    let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-                    let match_bits =
-                        crate::value::STRING_TAG | (match_ptr as u64 & crate::value::POINTER_MASK);
-                    // GC_STORE_AUDIT(BARRIERED): regex exec fancy match slot uses the shared array slot-store helper.
-                    crate::array::store_array_slot(arr, 0, match_bits);
+                    (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length = caps.len() as u32;
+                    for i in 0..caps.len() {
+                        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                        if let Some(m) = caps.get(i) {
+                            let str_ptr = js_string_from_str(m.as_str());
+                            let nanboxed = js_nanbox_string(str_ptr as i64);
+                            // GC_STORE_AUDIT(BARRIERED): regex exec fancy capture slot uses the shared array slot-store helper.
+                            crate::array::store_array_slot(arr, i, nanboxed.to_bits());
+                        } else {
+                            let undefined = f64::from_bits(TAG_UNDEFINED);
+                            // GC_STORE_AUDIT(BARRIERED): regex exec fancy unmatched capture slot uses the shared array slot-store helper.
+                            crate::array::store_array_slot(arr, i, undefined.to_bits());
+                        }
+                    }
                     if global {
+                        let match_str = full.as_str();
                         (*re).last_index = (match_char_offset + match_str.chars().count()) as u32;
                     }
+                    set_exec_array_metadata(
+                        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                        str_data,
+                        match_char_offset as f64,
+                    );
                     LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = match_char_offset as f64);
+                    LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
                     return Some(arr_handle.get_raw_mut_ptr::<ArrayHeader>());
                 }
                 return Some(ptr::null_mut()); // fancy-regex tried but no match
@@ -1179,6 +1166,11 @@ pub extern "C" fn js_regexp_exec(
 
                 // Store .index in thread-local
                 LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = match_char_offset as f64);
+                set_exec_array_metadata(
+                    arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                    str_data,
+                    match_char_offset as f64,
+                );
 
                 // Build groups object if named captures exist
                 let group_names: Vec<(&str, Option<regex::Match>)> = regex
@@ -1264,6 +1256,13 @@ pub(crate) fn dispatch_regex_receiver_method(
             } else {
                 f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits())
             })
+        }
+        // `regex.toString()` → `/source/flags` (RegExp.prototype.toString).
+        "toString" => {
+            let s = js_regexp_to_string(re);
+            Some(f64::from_bits(
+                crate::value::js_nanbox_string(s as i64).to_bits(),
+            ))
         }
         _ => None,
     }
@@ -1364,6 +1363,17 @@ pub extern "C" fn js_regexp_get_flags(re: *const RegExpHeader) -> *mut StringHea
             js_string_from_str("")
         }
     }
+}
+
+/// `RegExp.prototype.toString()` — `/source/flags`. Used by both the
+/// `regex.toString()` method dispatch and ToString coercion (`String(re)`,
+/// template literals). Node never produces `"[object Object]"` for a RegExp.
+#[no_mangle]
+pub extern "C" fn js_regexp_to_string(re: *const RegExpHeader) -> *mut StringHeader {
+    let src = js_regexp_get_source(re);
+    let flg = js_regexp_get_flags(re);
+    let out = unsafe { format!("/{}/{}", string_as_str(src), string_as_str(flg)) };
+    js_string_from_str(&out)
 }
 
 /// Get regex.lastIndex — returns the current lastIndex value as f64

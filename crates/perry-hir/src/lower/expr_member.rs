@@ -48,7 +48,42 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
     result
 }
 
+/// #3946: lower a value-read of a `node:process` core property imported by
+/// name (`import { pid, arch } from "node:process"`) or read off a namespace
+/// local. Mirrors the dedicated `process.<prop>` variants used by the global
+/// member-access path so named/namespace forms agree with `process.<prop>`
+/// instead of resolving to `undefined`. Methods (`cwd`, `exit`, …) return
+/// `None` so the caller keeps lowering them to a callable native-module ref.
+pub(crate) fn lower_process_named_property(prop: &str) -> Option<Expr> {
+    Some(match prop {
+        "argv" => Expr::ProcessArgv,
+        "platform" => Expr::OsPlatform,
+        "arch" => Expr::OsArch,
+        "pid" => Expr::ProcessPid,
+        "ppid" => Expr::ProcessPpid,
+        "version" => Expr::ProcessVersion,
+        "versions" => Expr::ProcessVersions,
+        "env" => Expr::ProcessEnv,
+        "stdin" => Expr::ProcessStdin,
+        "stdout" => Expr::ProcessStdout,
+        "stderr" => Expr::ProcessStderr,
+        "execArgv" | "moduleLoadList" => Expr::Array(Vec::new()),
+        "title" => Expr::ProcessTitle,
+        "argv0" | "execPath" => Expr::IndexGet {
+            object: Box::new(Expr::ProcessArgv),
+            index: Box::new(Expr::Number(0.0)),
+        },
+        _ => return None,
+    })
+}
+
 fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Result<Expr> {
+    // #3896: capture-and-clear the call-callee marker so it applies only to THIS
+    // member (the immediate callee), not to nested member-object reads lowered
+    // below. The #463 read-gate below uses `member_is_call_callee` to keep
+    // rejecting `ns.foo()` while relaxing a bare `ns.foo` value read.
+    let member_is_call_callee = ctx.lowering_call_callee;
+    ctx.lowering_call_callee = false;
     // Issue #444: `import.meta.<prop>` folds directly to a literal at
     // lowering time. Routing through the bare-`import.meta` Object
     // synthesis hits a long-standing module-level NaN-boxing bug where
@@ -137,7 +172,18 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
 
     // Check if this is process.* property access
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
-        if obj_ident.sym.as_ref() == "process" {
+        // #3946: the global `process`, and also a namespace/default import
+        // local (`import * as p from "node:process"; p.pid` /
+        // `import p from "node:process"; p.pid`) both route through the same
+        // dedicated process-property lowering — otherwise the namespace form
+        // fell through to a generic native-module PropertyGet that resolved
+        // `pid`/`arch`/`platform`/… to `undefined`.
+        let is_process_obj = obj_ident.sym.as_ref() == "process"
+            || matches!(
+                ctx.lookup_native_module(obj_ident.sym.as_ref()),
+                Some(("process", None))
+            );
+        if is_process_obj {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 match prop_ident.sym.as_ref() {
                     "argv" => return Ok(Expr::ProcessArgv),
@@ -969,6 +1015,24 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "worker_threads"
+                    && matches!(class_name.as_str(), "MessagePort" | "BroadcastChannel")
+                    && matches!(
+                        property_name.as_str(),
+                        "postMessage"
+                            | "close"
+                            | "ref"
+                            | "unref"
+                            | "hasRef"
+                            | "addEventListener"
+                            | "removeEventListener"
+                    )
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "stream" && is_classic_stream_method_name(&property_name) {
                     // Classic Node streams materialize core stream and
                     // EventEmitter methods as closure-valued fields on the
@@ -988,6 +1052,34 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // method-value reads, not zero-arg native calls. Keep the
                     // PropertyGet shape so runtime handle-property dispatch
                     // can bind a callable to the socket handle.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "events"
+                    && (matches!(
+                        class_name.as_str(),
+                        "EventEmitter" | "EventEmitterAsyncResource"
+                    ) && (matches!(
+                        property_name.as_str(),
+                        "on" | "addListener"
+                            | "once"
+                            | "prependListener"
+                            | "prependOnceListener"
+                            | "off"
+                            | "removeListener"
+                            | "removeAllListeners"
+                            | "emit"
+                            | "listenerCount"
+                            | "listeners"
+                            | "rawListeners"
+                            | "eventNames"
+                            | "setMaxListeners"
+                            | "getMaxListeners"
+                    ) || (class_name == "EventEmitterAsyncResource"
+                        && property_name == "emitDestroy")))
+                {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         object: Box::new(object_expr),
@@ -1182,6 +1274,20 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "worker_threads"
+                    && class_name == "Worker"
+                    && is_worker_instance_value_property(&property_name)
+                {
+                    // `Worker` exposes data properties (`threadName`,
+                    // `resourceLimits`) and method-valued properties (`ref`,
+                    // `terminate`, ...). Bare reads must return those object
+                    // fields; only call expressions should dispatch through
+                    // the native method table.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if matches!(
                     module_name.as_str(),
                     "readable_stream"
@@ -1294,11 +1400,12 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     } else {
                         property_name
                     };
-                    let class_filter = if matches!(module_name.as_str(), "http" | "https") {
-                        Some(class_name.clone())
-                    } else {
-                        None
-                    };
+                    let class_filter =
+                        if matches!(module_name.as_str(), "http" | "https" | "events") {
+                            Some(class_name.clone())
+                        } else {
+                            None
+                        };
                     // For properties that map to FFI functions, generate a NativeMethodCall
                     // with no args (property getter)
                     let object_expr = lower_expr(ctx, &member.obj)?;
@@ -1444,6 +1551,19 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     }
 
     let mut object_expr = lower_expr(ctx, &member.obj)?;
+    let member_reads_global_fetch = matches!(
+        unwrap_transparent(member.obj.as_ref()),
+        ast::Expr::Ident(i) if i.sym.as_ref() == "globalThis"
+    ) && match &member.prop {
+        ast::MemberProp::Ident(p) => p.sym.as_ref() == "fetch",
+        ast::MemberProp::Computed(c) => {
+            matches!(c.expr.as_ref(), ast::Expr::Lit(ast::Lit::Str(s)) if s.value.as_str() == Some("fetch"))
+        }
+        ast::MemberProp::PrivateName(_) => false,
+    };
+    if member_reads_global_fetch {
+        ctx.uses_fetch = true;
+    }
 
     // #973 (5ddccbbc) rerouted bare built-in identifiers used as VALUES
     // (`Number`, `Object`, `Array`, ...) to `PropertyGet { GlobalGet(0),
@@ -1489,7 +1609,23 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         ast::MemberProp::Ident(p) if p.sym.as_ref() == "prototype"
                             || p.sym.as_ref() == "__proto__"
                     );
-                    if !outer_is_prototype_or_proto && property != "crypto" {
+                    let receiver_is_namespace_value = matches!(
+                        property.as_str(),
+                        "crypto" | "WebAssembly" | "localStorage" | "sessionStorage"
+                    );
+                    let outer_is_websocket_static = property == "WebSocket"
+                        && match &member.prop {
+                            ast::MemberProp::Ident(p) => matches!(
+                                p.sym.as_ref(),
+                                "CONNECTING" | "OPEN" | "CLOSING" | "CLOSED"
+                            ),
+                            ast::MemberProp::Computed(_) => true,
+                            _ => false,
+                        };
+                    if !outer_is_prototype_or_proto
+                        && !receiver_is_namespace_value
+                        && !outer_is_websocket_static
+                    {
                         object_expr = Expr::GlobalGet(0);
                     }
                 }
@@ -1554,6 +1690,29 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 if is_global_builtin {
                     if let Some(len) = crate::analysis::builtin_constructor_length(name) {
                         return Ok(Expr::Number(len as f64));
+                    }
+                }
+            }
+            if let Expr::PropertyGet {
+                object: inner,
+                property,
+            } = &object_expr
+            {
+                if matches!(inner.as_ref(), Expr::GlobalGet(0)) {
+                    if let ast::Expr::Member(inner_member) = member.obj.as_ref() {
+                        if let (ast::Expr::Ident(ns_ident), ast::MemberProp::Ident(method_ident)) =
+                            (inner_member.obj.as_ref(), &inner_member.prop)
+                        {
+                            let ns = ns_ident.sym.as_ref();
+                            let method = method_ident.sym.as_ref();
+                            if method == property.as_str() {
+                                if let Some(len) =
+                                    crate::analysis::builtin_static_function_length(ns, method)
+                                {
+                                    return Ok(Expr::Number(len as f64));
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1710,6 +1869,17 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             // #2309: defer when tree-shaking (sink armed for this node_modules
             // module); re-raised only if the module survives pruning.
             if !crate::try_defer_refusal(msg.clone(), member.span.lo.0) {
+                // #3896: a bare *value read* of an absent member on a Node
+                // builtin module namespace/default object is an ordinary
+                // property miss → `undefined` (e.g. `dns/promises.ADDRCONFIG`,
+                // which Node also doesn't export but reads as undefined). Calls
+                // (`ns.foo()`) keep rejecting — `lower_call` set the callee
+                // marker, so `member_is_call_callee` is true there. Only Node
+                // core modules relax; unenumerated npm packages keep the strict
+                // gate (and the tree-shaking defer above).
+                if !member_is_call_callee && perry_api_manifest::is_node_core_module(module) {
+                    return Ok(Expr::Undefined);
+                }
                 crate::lower_bail!(member.span, "{}", msg);
             }
         }
@@ -2250,6 +2420,22 @@ fn is_headers_method_name(prop: &str) -> bool {
             | "keys"
             | "set"
             | "values"
+    )
+}
+
+fn is_worker_instance_value_property(prop: &str) -> bool {
+    matches!(
+        prop,
+        "threadId"
+            | "threadName"
+            | "resourceLimits"
+            | "postMessage"
+            | "terminate"
+            | "ref"
+            | "unref"
+            | "on"
+            | "once"
+            | "off"
     )
 }
 

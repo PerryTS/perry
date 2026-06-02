@@ -108,6 +108,17 @@ impl SH for Expr {
             Expr::ProcessStderr => tag(h, 72),
             Expr::ProcessStdinSetRawMode(e) => { tag(h, 73); e.as_ref().hash(h); }
             Expr::ProcessStdinOn { event, handler } => { tag(h, 74); event.as_ref().hash(h); handler.as_ref().hash(h); }
+            Expr::ProcessStdinRemoveListener { event, handler } => { tag(h, 11241); event.as_ref().hash(h); handler.as_ref().hash(h); }
+            Expr::ProcessStdinLifecycle(method) => {
+                tag(h, 11242);
+                tag(h, match method {
+                    ProcessStdinLifecycleMethod::Pause => 1,
+                    ProcessStdinLifecycleMethod::Resume => 2,
+                    ProcessStdinLifecycleMethod::Unref => 3,
+                    ProcessStdinLifecycleMethod::Ref => 4,
+                    ProcessStdinLifecycleMethod::Destroy => 5,
+                });
+            }
             Expr::ProcessStdoutOn { event, handler } => { tag(h, 75); event.as_ref().hash(h); handler.as_ref().hash(h); }
             Expr::ProcessStdinIsTTY => tag(h, 76),
             Expr::ProcessStdoutIsTTY => tag(h, 77),
@@ -555,7 +566,7 @@ impl SH for Expr {
             Expr::ReflectDelete { target, key } => { tag(h, 436); target.as_ref().hash(h); key.as_ref().hash(h); }
             Expr::ReflectOwnKeys(e) => { tag(h, 437); e.as_ref().hash(h); }
             Expr::ReflectApply { func, this_arg, args, } => { tag(h, 438); func.as_ref().hash(h); this_arg.as_ref().hash(h); args.as_ref().hash(h); }
-            Expr::ReflectConstruct { target, args } => { tag(h, 439); target.as_ref().hash(h); args.as_ref().hash(h); }
+            Expr::ReflectConstruct { target, args, new_target } => { tag(h, 439); target.as_ref().hash(h); args.as_ref().hash(h); new_target.as_ref().hash(h); }
             Expr::ReflectDefineProperty { target, key, descriptor, } => { tag(h, 440); target.as_ref().hash(h); key.as_ref().hash(h); descriptor.as_ref().hash(h); }
             Expr::ReflectGetPrototypeOf(e) => { tag(h, 441); e.as_ref().hash(h); }
             Expr::ReflectSetPrototypeOf { target, proto } => { tag(h, 12230); target.as_ref().hash(h); proto.as_ref().hash(h); }
@@ -590,6 +601,18 @@ impl SH for Expr {
             Expr::WebAssemblyInstantiate(bytes) => { tag(h, 12028); bytes.as_ref().hash(h); }
             Expr::WebAssemblyCallExport { instance, name, args, } => { tag(h, 12029); instance.as_ref().hash(h); name.as_ref().hash(h); args.hash(h); }
             Expr::DynamicImport { paths, arg } => { tag(h, 12030); for p in paths { p.hash(h); } arg.as_ref().hash(h); }
+            Expr::WorkerNew { paths, filename, options } => {
+                tag(h, 12055);
+                for p in paths { p.hash(h); }
+                filename.as_ref().hash(h);
+                match options {
+                    Some(e) => {
+                        true.hash(h);
+                        e.as_ref().hash(h);
+                    }
+                    None => false.hash(h),
+                }
+            }
         }
     }
 }

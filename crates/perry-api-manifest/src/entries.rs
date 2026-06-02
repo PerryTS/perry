@@ -151,7 +151,6 @@ pub const NODE_SUBMODULES: &[&str] = &[
     "stream/consumers",
     "stream/web",
     "readline/promises",
-    "punycode.ucs2",
     "sys",
     "test",
     "test/reporters",
@@ -162,6 +161,11 @@ pub const NODE_SUBMODULES: &[&str] = &[
     "timers",
     "timers/promises",
 ];
+
+/// Internal manifest keys used by dispatch/property gates but not importable
+/// module specifiers.
+#[cfg(test)]
+pub(crate) const INTERNAL_MODULE_KEYS: &[&str] = &["punycode.ucs2"];
 
 /// Modules handled entirely by `perry-runtime` — the linker doesn't
 /// need to pull in `perry-stdlib` for these. Migrated from
@@ -1077,6 +1081,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("tls", "CLIENT_RENEG_WINDOW"),
     property("events", "default"),
     method_sig("events", "EventEmitter", false, None, &[], TypeSpec::Any),
+    method_sig(
+        "events",
+        "EventEmitterAsyncResource",
+        false,
+        None,
+        &[p_any("options")],
+        TypeSpec::Any,
+    ),
     method("events", "on", true, None),
     method("events", "emit", true, None),
     method("events", "removeListener", true, None),
@@ -1099,6 +1111,25 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("events", "setMaxListeners", true, None),
     method("events", "getMaxListeners", true, None),
     method("events", "domain", true, None),
+    method("events", "asyncId", true, Some("EventEmitterAsyncResource")),
+    method(
+        "events",
+        "triggerAsyncId",
+        true,
+        Some("EventEmitterAsyncResource"),
+    ),
+    method(
+        "events",
+        "asyncResource",
+        true,
+        Some("EventEmitterAsyncResource"),
+    ),
+    method(
+        "events",
+        "emitDestroy",
+        true,
+        Some("EventEmitterAsyncResource"),
+    ),
     // Module-level helpers (`events.once` / `events.getEventListeners` /
     // `events.listenerCount` / `events.getMaxListeners` /
     // `events.setMaxListeners`).
@@ -2482,6 +2513,18 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_any("p0")],
         TypeSpec::Any,
     ),
+    // #3899: `workerData` is a value-only export (resolved to the worker's data,
+    // or `null` on the main thread, by the value-shaped property arm in
+    // `native_module.rs`). The old `internal_method_sig` row made
+    // `module_has_symbol("worker_threads", "workerData")` return a `Method`, so
+    // codegen's `typeof <module>.<member>` fold reported `"function"` (parentPort,
+    // which has only a property row, correctly read `"object"`). Dropping the
+    // method row lets workerData read through `property("worker_threads",
+    // "workerData")` below, and `workerData()` throws a normal TypeError —
+    // matching Node. (`getWorkerData` is kept for now: it is not a public named
+    // export, but removing it entirely makes `worker_threads.getWorkerData()`
+    // trip the #463 compile gate instead of Node's runtime TypeError — that
+    // absent-member-read boundary is tracked by #3896.)
     internal_method_sig(
         "worker_threads",
         "getWorkerData",
@@ -2490,23 +2533,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[],
         TypeSpec::Any,
     ),
-    internal_method_sig(
-        "worker_threads",
-        "workerData",
-        false,
-        None,
-        &[],
-        TypeSpec::Any,
-    ),
-    internal_method_sig(
-        "worker_threads",
-        "parentPort",
-        false,
-        None,
-        &[],
-        TypeSpec::Any,
-    ),
-    method("worker_threads", "postMessage", true, None),
+    internal_method("worker_threads", "postMessage", true, None),
+    method("worker_threads", "on", true, Some("Worker")),
+    method("worker_threads", "once", true, Some("Worker")),
+    method("worker_threads", "off", true, Some("Worker")),
+    method("worker_threads", "terminate", true, Some("Worker")),
+    method("worker_threads", "ref", true, Some("Worker")),
+    method("worker_threads", "unref", true, Some("Worker")),
     // node:worker_threads — value-shaped exports (#2135). Perry doesn't
     // spawn JS workers, so the main thread is the only thread: isMainThread
     // is always true, threadId is 0, resourceLimits is an empty object.
@@ -2595,6 +2628,17 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "createHash", false, None),
     method("crypto", "createSign", false, None),
     method("crypto", "createVerify", false, None),
+    // #3955: the Hash/Hmac/Sign/Verify constructor classes are public
+    // `node:crypto` named exports in Node. The HIR call-lowering in
+    // `lower/expr_call/crypto.rs` already routes `Hash(...)`/`Hmac(...)`/
+    // `Sign(...)`/`Verify(...)` through the same path as their `create*`
+    // factories, so these entries just expose them on the ESM/named-import
+    // surface — `import { Hash } from "node:crypto"` previously failed `check`
+    // with "does not provide an export named 'Hash'".
+    method("crypto", "Hash", false, None),
+    method("crypto", "Hmac", false, None),
+    method("crypto", "Sign", false, None),
+    method("crypto", "Verify", false, None),
     class("crypto", "ECDH"),
     // #1367: X509Certificate — `new X509Certificate(pem|der)` + read-only
     // subject/issuer/validFrom/validTo/serialNumber/fingerprint/ca props.
@@ -2609,6 +2653,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "createPrivateKey", false, None),
     method("crypto", "createPublicKey", false, None),
     method("crypto", "generateKeyPairSync", false, None),
+    // #3927: `crypto.generateKeySync("aes"|"hmac", { length })` — the codegen
+    // dispatch (expr/calls.rs → js_crypto_generate_key_sync) and the secret-key
+    // KeyObject metadata (type/symmetricKeySize/export, fixed for 192/256 by
+    // #3930) were already complete; only this manifest row was missing, so the
+    // #463 unimplemented-API gate rejected the call before codegen ran.
+    method("crypto", "generateKeySync", false, None),
     method("crypto", "createHmac", false, None),
     // `crypto.createCipheriv(alg, key, iv)` / `createDecipheriv(...)` —
     // issue #1075. Registers a CipherHandle dispatched via the
@@ -2617,6 +2667,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // (no NATIVE_MODULE_TABLE entry — direct dispatch like createHash).
     method("crypto", "createCipheriv", false, None),
     method("crypto", "createDecipheriv", false, None),
+    // `crypto.Cipheriv` / `crypto.Decipheriv` — the constructor exports
+    // behind the `createCipheriv()` / `createDecipheriv()` factories
+    // (#3726). Node exposes them as enumerable constructor functions
+    // (length 4). Perry reads them as callable handles via
+    // `is_native_module_callable_export` / `native_callable_export_arity`;
+    // the actual cipher behavior continues to flow through the
+    // factory-helper codegen path.
+    class("crypto", "Cipheriv"),
+    class("crypto", "Decipheriv"),
     // `crypto.createSign(alg)` / `createVerify(alg)` — RSA PKCS#1 v1.5 sign /
     // verify over the SHA family (#1364). SignHandle dispatched like createHash
     // (no NATIVE_MODULE_TABLE entry — direct codegen dispatch in expr/calls.rs).
@@ -3056,6 +3115,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("test", "beforeEach", false, None),
     method("test", "afterEach", false, None),
     method("test", "run", false, None),
+    // #3719: Node's current `node:test` named exports — `expectFailure`
+    // (function) and `assert` (assertion namespace object with `register`).
+    method("test", "expectFailure", false, None),
+    property("test", "assert"),
     property("test", "mock"),
     method("test", "fn", false, Some("mock")),
     method("test", "method", false, Some("mock")),
@@ -3200,6 +3263,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // ===========================================================
     class("buffer", "Buffer"),
     class("events", "EventEmitter"),
+    class("events", "EventEmitterAsyncResource"),
     class("domain", "Domain"),
     class("ws", "WebSocketServer"),
     class("ws", "WebSocket"),
@@ -3383,7 +3447,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("fs", "constants"),
     // --- node:diagnostics_channel direct submodule.
     property("diagnostics_channel", "default"),
+    class("diagnostics_channel", "BoundedChannel"),
     class("diagnostics_channel", "Channel"),
+    method("diagnostics_channel", "boundedChannel", false, None),
     method("diagnostics_channel", "channel", false, None),
     method("diagnostics_channel", "hasSubscribers", false, None),
     method("diagnostics_channel", "subscribe", false, None),
@@ -3629,6 +3695,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("assert", "default", false, None),
     method("assert", "strict", false, None),
     property("assert", "strict"),
+    class("assert", "Assert"),
     class("assert", "AssertionError"),
     method("assert/strict", "ok", false, None),
     method("assert/strict", "fail", false, None),
@@ -3651,6 +3718,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("assert/strict", "default", false, None),
     method("assert/strict", "strict", false, None),
     property("assert/strict", "strict"),
+    class("assert/strict", "Assert"),
     class("assert/strict", "AssertionError"),
     property("dns", "ADDRCONFIG"),
     property("dns", "V4MAPPED"),
@@ -3679,7 +3747,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("dns", "LOADIPHLPAPI"),
     property("dns", "ADDRGETNETWORKPARAMS"),
     property("dns", "CANCELLED"),
+    property("dns", "default"),
     property("dns", "promises"),
+    property("dns/promises", "default"),
     property("dns/promises", "NODATA"),
     property("dns/promises", "FORMERR"),
     property("dns/promises", "SERVFAIL"),
@@ -3874,6 +3944,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("child_process", "spawn", false, None),
     method("child_process", "spawnSync", false, None),
     method("child_process", "fork", false, None),
+    property("child_process", "default"),
     // #1856: `ChildProcess` is the streaming-subprocess constructor; reading
     // it as a value yields `[Function: ChildProcess]`. `Stream` is not a real
     // `child_process` export (Node returns `undefined`) — registered so the
@@ -3929,7 +4000,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Resource timing entries are recorded through the perf_hooks timeline.
     internal_method("perf_hooks", "markResourceTiming", false, None),
     // timerify returns a wrapper that emits observer-visible function entries.
-    internal_method("perf_hooks", "timerify", false, None),
+    method("perf_hooks", "timerify", false, None),
     // #1336: monitorEventLoopDelay() / createHistogram() return a
     // Histogram-shaped object whose method/property reads route
     // through the internal `perf_histogram` namespace (not listed in
@@ -4002,6 +4073,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("v8", "takeCoverage", false, None),
     method("v8", "stopCoverage", false, None),
     method("v8", "setHeapSnapshotNearHeapLimit", false, None),
+    // #3904: modern V8 diagnostics/profiler named exports (function-valued in
+    // Node's ESM namespace). `getHeapSnapshot`/`writeHeapSnapshot` deeper
+    // behavior is tracked by #3140; here they're added to the export surface.
+    method("v8", "getCppHeapStatistics", false, None),
+    method("v8", "getHeapSnapshot", false, None),
+    method("v8", "isStringOneByteRepresentation", false, None),
+    method("v8", "queryObjects", false, None),
+    method("v8", "startCpuProfile", false, None),
+    method("v8", "writeHeapSnapshot", false, None),
     method("v8", "isBuildingSnapshot", true, Some("startupSnapshot")),
     method("v8", "addSerializeCallback", true, Some("startupSnapshot")),
     method(
@@ -4084,10 +4164,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("punycode", "version"),
     // #2607: the `ucs2` code-point helper sub-namespace. The sub-namespace
     // object is a `property` on `punycode`; its `decode`/`encode` methods carry
-    // the `punycode.ucs2` module key (mirrors `util/types`).
+    // the internal `punycode.ucs2` dispatch key. Node does not expose
+    // `node:punycode.ucs2` as an importable builtin module.
     property("punycode", "ucs2"),
-    method("punycode.ucs2", "decode", false, None),
-    method("punycode.ucs2", "encode", false, None),
+    internal_method("punycode.ucs2", "decode", false, None),
+    internal_method("punycode.ucs2", "encode", false, None),
     // --- http (perry-ext-http surface + classes the framework spec
     //     exposes). Both http and https route through the same crate. ---
     method("http", "createServer", false, None),
@@ -4098,6 +4179,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "get", false, None),
     property("http", "METHODS"),
     property("http", "STATUS_CODES"),
+    // #3712 — module-level helper/export tail. `maxHeaderSize` is the 16 KiB
+    // default constant; `globalAgent` is the shared http.Agent; the four
+    // helpers validate header tokens/values or are deterministic no-ops.
+    property("http", "maxHeaderSize"),
+    property("http", "globalAgent"),
+    method("http", "validateHeaderName", false, None),
+    method("http", "validateHeaderValue", false, None),
+    method("http", "setMaxIdleHTTPParsers", false, None),
+    method("http", "setGlobalProxyFromEnv", false, None),
     class("http", "Server"),
     class("http", "ClientRequest"),
     class("http", "IncomingMessage"),
@@ -4185,12 +4275,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("axios", "create", false, None),
     method("axios", "all", false, None),
     // --- node-fetch (perry-ext-fetch) — also exposes the Web Fetch
-    //     API classes (Headers, Request, Response, Blob). ---
+    //     API classes (Headers, Request, Response, Blob, FormData). ---
     method("node-fetch", "default", false, None),
     class("node-fetch", "Headers"),
     class("node-fetch", "Request"),
     class("node-fetch", "Response"),
     class("node-fetch", "Blob"),
+    class("node-fetch", "FormData"),
     // --- bignumber.js — alias surface for decimal.js. The wrapper
     //     dispatches to the same perry-ext-decimal implementation. ---
     class("bignumber.js", "BigNumber"),
@@ -4514,6 +4605,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("fetch", "Request"),
     class("fetch", "Response"),
     class("fetch", "Blob"),
+    class("fetch", "FormData"),
     // --- streams — Web Streams API umbrella (perry-ext-streams). ---
     class("streams", "ReadableStream"),
     class("streams", "WritableStream"),
@@ -4681,12 +4773,26 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http2", "getDefaultSettings", false, None),
     method("http2", "getPackedSettings", false, None),
     method("http2", "getUnpackedSettings", false, None),
+    // `http2.performServerHandshake(socket[, options])` — Node's module-level
+    // helper for adopting an already-connected socket as an HTTP/2 server
+    // session (#3720). Exposed as a callable export (length 1) so the value
+    // read matches Node's `typeof` / `name` / `length` shape; wired through
+    // `is_native_module_callable_export` / `native_callable_export_arity`.
+    method("http2", "performServerHandshake", false, None),
+    // #3905: remaining public ESM export surface — the non-secure server
+    // factory, the client-session factory, and the module default (namespace
+    // object). `createServer` is already runtime-callable; these unblock the
+    // named/default imports that Node accepts.
+    method("http2", "createServer", false, None),
+    method("http2", "connect", false, None),
+    property("http2", "default"),
     internal_class("http2", "Http2SecureServer"),
     class("http2", "Http2ServerRequest"),
     class("http2", "Http2ServerResponse"),
-    // `http2.constants` — the frozen object of HTTP2_HEADER_* / NGHTTP2_* /
+    // `http2.constants` — the object of HTTP2_HEADER_* / NGHTTP2_* /
     // HTTP_STATUS_* values. `@hono/node-server` imports it by name (#1651).
     property("http2", "constants"),
+    property("http2", "sensitiveHeaders"),
     // `@perryts/google-auth` no longer ships in the bundled manifest —
     // since v0.5.1015 it lives at https://github.com/PerryTS/google-auth
     // and is installed via `npm install @perryts/google-auth`. The

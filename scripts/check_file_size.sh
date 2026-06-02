@@ -90,11 +90,18 @@ crates/perry-runtime/src/object/native_call_method.rs
 # loop). Extracting that pass is high-risk surgery deferred to the codegen
 # split tracked under #1435.
 crates/perry-codegen/src/codegen/mod.rs
+# Global object bootstrap crossed the gate on current main; split constructor
+# tables/population helpers alongside the runtime object cleanup tracked in #1435.
+crates/perry-runtime/src/object/global_this.rs
 # Central class registry — class IDs, prototypes, parent-closure
 # scanning, and field-init replay. Crossed the limit after the
 # #1787 instance-field init replay (#2074) + web-stream class
 # wiring (#1641/#2110). Split tracked under #1435.
 crates/perry-runtime/src/object/class_registry.rs
+# Global object/bootstrap native singleton table crossed the current-main
+# threshold after recent builtin surface additions. Splitting constructor and
+# singleton installers into sibling modules is tracked under #1435.
+crates/perry-runtime/src/object/global_this.rs
 # Native-module namespace property/method dispatcher
 # (`get_native_module_constant` is one big match — one arm per
 # stdlib namespace, every property literal inline). Splitting per
@@ -103,6 +110,9 @@ crates/perry-runtime/src/object/class_registry.rs
 # Crossed the limit at 2014 LOC after the #2135 worker_threads
 # value-export arm. Split tracked under #1435.
 crates/perry-runtime/src/object/native_module.rs
+# globalThis constructor/namespace registry; current main crossed the threshold
+# after WebCrypto + DOM/Event global exposure landed. Split tracked under #1435.
+crates/perry-runtime/src/object/global_this.rs
 # console.log / util.inspect value formatter (two big per-tag dispatch
 # towers: format_jsvalue + format_jsvalue_for_json). main had already
 # grown it to 1999 LOC; the #2089 Date-as-reference-type inspect arms
@@ -110,6 +120,23 @@ crates/perry-runtime/src/object/native_module.rs
 # ObjectHeader) tipped it over. Splitting the two towers into sibling
 # modules is tracked under #1435.
 crates/perry-runtime/src/builtins/formatting.rs
+# Node core native-lowering table; current main crossed the threshold after
+# namespace alias exposure work. Split tracked under #1435.
+crates/perry-codegen/src/lower_call/native_table/node_core.rs
+# fs directory glob/watch helpers; current main crossed the threshold after
+# namespace-alias exposure work. Split tracked under #1435 with the other
+# runtime file-size cleanups.
+crates/perry-runtime/src/fs/dir_glob_watch.rs
+# node:fs module root — crossed the gate after the final fs parity
+# surface reconciliation (#3969) bumped its dispatch tower by a few lines.
+# Splitting tracked under #1435 with the other runtime file-size cleanups.
+crates/perry-runtime/src/fs/mod.rs
+# stdlib native dispatch table; current main crossed the threshold after
+# namespace-alias exposure work. Split tracked under #1435.
+crates/perry-stdlib/src/common/dispatch.rs
+# SQLite stdlib shim remains a generated-feel native adapter table; current
+# main crossed the threshold before this PR. Split tracked under #1435.
+crates/perry-stdlib/src/sqlite.rs
 # WHATWG Streams (ReadableStream/WritableStream/TransformStream + reader/
 # writer/controller dispatch). Crossed the limit at 2088 LOC after the
 # web-stream correctness batch (#2450 pipeTo preventClose, #2455 BYOB-on-
@@ -125,6 +152,11 @@ crates/perry-codegen/tests/native_proof_regressions.rs
 # `process_allowed_node_flags_literal`. Splitting the per-namespace literal
 # builders into a sibling module is tracked under #1435.
 crates/perry-hir/src/lower/expr_member.rs
+# Expression lowering entry point — crossed the 2000-line gate when the
+# CJS-default-import allow-list grew to cover all node-core namespaces with
+# `default` namespace shims (#3903). Splitting the per-namespace dispatch
+# helpers into a sibling module is tracked under #1435.
+crates/perry-hir/src/lower/lower_expr.rs
 # node:process surface (env/argv/hrtime/cpuUsage/resourceUsage + EventEmitter
 # wiring + warning/deprecation emit). Crossed the limit at 2047 LOC after the
 # argument-validation batch landed on main without a split (#3493 setuid/setgid/
@@ -141,6 +173,19 @@ crates/perry-stdlib/src/common/dispatch.rs
 # sqlite stdlib remains a monolithic binding surface on current main; split
 # statements/sessions/backups/functions in the sqlite cleanup tracked in #1435.
 crates/perry-stdlib/src/sqlite.rs
+# Node core native table crossed the limit on current main after namespace
+# alias additions; split per namespace in the native-table cleanup tracked in #1435.
+crates/perry-codegen/src/lower_call/native_table/node_core.rs
+# globalThis constructor/prototype registry is over the limit on current main;
+# splitting constructor tables from property dispatch is tracked under #1435.
+crates/perry-runtime/src/object/global_this.rs
+# Trunk of the #1103 object.rs split (shape/transition/overflow caches, GC root
+# scanners, implicit-this, descriptor tables). The companion behavior lives in
+# the 30+ `object/` siblings already peeled off; the trunk crossed 2000 LOC on
+# current main after the binary-data / Date inspect alignment batch
+# (#4039/#4040/#4041). Peeling the cache + root-scanner groups into siblings is
+# tracked under #1435.
+crates/perry-runtime/src/object/mod.rs
 EOF
 )
 

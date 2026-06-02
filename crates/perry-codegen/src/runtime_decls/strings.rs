@@ -270,8 +270,18 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_array_concat_new", I64, &[I64, I64]);
     module.declare_function("js_error_new", I64, &[]);
     module.declare_function("js_error_new_with_message", I64, &[I64]);
+    module.declare_function("js_error_new_from_value", I64, &[DOUBLE]);
+    module.declare_function("js_error_new_kind_from_value", I64, &[I32, DOUBLE]);
+    module.declare_function("js_error_new_with_cause_from_value", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_error_new_kind_with_options_from_value",
+        I64,
+        &[I32, DOUBLE, DOUBLE],
+    );
     // `new assert.AssertionError({...})` — Expr::NewDynamic special-case.
     module.declare_function("js_assert_assertion_error_ctor", DOUBLE, &[DOUBLE]);
+    // `new assert.Assert(options)` — Expr::NewDynamic special-case.
+    module.declare_function("js_assert_assert_ctor", DOUBLE, &[DOUBLE]);
     // Issue #462: thrown by PropertyGet codegen on undefined/null receiver.
     // Helper diverges (`-> !`); declared as void-return for LLVM purposes.
     module.declare_function(
@@ -494,6 +504,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_trim_start", I64, &[I64]);
     module.declare_function("js_string_trim_end", I64, &[I64]);
     module.declare_function("js_string_char_at", I64, &[I64, I32]);
+    // #3987: `s[key]` canonical-index read — returns the char (NaN-boxed string)
+    // for a valid array index, else NaN-boxed `undefined`. Takes the raw key.
+    module.declare_function("js_string_index_get", DOUBLE, &[I64, DOUBLE]);
     // #2787: NaN-safe JS index coercion (undefined/NaN -> 0, trunc, clamp) for
     // the char-access methods, replacing a raw `fptosi` that is UB on a NaN.
     module.declare_function("js_string_index_to_i32", I32, &[DOUBLE]);
@@ -563,6 +576,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_inspect", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_debuglog", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_diff", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_util_inherits", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_is_deep_strict_equal", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_strip_vt_control_characters", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_style_text", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
@@ -736,6 +750,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // readline (#347) — Phase 2 raw-mode toggle + stdin event handlers.
     module.declare_function("js_readline_set_raw_mode", DOUBLE, &[DOUBLE]);
     module.declare_function("js_readline_stdin_on", VOID, &[I64, I64]);
+    module.declare_function("js_readline_stdin_remove_listener", DOUBLE, &[I64, I64]);
+    module.declare_function("js_readline_stdin_pause", DOUBLE, &[]);
+    module.declare_function("js_readline_stdin_resume", DOUBLE, &[]);
+    module.declare_function("js_readline_stdin_unref", DOUBLE, &[]);
+    module.declare_function("js_readline_stdin_ref", DOUBLE, &[]);
+    module.declare_function("js_readline_stdin_destroy", DOUBLE, &[]);
     // tty (#347 Phase 3) — isatty + stdout dimensions + resize handler.
     module.declare_function("js_tty_isatty", DOUBLE, &[DOUBLE]);
     module.declare_function("js_tty_read_stream_new", DOUBLE, &[DOUBLE]);
@@ -967,6 +987,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // is a runtime expression (function arg holding class ref).
     module.declare_function("js_instanceof_dynamic", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_register_class_extends_error", VOID, &[I32]);
+    module.declare_function("js_register_class_extends_data_view", VOID, &[I32]);
     module.declare_function("js_register_class_id", VOID, &[I32]);
     // #1021 NestJS: surface Perry class names to V8 so `metatype.name`
     // is non-empty. Codegen emits one call per registered class id at
@@ -1051,6 +1072,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_throw_symbol_constructor_type_error", DOUBLE, &[]);
     module.declare_function("js_throw_bigint_constructor_type_error", DOUBLE, &[]);
     module.declare_function("js_throw_math_constructor_type_error", DOUBLE, &[]);
+    module.declare_function("js_webcrypto_illegal_constructor", DOUBLE, &[]);
     module.declare_function("js_throw_type_error_const_assignment", DOUBLE, &[DOUBLE]);
     module.declare_function(
         "js_throw_reference_error_unresolvable_assignment",

@@ -222,8 +222,13 @@ pub extern "C" fn js_abort_controller_abort_reason(controller: *mut ObjectHeader
         }
         // Set aborted = true on signal
         js_object_set_field_f64(signal, 0, f64::from_bits(TAG_TRUE_AC));
-        // Store reason (defaults to undefined); if user passes a string or other value we keep it as-is.
-        js_object_set_field_f64(signal, 1, reason);
+        // Node defaults omitted/undefined reasons to a DOMException AbortError.
+        let effective = if reason.to_bits() == TAG_UNDEFINED_AC {
+            crate::event_target::abort_dom_exception_value()
+        } else {
+            reason
+        };
+        js_object_set_field_f64(signal, 1, effective);
         // Fire listeners
         fire_abort_listeners(signal);
     }
@@ -332,7 +337,7 @@ pub extern "C" fn js_abort_signal_abort(reason: f64) -> *mut ObjectHeader {
     let reason_bits = reason.to_bits();
     // Node defaults the reason to an AbortError when none is supplied.
     let effective = if reason_bits == TAG_UNDEFINED_AC {
-        js_abort_error_value()
+        crate::event_target::abort_dom_exception_value()
     } else {
         reason
     };

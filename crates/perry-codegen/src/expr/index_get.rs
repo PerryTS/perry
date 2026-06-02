@@ -541,13 +541,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let idx_d = lower_expr(ctx, index)?;
                 let blk = ctx.block();
                 let s_handle = unbox_to_i64(blk, &s_box);
-                let idx_i32 = blk.fptosi(DOUBLE, &idx_d, I32);
-                let result = blk.call(
-                    I64,
-                    "js_string_char_at",
-                    &[(I64, &s_handle), (I32, &idx_i32)],
-                );
-                return Ok(nanbox_string_inline(blk, &result));
+                // #3987: route through the canonical-index runtime helper (it
+                // takes the raw NaN-boxed key, not an `fptosi`'d i32) so a valid
+                // array index returns its char and every non-canonical key
+                // (`NaN`, `1.5`, negatives, OOB, `"01"`, non-numeric strings)
+                // returns `undefined` — matching ECMAScript / Node — instead of
+                // truncating the index and returning `""` for OOB.
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_string_index_get",
+                    &[(I64, &s_handle), (DOUBLE, &idx_d)],
+                ));
             }
             // Issue #514: when the receiver's static type is genuinely
             // unknown (`Type::Any` / `Type::Unknown`) and the index is

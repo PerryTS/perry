@@ -140,12 +140,7 @@ pub(crate) unsafe fn fs_open_sync_result(
     let (opts, append_mode) = open_options_from_flags(flags_value);
     match opts.open(&path_str) {
         Ok(file) => {
-            let fd = NEXT_FD.with(|n| {
-                let mut n = n.borrow_mut();
-                let fd = *n;
-                *n += 1;
-                fd
-            });
+            let fd = allocate_synthetic_fd();
             FD_REGISTRY.with(|r| {
                 r.borrow_mut().insert(fd, file);
             });
@@ -715,20 +710,61 @@ pub(crate) fn dir_id_of(closure: *const ClosureHeader) -> usize {
     crate::closure::js_closure_get_capture_ptr(closure, 0) as usize
 }
 
-pub(crate) fn dir_read_next(id: usize) -> f64 {
-    const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+fn dir_closed_error_value() -> f64 {
+    let message = "Directory handle was closed";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, "ERR_DIR_CLOSED");
+    let err = crate::error::js_error_new_with_message(msg);
+    crate::value::js_nanbox_pointer(err as i64)
+}
+
+pub(crate) fn dir_mark_closed(id: usize) {
+    DIR_REGISTRY.with(|r| {
+        if let Some(state) = r.borrow_mut().get_mut(&id) {
+            state.closed = true;
+        }
+    });
+}
+
+pub(crate) fn dir_close_result(id: usize) -> Result<(), f64> {
     DIR_REGISTRY.with(|r| {
         let mut reg = r.borrow_mut();
         let Some(state) = reg.get_mut(&id) else {
-            return f64::from_bits(TAG_NULL);
+            return Err(dir_closed_error_value());
         };
-        if state.closed || state.index >= state.entries.len() {
-            return f64::from_bits(TAG_NULL);
+        if state.closed {
+            return Err(dir_closed_error_value());
+        }
+        state.closed = true;
+        Ok(())
+    })
+}
+
+pub(crate) fn dir_read_next_result(id: usize) -> Result<Option<f64>, f64> {
+    DIR_REGISTRY.with(|r| {
+        let mut reg = r.borrow_mut();
+        let Some(state) = reg.get_mut(&id) else {
+            return Err(dir_closed_error_value());
+        };
+        if state.closed {
+            return Err(dir_closed_error_value());
+        }
+        if state.index >= state.entries.len() {
+            return Ok(None);
         }
         let value = state.entries[state.index];
         state.index += 1;
-        value
+        Ok(Some(value))
     })
+}
+
+pub(crate) fn dir_read_next(id: usize) -> f64 {
+    const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+    match dir_read_next_result(id) {
+        Ok(Some(value)) => value,
+        Ok(None) => f64::from_bits(TAG_NULL),
+        Err(err) => crate::exception::js_throw(err),
+    }
 }
 
 pub(crate) fn make_dir_method(id: usize, func: *const u8) -> f64 {
@@ -743,59 +779,262 @@ pub(crate) extern "C" fn dir_read_sync_impl(closure: *const ClosureHeader) -> f6
 
 pub(crate) extern "C" fn dir_close_sync_impl(closure: *const ClosureHeader) -> f64 {
     let id = dir_id_of(closure);
-    DIR_REGISTRY.with(|r| {
-        if let Some(state) = r.borrow_mut().get_mut(&id) {
-            state.closed = true;
-        }
-    });
-    f64::from_bits(crate::value::TAG_UNDEFINED)
+    match dir_close_result(id) {
+        Ok(()) => f64::from_bits(crate::value::TAG_UNDEFINED),
+        Err(err) => crate::exception::js_throw(err),
+    }
 }
 
 pub(crate) extern "C" fn dir_read_impl(closure: *const ClosureHeader, callback: f64) -> f64 {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
-    let entry = dir_read_next(dir_id_of(closure));
+    let entry = dir_read_next_result(dir_id_of(closure));
     let cb = extract_closure_ptr(callback);
     if !cb.is_null() {
-        crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), entry);
+        match entry {
+            Ok(Some(value)) => {
+                crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), value);
+            }
+            Ok(None) => {
+                crate::closure::js_closure_call2(
+                    cb,
+                    f64::from_bits(TAG_NULL),
+                    f64::from_bits(TAG_NULL),
+                );
+            }
+            Err(err) => {
+                crate::closure::js_closure_call2(cb, err, f64::from_bits(TAG_NULL));
+            }
+        }
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    promise_value_fs(entry)
+    match entry {
+        Ok(Some(value)) => promise_value_fs(value),
+        Ok(None) => promise_value_fs(f64::from_bits(TAG_NULL)),
+        Err(err) => promise_rejected_fs(err),
+    }
 }
 
 pub(crate) extern "C" fn dir_close_impl(closure: *const ClosureHeader, callback: f64) -> f64 {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
-    let _ = dir_close_sync_impl(closure);
+    let closed = dir_close_result(dir_id_of(closure));
     let cb = extract_closure_ptr(callback);
     if !cb.is_null() {
-        crate::closure::js_closure_call1(cb, f64::from_bits(TAG_NULL));
+        let err = match closed {
+            Ok(()) => f64::from_bits(TAG_NULL),
+            Err(err) => err,
+        };
+        crate::closure::js_closure_call1(cb, err);
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    match closed {
+        Ok(()) => promise_undefined_fs(),
+        Err(err) => promise_rejected_fs(err),
+    }
+}
+
+fn dir_iterator_method(id: usize, self_value: f64, func: *const u8) -> f64 {
+    let closure = crate::closure::js_closure_alloc(func, 2);
+    crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::js_closure_set_capture_f64(closure, 1, self_value);
+    f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
+}
+
+fn dir_iterator_id_of(closure: *const ClosureHeader) -> usize {
+    crate::closure::js_closure_get_capture_ptr(closure, 0) as usize
+}
+
+fn dir_iterator_self_value(closure: *const ClosureHeader) -> f64 {
+    crate::closure::js_closure_get_capture_f64(closure, 1)
+}
+
+fn dir_iterator_result(value: f64, done: bool) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 2);
+    let value_key = js_string_from_bytes(b"value".as_ptr(), b"value".len() as u32);
+    let done_key = js_string_from_bytes(b"done".as_ptr(), b"done".len() as u32);
+    crate::object::js_object_set_field_by_name(obj, value_key, value);
+    crate::object::js_object_set_field_by_name(
+        obj,
+        done_key,
+        f64::from_bits(crate::value::JSValue::bool(done).bits()),
+    );
+    f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits())
+}
+
+extern "C" fn dir_iterator_next_impl(closure: *const ClosureHeader) -> f64 {
+    match dir_read_next_result(dir_iterator_id_of(closure)) {
+        Ok(Some(value)) => promise_value_fs(dir_iterator_result(value, false)),
+        Ok(None) => {
+            dir_mark_closed(dir_iterator_id_of(closure));
+            promise_value_fs(dir_iterator_result(
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+                true,
+            ))
+        }
+        Err(err) => promise_rejected_fs(err),
+    }
+}
+
+extern "C" fn dir_iterator_return_impl(closure: *const ClosureHeader) -> f64 {
+    dir_mark_closed(dir_iterator_id_of(closure));
+    promise_value_fs(dir_iterator_result(
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+        true,
+    ))
+}
+
+extern "C" fn dir_iterator_self_impl(closure: *const ClosureHeader) -> f64 {
+    dir_iterator_self_value(closure)
+}
+
+extern "C" fn dir_entries_impl(closure: *const ClosureHeader) -> f64 {
+    unsafe { build_dir_iterator_object(dir_id_of(closure)) }
+}
+
+extern "C" fn dir_dispose_impl(closure: *const ClosureHeader) -> f64 {
+    dir_mark_closed(dir_id_of(closure));
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+extern "C" fn dir_async_dispose_impl(closure: *const ClosureHeader) -> f64 {
+    dir_mark_closed(dir_id_of(closure));
     promise_undefined_fs()
+}
+
+extern "C" fn dir_path_getter_impl(closure: *const ClosureHeader) -> f64 {
+    crate::closure::js_closure_get_capture_f64(closure, 0)
+}
+
+unsafe fn install_dir_symbol(target: f64, short_name: &str, method: f64) {
+    let symbol = crate::symbol::well_known_symbol(short_name);
+    if symbol.is_null() {
+        return;
+    }
+    let symbol_value = f64::from_bits(crate::value::JSValue::pointer(symbol as *const u8).bits());
+    crate::symbol::js_object_set_symbol_property(target, symbol_value, method);
+}
+
+unsafe fn build_dir_iterator_object(id: usize) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 2);
+    let self_value = f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits());
+    let set = |name: &str, v: f64| {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        crate::object::js_object_set_field_by_name(obj, key, v);
+    };
+    set(
+        "next",
+        dir_iterator_method(id, self_value, dir_iterator_next_impl as *const u8),
+    );
+    set(
+        "return",
+        dir_iterator_method(id, self_value, dir_iterator_return_impl as *const u8),
+    );
+    install_dir_symbol(
+        self_value,
+        "asyncIterator",
+        dir_iterator_method(id, self_value, dir_iterator_self_impl as *const u8),
+    );
+    self_value
+}
+
+unsafe fn install_dir_proto_method(
+    proto: *mut crate::object::ObjectHeader,
+    name: &str,
+    value: f64,
+) {
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    crate::object::js_object_set_field_by_name(proto, key, value);
+    crate::object::set_property_attrs(
+        proto as usize,
+        name.to_string(),
+        crate::object::PropertyAttrs::new(true, false, true),
+    );
+}
+
+unsafe fn install_dir_proto_path(proto: *mut crate::object::ObjectHeader, path: &str) {
+    crate::closure::js_register_closure_arity(dir_path_getter_impl as *const u8, 0);
+    let path_ptr = js_string_from_bytes(path.as_ptr(), path.len() as u32);
+    let path_value = crate::value::js_nanbox_string(path_ptr as i64);
+    let getter = crate::closure::js_closure_alloc(dir_path_getter_impl as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(getter, 0, path_value);
+    let getter_value = crate::value::js_nanbox_pointer(getter as i64);
+
+    let key = crate::string::js_string_from_bytes(b"path".as_ptr(), b"path".len() as u32);
+    crate::object::js_object_set_field_by_name(proto, key, getter_value);
+    crate::object::set_accessor_descriptor(
+        proto as usize,
+        "path".to_string(),
+        crate::object::AccessorDescriptor {
+            get: getter_value.to_bits(),
+            set: 0,
+        },
+    );
+    crate::object::set_property_attrs(
+        proto as usize,
+        "path".to_string(),
+        crate::object::PropertyAttrs::new(true, false, true),
+    );
 }
 
 pub(crate) unsafe fn build_dir_object(id: usize, path: &str) -> f64 {
     crate::closure::js_register_closure_arity(dir_read_impl as *const u8, 1);
     crate::closure::js_register_closure_arity(dir_close_impl as *const u8, 1);
-    let obj = crate::object::js_object_alloc(CLASS_ID_FS_DIR, 6);
-    let set = |name: &str, v: f64| {
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        crate::object::js_object_set_field_by_name(obj, key, v);
-    };
-    let path_ptr = js_string_from_bytes(path.as_ptr(), path.len() as u32);
-    set("path", crate::value::js_nanbox_string(path_ptr as i64));
-    set(
+    crate::closure::js_register_closure_arity(dir_entries_impl as *const u8, 0);
+    crate::closure::js_register_closure_arity(dir_dispose_impl as *const u8, 0);
+    crate::closure::js_register_closure_arity(dir_async_dispose_impl as *const u8, 0);
+    crate::closure::js_register_closure_arity(dir_read_sync_impl as *const u8, 0);
+    crate::closure::js_register_closure_arity(dir_close_sync_impl as *const u8, 0);
+    crate::closure::js_register_closure_arity(dir_iterator_next_impl as *const u8, 0);
+    crate::closure::js_register_closure_arity(dir_iterator_return_impl as *const u8, 0);
+    crate::closure::js_register_closure_arity(dir_iterator_self_impl as *const u8, 0);
+
+    let obj = crate::object::js_object_alloc(CLASS_ID_FS_DIR, 0);
+    let self_value = f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits());
+    let proto = crate::object::js_object_alloc(0, 7);
+    let proto_value = f64::from_bits(crate::value::JSValue::pointer(proto as *const u8).bits());
+    crate::object::prototype_chain::object_set_static_prototype(
+        obj as usize,
+        proto_value.to_bits(),
+    );
+
+    install_dir_proto_method(
+        proto,
+        "constructor",
+        crate::object::bound_native_callable_export_value("fs", "Dir"),
+    );
+    install_dir_proto_path(proto, path);
+    install_dir_proto_method(
+        proto,
         "readSync",
         make_dir_method(id, dir_read_sync_impl as *const u8),
     );
-    set(
+    install_dir_proto_method(
+        proto,
         "closeSync",
         make_dir_method(id, dir_close_sync_impl as *const u8),
     );
-    set("read", make_dir_method(id, dir_read_impl as *const u8));
-    set("close", make_dir_method(id, dir_close_impl as *const u8));
-    set(
-        "Symbol.asyncIterator",
-        f64::from_bits(crate::value::TAG_UNDEFINED),
+    install_dir_proto_method(
+        proto,
+        "read",
+        make_dir_method(id, dir_read_impl as *const u8),
     );
-    f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits())
+    install_dir_proto_method(
+        proto,
+        "close",
+        make_dir_method(id, dir_close_impl as *const u8),
+    );
+
+    let entries = make_dir_method(id, dir_entries_impl as *const u8);
+    install_dir_proto_method(proto, "entries", entries);
+    install_dir_symbol(proto_value, "asyncIterator", entries);
+    install_dir_symbol(
+        proto_value,
+        "dispose",
+        make_dir_method(id, dir_dispose_impl as *const u8),
+    );
+    install_dir_symbol(
+        proto_value,
+        "asyncDispose",
+        make_dir_method(id, dir_async_dispose_impl as *const u8),
+    );
+    self_value
 }

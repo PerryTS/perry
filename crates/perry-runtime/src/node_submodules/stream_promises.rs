@@ -167,11 +167,18 @@ fn invalid_pipeline_body_error_value(body: f64) -> f64 {
     type_error_value_with_code(&message, "ERR_INVALID_ARG_TYPE")
 }
 
-pub(crate) fn signal_reason(signal: f64) -> f64 {
-    match get_object_property(signal, b"reason") {
-        Some(reason) if !JSValue::from_bits(reason.to_bits()).is_undefined() => reason,
-        _ => abort_error_value(),
-    }
+/// The error used to reject a pending `timers/promises` or `stream/promises`
+/// operation when its `AbortSignal` fires.
+///
+/// #3870-adjacent (abort-error-shape): Node ALWAYS rejects these with a fresh
+/// `AbortError` (`name: "AbortError"`, `message: "The operation was aborted"`,
+/// `code: "ABORT_ERR"`) and ignores `signal.reason` entirely — even a custom
+/// reason passed to `controller.abort(reason)` or the `TimeoutError` from
+/// `AbortSignal.timeout()`. Previously this returned `signal.reason` when set,
+/// which for a default `controller.abort()` is a DOMException whose `.code` is
+/// the numeric `20`, diverging from Node's string `"ABORT_ERR"`.
+pub(crate) fn signal_reason(_signal: f64) -> f64 {
+    abort_error_value()
 }
 
 extern "C" fn stream_promises_abort_listener(closure: *const ClosureHeader) -> f64 {

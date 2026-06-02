@@ -21590,14 +21590,6 @@ msgstr "`isUUID` — モジュール"
 msgid "`getWorkerData` — module"
 msgstr "`getWorkerData` — モジュール"
 
-#: src/api/reference.md:1126
-msgid "`parentPort` — module"
-msgstr "`parentPort` — モジュール"
-
-#: src/api/reference.md:1127
-msgid "`postMessage` — instance"
-msgstr "`postMessage` — インスタンス"
-
 #: src/api/reference.md:1128
 msgid "`workerData` — module"
 msgstr "`workerData` — モジュール"

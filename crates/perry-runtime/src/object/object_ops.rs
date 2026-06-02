@@ -2,10 +2,6 @@
 //! `Object.fromEntries`/`groupBy`/`is`/`hasOwn`/`create`/`freeze`/`seal`/
 //! `defineProperty`/`getOwnPropertyDescriptor`/`getPrototypeOf`/... plus
 //! the `js_object_*` helpers backing them.
-//!
-//! Split out of `object.rs` (issue #1103). Pure relocation. The
-//! `globalThis` singleton subsystem stays in the parent module because
-//! it is also consumed by class/builtin-resolution code there.
 
 use super::*;
 
@@ -529,11 +525,39 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
                     .unwrap_or(false);
                 return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
             }
+            if ptr >= crate::gc::GC_HEADER_SIZE + 0x1000
+                && crate::object::is_valid_obj_ptr(ptr as *const u8)
+            {
+                let gc_header =
+                    (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                if (*gc_header).obj_type == crate::gc::GC_TYPE_ERROR {
+                    let present = super::has_own_helpers::str_from_string_header(key_str)
+                        .map(|key| {
+                            crate::error::js_error_has_own_property(
+                                ptr as *mut crate::error::ErrorHeader,
+                                key,
+                            )
+                        })
+                        .unwrap_or(false);
+                    return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+                }
+            }
         }
 
         let obj = extract_obj_ptr(obj_value);
         if obj.is_null() || (obj as usize) < 0x10000 {
             return f64::from_bits(TAG_FALSE);
+        }
+
+        if (*obj).class_id == super::native_module::NATIVE_MODULE_CLASS_ID {
+            let present = super::native_module::read_native_module_name(obj)
+                .as_deref()
+                .zip(super::has_own_helpers::str_from_string_header(key_str))
+                .map(|(module, key)| {
+                    super::native_module::native_module_has_enumerable_key(module, key)
+                })
+                .unwrap_or(false);
+            return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
 
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
@@ -548,6 +572,16 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             }
         }
 
+        if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+            let Some(key_name) = super::has_own_helpers::str_from_string_header(key_str) else {
+                return f64::from_bits(TAG_FALSE);
+            };
+            let present = read_native_module_name(obj)
+                .as_deref()
+                .is_some_and(|module_name| native_module_has_enumerable_key(module_name, key_name));
+            return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+        }
+
         if own_key_present(obj, key_str) {
             f64::from_bits(TAG_TRUE)
         } else {
@@ -556,12 +590,7 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
     }
 }
 
-/// `Object.prototype.propertyIsEnumerable.call(obj, key)` (#2891) — true iff
-/// `key` is an OWN property of `obj` whose descriptor is enumerable. Inherited
-/// and absent keys return false. Nullish receivers throw `TypeError` per
-/// ToObject. Mirrors the ordinary-method branch in `native_call_method.rs`
-/// (which handles `obj.propertyIsEnumerable(key)`); this entry point is what
-/// the syntactic `.call` shapes lower to.
+/// `Object.prototype.propertyIsEnumerable.call(obj, key)` (#2891).
 #[no_mangle]
 pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f64) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
@@ -615,7 +644,7 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         }
 
         let obj = extract_obj_ptr(obj_value);
-        if obj.is_null() || (obj as usize) < 0x10000 || !is_valid_obj_ptr(obj as *const u8) {
+        if obj.is_null() || (obj as usize) < 0x10000 {
             return f64::from_bits(TAG_FALSE);
         }
         let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
@@ -624,6 +653,12 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
             Ok(s) => s,
             Err(_) => return f64::from_bits(TAG_FALSE),
         };
+        if let Some(result) = super::array_property_is_enumerable(obj, key_str, key_name) {
+            return result;
+        }
+        if !is_valid_obj_ptr(obj as *const u8) {
+            return f64::from_bits(TAG_FALSE);
+        }
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
             if let Some(module_name) = read_native_module_name(obj) {
                 return f64::from_bits(
@@ -868,6 +903,15 @@ pub extern "C" fn js_object_define_property(
             let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
             std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
         };
+        if let Some(result) = super::define_array_property(
+            obj,
+            obj_value,
+            key_str,
+            key_rust.as_deref(),
+            descriptor_value,
+        ) {
+            return result;
+        }
         // #2843: enforce frozen / sealed / non-extensible invariants BEFORE any
         // mutation, so a rejected definition leaves the object untouched and the
         // thrown TypeError matches Node.
@@ -978,81 +1022,14 @@ pub extern "C" fn js_object_define_property(
     }
 }
 
-/// Object-literal accessor installer for `{ get k(){}, set k(v){} }` (#2442).
-///
-/// Installs — or *merges into* — the accessor descriptor for `(obj, key)`.
-/// Two semantic differences from `Object.defineProperty`:
-///
-///  1. Object-literal accessors are **enumerable** and **configurable** (JS
-///     spec), whereas `defineProperty`'s omitted attrs default to `false`.
-///  2. A separate `get k` and `set k` for the *same* key must merge into one
-///     accessor rather than clobber each other — so a `js_value_undefined`
-///     `getter`/`setter` leaves the existing half of the descriptor untouched.
-///
-/// `getter` / `setter` are NaN-boxed closure values, or `undefined` to skip.
-/// Each present closure is cloned and rebound so it runs with `this === obj`
-/// (the same #450 model `js_object_define_property` uses for its accessors).
-#[no_mangle]
-pub extern "C" fn js_object_define_accessor(
-    obj_value: f64,
-    key_value: f64,
-    getter: f64,
-    setter: f64,
-) -> f64 {
-    unsafe {
-        let obj = extract_obj_ptr(obj_value);
-        if obj.is_null() {
-            return obj_value;
-        }
-        let key_str = crate::builtins::js_string_coerce(key_value);
-        if key_str.is_null() {
-            return obj_value;
-        }
-        super::mark_object_dynamic_shape_unknown(obj);
-        let key_rust: Option<String> = {
-            let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let name_len = (*key_str).byte_len as usize;
-            let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
-            std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
-        };
-        ensure_key_in_keys_array(obj, key_str);
-        let Some(k) = key_rust else {
-            return obj_value;
-        };
-        let recv_box = crate::value::js_nanbox_pointer(obj as i64);
-        let existing = get_accessor_descriptor(obj as usize, &k).unwrap_or_default();
-        let undef = crate::value::TAG_UNDEFINED;
-        let get_bits = if getter.to_bits() == undef {
-            existing.get
-        } else {
-            crate::closure::clone_closure_rebind_this(getter.to_bits(), recv_box)
-        };
-        let set_bits = if setter.to_bits() == undef {
-            existing.set
-        } else {
-            crate::closure::clone_closure_rebind_this(setter.to_bits(), recv_box)
-        };
-        set_accessor_descriptor(
-            obj as usize,
-            k.clone(),
-            AccessorDescriptor {
-                get: get_bits,
-                set: set_bits,
-            },
-        );
-        // Object-literal accessors are enumerable + configurable (spec).
-        // `writable` is meaningless for accessors; pass `true` so any data
-        // fallthrough write before the accessor override isn't rejected.
-        set_property_attrs(obj as usize, k, PropertyAttrs::new(true, true, true));
-        obj_value
-    }
-}
-
 /// Ensure a key appears in the object's keys_array. Used by `Object.defineProperty`
 /// so the property is enumerable-filterable and discoverable by `getOwnPropertyNames`
 /// even when the value is undefined or the property is an accessor (no underlying slot).
 #[allow(unused_assignments)]
-unsafe fn ensure_key_in_keys_array(obj: *mut ObjectHeader, key: *const crate::StringHeader) {
+pub(super) unsafe fn ensure_key_in_keys_array(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+) {
     if obj.is_null() || (obj as usize) < 0x10000 || key.is_null() {
         return;
     }
@@ -1385,37 +1362,6 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
     f64::from_bits((obj as u64) | 0x7FFD_0000_0000_0000)
 }
 
-/// Object.freeze(obj) — sets the frozen flag and drops `writable` +
-/// `configurable` on every existing key so per-key descriptor lookups report
-/// the post-freeze state. Returns the object.
-fn constructor_dynamic_prototype(obj: *const ObjectHeader) -> Option<f64> {
-    if obj.is_null() {
-        return None;
-    }
-    let key =
-        crate::string::js_string_from_bytes(b"constructor".as_ptr(), b"constructor".len() as u32);
-    let constructor = js_object_get_field_by_name_f64(obj, key);
-    let bits = constructor.to_bits();
-    let top16 = bits >> 48;
-    if top16 != 0x7FFD {
-        return None;
-    }
-    let raw_addr = (bits & crate::value::POINTER_MASK) as usize;
-    if raw_addr < (crate::gc::GC_HEADER_SIZE as usize) + 0x1000 {
-        return None;
-    }
-    let gc = unsafe { gc_header_for(raw_addr as *const ObjectHeader) };
-    if unsafe { (*gc).obj_type } != crate::gc::GC_TYPE_CLOSURE {
-        return None;
-    }
-    let proto = crate::closure::closure_get_dynamic_prop(raw_addr, "prototype");
-    if crate::value::JSValue::from_bits(proto.to_bits()).is_undefined() {
-        None
-    } else {
-        Some(proto)
-    }
-}
-
 /// Object.getPrototypeOf(obj):
 /// - For an INT32-tagged class ref (top16 == 0x7FFE) — return the parent
 ///   class ref via CLASS_REGISTRY's parent_class_id chain, or null at
@@ -1443,6 +1389,18 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     }
     let bits = obj_value.to_bits();
     let top16 = bits >> 48;
+    if top16 == 0x7FFD {
+        let raw_addr = bits & 0x0000_FFFF_FFFF_FFFF;
+        if raw_addr > 0 && raw_addr < 0x100000 {
+            if let Some(dispatch) = super::class_registry::handle_prototype_dispatch() {
+                let proto = unsafe { dispatch(raw_addr as i64) };
+                if proto.to_bits() != crate::value::TAG_UNDEFINED {
+                    return proto;
+                }
+            }
+            return f64::from_bits(TAG_NULL);
+        }
+    }
     if top16 == 0x7FFE {
         let class_id = (bits & 0xFFFF_FFFF) as u32;
         if let Some(parent_id) = get_parent_class_id(class_id) {
@@ -1499,6 +1457,17 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                         return f64::from_bits(crate::value::js_nanbox_pointer(p as i64).to_bits());
                     }
                 }
+                if (*gc).obj_type == crate::gc::GC_TYPE_ERROR {
+                    let err = raw_addr as *const crate::error::ErrorHeader;
+                    if let Some(proto) = error_kind_prototype_value((*err).error_kind) {
+                        return proto;
+                    }
+                }
+                if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY {
+                    if let Some(proto) = super::array_get_prototype_of_addr(raw_addr as usize) {
+                        return proto;
+                    }
+                }
                 // #489 / #2145: a function/constructor receiver has no
                 // walkable [[Prototype]] in Perry's model UNLESS its
                 // closure-static-prototype side-table has been set
@@ -1520,6 +1489,18 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                 }
                 if let Some(proto) = constructor_dynamic_prototype(obj) {
                     return proto;
+                }
+                if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+                    && ((*obj).class_id == 0 || is_anon_shape_class_id((*obj).class_id))
+                {
+                    if let Some(proto_bits) =
+                        super::prototype_chain::default_object_prototype_for_owner(
+                            raw_addr as usize,
+                        )
+                    {
+                        return f64::from_bits(proto_bits);
+                    }
+                    return f64::from_bits(TAG_NULL);
                 }
             }
             return obj_value;
@@ -1544,6 +1525,17 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                         return f64::from_bits(crate::value::js_nanbox_pointer(p as i64).to_bits());
                     }
                 }
+                if (*gc).obj_type == crate::gc::GC_TYPE_ERROR {
+                    let err = bits as *const crate::error::ErrorHeader;
+                    if let Some(proto) = error_kind_prototype_value((*err).error_kind) {
+                        return proto;
+                    }
+                }
+                if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY {
+                    if let Some(proto) = super::array_get_prototype_of_addr(bits as usize) {
+                        return proto;
+                    }
+                }
                 // #489 / #2145: function/constructor receiver — see the
                 // 0x7FFD branch above. Return the recorded static
                 // prototype if any, else null to break the chain-walk
@@ -1558,6 +1550,16 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                 }
                 if let Some(proto) = constructor_dynamic_prototype(obj) {
                     return proto;
+                }
+                if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+                    && ((*obj).class_id == 0 || is_anon_shape_class_id((*obj).class_id))
+                {
+                    if let Some(proto_bits) =
+                        super::prototype_chain::default_object_prototype_for_owner(bits as usize)
+                    {
+                        return f64::from_bits(proto_bits);
+                    }
+                    return f64::from_bits(TAG_NULL);
                 }
             }
             return obj_value;

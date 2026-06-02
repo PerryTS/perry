@@ -1581,11 +1581,35 @@ pub extern "C" fn js_readline_has_active() -> i64 {
 }
 // Phase 2 stubs.
 #[no_mangle]
-pub extern "C" fn js_readline_set_raw_mode() -> i64 {
+pub extern "C" fn js_readline_set_raw_mode(_enabled: f64) -> i64 {
     0
 }
 #[no_mangle]
-pub extern "C" fn js_readline_stdin_on() -> i64 {
+pub extern "C" fn js_readline_stdin_on(_event_ptr: i64, _callback: i64) -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_remove_listener(_event_ptr: i64, _callback: i64) -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_pause() -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_resume() -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_unref() -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_ref() -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn js_readline_stdin_destroy() -> i64 {
     0
 }
 // Phase 3 stubs are NOT here — js_tty_* / js_process_*_isatty /

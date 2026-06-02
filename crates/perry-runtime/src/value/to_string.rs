@@ -297,6 +297,11 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             if crate::date::is_date_cell_addr(ptr as usize) {
                 return crate::date::js_date_to_string(value);
             }
+            // A RegExp stringifies to `/source/flags` (RegExp.prototype.toString),
+            // not "[object Object]" — covers `String(re)` and `` `${re}` ``.
+            if crate::regex::is_regex_pointer(ptr) {
+                return crate::regex::js_regexp_to_string(ptr as *const crate::regex::RegExpHeader);
+            }
             unsafe {
                 let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
                 if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {

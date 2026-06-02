@@ -15,6 +15,23 @@ thread_local! {
     /// Both pointers are GC-rooted via `scan_template_raw_roots`.
     static TEMPLATE_RAW_MAP: RefCell<HashMap<usize, *mut ArrayHeader>> =
         RefCell::new(HashMap::new());
+
+    /// Own non-index properties for Array exotic objects.
+    ///
+    /// Perry's `ArrayHeader` intentionally stays compact: `length`,
+    /// `capacity`, then inline element slots. Treating that header as an
+    /// `ObjectHeader` corrupts reads of named keys, so array expandos live in
+    /// this side table keyed by the array allocation address. Numeric array
+    /// indices remain in element storage; canonical non-indices such as
+    /// `"4294967295"` are stored here per ECMA-262.
+    static ARRAY_NAMED_PROPS: RefCell<HashMap<usize, Vec<ArrayNamedProperty>>> =
+        RefCell::new(HashMap::new());
+}
+
+#[derive(Clone)]
+struct ArrayNamedProperty {
+    name: String,
+    value: f64,
 }
 
 #[repr(u8)]
@@ -80,6 +97,189 @@ pub fn scan_template_raw_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
             }
         }
     });
+    scan_array_named_property_roots_mut(visitor);
+}
+
+fn barrier_array_named_props(owner: usize, props: &mut [ArrayNamedProperty]) {
+    for prop in props.iter_mut() {
+        crate::gc::runtime_write_barrier_external_slot(
+            owner,
+            &mut prop.value as *mut f64 as usize,
+            prop.value.to_bits(),
+        );
+    }
+}
+
+fn merge_array_named_props(
+    props: &mut HashMap<usize, Vec<ArrayNamedProperty>>,
+    owner: usize,
+    owner_props: Vec<ArrayNamedProperty>,
+) {
+    let entry = props.entry(owner).or_default();
+    for prop in owner_props {
+        if let Some(existing) = entry.iter_mut().find(|existing| existing.name == prop.name) {
+            existing.value = prop.value;
+        } else {
+            entry.push(prop);
+        }
+    }
+    barrier_array_named_props(owner, entry);
+}
+
+pub(crate) fn scan_array_named_property_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    ARRAY_NAMED_PROPS.with(|m| {
+        let mut props = m.borrow_mut();
+        let mut moved = Vec::new();
+        for (&owner, owner_props) in props.iter_mut() {
+            let mut new_owner = owner;
+            if visitor.visit_metadata_usize_slot(&mut new_owner) {
+                moved.push((owner, new_owner));
+            }
+            for prop in owner_props.iter_mut() {
+                visitor.visit_nanbox_f64_slot(&mut prop.value);
+            }
+        }
+        for (old_owner, new_owner) in moved {
+            if let Some(old_props) = props.remove(&old_owner) {
+                merge_array_named_props(&mut props, new_owner, old_props);
+            }
+        }
+    });
+}
+
+unsafe fn string_header_as_str<'a>(key: *const crate::StringHeader) -> Option<&'a str> {
+    if key.is_null() {
+        return None;
+    }
+    let len = (*key).byte_len as usize;
+    let data = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let bytes = std::slice::from_raw_parts(data, len);
+    std::str::from_utf8(bytes).ok()
+}
+
+pub(crate) unsafe fn array_named_property_set(
+    arr: *mut ArrayHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+) {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() {
+        return;
+    }
+    let Some(name) = string_header_as_str(key) else {
+        return;
+    };
+    let owner = arr as usize;
+    ARRAY_NAMED_PROPS.with(|m| {
+        let mut map = m.borrow_mut();
+        let props = map.entry(owner).or_default();
+        if let Some(prop) = props.iter_mut().find(|prop| prop.name == name) {
+            prop.value = value;
+        } else {
+            props.push(ArrayNamedProperty {
+                name: name.to_string(),
+                value,
+            });
+        }
+        barrier_array_named_props(owner, props);
+    });
+}
+
+pub(crate) unsafe fn array_named_property_get_by_name(
+    arr: *const ArrayHeader,
+    name: &str,
+) -> Option<f64> {
+    let arr = clean_arr_ptr(arr);
+    if arr.is_null() {
+        return None;
+    }
+    ARRAY_NAMED_PROPS.with(|m| {
+        m.borrow().get(&(arr as usize)).and_then(|props| {
+            props
+                .iter()
+                .find(|prop| prop.name == name)
+                .map(|prop| prop.value)
+        })
+    })
+}
+
+pub(crate) unsafe fn array_named_property_get(
+    arr: *const ArrayHeader,
+    key: *const crate::StringHeader,
+) -> Option<f64> {
+    let name = string_header_as_str(key)?;
+    array_named_property_get_by_name(arr, name)
+}
+
+pub(crate) unsafe fn array_named_property_has(
+    arr: *const ArrayHeader,
+    key: *const crate::StringHeader,
+) -> bool {
+    let Some(name) = string_header_as_str(key) else {
+        return false;
+    };
+    let arr = clean_arr_ptr(arr);
+    if arr.is_null() {
+        return false;
+    }
+    ARRAY_NAMED_PROPS.with(|m| {
+        m.borrow()
+            .get(&(arr as usize))
+            .map(|props| props.iter().any(|prop| prop.name == name))
+            .unwrap_or(false)
+    })
+}
+
+pub(crate) unsafe fn array_named_property_names(
+    arr: *const ArrayHeader,
+    enumerable_only: bool,
+) -> Vec<String> {
+    let arr = clean_arr_ptr(arr);
+    if arr.is_null() {
+        return Vec::new();
+    }
+    let owner = arr as usize;
+    ARRAY_NAMED_PROPS.with(|m| {
+        m.borrow()
+            .get(&owner)
+            .map(|props| {
+                props
+                    .iter()
+                    .filter(|prop| {
+                        !enumerable_only
+                            || crate::object::get_property_attrs(owner, &prop.name)
+                                .map(|attrs| attrs.enumerable())
+                                .unwrap_or(true)
+                    })
+                    .map(|prop| prop.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
+}
+
+pub(crate) unsafe fn array_named_property_delete(
+    arr: *const ArrayHeader,
+    key: *const crate::StringHeader,
+) -> bool {
+    let Some(name) = string_header_as_str(key) else {
+        return false;
+    };
+    let arr = clean_arr_ptr(arr);
+    if arr.is_null() {
+        return false;
+    }
+    ARRAY_NAMED_PROPS.with(|m| {
+        let mut map = m.borrow_mut();
+        let Some(props) = map.get_mut(&(arr as usize)) else {
+            return false;
+        };
+        let Some(index) = props.iter().position(|prop| prop.name == name) else {
+            return false;
+        };
+        props.remove(index);
+        true
+    })
 }
 
 #[cfg(test)]

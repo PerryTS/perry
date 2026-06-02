@@ -11,15 +11,20 @@
 //! logic changes.
 
 pub use super::class_handles::{
-    event_emitter_handle_probe, event_emitter_on, handle_method_dispatch, handle_property_dispatch,
-    handle_property_set_dispatch, js_register_event_emitter_handle_probe,
-    js_register_event_emitter_on, js_register_handle_method_dispatch,
+    event_emitter_async_resource_handle_probe, event_emitter_handle_probe, event_emitter_on,
+    fetch_handle_kind_probe, handle_method_dispatch, handle_own_property_names_dispatch,
+    handle_property_dispatch, handle_property_set_dispatch, handle_prototype_dispatch,
+    js_register_event_emitter_async_resource_handle_probe, js_register_event_emitter_handle_probe,
+    js_register_event_emitter_on, js_register_fetch_handle_kind_probe,
+    js_register_handle_method_dispatch, js_register_handle_own_property_names_dispatch,
     js_register_handle_property_dispatch, js_register_handle_property_set_dispatch,
-    js_register_net_socket_handle_probe, js_register_stream_handle_kind_probe,
-    js_register_stream_handle_probe, net_socket_handle_probe, stream_handle_kind_probe,
-    stream_handle_probe, EventEmitterHandleProbeFn, EventEmitterOnFn, HandleMethodDispatchFn,
-    HandlePropertyDispatchFn, HandlePropertySetDispatchFn, NetSocketHandleProbeFn,
-    StreamHandleKindProbeFn, StreamHandleProbeFn,
+    js_register_handle_prototype_dispatch, js_register_net_socket_handle_probe,
+    js_register_stream_handle_kind_probe, js_register_stream_handle_probe, net_socket_handle_probe,
+    stream_handle_kind_probe, stream_handle_probe, EventEmitterAsyncResourceHandleProbeFn,
+    EventEmitterHandleProbeFn, EventEmitterOnFn, FetchHandleKindProbeFn, HandleMethodDispatchFn,
+    HandleOwnPropertyNamesDispatchFn, HandlePropertyDispatchFn, HandlePropertySetDispatchFn,
+    HandlePrototypeDispatchFn, NetSocketHandleProbeFn, StreamHandleKindProbeFn,
+    StreamHandleProbeFn,
 };
 use super::*;
 
@@ -174,7 +179,10 @@ fn global_object_prototype_bits() -> Option<u64> {
     }
 }
 
-fn ensure_function_prototype_object(func_value: f64, class_id: u32) -> *mut ObjectHeader {
+pub(crate) fn ensure_function_prototype_object(
+    func_value: f64,
+    class_id: u32,
+) -> *mut ObjectHeader {
     if class_id == 0 {
         return std::ptr::null_mut();
     }
@@ -632,6 +640,8 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
         let func_ptr = (*ptr).func_ptr as usize;
         let is_global_builtin_func = func_ptr
             == global_this_builtin_noop_thunk as *const u8 as usize
+            || func_ptr == typed_array_constructor_call_thunk as *const u8 as usize
+            || func_ptr == webcrypto_illegal_constructor_thunk as *const u8 as usize
             || func_ptr
                 == crate::messaging::js_message_channel_constructor_call_error as *const u8
                     as usize
@@ -642,6 +652,29 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
                     as usize;
         if !is_global_builtin_func {
             return None;
+        }
+    }
+    // Prefer the per-closure built-in `.name` record. Full-suite Rust tests
+    // temporarily seed GLOBAL_THIS_PTR with GC fixture pointers; relying only
+    // on the singleton walk below makes unrelated tests race with constructor
+    // identity for globals such as TextEncoderStream.
+    let name_value = crate::value::JSValue::from_bits(
+        crate::closure::closure_get_dynamic_prop(ptr as usize, "name").to_bits(),
+    );
+    if name_value.is_string() {
+        let name_ptr = name_value.as_string_ptr();
+        if !name_ptr.is_null() {
+            let name_bytes = unsafe {
+                let data = (name_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                std::slice::from_raw_parts(data, (*name_ptr).byte_len as usize)
+            };
+            if let Ok(name) = std::str::from_utf8(name_bytes) {
+                for builtin in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
+                    if builtin == name {
+                        return Some(builtin);
+                    }
+                }
+            }
         }
     }
     // Find which builtin name maps to this exact closure header on the
@@ -678,9 +711,11 @@ fn text_decoder_bool_option(options: f64, name: &str) -> f64 {
     f64::from_bits(crate::value::JSValue::bool(crate::value::js_is_truthy(value_f64) != 0).bits())
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn js_text_encoding_stream_new() -> f64 {
-    let stream = js_object_alloc(0, 0);
+pub(crate) const CLASS_ID_TEXT_ENCODER_STREAM: u32 = 0x7FFF_FF30;
+pub(crate) const CLASS_ID_TEXT_DECODER_STREAM: u32 = 0x7FFF_FF31;
+
+unsafe fn text_encoding_stream_new_with_constructor(constructor: f64, class_id: u32) -> f64 {
+    let stream = js_object_alloc(class_id, 0);
     if stream.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -696,7 +731,38 @@ pub unsafe extern "C" fn js_text_encoding_stream_new() -> f64 {
         js_object_set_field_by_name(stream, key, value);
     }
 
+    let ctor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+    js_object_set_field_by_name(stream, ctor_key, constructor);
+
     crate::value::js_nanbox_pointer(stream as i64)
+}
+
+unsafe fn text_encoding_stream_new(constructor_name: &[u8], class_id: u32) -> f64 {
+    let ctor = js_get_global_this_builtin_value(constructor_name.as_ptr(), constructor_name.len());
+    text_encoding_stream_new_with_constructor(ctor, class_id)
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn test_text_encoding_stream_new_with_constructor(
+    constructor: f64,
+    class_id: u32,
+) -> f64 {
+    text_encoding_stream_new_with_constructor(constructor, class_id)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_text_encoder_stream_new() -> f64 {
+    text_encoding_stream_new(b"TextEncoderStream", CLASS_ID_TEXT_ENCODER_STREAM)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_text_decoder_stream_new() -> f64 {
+    text_encoding_stream_new(b"TextDecoderStream", CLASS_ID_TEXT_DECODER_STREAM)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_text_encoding_stream_new() -> f64 {
+    js_text_encoder_stream_new()
 }
 
 /// Synthetic-anonymous-shape class IDs: classes the HIR generates for
@@ -981,6 +1047,21 @@ pub unsafe extern "C" fn js_new_function_construct(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    // #3656: `new p()` where `p` is a Proxy dispatches through its `construct`
+    // trap (or forwards to the target). Reached when the compiler can't prove
+    // the callee is a proxy statically (e.g. `new record.proxy()`). newTarget
+    // for a plain `new` is the constructor being invoked — the proxy itself.
+    if crate::proxy::js_proxy_is_proxy(func_value) == 1 {
+        let arr = crate::array::js_array_alloc(0);
+        let mut a = arr;
+        if !args_ptr.is_null() {
+            for i in 0..args_len {
+                a = crate::array::js_array_push_f64(a, *args_ptr.add(i));
+            }
+        }
+        let arr_box = f64::from_bits(0x7FFD_0000_0000_0000 | (a as u64 & 0x0000_FFFF_FFFF_FFFF));
+        return crate::proxy::js_proxy_construct(func_value, arr_box, func_value);
+    }
     if let Some((module, method)) = bound_native_callable_module_and_method(func_value) {
         if module == "sqlite"
             && matches!(
@@ -1070,11 +1151,17 @@ pub unsafe extern "C" fn js_new_function_construct(
             std::slice::from_raw_parts(args_ptr, args_len)
         };
         match name {
+            "Crypto" | "CryptoKey" | "SubtleCrypto" => {
+                return crate::object::js_webcrypto_illegal_constructor();
+            }
             "Symbol" => {
                 return crate::error::js_throw_symbol_constructor_type_error();
             }
             "BigInt" => {
                 return crate::error::js_throw_bigint_constructor_type_error();
+            }
+            "Navigator" => {
+                return crate::error::js_throw_illegal_constructor_type_error();
             }
             "Date" => {
                 if args.is_empty() {
@@ -1114,33 +1201,68 @@ pub unsafe extern "C" fn js_new_function_construct(
                     .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::js_object_coerce(value);
             }
+            "Event" => {
+                let event_type = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let options = args
+                    .get(1)
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let event =
+                    crate::event_target::js_event_new(event_type, options, args.len() as u32);
+                return crate::value::js_nanbox_pointer(event as i64);
+            }
+            "CustomEvent" => {
+                let event_type = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let options = args
+                    .get(1)
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let event = crate::event_target::js_custom_event_new(
+                    event_type,
+                    options,
+                    args.len() as u32,
+                );
+                return crate::value::js_nanbox_pointer(event as i64);
+            }
+            "DOMException" => {
+                let message = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let name = args
+                    .get(1)
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let exception = crate::event_target::js_dom_exception_new(message, name);
+                return crate::value::js_nanbox_pointer(exception as i64);
+            }
             // #2889: `new (rebound Error subclass)(msg)` through a global
             // constructor value. Mirrors the bare `new TypeError(msg)`
             // lowering so `const E = TypeError; new E("x")` produces a real
             // error instance with the right `.name`.
             "Error" | "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError"
             | "EvalError" | "URIError" => {
-                let has_msg = !args.is_empty() && args[0].to_bits() != crate::value::TAG_UNDEFINED;
-                let message = if has_msg {
-                    crate::builtins::js_string_coerce(args[0])
+                let kind = match name {
+                    "TypeError" => crate::error::ERROR_KIND_TYPE_ERROR,
+                    "RangeError" => crate::error::ERROR_KIND_RANGE_ERROR,
+                    "ReferenceError" => crate::error::ERROR_KIND_REFERENCE_ERROR,
+                    "SyntaxError" => crate::error::ERROR_KIND_SYNTAX_ERROR,
+                    "EvalError" => crate::error::ERROR_KIND_EVAL_ERROR,
+                    "URIError" => crate::error::ERROR_KIND_URI_ERROR,
+                    _ => crate::error::ERROR_KIND_ERROR,
+                };
+                let message = if args.is_empty() {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
                 } else {
-                    std::ptr::null_mut()
+                    args[0]
                 };
-                let error = match name {
-                    "TypeError" => crate::error::js_typeerror_new(message),
-                    "RangeError" => crate::error::js_rangeerror_new(message),
-                    "ReferenceError" => crate::error::js_referenceerror_new(message),
-                    "SyntaxError" => crate::error::js_syntaxerror_new(message),
-                    "EvalError" => crate::error::js_evalerror_new(message),
-                    "URIError" => crate::error::js_urierror_new(message),
-                    _ => {
-                        if has_msg {
-                            crate::error::js_error_new_with_message(message)
-                        } else {
-                            crate::error::js_error_new()
-                        }
-                    }
-                };
+                let error = crate::error::js_error_new_kind_from_value(kind, message);
                 return crate::value::js_nanbox_pointer(error as i64);
             }
             // #2889: `new (rebound RegExp)(pattern, flags)`.
@@ -1184,14 +1306,26 @@ pub unsafe extern "C" fn js_new_function_construct(
                 let ta = crate::typedarray::js_typed_array_new(kind, arg0);
                 return crate::value::js_nanbox_pointer(ta as i64);
             }
-            "TextEncoderStream" | "TextDecoderStream" => {
-                return js_text_encoding_stream_new();
+            "TextEncoderStream" => {
+                return text_encoding_stream_new_with_constructor(
+                    func_value,
+                    CLASS_ID_TEXT_ENCODER_STREAM,
+                );
+            }
+            "TextDecoderStream" => {
+                return text_encoding_stream_new_with_constructor(
+                    func_value,
+                    CLASS_ID_TEXT_DECODER_STREAM,
+                );
             }
             "MessageChannel" => {
                 return crate::messaging::js_message_channel_new();
             }
             "MessagePort" => {
                 return crate::messaging::js_message_port_constructor_error();
+            }
+            "Storage" => {
+                return crate::web_storage::storage_constructor_illegal(std::ptr::null());
             }
             "BroadcastChannel" => {
                 let name = args
@@ -2362,7 +2496,7 @@ pub fn is_class_object_ptr(ptr: *const u8) -> bool {
     // timers, …) bit-OR'd with POINTER_TAG, not real heap pointers — real
     // objects always live well above 0x100000. The previous 0x1008 floor only
     // caught the tiny net/fastify id space; a mid-range handle (e.g. zlib's
-    // 0x60000 stream base, #1843) sailed past it and this function then
+    // zlib stream base, #1843) sailed past it and this function then
     // segfaulted dereferencing `[handle - 8]` as a GcHeader. 0x100000 is the
     // same handle/real-pointer threshold `js_native_call_method` already uses.
     if ptr.is_null() || (ptr as usize) < 0x100000 {

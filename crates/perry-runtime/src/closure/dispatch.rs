@@ -1138,6 +1138,25 @@ pub unsafe extern "C" fn js_native_call_value(
 
     let jsval = JSValue::from_bits(func_value.to_bits());
 
+    // #3656: a Proxy value invoked as a function dispatches through its `apply`
+    // trap (or, absent a trap, forwards to the target). The compiler emits a
+    // `ProxyApply` node when it can statically prove the callee is a proxy, but
+    // indirect callees (e.g. `record.proxy()` off a `Proxy.revocable` result)
+    // reach this generic value-call path with no static hint. Proxy ids encode
+    // to small pointers, so real heap closures early-out of `js_proxy_is_proxy`.
+    if crate::proxy::js_proxy_is_proxy(func_value) == 1 {
+        let arr = crate::array::js_array_alloc(0);
+        let mut a = arr;
+        if !args_ptr.is_null() {
+            for i in 0..args_len {
+                a = crate::array::js_array_push_f64(a, unsafe { *args_ptr.add(i) });
+            }
+        }
+        let arr_box = f64::from_bits(0x7FFD_0000_0000_0000 | (a as u64 & 0x0000_FFFF_FFFF_FFFF));
+        let this_arg = f64::from_bits(crate::value::TAG_UNDEFINED);
+        return crate::proxy::js_proxy_apply(func_value, this_arg, arr_box);
+    }
+
     // Get the closure pointer from the value
     // For native compilation, function values are stored as NaN-boxed pointers
     let closure: *const ClosureHeader = if jsval.is_pointer() {
@@ -1193,6 +1212,19 @@ pub unsafe extern "C" fn js_native_call_value(
             undef
         }
     };
+
+    if func_ptr == crate::object::global_this_array_thunk as *const u8 {
+        if args_len == 1 {
+            let arr = crate::array::js_array_constructor_single(arg_at(0));
+            return crate::value::js_nanbox_pointer(arr as i64);
+        }
+        let arr = crate::array::js_array_alloc(args_len as u32);
+        (*arr).length = args_len as u32;
+        for i in 0..args_len {
+            crate::array::js_array_set_f64(arr, i as u32, arg_at(i));
+        }
+        return crate::value::js_nanbox_pointer(arr as i64);
+    }
 
     // Call with the appropriate arity
     match dispatch_args_len {

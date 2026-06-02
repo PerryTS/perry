@@ -59,6 +59,7 @@ pub use self::iter_methods::{
 };
 pub use self::iter_object::{
     array_entries_iter, array_keys_iter, array_values_iter, dispatch_array_iterator_method,
+    js_array_entries_iter_obj, js_array_keys_iter_obj, js_array_values_iter_obj,
     ARRAY_ITERATOR_CLASS_ID,
 };
 pub use self::iterator::{js_for_of_to_array, js_iterator_to_array};
@@ -93,7 +94,9 @@ pub use self::splice_slice::{
 pub(crate) use self::alloc::array_length_from_property_value_or_throw;
 pub(crate) use self::alloc::{js_array_from_arraylike, js_array_from_string_codepoints};
 pub(crate) use self::header::{
-    array_byte_size, array_numeric_raw_f64_get, array_numeric_raw_f64_push_inbounds,
+    array_byte_size, array_named_property_delete, array_named_property_get,
+    array_named_property_get_by_name, array_named_property_has, array_named_property_names,
+    array_named_property_set, array_numeric_raw_f64_get, array_numeric_raw_f64_push_inbounds,
     array_numeric_raw_f64_set_inbounds, canonicalize_array_numeric_store_value, clean_arr_ptr,
     clean_arr_ptr_mut, clear_array_numeric_layout, clear_array_numeric_layout_ptr,
     gc_element_slot_range, mark_array_layout_unknown, note_array_slot, note_array_slot_layout_only,

@@ -205,27 +205,30 @@ The GC uses conservative stack scanning to find roots and supports arena-allocat
 ## JSX/TSX
 
 Perry's parser and HIR understand JSX syntax (parsed via SWC, lowered in
-`crates/perry-hir/src/jsx.rs`), but the runtime `_jsx` / `_jsxs` symbols are
-not yet linked, so a `.tsx` file fails at the link stage today. The
-canonical pattern is the function-call form Perry's UI examples already use
-(`Text("hi")` instead of `<Text>hi</Text>`).
+`crates/perry-hir/src/jsx.rs`) and `.tsx` files link through Perry's built-in
+`jsx()` / `jsxs()` runtime path. You do not need a local
+`react/jsx-runtime` package just to compile TSX.
 
-```text
-// Planned JSX shape (parses but doesn't link yet — issue: runtime _jsx symbols):
+```tsx
+import { Box, Text } from "perry/tui";
 
 function Greeting({ name }: { name: string }) {
   return <Text>{`Hello, ${name}!`}</Text>;
 }
 
-<Button onClick={() => console.log("clicked")}>Click me</Button>
-
-<>
-  <Text>Line 1</Text>
-  <Text>Line 2</Text>
-</>
+const page = <div className="card"><Greeting name="Perry" /></div>;
+const app = <Box><Greeting name="TUI" /></Box>;
 ```
 
-JSX elements are transformed to function calls via the `jsx()`/`jsxs()` runtime.
+JSX elements are transformed to function calls via the `jsx()` / `jsxs()`
+runtime. Perry's built-in adapter supports HTML-style intrinsic tags,
+fragments, function components, and compile-time rewrites for `perry/tui`
+`Box` / `Text` so those TUI JSX forms lower to the same native builders as the
+function-call form.
+
+Caveat: this is Perry's TSX runtime, not React DOM or full React reconciler
+semantics. For `perry/ui`, or for `perry/tui` intrinsics whose JSX rewrite has
+not landed yet, the function-call form remains the canonical native API.
 
 ## Next Steps
 

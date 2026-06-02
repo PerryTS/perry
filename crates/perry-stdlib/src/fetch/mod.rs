@@ -42,6 +42,11 @@ use validation::{
     normalize_method,
 };
 
+// Web Fetch handles must stay below the `0x100000` small-handle cutoff while
+// avoiding the low native-id range exposed by `node:http` (#3973/#3974 via #4004).
+pub(crate) const FETCH_HANDLE_ID_START: usize = 0x40000;
+pub(crate) const FETCH_HANDLE_ID_END: usize = 0xE0000;
+
 // Response handle storage
 lazy_static::lazy_static! {
     static ref FETCH_RESPONSES: Mutex<HashMap<usize, FetchResponse>> = Mutex::new(HashMap::new());
@@ -52,8 +57,9 @@ lazy_static::lazy_static! {
     /// runtime handle-dispatch arms (`dispatch_request_method` /
     /// `dispatch_response_method` / …) distinguish handle types by
     /// registry-membership alone for any-typed / computed-key calls, where the
-    /// static type was lost. Streams keep their own high-range scheme.
-    static ref NEXT_FETCH_HANDLE_ID: Mutex<usize> = Mutex::new(1);
+    /// static type was lost. The counter starts in a high subrange to avoid
+    /// colliding with perry-ffi handles exposed by `node:http`.
+    static ref NEXT_FETCH_HANDLE_ID: Mutex<usize> = Mutex::new(FETCH_HANDLE_ID_START);
     static ref STREAM_HANDLES: Mutex<HashMap<usize, StreamState>> = Mutex::new(HashMap::new());
     static ref NEXT_STREAM_ID: Mutex<usize> = Mutex::new(1);
 
@@ -74,6 +80,34 @@ lazy_static::lazy_static! {
         .tcp_keepalive(std::time::Duration::from_secs(60))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
+}
+
+fn alloc_fetch_handle_id() -> usize {
+    let mut id_guard = NEXT_FETCH_HANDLE_ID.lock().unwrap();
+    let id = *id_guard;
+    if id >= FETCH_HANDLE_ID_END {
+        panic!("Web Fetch handle id range exhausted");
+    }
+    *id_guard += 1;
+    id
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fetch_handle_ids_use_high_small_handle_range() {
+        assert!(FETCH_HANDLE_ID_START >= 0x40000);
+        assert!(FETCH_HANDLE_ID_END <= 0x100000);
+
+        let native_id = crate::common::register_handle("native-request-marker".to_string());
+        let id = alloc_fetch_handle_id();
+        assert!((native_id as usize) < FETCH_HANDLE_ID_START);
+        assert!((FETCH_HANDLE_ID_START..FETCH_HANDLE_ID_END).contains(&id));
+        assert_ne!(native_id as usize, id);
+        crate::common::drop_handle(native_id);
+    }
 }
 
 struct StreamState {
@@ -241,10 +275,7 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perr
                 let body = response.bytes().await.unwrap_or_default().to_vec();
 
                 // Store response
-                let mut id_guard = NEXT_FETCH_HANDLE_ID.lock().unwrap();
-                let response_id = *id_guard;
-                *id_guard += 1;
-                drop(id_guard);
+                let response_id = alloc_fetch_handle_id();
 
                 FETCH_RESPONSES.lock().unwrap().insert(
                     response_id,
@@ -319,10 +350,7 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
 
                 let body = response.bytes().await.unwrap_or_default().to_vec();
 
-                let mut id_guard = NEXT_FETCH_HANDLE_ID.lock().unwrap();
-                let response_id = *id_guard;
-                *id_guard += 1;
-                drop(id_guard);
+                let response_id = alloc_fetch_handle_id();
 
                 FETCH_RESPONSES.lock().unwrap().insert(
                     response_id,
@@ -399,10 +427,7 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
 
                 let body = response.bytes().await.unwrap_or_default().to_vec();
 
-                let mut id_guard = NEXT_FETCH_HANDLE_ID.lock().unwrap();
-                let response_id = *id_guard;
-                *id_guard += 1;
-                drop(id_guard);
+                let response_id = alloc_fetch_handle_id();
 
                 FETCH_RESPONSES.lock().unwrap().insert(
                     response_id,
@@ -482,10 +507,7 @@ pub unsafe extern "C" fn js_fetch_post(
                 let body = response.bytes().await.unwrap_or_default().to_vec();
 
                 // Store response
-                let mut id_guard = NEXT_FETCH_HANDLE_ID.lock().unwrap();
-                let response_id = *id_guard;
-                *id_guard += 1;
-                drop(id_guard);
+                let response_id = alloc_fetch_handle_id();
 
                 FETCH_RESPONSES.lock().unwrap().insert(
                     response_id,
@@ -584,10 +606,7 @@ pub unsafe extern "C" fn js_fetch_with_options(
                 let body = response.bytes().await.unwrap_or_default().to_vec();
 
                 // Store response
-                let mut id_guard = NEXT_FETCH_HANDLE_ID.lock().unwrap();
-                let response_id = *id_guard;
-                *id_guard += 1;
-                drop(id_guard);
+                let response_id = alloc_fetch_handle_id();
 
                 FETCH_RESPONSES.lock().unwrap().insert(
                     response_id,
@@ -1137,19 +1156,13 @@ impl BlobData {
 }
 
 pub(crate) fn alloc_blob(data: BlobData) -> usize {
-    let mut id_guard = NEXT_FETCH_HANDLE_ID.lock().unwrap();
-    let id = *id_guard;
-    *id_guard += 1;
-    drop(id_guard);
+    let id = alloc_fetch_handle_id();
     BLOB_REGISTRY.lock().unwrap().insert(id, data);
     id
 }
 
 fn alloc_headers(store: HeadersStore) -> usize {
-    let mut id_guard = NEXT_FETCH_HANDLE_ID.lock().unwrap();
-    let id = *id_guard;
-    *id_guard += 1;
-    drop(id_guard);
+    let id = alloc_fetch_handle_id();
     HEADERS_REGISTRY.lock().unwrap().insert(id, store);
     id
 }
@@ -1161,10 +1174,7 @@ fn alloc_response(
     body: Vec<u8>,
     body_present: bool,
 ) -> usize {
-    let mut id_guard = NEXT_FETCH_HANDLE_ID.lock().unwrap();
-    let id = *id_guard;
-    *id_guard += 1;
-    drop(id_guard);
+    let id = alloc_fetch_handle_id();
     FETCH_RESPONSES.lock().unwrap().insert(
         id,
         FetchResponse {
@@ -1300,10 +1310,7 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
         })
     };
     if let Some(new_resp) = cloned {
-        let mut id_guard = NEXT_FETCH_HANDLE_ID.lock().unwrap();
-        let new_id = *id_guard;
-        *id_guard += 1;
-        drop(id_guard);
+        let new_id = alloc_fetch_handle_id();
         FETCH_RESPONSES.lock().unwrap().insert(new_id, new_resp);
         return handle_to_f64(new_id);
     }
@@ -1730,10 +1737,7 @@ pub unsafe extern "C" fn js_request_new(
     } else {
         HeadersStore::default()
     };
-    let mut id_guard = NEXT_FETCH_HANDLE_ID.lock().unwrap();
-    let id = *id_guard;
-    *id_guard += 1;
-    drop(id_guard);
+    let id = alloc_fetch_handle_id();
     REQUEST_REGISTRY.lock().unwrap().insert(
         id,
         RequestRecord {
@@ -1876,10 +1880,7 @@ pub extern "C" fn js_request_clone(handle: f64) -> f64 {
         })
     };
     if let Some(new_req) = cloned {
-        let mut id_guard = NEXT_FETCH_HANDLE_ID.lock().unwrap();
-        let new_id = *id_guard;
-        *id_guard += 1;
-        drop(id_guard);
+        let new_id = alloc_fetch_handle_id();
         REQUEST_REGISTRY.lock().unwrap().insert(new_id, new_req);
         return handle_to_f64(new_id);
     }

@@ -515,6 +515,13 @@ pub enum Expr {
         event: Box<Expr>,
         handler: Box<Expr>,
     },
+    // process.stdin.removeListener/off(event, handler) -> stdin (#3962)
+    ProcessStdinRemoveListener {
+        event: Box<Expr>,
+        handler: Box<Expr>,
+    },
+    // process.stdin.pause/resume/unref/ref/destroy() -> stdin (#3962)
+    ProcessStdinLifecycle(ProcessStdinLifecycleMethod),
     // process.stdout.on('resize', handler) -> stdout (#347 Phase 3)
     // Registers a SIGWINCH handler that fires when the terminal is
     // resized. Other events fall through to the generic dispatch.
@@ -2171,6 +2178,10 @@ pub enum Expr {
     ReflectConstruct {
         target: Box<Expr>,
         args: Box<Expr>,
+        /// Optional `newTarget` (the 3rd `Reflect.construct` argument). When the
+        /// call omits it, this lowers to `Expr::Undefined` and the runtime
+        /// defaults `newTarget` to the target/proxy itself.
+        new_target: Box<Expr>,
     },
     ReflectDefineProperty {
         target: Box<Expr>,
@@ -2243,6 +2254,24 @@ pub enum Expr {
         paths: Vec<String>,
         arg: Box<Expr>,
     },
+    /// Compile-time-resolved `new Worker(filename, options?)` from
+    /// `node:worker_threads`. The filename expression follows the same
+    /// deterministic subset as dynamic `import()`: lowering leaves `paths`
+    /// empty, and the module collector resolves it before codegen.
+    WorkerNew {
+        paths: Vec<String>,
+        filename: Box<Expr>,
+        options: Option<Box<Expr>>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessStdinLifecycleMethod {
+    Pause,
+    Resume,
+    Unref,
+    Ref,
+    Destroy,
 }
 
 /// Which primitive the `new X(...)` form is wrapping. Used by

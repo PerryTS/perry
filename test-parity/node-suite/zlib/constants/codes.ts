@@ -1,7 +1,10 @@
 import * as zlib from "node:zlib";
+import { codes } from "node:zlib";
 
 console.log("zlib keys includes codes:", Object.keys(zlib).includes("codes"));
 console.log("codes type:", typeof (zlib as any).codes);
+console.log("named codes type:", typeof codes);
+console.log("named codes identity:", codes === (zlib as any).codes);
 console.log("codes stable identity:", (zlib as any).codes === (zlib as any).codes);
 console.log("codes keys:", JSON.stringify(Object.keys((zlib as any).codes)));
 console.log(

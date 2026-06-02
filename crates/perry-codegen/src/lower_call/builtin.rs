@@ -16,7 +16,7 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
+use crate::expr::{lower_array_literal, lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
 use crate::types::{DOUBLE, I32, I64};
 
@@ -119,9 +119,6 @@ pub(super) fn lower_builtin_new(
         // Uint8Array — i.e. ArrayBuffers — are aliased rather than
         // copied). SharedArrayBuffer uses the same storage allocation with a
         // separate runtime registry so util.types can distinguish it.
-        // Non-numeric arg shapes (`new ArrayBuffer(undefined)` etc.) coerce to
-        // 0 — matches Node/bun's `ToIndex(length)` step for the typical
-        // undefined-arg case.
         "ArrayBuffer" | "SharedArrayBuffer" => {
             let size_box = if !args.is_empty() {
                 lower_expr(ctx, &args[0])?
@@ -129,13 +126,12 @@ pub(super) fn lower_builtin_new(
                 double_literal(0.0)
             };
             let blk = ctx.block();
-            let size_i32 = blk.fptosi(DOUBLE, &size_box, I32);
             let runtime = if class_name == "SharedArrayBuffer" {
-                "js_shared_array_buffer_new"
+                "js_shared_array_buffer_new_value"
             } else {
-                "js_array_buffer_new"
+                "js_array_buffer_new_value"
             };
-            let handle = blk.call(I64, runtime, &[(I32, &size_i32)]);
+            let handle = blk.call(I64, runtime, &[(DOUBLE, &size_box)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         "Uint8Array" if args.len() >= 2 => {
@@ -157,8 +153,8 @@ pub(super) fn lower_builtin_new(
         }
         // Minimal DataView support for BufferSource consumers such as
         // StringDecoder: Perry models ArrayBuffer/Uint8Array storage as a
-        // BufferHeader, so `new DataView(buffer)` can alias the same backing
-        // pointer for byte-extraction call sites.
+        // BufferHeader, so `new DataView(buffer)` can create a registered view
+        // over that backing store for byte-extraction call sites.
         "DataView" => {
             // Pass the raw NaN-boxed arguments (undefined when absent) so the
             // runtime can apply the spec's ToIndex/range validation and throw
@@ -241,6 +237,23 @@ pub(super) fn lower_builtin_new(
             let handle = blk.call(I64, "js_event_emitter_new_with_options", &[(DOUBLE, &opts)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        "EventEmitterAsyncResource" => {
+            let opts = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_event_emitter_async_resource_new",
+                &[(DOUBLE, &opts)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
         "EventTarget" => {
             for a in args {
                 let _ = lower_expr(ctx, a)?;
@@ -282,6 +295,74 @@ pub(super) fn lower_builtin_new(
                 "js_broadcast_channel_new",
                 &[(DOUBLE, &name)],
             )))
+        }
+        "Event" => {
+            let event_type = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let options = if let Some(a) = args.get(1) {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(2) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let argc = args.len().to_string();
+            let handle = blk.call(
+                I64,
+                "js_event_new",
+                &[(DOUBLE, &event_type), (DOUBLE, &options), (I32, &argc)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "CustomEvent" => {
+            let event_type = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let options = if let Some(a) = args.get(1) {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(2) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let argc = args.len().to_string();
+            let handle = blk.call(
+                I64,
+                "js_custom_event_new",
+                &[(DOUBLE, &event_type), (DOUBLE, &options), (I32, &argc)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "DOMException" => {
+            let message = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let name = if let Some(a) = args.get(1) {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(2) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_dom_exception_new",
+                &[(DOUBLE, &message), (DOUBLE, &name)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         "Console" => {
             let opts = if let Some(a) = args.first() {
@@ -675,25 +756,39 @@ pub(super) fn lower_builtin_new(
         "Array" => {
             // `new Array()` → empty array, `new Array(n)` → length-n sparse
             // array after runtime validation, and `new Array(value)` with a
-            // non-number argument → one-element array. Multi-arg calls fall
-            // back to the generic Expr::New path.
-            let blk = ctx.block();
-            let handle = if args.is_empty() {
-                blk.call(I64, "js_array_create", &[])
-            } else if args.len() == 1 {
+            // non-number argument → one-element array.
+            if args.is_empty() {
+                let blk = ctx.block();
+                let handle = blk.call(I64, "js_array_create", &[]);
+                let blk = ctx.block();
+                return Ok(Some(nanbox_pointer_inline(blk, &handle)));
+            }
+            if args.len() == 1 {
                 let value = lower_expr(ctx, &args[0])?;
                 let blk = ctx.block();
-                blk.call(I64, "js_array_constructor_single", &[(DOUBLE, &value)])
-            } else {
-                return Ok(None);
-            };
-            let blk = ctx.block();
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+                let handle = blk.call(I64, "js_array_constructor_single", &[(DOUBLE, &value)]);
+                let blk = ctx.block();
+                return Ok(Some(nanbox_pointer_inline(blk, &handle)));
+            }
+            // #3985: `Array(a, b, c, ...)` / `new Array(a, b, ...)` with ≥2 args
+            // is the element-list form — semantically identical to the
+            // `[a, b, c, ...]` literal (only the single-number form means
+            // "length"). Previously this returned `Ok(None)` and fell back to a
+            // generic path that produced a length-0 array.
+            let arr = lower_array_literal(ctx, args)?;
+            Ok(Some(arr))
         }
         "Response" => {
             // new Response(body?, init?) — init = { status?, statusText?, headers? }
+            // Route the body through js_response_body_init_ptr (not the plain
+            // string coercion) so a ReadableStream body — e.g. Hono's
+            // `new Response(res.body, res)` header re-wrap — is drained to its
+            // bytes instead of stringified to its numeric stream handle.
+            // Non-stream bodies coerce exactly as get_raw_string_ptr did.
             let body_ptr = if !args.is_empty() {
-                get_raw_string_ptr(ctx, &args[0])?
+                let v = lower_expr(ctx, &args[0])?;
+                let blk = ctx.block();
+                blk.call(I64, "js_response_body_init_ptr", &[(DOUBLE, &v)])
             } else {
                 "0".to_string()
             };
@@ -905,6 +1000,14 @@ pub(super) fn lower_builtin_new(
                     );
                 }
             }
+            Ok(Some(h))
+        }
+
+        "FormData" => {
+            // new FormData() — Perry's current native registry stores string
+            // values, which covers deterministic constructor/mutator parity
+            // for append/set/delete/get/getAll/has/iteration.
+            let h = ctx.block().call(DOUBLE, "js_form_data_new", &[]);
             Ok(Some(h))
         }
 
@@ -1190,7 +1293,12 @@ pub(super) fn lower_builtin_new(
             for a in args {
                 let _ = lower_expr(ctx, a)?;
             }
-            let h = ctx.block().call(DOUBLE, "js_text_encoding_stream_new", &[]);
+            let runtime = if class_name == "TextEncoderStream" {
+                "js_text_encoder_stream_new"
+            } else {
+                "js_text_decoder_stream_new"
+            };
+            let h = ctx.block().call(DOUBLE, runtime, &[]);
             Ok(Some(h))
         }
 

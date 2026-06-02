@@ -1,6 +1,8 @@
 use crate::fs::validate::{describe_received, is_numeric, throw_type_error_with_code};
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::{JSValue, TAG_TRUE};
+#[cfg(unix)]
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
 
 fn signal_number_by_name(name: &str) -> Option<i32> {
     #[cfg(unix)]
@@ -61,6 +63,306 @@ fn signal_number_by_name(name: &str) -> Option<i32> {
             "SIGBREAK" => Some(21),
             _ => None,
         }
+    }
+}
+
+#[cfg(unix)]
+static SIGNAL_WAKE_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
+#[cfg(unix)]
+static SIGNAL_WAKE_THREAD_STARTED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(unix)]
+static SIGHUP_PENDING: AtomicUsize = AtomicUsize::new(0);
+#[cfg(unix)]
+static SIGHUP_LISTENERS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(unix)]
+static SIGHUP_INSTALLED: AtomicBool = AtomicBool::new(false);
+#[cfg(unix)]
+static SIGINT_PENDING: AtomicUsize = AtomicUsize::new(0);
+#[cfg(unix)]
+static SIGINT_LISTENERS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(unix)]
+static SIGINT_INSTALLED: AtomicBool = AtomicBool::new(false);
+#[cfg(unix)]
+static SIGQUIT_PENDING: AtomicUsize = AtomicUsize::new(0);
+#[cfg(unix)]
+static SIGQUIT_LISTENERS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(unix)]
+static SIGQUIT_INSTALLED: AtomicBool = AtomicBool::new(false);
+#[cfg(unix)]
+static SIGABRT_PENDING: AtomicUsize = AtomicUsize::new(0);
+#[cfg(unix)]
+static SIGABRT_LISTENERS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(unix)]
+static SIGABRT_INSTALLED: AtomicBool = AtomicBool::new(false);
+#[cfg(unix)]
+static SIGBUS_PENDING: AtomicUsize = AtomicUsize::new(0);
+#[cfg(unix)]
+static SIGBUS_LISTENERS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(unix)]
+static SIGBUS_INSTALLED: AtomicBool = AtomicBool::new(false);
+#[cfg(unix)]
+static SIGPIPE_PENDING: AtomicUsize = AtomicUsize::new(0);
+#[cfg(unix)]
+static SIGPIPE_LISTENERS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(unix)]
+static SIGPIPE_INSTALLED: AtomicBool = AtomicBool::new(false);
+#[cfg(unix)]
+static SIGTERM_PENDING: AtomicUsize = AtomicUsize::new(0);
+#[cfg(unix)]
+static SIGTERM_LISTENERS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(unix)]
+static SIGTERM_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(unix)]
+struct ProcessSignalSlot {
+    name: &'static str,
+    number: libc::c_int,
+    pending: &'static AtomicUsize,
+    listeners: &'static AtomicUsize,
+    installed: &'static AtomicBool,
+}
+
+#[cfg(unix)]
+static PROCESS_SIGNAL_SLOTS: &[ProcessSignalSlot] = &[
+    ProcessSignalSlot {
+        name: "SIGHUP",
+        number: libc::SIGHUP,
+        pending: &SIGHUP_PENDING,
+        listeners: &SIGHUP_LISTENERS,
+        installed: &SIGHUP_INSTALLED,
+    },
+    ProcessSignalSlot {
+        name: "SIGINT",
+        number: libc::SIGINT,
+        pending: &SIGINT_PENDING,
+        listeners: &SIGINT_LISTENERS,
+        installed: &SIGINT_INSTALLED,
+    },
+    ProcessSignalSlot {
+        name: "SIGQUIT",
+        number: libc::SIGQUIT,
+        pending: &SIGQUIT_PENDING,
+        listeners: &SIGQUIT_LISTENERS,
+        installed: &SIGQUIT_INSTALLED,
+    },
+    ProcessSignalSlot {
+        name: "SIGABRT",
+        number: libc::SIGABRT,
+        pending: &SIGABRT_PENDING,
+        listeners: &SIGABRT_LISTENERS,
+        installed: &SIGABRT_INSTALLED,
+    },
+    ProcessSignalSlot {
+        name: "SIGBUS",
+        number: libc::SIGBUS,
+        pending: &SIGBUS_PENDING,
+        listeners: &SIGBUS_LISTENERS,
+        installed: &SIGBUS_INSTALLED,
+    },
+    ProcessSignalSlot {
+        name: "SIGPIPE",
+        number: libc::SIGPIPE,
+        pending: &SIGPIPE_PENDING,
+        listeners: &SIGPIPE_LISTENERS,
+        installed: &SIGPIPE_INSTALLED,
+    },
+    ProcessSignalSlot {
+        name: "SIGTERM",
+        number: libc::SIGTERM,
+        pending: &SIGTERM_PENDING,
+        listeners: &SIGTERM_LISTENERS,
+        installed: &SIGTERM_INSTALLED,
+    },
+];
+
+#[cfg(unix)]
+fn slot_by_name(name: &str) -> Option<&'static ProcessSignalSlot> {
+    PROCESS_SIGNAL_SLOTS.iter().find(|slot| slot.name == name)
+}
+
+#[cfg(unix)]
+fn slot_by_number(number: libc::c_int) -> Option<&'static ProcessSignalSlot> {
+    PROCESS_SIGNAL_SLOTS
+        .iter()
+        .find(|slot| slot.number == number)
+}
+
+#[cfg(unix)]
+extern "C" fn process_signal_handler(sig: libc::c_int) {
+    if let Some(slot) = slot_by_number(sig) {
+        slot.pending.fetch_add(1, Ordering::Release);
+        let fd = SIGNAL_WAKE_WRITE_FD.load(Ordering::Relaxed);
+        if fd >= 0 {
+            let byte = [sig as u8];
+            unsafe {
+                let _ = libc::write(fd, byte.as_ptr() as *const _, 1);
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn set_fd_cloexec(fd: libc::c_int) {
+    unsafe {
+        let current = libc::fcntl(fd, libc::F_GETFD);
+        if current >= 0 {
+            let _ = libc::fcntl(fd, libc::F_SETFD, current | libc::FD_CLOEXEC);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn set_fd_nonblocking(fd: libc::c_int) {
+    unsafe {
+        let current = libc::fcntl(fd, libc::F_GETFL);
+        if current >= 0 {
+            let _ = libc::fcntl(fd, libc::F_SETFL, current | libc::O_NONBLOCK);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn ensure_signal_wake_thread() {
+    if SIGNAL_WAKE_THREAD_STARTED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    unsafe {
+        let mut fds = [0; 2];
+        if libc::pipe(fds.as_mut_ptr()) != 0 {
+            SIGNAL_WAKE_THREAD_STARTED.store(false, Ordering::Release);
+            return;
+        }
+        set_fd_cloexec(fds[0]);
+        set_fd_cloexec(fds[1]);
+        set_fd_nonblocking(fds[1]);
+        SIGNAL_WAKE_WRITE_FD.store(fds[1], Ordering::Release);
+        let read_fd = fds[0];
+        let _ = std::thread::Builder::new()
+            .name("perry-signal-wake".to_string())
+            .spawn(move || {
+                let mut buf = [0u8; 64];
+                loop {
+                    let n = libc::read(read_fd, buf.as_mut_ptr() as *mut _, buf.len());
+                    if n > 0 {
+                        crate::event_pump::js_notify_main_thread();
+                    } else if n == 0 {
+                        break;
+                    } else {
+                        let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+                        if errno != libc::EINTR {
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                    }
+                }
+            });
+    }
+}
+
+#[cfg(unix)]
+fn install_process_signal_handler(slot: &'static ProcessSignalSlot) {
+    if slot
+        .installed
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    ensure_signal_wake_thread();
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = process_signal_handler as *const () as usize;
+        sa.sa_flags = libc::SA_RESTART;
+        libc::sigemptyset(&mut sa.sa_mask);
+        if libc::sigaction(slot.number, &sa, std::ptr::null_mut()) != 0 {
+            slot.installed.store(false, Ordering::Release);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn uninstall_process_signal_handler(slot: &'static ProcessSignalSlot) {
+    slot.pending.store(0, Ordering::Release);
+    if slot
+        .installed
+        .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = libc::SIG_DFL;
+        libc::sigemptyset(&mut sa.sa_mask);
+        let _ = libc::sigaction(slot.number, &sa, std::ptr::null_mut());
+    }
+}
+
+pub(crate) fn is_process_signal_name(name: &str) -> bool {
+    #[cfg(unix)]
+    {
+        slot_by_name(name).is_some()
+    }
+    #[cfg(not(unix))]
+    {
+        matches!(name, "SIGINT" | "SIGTERM")
+    }
+}
+
+pub(crate) fn set_process_signal_listener_count(name: &str, count: usize) {
+    #[cfg(unix)]
+    {
+        let Some(slot) = slot_by_name(name) else {
+            return;
+        };
+        slot.listeners.store(count, Ordering::Release);
+        if count > 0 {
+            install_process_signal_handler(slot);
+        } else {
+            uninstall_process_signal_handler(slot);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (name, count);
+    }
+}
+
+pub(crate) fn has_active_process_signal_listeners() -> bool {
+    #[cfg(unix)]
+    {
+        PROCESS_SIGNAL_SLOTS
+            .iter()
+            .any(|slot| slot.listeners.load(Ordering::Acquire) > 0)
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+pub(crate) fn take_pending_process_signals() -> Vec<&'static str> {
+    #[cfg(unix)]
+    {
+        let mut signals = Vec::new();
+        for slot in PROCESS_SIGNAL_SLOTS {
+            let count = slot.pending.swap(0, Ordering::AcqRel);
+            if count == 0 || slot.listeners.load(Ordering::Acquire) == 0 {
+                continue;
+            }
+            signals.extend(std::iter::repeat(slot.name).take(count));
+        }
+        signals
+    }
+    #[cfg(not(unix))]
+    {
+        Vec::new()
     }
 }
 

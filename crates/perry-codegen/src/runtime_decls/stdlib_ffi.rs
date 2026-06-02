@@ -11,6 +11,20 @@ use super::*;
 /// Signatures cross-checked against `crates/perry-runtime/src/` and
 /// `crates/perry-stdlib/src/`.
 pub fn declare_stdlib_ffi(module: &mut LlModule) {
+    // ========== worker_threads ==========
+    module.declare_function("js_worker_threads_worker_new", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_worker_threads_worker_post_message",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_worker_threads_worker_on", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function("js_worker_threads_worker_once", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function("js_worker_threads_worker_off", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function("js_worker_threads_worker_terminate", DOUBLE, &[I64]);
+    module.declare_function("js_worker_threads_worker_ref", DOUBLE, &[I64]);
+    module.declare_function("js_worker_threads_worker_unref", DOUBLE, &[I64]);
+
     // ========== HTTP server ==========
     module.declare_function("js_http_client_request_end", I64, &[I64, DOUBLE]);
     module.declare_function("js_http_client_request_write", I64, &[I64, DOUBLE]);
@@ -1216,6 +1230,24 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_event_emitter_listeners", I64, &[I64, I64]);
     module.declare_function("js_event_emitter_raw_listeners", I64, &[I64, I64]);
     module.declare_function("js_event_emitter_domain_value", DOUBLE, &[I64]);
+    module.declare_function("js_event_emitter_async_resource_new", I64, &[DOUBLE]);
+    module.declare_function("js_event_emitter_async_resource_call", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_event_emitter_async_resource_async_id", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_event_emitter_async_resource_trigger_async_id",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function(
+        "js_event_emitter_async_resource_async_resource",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function(
+        "js_event_emitter_async_resource_emit_destroy",
+        DOUBLE,
+        &[I64],
+    );
     // Module-level helpers
     module.declare_function("js_events_once", I64, &[DOUBLE, I64, DOUBLE]);
     module.declare_function("js_events_on", I64, &[DOUBLE, I64, DOUBLE]);
@@ -1669,6 +1701,13 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_object_literal_set_computed",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_object_literal_to_property_key", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_object_literal_set_prototype", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_to_primitive", DOUBLE, &[DOUBLE, I32]);
     module.declare_function("js_register_class_has_instance", VOID, &[I32, I64]);
     module.declare_function("js_register_class_to_string_tag", VOID, &[I32, I64]);
@@ -1695,15 +1734,13 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_map_group_by", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_array_from_async", DOUBLE, &[DOUBLE]);
 
-    // ========== JSX runtime stubs (issue #277) ==========
-    // `js_jsx(type, props)` and `js_jsxs(type, props)` are no-op stubs that
-    // let TSX/JSX files compile and link without a real JSX runtime package.
-    // The codegen intercepts ExternFuncRef { name: "jsx" } / "jsxs" in
-    // `lower_call.rs` and routes them here with both args as DOUBLE
-    // (NaN-boxed), bypassing the string→PTR conversion the generic path
-    // would apply to string literals.  When a real JSX runtime is imported
-    // via `perry.compilePackages` the imported symbol takes precedence and
-    // these stubs are never called.
+    // ========== JSX runtime adapter (issue #277, #1653) ==========
+    // `js_jsx(type, props)` and `js_jsxs(type, props)` are Perry's built-in
+    // TSX/JSX runtime entry points. Codegen intercepts
+    // ExternFuncRef { name: "jsx" } / "jsxs" in `lower_call.rs` and routes
+    // them here with both args as DOUBLE (NaN-boxed), bypassing the string→PTR
+    // conversion the generic path would apply to string literals. The runtime
+    // handles HTML-style intrinsics, fragments, and function components.
     module.declare_function("js_jsx", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_jsxs", DOUBLE, &[DOUBLE, DOUBLE]);
 }

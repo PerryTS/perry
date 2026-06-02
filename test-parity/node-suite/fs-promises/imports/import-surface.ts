@@ -1,6 +1,6 @@
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
-import { readFile, writeFile, readdir, stat, rm, lstat, cp, truncate, mkdtemp, readlink, open, statfs, utimes, lutimes, opendir, chmod, chown, lchown, glob, watch, constants } from "node:fs/promises";
+import { readFile, writeFile, readdir, stat, rm, lstat, cp, truncate, mkdtemp, mkdtempDisposable, readlink, open, statfs, utimes, lutimes, opendir, chmod, chown, lchown, glob, watch, constants } from "node:fs/promises";
 
 console.log("namespace object:", fsp !== null && typeof fsp === "object");
 console.log("namespace readFile:", typeof fsp.readFile);
@@ -8,13 +8,17 @@ console.log("namespace writeFile:", typeof fsp.writeFile);
 console.log("namespace readdir:", typeof fsp.readdir);
 console.log("namespace constants:", typeof fsp.constants);
 console.log("namespace constants F_OK:", fsp.constants.F_OK);
+console.log("namespace mkdtempDisposable:", typeof fsp.mkdtempDisposable);
 console.log("named readFile:", typeof readFile);
 console.log("named writeFile:", typeof writeFile);
 console.log("named readdir:", typeof readdir);
 console.log("named constants:", typeof constants);
+console.log("named mkdtempDisposable:", typeof mkdtempDisposable);
 console.log("constants named namespace identity:", constants === fsp.constants);
 console.log("constants fs identity:", constants === fs.constants);
 console.log("constants parent identity:", constants === fs.promises.constants);
+console.log("mkdtempDisposable namespace identity:", mkdtempDisposable === fsp.mkdtempDisposable);
+console.log("mkdtempDisposable parent identity:", mkdtempDisposable === fs.promises.mkdtempDisposable);
 console.log("readFile parent identity:", readFile === fs.promises.readFile);
 console.log("writeFile parent identity:", writeFile === fs.promises.writeFile);
 console.log("open parent identity:", open === fs.promises.open);

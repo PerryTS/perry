@@ -1380,7 +1380,7 @@ mod objects_arrays_lit;
 mod os_uri_dates;
 mod property_get;
 mod property_set;
-mod proxy_reflect;
+pub(crate) mod proxy_reflect;
 mod static_field_meta;
 mod static_method;
 mod string_regex_proc;
@@ -1626,6 +1626,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ProcessOnce { .. }
         | Expr::ProcessStdinSetRawMode(..)
         | Expr::ProcessStdinOn { .. }
+        | Expr::ProcessStdinRemoveListener { .. }
+        | Expr::ProcessStdinLifecycle(..)
         | Expr::ProcessStdoutOn { .. }
         | Expr::TtyIsAtty(..)
         | Expr::ProcessStdinIsTTY
@@ -1883,9 +1885,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ReflectGetMetadataKeys { .. }
         | Expr::ReflectGetOwnMetadataKeys { .. }
         | Expr::ReflectDeleteMetadata { .. } => proxy_reflect::lower(ctx, expr),
-        Expr::DynamicImport { .. } | Expr::ExternFuncRef { .. } | Expr::I18nString { .. } => {
-            dyn_extern_i18n::lower(ctx, expr)
-        }
+        Expr::DynamicImport { .. }
+        | Expr::WorkerNew { .. }
+        | Expr::ExternFuncRef { .. }
+        | Expr::I18nString { .. } => dyn_extern_i18n::lower(ctx, expr),
         Expr::ChildProcessExecSync { .. }
         | Expr::ChildProcessSpawnSync { .. }
         | Expr::ChildProcessSpawnBackground { .. }

@@ -16,6 +16,93 @@
 //! Request id never collides with a Response/Headers/Blob id.
 
 use super::*;
+use perry_runtime::js_get_string_pointer_unified;
+
+/// Coerce a `Response` body-init value to a `*const StringHeader` (returned as
+/// i64, mirroring `js_get_string_pointer_unified`).
+///
+/// A `ReadableStream` handle — e.g. another Response's `.body` — is a plain
+/// numeric f64 id with no NaN-box tag, so the generic string coercion would
+/// stringify the handle to its number and discard the real bytes. Hono re-wraps
+/// responses to mutate headers via `new Response(res.body, res)`, so the body
+/// must be DRAINED from the stream's buffered chunks instead. Any non-stream
+/// value falls back to the normal coercion, so plain string bodies
+/// (`c.json`/`c.text`) are unaffected.
+#[no_mangle]
+pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
+    // A non-integral or out-of-range value can't be a stream, so skip the
+    // registry probe for the common cases.
+    if value.is_finite()
+        && value.fract() == 0.0
+        && ((crate::streams::STREAM_HANDLE_ID_START as f64)
+            ..(crate::streams::STREAM_HANDLE_ID_END as f64))
+            .contains(&value)
+    {
+        let id = value as usize;
+        // kind == 1 ⇒ live ReadableStream.
+        if crate::streams::js_stream_handle_kind(id) == 1 {
+            let bytes = crate::streams::drain_readable_into_bytes(id);
+            return unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) } as i64;
+        }
+    }
+    js_get_string_pointer_unified(value)
+}
+
+lazy_static::lazy_static! {
+    static ref FORM_DATA_METHOD_VALUE_CACHE: Mutex<HashMap<(usize, &'static str), u64>> =
+        Mutex::new(HashMap::new());
+}
+
+fn form_data_bound_method_value(form_id: usize, method_name: &'static str) -> f64 {
+    if let Some(bits) = FORM_DATA_METHOD_VALUE_CACHE
+        .lock()
+        .unwrap()
+        .get(&(form_id, method_name))
+        .copied()
+    {
+        return f64::from_bits(bits);
+    }
+
+    extern "C" {
+        fn js_write_barrier_root_nanbox(value_bits: u64);
+    }
+
+    let closure =
+        perry_runtime::closure::js_closure_alloc(perry_runtime::closure::BOUND_METHOD_FUNC_PTR, 3);
+    perry_runtime::closure::js_closure_set_capture_f64(closure, 0, handle_to_f64(form_id));
+    perry_runtime::closure::js_closure_set_capture_ptr(closure, 1, method_name.as_ptr() as i64);
+    perry_runtime::closure::js_closure_set_capture_ptr(closure, 2, method_name.len() as i64);
+    let value = perry_runtime::value::js_nanbox_pointer(closure as i64);
+    unsafe { js_write_barrier_root_nanbox(value.to_bits()) };
+    FORM_DATA_METHOD_VALUE_CACHE
+        .lock()
+        .unwrap()
+        .insert((form_id, method_name), value.to_bits());
+    value
+}
+
+/// `instanceof` kind-probe for fetch handles (registered with the runtime at
+/// init via `js_register_fetch_handle_kind_probe`). Returns 0 = none,
+/// 1 = Response, 2 = Request, 3 = Headers, 4 = Blob. Lets `x instanceof
+/// Response` (etc.) resolve for the pointer-tagged small-integer handles these
+/// types use instead of heap objects. Lives here (not `mod.rs`) to keep that
+/// file under the 2,000-line lint gate.
+#[no_mangle]
+pub extern "C" fn js_fetch_handle_kind(id: usize) -> u8 {
+    if FETCH_RESPONSES.lock().unwrap().contains_key(&id) {
+        return 1;
+    }
+    if REQUEST_REGISTRY.lock().unwrap().contains_key(&id) {
+        return 2;
+    }
+    if HEADERS_REGISTRY.lock().unwrap().contains_key(&id) {
+        return 3;
+    }
+    if BLOB_REGISTRY.lock().unwrap().contains_key(&id) {
+        return 4;
+    }
+    0
+}
 
 // ----------------- Untyped property dispatch (refs #421) -----------------
 //
@@ -333,6 +420,30 @@ pub fn dispatch_headers_property(headers_id: usize, prop: &str) -> Option<f64> {
     Some(headers_bound_method_value(headers_id, method_name))
 }
 
+/// Try to read a property off a FormData handle by registry id. FormData
+/// exposes prototype methods as function-valued properties, so any-typed
+/// feature checks such as `typeof form.append === "function"` work.
+#[doc(hidden)]
+pub fn dispatch_form_data_property(form_id: usize, prop: &str) -> Option<f64> {
+    if !form_data_contains_handle(form_id) {
+        return None;
+    }
+    let method_name: &'static str = match prop {
+        "append" => "append",
+        "delete" => "delete",
+        "entries" | "Symbol.iterator" | "@@iterator" => "entries",
+        "forEach" => "forEach",
+        "get" => "get",
+        "getAll" => "getAll",
+        "has" => "has",
+        "keys" => "keys",
+        "set" => "set",
+        "values" => "values",
+        _ => return None,
+    };
+    Some(form_data_bound_method_value(form_id, method_name))
+}
+
 /// Try to dispatch a method call on a Response handle. Returns `Some(result)`
 /// only when the id is a known Response AND the method is supported. Returns
 /// `None` (fall through to the next dispatcher) otherwise. Required because
@@ -373,6 +484,60 @@ pub fn dispatch_response_method(resp_id: usize, method: &str, _args: &[f64]) -> 
                 Some(f64::from_bits(JSValue::pointer(promise as *mut u8).bits()))
             }
             "clone" => Some(js_response_clone(resp_f64)),
+            _ => None,
+        }
+    }
+}
+
+/// Try to dispatch a method call on a FormData handle. Returns `None` for
+/// unknown ids or methods.
+#[doc(hidden)]
+pub fn dispatch_form_data_method(form_id: usize, method: &str, args: &[f64]) -> Option<f64> {
+    if !form_data_contains_handle(form_id) {
+        return None;
+    }
+    let form_f64 = handle_to_f64(form_id);
+    let str_arg = |i: usize| -> *const StringHeader {
+        if i < args.len() {
+            (args[i].to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader
+        } else {
+            std::ptr::null()
+        }
+    };
+    unsafe {
+        match method {
+            "append" => Some(js_form_data_append(
+                form_f64,
+                args.first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
+                args.get(1)
+                    .copied()
+                    .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
+            )),
+            "set" => Some(js_form_data_set(
+                form_f64,
+                args.first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
+                args.get(1)
+                    .copied()
+                    .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
+            )),
+            "delete" => Some(js_form_data_delete(form_f64, str_arg(0))),
+            "get" => Some(js_form_data_get(form_f64, str_arg(0))),
+            "getAll" => Some(js_form_data_get_all(form_f64, str_arg(0))),
+            "has" => Some(js_form_data_has(form_f64, str_arg(0))),
+            "entries" | "Symbol.iterator" | "@@iterator" => Some(js_form_data_entries(form_f64)),
+            "keys" => Some(js_form_data_keys(form_f64)),
+            "values" => Some(js_form_data_values(form_f64)),
+            "forEach" => {
+                let cb = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(TAG_UNDEFINED));
+                Some(js_form_data_for_each(form_f64, cb))
+            }
             _ => None,
         }
     }
@@ -432,9 +597,19 @@ pub fn dispatch_headers_method(headers_id: usize, method: &str, args: &[f64]) ->
     };
     unsafe {
         match method {
-            "get" => Some(f64::from_bits(
-                JSValue::string_ptr(js_headers_get(h_f64, str_arg(0))).bits(),
-            )),
+            // WHATWG `Headers.get` returns `null` for an absent header, not the
+            // empty string. `js_headers_get` signals absence with a null
+            // `StringHeader` pointer; wrapping that in `string_ptr` would render
+            // as `""` and break `headers.get(x) === null` checks (the Hono
+            // adapter path behind #4004).
+            "get" => {
+                let p = js_headers_get(h_f64, str_arg(0));
+                if p.is_null() {
+                    Some(f64::from_bits(TAG_NULL))
+                } else {
+                    Some(f64::from_bits(JSValue::string_ptr(p).bits()))
+                }
+            }
             "set" => Some(js_headers_set(h_f64, str_arg(0), str_arg(1))),
             "append" => Some(js_headers_append(h_f64, str_arg(0), str_arg(1))),
             "has" => Some(js_headers_has(h_f64, str_arg(0))),

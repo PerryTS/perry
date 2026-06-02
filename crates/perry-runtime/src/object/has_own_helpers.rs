@@ -83,6 +83,9 @@ pub(super) unsafe fn array_own_key_present(
     if key_name == "length" {
         return true;
     }
+    if crate::array::array_named_property_has(arr, key) {
+        return true;
+    }
     let Some(index) = super::canonical_array_index(key_name) else {
         return false;
     };

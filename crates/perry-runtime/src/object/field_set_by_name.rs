@@ -292,6 +292,34 @@ pub extern "C" fn js_object_set_field_by_name(
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
+        if gc_type == crate::gc::GC_TYPE_ARRAY {
+            if key.is_null() {
+                return;
+            }
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+            let name = match std::str::from_utf8(key_bytes) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            let arr = obj as *mut crate::array::ArrayHeader;
+            if name == "length" {
+                crate::array::js_array_set_length(arr, value);
+                return;
+            }
+            if let Some(index) = super::canonical_array_index(name) {
+                crate::array::js_array_set_f64_extend(arr, index, value);
+                return;
+            }
+            if let Some(attrs) = super::get_property_attrs(obj as usize, name) {
+                if !attrs.writable() {
+                    return;
+                }
+            }
+            crate::array::array_named_property_set(arr, key, value);
+            return;
+        }
         // Error objects have a fixed `#[repr(C)]` layout with no field-storage
         // region (`message`/`name`/`stack`/`cause`/`errors` are dedicated
         // slots), so a user assignment like `err.code = "X"` or

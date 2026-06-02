@@ -48,6 +48,44 @@ use super::{
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
+        Expr::WorkerNew {
+            paths,
+            filename,
+            options,
+        } => {
+            let _ = lower_expr(ctx, filename)?;
+            let options_val = if let Some(options) = options {
+                lower_expr(ctx, options)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            if paths.len() != 1 {
+                bail!(
+                    "worker_threads Worker requires exactly one compile-time-resolved filename, got {}",
+                    paths.len()
+                );
+            }
+            let path = &paths[0];
+            let target_prefix = ctx
+                .dynamic_import_path_to_prefix
+                .get(path)
+                .cloned()
+                .ok_or_else(|| anyhow!("worker_threads Worker target was not compiled: {path}"))?;
+            if target_prefix.starts_with("__node_submod__")
+                || target_prefix.starts_with("__native_mod__")
+            {
+                bail!("worker_threads Worker target must be a compiled source file: {path}");
+            }
+            let init_name = format!("{}__init", target_prefix);
+            ctx.pending_declares
+                .push((init_name.clone(), crate::types::VOID, vec![]));
+            let entry_ptr = ctx.block().ptrtoint(&format!("@{}", init_name), I64);
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_worker_threads_worker_new",
+                &[(I64, &entry_ptr), (DOUBLE, &options_val)],
+            ))
+        }
         Expr::DynamicImport { paths, arg } => {
             // Defensive: an empty `paths` list means the resolver pass
             // failed to populate this node, which `collect_modules`

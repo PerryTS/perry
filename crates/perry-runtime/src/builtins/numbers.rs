@@ -476,23 +476,11 @@ pub extern "C" fn js_string_coerce(value: f64) -> *mut StringHeader {
     } else if jsval.is_int32() {
         jsval.as_int32().to_string()
     } else {
-        // Regular number
-        let n = value;
-        if n.is_nan() {
-            "NaN".to_string()
-        } else if n.is_infinite() {
-            if n > 0.0 {
-                "Infinity".to_string()
-            } else {
-                "-Infinity".to_string()
-            }
-        } else if n == 0.0 {
-            "0".to_string()
-        } else if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
-            (n as i64).to_string()
-        } else {
-            n.to_string()
-        }
+        // Regular number — ECMAScript NumberToString. #3987: route through the
+        // shared `js_format_f64` so `String(1e21)` → "1e+21" / `String(1e-7)`
+        // → "1e-7" (scientific notation for |n| >= 1e21 / < 1e-6) instead of
+        // Rust's full-decimal `to_string()`, matching `.toString()` and Node.
+        crate::string::js_format_f64(value)
     };
 
     js_string_from_bytes(result.as_ptr(), result.len() as u32)

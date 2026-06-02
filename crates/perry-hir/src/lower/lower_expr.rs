@@ -98,15 +98,6 @@ fn is_known_global_identifier_name(name: &str) -> bool {
             | "btoa"
             | "BigInt"
             | "WebAssembly"
-            // #3527: `eval` as a VALUE (not a call). Libraries build intrinsic
-            // tables that reference it bare — get-intrinsic's
-            // `'%eval%': eval` — and would otherwise throw `ReferenceError:
-            // identifier is not defined` at module init. `eval(...)` *calls*
-            // keep their dedicated eval-surface classification in
-            // `expr_call::intrinsics` (which matches the callee name before the
-            // callee is lowered through this arm), so this only affects the
-            // value read, which lowers to the `GlobalGet(0)` sentinel.
-            | "eval"
     ) || is_builtin_global_value_name(name)
 }
 
@@ -114,10 +105,15 @@ fn is_cjs_style_native_default_import(module_name: &str) -> bool {
     matches!(
         module_name,
         "async_hooks"
+            | "child_process"
             | "constants"
+            | "dns"
+            | "dns/promises"
             | "events"
             | "os"
             | "path"
+            | "path/posix"
+            | "path/win32"
             | "punycode"
             | "querystring"
             | "sys"
@@ -271,28 +267,26 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 if module_name == "worker_threads" {
                     if let Some(method) = method_name {
                         if method == "workerData" {
-                            // workerData is a property-like import that calls a getter function
-                            return Ok(Expr::NativeMethodCall {
-                                module: "worker_threads".to_string(),
-                                class_name: None,
-                                object: None,
-                                method: "workerData".to_string(),
-                                args: Vec::new(),
-                            });
-                        }
-                        if method == "parentPort" {
-                            // parentPort is a singleton handle - call getter function
-                            return Ok(Expr::NativeMethodCall {
-                                module: "worker_threads".to_string(),
-                                class_name: None,
-                                object: None,
-                                method: "parentPort".to_string(),
-                                args: Vec::new(),
+                            return Ok(Expr::PropertyGet {
+                                object: Box::new(Expr::NativeModuleRef(
+                                    "worker_threads".to_string(),
+                                )),
+                                property: "workerData".to_string(),
                             });
                         }
                     }
                 }
                 if let Some(method) = method_name {
+                    // #3946: a `node:process` *property* imported by name
+                    // (`import { pid, arch } from "node:process"`) must read
+                    // the live process value, not a generic native-module
+                    // PropertyGet (which resolved to `undefined`). Methods
+                    // fall through to the callable native-module ref below.
+                    if module_name == "process" {
+                        if let Some(e) = expr_member::lower_process_named_property(method) {
+                            return Ok(e);
+                        }
+                    }
                     return Ok(Expr::PropertyGet {
                         object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
                         property: method.to_string(),
@@ -389,6 +383,9 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 // `Expr::Date*Get(...)` — so they don't reach this arm.
                 // date-fns / drizzle / lodash duck-typing path.
                 if is_builtin_global_value_name(&name) {
+                    if name == "fetch" {
+                        ctx.uses_fetch = true;
+                    }
                     return Ok(Expr::PropertyGet {
                         object: Box::new(Expr::GlobalGet(0)),
                         property: name,
@@ -684,9 +681,10 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     {
                         return Ok(Expr::String("function".to_string()));
                     }
-                    // #1454: global timer builtins (+ fetch) are functions, but
-                    // a bare read lowers to an ExternFuncRef whose typeof reads
-                    // "boolean". Fold to "function" (gc is excluded — it's
+                    // #1454: global timer builtins and fetch are functions.
+                    // Timers still lower bare reads to ExternFuncRef; fetch
+                    // now resolves through globalThis for value identity.
+                    // Fold both shapes to "function" (gc is excluded — it's
                     // undefined in Node without --expose-gc).
                     let n = id.sym.as_ref();
                     if matches!(
@@ -841,6 +839,30 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                     | "runInAsyncScope"
                                     | "emitDestroy"
                                     | "bind"
+                            ) {
+                                return Ok(Expr::String("function".to_string()));
+                            }
+                            if matches!(
+                                ctx.lookup_native_instance(obj_name),
+                                Some(("events", "EventEmitterAsyncResource"))
+                            ) && matches!(
+                                prop_name,
+                                "emitDestroy"
+                                    | "on"
+                                    | "addListener"
+                                    | "once"
+                                    | "prependListener"
+                                    | "prependOnceListener"
+                                    | "off"
+                                    | "removeListener"
+                                    | "removeAllListeners"
+                                    | "emit"
+                                    | "listenerCount"
+                                    | "listeners"
+                                    | "rawListeners"
+                                    | "eventNames"
+                                    | "setMaxListeners"
+                                    | "getMaxListeners"
                             ) {
                                 return Ok(Expr::String("function".to_string()));
                             }

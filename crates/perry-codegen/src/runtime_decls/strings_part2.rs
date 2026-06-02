@@ -525,6 +525,8 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // bytes that subsequent `new Uint8Array(ab)` views ALIAS via shared pointer.
     module.declare_function("js_array_buffer_new", I64, &[I32]);
     module.declare_function("js_shared_array_buffer_new", I64, &[I32]);
+    module.declare_function("js_array_buffer_new_value", I64, &[DOUBLE]);
+    module.declare_function("js_shared_array_buffer_new_value", I64, &[DOUBLE]);
     // JSON full-featured stringify/parse (replacer + indent + reviver).
     module.declare_function("js_json_stringify_full", I64, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_json_parse_with_reviver", I64, &[I64, I64]);
@@ -769,6 +771,9 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // ──────────────────────────────────────────────────────────────────
     // new Response(body_ptr, status, status_text_ptr, headers_handle) -> f64
     module.declare_function("js_response_new", DOUBLE, &[I64, DOUBLE, I64, DOUBLE]);
+    // js_response_body_init_ptr(body_value_f64) -> string_ptr (i64): drains a
+    // ReadableStream body to bytes, else falls back to string coercion.
+    module.declare_function("js_response_body_init_ptr", I64, &[DOUBLE]);
     // new Headers() -> f64
     module.declare_function("js_headers_new", DOUBLE, &[]);
     // headers.set(handle_f64, key_ptr, val_ptr) -> f64 (undefined-tag)
@@ -847,9 +852,17 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_response_blob", I64, &[DOUBLE]);
     module.declare_function("js_response_bytes", I64, &[DOUBLE]);
     module.declare_function("js_response_form_data", I64, &[DOUBLE]);
+    module.declare_function("js_form_data_new", DOUBLE, &[]);
+    module.declare_function("js_form_data_append", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_form_data_set", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_form_data_delete", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_form_data_get", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_form_data_get_all", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function("js_form_data_has", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_form_data_entries", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_form_data_keys", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_form_data_values", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_form_data_for_each", DOUBLE, &[DOUBLE, DOUBLE]);
     // Blob instance methods (issue #234) — handle is f64 (registry id).
     // arrayBuffer/bytes/text return a Promise pointer (i64); slice returns a
     // new blob handle as f64.
@@ -972,6 +985,8 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_transform_stream_readable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_transform_stream_writable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_text_encoding_stream_new", DOUBLE, &[]);
+    module.declare_function("js_text_encoder_stream_new", DOUBLE, &[]);
+    module.declare_function("js_text_decoder_stream_new", DOUBLE, &[]);
     // #1545: node:stream/web QueuingStrategy constructors — take the options
     // object, return a `{ highWaterMark, size }` object.
     module.declare_function("js_streams_strategy_high_water_mark", DOUBLE, &[DOUBLE]);
@@ -1017,12 +1032,26 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_abort_signal_any", I64, &[I64]);
     module.declare_function("js_abort_signal_throw_if_aborted", DOUBLE, &[I64]);
     module.declare_function("js_event_target_new", I64, &[]);
+    module.declare_function("js_event_new", I64, &[DOUBLE, DOUBLE, I32]);
+    module.declare_function("js_custom_event_new", I64, &[DOUBLE, DOUBLE, I32]);
+    module.declare_function("js_dom_exception_new", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_event_target_add_event_listener", VOID, &[I64, I64, I64]);
+    module.declare_function(
+        "js_event_target_add_event_listener_with_options",
+        VOID,
+        &[I64, I64, I64, DOUBLE],
+    );
     module.declare_function(
         "js_event_target_remove_event_listener",
         VOID,
         &[I64, I64, I64],
     );
+    module.declare_function(
+        "js_event_target_remove_event_listener_with_options",
+        VOID,
+        &[I64, I64, I64, DOUBLE],
+    );
+    module.declare_function("js_event_target_dispatch_event", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_event_target_is_event_target", I32, &[I64]);
     module.declare_function("js_event_target_get_event_listeners", I64, &[I64, I64]);
     module.declare_function("js_event_target_get_max_listeners", DOUBLE, &[I64]);

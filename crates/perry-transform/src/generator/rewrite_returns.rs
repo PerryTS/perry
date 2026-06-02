@@ -201,20 +201,6 @@ pub fn is_iter_result(expr: &Expr) -> bool {
     }
 }
 
-/// Walk an expression / statement tree and replace every
-/// `Expr::Object({value: V, done: D})` with `Expr::IterResultSet(V, D)`.
-/// Recurses through Closure bodies, blocks, control-flow, etc. — needs
-/// to descend into the nested generator state-machine closures the
-/// generator transform just synthesized.
-///
-/// Bool literals (`Expr::Bool(true)` / `Expr::Bool(false)`) and number-1
-/// patterns are recognized for the `done` half. Other shapes (computed
-/// done) fall through to the original object alloc — they're not on
-/// the hot path.
-pub fn rewrite_iter_results_to_scratch(expr: &mut Expr) {
-    rewrite_expr(expr);
-}
-
 /// Rewrite every `Expr::Yield { value, .. }` to `Expr::Await(value)` recursively
 /// through statement and expression trees. Does NOT descend into nested closures
 /// (their await/yield context is independent).

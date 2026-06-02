@@ -86,7 +86,8 @@ fn split_children_from_props(props: &Expr) -> (Vec<(String, Expr)>, Option<Expr>
 ///
 /// Follow-up scope (#689): Spacer, Input, Spinner, List, Select,
 /// ProgressBar, Table, Tabs, TextArea. All currently fall through to
-/// `js_jsx` and return TAG_UNDEFINED until the rewriter is extended.
+/// `js_jsx`; the runtime returns `undefined` for those unrecognised intrinsic
+/// sentinels until the rewriter is extended.
 pub(super) fn try_rewrite_perry_tui_jsx_intrinsic(
     ctx: &mut FnCtx<'_>,
     _is_jsxs: bool,

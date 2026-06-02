@@ -1,4 +1,4 @@
 import dcDefault, * as dc from "node:diagnostics_channel";
 
-console.log("namespace boundedChannel typeof:", typeof (dc as any).boundedChannel);
-console.log("default boundedChannel typeof:", typeof (dcDefault as any).boundedChannel);
+console.log("namespace missing typeof:", typeof (dc as any).notARealExport);
+console.log("default missing typeof:", typeof (dcDefault as any).notARealExport);

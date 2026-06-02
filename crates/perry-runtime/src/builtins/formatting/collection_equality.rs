@@ -17,6 +17,7 @@ fn deep_strict_map_equal(
     left: *const crate::map::MapHeader,
     right: *const crate::map::MapHeader,
     depth: usize,
+    skip_prototype: bool,
 ) -> bool {
     let len = crate::map::js_map_size(left);
     if len != crate::map::js_map_size(right) {
@@ -32,11 +33,21 @@ fn deep_strict_map_equal(
                 continue;
             }
             let right_key = crate::map::js_map_entry_key_at(right, right_index);
-            if !super::js_util_deep_strict_equal_bool(left_key, right_key, depth + 1) {
+            if !super::js_util_deep_strict_equal_bool(
+                left_key,
+                right_key,
+                depth + 1,
+                skip_prototype,
+            ) {
                 continue;
             }
             let right_value = crate::map::js_map_entry_value_at(right, right_index);
-            if super::js_util_deep_strict_equal_bool(left_value, right_value, depth + 1) {
+            if super::js_util_deep_strict_equal_bool(
+                left_value,
+                right_value,
+                depth + 1,
+                skip_prototype,
+            ) {
                 matched[right_index as usize] = true;
                 found = true;
                 break;
@@ -53,6 +64,7 @@ fn deep_strict_set_equal(
     left: *const crate::set::SetHeader,
     right: *const crate::set::SetHeader,
     depth: usize,
+    skip_prototype: bool,
 ) -> bool {
     let len = crate::set::js_set_size(left);
     if len != crate::set::js_set_size(right) {
@@ -67,7 +79,12 @@ fn deep_strict_set_equal(
                 continue;
             }
             let right_value = crate::set::js_set_value_at(right, right_index);
-            if super::js_util_deep_strict_equal_bool(left_value, right_value, depth + 1) {
+            if super::js_util_deep_strict_equal_bool(
+                left_value,
+                right_value,
+                depth + 1,
+                skip_prototype,
+            ) {
                 matched[right_index as usize] = true;
                 found = true;
                 break;
@@ -80,7 +97,12 @@ fn deep_strict_set_equal(
     true
 }
 
-pub(super) fn deep_strict_collection_equal(left: f64, right: f64, depth: usize) -> Option<bool> {
+pub(super) fn deep_strict_collection_equal(
+    left: f64,
+    right: f64,
+    depth: usize,
+    skip_prototype: bool,
+) -> Option<bool> {
     let left_heap = heap_value_type(left);
     let right_heap = heap_value_type(right);
     match (left_heap, right_heap) {
@@ -89,6 +111,7 @@ pub(super) fn deep_strict_collection_equal(left: f64, right: f64, depth: usize) 
                 left_ptr as *const crate::map::MapHeader,
                 right_ptr as *const crate::map::MapHeader,
                 depth,
+                skip_prototype,
             ))
         }
         (Some((left_ptr, crate::gc::GC_TYPE_SET)), Some((right_ptr, crate::gc::GC_TYPE_SET))) => {
@@ -96,6 +119,7 @@ pub(super) fn deep_strict_collection_equal(left: f64, right: f64, depth: usize) 
                 left_ptr as *const crate::set::SetHeader,
                 right_ptr as *const crate::set::SetHeader,
                 depth,
+                skip_prototype,
             ))
         }
         (Some((_, crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET)), _)

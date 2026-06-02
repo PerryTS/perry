@@ -16,15 +16,21 @@ use super::super::{
     resolve_typed_parse_ty, LoweringContext,
 };
 
-fn new_callee_name<'a>(ctx: &LoweringContext, new_expr: &'a ast::NewExpr) -> Option<&'a str> {
+fn new_callee_name(ctx: &LoweringContext, new_expr: &ast::NewExpr) -> Option<String> {
     match new_expr.callee.as_ref() {
-        ast::Expr::Ident(class_ident) => Some(class_ident.sym.as_ref()),
+        ast::Expr::Ident(class_ident) => {
+            let raw = class_ident.sym.as_ref();
+            Some(
+                ctx.resolve_class_alias(raw)
+                    .unwrap_or_else(|| raw.to_string()),
+            )
+        }
         ast::Expr::Member(member)
             if matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if obj.sym.as_ref() == "globalThis")
                 && ctx.lookup_local("globalThis").is_none() =>
         {
             match &member.prop {
-                ast::MemberProp::Ident(prop_ident) => Some(prop_ident.sym.as_ref()),
+                ast::MemberProp::Ident(prop_ident) => Some(prop_ident.sym.to_string()),
                 _ => None,
             }
         }
@@ -34,7 +40,7 @@ fn new_callee_name<'a>(ctx: &LoweringContext, new_expr: &'a ast::NewExpr) -> Opt
 
 pub(super) fn try_url_date_weakref_instance(
     ctx: &mut LoweringContext,
-    call: &ast::CallExpr,
+    _call: &ast::CallExpr,
     expr: &ast::Expr,
     mut args: Vec<Expr>,
 ) -> Result<Result<Expr, Vec<Expr>>> {
@@ -264,17 +270,6 @@ pub(super) fn try_url_date_weakref_instance(
                     "valueOf" => {
                         let date_expr = lower_expr(ctx, &member.obj)?;
                         return Ok(Ok(Expr::DateValueOf(Box::new(date_expr))));
-                    }
-                    // #2089: `date.toString()` — full local date string (or
-                    // "Invalid Date"). `toString` exists on EVERY value, so this
-                    // arm must fire ONLY when the receiver is statically a Date;
-                    // otherwise it would hijack `bigint.toString()` /
-                    // `urlSearchParams.toString()` / etc. An `any`-typed Date
-                    // receiver falls through to generic dispatch, which routes a
-                    // DateCell through `js_jsvalue_to_string` (also #2089-aware).
-                    "toString" if recv_class == Some("Date") => {
-                        let date_expr = lower_expr(ctx, &member.obj)?;
-                        return Ok(Ok(Expr::DateToString(Box::new(date_expr))));
                     }
                     "toDateString" => {
                         let date_expr = lower_expr(ctx, &member.obj)?;

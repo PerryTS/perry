@@ -47,7 +47,8 @@ pub use append::js_string_append;
 pub use base64_codec::{js_atob, js_btoa};
 pub use char_ops::{
     js_string_at, js_string_char_at, js_string_char_code_at, js_string_code_point_at,
-    js_string_from_char_code, js_string_from_code_point, js_string_to_char_array,
+    js_string_from_char_code, js_string_from_code_point, js_string_index_get,
+    js_string_to_char_array,
 };
 pub use compare::{
     js_string_compare, js_string_ends_with, js_string_ends_with_at, js_string_equals,
@@ -64,6 +65,7 @@ pub use concat::{
     js_value_concat_string,
 };
 pub(crate) use format::fix_exponent_format;
+pub(crate) use format::js_format_f64;
 pub use format::{
     js_number_to_exponential, js_number_to_fixed, js_number_to_precision, js_number_to_string,
     scan_small_int_cache_roots, scan_small_int_cache_roots_mut,

@@ -76,3 +76,29 @@ const missingCpSource = ROOT + "/missing-cp-source.txt";
 await capture("cp missing source", { code: "ENOENT", syscall: "lstat", path: missingCpSource, noDest: true }, () => fsp.cp(missingCpSource, ROOT + "/cp-dest.txt"));
 
 await capture("opendir missing path", { code: "ENOENT", syscall: "opendir", path: ROOT + "/missing-dir", noDest: true }, () => fsp.opendir(ROOT + "/missing-dir"));
+
+const missingAccess = ROOT + "/missing-access.txt";
+await capture("access missing", { code: "ENOENT", syscall: "access", path: missingAccess, noDest: true }, () => fsp.access(missingAccess));
+
+const missingChmod = ROOT + "/missing-chmod.txt";
+await capture("chmod missing", { code: "ENOENT", syscall: "chmod", path: missingChmod, noDest: true }, () => fsp.chmod(missingChmod, 0o600));
+
+const missingChown = ROOT + "/missing-chown.txt";
+await capture("chown missing", { code: "ENOENT", syscall: "chown", path: missingChown, noDest: true }, () => fsp.chown(missingChown, 0, 0));
+
+const missingLchown = ROOT + "/missing-lchown.txt";
+await capture("lchown missing", { code: "ENOENT", syscall: "lchown", path: missingLchown, noDest: true }, () => fsp.lchown(missingLchown, 0, 0));
+
+const missingRm = ROOT + "/missing-rm.txt";
+await capture("rm missing", { code: "ENOENT", syscall: "lstat", path: missingRm, noDest: true }, () => fsp.rm(missingRm));
+
+const missingTruncate = ROOT + "/missing-truncate.txt";
+await capture("truncate missing", { code: "ENOENT", syscall: "open", path: missingTruncate, noDest: true }, () => fsp.truncate(missingTruncate, 0));
+
+if (typeof process.getuid === "function" && process.getuid() !== 0) {
+  const pathChownPath = ROOT + "/chown-eperm.txt";
+  await fsp.writeFile(pathChownPath, "owner");
+  await capture("chown EPERM", { code: "EPERM", syscall: "chown", path: pathChownPath, noDest: true }, () => fsp.chown(pathChownPath, 0, 0));
+} else {
+  console.log("chown EPERM skipped");
+}

@@ -643,6 +643,9 @@ pub fn try_lower_native_method_str_dispatch(
     // emits the bytes as `[N+1 x i8]` for every interned string), and
     // materialize the args into a stack `[N x double]` slot.
     if let Expr::PropertyGet { object, property } = callee {
+        if is_message_port_closure_method(object, property) {
+            return Ok(None);
+        }
         // Skip when the receiver is a global module access (e.g. `console.log`,
         // `JSON.parse`) — those are handled by the spread/closure paths above
         // or have dedicated lowerings. Skip when the receiver is a known class
@@ -777,6 +780,32 @@ pub fn try_lower_native_method_str_dispatch(
         }
     }
     Ok(None)
+}
+
+fn is_message_port_closure_method(object: &Expr, property: &str) -> bool {
+    if !matches!(
+        property,
+        "postMessage"
+            | "on"
+            | "addListener"
+            | "once"
+            | "off"
+            | "removeListener"
+            | "addEventListener"
+            | "removeEventListener"
+            | "close"
+            | "start"
+            | "ref"
+            | "unref"
+            | "hasRef"
+    ) {
+        return false;
+    }
+
+    matches!(
+        object,
+        Expr::PropertyGet { property: port, .. } if matches!(port.as_str(), "port1" | "port2")
+    )
 }
 
 pub fn try_lower_closure_call_fallthrough(

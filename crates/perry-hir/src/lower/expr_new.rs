@@ -140,8 +140,16 @@ fn lower_url_encoding_constructor(
     }
 }
 
+fn is_url_encoding_constructor_name(name: &str) -> bool {
+    matches!(
+        name,
+        "URL" | "URLSearchParams" | "TextEncoder" | "TextDecoder"
+    )
+}
+
 fn module_constructor_name(module_name: &str, method_name: Option<&str>) -> Option<&'static str> {
     match (module_name, method_name) {
+        ("events", Some("EventEmitterAsyncResource")) => Some("EventEmitterAsyncResource"),
         ("url", Some("URL")) => Some("URL"),
         ("url", Some("URLSearchParams")) => Some("URLSearchParams"),
         ("util", Some("TextEncoder")) => Some("TextEncoder"),
@@ -177,6 +185,32 @@ fn global_member_constructor_name(
     }
     None
 }
+
+fn lower_worker_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
+    let args = new_expr
+        .args
+        .as_ref()
+        .map(|args| {
+            args.iter()
+                .map(|a| lower_expr(ctx, &a.expr))
+                .collect::<Result<Vec<_>>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let mut args = args.into_iter();
+    let filename = args.next().unwrap_or(Expr::Undefined);
+    let options = args.next().map(Box::new);
+    Ok(Expr::WorkerNew {
+        paths: Vec::new(),
+        filename: Box::new(filename),
+        options,
+    })
+}
+
+fn is_worker_threads_module_name(module_name: &str) -> bool {
+    module_name == "worker_threads" || module_name == "node:worker_threads"
+}
+
 pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
     let callee_expr = peel_new_callee(new_expr.callee.as_ref());
 
@@ -288,7 +322,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 } else {
                     ctx.lookup_native_module(obj_name)
                         .and_then(|(module_name, method)| {
-                            if method.is_none() && matches!(module_name, "dns" | "dns/promises") {
+                            if matches!(module_name, "dns" | "dns/promises")
+                                && (method.is_none() || method.as_deref() == Some("default"))
+                            {
                                 Some(module_name.to_string())
                             } else {
                                 None
@@ -396,7 +432,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             let is_worker_threads_module = module_alias == "worker_threads"
                 || ctx.lookup_builtin_module_alias(module_alias) == Some("worker_threads")
                 || match ctx.lookup_native_module(module_alias) {
-                    Some((module_name, _)) => module_name == "worker_threads",
+                    Some((module_name, _)) => is_worker_threads_module_name(module_name),
                     None => false,
                 };
             if is_worker_threads_module
@@ -423,11 +459,15 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     args,
                 });
             }
+            if is_worker_threads_module && prop_ident.sym.as_ref() == "Worker" {
+                return lower_worker_new(ctx, new_expr);
+            }
             if let Some((module_name, _)) = ctx.lookup_native_module(module_alias) {
                 let class_name = prop_ident.sym.as_ref();
                 if matches!(
                     (module_name, class_name),
-                    ("async_hooks", "AsyncLocalStorage" | "AsyncResource")
+                    ("events", "EventEmitterAsyncResource")
+                        | ("async_hooks", "AsyncLocalStorage" | "AsyncResource")
                         | ("sqlite", "DatabaseSync" | "Session" | "StatementSync")
                 ) {
                     let args = new_expr
@@ -636,6 +676,27 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 }
             }
 
+            if let Some(resolved) = ctx.resolve_class_alias(&class_name) {
+                if is_url_encoding_constructor_name(&resolved) {
+                    if let Some(expr) =
+                        lower_url_encoding_constructor(ctx, &resolved, new_expr.args.as_deref())?
+                    {
+                        return Ok(expr);
+                    }
+                }
+            }
+
+            if class_name == "Worker"
+                && ctx
+                    .lookup_native_module("Worker")
+                    .map(|(module_name, export_name)| {
+                        is_worker_threads_module_name(module_name) && export_name == Some("Worker")
+                    })
+                    .unwrap_or(false)
+            {
+                return lower_worker_new(ctx, new_expr);
+            }
+
             // #1677 `new Function(...)` handling, when `Function` is not
             // shadowed. Phase 1 (#1679) first: when every argument is a
             // compile-time-constant string, fold the call into a real
@@ -682,6 +743,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 "Request"
                     | "Response"
                     | "Headers"
+                    | "FormData"
                     | "Blob"
                     | "File"
                     | "ReadableStream"
@@ -692,6 +754,24 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             }
 
             // Handle built-in types
+            if class_name == "Object"
+                && ctx.lookup_local("Object").is_none()
+                && ctx.lookup_func("Object").is_none()
+                && ctx.lookup_class("Object").is_none()
+            {
+                let mut args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                let arg = args.drain(..).next().unwrap_or(Expr::Undefined);
+                return Ok(Expr::ObjectCoerce(Box::new(arg)));
+            }
             if class_name == "Map" {
                 // new Map() or new Map(entries)
                 let args = new_expr
@@ -1051,18 +1131,10 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
 
                 if args.is_empty() {
                     return match class_name.as_str() {
-                        "TypeError" => {
-                            Ok(Expr::TypeErrorNew(Box::new(Expr::String("".to_string()))))
-                        }
-                        "RangeError" => {
-                            Ok(Expr::RangeErrorNew(Box::new(Expr::String("".to_string()))))
-                        }
-                        "ReferenceError" => Ok(Expr::ReferenceErrorNew(Box::new(Expr::String(
-                            "".to_string(),
-                        )))),
-                        "SyntaxError" => {
-                            Ok(Expr::SyntaxErrorNew(Box::new(Expr::String("".to_string()))))
-                        }
+                        "TypeError" => Ok(Expr::TypeErrorNew(Box::new(Expr::Undefined))),
+                        "RangeError" => Ok(Expr::RangeErrorNew(Box::new(Expr::Undefined))),
+                        "ReferenceError" => Ok(Expr::ReferenceErrorNew(Box::new(Expr::Undefined))),
+                        "SyntaxError" => Ok(Expr::SyntaxErrorNew(Box::new(Expr::Undefined))),
                         _ => Ok(Expr::ErrorNew(None)),
                     };
                 } else {
@@ -1220,8 +1292,10 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .unwrap_or_default();
             if ctx.lookup_class(&class_name).is_none() {
                 if let Some(resolved) = ctx.resolve_class_alias(&class_name) {
-                    if matches!(resolved.as_str(), "Blob" | "File") {
-                        ctx.uses_fetch = true;
+                    if matches!(resolved.as_str(), "Blob" | "File" | "WebSocket") {
+                        if matches!(resolved.as_str(), "Blob" | "File") {
+                            ctx.uses_fetch = true;
+                        }
                         return Ok(Expr::New {
                             class_name: resolved,
                             args,
@@ -1362,9 +1436,11 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     return Ok(nonconstructable_builtin_throw_expr(property, args));
                 }
                 if matches!(object.as_ref(), Expr::GlobalGet(_))
-                    && matches!(property.as_str(), "Blob" | "File")
+                    && matches!(property.as_str(), "Blob" | "File" | "WebSocket")
                 {
-                    ctx.uses_fetch = true;
+                    if matches!(property.as_str(), "Blob" | "File") {
+                        ctx.uses_fetch = true;
+                    }
                     return Ok(Expr::New {
                         class_name: property.clone(),
                         args,

@@ -1731,6 +1731,18 @@ pub fn is_net_server_handle(handle: i64) -> bool {
     statics::servers().lock().unwrap().contains_key(&handle)
 }
 
+/// `server.listening` — boolean state exposed through handle property dispatch.
+#[no_mangle]
+pub extern "C" fn js_net_server_listening(handle: i64) -> i32 {
+    match statics::servers().lock() {
+        Ok(servers) => servers
+            .get(&handle)
+            .map(|server| if server.listening { 1 } else { 0 })
+            .unwrap_or(0),
+        Err(_) => 0,
+    }
+}
+
 /// `extern "C"` form of `is_net_socket_handle` — used by
 /// perry-stdlib's `common::dispatch::dispatch_handle_method`
 /// (HANDLE_METHOD_DISPATCH) when bundled-net is stripped and
