@@ -1179,6 +1179,7 @@ pub fn fix_native_instance_expr_with_locals(
                         native_instances,
                         local_id_instances,
                     ),
+                    crate::ir::ArrayElement::Hole => {}
                 }
             }
         }

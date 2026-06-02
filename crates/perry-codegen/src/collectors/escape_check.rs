@@ -460,6 +460,7 @@ pub fn check_escapes_in_expr(
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => {
                         check_escapes_in_expr(e, candidates, classes, escaped);
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }

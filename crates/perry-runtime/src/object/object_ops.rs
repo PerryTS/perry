@@ -877,6 +877,27 @@ pub extern "C" fn js_object_define_property(
             {
                 let desc_ptr = extract_obj_ptr(descriptor_value);
                 if !desc_ptr.is_null() {
+                    let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
+                    let set_key = crate::string::js_string_from_bytes(b"set".as_ptr(), 3);
+                    let get_field =
+                        js_object_get_field_by_name(desc_ptr as *const ObjectHeader, get_key);
+                    let set_field =
+                        js_object_get_field_by_name(desc_ptr as *const ObjectHeader, set_key);
+                    if !get_field.is_undefined() || !set_field.is_undefined() {
+                        let get_bits = if get_field.is_undefined() {
+                            0
+                        } else {
+                            crate::closure::clone_closure_rebind_this(get_field.bits(), obj_value)
+                        };
+                        let set_bits = if set_field.is_undefined() {
+                            0
+                        } else {
+                            crate::closure::clone_closure_rebind_this(set_field.bits(), obj_value)
+                        };
+                        crate::symbol::set_symbol_accessor_property(
+                            obj_value, key_value, get_bits, set_bits,
+                        );
+                    }
                     let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
                     let value_field =
                         js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);

@@ -293,6 +293,25 @@ fn throw_range_error(message: &[u8]) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+/// Validate a typed-array constructor length argument with `ToIndex`
+/// semantics (#3662). Node truncates toward zero (`NaN` → 0, `2.5` → 2) and
+/// throws a plain `RangeError: Invalid typed array length: <n>` when the
+/// resulting integer is negative or exceeds `2**53 - 1` (`Infinity` included).
+/// Returns the validated element count.
+#[inline]
+fn typed_array_length_or_throw(val: f64) -> u32 {
+    let integer = if val.is_nan() { 0.0 } else { val.trunc() };
+    if integer < 0.0 || integer > 9_007_199_254_740_991.0 {
+        let shown = if val.is_infinite() {
+            if val > 0.0 { "Infinity" } else { "-Infinity" }.to_string()
+        } else {
+            format!("{}", integer as i64)
+        };
+        throw_range_error(format!("Invalid typed array length: {shown}").as_bytes());
+    }
+    integer as u32
+}
+
 #[inline]
 fn is_arena_backed_addr(addr: usize) -> bool {
     !matches!(
@@ -673,7 +692,8 @@ pub extern "C" fn js_native_memory_copy(dst_raw: u64, src_raw: u64) {
 /// Allocate a typed array of `length` elements, all zero.
 #[no_mangle]
 pub extern "C" fn js_typed_array_new_empty(kind: i32, length: i32) -> *mut TypedArrayHeader {
-    typed_array_alloc(kind as u8, length.max(0) as u32)
+    let len = typed_array_length_or_throw(length as f64);
+    typed_array_alloc(kind as u8, len)
 }
 
 /// Allocate a typed array from a NaN-boxed JS value. Dispatches at runtime:
@@ -709,7 +729,8 @@ pub extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHead
     if top16 == 0x7FFE {
         // INT32_TAG — lower 32 bits are the signed length.
         let n = (bits & 0xFFFF_FFFF) as i32;
-        return typed_array_alloc(kind as u8, n.max(0) as u32);
+        let len = typed_array_length_or_throw(n as f64);
+        return typed_array_alloc(kind as u8, len);
     }
     if !(0x7FFC..=0x7FFF).contains(&top16) {
         // Issue #654: typed-array sources (`new Float64Array(otherTA)`)
@@ -727,13 +748,11 @@ pub extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHead
                 );
             }
         }
-        // Plain IEEE double (including negative, NaN, ±Inf).
-        let len = if val.is_finite() && val >= 0.0 {
-            val as i32
-        } else {
-            0
-        };
-        return typed_array_alloc(kind as u8, len.max(0) as u32);
+        // Plain IEEE double (including negative, NaN, ±Inf). Node applies
+        // ToIndex: NaN → 0, truncate toward zero, and throw a RangeError on a
+        // negative / out-of-range length (#3662).
+        let len = typed_array_length_or_throw(val);
+        return typed_array_alloc(kind as u8, len);
     }
     // Undefined / null / bool / string → empty typed array.
     typed_array_alloc(kind as u8, 0)

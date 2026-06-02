@@ -826,6 +826,7 @@ where
             for el in elements {
                 match el {
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => f(e),
+                    ArrayElement::Hole => {}
                 }
             }
         }

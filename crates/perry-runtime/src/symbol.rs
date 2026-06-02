@@ -19,6 +19,10 @@
 //! `Object.getOwnPropertySymbols(obj)` calls and routing them to the
 //! functions in this module.
 
+mod accessors;
+
+pub(crate) use accessors::set_symbol_accessor_property;
+
 use crate::string::{js_string_from_bytes, StringHeader};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -194,22 +198,10 @@ pub(crate) fn is_global_registered_symbol(ptr: usize) -> bool {
     }
 }
 
-// Side-table for symbol-keyed properties on objects. The object pointer is
-// the key (as usize); the value is a list of (symbol_ptr, value_bits) pairs.
-// Storage is intentionally simple (linear scan per lookup) — symbol-keyed
-// properties on a single object are rare.
-//
-// GC invariant:
-// - SYMBOL_PROPERTIES outer object keys are metadata-only raw pointers. They
-//   are rewritten when an owner moves but do not keep that owner alive.
-// - SYMBOL_PROPERTIES inner symbol keys are raw-pointer roots.
-// - SYMBOL_PROPERTIES values and CLASS_STATIC_SYMBOLS values are NaN-box roots.
-// - CLASS_STATIC_SYMBOLS symbol keys are raw-pointer roots.
-// - SYMBOL_POINTERS is metadata-only: moved symbol addresses are rewritten, but
-//   tracking a pointer there does not by itself keep the symbol alive.
+// Symbol-keyed property side tables. Object keys are metadata-only and get
+// rewritten when owners move; symbol keys and NaN-boxed values are GC roots.
+// Storage stays intentionally linear because per-object symbol keys are rare.
 static SYMBOL_PROPERTIES: Mutex<Option<HashMap<usize, Vec<(usize, u64)>>>> = Mutex::new(None);
-static SYMBOL_ACCESSORS: Mutex<Option<HashMap<(usize, usize), crate::object::AccessorDescriptor>>> =
-    Mutex::new(None);
 
 // Monotonic id counter for fresh symbols. Not thread-safe per-thread but
 // Symbol semantics are compatible with coarse locking.
@@ -521,42 +513,9 @@ pub(crate) unsafe fn sym_key_from_f64(sym_f64: f64) -> usize {
     ptr as usize
 }
 
-unsafe fn symbol_accessor_descriptor(
-    obj_f64: f64,
-    sym_f64: f64,
-) -> Option<crate::object::AccessorDescriptor> {
-    let obj_key = obj_key_from_f64(obj_f64);
-    let sym_key = sym_key_from_f64(sym_f64);
-    if obj_key == 0 || sym_key == 0 {
-        return None;
-    }
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSORS);
-    guard
-        .as_ref()
-        .and_then(|m| m.get(&(obj_key, sym_key)).copied())
-}
-
-fn store_symbol_accessor_descriptor(
-    obj_key: usize,
-    sym_key: usize,
-    acc: crate::object::AccessorDescriptor,
-) {
-    {
-        let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSORS);
-        if guard.is_none() {
-            *guard = Some(HashMap::new());
-        }
-        guard.as_mut().unwrap().insert((obj_key, sym_key), acc);
-    }
-    crate::gc::runtime_write_barrier_root_raw_ptr(sym_key as *const SymbolHeader);
-    if acc.get != 0 {
-        crate::gc::runtime_write_barrier_root_nanbox(acc.get);
-    }
-    if acc.set != 0 {
-        crate::gc::runtime_write_barrier_root_nanbox(acc.set);
-    }
-}
-
+/// Define (or merge) a symbol-keyed accessor on an object literal, delegating
+/// to the shared symbol-accessor side table. Separate `get`/`set` definitions
+/// for the same key accumulate, matching `Object.defineProperty` semantics.
 pub(crate) unsafe fn js_object_define_symbol_accessor(
     obj_f64: f64,
     sym_f64: f64,
@@ -568,26 +527,19 @@ pub(crate) unsafe fn js_object_define_symbol_accessor(
     if obj_key == 0 || sym_key == 0 {
         return obj_f64;
     }
-    let existing = symbol_accessor_descriptor(obj_f64, sym_f64).unwrap_or_default();
+    let existing = accessors::symbol_accessor_property(obj_f64, sym_f64);
     let undef = crate::value::TAG_UNDEFINED;
     let get_bits = if getter.to_bits() == undef {
-        existing.get
+        existing.map(|a| a.get).unwrap_or(0)
     } else {
         crate::closure::clone_closure_rebind_this(getter.to_bits(), obj_f64)
     };
     let set_bits = if setter.to_bits() == undef {
-        existing.set
+        existing.map(|a| a.set).unwrap_or(0)
     } else {
         crate::closure::clone_closure_rebind_this(setter.to_bits(), obj_f64)
     };
-    store_symbol_accessor_descriptor(
-        obj_key,
-        sym_key,
-        crate::object::AccessorDescriptor {
-            get: get_bits,
-            set: set_bits,
-        },
-    );
+    accessors::set_symbol_accessor_property(obj_f64, sym_f64, get_bits, set_bits);
     obj_f64
 }
 
@@ -659,7 +611,7 @@ fn store_class_static_symbol_root(class_id: u32, sym_key: usize, value_bits: u64
 }
 
 unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64 {
-    if let Some(acc) = symbol_accessor_descriptor(obj_f64, sym_f64) {
+    if let Some(acc) = accessors::symbol_accessor_property(obj_f64, sym_f64) {
         if acc.set != 0 {
             let closure =
                 (acc.set & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
@@ -700,6 +652,7 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
             }
         }
     }
+    accessors::clear_symbol_accessor_property(obj_key, sym_key);
     store_object_symbol_property_root(obj_key, sym_key, value_f64.to_bits());
     value_f64
 }
@@ -811,7 +764,7 @@ pub fn scan_symbol_side_table_roots(mark: &mut dyn FnMut(f64)) {
 
 pub fn scan_symbol_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     scan_symbol_property_roots_mut(visitor);
-    scan_symbol_accessor_roots_mut(visitor);
+    accessors::scan_symbol_accessor_roots_mut(visitor);
     scan_class_static_symbol_roots_mut(visitor);
     scan_symbol_pointer_metadata_roots_mut(visitor);
 }
@@ -845,39 +798,6 @@ fn scan_symbol_property_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_
             std::collections::hash_map::Entry::Vacant(entry) => {
                 entry.insert(entries);
             }
-        }
-    }
-}
-
-fn scan_symbol_accessor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let mut rewrites = Vec::new();
-    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSORS);
-    let Some(map) = guard.as_mut() else {
-        return;
-    };
-
-    for (old_owner, old_sym_key) in map.keys().copied().collect::<Vec<_>>() {
-        let Some(acc) = map.get_mut(&(old_owner, old_sym_key)) else {
-            continue;
-        };
-        let mut new_owner = old_owner;
-        let owner_moved = visitor.visit_metadata_usize_slot(&mut new_owner);
-        let mut new_sym_key = old_sym_key;
-        let sym_moved = visitor.visit_usize_slot(&mut new_sym_key);
-        if acc.get != 0 {
-            visitor.visit_nanbox_u64_slot(&mut acc.get);
-        }
-        if acc.set != 0 {
-            visitor.visit_nanbox_u64_slot(&mut acc.set);
-        }
-        if (owner_moved && new_owner != old_owner) || (sym_moved && new_sym_key != old_sym_key) {
-            rewrites.push(((old_owner, old_sym_key), (new_owner, new_sym_key)));
-        }
-    }
-
-    for (old_key, new_key) in rewrites {
-        if let Some(acc) = map.remove(&old_key) {
-            map.insert(new_key, acc);
         }
     }
 }
@@ -931,7 +851,6 @@ fn scan_symbol_pointer_metadata_roots_mut(visitor: &mut crate::gc::RuntimeRootVi
 enum SymbolSideTableRootSlot {
     SymbolPropertyOwner { owner: usize },
     SymbolPropertyEntry { owner: usize, sym_key: usize },
-    SymbolAccessor { owner: usize, sym_key: usize },
     ClassStaticSymbol { class_id: u32, sym_key: usize },
     SymbolPointer { ptr: usize },
 }
@@ -980,15 +899,6 @@ fn symbol_side_table_root_snapshot() -> Vec<SymbolSideTableRootSlot> {
     }
 
     {
-        let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSORS);
-        if let Some(map) = guard.as_ref() {
-            for &(owner, sym_key) in map.keys() {
-                slots.push(SymbolSideTableRootSlot::SymbolAccessor { owner, sym_key });
-            }
-        }
-    }
-
-    {
         let guard = crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS);
         if let Some(map) = guard.as_ref() {
             for &(class_id, sym_key) in map.keys() {
@@ -1029,43 +939,11 @@ fn scan_symbol_side_table_root_slot(
             visitor.visit_usize_slot(entry_sym);
             visitor.visit_nanbox_u64_slot(value_bits);
         }
-        SymbolSideTableRootSlot::SymbolAccessor { owner, sym_key } => {
-            rewrite_symbol_accessor_entry_if_forwarded(visitor, owner, sym_key);
-        }
         SymbolSideTableRootSlot::ClassStaticSymbol { class_id, sym_key } => {
             rewrite_class_static_symbol_entry_if_forwarded(visitor, class_id, sym_key);
         }
         SymbolSideTableRootSlot::SymbolPointer { ptr } => {
             rewrite_symbol_pointer_metadata_if_forwarded(visitor, ptr);
-        }
-    }
-}
-
-fn rewrite_symbol_accessor_entry_if_forwarded(
-    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-    owner: usize,
-    sym_key: usize,
-) {
-    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSORS);
-    let Some(map) = guard.as_mut() else {
-        return;
-    };
-    let Some(acc) = map.get_mut(&(owner, sym_key)) else {
-        return;
-    };
-    let mut new_owner = owner;
-    let owner_moved = visitor.visit_metadata_usize_slot(&mut new_owner);
-    let mut new_sym_key = sym_key;
-    let sym_moved = visitor.visit_usize_slot(&mut new_sym_key);
-    if acc.get != 0 {
-        visitor.visit_nanbox_u64_slot(&mut acc.get);
-    }
-    if acc.set != 0 {
-        visitor.visit_nanbox_u64_slot(&mut acc.set);
-    }
-    if (owner_moved && new_owner != owner) || (sym_moved && new_sym_key != sym_key) {
-        if let Some(acc) = map.remove(&(owner, sym_key)) {
-            map.insert((new_owner, new_sym_key), acc);
         }
     }
 }
@@ -1135,8 +1013,8 @@ fn rewrite_symbol_pointer_metadata_if_forwarded(
 #[cfg(test)]
 pub(crate) fn test_clear_symbol_side_table_roots() {
     *crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES) = None;
-    *crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSORS) = None;
     *crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS) = None;
+    accessors::test_clear_symbol_accessor_roots();
 
     let mut persistent = Vec::new();
     {
@@ -1253,7 +1131,7 @@ pub unsafe extern "C" fn js_object_has_own_symbol(obj_f64: f64, sym_f64: f64) ->
     if obj_key == 0 || sym_key == 0 {
         return false;
     }
-    if symbol_accessor_descriptor(obj_f64, sym_f64).is_some() {
+    if accessors::has_own_symbol_accessor(obj_key, sym_key) {
         return true;
     }
     let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
@@ -1284,7 +1162,7 @@ pub unsafe extern "C" fn js_object_has_own_symbol(obj_f64: f64, sym_f64: f64) ->
 /// `resolve_proto_chain_symbol`, which walks prototype objects itself and must
 /// therefore NOT recurse into the full chain-walking getter.
 pub(crate) unsafe fn own_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> {
-    if let Some(acc) = symbol_accessor_descriptor(obj_f64, sym_f64) {
+    if let Some(acc) = accessors::symbol_accessor_property(obj_f64, sym_f64) {
         if acc.get != 0 {
             let closure =
                 (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
@@ -1503,6 +1381,9 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                 }
             }
         }
+    }
+    if let Some(acc) = accessors::symbol_accessor_property(obj_f64, sym_f64) {
+        return accessors::invoke_symbol_accessor_getter(acc.get, obj_f64);
     }
     if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
         return v;
@@ -1904,14 +1785,9 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
         .cloned()
         .unwrap_or_default();
     drop(guard);
-    {
-        let accessors = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSORS);
-        if let Some(map) = accessors.as_ref() {
-            for &(owner, sym_key) in map.keys() {
-                if owner == obj_key && !entries.iter().any(|(existing, _)| *existing == sym_key) {
-                    entries.push((sym_key, 0));
-                }
-            }
+    for sym_key in accessors::owner_symbol_accessor_keys(obj_key) {
+        if !entries.iter().any(|(existing, _)| *existing == sym_key) {
+            entries.push((sym_key, 0));
         }
     }
     if entries.is_empty() {

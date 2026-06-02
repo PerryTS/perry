@@ -1245,6 +1245,7 @@ pub fn collect_localset_ids_in_expr_filtered(
             for el in elements {
                 match el {
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => walk(e, out),
+                    ArrayElement::Hole => {}
                 }
             }
         }

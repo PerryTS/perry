@@ -388,6 +388,7 @@ pub fn check_object_literal_escapes_in_expr(
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => {
                         check_object_literal_escapes_in_expr(e, candidates, escaped);
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }

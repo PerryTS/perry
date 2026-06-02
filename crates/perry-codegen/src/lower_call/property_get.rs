@@ -46,6 +46,13 @@ fn is_date_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
         || receiver_class_name(ctx, object).as_deref() == Some("Date")
 }
 
+fn is_inherited_object_prototype_method(name: &str) -> bool {
+    matches!(
+        name,
+        "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf" | "valueOf"
+    )
+}
+
 /// Try to lower a `Call { callee: PropertyGet { .. } }` via the
 /// string/array/class/Map/Set/Promise/fetch/static/instance dispatch tower.
 pub fn try_lower_property_get_method_call(
@@ -338,7 +345,7 @@ pub fn try_lower_property_get_method_call(
             return Ok(Some(lower_string_method(ctx, object, property, args)?));
         }
     }
-    if is_array_expr(ctx, object) {
+    if is_array_expr(ctx, object) && !is_inherited_object_prototype_method(property) {
         return Ok(Some(lower_array_method(ctx, object, property, args)?));
     }
 

@@ -357,6 +357,7 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             for el in elements {
                 match el {
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => walk(e, out),
+                    ArrayElement::Hole => {}
                 }
             }
         }

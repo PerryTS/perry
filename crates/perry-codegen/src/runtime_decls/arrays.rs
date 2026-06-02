@@ -34,6 +34,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // alloc + N×push_f64. See `js_array_alloc_literal` in perry-runtime/src/array.rs.
     module.declare_function("js_array_alloc_literal", I64, &[I32]);
     module.declare_function("js_array_push_f64", I64, &[I64, DOUBLE]);
+    module.declare_function("js_array_push_hole", I64, &[I64]);
     module.declare_function("js_array_numeric_push_f64_unboxed", I64, &[I64, DOUBLE]);
     // Refs #488: bulk push for `arr.push(...src)` spread call.
     module.declare_function("js_array_push_spread_f64", I64, &[I64, I64]);
@@ -131,9 +132,9 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // #2805: Array.prototype.concat(...args) — non-mutating, variadic, with
     // Symbol.isConcatSpreadable handling. (recv_handle, args_ptr, count).
     module.declare_function("js_array_concat_variadic", I64, &[I64, PTR, I32]);
-    // Spread `[...x]` — wraps js_array_clone with a null/undefined
-    // TypeError check so plain spread matches ECMA semantics.
+    // Spread `[...x]` — strict GetIterator/materialization.
     module.declare_function("js_array_clone_for_spread", I64, &[DOUBLE]);
+    module.declare_function("js_array_spread_append", I64, &[I64, DOUBLE]);
     // Generator / iterator protocol: walk `.next()`/`.value` loop and collect into array.
     module.declare_function("js_iterator_to_array", I64, &[DOUBLE]);
     // #1831: `yield*` iterator resolution — `operand[Symbol.iterator]()` or the

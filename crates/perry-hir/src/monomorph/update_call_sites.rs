@@ -261,6 +261,7 @@ fn update_call_sites_in_expr(
                 match e {
                     ArrayElement::Expr(expr) => update_call_sites_in_expr(expr, ctx, lookup),
                     ArrayElement::Spread(expr) => update_call_sites_in_expr(expr, ctx, lookup),
+                    ArrayElement::Hole => {}
                 }
             }
         }
