@@ -170,16 +170,49 @@ pub fn build_default_param_stmts(params: &[Param]) -> Vec<Stmt> {
         let Some(default_expr) = param.default.as_ref() else {
             continue;
         };
+        let mut default_refs = Vec::new();
+        let mut visited_closures = std::collections::HashSet::new();
+        crate::analysis::collect_local_refs_expr(
+            default_expr,
+            &mut default_refs,
+            &mut visited_closures,
+        );
+        let default_reads_own_param = default_refs.contains(&param.id);
+        let default_is_throw_helper = matches!(
+            default_expr,
+            Expr::Call { callee, .. }
+                if matches!(
+                    callee.as_ref(),
+                    Expr::ExternFuncRef { name, .. } if name.starts_with("js_throw_")
+                )
+        );
+        let default_is_eval_syntax_error = matches!(
+            default_expr,
+            Expr::SyntaxErrorNew(msg)
+                if matches!(
+                    msg.as_ref(),
+                    Expr::String(message)
+                        if message.starts_with("eval var declaration conflicts with")
+                )
+        );
         out.push(Stmt::If {
             condition: Expr::Compare {
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(param.id)),
                 right: Box::new(Expr::Undefined),
             },
-            then_branch: vec![Stmt::Expr(Expr::LocalSet(
-                param.id,
-                Box::new(default_expr.clone()),
-            ))],
+            then_branch: if default_reads_own_param {
+                vec![Stmt::Throw(Expr::ReferenceErrorNew(Box::new(
+                    Expr::String("Cannot access parameter in its own initializer".to_string()),
+                )))]
+            } else if default_is_throw_helper || default_is_eval_syntax_error {
+                vec![Stmt::Throw(default_expr.clone())]
+            } else {
+                vec![Stmt::Expr(Expr::LocalSet(
+                    param.id,
+                    Box::new(default_expr.clone()),
+                ))]
+            },
             else_branch: None,
         });
     }

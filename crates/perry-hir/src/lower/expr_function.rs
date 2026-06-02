@@ -125,10 +125,10 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
     for param in &arrow.params {
         let param_name = get_pat_name(param)?;
-        let param_default = get_param_default(ctx, param)?;
         let is_rest = is_rest_param(param);
         let param_ty = get_pat_type(param, ctx);
         let param_id = ctx.define_local(param_name.clone(), param_ty.clone());
+        let param_default = get_param_default(ctx, param)?;
         params.push(Param {
             id: param_id,
             name: param_name,
