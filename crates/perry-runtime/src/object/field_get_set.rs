@@ -323,6 +323,86 @@ unsafe fn invoke_accessor_getter(get_bits: u64, receiver: f64) -> JSValue {
     JSValue::from_bits(result_f64.to_bits())
 }
 
+/// #4140: builtin *reflection-only* accessors — most prominently the four
+/// `%TypedArray%.prototype` getters (`length`/`byteLength`/`byteOffset`/
+/// `buffer`) — are installed via [`super::set_builtin_accessor_descriptor`],
+/// which deliberately does NOT flip the `ACCESSORS_IN_USE` hot-path gate (these
+/// getters are never written and exist purely so reflection sees them, see
+/// #2060). The downside: a plain *value* read that resolves to the hosting
+/// prototype object (e.g. `Uint8Array.prototype.buffer`, where the per-kind
+/// proto inherits from the shared `%TypedArray%.prototype`) skips the gated
+/// accessor short-circuit and returns the empty backing slot — `undefined`
+/// instead of Node's `TypeError`.
+///
+/// Invoke the real getter here for the one builtin object that hosts these
+/// getters, guarded by a cheap pointer compare so ordinary reads pay nothing.
+/// The receiver is the intrinsic prototype itself, which is never a concrete
+/// typed array (real `TypedArray` instances short-circuit far earlier in
+/// `js_object_get_field_by_name`), so the getter always throws the spec
+/// `TypeError` — matching `Uint8Array.prototype.buffer` in Node. When the gate
+/// IS on, the inline short-circuit below already handles this, so bail.
+unsafe fn builtin_reflection_accessor_read(
+    obj: *const ObjectHeader,
+    key_bytes: &[u8],
+) -> Option<JSValue> {
+    // Only the four `%TypedArray%.prototype` accessor names — the cheap key
+    // filter keeps this off every other property read entirely.
+    if !matches!(
+        key_bytes,
+        b"buffer" | b"byteLength" | b"byteOffset" | b"length"
+    ) {
+        return None;
+    }
+    // This helper runs before the heavy object validation further down, so a
+    // caller that passes a NaN-boxed number / raw `f64` as `obj` (e.g. the
+    // dynamic `arr.length = …` set path threading a numeric value through the
+    // generic getter) must not be dereferenced. A genuine heap pointer has its
+    // top 16 bits clear; reject anything else and confirm it points at a real
+    // GC object before reading its header below.
+    if (obj as u64) >> 48 != 0 || !super::is_valid_obj_ptr(obj as *const u8) {
+        return None;
+    }
+    let intrinsic_proto =
+        super::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(std::sync::atomic::Ordering::Relaxed);
+    if intrinsic_proto == 0 {
+        return None;
+    }
+    // Fire for the shared `%TypedArray%.prototype` intrinsic itself and for
+    // every per-kind prototype (`Uint8Array.prototype`, …). The per-kind protos
+    // carry `OBJ_FLAG_TYPED_ARRAY_PROTO` and resolve their `[[Prototype]]` to
+    // the intrinsic only through `Object.getPrototypeOf`'s flag check — they
+    // have `class_id == 0` and no recorded static-prototype link, so the normal
+    // chain walk in this function never reaches the intrinsic where these
+    // accessors live, and the read silently returned the empty slot
+    // (`undefined`) instead of Node's `TypeError`. None of these objects is a
+    // concrete typed array (real instances short-circuit far earlier via the
+    // `TYPED_ARRAY_REGISTRY` arm), so invoking the getter with the proto as the
+    // receiver always throws — matching `Uint8Array.prototype.buffer` in Node.
+    // #4140.
+    let is_intrinsic = obj as i64 == intrinsic_proto;
+    // `OBJ_FLAG_TYPED_ARRAY_PROTO` lives in the shared `_reserved` word, whose
+    // bits mean different things for `GC_TYPE_ARRAY` (raw-f64 layout, arguments,
+    // survival age, …). The per-kind typed-array prototypes are always plain
+    // `GC_TYPE_OBJECT`s, so gate the flag read on the object type — otherwise a
+    // regular array whose `_reserved` happens to have bit 0x100 set would be
+    // misread as a typed-array prototype and its `.length` get would crash.
+    let gc = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    let is_perkind_proto = (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+        && ((*gc)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO) != 0;
+    if !is_intrinsic && !is_perkind_proto {
+        return None;
+    }
+    // The accessor descriptors live on the intrinsic prototype, not the per-kind
+    // protos, so always resolve the getter off the intrinsic.
+    let name = std::str::from_utf8(key_bytes).ok()?;
+    let acc = get_accessor_descriptor(intrinsic_proto as usize, name)?;
+    if acc.get == 0 {
+        return Some(JSValue::undefined());
+    }
+    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+    Some(invoke_accessor_getter(acc.get, receiver))
+}
+
 unsafe fn primitive_object_prototype_accessor(name: &str, receiver: f64) -> Option<JSValue> {
     if !ACCESSORS_IN_USE.with(|c| c.get()) {
         return None;
@@ -3413,6 +3493,14 @@ pub extern "C" fn js_object_get_field_by_name(
             (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
             (*key).byte_len as usize,
         );
+        // #4140: builtin reflection-only accessors (e.g. the
+        // `%TypedArray%.prototype` getters) don't flip `ACCESSORS_IN_USE`, so the
+        // gated short-circuits below skip them on a plain value read. Handle the
+        // hosting prototype object here — a cheap pointer compare for everything
+        // else — before the slot scan returns the empty backing field.
+        if let Some(v) = builtin_reflection_accessor_read(obj, key_bytes) {
+            return v;
+        }
         let key_hash = {
             let mut h: u32 = 0x811c9dc5;
             for &b in key_bytes {
