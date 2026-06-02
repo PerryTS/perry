@@ -2390,6 +2390,40 @@ extern "C" fn url_parse_thunk(
     }
 }
 
+extern "C" fn subtle_crypto_supports_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let args = global_this_rest_array_values(rest);
+    if args.len() < 2 {
+        let message = format!(
+            "Failed to execute 'supports' on 'SubtleCrypto': 2 arguments required, but only {} present.",
+            args.len()
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_MISSING_ARGS");
+    }
+
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let op = args[0];
+    let algorithm = args[1];
+    let length = args.get(2).copied().unwrap_or(undefined);
+    let ptr = crate::value::JS_NATIVE_WEBCRYPTO_DISPATCH.load(Ordering::SeqCst);
+    if ptr.is_null() {
+        return f64::from_bits(crate::value::TAG_FALSE);
+    }
+    let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+        unsafe { std::mem::transmute(ptr) };
+    let dispatch_args = [op, algorithm, length];
+    unsafe {
+        dispatch(
+            b"supports".as_ptr(),
+            "supports".len(),
+            dispatch_args.as_ptr(),
+            dispatch_args.len(),
+        )
+    }
+}
+
 /// Install a single callable static method on a constructor closure as a
 /// `{ writable: true, enumerable: false, configurable: true }` data property
 /// (matching Node's descriptors for built-in statics). `has_rest` registers
@@ -2595,6 +2629,21 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
                 false,
             );
             install_constructor_static(ctor, "parse", url_parse_thunk as *const u8, 1, false);
+        }
+        "SubtleCrypto" => {
+            install_constructor_static_with_call_arity(
+                ctor,
+                "supports",
+                subtle_crypto_supports_thunk as *const u8,
+                2,
+                0,
+                true,
+            );
+            super::set_builtin_property_attrs(
+                ctor as usize,
+                "supports".to_string(),
+                super::PropertyAttrs::new(true, true, true),
+            );
         }
         _ => {}
     }

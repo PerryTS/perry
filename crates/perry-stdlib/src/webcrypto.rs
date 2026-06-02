@@ -13,15 +13,16 @@ mod hmac;
 mod jwk;
 mod kdf;
 mod keys;
+mod supports;
 mod util;
 mod wrap;
 
 #[allow(unused_imports)]
 // Private imports keep sibling modules able to share `pub(super)` helpers.
-use self::{aes::*, digest::*, hmac::*, jwk::*, kdf::*, keys::*, util::*, wrap::*};
+use self::{aes::*, digest::*, hmac::*, jwk::*, kdf::*, keys::*, supports::*, util::*, wrap::*};
 
 // Public re-exports preserve the parent module surface for FFI entry points.
-pub use self::{aes::*, digest::*, hmac::*, jwk::*, kdf::*, keys::*, wrap::*};
+pub use self::{aes::*, digest::*, hmac::*, jwk::*, kdf::*, keys::*, supports::*, wrap::*};
 
 /// Dispatcher for captured/dynamic `crypto.subtle.*` calls. Static
 /// `crypto.subtle.method(...)` call sites still lower directly in codegen;
@@ -95,6 +96,7 @@ pub unsafe extern "C" fn js_webcrypto_native_dispatch(
             arg(5),
             arg(6),
         )),
+        "supports" if args_len >= 2 => js_webcrypto_supports(arg(0), arg(1), arg(2)),
         _ => undefined,
     }
 }
