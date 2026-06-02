@@ -60,6 +60,31 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_http_client_request_host", I64, &[I64]);
     module.declare_function("js_http_client_request_path", I64, &[I64]);
     module.declare_function("js_http_client_request_listener_count", DOUBLE, &[I64, I64]);
+    module.declare_function("js_http_client_request_get_header", DOUBLE, &[I64, I64]);
+    module.declare_function("js_http_client_request_has_header", DOUBLE, &[I64, I64]);
+    module.declare_function("js_http_client_request_remove_header", DOUBLE, &[I64, I64]);
+    module.declare_function("js_http_client_request_get_header_names", DOUBLE, &[I64]);
+    module.declare_function("js_http_client_request_get_headers", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_http_client_request_get_raw_header_names",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function("js_http_client_request_abort", DOUBLE, &[I64]);
+    module.declare_function("js_http_client_request_destroy", I64, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_http_client_request_noop_undefined",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_http_client_request_aborted", DOUBLE, &[I64]);
+    module.declare_function("js_http_client_request_destroyed", DOUBLE, &[I64]);
+    module.declare_function("js_http_client_request_finished", DOUBLE, &[I64]);
+    module.declare_function("js_http_client_request_reused_socket", DOUBLE, &[I64]);
+    module.declare_function("js_http_client_request_max_headers_count", DOUBLE, &[I64]);
+    module.declare_function("js_http_client_request_writable_ended", DOUBLE, &[I64]);
+    module.declare_function("js_http_client_request_writable_finished", DOUBLE, &[I64]);
+    module.declare_function("js_http_client_request_socket", DOUBLE, &[I64]);
     module.declare_function("js_http_get", I64, &[DOUBLE, I64]);
     // #3226/#3227/#3228 — overload-normalizing client factories take a
     // single `NA_VARARGS` array (i64 ArrayHeader ptr) and return a

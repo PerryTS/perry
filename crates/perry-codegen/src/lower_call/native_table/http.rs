@@ -1,5 +1,22 @@
 use super::*;
 
+const fn cr(
+    method: &'static str,
+    runtime: &'static str,
+    args: &'static [NativeArgKind],
+    ret: NativeRetKind,
+) -> NativeModSig {
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method,
+        class_filter: Some("ClientRequest"),
+        runtime,
+        args,
+        ret,
+    }
+}
+
 pub(super) const HTTP_ROWS: &[NativeModSig] = &[
     // ========== node:http / node:https client (issue #769) ==========
     // `http.request(url_or_options, cb)` / `http.get(url_or_options, cb)`
@@ -164,6 +181,79 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         args: &[NA_STR],
         ret: NR_F64,
     },
+    cr(
+        "getHeader",
+        "js_http_client_request_get_header",
+        &[NA_STR],
+        NR_F64,
+    ),
+    cr(
+        "hasHeader",
+        "js_http_client_request_has_header",
+        &[NA_STR],
+        NR_F64,
+    ),
+    cr(
+        "removeHeader",
+        "js_http_client_request_remove_header",
+        &[NA_STR],
+        NR_F64,
+    ),
+    cr(
+        "getHeaderNames",
+        "js_http_client_request_get_header_names",
+        &[],
+        NR_F64,
+    ),
+    cr(
+        "getHeaders",
+        "js_http_client_request_get_headers",
+        &[],
+        NR_F64,
+    ),
+    cr(
+        "getRawHeaderNames",
+        "js_http_client_request_get_raw_header_names",
+        &[],
+        NR_F64,
+    ),
+    cr("abort", "js_http_client_request_abort", &[], NR_F64),
+    cr(
+        "destroy",
+        "js_http_client_request_destroy",
+        &[NA_F64],
+        NR_PTR,
+    ),
+    cr(
+        "flushHeaders",
+        "js_http_client_request_noop_undefined",
+        &[NA_F64, NA_F64],
+        NR_F64,
+    ),
+    cr(
+        "cork",
+        "js_http_client_request_noop_undefined",
+        &[NA_F64, NA_F64],
+        NR_F64,
+    ),
+    cr(
+        "uncork",
+        "js_http_client_request_noop_undefined",
+        &[NA_F64, NA_F64],
+        NR_F64,
+    ),
+    cr(
+        "setNoDelay",
+        "js_http_client_request_noop_undefined",
+        &[NA_F64, NA_F64],
+        NR_F64,
+    ),
+    cr(
+        "setSocketKeepAlive",
+        "js_http_client_request_noop_undefined",
+        &[NA_F64, NA_F64],
+        NR_F64,
+    ),
     NativeModSig {
         module: "http",
         has_receiver: true,
@@ -200,6 +290,55 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_STR,
     },
+    cr(
+        "__get_aborted",
+        "js_http_client_request_aborted",
+        &[],
+        NR_F64,
+    ),
+    cr(
+        "__get_destroyed",
+        "js_http_client_request_destroyed",
+        &[],
+        NR_F64,
+    ),
+    cr(
+        "__get_finished",
+        "js_http_client_request_finished",
+        &[],
+        NR_F64,
+    ),
+    cr(
+        "__get_reusedSocket",
+        "js_http_client_request_reused_socket",
+        &[],
+        NR_F64,
+    ),
+    cr(
+        "__get_maxHeadersCount",
+        "js_http_client_request_max_headers_count",
+        &[],
+        NR_F64,
+    ),
+    cr(
+        "__get_writableEnded",
+        "js_http_client_request_writable_ended",
+        &[],
+        NR_F64,
+    ),
+    cr(
+        "__get_writableFinished",
+        "js_http_client_request_writable_finished",
+        &[],
+        NR_F64,
+    ),
+    cr("__get_socket", "js_http_client_request_socket", &[], NR_F64),
+    cr(
+        "__get_connection",
+        "js_http_client_request_socket",
+        &[],
+        NR_F64,
+    ),
     // ========== http.Agent / https.Agent (issue #2129) ==========
     // `new http.Agent(options?)` / `new https.Agent(options?)` — registered
     // via the Member-callee path in lower/expr_new.rs (mirrors the

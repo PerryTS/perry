@@ -1416,6 +1416,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if matches!(module_name.as_str(), "http" | "https")
+                    && class_name == "ClientRequest"
+                    && is_http_client_request_method_name(&property_name)
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "http"
                     && class_name == "IncomingMessage"
                     && is_http_incoming_message_method_name(&property_name)
@@ -1451,6 +1460,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             | ("ClientRequest", "protocol")
                             | ("ClientRequest", "host")
                             | ("ClientRequest", "path")
+                            | ("ClientRequest", "aborted")
+                            | ("ClientRequest", "connection")
+                            | ("ClientRequest", "destroyed")
+                            | ("ClientRequest", "finished")
+                            | ("ClientRequest", "maxHeadersCount")
+                            | ("ClientRequest", "reusedSocket")
+                            | ("ClientRequest", "socket")
+                            | ("ClientRequest", "writableEnded")
+                            | ("ClientRequest", "writableFinished")
                             | ("Agent", "createConnection")
                             | ("Agent", "createSocket")
                             | ("IncomingMessage", "method")
@@ -2410,6 +2428,30 @@ fn is_classic_stream_method_name(prop: &str) -> bool {
 
 fn is_http_incoming_message_method_name(prop: &str) -> bool {
     matches!(prop, "setEncoding")
+}
+
+fn is_http_client_request_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "on" | "end"
+            | "write"
+            | "setHeader"
+            | "setTimeout"
+            | "listenerCount"
+            | "getHeader"
+            | "hasHeader"
+            | "removeHeader"
+            | "getHeaderNames"
+            | "getHeaders"
+            | "getRawHeaderNames"
+            | "abort"
+            | "destroy"
+            | "flushHeaders"
+            | "cork"
+            | "uncork"
+            | "setNoDelay"
+            | "setSocketKeepAlive"
+    )
 }
 
 fn is_http_incoming_message_runtime_property_name(prop: &str) -> bool {

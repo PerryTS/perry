@@ -53,6 +53,8 @@ pub use agent::*;
 mod client_overload;
 use client_overload::{merge_url_and_options, method_for_overload, parse_client_args};
 
+mod client_request_surface;
+
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
@@ -155,6 +157,7 @@ fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
 
     // #2154: stored `agent.createConnection` / `.createSocket` closures.
     agent::scan_agent_roots(visitor);
+    client_request_surface::scan_roots(visitor);
 }
 
 fn push_event(ev: PendingHttpEvent) {
@@ -1280,9 +1283,7 @@ pub unsafe extern "C" fn js_http_set_header(
         Some(v) => v,
         None => return handle,
     };
-    with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-        req.headers.insert(name, value);
-    });
+    client_request_surface::set_header(handle, &name, value);
     handle
 }
 
