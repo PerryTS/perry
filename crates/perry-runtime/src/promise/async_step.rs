@@ -17,6 +17,12 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
     // await). The probes still run on real pointers below.
     if is_definitely_primitive(value) {
         let promise = js_promise_new();
+        // When lifecycle hooks are active, go through the real resolve path so
+        // `settled`/`before`/`after` fire (instead of poking the state field).
+        if crate::v8::promise_hooks_active() || crate::async_hooks::hooks_active() {
+            js_promise_resolve(promise, value);
+            return promise;
+        }
         unsafe {
             (*promise).state = PromiseState::Fulfilled;
             (*promise).value = value;
@@ -90,6 +96,15 @@ pub extern "C" fn js_promise_resolved_then(
     on_fulfilled: ClosurePtr,
     on_rejected: ClosurePtr,
 ) -> *mut Promise {
+    // The primitive fast path below bypasses `js_promise_new`/`then`, so it
+    // would never fire `v8.promiseHooks` (#3139). When hooks are active, route
+    // through the real resolve+then path instead.
+    if crate::v8::promise_hooks_active() {
+        bump(&MT_FAST_PATH_MISS);
+        let p1 = js_promise_resolved(value);
+        return js_promise_then(p1, on_fulfilled, on_rejected);
+    }
+
     if is_definitely_primitive(value) {
         bump(&MT_FAST_PATH_HIT);
         // FAST PATH (primitive) — skip Promise.resolve()'s allocation

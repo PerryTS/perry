@@ -91,6 +91,7 @@ pub mod typed_feedback;
 pub mod typedarray;
 pub mod typedarray_half;
 pub mod url;
+pub mod v8;
 pub mod value;
 pub mod wasi;
 pub mod web_storage;
