@@ -8,6 +8,8 @@ thread_local! {
 const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_0060;
 const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_0061;
 const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_0062;
+const CLASS_ID_BOXED_BIGINT: u32 = 0xFFFF_0063;
+const CLASS_ID_BOXED_SYMBOL: u32 = 0xFFFF_0064;
 
 pub(super) unsafe fn boxed_primitive_base_for_object(
     obj_ptr: *const crate::object::ObjectHeader,
@@ -37,13 +39,17 @@ pub(super) unsafe fn boxed_primitive_base_for_object(
 unsafe fn boxed_primitive_payload_for_object(
     obj_ptr: *const crate::object::ObjectHeader,
 ) -> Option<(u32, f64)> {
-    if obj_ptr.is_null() {
+    if obj_ptr.is_null() || (obj_ptr as usize) < 0x100000 {
         return None;
     }
     let class_id = (*obj_ptr).class_id;
     if !matches!(
         class_id,
-        CLASS_ID_BOXED_NUMBER | CLASS_ID_BOXED_STRING | CLASS_ID_BOXED_BOOLEAN
+        CLASS_ID_BOXED_NUMBER
+            | CLASS_ID_BOXED_STRING
+            | CLASS_ID_BOXED_BOOLEAN
+            | CLASS_ID_BOXED_BIGINT
+            | CLASS_ID_BOXED_SYMBOL
     ) {
         return None;
     }
@@ -67,6 +73,54 @@ fn register_boxed_primitive_payload(obj: *mut crate::object::ObjectHeader, paylo
     });
 }
 
+fn boxed_constructor_name(class_id: u32) -> Option<&'static [u8]> {
+    match class_id {
+        CLASS_ID_BOXED_NUMBER => Some(b"Number"),
+        CLASS_ID_BOXED_STRING => Some(b"String"),
+        CLASS_ID_BOXED_BOOLEAN => Some(b"Boolean"),
+        CLASS_ID_BOXED_BIGINT => Some(b"BigInt"),
+        CLASS_ID_BOXED_SYMBOL => Some(b"Symbol"),
+        _ => None,
+    }
+}
+
+fn attach_boxed_primitive_prototype(obj: *mut crate::object::ObjectHeader, class_id: u32) {
+    if obj.is_null() {
+        return;
+    }
+    let Some(name) = boxed_constructor_name(class_id) else {
+        return;
+    };
+    let ctor = crate::object::js_get_global_this_builtin_value(name.as_ptr(), name.len());
+    let ctor_value = crate::value::JSValue::from_bits(ctor.to_bits());
+    if !ctor_value.is_pointer() {
+        return;
+    }
+    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto_value = crate::value::JSValue::from_bits(proto.to_bits());
+    if proto_value.is_pointer() {
+        crate::object::prototype_chain::object_set_static_prototype(obj as usize, proto.to_bits());
+    }
+}
+
+fn install_string_wrapper_length(
+    obj: *mut crate::object::ObjectHeader,
+    string_ptr: *const crate::string::StringHeader,
+) {
+    if obj.is_null() || string_ptr.is_null() {
+        return;
+    }
+    let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+    let len = crate::string::js_string_length(string_ptr) as f64;
+    crate::object::js_object_set_field_by_name(obj, key, len);
+    crate::object::set_builtin_property_attrs(
+        obj as usize,
+        "length".to_string(),
+        crate::object::PropertyAttrs::new(false, false, false),
+    );
+}
+
 pub fn scan_boxed_primitive_payload_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let mut moved = Vec::new();
     BOXED_PRIMITIVE_PAYLOADS.with(|m| {
@@ -86,17 +140,51 @@ pub fn scan_boxed_primitive_payload_roots_mut(visitor: &mut crate::gc::RuntimeRo
     });
 }
 
+/// #3857: `JSON.stringify` of a boxed primitive wrapper (`new String("hi")`,
+/// `new Number(5)`, `new Boolean(true)`, `Object(1n)`) serializes the
+/// *underlying primitive*, not the wrapper object's (empty) own-property set —
+/// otherwise it produced `{}`. Returns the NaN-boxed primitive payload for
+/// String/Number/Boolean/BigInt wrappers; `None` for Symbol wrappers (JSON
+/// omits symbols) and for any non-wrapper value.
 #[inline]
-pub(super) fn boxed_primitive_payload(value: f64) -> Option<(u32, f64)> {
-    let jv = crate::value::JSValue::from_bits(value.to_bits());
-    if !jv.is_pointer() {
-        return None;
+pub(crate) fn boxed_primitive_json_value(value: f64) -> Option<f64> {
+    let (class_id, payload) = boxed_primitive_payload(value)?;
+    match class_id {
+        CLASS_ID_BOXED_STRING
+        | CLASS_ID_BOXED_NUMBER
+        | CLASS_ID_BOXED_BOOLEAN
+        | CLASS_ID_BOXED_BIGINT => Some(payload),
+        _ => None,
     }
-    let ptr = jv.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader;
-    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+}
+
+#[inline]
+pub(crate) fn boxed_primitive_payload(value: f64) -> Option<(u32, f64)> {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    let bits = value.to_bits();
+    let ptr = if jv.is_pointer() {
+        jv.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader
+    } else if (bits >> 48) == 0 && bits >= 0x100000 {
+        bits as *mut crate::object::ObjectHeader
+    } else {
+        return None;
+    };
+    if ptr.is_null() || (ptr as usize) < 0x100000 {
         return None;
     }
     unsafe { boxed_primitive_payload_for_object(ptr) }
+}
+
+pub(crate) fn boxed_primitive_to_string_tag(value: f64) -> Option<&'static str> {
+    let (class_id, _) = boxed_primitive_payload(value)?;
+    match class_id {
+        CLASS_ID_BOXED_NUMBER => Some("Number"),
+        CLASS_ID_BOXED_STRING => Some("String"),
+        CLASS_ID_BOXED_BOOLEAN => Some("Boolean"),
+        CLASS_ID_BOXED_BIGINT => Some("BigInt"),
+        CLASS_ID_BOXED_SYMBOL => Some("Symbol"),
+        _ => None,
+    }
 }
 
 #[no_mangle]
@@ -110,6 +198,7 @@ pub extern "C" fn js_boxed_number_new(value: f64) -> f64 {
         js_number_coerce(value)
     };
     register_boxed_primitive_payload(obj, payload);
+    attach_boxed_primitive_prototype(obj, CLASS_ID_BOXED_NUMBER);
     crate::value::js_nanbox_pointer(obj as i64)
 }
 
@@ -124,6 +213,8 @@ pub extern "C" fn js_boxed_string_new(value: f64) -> f64 {
     };
     let boxed = f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits());
     register_boxed_primitive_payload(obj, boxed);
+    install_string_wrapper_length(obj, ptr);
+    attach_boxed_primitive_prototype(obj, CLASS_ID_BOXED_STRING);
     crate::value::js_nanbox_pointer(obj as i64)
 }
 
@@ -133,5 +224,33 @@ pub extern "C" fn js_boxed_boolean_new(value: f64) -> f64 {
     let boxed =
         f64::from_bits(crate::value::JSValue::bool(crate::value::js_is_truthy(value) != 0).bits());
     register_boxed_primitive_payload(obj, boxed);
+    attach_boxed_primitive_prototype(obj, CLASS_ID_BOXED_BOOLEAN);
     crate::value::js_nanbox_pointer(obj as i64)
+}
+
+#[no_mangle]
+pub extern "C" fn js_boxed_bigint_new(value: f64) -> f64 {
+    let obj = crate::object::js_object_alloc(CLASS_ID_BOXED_BIGINT, 0);
+    register_boxed_primitive_payload(obj, value);
+    attach_boxed_primitive_prototype(obj, CLASS_ID_BOXED_BIGINT);
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+#[no_mangle]
+pub extern "C" fn js_boxed_symbol_new(value: f64) -> f64 {
+    let obj = crate::object::js_object_alloc(CLASS_ID_BOXED_SYMBOL, 0);
+    register_boxed_primitive_payload(obj, value);
+    attach_boxed_primitive_prototype(obj, CLASS_ID_BOXED_SYMBOL);
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boxed_primitive_probe_rejects_pointer_tagged_native_handles() {
+        let fetch_family_handle = crate::value::js_nanbox_pointer(0x40001);
+        assert!(boxed_primitive_payload(fetch_family_handle).is_none());
+    }
 }

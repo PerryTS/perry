@@ -45,6 +45,19 @@ process.stdin.on("keypress", (_str: string, _key: { name: string }) => {
 });
 console.log("on() registration ok");
 
+// 2b. #3962 lifecycle teardown surface compiles, links, and can detach
+// listeners without requiring process.exit().
+function teardownData(_chunk: string) {
+    /* no-op for the test */
+}
+process.stdin.on("data", teardownData);
+process.stdin.removeListener("data", teardownData);
+process.stdin.on("data", teardownData);
+process.stdin.pause();
+process.stdin.resume();
+process.stdin.off("data", teardownData);
+console.log("stdin lifecycle teardown ok");
+
 // 3. Phase 1 readline still works alongside Phase 2 surface.
 import * as readline from "readline";
 const rl = readline.createInterface({
@@ -53,4 +66,10 @@ const rl = readline.createInterface({
 });
 rl.on("close", () => console.log("readline closed"));
 rl.close();
+if (typeof process.stdin.unref === "function") {
+    process.stdin.unref();
+}
+if (typeof process.stdin.destroy === "function") {
+    process.stdin.destroy();
+}
 console.log("done");

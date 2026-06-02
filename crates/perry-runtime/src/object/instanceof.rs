@@ -7,7 +7,52 @@ use super::*;
 
 // Keep in sync with perry-codegen/src/expr/instance_misc1.rs.
 const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
+const CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE: u32 = 0xFFFF0077;
 const CLASS_ID_PROMISE: u32 = 0xFFFF0027;
+const CLASS_ID_CRYPTO: u32 = 0xFFFF00C0;
+const CLASS_ID_SUBTLE_CRYPTO: u32 = 0xFFFF00C1;
+const CLASS_ID_CRYPTO_KEY: u32 = 0xFFFF00C2;
+
+fn small_native_handle_id(value: f64) -> Option<i64> {
+    let bits = value.to_bits();
+    if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
+        let raw = (bits & crate::value::POINTER_MASK) as i64;
+        if raw > 0 && raw < 0x100000 {
+            return Some(raw);
+        }
+    }
+    if value.is_finite() && value > 0.0 && value.fract() == 0.0 && value < 0x100000 as f64 {
+        return Some(value as i64);
+    }
+    None
+}
+
+fn value_addr(value: f64) -> usize {
+    let bits = value.to_bits();
+    if (bits >> 48) >= 0x7FF8 {
+        (bits & crate::value::POINTER_MASK) as usize
+    } else if (bits >> 48) == 0 && bits >= 0x1000 {
+        bits as usize
+    } else {
+        0
+    }
+}
+
+fn is_native_module_namespace_value(value: f64, expected: &str) -> bool {
+    let jv = crate::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let obj = jv.as_pointer::<ObjectHeader>();
+    if obj.is_null() {
+        return false;
+    }
+    unsafe {
+        (*obj).class_id == crate::object::native_module::NATIVE_MODULE_CLASS_ID
+            && crate::object::native_module::read_native_module_name(obj)
+                .is_some_and(|name| name == expected)
+    }
+}
 
 /// v0.5.749: dynamic instanceof — `value instanceof type` where the
 /// type is a runtime value (function arg holding a class ref). Extracts
@@ -51,14 +96,51 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
+        if module == "events"
+            && method == "EventEmitterAsyncResource"
+            && is_event_emitter_async_resource_instance_value(value)
+        {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
         if module == "tty"
             && matches!(method.as_str(), "ReadStream" | "WriteStream")
             && crate::tty::is_tty_stream_instance(value, method.as_str())
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
+        if module == "fs" {
+            let matched = match method.as_str() {
+                "Stats" => crate::fs::is_fs_stats_instance_value(value),
+                "Dir" => crate::fs::is_fs_dir_instance_value(value),
+                "Dirent" => crate::fs::is_fs_dirent_instance_value(value),
+                "ReadStream" | "FileReadStream" | "WriteStream" | "FileWriteStream"
+                | "Utf8Stream" => crate::fs::is_fs_stream_instance_value(value, method.as_str()),
+                _ => false,
+            };
+            if matched {
+                return f64::from_bits(crate::value::TAG_TRUE);
+            }
+        }
+        if module == "tls"
+            && method == "SecureContext"
+            && crate::tls::is_secure_context_instance(value)
+        {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
         if module == "wasi" && method == "WASI" && crate::wasi::is_wasi_instance(value) {
             return f64::from_bits(crate::value::TAG_TRUE);
+        }
+        // #2689: `net.Stream` is an alias for `net.Socket`; both should match
+        // a live socket handle via the runtime probe.
+        if module == "net" && matches!(method.as_str(), "Socket" | "Stream") {
+            if let (Some(handle), Some(probe)) = (
+                small_native_handle_id(value),
+                crate::object::net_socket_handle_probe(),
+            ) {
+                if unsafe { probe(handle) } {
+                    return f64::from_bits(crate::value::TAG_TRUE);
+                }
+            }
         }
         if module == "console"
             && method == "Console"
@@ -68,9 +150,16 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         }
         if module == "perf_hooks" {
             let class_id = match method.as_str() {
+                "Performance" => crate::perf_hooks::CLASS_ID_PERFORMANCE,
                 "PerformanceEntry" => crate::perf_hooks::CLASS_ID_PERFORMANCE_ENTRY,
                 "PerformanceMark" => crate::perf_hooks::CLASS_ID_PERFORMANCE_MARK,
                 "PerformanceMeasure" => crate::perf_hooks::CLASS_ID_PERFORMANCE_MEASURE,
+                "PerformanceObserverEntryList" => {
+                    crate::perf_hooks::CLASS_ID_PERFORMANCE_OBSERVER_ENTRY_LIST
+                }
+                "PerformanceResourceTiming" => {
+                    crate::perf_hooks::CLASS_ID_PERFORMANCE_RESOURCE_TIMING
+                }
                 _ => 0,
             };
             if class_id != 0 {
@@ -82,6 +171,31 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         return js_instanceof(value, crate::buffer::BUFFER_TYPE_ID);
     }
     if let Some(name) = identify_global_builtin_constructor(type_ref) {
+        match name {
+            "Crypto" => {
+                return if is_native_module_namespace_value(value, "crypto.webcrypto") {
+                    f64::from_bits(crate::value::TAG_TRUE)
+                } else {
+                    f64::from_bits(TAG_FALSE)
+                };
+            }
+            "SubtleCrypto" => {
+                return if is_native_module_namespace_value(value, "crypto.subtle") {
+                    f64::from_bits(crate::value::TAG_TRUE)
+                } else {
+                    f64::from_bits(TAG_FALSE)
+                };
+            }
+            "CryptoKey" => {
+                let addr = value_addr(value);
+                return if addr != 0 && crate::buffer::crypto_key_meta(addr).is_some() {
+                    f64::from_bits(crate::value::TAG_TRUE)
+                } else {
+                    f64::from_bits(TAG_FALSE)
+                };
+            }
+            _ => {}
+        }
         let class_id = match name {
             "Error" => crate::error::CLASS_ID_ERROR,
             "TypeError" => crate::error::CLASS_ID_TYPE_ERROR,
@@ -92,6 +206,12 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             "URIError" => crate::error::CLASS_ID_URI_ERROR,
             "AggregateError" => crate::error::CLASS_ID_AGGREGATE_ERROR,
             "Promise" => CLASS_ID_PROMISE,
+            "Navigator" => crate::navigator::NAVIGATOR_CLASS_ID,
+            "TextEncoderStream" => crate::object::CLASS_ID_TEXT_ENCODER_STREAM,
+            "TextDecoderStream" => crate::object::CLASS_ID_TEXT_DECODER_STREAM,
+            "Event" => crate::event_target::CLASS_ID_EVENT,
+            "CustomEvent" => crate::event_target::CLASS_ID_CUSTOM_EVENT,
+            "DOMException" => crate::event_target::CLASS_ID_DOM_EXCEPTION,
             _ => 0,
         };
         if class_id != 0 {
@@ -100,6 +220,13 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     }
     if crate::node_submodules::is_diagnostics_channel_constructor_value(type_ref) {
         return if crate::node_submodules::diagnostics_channel_is_channel_instance_value(value) {
+            f64::from_bits(crate::value::TAG_TRUE)
+        } else {
+            f64::from_bits(TAG_FALSE)
+        };
+    }
+    if crate::node_submodules::is_diagnostics_bounded_channel_constructor_value(type_ref) {
+        return if crate::node_submodules::diagnostics_bounded_channel_is_instance_value(value) {
             f64::from_bits(crate::value::TAG_TRUE)
         } else {
             f64::from_bits(TAG_FALSE)
@@ -208,6 +335,16 @@ fn is_event_emitter_instance_value(value: f64) -> bool {
     false
 }
 
+fn is_event_emitter_async_resource_instance_value(value: f64) -> bool {
+    let Some(handle) = small_native_handle_id(value) else {
+        return false;
+    };
+    if let Some(probe) = crate::object::event_emitter_async_resource_handle_probe() {
+        return unsafe { probe(handle) };
+    }
+    false
+}
+
 /// Check if a value is an instance of a class with the given class_id
 /// Walks the inheritance chain to check parent classes
 /// Returns NaN-boxed TAG_TRUE / TAG_FALSE so the result identifies as a boolean.
@@ -221,7 +358,6 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     if class_id == 0 {
         return false_val;
     }
-
     // Keep in sync with perry-codegen/src/expr/instance_misc1.rs.
     let classic_stream_name = match class_id {
         0xFFFF0070 => Some("Stream"),
@@ -241,6 +377,77 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     }
     if class_id == CLASS_ID_EVENT_EMITTER {
         return if is_event_emitter_instance_value(value) {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE {
+        return if is_event_emitter_async_resource_instance_value(value) {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == crate::fs::CLASS_ID_FS_STATS_EXPORT {
+        return if crate::fs::is_fs_stats_instance_value(value) {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == crate::fs::CLASS_ID_FS_DIR {
+        return if crate::fs::is_fs_dir_instance_value(value) {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == crate::fs::CLASS_ID_FS_DIRENT {
+        return if crate::fs::is_fs_dirent_instance_value(value) {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == crate::fs::CLASS_ID_FS_READ_STREAM {
+        return if crate::fs::is_fs_stream_instance_value(value, "ReadStream") {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == crate::fs::CLASS_ID_FS_WRITE_STREAM {
+        return if crate::fs::is_fs_stream_instance_value(value, "WriteStream") {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == crate::fs::CLASS_ID_FS_UTF8_STREAM {
+        return if crate::fs::is_fs_stream_instance_value(value, "Utf8Stream") {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == CLASS_ID_CRYPTO {
+        return if is_native_module_namespace_value(value, "crypto.webcrypto") {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == CLASS_ID_SUBTLE_CRYPTO {
+        return if is_native_module_namespace_value(value, "crypto.subtle") {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == CLASS_ID_CRYPTO_KEY {
+        let addr = value_addr(value);
+        return if addr != 0 && crate::buffer::crypto_key_meta(addr).is_some() {
             true_val
         } else {
             false_val
@@ -345,6 +552,46 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
                 if kind == want {
                     return true_val;
                 }
+            }
+        }
+        return false_val;
+    }
+
+    // WHATWG fetch: `instanceof Response` / `Request` / `Headers` / `Blob`.
+    // These are pointer-tagged small-integer handles (stdlib fetch registries),
+    // not heap objects, so consult the stdlib fetch kind-probe rather than the
+    // class chain. Without this, Hono's `res instanceof Response` route-fallback
+    // guard sees `false` and skips the fallback, escaping a bare sentinel.
+    const CLASS_ID_RESPONSE: u32 = 0xFFFF0028;
+    const CLASS_ID_REQUEST: u32 = 0xFFFF0029;
+    const CLASS_ID_HEADERS: u32 = 0xFFFF002A;
+    const CLASS_ID_BLOB: u32 = 0xFFFF0026;
+    if class_id == CLASS_ID_RESPONSE
+        || class_id == CLASS_ID_REQUEST
+        || class_id == CLASS_ID_HEADERS
+        || class_id == CLASS_ID_BLOB
+    {
+        if let Some(handle) = small_native_handle_id(value) {
+            if let Some(probe) = crate::object::fetch_handle_kind_probe() {
+                let want = match class_id {
+                    CLASS_ID_RESPONSE => 1u8,
+                    CLASS_ID_REQUEST => 2,
+                    CLASS_ID_HEADERS => 3,
+                    _ => 4, // CLASS_ID_BLOB
+                };
+                if unsafe { probe(handle as usize) } == want {
+                    return true_val;
+                }
+            }
+        }
+        // A Blob can also be a real heap object allocated with CLASS_ID_BLOB
+        // (e.g. `stream/consumers`.`blob()` and `blob_value_from_bytes`), not
+        // just a small fetch-registry handle. Match it by its own class id so
+        // `blob instanceof Blob` is true for that representation too.
+        if class_id == CLASS_ID_BLOB && jsval.is_pointer() {
+            let obj = jsval.as_pointer::<ObjectHeader>();
+            if (obj as usize) >= 0x100000 && unsafe { (*obj).class_id } == CLASS_ID_BLOB {
+                return true_val;
             }
         }
         return false_val;
@@ -514,6 +761,13 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         if gc_type == crate::gc::GC_TYPE_ERROR {
             let err_ptr = obj_ptr as *const crate::error::ErrorHeader;
             let kind = (*err_ptr).error_kind;
+            if class_id == crate::event_target::CLASS_ID_DOM_EXCEPTION {
+                return if crate::event_target::is_dom_exception_error(err_ptr) {
+                    true_val
+                } else {
+                    false_val
+                };
+            }
             return match class_id {
                 crate::error::CLASS_ID_ERROR => true_val,
                 crate::error::CLASS_ID_TYPE_ERROR => {
@@ -571,6 +825,11 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
 
         if gc_type == crate::gc::GC_TYPE_OBJECT {
             if let Some(matches) =
+                crate::perf_hooks::is_perf_hooks_shape_instance_of(value, class_id)
+            {
+                return if matches { true_val } else { false_val };
+            }
+            if let Some(matches) =
                 crate::perf_hooks::is_perf_entry_object_instance_of(obj_ptr, class_id)
             {
                 return if matches { true_val } else { false_val };
@@ -587,6 +846,11 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
 
         // Check if the object's class_id matches directly
         let obj_class_id = (*obj_ptr).class_id;
+        if class_id == crate::event_target::CLASS_ID_EVENT
+            && obj_class_id == crate::event_target::CLASS_ID_CUSTOM_EVENT
+        {
+            return true_val;
+        }
         if obj_class_id == class_id {
             return true_val;
         }

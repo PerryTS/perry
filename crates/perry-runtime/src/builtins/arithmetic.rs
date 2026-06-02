@@ -82,6 +82,15 @@ pub extern "C" fn js_loose_eq(a: JSValue, b: JSValue) -> JSValue {
     if a.is_null() || a.is_undefined() || b.is_null() || b.is_undefined() {
         return JSValue::bool(false);
     }
+    // Boxed primitives compare via their wrapped primitive value under
+    // abstract equality (`new Number(5) == 5`, and sloppy primitive accessors
+    // return boxed receivers).
+    if let Some((_, payload)) = boxed_primitive_payload(f64::from_bits(a.bits())) {
+        return js_loose_eq(JSValue::from_bits(payload.to_bits()), b);
+    }
+    if let Some((_, payload)) = boxed_primitive_payload(f64::from_bits(b.bits())) {
+        return js_loose_eq(a, JSValue::from_bits(payload.to_bits()));
+    }
     // Both strings (heap STRING_TAG and/or inline SHORT_STRING_TAG):
     // content compare. The previous `is_string() && is_string()` test
     // missed any SSO operand — `JSON.parse(...).foo == "perry"` returned
@@ -204,7 +213,7 @@ pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
         // …) — small ids bit-OR'd with POINTER_TAG, not real heap pointers,
         // which always live above 0x100000. `typeof aHandle` is "object".
         // Reading a fake handle's `[ptr+12]` type tag otherwise segfaults
-        // (e.g. zlib's 0x60000 stream base).
+        // (e.g. zlib's reserved stream base).
         let ptr = jsval.as_pointer::<u8>();
         if !ptr.is_null() && (ptr as usize) >= 0x100000 {
             // Symbols: registered in SYMBOL_POINTERS (handles both gc_malloc'd

@@ -1115,7 +1115,6 @@ pub fn collect_localset_ids_in_expr_filtered(
         | Expr::ForOfToArray(operand)
         | Expr::WeakRefNew(operand)
         | Expr::WeakRefDeref(operand)
-        | Expr::StructuredClone(operand)
         | Expr::QueueMicrotask(operand)
         | Expr::FsExistsSync(operand)
         | Expr::FsReadFileSync(operand)
@@ -1154,6 +1153,10 @@ pub fn collect_localset_ids_in_expr_filtered(
         | Expr::MathMinSpread(operand)
         | Expr::MathMaxSpread(operand) => {
             walk(operand, out);
+        }
+        Expr::StructuredClone { value, options } => {
+            walk(value, out);
+            walk(options, out);
         }
         Expr::ObjectCreate(proto, props) => {
             walk(proto, out);

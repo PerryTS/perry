@@ -26,7 +26,8 @@ pub use self::abort::{
 pub use self::node_compat::{
     js_url_domain_to_ascii, js_url_domain_to_unicode, js_url_file_url_to_path,
     js_url_file_url_to_path_buffer, js_url_format, js_url_legacy_parse, js_url_legacy_resolve,
-    js_url_path_to_file_url, js_url_to_http_options,
+    js_url_legacy_resolve_object, js_url_legacy_url_new, js_url_path_to_file_url,
+    js_url_to_http_options,
 };
 pub use self::search_params::{
     js_url_search_params_append, js_url_search_params_delete, js_url_search_params_delete2,
@@ -224,6 +225,22 @@ mod tests {
     fn test_parse_file_url() {
         let (protocol, host, hostname, _, pathname, _, _) = parse_url("file:///Users/test/file.ts");
         assert_eq!(protocol, "file:");
+        assert_eq!(host, "");
+        assert_eq!(hostname, "");
+        assert_eq!(pathname, "/Users/test/file.ts");
+    }
+
+    #[test]
+    fn test_parse_file_url_host() {
+        let (protocol, host, hostname, _, pathname, _, _) =
+            parse_url("file://example.com/Users/test/file.ts");
+        assert_eq!(protocol, "file:");
+        assert_eq!(host, "example.com");
+        assert_eq!(hostname, "example.com");
+        assert_eq!(pathname, "/Users/test/file.ts");
+
+        let (_, host, hostname, _, pathname, _, _) =
+            parse_url("file://localhost/Users/test/file.ts");
         assert_eq!(host, "");
         assert_eq!(hostname, "");
         assert_eq!(pathname, "/Users/test/file.ts");

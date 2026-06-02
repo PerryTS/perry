@@ -70,6 +70,9 @@ struct ReadableStreamData {
     strategy_size_cb: i64,
     high_water_mark: f64,
     is_byte_stream: bool,
+    /// Internal source used by runtime APIs that hand back byte chunks instead
+    /// of receiving a Web Streams controller.
+    pull_returns_byte_chunk: bool,
     pulling: bool,
     started: bool,
     reader_handle: Option<usize>,
@@ -121,6 +124,9 @@ unsafe impl Send for WritableStreamData {}
 unsafe impl Send for ReaderData {}
 unsafe impl Send for WriterData {}
 
+pub(crate) const STREAM_HANDLE_ID_START: usize = 0x100000;
+pub(crate) const STREAM_HANDLE_ID_END: usize = 0x200000;
+
 lazy_static::lazy_static! {
     static ref READABLE_STREAMS: Mutex<HashMap<usize, ReadableStreamData>> = Mutex::new(HashMap::new());
     static ref WRITABLE_STREAMS: Mutex<HashMap<usize, WritableStreamData>> = Mutex::new(HashMap::new());
@@ -128,17 +134,12 @@ lazy_static::lazy_static! {
     static ref READERS: Mutex<HashMap<usize, ReaderData>> = Mutex::new(HashMap::new());
     static ref WRITERS: Mutex<HashMap<usize, WriterData>> = Mutex::new(HashMap::new());
     // #1545: ONE id counter shared across all five Web Streams registries.
-    // Two reasons: (1) ids are globally unique across readable/writable/
-    // transform/reader/writer, so the runtime handle dispatcher can tell which
-    // registry a handle belongs to unambiguously; (2) the high base (0x40000)
-    // puts stream handles well above every other handle subsystem's id range
-    // (commander/fastify/net/... all start at 1 and never approach it), so a
-    // stream handle never collides with another subsystem's handle while still
-    // staying under the 0x100000 small-handle detection threshold. This is what
-    // lets `js_handle_method_dispatch` safely route stream methods at runtime
-    // for receivers whose static type the codegen lost (e.g.
-    // `src.pipeThrough(ts).getReader()`, `ts.readable.getReader()`).
-    static ref NEXT_STREAM_ID: Mutex<usize> = Mutex::new(0x40000);
+    // Stream handles are raw numeric f64 values, not POINTER_TAG small handles,
+    // so they live just above the runtime's `< 0x100000` small-handle band.
+    // That keeps them disjoint from Fetch/native/proxy pointer-tagged ids while
+    // the runtime's finite-number stream probes still route dynamic calls like
+    // `src.pipeThrough(ts).getReader()`.
+    static ref NEXT_STREAM_ID: Mutex<usize> = Mutex::new(STREAM_HANDLE_ID_START);
 }
 
 static GC_REGISTERED: std::sync::Once = std::sync::Once::new();
@@ -238,6 +239,9 @@ fn scan_stream_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>
 fn next_id(slot: &Mutex<usize>) -> usize {
     let mut guard = slot.lock().unwrap();
     let id = *guard;
+    if id >= STREAM_HANDLE_ID_END {
+        panic!("Web Streams handle id range exhausted");
+    }
     *guard += 1;
     id
 }
@@ -394,6 +398,7 @@ fn alloc_readable_with_strategy(
             strategy_size_cb,
             high_water_mark: if hwm.is_nan() || hwm <= 0.0 { 1.0 } else { hwm },
             is_byte_stream,
+            pull_returns_byte_chunk: false,
             pulling: false,
             started: false,
             reader_handle: None,
@@ -445,27 +450,40 @@ unsafe fn invoke_start(stream_id: usize) {
 }
 
 unsafe fn maybe_pull(stream_id: usize) {
-    let (cb, controller, should_pull) = {
+    let (cb, controller, should_pull, pull_returns_byte_chunk) = {
         let mut g = READABLE_STREAMS.lock().unwrap();
         match g.get_mut(&stream_id) {
             Some(s) if s.state == ReadableState::Readable && !s.pulling && s.started => {
                 let need = s.chunks.is_empty() || (s.chunks.len() as f64) < s.high_water_mark;
                 if need && s.pull_cb != 0 {
                     s.pulling = true;
-                    (s.pull_cb, stream_id as f64, true)
+                    (s.pull_cb, stream_id as f64, true, s.pull_returns_byte_chunk)
                 } else {
-                    (0, 0.0, false)
+                    (0, 0.0, false, false)
                 }
             }
-            _ => (0, 0.0, false),
+            _ => (0, 0.0, false, false),
         }
     };
     if !should_pull {
         return;
     }
-    js_closure_call1(cb as *const ClosureHeader, controller);
+    if pull_returns_byte_chunk {
+        pull_deferred_byte_chunk(stream_id, cb);
+    } else {
+        js_closure_call1(cb as *const ClosureHeader, controller);
+    }
     if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
         s.pulling = false;
+    }
+}
+
+unsafe fn pull_deferred_byte_chunk(stream_id: usize, cb: i64) {
+    let chunk = js_closure_call0(cb as *const ClosureHeader);
+    if chunk.to_bits() == TAG_UNDEFINED {
+        let _ = js_readable_stream_controller_close(stream_id as f64);
+    } else {
+        let _ = js_readable_stream_controller_enqueue(stream_id as f64, chunk);
     }
 }
 
@@ -538,6 +556,32 @@ pub unsafe extern "C" fn js_readable_stream_new_with_source_type(
     );
     invoke_start(id);
     maybe_pull(id);
+    id as f64
+}
+
+/// Runtime registration target for APIs like
+/// `fs.promises.FileHandle.readableWebStream()`: create a byte-oriented
+/// ReadableStream whose pull callback returns one Uint8Array chunk per call
+/// and `undefined` at EOF. Unlike the public constructor path, this does not
+/// run an eager initial pull, so file positions are not advanced at stream
+/// creation time.
+#[no_mangle]
+pub unsafe extern "C" fn js_readable_stream_deferred_byte_source(
+    pull_bits: f64,
+    cancel_bits: f64,
+) -> f64 {
+    ensure_gc_registered();
+    let id = alloc_readable_with_type(
+        0,
+        closure_from_bits(pull_bits.to_bits()),
+        closure_from_bits(cancel_bits.to_bits()),
+        1.0,
+        true,
+    );
+    if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&id) {
+        s.started = true;
+        s.pull_returns_byte_chunk = true;
+    }
     id as f64
 }
 
@@ -1330,6 +1374,7 @@ pub unsafe extern "C" fn js_readable_stream_tee(stream_handle: f64) -> f64 {
                     strategy_size_cb: 0,
                     high_water_mark: 1.0,
                     is_byte_stream,
+                    pull_returns_byte_chunk: false,
                     pulling: false,
                     started: true,
                     reader_handle: None,
@@ -2139,7 +2184,7 @@ pub extern "C" fn js_stream_handle_is_registered(id: usize) -> bool {
 /// 4 = writer, 5 = TransformStream.
 #[no_mangle]
 pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
-    if !(0x40000..0x100000).contains(&id) {
+    if !(STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&id) {
         return 0;
     }
     if READABLE_STREAMS
@@ -2182,8 +2227,9 @@ pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
 /// `js_handle_method_dispatch` with a bare numeric handle.
 ///
 /// Because every Web Streams handle now lives in one shared id space based at
-/// `0x40000` (see `NEXT_STREAM_ID`), the handle is (a) recognisable by range
-/// and (b) present in exactly one of the five registries, so routing by
+/// `STREAM_HANDLE_ID_START` (see `NEXT_STREAM_ID`), the handle is (a)
+/// recognisable by range and (b) present in exactly one of the five registries,
+/// so routing by
 /// `(registry-membership, method-name)` is unambiguous and can never collide
 /// with another handle subsystem. Returns `None` when the handle isn't a stream
 /// handle or the method isn't a stream method, so the generic dispatcher falls
@@ -2194,7 +2240,7 @@ pub(crate) unsafe fn dispatch_stream_method(
     args: &[f64],
 ) -> Option<f64> {
     let id = handle as usize;
-    if !(0x40000..0x100000).contains(&id) {
+    if !(STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&id) {
         return None;
     }
     let arg0 = args
@@ -2428,6 +2474,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stream_ids_live_outside_pointer_tag_small_handle_band() {
+        let id = next_id(&NEXT_STREAM_ID);
+        assert!(
+            (STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&id),
+            "stream id {id:#x} must stay in the raw numeric stream band"
+        );
+        assert!(
+            id >= 0x100000,
+            "stream id {id:#x} must not overlap pointer-tagged small handles"
+        );
+    }
+
+    #[test]
     fn root_scanner_emits_callbacks_chunks_and_promises() {
         {
             let mut readable = READABLE_STREAMS.lock().unwrap();
@@ -2444,6 +2503,7 @@ mod tests {
                     high_water_mark: 1.0,
                     strategy_size_cb: 0,
                     is_byte_stream: false,
+                    pull_returns_byte_chunk: false,
                     pulling: false,
                     started: false,
                     reader_handle: None,

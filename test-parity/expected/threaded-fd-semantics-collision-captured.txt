@@ -1,0 +1,3 @@
+collision worker local read: WORK
+collision captured fd read: EBADF:read
+main fd still reads: MAIN

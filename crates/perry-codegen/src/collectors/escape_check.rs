@@ -368,13 +368,16 @@ pub fn check_escapes_in_expr(
         | Expr::WeakRefNew(operand)
         | Expr::WeakRefDeref(operand)
         | Expr::FinalizationRegistryNew(operand)
-        | Expr::StructuredClone(operand)
         | Expr::QueueMicrotask(operand)
         | Expr::ArrayIsArray(operand) => {
             check_escapes_in_expr(operand, candidates, classes, escaped);
         }
         Expr::JsonParseTyped { text, .. } => {
             check_escapes_in_expr(text, candidates, classes, escaped);
+        }
+        Expr::StructuredClone { value, options } => {
+            check_escapes_in_expr(value, candidates, classes, escaped);
+            check_escapes_in_expr(options, candidates, classes, escaped);
         }
         Expr::ProcessNextTick { callback, args } => {
             check_escapes_in_expr(callback, candidates, classes, escaped);

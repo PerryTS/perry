@@ -191,6 +191,10 @@ where
         | Expr::MathMinSpread(v)
         | Expr::MathMaxSpread(v)
         | Expr::WebAssemblyValidate(v)
+        | Expr::WebAssemblyCompile(v)
+        | Expr::WebAssemblyModuleNew(v)
+        | Expr::WebAssemblyModuleExports(v)
+        | Expr::WebAssemblyModuleImports(v)
         | Expr::WebAssemblyInstantiate(v)
         | Expr::Atob(v)
         | Expr::Btoa(v)
@@ -202,7 +206,6 @@ where
         | Expr::DecodeURI(v)
         | Expr::EncodeURIComponent(v)
         | Expr::DecodeURIComponent(v)
-        | Expr::StructuredClone(v)
         | Expr::QueueMicrotask(v)
         | Expr::IterResultSet(v, _)
         | Expr::CryptoRandomBytes(v)
@@ -764,6 +767,10 @@ where
                 f(e);
             }
         }
+        Expr::WebAssemblyModuleCustomSections { module, name } => {
+            f(module);
+            f(name);
+        }
         Expr::DateUtc(elements) => {
             for e in elements {
                 f(e);
@@ -1070,6 +1077,10 @@ where
                 f(e);
             }
         }
+        Expr::StructuredClone { value, options } => {
+            f(value);
+            f(options);
+        }
         Expr::BufferFromArrayBuffer {
             data,
             byte_offset,
@@ -1205,6 +1216,11 @@ where
             f(event);
             f(handler);
         }
+        Expr::ProcessStdinRemoveListener { event, handler } => {
+            f(event);
+            f(handler);
+        }
+        Expr::ProcessStdinLifecycle(_) => {}
         Expr::ProcessStdoutOn { event, handler } => {
             f(event);
             f(handler);
@@ -1598,9 +1614,14 @@ where
             f(this_arg);
             f(args);
         }
-        Expr::ReflectConstruct { target, args } => {
+        Expr::ReflectConstruct {
+            target,
+            args,
+            new_target,
+        } => {
             f(target);
             f(args);
+            f(new_target);
         }
         Expr::ReflectDefineProperty {
             target,
@@ -1695,6 +1716,14 @@ where
         // Issue #100: dynamic import() — descend into the path arg.
         Expr::DynamicImport { arg, .. } => {
             f(arg);
+        }
+        Expr::WorkerNew {
+            filename, options, ..
+        } => {
+            f(filename);
+            if let Some(options) = options {
+                f(options);
+            }
         }
     }
 }

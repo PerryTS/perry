@@ -224,17 +224,17 @@ pub(crate) fn lower_string_method(
             // #2787: a missing index defaults to 0; the provided index is
             // coerced with JS `ToIntegerOrInfinity` (undefined/NaN -> 0) rather
             // than a raw `fptosi`, which is UB on a NaN bit pattern.
-            if args.len() > 1 {
-                bail!(
-                    "perry-codegen: String.charAt expects at most 1 arg, got {}",
-                    args.len()
-                );
-            }
+            // #3987: JS ignores extra args to `charAt` but still evaluates them
+            // (left-to-right, for side effects). Use args[0] as the index and
+            // lower the rest, discarding their values, instead of bailing.
             let idx_d = if args.is_empty() {
                 crate::nanbox::double_literal(0.0)
             } else {
                 lower_expr(ctx, &args[0])?
             };
+            for extra in args.iter().skip(1) {
+                let _ = lower_expr(ctx, extra)?;
+            }
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
@@ -291,13 +291,14 @@ pub(crate) fn lower_string_method(
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let needle_handle = unbox_str_handle(blk, &needle_box);
-            if needle_is_regex && repl_is_function {
+            if repl_is_function {
                 // repl_box is a NaN-boxed closure pointer (double).
-                // The regex callback helpers take the callback as f64.
-                let runtime_fn = if property == "replaceAll" {
-                    "js_string_replace_all_regex_fn"
-                } else {
-                    "js_string_replace_regex_fn"
+                // The callback helpers take the callback as f64.
+                let runtime_fn = match (needle_is_regex, property) {
+                    (true, "replaceAll") => "js_string_replace_all_regex_fn",
+                    (true, _) => "js_string_replace_regex_fn",
+                    (false, "replaceAll") => "js_string_replace_all_string_fn",
+                    (false, _) => "js_string_replace_string_fn",
                 };
                 let result = blk.call(
                     I64,
@@ -344,17 +345,15 @@ pub(crate) fn lower_string_method(
         "at" => {
             // #2787: missing index -> 0; JS index coercion (undefined/NaN -> 0).
             // `js_string_at` already resolves negative indices relative to len.
-            if args.len() > 1 {
-                bail!(
-                    "perry-codegen: String.at expects at most 1 arg, got {}",
-                    args.len()
-                );
-            }
+            // #3987: ignore extra args (still evaluate for side effects).
             let idx_d = if args.is_empty() {
                 crate::nanbox::double_literal(0.0)
             } else {
                 lower_expr(ctx, &args[0])?
             };
+            for extra in args.iter().skip(1) {
+                let _ = lower_expr(ctx, extra)?;
+            }
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
@@ -367,17 +366,15 @@ pub(crate) fn lower_string_method(
         }
         "codePointAt" => {
             // #2787: missing index -> 0; JS index coercion (undefined/NaN -> 0).
-            if args.len() > 1 {
-                bail!(
-                    "perry-codegen: String.codePointAt expects at most 1 arg, got {}",
-                    args.len()
-                );
-            }
+            // #3987: ignore extra args (still evaluate for side effects).
             let idx_d = if args.is_empty() {
                 crate::nanbox::double_literal(0.0)
             } else {
                 lower_expr(ctx, &args[0])?
             };
+            for extra in args.iter().skip(1) {
+                let _ = lower_expr(ctx, extra)?;
+            }
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
@@ -390,17 +387,15 @@ pub(crate) fn lower_string_method(
         }
         "charCodeAt" => {
             // #2787: missing index -> 0; JS index coercion (undefined/NaN -> 0).
-            if args.len() > 1 {
-                bail!(
-                    "perry-codegen: String.charCodeAt expects at most 1 arg, got {}",
-                    args.len()
-                );
-            }
+            // #3987: ignore extra args (still evaluate for side effects).
             let idx_d = if args.is_empty() {
                 crate::nanbox::double_literal(0.0)
             } else {
                 lower_expr(ctx, &args[0])?
             };
+            for extra in args.iter().skip(1) {
+                let _ = lower_expr(ctx, extra)?;
+            }
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);

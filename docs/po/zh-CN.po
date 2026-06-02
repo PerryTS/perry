@@ -21612,14 +21612,6 @@ msgstr "`isUUID` — 模块"
 msgid "`getWorkerData` — module"
 msgstr "`getWorkerData` — 模块"
 
-#: src/api/reference.md:1126
-msgid "`parentPort` — module"
-msgstr "`parentPort` — 模块"
-
-#: src/api/reference.md:1127
-msgid "`postMessage` — instance"
-msgstr "`postMessage` — 实例"
-
 #: src/api/reference.md:1128
 msgid "`workerData` — module"
 msgstr "`workerData` — 模块"

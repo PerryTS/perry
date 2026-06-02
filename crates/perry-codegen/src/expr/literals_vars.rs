@@ -262,9 +262,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // JSON / Reflect stay "object" — they're namespaces,
                         // not constructors.
                         match property.as_str() {
-                            "process" | "console" | "globalThis" | "performance" | "navigator" => {
-                                Some("object")
-                            }
+                            "process" | "console" | "globalThis" | "performance" | "navigator"
+                            | "crypto" | "localStorage" | "sessionStorage" => Some("object"),
                             "Math" | "JSON" | "Reflect" => Some("object"),
                             n if is_global_this_builtin_function_name(n) => Some("function"),
                             _ => None,
@@ -464,9 +463,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // declared param/let/global in the current scope
                 // (curry-style nested closures, async transformer
                 // intermediate ids, etc.). Return undefined so
-                // compilation succeeds; the caller gets garbage at
-                // runtime but won't crash at codegen.
-                Ok(double_literal(0.0))
+                // compilation succeeds without fabricating a numeric 0.
+                Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
             }
         }
 

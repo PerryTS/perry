@@ -413,29 +413,41 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::TypeErrorNew(msg) => {
             let m = lower_expr(ctx, msg)?;
             let blk = ctx.block();
-            let msg_handle = unbox_to_i64(blk, &m);
-            let err_handle = blk.call(I64, "js_typeerror_new", &[(I64, &msg_handle)]);
+            let err_handle = blk.call(
+                I64,
+                "js_error_new_kind_from_value",
+                &[(I32, "1"), (DOUBLE, &m)],
+            );
             Ok(nanbox_pointer_inline(blk, &err_handle))
         }
         Expr::RangeErrorNew(msg) => {
             let m = lower_expr(ctx, msg)?;
             let blk = ctx.block();
-            let msg_handle = unbox_to_i64(blk, &m);
-            let err_handle = blk.call(I64, "js_rangeerror_new", &[(I64, &msg_handle)]);
+            let err_handle = blk.call(
+                I64,
+                "js_error_new_kind_from_value",
+                &[(I32, "2"), (DOUBLE, &m)],
+            );
             Ok(nanbox_pointer_inline(blk, &err_handle))
         }
         Expr::SyntaxErrorNew(msg) => {
             let m = lower_expr(ctx, msg)?;
             let blk = ctx.block();
-            let msg_handle = unbox_to_i64(blk, &m);
-            let err_handle = blk.call(I64, "js_syntaxerror_new", &[(I64, &msg_handle)]);
+            let err_handle = blk.call(
+                I64,
+                "js_error_new_kind_from_value",
+                &[(I32, "4"), (DOUBLE, &m)],
+            );
             Ok(nanbox_pointer_inline(blk, &err_handle))
         }
         Expr::ReferenceErrorNew(msg) => {
             let m = lower_expr(ctx, msg)?;
             let blk = ctx.block();
-            let msg_handle = unbox_to_i64(blk, &m);
-            let err_handle = blk.call(I64, "js_referenceerror_new", &[(I64, &msg_handle)]);
+            let err_handle = blk.call(
+                I64,
+                "js_error_new_kind_from_value",
+                &[(I32, "3"), (DOUBLE, &m)],
+            );
             Ok(nanbox_pointer_inline(blk, &err_handle))
         }
         Expr::NumberIsSafeInteger(operand) => {

@@ -48,8 +48,8 @@ pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement
         }
     }
 
-    // Use the original exported names (not the local __jsx/__jsxs aliases) so Perry
-    // generates the correct wrapper symbol names: __wrapper_jsx / __wrapper_jsxs.
+    // Use Perry's built-in extern names so codegen can route TSX straight to
+    // the native `js_jsx` / `js_jsxs` runtime adapter.
     let func_name = if children.len() > 1 { "jsxs" } else { "jsx" };
     match children.len() {
         0 => {}
@@ -90,7 +90,8 @@ pub(crate) fn lower_jsx_fragment(
         }
     }
 
-    // Use original exported names for correct wrapper symbol generation.
+    // Use Perry's built-in extern names for the same runtime routing as
+    // ordinary JSX elements.
     let func_name = if children.len() > 1 { "jsxs" } else { "jsx" };
     let mut props_fields: Vec<(String, Expr)> = Vec::new();
     match children.len() {

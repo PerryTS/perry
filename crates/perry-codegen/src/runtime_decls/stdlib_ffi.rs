@@ -11,9 +11,45 @@ use super::*;
 /// Signatures cross-checked against `crates/perry-runtime/src/` and
 /// `crates/perry-stdlib/src/`.
 pub fn declare_stdlib_ffi(module: &mut LlModule) {
+    // ========== worker_threads ==========
+    module.declare_function("js_worker_threads_worker_new", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_worker_threads_worker_post_message",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_worker_threads_worker_on", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function("js_worker_threads_worker_once", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function("js_worker_threads_worker_off", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function("js_worker_threads_worker_terminate", DOUBLE, &[I64]);
+    module.declare_function("js_worker_threads_worker_ref", DOUBLE, &[I64]);
+    module.declare_function("js_worker_threads_worker_unref", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_worker_threads_worker_get_heap_statistics",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function("js_worker_threads_worker_cpu_usage", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_worker_threads_worker_get_heap_snapshot",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_worker_threads_worker_start_cpu_profile", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_worker_threads_worker_start_heap_profile",
+        DOUBLE,
+        &[I64],
+    );
+
     // ========== HTTP server ==========
     module.declare_function("js_http_client_request_end", I64, &[I64, DOUBLE]);
     module.declare_function("js_http_client_request_write", I64, &[I64, DOUBLE]);
+    module.declare_function("js_http_client_request_method", I64, &[I64]);
+    module.declare_function("js_http_client_request_protocol", I64, &[I64]);
+    module.declare_function("js_http_client_request_host", I64, &[I64]);
+    module.declare_function("js_http_client_request_path", I64, &[I64]);
+    module.declare_function("js_http_client_request_listener_count", DOUBLE, &[I64, I64]);
     module.declare_function("js_http_get", I64, &[DOUBLE, I64]);
     // #3226/#3227/#3228 — overload-normalizing client factories take a
     // single `NA_VARARGS` array (i64 ArrayHeader ptr) and return a
@@ -51,6 +87,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     );
     module.declare_function("js_http_response_headers", DOUBLE, &[I64]);
     module.declare_function("js_http_response_trailers", DOUBLE, &[I64]);
+    module.declare_function("js_http_incoming_message_set_encoding", I64, &[I64, I64]);
     module.declare_function("js_http_server_accept_v2", I64, &[I64]);
     module.declare_function("js_http_server_close", DOUBLE, &[I64]);
     module.declare_function("js_http_server_create", I64, &[DOUBLE]);
@@ -70,6 +107,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_http_agent_keep_alive_msecs", DOUBLE, &[I64]);
     module.declare_function("js_http_agent_keep_alive", DOUBLE, &[I64]);
     module.declare_function("js_http_agent_protocol", I64, &[I64]);
+    module.declare_function("js_http_agent_default_port", DOUBLE, &[I64]);
     module.declare_function("js_http_agent_set_protocol", VOID, &[I64, I64]);
     // #2154
     module.declare_function("js_http_agent_destroy", I64, &[I64]);
@@ -152,8 +190,55 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_https_create_server", I64, &[DOUBLE, I64]);
     module.declare_function("js_node_https_server_listen", I64, &[I64, I64]);
     module.declare_function("js_node_https_server_close", VOID, &[I64, I64]);
+    module.declare_function("js_node_https_server_close_all_connections", VOID, &[I64]);
+    module.declare_function("js_node_https_server_close_idle_connections", VOID, &[I64]);
     module.declare_function("js_node_https_server_address_json", I64, &[I64]);
     module.declare_function("js_node_https_server_on", DOUBLE, &[I64, I64, I64]);
+    module.declare_function("js_node_https_server_headers_timeout", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_headers_timeout",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_https_server_keep_alive_timeout", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_keep_alive_timeout",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_https_server_request_timeout", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_request_timeout",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_https_server_idle_timeout", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_idle_timeout",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_https_server_max_headers_count", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_max_headers_count",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_https_server_max_requests_per_socket",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function(
+        "js_node_https_server_set_max_requests_per_socket",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_https_server_set_timeout_method",
+        I64,
+        &[I64, DOUBLE, I64],
+    );
     // node:http2 secure server (HTTP/2 with ALPN):
     module.declare_function("js_node_http2_create_secure_server", I64, &[DOUBLE, I64]);
     module.declare_function("js_node_http2_server_listen", I64, &[I64, I64]);
@@ -499,6 +584,17 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         DOUBLE,
         &[I64, DOUBLE, DOUBLE],
     );
+    // #3079: setup-time command/file/args validation. The validators receive
+    // the *original* NaN-boxed value (codegen still has it before unboxing to a
+    // raw pointer) and throw `TypeError [ERR_INVALID_ARG_TYPE]` on a bad shape.
+    // `validate_command` takes (value, name_ptr, name_len); `validate_args`
+    // takes (value). Both return the value so the call can sit inline.
+    module.declare_function(
+        "js_child_process_validate_command",
+        DOUBLE,
+        &[DOUBLE, PTR, I32],
+    );
+    module.declare_function("js_child_process_validate_args", DOUBLE, &[DOUBLE]);
 
     // ========== cheerio ==========
     module.declare_function("js_cheerio_load", I64, &[I64]);
@@ -601,9 +697,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_domain_to_ascii", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_domain_to_unicode", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_to_http_options", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_url_legacy_url_new", DOUBLE, &[]);
     module.declare_function("js_url_format", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_url_legacy_parse", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_url_legacy_resolve", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_url_legacy_resolve_object", DOUBLE, &[DOUBLE, DOUBLE]);
 
     // ========== WebSocket ==========
     module.declare_function("js_ws_close", VOID, &[I64]);
@@ -652,11 +750,124 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_sqlite_pragma", I64, &[I64, I64, I64]);
     module.declare_function("js_sqlite_prepare", I64, &[I64, I64]);
     module.declare_function("js_sqlite_stmt_all", I64, &[I64, I64]);
+    module.declare_function("js_sqlite_stmt_columns", I64, &[I64]);
     module.declare_function("js_sqlite_stmt_get", I64, &[I64, I64]);
     module.declare_function("js_sqlite_stmt_run", I64, &[I64, I64]);
     module.declare_function("js_sqlite_transaction", I64, &[I64, I64]);
     module.declare_function("js_sqlite_transaction_commit", VOID, &[I64]);
     module.declare_function("js_sqlite_transaction_rollback", VOID, &[I64]);
+    module.declare_function("js_node_sqlite_backup", I64, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_database_sync_call", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_database_sync_new", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_database_sync_open", I32, &[I64]);
+    module.declare_function("js_node_sqlite_database_sync_close", I32, &[I64]);
+    module.declare_function("js_node_sqlite_database_sync_dispose", I32, &[I64]);
+    module.declare_function("js_node_sqlite_database_sync_exec", I32, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_node_sqlite_database_sync_prepare",
+        I64,
+        &[I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_function",
+        I32,
+        &[I64, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_aggregate",
+        I32,
+        &[I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_enable_defensive",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_set_authorizer",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_create_tag_store",
+        I64,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_create_session",
+        I64,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_apply_changeset",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_enable_load_extension",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_load_extension",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_location",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_sqlite_database_sync_is_open", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_sqlite_database_sync_is_transaction",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function("js_node_sqlite_database_sync_limits", I64, &[I64]);
+    module.declare_function("js_node_sqlite_statement_sync_call", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_statement_sync_new", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_statement_sync_run", I64, &[I64, I64]);
+    module.declare_function("js_node_sqlite_statement_sync_get", DOUBLE, &[I64, I64]);
+    module.declare_function("js_node_sqlite_statement_sync_all", I64, &[I64, I64]);
+    module.declare_function("js_node_sqlite_statement_sync_iterate", DOUBLE, &[I64, I64]);
+    module.declare_function("js_node_sqlite_statement_sync_columns", I64, &[I64]);
+    module.declare_function(
+        "js_node_sqlite_statement_sync_set_read_bigints",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_statement_sync_set_return_arrays",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_statement_sync_set_allow_bare_named_parameters",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_statement_sync_set_allow_unknown_named_parameters",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_sqlite_statement_sync_source_sql", I64, &[I64]);
+    module.declare_function("js_node_sqlite_statement_sync_expanded_sql", I64, &[I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_run", I64, &[I64, I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_get", DOUBLE, &[I64, I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_all", I64, &[I64, I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_iterate", DOUBLE, &[I64, I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_clear", I32, &[I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_size", DOUBLE, &[I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_capacity", DOUBLE, &[I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_db", I64, &[I64]);
+    module.declare_function("js_node_sqlite_session_call", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_session_new", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_session_changeset", I64, &[I64]);
+    module.declare_function("js_node_sqlite_session_patchset", I64, &[I64]);
+    module.declare_function("js_node_sqlite_session_close", I32, &[I64]);
+    module.declare_function("js_node_sqlite_session_dispose", I32, &[I64]);
 
     // ========== OS ==========
     module.declare_function("js_os_cpus", I64, &[]);
@@ -668,6 +879,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_os_uptime", DOUBLE, &[]);
     module.declare_function("js_os_user_info", I64, &[]);
     module.declare_function("js_os_user_info_buffer", I64, &[]);
+    // #3004 — dynamic-options form: inspects `options.encoding` at runtime.
+    module.declare_function("js_os_user_info_options", I64, &[I64]);
 
     // ========== Crypto ==========
     module.declare_function("js_crypto_aes256_decrypt", I64, &[I64, I64, I64]);
@@ -1033,6 +1246,25 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_event_emitter_event_names", I64, &[I64]);
     module.declare_function("js_event_emitter_listeners", I64, &[I64, I64]);
     module.declare_function("js_event_emitter_raw_listeners", I64, &[I64, I64]);
+    module.declare_function("js_event_emitter_domain_value", DOUBLE, &[I64]);
+    module.declare_function("js_event_emitter_async_resource_new", I64, &[DOUBLE]);
+    module.declare_function("js_event_emitter_async_resource_call", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_event_emitter_async_resource_async_id", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_event_emitter_async_resource_trigger_async_id",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function(
+        "js_event_emitter_async_resource_async_resource",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function(
+        "js_event_emitter_async_resource_emit_destroy",
+        DOUBLE,
+        &[I64],
+    );
     // Module-level helpers
     module.declare_function("js_events_once", I64, &[DOUBLE, I64, DOUBLE]);
     module.declare_function("js_events_on", I64, &[DOUBLE, I64, DOUBLE]);
@@ -1041,6 +1273,19 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_events_listener_count", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_events_get_max_listeners", DOUBLE, &[DOUBLE]);
     module.declare_function("js_events_set_max_listeners", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function("js_events_init", DOUBLE, &[]);
+
+    // ========== Domain ==========
+    module.declare_function("js_domain_create", I64, &[]);
+    module.declare_function("js_domain_on", I64, &[I64, I64, I64]);
+    module.declare_function("js_domain_emit", DOUBLE, &[I64, I64, I64]);
+    module.declare_function("js_domain_run", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function("js_domain_bind", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_domain_intercept", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_domain_add", I64, &[I64, DOUBLE]);
+    module.declare_function("js_domain_remove", I64, &[I64, DOUBLE]);
+    module.declare_function("js_domain_enter", I64, &[I64]);
+    module.declare_function("js_domain_exit", I64, &[I64]);
 
     // ========== StringDecoder (issue #848) ==========
     // `js_string_decoder_new` allocates a real handle; `write` / `end`
@@ -1410,6 +1655,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // closure-typed class field method-style. `Expr::This` codegen reads
     // this when the lexical this_stack is empty.
     module.declare_function("js_implicit_this_get", DOUBLE, &[]);
+    module.declare_function("js_implicit_this_get_sloppy", DOUBLE, &[]);
     module.declare_function("js_implicit_this_set", DOUBLE, &[DOUBLE]);
 
     // ========== Runtime init / module loader ==========
@@ -1472,6 +1718,13 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_object_literal_set_computed",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_object_literal_to_property_key", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_object_literal_set_prototype", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_to_primitive", DOUBLE, &[DOUBLE, I32]);
     module.declare_function("js_register_class_has_instance", VOID, &[I32, I64]);
     module.declare_function("js_register_class_to_string_tag", VOID, &[I32, I64]);
@@ -1498,15 +1751,13 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_map_group_by", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_array_from_async", DOUBLE, &[DOUBLE]);
 
-    // ========== JSX runtime stubs (issue #277) ==========
-    // `js_jsx(type, props)` and `js_jsxs(type, props)` are no-op stubs that
-    // let TSX/JSX files compile and link without a real JSX runtime package.
-    // The codegen intercepts ExternFuncRef { name: "jsx" } / "jsxs" in
-    // `lower_call.rs` and routes them here with both args as DOUBLE
-    // (NaN-boxed), bypassing the string→PTR conversion the generic path
-    // would apply to string literals.  When a real JSX runtime is imported
-    // via `perry.compilePackages` the imported symbol takes precedence and
-    // these stubs are never called.
+    // ========== JSX runtime adapter (issue #277, #1653) ==========
+    // `js_jsx(type, props)` and `js_jsxs(type, props)` are Perry's built-in
+    // TSX/JSX runtime entry points. Codegen intercepts
+    // ExternFuncRef { name: "jsx" } / "jsxs" in `lower_call.rs` and routes
+    // them here with both args as DOUBLE (NaN-boxed), bypassing the string→PTR
+    // conversion the generic path would apply to string literals. The runtime
+    // handles HTML-style intrinsics, fragments, and function components.
     module.declare_function("js_jsx", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_jsxs", DOUBLE, &[DOUBLE, DOUBLE]);
 }

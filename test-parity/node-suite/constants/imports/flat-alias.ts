@@ -9,7 +9,6 @@ import {
   RSA_PKCS1_PADDING,
   SIGINT,
   SIGTERM,
-  RTLD_DEEPBIND,
   SSL_OP_NO_SSLv2,
   SSL_OP_NO_TLSv1,
 } from "node:constants";
@@ -18,6 +17,10 @@ import fs from "node:fs";
 import os from "node:os";
 import process from "node:process";
 
+const hasRtldDeepbind = Object.keys(constantsDefault).includes("RTLD_DEEPBIND");
+const hasOsRtldDeepbind = typeof (os.constants.dlopen as any).RTLD_DEEPBIND !== "undefined";
+const rtldDeepbind = (constantsDefault as Record<string, unknown>).RTLD_DEEPBIND;
+
 console.log("key count broad:", Object.keys(constantsDefault).length > 100);
 console.log("F_OK:", F_OK, typeof F_OK);
 console.log("O_RDONLY:", O_RDONLY, typeof O_RDONLY);
@@ -25,7 +28,8 @@ console.log("SIGINT:", SIGINT, typeof SIGINT);
 console.log("SIGTERM:", SIGTERM, typeof SIGTERM);
 console.log("EACCES:", EACCES, typeof EACCES);
 console.log("PRIORITY_NORMAL:", PRIORITY_NORMAL, typeof PRIORITY_NORMAL);
-console.log("RTLD_DEEPBIND:", RTLD_DEEPBIND, typeof RTLD_DEEPBIND);
+console.log("RTLD_DEEPBIND present:", hasRtldDeepbind, hasOsRtldDeepbind);
+console.log("RTLD_DEEPBIND type:", hasRtldDeepbind ? typeof rtldDeepbind : "missing");
 console.log("RSA:", RSA_PKCS1_PADDING, typeof RSA_PKCS1_PADDING);
 console.log("SSL_OP_NO_SSLv2:", SSL_OP_NO_SSLv2, typeof SSL_OP_NO_SSLv2);
 console.log("SSL_OP_NO_TLSv1:", SSL_OP_NO_TLSv1, typeof SSL_OP_NO_TLSv1);
@@ -48,7 +52,11 @@ console.log(
   "PRIORITY same os:",
   constantsDefault.PRIORITY_NORMAL === os.constants.priority.PRIORITY_NORMAL,
 );
-console.log("RTLD same os:", constantsDefault.RTLD_DEEPBIND === os.constants.dlopen.RTLD_DEEPBIND);
+console.log(
+  "RTLD same os:",
+  hasRtldDeepbind === hasOsRtldDeepbind &&
+    (!hasRtldDeepbind || rtldDeepbind === (os.constants.dlopen as any).RTLD_DEEPBIND),
+);
 console.log(
   "RSA same crypto:",
   constantsDefault.RSA_PKCS1_PADDING === crypto.constants.RSA_PKCS1_PADDING,

@@ -7,7 +7,7 @@
 //!
 //! Plus the `util/types` predicate helper that bypasses the runtime
 //! dispatcher for source-level `util.types.isPromise(x)` and friends after HIR
-//! normalizes them to the canonical `util/types` module key.
+//! normalizes them to the `util/types` / `util.types` module keys.
 
 use anyhow::Result;
 use perry_hir::Expr;
@@ -55,7 +55,8 @@ fn lower_util_types_predicate_arg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Op
     else {
         return Ok(None);
     };
-    let is_direct_util_types_module = module == "util/types" && class_name.is_none();
+    let is_direct_util_types_module =
+        matches!(module.as_str(), "util/types" | "util.types") && class_name.is_none();
     if !is_direct_util_types_module || object.is_some() {
         return Ok(None);
     }
@@ -78,11 +79,14 @@ fn lower_util_types_predicate_arg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Op
         )));
     }
     let Some(runtime) = (match method.as_str() {
+        "isArgumentsObject" => Some("js_util_types_is_arguments_object"),
         "isPromise" => Some("js_util_types_is_promise"),
+        "isBigIntObject" => Some("js_util_types_is_big_int_object"),
         "isArrayBuffer" => Some("js_util_types_is_array_buffer"),
         "isSharedArrayBuffer" => Some("js_util_types_is_shared_array_buffer"),
         "isAnyArrayBuffer" => Some("js_util_types_is_any_array_buffer"),
         "isArrayBufferView" => Some("js_util_types_is_array_buffer_view"),
+        "isDataView" => Some("js_util_types_is_data_view"),
         "isTypedArray" => Some("js_util_types_is_typed_array"),
         "isUint8Array" => Some("js_util_types_is_uint8_array"),
         "isInt8Array" => Some("js_util_types_is_int8_array"),
@@ -90,6 +94,7 @@ fn lower_util_types_predicate_arg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Op
         "isUint16Array" => Some("js_util_types_is_uint16_array"),
         "isInt32Array" => Some("js_util_types_is_int32_array"),
         "isUint32Array" => Some("js_util_types_is_uint32_array"),
+        "isFloat16Array" => Some("js_util_types_is_float16_array"),
         "isFloat32Array" => Some("js_util_types_is_float32_array"),
         "isFloat64Array" => Some("js_util_types_is_float64_array"),
         "isUint8ClampedArray" => Some("js_util_types_is_uint8_clamped_array"),
@@ -98,14 +103,25 @@ fn lower_util_types_predicate_arg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Op
         "isMap" => Some("js_util_types_is_map"),
         "isMapIterator" => Some("js_util_types_is_map_iterator"),
         "isProxy" => Some("js_util_types_is_proxy"),
+        "isExternal" => Some("js_util_types_is_external"),
+        "isModuleNamespaceObject" => Some("js_util_types_is_module_namespace_object"),
         "isSet" => Some("js_util_types_is_set"),
         "isSetIterator" => Some("js_util_types_is_set_iterator"),
+        "isWeakMap" => Some("js_util_types_is_weak_map"),
+        "isWeakSet" => Some("js_util_types_is_weak_set"),
         "isDate" => Some("js_util_types_is_date"),
         "isRegExp" => Some("js_util_types_is_reg_exp"),
         "isAsyncFunction" => Some("js_util_types_is_async_function"),
         "isGeneratorFunction" => Some("js_util_types_is_generator_function"),
         "isGeneratorObject" => Some("js_util_types_is_generator_object"),
         "isNativeError" => Some("js_util_types_is_native_error"),
+        "isKeyObject" => Some("js_util_types_is_key_object"),
+        "isCryptoKey" => Some("js_util_types_is_crypto_key"),
+        "isNumberObject" => Some("js_util_types_is_number_object"),
+        "isStringObject" => Some("js_util_types_is_string_object"),
+        "isBooleanObject" => Some("js_util_types_is_boolean_object"),
+        "isSymbolObject" => Some("js_util_types_is_symbol_object"),
+        "isBoxedPrimitive" => Some("js_util_types_is_boxed_primitive"),
         _ => None,
     }) else {
         return Ok(None);
@@ -627,6 +643,9 @@ pub fn try_lower_native_method_str_dispatch(
     // emits the bytes as `[N+1 x i8]` for every interned string), and
     // materialize the args into a stack `[N x double]` slot.
     if let Expr::PropertyGet { object, property } = callee {
+        if is_message_port_closure_method(object, property) {
+            return Ok(None);
+        }
         // Skip when the receiver is a global module access (e.g. `console.log`,
         // `JSON.parse`) — those are handled by the spread/closure paths above
         // or have dedicated lowerings. Skip when the receiver is a known class
@@ -761,6 +780,32 @@ pub fn try_lower_native_method_str_dispatch(
         }
     }
     Ok(None)
+}
+
+fn is_message_port_closure_method(object: &Expr, property: &str) -> bool {
+    if !matches!(
+        property,
+        "postMessage"
+            | "on"
+            | "addListener"
+            | "once"
+            | "off"
+            | "removeListener"
+            | "addEventListener"
+            | "removeEventListener"
+            | "close"
+            | "start"
+            | "ref"
+            | "unref"
+            | "hasRef"
+    ) {
+        return false;
+    }
+
+    matches!(
+        object,
+        Expr::PropertyGet { property: port, .. } if matches!(port.as_str(), "port1" | "port2")
+    )
 }
 
 pub fn try_lower_closure_call_fallthrough(

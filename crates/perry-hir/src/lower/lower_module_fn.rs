@@ -15,6 +15,37 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
+fn stmt_is_string_directive(stmt: &ast::Stmt) -> Option<&str> {
+    let ast::Stmt::Expr(expr_stmt) = stmt else {
+        return None;
+    };
+    let mut expr = expr_stmt.expr.as_ref();
+    while let ast::Expr::Paren(paren) = expr {
+        expr = paren.expr.as_ref();
+    }
+    let ast::Expr::Lit(ast::Lit::Str(s)) = expr else {
+        return None;
+    };
+    s.value.as_str()
+}
+
+fn module_has_strict_mode(ast_module: &ast::Module) -> bool {
+    for item in &ast_module.body {
+        match item {
+            ast::ModuleItem::ModuleDecl(_) => return true,
+            ast::ModuleItem::Stmt(stmt) => {
+                let Some(directive) = stmt_is_string_directive(stmt) else {
+                    break;
+                };
+                if directive == "use strict" {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 fn collect_assigned_function_binding_candidates(ast_module: &ast::Module) -> HashSet<String> {
     fn collect_from_stmt(stmt: &ast::Stmt, out: &mut HashSet<String>) {
         match stmt {
@@ -276,6 +307,7 @@ pub fn lower_module_full(
     ctx.resolved_types = resolved_types;
     ctx.is_entry_module = is_entry_module;
     ctx.is_external_module = is_external_module;
+    ctx.current_strict = module_has_strict_mode(ast_module);
     if let Some(seed) = imported_class_fields {
         ctx.seed_imported_class_fields(seed);
     }
@@ -291,33 +323,10 @@ pub fn lower_module_full(
     // synthesize a real concrete class extending `SomeClass`.
     pre_scan_mixin_functions(ast_module, &mut ctx);
 
-    // For .tsx files, pre-register JSX runtime symbols so JSX expressions can be lowered.
-    // This injects an automatic import of { jsx, jsxs } from "react/jsx-runtime"
-    // (remapped to perry-react via the user's packageAliases).
-    // Fragment is NOT imported — it's inlined as the string "__Fragment" directly in JSX lowering.
-    if source_file_path.ends_with(".tsx") {
-        ctx.register_imported_func("__jsx".to_string(), "jsx".to_string());
-        ctx.register_imported_func("__jsxs".to_string(), "jsxs".to_string());
-        module.imports.push(Import {
-            source: "react/jsx-runtime".to_string(),
-            specifiers: vec![
-                ImportSpecifier::Named {
-                    local: "__jsx".to_string(),
-                    imported: "jsx".to_string(),
-                },
-                ImportSpecifier::Named {
-                    local: "__jsxs".to_string(),
-                    imported: "jsxs".to_string(),
-                },
-            ],
-            is_native: false,
-            module_kind: ModuleKind::NativeCompiled,
-            resolved_path: None,
-            type_only: false,
-            is_dynamic: false,
-            is_dynamic_target: false,
-        });
-    }
+    // JSX expressions lower directly to the built-in `jsx`/`jsxs` externs in
+    // `jsx.rs`. Do not synthesize a `react/jsx-runtime` import here: codegen
+    // routes those extern names to Perry's runtime adapter, and making the
+    // module graph resolve a fake package only produces a misleading warning.
 
     // Pre-scan: Find all function names that have implementations (bodies)
     // This is needed to properly handle TypeScript function overloads where

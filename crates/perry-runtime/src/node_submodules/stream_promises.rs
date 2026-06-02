@@ -19,7 +19,7 @@ use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
 };
 use crate::string::js_string_from_bytes;
-use crate::value::JSValue;
+use crate::value::{JSValue, TAG_FALSE, TAG_TRUE};
 use std::os::raw::c_int;
 
 #[inline]
@@ -114,6 +114,10 @@ pub(crate) fn options_signal(options: f64) -> Option<f64> {
     get_object_property(options, b"signal")
 }
 
+fn option_is_false(options: f64, name: &[u8]) -> bool {
+    get_object_property(options, name).is_some_and(|value| value.to_bits() == TAG_FALSE)
+}
+
 pub(crate) fn signal_aborted(signal: f64) -> bool {
     get_object_property(signal, b"aborted").is_some_and(|v| crate::value::js_is_truthy(v) != 0)
 }
@@ -163,11 +167,18 @@ fn invalid_pipeline_body_error_value(body: f64) -> f64 {
     type_error_value_with_code(&message, "ERR_INVALID_ARG_TYPE")
 }
 
-pub(crate) fn signal_reason(signal: f64) -> f64 {
-    match get_object_property(signal, b"reason") {
-        Some(reason) if !JSValue::from_bits(reason.to_bits()).is_undefined() => reason,
-        _ => abort_error_value(),
-    }
+/// The error used to reject a pending `timers/promises` or `stream/promises`
+/// operation when its `AbortSignal` fires.
+///
+/// #3870-adjacent (abort-error-shape): Node ALWAYS rejects these with a fresh
+/// `AbortError` (`name: "AbortError"`, `message: "The operation was aborted"`,
+/// `code: "ABORT_ERR"`) and ignores `signal.reason` entirely — even a custom
+/// reason passed to `controller.abort(reason)` or the `TimeoutError` from
+/// `AbortSignal.timeout()`. Previously this returned `signal.reason` when set,
+/// which for a default `controller.abort()` is a DOMException whose `.code` is
+/// the numeric `20`, diverging from Node's string `"ABORT_ERR"`.
+pub(crate) fn signal_reason(_signal: f64) -> f64 {
+    abort_error_value()
 }
 
 extern "C" fn stream_promises_abort_listener(closure: *const ClosureHeader) -> f64 {
@@ -522,6 +533,12 @@ fn direct_stream_promises_pipeline(source: f64, destination: f64, options: f64) 
     }
 }
 
+fn validate_pipeline_promise_args(source: f64, destination: f64) -> Option<f64> {
+    validate_stream_promises_pipeline_args(source, destination, &[])
+        .err()
+        .map(promise_rejected)
+}
+
 extern "C" fn stream_promises_pipeline_callback(
     closure: *const ClosureHeader,
     err: f64,
@@ -563,6 +580,10 @@ pub(crate) extern "C" fn thunk_streamP_pipeline(
     destination: f64,
     options_or_rest: f64,
 ) -> f64 {
+    if let Some(rejection) = validate_pipeline_promise_args(source, destination) {
+        return rejection;
+    }
+
     let rest_values = match array_values(options_or_rest) {
         Some(values) => values,
         None => return direct_stream_promises_pipeline(source, destination, options_or_rest),

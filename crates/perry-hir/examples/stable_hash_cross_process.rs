@@ -79,6 +79,7 @@ fn build_canonical() -> Module {
         }))],
         is_async: false,
         is_generator: false,
+        is_strict: false,
         is_exported: true,
         captures: vec![],
         decorators: vec![],

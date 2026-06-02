@@ -75,13 +75,15 @@ pub(crate) use console::{
 };
 
 pub use formatting::{
-    function_name_for_ptr, js_array_print, js_register_function_name, js_util_format,
-    js_util_format_with_options, js_util_inspect, js_util_is_deep_strict_equal,
-    js_util_strip_vt_control_characters, register_function_name_if_absent,
-    scan_boxed_primitive_payload_roots_mut,
+    function_name_for_ptr, js_array_print, js_boxed_bigint_new, js_boxed_boolean_new,
+    js_boxed_number_new, js_boxed_string_new, js_boxed_symbol_new, js_register_function_name,
+    js_util_format, js_util_format_with_options, js_util_inspect, js_util_is_deep_strict_equal,
+    js_util_is_deep_strict_equal_skip_prototype, js_util_strip_vt_control_characters,
+    register_function_name_if_absent, scan_boxed_primitive_payload_roots_mut,
 };
 
 pub(crate) use formatting::{
+    boxed_primitive_json_value, boxed_primitive_payload, boxed_primitive_to_string_tag,
     format_finite_number_js, format_jsvalue, is_negative_zero, jsvalue_string_content,
     InspectCompactGuard, InspectCustomInspectGuard, InspectDepthLimitGuard, InspectGettersGuard,
     InspectShowHiddenGuard, InspectSortedGuard,
@@ -94,6 +96,8 @@ pub use globals::{
     restore_queued_microtask_contexts, scan_queued_microtask_roots,
     scan_queued_microtask_roots_mut,
 };
+
+pub(crate) use globals::{drain_queued_microtasks_count, queued_microtasks_pending};
 
 pub use numbers::{
     js_is_finite, js_is_nan, js_number_coerce, js_number_is_finite, js_number_is_integer,

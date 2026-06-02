@@ -10,7 +10,6 @@ pub(crate) fn is_builtin_function(name: &str) -> bool {
             | "clearTimeout"
             | "clearInterval"
             | "clearImmediate"
-            | "fetch"
             | "gc"
     )
 }
@@ -76,25 +75,52 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "TextDecoder"
             | "TextEncoderStream"
             | "TextDecoderStream"
+            | "Navigator"
             | "URL"
             | "URLSearchParams"
             | "AbortController"
             | "AbortSignal"
             | "EventTarget"
+            | "Crypto"
+            | "CryptoKey"
+            | "SubtleCrypto"
+            | "Event"
+            | "CustomEvent"
+            | "DOMException"
             | "FormData"
             | "Blob"
             | "File"
             | "Headers"
             | "Request"
             | "Response"
+            | "MessageChannel"
+            | "MessagePort"
+            | "BroadcastChannel"
+            | "Storage"
+            | "localStorage"
+            | "sessionStorage"
+            | "WebSocket"
             | "FinalizationRegistry"
+            | "Performance"
+            | "PerformanceEntry"
+            | "PerformanceMark"
+            | "PerformanceMeasure"
+            | "PerformanceObserver"
+            | "PerformanceObserverEntryList"
+            | "PerformanceResourceTiming"
             // #2875: TC39 explicit-resource-management globals.
             | "DisposableStack"
             | "AsyncDisposableStack"
             | "SuppressedError"
             | "Buffer"
+            | "fetch"
             | "process"
             | "console"
+            | "crypto"
+            | "WebAssembly"
+            // #3579: `var myEval = eval; myEval(...)` needs the same callable
+            // globalThis function value as direct `globalThis.eval` reads.
+            | "eval"
             // #2905: standard global helper functions used as bare values
             // (`const p = parseInt`). Bare CALLS (`parseInt(x)`) are picked
             // off earlier by `try_global_builtins` → `Expr::ParseInt`/etc., so
@@ -129,9 +155,13 @@ pub(crate) fn builtin_constructor_length(name: &str) -> Option<u32> {
     let len = match name {
         "Array" | "Object" | "String" | "Number" | "Boolean" | "Function" | "Error"
         | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EvalError"
-        | "URIError" | "Promise" | "WeakRef" | "BigInt" => 1,
-        "Symbol" | "Map" | "Set" | "WeakMap" | "WeakSet" => 0,
+        | "URIError" | "Promise" | "WeakRef" | "BigInt" | "Event" | "CustomEvent" | "WebSocket" => {
+            1
+        }
+        "Symbol" | "Map" | "Set" | "WeakMap" | "WeakSet" | "MessageChannel" | "MessagePort"
+        | "Navigator" | "TextEncoderStream" | "TextDecoderStream" | "DOMException" | "Storage" => 0,
         "RegExp" | "Proxy" | "File" => 2,
+        "BroadcastChannel" => 1,
         "Date" => 7,
         "Uint8Array" | "Int8Array" | "Uint16Array" | "Int16Array" | "Uint32Array"
         | "Int32Array" | "Float16Array" | "Float32Array" | "Float64Array" | "BigInt64Array"
@@ -238,6 +268,7 @@ pub(crate) fn is_builtin_static_function_member(namespace: &str, member: &str) -
         "JSON" => matches!(member, "parse" | "stringify"),
         "Date" => matches!(member, "now" | "UTC" | "parse"),
         "ArrayBuffer" => matches!(member, "isView"),
+        "BigInt" => matches!(member, "asIntN" | "asUintN"),
         "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
         | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
         | "BigInt64Array" | "BigUint64Array" => matches!(member, "from" | "of"),
@@ -257,6 +288,127 @@ pub(crate) fn is_builtin_static_function_member(namespace: &str, member: &str) -
                 | "set"
                 | "setPrototypeOf"
         ),
+        "WebAssembly" => matches!(
+            member,
+            "compile" | "compileStreaming" | "instantiate" | "instantiateStreaming" | "validate"
+        ),
         _ => false,
     }
+}
+
+/// Spec-defined `.length` for static *function* members recognized by
+/// [`is_builtin_static_function_member`].
+///
+/// Perry currently lowers many builtin static functions as intrinsics rather
+/// than first-class closure values, so direct `Builtin.method.length` reads and
+/// compile-time-folded descriptor probes need this central table just like
+/// constructors use [`builtin_constructor_length`].
+pub(crate) fn builtin_static_function_length(namespace: &str, member: &str) -> Option<u32> {
+    let len = match namespace {
+        "Math" => match member {
+            "random" => 0,
+            "atan2" | "hypot" | "imul" | "max" | "min" | "pow" => 2,
+            "abs" | "acos" | "acosh" | "asin" | "asinh" | "atan" | "atanh" | "cbrt" | "ceil"
+            | "clz32" | "cos" | "cosh" | "exp" | "expm1" | "floor" | "fround" | "f16round"
+            | "log" | "log10" | "log1p" | "log2" | "round" | "sign" | "sin" | "sinh" | "sqrt"
+            | "tan" | "tanh" | "trunc" => 1,
+            _ => return None,
+        },
+        "Promise" => match member {
+            "withResolvers" => 0,
+            "resolve" | "reject" | "all" | "race" | "allSettled" | "any" | "try" => 1,
+            _ => return None,
+        },
+        "Array" => match member {
+            "of" => 0,
+            "isArray" | "from" | "fromAsync" => 1,
+            _ => return None,
+        },
+        "Object" => match member {
+            "defineProperty" => 3,
+            "assign"
+            | "create"
+            | "defineProperties"
+            | "groupBy"
+            | "hasOwn"
+            | "is"
+            | "getOwnPropertyDescriptor"
+            | "setPrototypeOf" => 2,
+            "entries"
+            | "freeze"
+            | "fromEntries"
+            | "getOwnPropertyDescriptors"
+            | "getOwnPropertyNames"
+            | "getOwnPropertySymbols"
+            | "getPrototypeOf"
+            | "isExtensible"
+            | "isFrozen"
+            | "isSealed"
+            | "keys"
+            | "preventExtensions"
+            | "seal"
+            | "values" => 1,
+            _ => return None,
+        },
+        "Number" => match member {
+            "parseInt" => 2,
+            "isFinite" | "isInteger" | "isNaN" | "isSafeInteger" | "parseFloat" => 1,
+            _ => return None,
+        },
+        "String" => match member {
+            "fromCharCode" | "fromCodePoint" | "raw" => 1,
+            _ => return None,
+        },
+        "Symbol" => match member {
+            "for" | "keyFor" => 1,
+            _ => return None,
+        },
+        "JSON" => match member {
+            "parse" => 2,
+            "stringify" => 3,
+            _ => return None,
+        },
+        "Date" => match member {
+            "now" => 0,
+            "UTC" => 7,
+            "parse" => 1,
+            _ => return None,
+        },
+        "ArrayBuffer" => match member {
+            "isView" => 1,
+            _ => return None,
+        },
+        "BigInt" => match member {
+            "asIntN" | "asUintN" => 2,
+            _ => return None,
+        },
+        "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
+        | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
+        | "BigInt64Array" | "BigUint64Array" => match member {
+            "from" => 1,
+            "of" => 0,
+            _ => return None,
+        },
+        "Reflect" => match member {
+            "apply" | "defineProperty" | "set" => 3,
+            "construct"
+            | "deleteProperty"
+            | "get"
+            | "getOwnPropertyDescriptor"
+            | "has"
+            | "setPrototypeOf" => 2,
+            "getPrototypeOf" | "isExtensible" | "ownKeys" | "preventExtensions" => 1,
+            _ => return None,
+        },
+        "WebAssembly" => match member {
+            "compile"
+            | "compileStreaming"
+            | "instantiate"
+            | "instantiateStreaming"
+            | "validate" => 1,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(len)
 }

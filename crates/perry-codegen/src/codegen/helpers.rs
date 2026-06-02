@@ -391,6 +391,7 @@ pub(super) fn init_static_fields_early(
         // built-in error subclass, register this class's id.
         let mut cur: Option<String> = c.extends_name.clone();
         let mut extends_error = false;
+        let mut extends_data_view = false;
         let mut depth = 0usize;
         while let Some(name) = cur {
             if matches!(
@@ -405,6 +406,10 @@ pub(super) fn init_static_fields_early(
                     | "AggregateError"
             ) {
                 extends_error = true;
+                break;
+            }
+            if name == "DataView" {
+                extends_data_view = true;
                 break;
             }
             // Walk user-defined ancestor chain.
@@ -423,6 +428,15 @@ pub(super) fn init_static_fields_early(
                 let cid_str = cid.to_string();
                 ctx.block().call_void(
                     "js_register_class_extends_error",
+                    &[(crate::types::I32, &cid_str)],
+                );
+            }
+        }
+        if extends_data_view {
+            if let Some(&cid) = ctx.class_ids.get(&c.name) {
+                let cid_str = cid.to_string();
+                ctx.block().call_void(
+                    "js_register_class_extends_data_view",
                     &[(crate::types::I32, &cid_str)],
                 );
             }

@@ -1016,17 +1016,39 @@ pub(super) fn try_builtin_prototype_method_apply_call(
         "call" => false,
         _ => return Ok(None),
     };
-    // Inner member: `<recv>.<method>` where `<method>` is a plain name and
-    // `<recv>` is a builtin-prototype reference or array/string literal.
-    let ast::Expr::Member(inner) = outer.obj.as_ref() else {
-        return Ok(None);
+    // Resolve the builtin prototype method name from the thing we're calling
+    // `.call`/`.apply` ON. Two shapes are supported:
+    //   * `<recv>.<method>.call(...)` — a member whose object is a builtin
+    //     prototype receiver (array/string literal or `<Ctor>.prototype`).
+    //   * `local.call(...)` — an identifier previously bound to such a method
+    //     ref, e.g. `const m = [].map` (#3144).
+    // `method_prop` is the `IdentName` for the resolved method; we reuse it as
+    // the synthesized member's `.prop`.
+    let method_prop: ast::IdentName = match outer.obj.as_ref() {
+        ast::Expr::Member(inner) => {
+            let ast::MemberProp::Ident(method_ident) = &inner.prop else {
+                return Ok(None);
+            };
+            if !is_builtin_prototype_receiver(ctx, inner.obj.as_ref()) {
+                return Ok(None);
+            }
+            method_ident.clone()
+        }
+        ast::Expr::Ident(id) => match ctx.builtin_proto_method_locals.get(id.sym.as_ref()) {
+            Some(name) => {
+                // Build the method `.prop` IdentName by cloning the outer
+                // `.call`/`.apply` IdentName and overwriting its `sym`
+                // (avoids needing a synthetic span).
+                let mut prop = outer_prop.clone();
+                prop.sym = name.as_str().into();
+                prop
+            }
+            // Not a tracked builtin-method local: leave unrelated
+            // `someFn.call(...)` untouched.
+            None => return Ok(None),
+        },
+        _ => return Ok(None),
     };
-    if !matches!(&inner.prop, ast::MemberProp::Ident(_)) {
-        return Ok(None);
-    }
-    if !is_builtin_prototype_receiver(ctx, inner.obj.as_ref()) {
-        return Ok(None);
-    }
 
     // `.call`/`.apply` need at least the `thisArg` (the new receiver). A
     // spread in the `thisArg` slot can't be statically resolved to a receiver.
@@ -1061,15 +1083,51 @@ pub(super) fn try_builtin_prototype_method_apply_call(
         call.args.iter().skip(1).cloned().collect()
     };
 
-    // Synthesize `(thisArg).<method>(rest_args)`: keep the original method
-    // name, swap the prototype/literal receiver for the real `thisArg`, drop
-    // the `.apply`/`.call` wrapper, and re-dispatch.
-    let mut synth_member = inner.clone();
-    synth_member.obj = this_arg.expr.clone();
+    // Synthesize `(thisArg).<method>(rest_args)`: use the resolved method
+    // name, make the receiver the real `thisArg`, drop the `.apply`/`.call`
+    // wrapper, and re-dispatch.
+    let synth_member = ast::MemberExpr {
+        span: outer.span,
+        obj: this_arg.expr.clone(),
+        prop: ast::MemberProp::Ident(method_prop),
+    };
     let mut synth_call = call.clone();
     synth_call.callee = ast::Callee::Expr(Box::new(ast::Expr::Member(synth_member)));
     synth_call.args = rest_args;
     Ok(Some(super::lower_call(ctx, &synth_call)?))
+}
+
+/// #3144: if `init` is a value-read of a builtin prototype method whose
+/// receiver passes [`is_builtin_prototype_receiver`] (e.g. `[].map`,
+/// `"".slice`, `Array.prototype.filter`), return the method name. Used to
+/// track locals like `const m = [].map` so a later `m.call(arr, ...)` /
+/// `m.apply(arr, [...])` can be rewritten to a direct call.
+pub(crate) fn as_builtin_proto_method_ref(
+    ctx: &LoweringContext,
+    init: &ast::Expr,
+) -> Option<String> {
+    let ast::Expr::Member(member) = init else {
+        return None;
+    };
+    let ast::MemberProp::Ident(method) = &member.prop else {
+        return None;
+    };
+    if !is_builtin_prototype_receiver(ctx, &member.obj) {
+        return None;
+    }
+    // For a `<Ctor>.prototype` receiver, any method ident is accepted (mirrors
+    // the existing `.call`/`.apply` rewrite, which doesn't gate on the method
+    // name). For an array/string literal receiver, gate on the known
+    // array/string prototype-method predicates so we don't track unrelated
+    // member reads.
+    let is_proto_base = matches!(&*member.obj, ast::Expr::Member(_));
+    let known = crate::lower::array_fold::is_known_array_prototype_method(method.sym.as_ref())
+        || crate::lower::array_fold::is_known_string_prototype_method(method.sym.as_ref());
+    if is_proto_base || known {
+        Some(method.sym.to_string())
+    } else {
+        None
+    }
 }
 
 /// True when `recv` is a builtin constructor's `.prototype` (and that

@@ -139,7 +139,9 @@ pub fn run(module: &mut Module) {
     // find max + 1 once and bump from there.
     let mut next_local = max_local_id(module) + 1;
     let mut out_param_ids: HashMap<FuncId, LocalId> = HashMap::new();
-    for &id in producers.keys() {
+    let mut producer_ids: Vec<FuncId> = producers.keys().copied().collect();
+    producer_ids.sort_unstable();
+    for id in producer_ids {
         out_param_ids.insert(id, next_local);
         next_local += 1;
     }

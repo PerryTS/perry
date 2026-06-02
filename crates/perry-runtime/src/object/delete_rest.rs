@@ -7,14 +7,61 @@ use super::*;
 
 /// Delete a field from an object by its string key name
 /// Returns 1 if the field was deleted (or didn't exist), 0 otherwise
-/// Note: In strict mode, this would return 0 for non-configurable properties,
-/// but we don't track configurability, so we always return 1.
 #[no_mangle]
 pub extern "C" fn js_object_delete_field(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
 ) -> i32 {
+    if obj.is_null() || (obj as usize) < 0x10000 || key.is_null() {
+        return 1;
+    }
     unsafe {
+        if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+            let gc_header =
+                (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+                if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+                    if let Some(attrs) = get_property_attrs(obj as usize, name) {
+                        if !attrs.configurable() {
+                            return 0;
+                        }
+                    }
+                    if let Some(index) = super::canonical_array_index(name) {
+                        return crate::array::js_array_delete(
+                            obj as *mut crate::array::ArrayHeader,
+                            index,
+                        );
+                    }
+                }
+                crate::array::array_named_property_delete(
+                    obj as *const crate::array::ArrayHeader,
+                    key,
+                );
+                return 1;
+            }
+        }
+        // #3655: `delete fn.name` / `delete fn.userProp`. Functions/closures
+        // aren't `ObjectHeader`s — reading `keys_array` off one is out of
+        // bounds. The built-in `name`/`length` slots are `configurable:true`,
+        // so a delete records the key in the closure deleted-key side table
+        // (consulted by hasOwnProperty/getOwnProperty*/value reads);
+        // user-attached props are dropped from the dynamic-prop table outright.
+        if crate::closure::is_closure_ptr(obj as usize) {
+            if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+                // A non-configurable slot — e.g. a constructor's `prototype`,
+                // which #3655 registers as `{configurable:false}` — can't be
+                // deleted: leave it intact and report failure (strict mode
+                // throws on the `false` return; sloppy mode no-ops).
+                if let Some(attrs) = get_property_attrs(obj as usize, name) {
+                    if !attrs.configurable() {
+                        return 0;
+                    }
+                }
+                crate::closure::closure_delete_own_dynamic_prop(obj as usize, name);
+                crate::closure::closure_mark_key_deleted(obj as usize, name);
+            }
+            return 1;
+        }
         let keys = (*obj).keys_array;
         if keys.is_null() {
             // No keys array means no fields to delete, but delete "succeeds" vacuously
@@ -39,6 +86,18 @@ pub extern "C" fn js_object_delete_field(
             Some(i) => i,
             None => return 1, // Not found — delete succeeds vacuously
         };
+        let key_name = {
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).ok()
+        };
+        if let Some(name) = key_name {
+            if let Some(attrs) = get_property_attrs(obj as usize, name) {
+                if !attrs.configurable() {
+                    return 0;
+                }
+            }
+        }
 
         // Proper delete: shift remaining keys + values down by one, then
         // shorten keys_array. Pre-fix this just set the value to

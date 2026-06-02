@@ -108,7 +108,7 @@ pub unsafe extern "C" fn js_function_bind(
     js_closure_set_capture_ptr(bound, 2, bound_args_arr as i64);
 
     // Spec `.length` = max(0, target.length - boundArgs.length).
-    let target_len = crate::closure::closure_arity(target_closure).unwrap_or(0);
+    let target_len = crate::closure::closure_length(target_closure).unwrap_or(0);
     let bound_len = target_len.saturating_sub(bound_arg_count as u32);
     crate::object::set_builtin_closure_length(bound as usize, bound_len);
 
@@ -132,6 +132,35 @@ pub unsafe extern "C" fn js_function_bind(
 #[used]
 static KEEP_JS_FUNCTION_BIND: unsafe extern "C" fn(f64, *const f64, usize) -> f64 =
     js_function_bind;
+
+/// Reify a `Function.prototype.{bind,call,apply}` (or any function method)
+/// *read off a closure as a value* into a callable BOUND_METHOD closure. When
+/// invoked it routes through `js_native_call_method(receiver, method, …)`, so
+/// `f.bind`, `f.call`, `f.apply` behave as real functions instead of reading
+/// back `undefined`.
+///
+/// Fixes the "uncurry-this" idiom `Function.prototype.call.bind(method)`
+/// (#3716): reading `.bind` off the reified `Function.prototype.call` value
+/// previously returned `undefined`, so the bound function was never created.
+/// `receiver` must be a NaN-boxed closure pointer; `method` is a `'static`
+/// byte slice (`b"bind"` / `b"call"` / `b"apply"`) whose pointer the
+/// BOUND_METHOD captures verbatim.
+pub(crate) unsafe fn reify_function_method_value(receiver: f64, method: &'static [u8]) -> f64 {
+    let closure = js_closure_alloc(BOUND_METHOD_FUNC_PTR, 3);
+    if closure.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    js_closure_set_capture_f64(closure, 0, receiver);
+    js_closure_set_capture_ptr(closure, 1, method.as_ptr() as i64);
+    js_closure_set_capture_ptr(closure, 2, method.len() as i64);
+    // `.name` = the method name so `typeof v === "function"` and `v.name`
+    // read back sensibly (e.g. `"bind"`).
+    if let Ok(name) = std::str::from_utf8(method) {
+        crate::object::set_bound_native_closure_name(closure, name);
+    }
+    crate::gc::runtime_write_barrier_root_heap_word(closure as u64);
+    f64::from_bits(crate::value::JSValue::pointer(closure as *mut u8).bits())
+}
 
 /// Issue #648: calling a value that isn't a function (most commonly the
 /// result of a property lookup that returned undefined, e.g.
@@ -1109,6 +1138,25 @@ pub unsafe extern "C" fn js_native_call_value(
 
     let jsval = JSValue::from_bits(func_value.to_bits());
 
+    // #3656: a Proxy value invoked as a function dispatches through its `apply`
+    // trap (or, absent a trap, forwards to the target). The compiler emits a
+    // `ProxyApply` node when it can statically prove the callee is a proxy, but
+    // indirect callees (e.g. `record.proxy()` off a `Proxy.revocable` result)
+    // reach this generic value-call path with no static hint. Proxy ids encode
+    // to small pointers, so real heap closures early-out of `js_proxy_is_proxy`.
+    if crate::proxy::js_proxy_is_proxy(func_value) == 1 {
+        let arr = crate::array::js_array_alloc(0);
+        let mut a = arr;
+        if !args_ptr.is_null() {
+            for i in 0..args_len {
+                a = crate::array::js_array_push_f64(a, unsafe { *args_ptr.add(i) });
+            }
+        }
+        let arr_box = f64::from_bits(0x7FFD_0000_0000_0000 | (a as u64 & 0x0000_FFFF_FFFF_FFFF));
+        let this_arg = f64::from_bits(crate::value::TAG_UNDEFINED);
+        return crate::proxy::js_proxy_apply(func_value, this_arg, arr_box);
+    }
+
     // Get the closure pointer from the value
     // For native compilation, function values are stored as NaN-boxed pointers
     let closure: *const ClosureHeader = if jsval.is_pointer() {
@@ -1124,6 +1172,16 @@ pub unsafe extern "C" fn js_native_call_value(
     if closure.is_null() {
         // Return undefined for null/invalid closures
         return f64::from_bits(JSValue::undefined().bits());
+    }
+
+    // #3716: a built-in prototype method invoked *as a value* (the uncurry-this
+    // idiom `Function.prototype.call.bind(method)`) lands here as a no-op-backed
+    // closure that would just return `undefined`. Re-dispatch it by name through
+    // `js_native_call_method`, with the receiver taken from `IMPLICIT_THIS`.
+    if let Some(result) =
+        crate::object::try_dispatch_value_called_proto_method(closure, args_ptr, args_len)
+    {
+        return result;
     }
 
     // Refs #421: when the closure body declares more params than the call site
@@ -1154,6 +1212,19 @@ pub unsafe extern "C" fn js_native_call_value(
             undef
         }
     };
+
+    if func_ptr == crate::object::global_this_array_thunk as *const u8 {
+        if args_len == 1 {
+            let arr = crate::array::js_array_constructor_single(arg_at(0));
+            return crate::value::js_nanbox_pointer(arr as i64);
+        }
+        let arr = crate::array::js_array_alloc(args_len as u32);
+        (*arr).length = args_len as u32;
+        for i in 0..args_len {
+            crate::array::js_array_set_f64(arr, i as u32, arg_at(i));
+        }
+        return crate::value::js_nanbox_pointer(arr as i64);
+    }
 
     // Call with the appropriate arity
     match dispatch_args_len {

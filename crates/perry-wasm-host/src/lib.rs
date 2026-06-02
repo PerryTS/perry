@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use wasmi::{Engine, Linker, Module, Store, Val};
+use wasmi::{Engine, ExternType, Linker, Module, Store, Val};
 
 /// Numeric WebAssembly value. MVP supports only the four core numeric types;
 /// `externref` / `funcref` / `v128` are out of scope (see issue #76, "Open
@@ -241,6 +241,162 @@ pub extern "C" fn perry_wasm_host_module_drop(module: *mut WasmModuleHandle) {
     }
 }
 
+/// WebAssembly external kind tags for module metadata. Mirrors the standard
+/// `WebAssembly.Module.exports/imports` descriptor `kind` strings:
+/// function/table/memory/global.
+pub const WASM_EXTERN_KIND_FUNCTION: u8 = 0;
+pub const WASM_EXTERN_KIND_TABLE: u8 = 1;
+pub const WASM_EXTERN_KIND_MEMORY: u8 = 2;
+pub const WASM_EXTERN_KIND_GLOBAL: u8 = 3;
+
+fn extern_type_kind(ty: &ExternType) -> u8 {
+    match ty {
+        ExternType::Func(_) => WASM_EXTERN_KIND_FUNCTION,
+        ExternType::Table(_) => WASM_EXTERN_KIND_TABLE,
+        ExternType::Memory(_) => WASM_EXTERN_KIND_MEMORY,
+        ExternType::Global(_) => WASM_EXTERN_KIND_GLOBAL,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn perry_wasm_host_module_exports_len(module: *mut WasmModuleHandle) -> usize {
+    if module.is_null() {
+        return 0;
+    }
+    let module = unsafe { &*module };
+    module.0.module.exports().count()
+}
+
+#[no_mangle]
+pub extern "C" fn perry_wasm_host_module_export_at(
+    module: *mut WasmModuleHandle,
+    index: usize,
+    out_name: *mut *const c_char,
+    out_name_len: *mut usize,
+    out_kind: *mut u8,
+) -> i32 {
+    if module.is_null() || out_name.is_null() || out_name_len.is_null() || out_kind.is_null() {
+        return 0;
+    }
+    let module = unsafe { &*module };
+    let Some(export) = module.0.module.exports().nth(index) else {
+        return 0;
+    };
+    let name = export.name();
+    unsafe {
+        *out_name = name.as_ptr() as *const c_char;
+        *out_name_len = name.len();
+        *out_kind = extern_type_kind(export.ty());
+    }
+    1
+}
+
+#[no_mangle]
+pub extern "C" fn perry_wasm_host_module_imports_len(module: *mut WasmModuleHandle) -> usize {
+    if module.is_null() {
+        return 0;
+    }
+    let module = unsafe { &*module };
+    module.0.module.imports().len()
+}
+
+#[no_mangle]
+pub extern "C" fn perry_wasm_host_module_import_at(
+    module: *mut WasmModuleHandle,
+    index: usize,
+    out_module: *mut *const c_char,
+    out_module_len: *mut usize,
+    out_name: *mut *const c_char,
+    out_name_len: *mut usize,
+    out_kind: *mut u8,
+) -> i32 {
+    if module.is_null()
+        || out_module.is_null()
+        || out_module_len.is_null()
+        || out_name.is_null()
+        || out_name_len.is_null()
+        || out_kind.is_null()
+    {
+        return 0;
+    }
+    let module = unsafe { &*module };
+    let Some(import) = module.0.module.imports().nth(index) else {
+        return 0;
+    };
+    let module_name = import.module();
+    let name = import.name();
+    unsafe {
+        *out_module = module_name.as_ptr() as *const c_char;
+        *out_module_len = module_name.len();
+        *out_name = name.as_ptr() as *const c_char;
+        *out_name_len = name.len();
+        *out_kind = extern_type_kind(import.ty());
+    }
+    1
+}
+
+fn utf8_arg<'a>(ptr: *const c_char, len: usize) -> Option<&'a str> {
+    if ptr.is_null() {
+        return None;
+    }
+    let bytes = unsafe { slice::from_raw_parts(ptr as *const u8, len) };
+    std::str::from_utf8(bytes).ok()
+}
+
+#[no_mangle]
+pub extern "C" fn perry_wasm_host_module_custom_sections_len(
+    module: *mut WasmModuleHandle,
+    name: *const c_char,
+    name_len: usize,
+) -> usize {
+    if module.is_null() {
+        return 0;
+    }
+    let Some(name) = utf8_arg(name, name_len) else {
+        return 0;
+    };
+    let module = unsafe { &*module };
+    module
+        .0
+        .module
+        .custom_sections()
+        .filter(|section| section.name() == name)
+        .count()
+}
+
+#[no_mangle]
+pub extern "C" fn perry_wasm_host_module_custom_section_at(
+    module: *mut WasmModuleHandle,
+    name: *const c_char,
+    name_len: usize,
+    nth: usize,
+    out_data: *mut *const u8,
+    out_data_len: *mut usize,
+) -> i32 {
+    if module.is_null() || out_data.is_null() || out_data_len.is_null() {
+        return 0;
+    }
+    let Some(name) = utf8_arg(name, name_len) else {
+        return 0;
+    };
+    let module = unsafe { &*module };
+    let Some(section) = module
+        .0
+        .module
+        .custom_sections()
+        .filter(|section| section.name() == name)
+        .nth(nth)
+    else {
+        return 0;
+    };
+    let data = section.data();
+    unsafe {
+        *out_data = data.as_ptr();
+        *out_data_len = data.len();
+    }
+    1
+}
+
 #[no_mangle]
 pub extern "C" fn perry_wasm_host_instance_new(
     module: *mut WasmModuleHandle,
@@ -366,6 +522,16 @@ mod tests {
         0x01, 0x7f, 0x03, 0x02, 0x01, 0x00, 0x07, 0x07, 0x01, 0x03, 0x61, 0x64, 0x64, 0x00, 0x00,
         0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b,
     ];
+    /// `(module (import "env" "f" (func (param i32) (result i32))))`.
+    const IMPORT_FUNC_WASM: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01,
+        0x7f, 0x02, 0x09, 0x01, 0x03, 0x65, 0x6e, 0x76, 0x01, 0x66, 0x00, 0x00,
+    ];
+    /// `(module (@custom "meta" "\01\02\03"))`.
+    const CUSTOM_WASM: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x00, 0x08, 0x04, 0x6d, 0x65, 0x74, 0x61,
+        0x01, 0x02, 0x03,
+    ];
 
     #[test]
     fn validate_add_wasm() {
@@ -380,5 +546,93 @@ mod tests {
         let result =
             call_export(&mut inst, "add", &[WasmVal::I32(2), WasmVal::I32(3)]).expect("call");
         assert_eq!(result, Some(WasmVal::I32(5)));
+    }
+
+    #[test]
+    fn c_abi_reports_module_exports_imports_and_custom_sections() {
+        let mut err = std::ptr::null_mut();
+        let add = perry_wasm_host_module_new(ADD_WASM.as_ptr(), ADD_WASM.len(), &mut err);
+        assert!(!add.is_null(), "compile add module: {err:p}");
+        assert_eq!(perry_wasm_host_module_exports_len(add), 1);
+
+        let mut name = std::ptr::null();
+        let mut name_len = 0usize;
+        let mut kind = u8::MAX;
+        assert_eq!(
+            perry_wasm_host_module_export_at(add, 0, &mut name, &mut name_len, &mut kind),
+            1
+        );
+        let export_name =
+            unsafe { std::str::from_utf8(std::slice::from_raw_parts(name as *const u8, name_len)) }
+                .unwrap();
+        assert_eq!(export_name, "add");
+        assert_eq!(kind, WASM_EXTERN_KIND_FUNCTION);
+        perry_wasm_host_module_drop(add);
+
+        let imports =
+            perry_wasm_host_module_new(IMPORT_FUNC_WASM.as_ptr(), IMPORT_FUNC_WASM.len(), &mut err);
+        assert!(!imports.is_null(), "compile import module: {err:p}");
+        assert_eq!(perry_wasm_host_module_imports_len(imports), 1);
+
+        let mut module_name = std::ptr::null();
+        let mut module_name_len = 0usize;
+        name = std::ptr::null();
+        name_len = 0;
+        kind = u8::MAX;
+        assert_eq!(
+            perry_wasm_host_module_import_at(
+                imports,
+                0,
+                &mut module_name,
+                &mut module_name_len,
+                &mut name,
+                &mut name_len,
+                &mut kind,
+            ),
+            1
+        );
+        let import_module = unsafe {
+            std::str::from_utf8(std::slice::from_raw_parts(
+                module_name as *const u8,
+                module_name_len,
+            ))
+        }
+        .unwrap();
+        let import_name =
+            unsafe { std::str::from_utf8(std::slice::from_raw_parts(name as *const u8, name_len)) }
+                .unwrap();
+        assert_eq!(
+            (import_module, import_name, kind),
+            ("env", "f", WASM_EXTERN_KIND_FUNCTION)
+        );
+        perry_wasm_host_module_drop(imports);
+
+        let custom = perry_wasm_host_module_new(CUSTOM_WASM.as_ptr(), CUSTOM_WASM.len(), &mut err);
+        assert!(!custom.is_null(), "compile custom module: {err:p}");
+        let section_name = b"meta";
+        assert_eq!(
+            perry_wasm_host_module_custom_sections_len(
+                custom,
+                section_name.as_ptr() as *const c_char,
+                section_name.len(),
+            ),
+            1
+        );
+        let mut data = std::ptr::null();
+        let mut data_len = 0usize;
+        assert_eq!(
+            perry_wasm_host_module_custom_section_at(
+                custom,
+                section_name.as_ptr() as *const c_char,
+                section_name.len(),
+                0,
+                &mut data,
+                &mut data_len,
+            ),
+            1
+        );
+        let bytes = unsafe { std::slice::from_raw_parts(data, data_len) };
+        assert_eq!(bytes, &[1, 2, 3]);
+        perry_wasm_host_module_drop(custom);
     }
 }

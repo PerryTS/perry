@@ -94,17 +94,103 @@ fn crypto_random_uuid_is_accepted() {
     );
 }
 
-/// Modules that have at least one manifest entry are strict — any
-/// unknown property errors. `crypto.foobar` is not implemented.
+#[test]
+fn node_builtin_dispatch_only_named_imports_are_rejected() {
+    let cases = [
+        ("node:buffer", "alloc", "bufferAlloc"),
+        ("node:buffer", "from", "bufferFrom"),
+        ("node:crypto", "md5", "md5"),
+        ("node:perf_hooks", "mark", "mark"),
+        ("node:perf_hooks", "timeOrigin", "timeOrigin"),
+        ("node:string_decoder", "encoding", "encoding"),
+        ("node:tty", "clearLine", "clearLine"),
+        ("node:process", "on", "processOn"),
+        ("node:process", "setMaxListeners", "setMaxListeners"),
+        ("node:module", "wrap", "moduleWrap"),
+        ("module", "wrapper", "moduleWrapper"),
+        ("node:url", "createObjectURL", "createObjectURL"),
+        ("node:worker_threads", "getWorkerData", "getWorkerData"),
+        ("node:https", "ClientRequest", "HttpsClientRequest"),
+        ("node:http2", "Http2SecureServer", "Http2SecureServer"),
+        ("node:child_process", "Stream", "ChildProcessStream"),
+        ("node:cluster", "worker", "clusterWorker"),
+        ("node:stream", "from", "streamFrom"),
+        ("node:stream", "fromWeb", "streamFromWeb"),
+    ];
+
+    for (module, imported, local) in cases {
+        let src = format!(
+            r#"
+            import {{ {imported} as {local} }} from "{module}";
+            void {local};
+        "#
+        );
+        let err = match lower_result(&src) {
+            Ok(_) => panic!("{module}.{imported} should reject as a named import"),
+            Err(err) => err,
+        };
+        assert!(
+            err.contains("does not provide an export named")
+                && err.contains(module)
+                && err.contains(imported),
+            "unexpected error for {module}.{imported}: {err}"
+        );
+    }
+}
+
+#[test]
+fn node_builtin_real_named_exports_still_compile() {
+    let result = lower_result(
+        r#"
+        import { Buffer, INSPECT_MAX_BYTES } from "node:buffer";
+        import { randomUUID, hash } from "node:crypto";
+        import { performance, PerformanceObserver } from "node:perf_hooks";
+        import { StringDecoder } from "node:string_decoder";
+        import { isatty, ReadStream, WriteStream } from "node:tty";
+        import { cwd, env } from "node:process";
+        import { builtinModules, createRequire } from "node:module";
+        import { URL, fileURLToPath } from "node:url";
+        import { Worker, workerData, parentPort } from "node:worker_threads";
+        import { Agent, Server as HttpsServer } from "node:https";
+        import { Http2ServerRequest, constants as http2Constants } from "node:http2";
+        import { ChildProcess, spawn } from "node:child_process";
+        import { Worker as ClusterWorker, fork } from "node:cluster";
+        import { Readable, default as streamDefault } from "node:stream";
+
+        console.log("ok");
+    "#,
+    );
+    assert!(
+        result.is_ok(),
+        "real Node named exports must keep compiling: {result:?}"
+    );
+}
+
+/// #3896: a bare value read of an unknown member on a Node-core module
+/// namespace is an ordinary property miss → undefined (matching Node), but the
+/// *call* form must still reject as unimplemented.
 #[test]
 fn crypto_unknown_method_is_rejected() {
-    let result = lower_result(
+    let read = lower_result(
         r#"
         import * as crypto from "crypto";
         const x = crypto.foobar;
     "#,
     );
-    assert!(result.is_err(), "crypto.foobar should error");
+    assert!(
+        read.is_ok(),
+        "crypto.foobar value read should resolve to undefined (#3896), got {read:?}"
+    );
+    let call = lower_result(
+        r#"
+        import * as crypto from "crypto";
+        crypto.foobar();
+    "#,
+    );
+    assert!(
+        call.is_err(),
+        "crypto.foobar() call should still error as unimplemented"
+    );
 }
 
 /// `os.platform` is implemented; `os.totalmem` too. Both must continue
@@ -217,14 +303,27 @@ fn every_supported_module_rejects_bogus_member() {
             const x = m.__perry_known_bogus_member_513__;
         "#
         );
+        let is_core = perry_api_manifest::is_node_core_module(module);
         match lower_result(&src) {
             Ok(_) => {
-                failures.push(format!(
-                    "{module}: bogus member access did not error (strict mode not engaged)"
-                ));
+                // #3896: a bogus member *value read* on a Node-core module
+                // namespace is an ordinary property miss → undefined (matching
+                // Node). The call form `m.bogus()` still rejects — see
+                // `every_supported_module_rejects_bogus_call`. Only non-core
+                // (npm) modules keep the strict read-gate.
+                if !is_core {
+                    failures.push(format!(
+                        "{module}: bogus member access did not error (strict mode not engaged)"
+                    ));
+                }
             }
             Err(e) => {
-                if !(e.contains("not implemented") && e.contains("#463")) {
+                if is_core {
+                    failures.push(format!(
+                        "{module}: Node-core bogus member read should now resolve to undefined \
+                         (#3896), not error — got {e}"
+                    ));
+                } else if !(e.contains("not implemented") && e.contains("#463")) {
                     failures.push(format!(
                         "{module}: errored but not via the R005/#463 path — got {e}"
                     ));

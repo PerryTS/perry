@@ -58,12 +58,32 @@ pub fn date_invalid() -> f64 {
 /// with no side-table registry to keep in sync.
 #[inline]
 pub fn is_date_cell_addr(addr: usize) -> bool {
-    if addr < 0x1000 + crate::gc::GC_HEADER_SIZE {
+    // #4004: small-handle registry ids (Web Fetch Request/Headers/Response,
+    // perry-ffi/node:http handles, timer ids, …) are NaN-boxed as POINTER_TAG
+    // values but are NOT real heap addresses — they live in the `< 0x100000`
+    // small-handle band. Real `DateCell`s are arena-allocated, always at or
+    // above the small-handle cutoff. Dereferencing `addr - GC_HEADER_SIZE` on a
+    // small handle reads unmapped memory: once #4018 moved fetch handles up to
+    // 0x40000 (past the old 0x1000 floor), any untyped `request.headers.get()`
+    // dispatch routed its receiver through `is_date_value` here and segfaulted.
+    // Reject the whole small-handle band so this is an exact heap-pointer check.
+    if addr < 0x100000 {
         return false;
     }
     unsafe {
         let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*header).obj_type == crate::gc::GC_TYPE_DATE_CELL
+        if (*header).obj_type != crate::gc::GC_TYPE_DATE_CELL {
+            return false;
+        }
+        // #4003: `Buffer`s are raw-`alloc`'d with NO `GcHeader`, so the word at
+        // `addr - GC_HEADER_SIZE` is unrelated heap memory that can
+        // coincidentally hold the `DATE_CELL` tag — observed for the first
+        // `gunzipSync` result, whose `.length`/`.byteLength` then mis-routed
+        // through the Date branch in `js_object_get_field_by_name` and returned
+        // `undefined`. A registered buffer is never a `DateCell`, so reject it.
+        // The lookup runs only in the rare tag-match case, keeping the common
+        // (non-Date) property-read path unchanged.
+        !crate::buffer::is_registered_buffer(addr)
     }
 }
 
@@ -1218,6 +1238,9 @@ pub extern "C" fn js_date_get_utc_milliseconds(timestamp: f64) -> f64 {
 /// date.valueOf() — same as getTime(), returns ms timestamp.
 #[no_mangle]
 pub extern "C" fn js_date_value_of(timestamp: f64) -> f64 {
+    if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(timestamp) {
+        return payload;
+    }
     let timestamp = date_cell_timestamp(timestamp);
     timestamp
 }

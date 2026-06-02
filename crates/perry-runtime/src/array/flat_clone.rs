@@ -358,7 +358,12 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
                     // #2874: lazy iterator-helper objects (`Iterator.from(x).map(f)`)
                     // dispatch `.next()` via class id, so `[...it]` / `Array.from(it)`
                     // must drive the iterator protocol.
-                    || (*obj).class_id == crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID;
+                    || (*obj).class_id == crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID
+                    // #3909: Buffer iterators (`buf.keys()`/`values()`/`entries()`)
+                    // dispatch `.next()` via class id too — without this `[...buf.keys()]`
+                    // / `Array.from(buf.values())` produced an empty array even though
+                    // `.next()` and `for...of` already worked.
+                    || (*obj).class_id == crate::buffer::BUFFER_ITERATOR_CLASS_ID;
                 let is_iterable = is_array_iterator || {
                     let iter_sym = crate::symbol::well_known_symbol("iterator");
                     if iter_sym.is_null() {

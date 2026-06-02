@@ -1,30 +1,18 @@
-//! `globalThis` singleton plus the built-in constructor / prototype-method
-//! population that backs `globalThis.Array`, `globalThis.Object`,
-//! `globalThis.console`, etc. Also home for
-//! `js_global_or_console_property_by_name`, the codegen-emitted
-//! property-read shortcut.
-//!
-//! Split out of `object/mod.rs` (issue #1103). Pure relocation — no
-//! logic changes.
+//! `globalThis` singleton plus built-in constructor/namespace population.
 
 use super::*;
 
-/// Issue #611 (Effect): `globalThis[<computed>] = value` and the
-/// `(globalThis as any)[id] ??= new Map()` pattern (used by hono / Effect /
-/// most ESM libraries that ship a CJS-compat global side-store) wrote to
-/// a 0-pointer sentinel and read back undefined — `globalStore` was always
-/// undefined, callers SIGSEGV'd at the next `.has()` / `.get()` call. This
-/// function lazily allocates a single shared ObjectHeader (one per process,
-/// initialised on first access) and returns a NaN-boxed POINTER to it. The
-/// codegen-side IndexGet / IndexSet on `Expr::GlobalGet` routes through
-/// this helper instead of through the 0.0 sentinel so reads / writes
-/// actually persist. Existing AST-shape patterns like
-/// `PropertyGet { GlobalGet, "log" }` (console.log dispatch) match on the
-/// HIR node, not the SSA value, so they continue to fire even though the
+#[path = "global_this_webassembly.rs"]
+mod global_this_webassembly;
+
+/// Issue #611: lazily allocate shared `globalThis` for computed global access.
 #[no_mangle]
 pub extern "C" fn js_get_global_this() -> f64 {
     let cached = GLOBAL_THIS_PTR.load(Ordering::Acquire);
     let ptr = if cached != 0 {
+        while !GLOBAL_THIS_READY.load(Ordering::Acquire) {
+            std::hint::spin_loop();
+        }
         cached
     } else {
         // First access — allocate. Race-tolerant: if two threads race the
@@ -40,24 +28,18 @@ pub extern "C" fn js_get_global_this() -> f64 {
             Ordering::Acquire,
         ) {
             Ok(_) => {
-                // Winner: populate built-in constructor properties on the
-                // singleton so `globalThis.Array` / `context.Array` (lodash's
-                // `runInContext` pattern) return non-undefined values. Each
-                // value is a tiny ObjectHeader carrying a `prototype` field
-                // pointing at another empty object — enough that
-                // `var arrayProto = Array.prototype` doesn't throw and the
-                // chained `.toString` reads return undefined rather than
-                // tripping the "Cannot read properties of undefined" gate at
-                // module-init time. Full constructor dispatch on these
-                // sentinels still falls through to existing code paths (bare
-                // `new Array(n)` continues to work through `lower_new`); the
-                // goal here is just to unblock libraries that read the
-                // constructors off `globalThis` as values. Refs lodash
-                // `runInContext` blocker after PR #963.
+                // Populate constructor values for `globalThis.Array` /
+                // `context.Array` style reads without changing bare `new Array`.
                 populate_global_this_builtins(new_ptr as *mut ObjectHeader);
+                GLOBAL_THIS_READY.store(true, Ordering::Release);
                 new_ptr
             }
-            Err(other) => other,
+            Err(other) => {
+                while !GLOBAL_THIS_READY.load(Ordering::Acquire) {
+                    std::hint::spin_loop();
+                }
+                other
+            }
         }
     };
     crate::value::js_nanbox_pointer(ptr)
@@ -91,117 +73,9 @@ pub unsafe extern "C" fn js_global_or_console_property_by_name(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-/// JS built-in constructor names exposed on `globalThis`. Pre-populated by
-/// the singleton init in `js_get_global_this` so libraries that read these
-/// off the global (lodash's `var Array = context.Array; var arrayProto =
-/// Array.prototype`, the same `(globalThis as any).X` read shape) see a
-/// non-undefined backing object. Codegen mirrors this list in
-/// `perry-codegen/src/expr.rs::is_global_this_builtin_name` to decide when
-/// `globalThis.<Name>` should route through the singleton instead of the
-/// legacy `0.0` no-value placeholder.
-pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
-    "Array",
-    "Object",
-    "String",
-    "Number",
-    "Boolean",
-    "Function",
-    "RegExp",
-    "Date",
-    "Error",
-    "TypeError",
-    "RangeError",
-    "SyntaxError",
-    "ReferenceError",
-    "EvalError",
-    "URIError",
-    "AggregateError",
-    "Symbol",
-    "Promise",
-    "Map",
-    "Set",
-    "WeakMap",
-    "WeakSet",
-    "WeakRef",
-    "Proxy",
-    "BigInt",
-    "Uint8Array",
-    "Int8Array",
-    "Uint16Array",
-    "Int16Array",
-    "Uint32Array",
-    "Int32Array",
-    "Float16Array",
-    "Float32Array",
-    "Float64Array",
-    "Uint8ClampedArray",
-    "BigInt64Array",
-    "BigUint64Array",
-    "ArrayBuffer",
-    "SharedArrayBuffer",
-    "DataView",
-    "TextEncoder",
-    "TextDecoder",
-    "TextEncoderStream",
-    "TextDecoderStream",
-    "URL",
-    "URLSearchParams",
-    "AbortController",
-    "AbortSignal",
-    "FormData",
-    "Blob",
-    "File",
-    "Headers",
-    "Request",
-    "Response",
-    "FinalizationRegistry",
-    // #2875: TC39 explicit-resource-management globals. Backed by the
-    // no-op constructor thunk so `typeof DisposableStack === "function"`;
-    // real `new DisposableStack()` / `new SuppressedError(...)` flow through
-    // codegen's `lower_builtin_new` to the dedicated runtime ctors.
-    "DisposableStack",
-    "AsyncDisposableStack",
-    "SuppressedError",
-    "Buffer",
-];
-
-/// JS built-in namespaces (typeof === "object", not "function"). Same
-/// shape on the singleton — a backing object with `prototype` so chained
-/// reads degrade gracefully — but typeof reports "object".
-pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] =
-    &["console", "process", "Math", "JSON", "Reflect"];
-
 // Note: `navigator` (#2923) is installed on the singleton directly (see
 // `populate_global_this_builtins`) rather than via this generic namespace
 // loop because it needs its own field-populated object, not an empty stub.
-
-/// JS global built-in functions exposed as function-valued properties on
-/// `globalThis`. Unlike constructor sentinels, these call through to Perry's
-/// real direct-call runtime helpers so rebinding works:
-/// `const clone = globalThis.structuredClone; clone(value)`.
-pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &[
-    "structuredClone",
-    "atob",
-    "btoa",
-    "setTimeout",
-    "clearTimeout",
-    "setInterval",
-    "clearInterval",
-    "setImmediate",
-    "clearImmediate",
-    "queueMicrotask",
-    // #2905: standard global helper functions. These route through Perry's
-    // real direct-call runtime helpers, so `const p = parseInt; p("42px")`
-    // and `globalThis.encodeURIComponent("a b")` match Node.
-    "parseInt",
-    "parseFloat",
-    "isNaN",
-    "isFinite",
-    "encodeURI",
-    "decodeURI",
-    "encodeURIComponent",
-    "decodeURIComponent",
-];
 
 /// No-op thunk used as the function body for most singleton globalThis
 /// built-in constructor values. Lets `globalThis.Array` carry a real
@@ -220,6 +94,251 @@ pub(crate) extern "C" fn global_this_builtin_noop_thunk(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+extern "C" fn global_this_date_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    let string = crate::date::js_date_to_string(crate::date::js_date_new());
+    crate::value::js_nanbox_string(string as i64)
+}
+
+extern "C" fn global_this_eval_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    source: f64,
+) -> f64 {
+    let source = crate::builtins::js_string_coerce(source);
+    let Some(body) = (unsafe { super::has_own_helpers::str_from_string_header(source) }) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    match normalize_eval_this_body(body).as_deref() {
+        Some("this" | "globalThis") => js_get_global_this(),
+        Some("typeof this") => {
+            let s = b"object";
+            let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            crate::value::js_nanbox_string(ptr as i64)
+        }
+        _ => f64::from_bits(crate::value::TAG_UNDEFINED),
+    }
+}
+
+fn normalize_eval_this_body(body: &str) -> Option<String> {
+    let mut src = body.trim().trim_end_matches(';').trim();
+    for directive in ["\"use strict\"", "'use strict'"] {
+        if let Some(rest) = src.strip_prefix(directive) {
+            let rest = rest.trim_start();
+            if let Some(after_semicolon) = rest.strip_prefix(';') {
+                src = after_semicolon.trim().trim_end_matches(';').trim();
+            }
+        }
+    }
+    if matches!(src, "this" | "globalThis" | "typeof this") {
+        Some(src.to_string())
+    } else {
+        None
+    }
+}
+
+pub(crate) extern "C" fn typed_array_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    super::object_ops::throw_object_type_error(b"Constructor %TypedArray% requires 'new'")
+}
+
+fn error_constructor_call(kind: u32, message: f64) -> f64 {
+    let error = crate::error::js_error_new_kind_from_value(kind, message);
+    crate::value::js_nanbox_pointer(error as i64)
+}
+
+extern "C" fn error_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    message: f64,
+) -> f64 {
+    error_constructor_call(crate::error::ERROR_KIND_ERROR, message)
+}
+
+extern "C" fn type_error_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    message: f64,
+) -> f64 {
+    error_constructor_call(crate::error::ERROR_KIND_TYPE_ERROR, message)
+}
+
+extern "C" fn range_error_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    message: f64,
+) -> f64 {
+    error_constructor_call(crate::error::ERROR_KIND_RANGE_ERROR, message)
+}
+
+extern "C" fn reference_error_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    message: f64,
+) -> f64 {
+    error_constructor_call(crate::error::ERROR_KIND_REFERENCE_ERROR, message)
+}
+
+extern "C" fn syntax_error_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    message: f64,
+) -> f64 {
+    error_constructor_call(crate::error::ERROR_KIND_SYNTAX_ERROR, message)
+}
+
+extern "C" fn eval_error_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    message: f64,
+) -> f64 {
+    error_constructor_call(crate::error::ERROR_KIND_EVAL_ERROR, message)
+}
+
+extern "C" fn uri_error_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    message: f64,
+) -> f64 {
+    error_constructor_call(crate::error::ERROR_KIND_URI_ERROR, message)
+}
+
+pub(crate) fn builtin_prototype_value(name: &str) -> f64 {
+    let ctor = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+    let ctor_bits = ctor.to_bits();
+    if (ctor_bits >> 48) != 0x7FFD {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let ctor_ptr = (ctor_bits & crate::value::POINTER_MASK) as usize;
+    if ctor_ptr == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype")
+}
+
+pub(crate) extern "C" fn webcrypto_illegal_constructor_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    crate::fs::validate::throw_type_error_with_code(
+        "Illegal constructor",
+        "ERR_ILLEGAL_CONSTRUCTOR",
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_webcrypto_illegal_constructor() -> f64 {
+    crate::fs::validate::throw_type_error_with_code(
+        "Illegal constructor",
+        "ERR_ILLEGAL_CONSTRUCTOR",
+    )
+}
+
+extern "C" fn global_this_crypto_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    super::native_module::webcrypto_namespace()
+}
+
+fn require_webcrypto_this() -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let jv = crate::value::JSValue::from_bits(this_value.to_bits());
+    if jv.is_pointer() {
+        let obj = jv.as_pointer::<ObjectHeader>();
+        if !obj.is_null()
+            && unsafe { (*obj).class_id } == super::native_module::NATIVE_MODULE_CLASS_ID
+            && unsafe { super::native_module::read_native_module_name(obj) }
+                .is_some_and(|name| name == "crypto.webcrypto")
+        {
+            return this_value;
+        }
+    }
+    crate::fs::validate::throw_type_error_with_code(
+        "Value of \"this\" must be of type Crypto",
+        "ERR_INVALID_THIS",
+    )
+}
+
+pub(crate) extern "C" fn webcrypto_get_random_values_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    array: f64,
+) -> f64 {
+    let this_value = require_webcrypto_this();
+    unsafe {
+        js_native_call_method(
+            this_value,
+            b"getRandomValues".as_ptr() as *const i8,
+            "getRandomValues".len(),
+            &array,
+            1,
+        )
+    }
+}
+
+pub(crate) extern "C" fn webcrypto_random_uuid_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this_value = require_webcrypto_this();
+    unsafe {
+        js_native_call_method(
+            this_value,
+            b"randomUUID".as_ptr() as *const i8,
+            "randomUUID".len(),
+            std::ptr::null(),
+            0,
+        )
+    }
+}
+
+extern "C" fn webcrypto_subtle_getter_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    require_webcrypto_this();
+    super::native_module::subtle_crypto_namespace()
+}
+
+extern "C" fn cryptokey_property_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+pub(crate) fn webcrypto_method_value(property_name: &str) -> Option<f64> {
+    let (func_ptr, arity) = match property_name {
+        "getRandomValues" => (webcrypto_get_random_values_thunk as *const u8, 1),
+        "randomUUID" => (webcrypto_random_uuid_thunk as *const u8, 0),
+        _ => return None,
+    };
+    crate::closure::js_register_closure_arity(func_ptr, arity);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+    }
+    super::native_module::set_bound_native_closure_name(closure, property_name);
+    super::native_module::set_builtin_closure_length(closure as usize, arity);
+    Some(crate::value::js_nanbox_pointer(closure as i64))
+}
+
+pub(crate) extern "C" fn global_this_array_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let rest_value = crate::value::JSValue::from_bits(rest.to_bits());
+    let args_arr = if rest_value.is_pointer() {
+        rest_value.as_pointer::<crate::array::ArrayHeader>()
+    } else {
+        std::ptr::null()
+    };
+    let argc = crate::array::js_array_length(args_arr);
+    if argc == 1 {
+        let first = crate::array::js_array_get_f64(args_arr, 0);
+        let arr = crate::array::js_array_constructor_single(first);
+        return crate::value::js_nanbox_pointer(arr as i64);
+    }
+    let arr = crate::array::js_array_alloc(argc);
+    unsafe {
+        (*arr).length = argc;
+        for i in 0..argc {
+            let value = crate::array::js_array_get_f64(args_arr, i);
+            crate::array::js_array_set_f64(arr, i, value);
+        }
+    }
+    crate::value::js_nanbox_pointer(arr as i64)
+}
+
 extern "C" fn global_this_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
@@ -232,14 +351,7 @@ extern "C" fn global_this_object_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
 ) -> f64 {
-    let js_value = crate::value::JSValue::from_bits(value.to_bits());
-    if js_value.is_undefined() || js_value.is_null() {
-        return crate::value::js_nanbox_pointer(js_object_alloc(0, 0) as i64);
-    }
-    if crate::value::js_nanbox_get_pointer(value) != 0 {
-        return value;
-    }
-    crate::value::js_nanbox_pointer(js_object_alloc(0, 0) as i64)
+    crate::object::js_object_coerce(value)
 }
 
 extern "C" fn global_this_structured_clone_thunk(
@@ -402,7 +514,7 @@ extern "C" fn global_this_error_prepare_stack_trace_thunk(
     crate::value::js_nanbox_string(empty as i64)
 }
 
-fn global_this_rest_array_values(rest: f64) -> Vec<f64> {
+pub(super) fn global_this_rest_array_values(rest: f64) -> Vec<f64> {
     let value = crate::value::JSValue::from_bits(rest.to_bits());
     if !value.is_pointer() {
         return Vec::new();
@@ -527,55 +639,14 @@ extern "C" fn global_this_queue_microtask_thunk(
 extern "C" fn object_prototype_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
-    use crate::value::JSValue;
+    // Delegate to the canonical `js_object_to_string` so this callable form
+    // (`const f = Object.prototype.toString; f.call(x)`) shares the full brand
+    // table (Map/Set/WeakMap/Promise/RegExp/Symbol/BigInt/typed arrays/Date/
+    // buffers/…). Previously this thunk duplicated a coarse discrimination that
+    // mis-tagged typed arrays as `[object Number]` and everything beyond
+    // Array/Error/Date as `[object Object]`.
     let this_bits = IMPLICIT_THIS.with(|c| c.get());
-    if let Some(tag) = crate::object::web_stream_to_string_tag(f64::from_bits(this_bits)) {
-        let formatted = format!("[object {}]", tag);
-        let bytes = formatted.as_bytes();
-        let s = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-        return f64::from_bits(crate::js_nanbox_string(s as i64).to_bits());
-    }
-    let this_jsv = JSValue::from_bits(this_bits);
-    let tag: &[u8] = if this_jsv.is_undefined() {
-        b"[object Undefined]"
-    } else if this_jsv.is_null() {
-        b"[object Null]"
-    } else if this_jsv.is_bool() {
-        b"[object Boolean]"
-    } else if this_jsv.is_any_string() {
-        b"[object String]"
-    } else if this_jsv.is_int32() || this_jsv.is_number() {
-        b"[object Number]"
-    } else {
-        // Discriminate by GC header type for heap-allocated values.
-        // Accept both NaN-boxed pointers and raw-i64 pointers (the
-        // codegen's two representations for non-numeric values — see
-        // CLAUDE.md "Module-level variables"). Module-level arrays
-        // arrive here as raw i64 because the codegen stores them
-        // unboxed; function-arg-passed arrays arrive NaN-boxed.
-        let raw = if this_jsv.is_pointer() {
-            (this_bits & 0x0000_FFFF_FFFF_FFFF) as *const u8
-        } else {
-            this_bits as *const u8
-        };
-        if !raw.is_null() && (raw as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
-            unsafe {
-                let gc_header = raw.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                let gc_type = (*gc_header).obj_type;
-                if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
-                    b"[object Array]"
-                } else if gc_type == crate::gc::GC_TYPE_ERROR {
-                    b"[object Error]"
-                } else {
-                    b"[object Object]"
-                }
-            }
-        } else {
-            b"[object Object]"
-        }
-    };
-    let s = crate::string::js_string_from_bytes(tag.as_ptr(), tag.len() as u32);
-    f64::from_bits(crate::js_nanbox_string(s as i64).to_bits())
+    unsafe { crate::object::js_object_to_string(f64::from_bits(this_bits)) }
 }
 
 extern "C" fn object_prototype_is_prototype_of_thunk(
@@ -586,6 +657,81 @@ extern "C" fn object_prototype_is_prototype_of_thunk(
     f64::from_bits(
         JSValue::bool(unsafe { super::js_object_is_prototype_of_value(this_value, value) }).bits(),
     )
+}
+
+extern "C" fn date_prototype_to_string_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let string = crate::date::js_date_to_string(this_value);
+    crate::value::js_nanbox_string(string as i64)
+}
+
+extern "C" fn object_prototype_has_own_property_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    key: f64,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    unsafe {
+        super::js_native_call_method(
+            this_value,
+            b"hasOwnProperty".as_ptr() as *const i8,
+            "hasOwnProperty".len(),
+            &key as *const f64,
+            1,
+        )
+    }
+}
+
+extern "C" fn error_prototype_to_string_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this_jsv = crate::value::JSValue::from_bits(this_value.to_bits());
+    if !this_jsv.is_pointer() || this_jsv.is_null() || this_jsv.is_undefined() {
+        super::object_ops::throw_object_type_error(
+            b"Error.prototype.toString called on non-object",
+        );
+    }
+    let raw = crate::value::js_nanbox_get_pointer(this_value) as *const u8;
+    if raw.is_null() || !crate::object::is_valid_obj_ptr(raw) {
+        super::object_ops::throw_object_type_error(
+            b"Error.prototype.toString called on non-object",
+        );
+    }
+
+    let name = error_to_string_property(this_value, b"name", "Error");
+    let message = error_to_string_property(this_value, b"message", "");
+    let result = if name.is_empty() {
+        message
+    } else if message.is_empty() {
+        name
+    } else {
+        format!("{name}: {message}")
+    };
+    let s = crate::string::js_string_from_bytes(result.as_ptr(), result.len() as u32);
+    crate::value::js_nanbox_string(s as i64)
+}
+
+fn error_to_string_property(this_value: f64, key: &'static [u8], default: &str) -> String {
+    let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    let obj = crate::value::js_nanbox_get_pointer(this_value) as *const ObjectHeader;
+    let value = crate::object::js_object_get_field_by_name_f64(obj, key_ptr);
+    let value_jsv = crate::value::JSValue::from_bits(value.to_bits());
+    if value_jsv.is_undefined() {
+        return default.to_string();
+    }
+    let string = crate::value::js_jsvalue_to_string(value);
+    unsafe { string_header_to_owned(string) }
+}
+
+unsafe fn string_header_to_owned(ptr: *const crate::StringHeader) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+    let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let len = (*ptr).byte_len as usize;
+    String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
 }
 
 extern "C" fn object_prototype_value_of_thunk(
@@ -600,6 +746,65 @@ extern "C" fn object_prototype_to_locale_string_thunk(
 ) -> f64 {
     let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
     unsafe { super::js_object_default_to_locale_string(this_value) }
+}
+
+unsafe fn function_apply_args(args_array: f64) -> Vec<f64> {
+    let value = JSValue::from_bits(args_array.to_bits());
+    if value.is_undefined() || value.is_null() {
+        return Vec::new();
+    }
+    let is_array = JSValue::from_bits(crate::array::js_array_is_array(args_array).to_bits());
+    if !is_array.is_bool() || !is_array.as_bool() {
+        return Vec::new();
+    }
+    let arr = if value.is_pointer() {
+        value.as_pointer::<crate::array::ArrayHeader>()
+    } else if (args_array.to_bits() >> 48) == 0 {
+        args_array.to_bits() as *const crate::array::ArrayHeader
+    } else {
+        std::ptr::null()
+    };
+    if arr.is_null() {
+        return Vec::new();
+    }
+    let len = crate::array::js_array_length(arr) as usize;
+    let mut out = Vec::with_capacity(len);
+    for i in 0..len {
+        out.push(f64::from_bits(
+            crate::array::js_array_get(arr, i as u32).bits(),
+        ));
+    }
+    out
+}
+
+extern "C" fn function_prototype_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    this_arg: f64,
+    rest_array: f64,
+) -> f64 {
+    unsafe {
+        let target = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+        let args = function_apply_args(rest_array);
+        let prev_this = IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits()));
+        let result = crate::closure::js_native_call_value(target, args.as_ptr(), args.len());
+        IMPLICIT_THIS.with(|c| c.set(prev_this));
+        result
+    }
+}
+
+extern "C" fn function_prototype_apply_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    this_arg: f64,
+    args_array: f64,
+) -> f64 {
+    unsafe {
+        let target = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+        let args = function_apply_args(args_array);
+        let prev_this = IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits()));
+        let result = crate::closure::js_native_call_value(target, args.as_ptr(), args.len());
+        IMPLICIT_THIS.with(|c| c.set(prev_this));
+        result
+    }
 }
 
 /// Thunk for `Array.prototype.slice` exposed as a real callable closure
@@ -647,6 +852,83 @@ extern "C" fn array_prototype_slice_thunk(
     f64::from_bits(crate::value::js_nanbox_pointer(result as i64).to_bits())
 }
 
+fn array_buffer_receiver_addr() -> Option<usize> {
+    let this_bits = IMPLICIT_THIS.with(|c| c.get());
+    let this_jsv = JSValue::from_bits(this_bits);
+    let raw = if this_jsv.is_pointer() {
+        (this_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if this_bits >> 48 == 0 && this_bits > 0x10000 {
+        this_bits as usize
+    } else {
+        return None;
+    };
+    if crate::buffer::is_registered_buffer(raw) && crate::buffer::is_array_buffer(raw) {
+        Some(raw)
+    } else {
+        None
+    }
+}
+
+fn array_buffer_brand_error() -> ! {
+    super::object_ops::throw_object_type_error(
+        b"Method get ArrayBuffer.prototype.byteLength called on incompatible receiver",
+    )
+}
+
+extern "C" fn array_buffer_byte_length_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    match array_buffer_receiver_addr() {
+        Some(addr) => {
+            let buf = addr as *const crate::buffer::BufferHeader;
+            f64::from_bits(
+                crate::value::JSValue::number(crate::buffer::js_buffer_length(buf) as f64).bits(),
+            )
+        }
+        None => array_buffer_brand_error(),
+    }
+}
+
+extern "C" fn array_buffer_is_view_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let jv = JSValue::from_bits(value.to_bits());
+    let addr = if jv.is_pointer() {
+        (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if value.to_bits() >> 48 == 0 && value.to_bits() > 0x10000 {
+        value.to_bits() as usize
+    } else {
+        0
+    };
+    let is_view = (addr != 0
+        && !crate::buffer::is_any_array_buffer(addr)
+        && (crate::buffer::is_uint8array_buffer(addr) || crate::buffer::is_data_view(addr)))
+        || jsvalue_extends_data_view(value)
+        || crate::typedarray::lookup_typed_array_kind(addr).is_some();
+    f64::from_bits(crate::value::JSValue::bool(is_view).bits())
+}
+
+fn jsvalue_extends_data_view(value: f64) -> bool {
+    let v = JSValue::from_bits(value.to_bits());
+    if !v.is_pointer() {
+        return false;
+    }
+    let ptr = v.as_pointer::<u8>();
+    if ptr.is_null() || !crate::object::is_valid_obj_ptr(ptr) {
+        return false;
+    }
+    unsafe {
+        let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+            return false;
+        }
+        let obj = ptr as *const ObjectHeader;
+        let class_id = (*obj).class_id;
+        class_id != 0 && crate::object::extends_builtin_data_view(class_id)
+    }
+}
+
 /// Resolve the `IMPLICIT_THIS` receiver to a `(typed-array ptr, kind)` if it
 /// is a typed array, else `None`. Backs the `%TypedArray%.prototype` accessor
 /// getters installed for reflection (#2060) — these fire when user code does
@@ -668,6 +950,57 @@ fn typed_array_receiver() -> Option<(*const crate::typedarray::TypedArrayHeader,
     Some((raw as *const crate::typedarray::TypedArrayHeader, kind))
 }
 
+fn typed_array_brand_error() -> ! {
+    super::object_ops::throw_object_type_error(
+        b"Method get %TypedArray%.prototype accessor called on incompatible receiver",
+    )
+}
+
+fn string_value_to_owned(value: f64) -> Option<String> {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv.is_any_string() {
+        return None;
+    }
+    let s = crate::builtins::js_string_coerce(value);
+    if s.is_null() {
+        return None;
+    }
+    unsafe {
+        let bytes = (s as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let len = (*s).byte_len as usize;
+        std::str::from_utf8(std::slice::from_raw_parts(bytes, len))
+            .ok()
+            .map(ToOwned::to_owned)
+    }
+}
+
+fn typed_array_constructor_this_kind() -> Option<u8> {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let ptr = crate::value::js_nanbox_get_pointer(this_value) as usize;
+    if ptr == 0 || !crate::closure::is_closure_ptr(ptr) {
+        return None;
+    }
+    let name_value = crate::closure::closure_get_dynamic_prop(ptr, "name");
+    let name = string_value_to_owned(f64::from_bits(name_value.to_bits()))?;
+    crate::typedarray::kind_for_name(&name)
+}
+
+fn require_typed_array_constructor_this() -> u8 {
+    typed_array_constructor_this_kind().unwrap_or_else(|| {
+        super::object_ops::throw_object_type_error(
+            b"%TypedArray%.from/of requires a concrete typed array constructor",
+        )
+    })
+}
+
+fn typed_array_buffer_value(ta: *const crate::typedarray::TypedArrayHeader) -> f64 {
+    let buf = crate::typedarray::typed_array_to_array_buffer(ta);
+    if buf.is_null() {
+        typed_array_brand_error();
+    }
+    crate::value::js_nanbox_pointer(buf as i64)
+}
+
 /// `%TypedArray%.prototype.length` getter — element count of the receiver.
 extern "C" fn typed_array_length_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
@@ -677,7 +1010,7 @@ extern "C" fn typed_array_length_getter_thunk(
             let len = crate::typedarray::js_typed_array_length(ta);
             f64::from_bits(crate::value::JSValue::number(len as f64).bits())
         }
-        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+        None => typed_array_brand_error(),
     }
 }
 
@@ -691,7 +1024,7 @@ extern "C" fn typed_array_byte_length_getter_thunk(
             let elem_size = crate::typedarray::elem_size_for_kind(kind);
             f64::from_bits(crate::value::JSValue::number((len * elem_size) as f64).bits())
         }
-        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+        None => typed_array_brand_error(),
     }
 }
 
@@ -702,7 +1035,7 @@ extern "C" fn typed_array_byte_offset_getter_thunk(
 ) -> f64 {
     match typed_array_receiver() {
         Some(_) => f64::from_bits(crate::value::JSValue::number(0.0).bits()),
-        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+        None => typed_array_brand_error(),
     }
 }
 
@@ -714,7 +1047,10 @@ extern "C" fn typed_array_byte_offset_getter_thunk(
 extern "C" fn typed_array_buffer_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
-    f64::from_bits(crate::value::TAG_UNDEFINED)
+    match typed_array_receiver() {
+        Some((ta, _)) => typed_array_buffer_value(ta),
+        None => typed_array_brand_error(),
+    }
 }
 
 /// Install the four `%TypedArray%.prototype` accessor descriptors
@@ -757,6 +1093,33 @@ fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
     }
 }
 
+fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
+    if proto_obj.is_null() {
+        return;
+    }
+    install_proto_method(
+        proto_obj,
+        "values",
+        global_this_builtin_noop_thunk as *const u8,
+        0,
+    );
+    unsafe {
+        let values_key = crate::string::js_string_from_bytes(b"values".as_ptr(), 6);
+        let values = js_object_get_field_by_name(proto_obj, values_key);
+        let iter = crate::symbol::well_known_symbol("iterator");
+        if !iter.is_null() && values.bits() != crate::value::TAG_UNDEFINED {
+            let proto_value = crate::value::js_nanbox_pointer(proto_obj as i64);
+            let iter_value =
+                f64::from_bits(crate::value::JSValue::pointer(iter as *const u8).bits());
+            crate::symbol::js_object_set_symbol_property(
+                proto_value,
+                iter_value,
+                f64::from_bits(values.bits()),
+            );
+        }
+    }
+}
+
 /// Allocate the shared `%TypedArray%` intrinsic constructor (a closure) and
 /// its `.prototype` object, cache both in the GC-rooted atomics, and wire the
 /// closure's `prototype` dynamic-prop to point at the shared prototype.
@@ -780,11 +1143,24 @@ fn ensure_typed_array_intrinsic() -> (*mut crate::closure::ClosureHeader, *mut O
             existing_proto as *mut ObjectHeader,
         );
     }
-    let ctor = crate::closure::js_closure_alloc(global_this_builtin_noop_thunk as *const u8, 0);
+    let ctor = crate::closure::js_closure_alloc(typed_array_constructor_call_thunk as *const u8, 0);
     let proto = js_object_alloc(0, 0);
     if ctor.is_null() || proto.is_null() {
         return (std::ptr::null_mut(), std::ptr::null_mut());
     }
+    crate::closure::js_register_closure_arity(typed_array_constructor_call_thunk as *const u8, 0);
+    super::native_module::set_bound_native_closure_name(ctor, "TypedArray");
+    super::native_module::set_builtin_closure_length(ctor as usize, 0);
+    super::set_builtin_property_attrs(
+        ctor as usize,
+        "name".to_string(),
+        super::PropertyAttrs::new(false, false, true),
+    );
+    super::set_builtin_property_attrs(
+        ctor as usize,
+        "length".to_string(),
+        super::PropertyAttrs::new(false, false, true),
+    );
     // Wire `%TypedArray%.prototype` so `getPrototypeOf(Int8Array).prototype`
     // hits a real object instead of undefined.
     let proto_key_bytes = b"prototype";
@@ -792,6 +1168,11 @@ fn ensure_typed_array_intrinsic() -> (*mut crate::closure::ClosureHeader, *mut O
         crate::string::js_string_from_bytes(proto_key_bytes.as_ptr(), proto_key_bytes.len() as u32);
     let proto_value = crate::value::js_nanbox_pointer(proto as i64);
     js_object_set_field_by_name(ctor as *mut ObjectHeader, proto_key, proto_value);
+    super::set_builtin_property_attrs(
+        ctor as usize,
+        "prototype".to_string(),
+        super::PropertyAttrs::new(false, false, false),
+    );
     // #2060: the four reflectable `length`/`byteLength`/`byteOffset`/`buffer`
     // accessor descriptors are own properties of `%TypedArray%.prototype` per
     // spec, NOT of the per-kind proto. Pre-#2145 they were installed on each
@@ -802,6 +1183,16 @@ fn ensure_typed_array_intrinsic() -> (*mut crate::closure::ClosureHeader, *mut O
     // `Object.getOwnPropertyDescriptor(getPrototypeOf(Int8Array.prototype),
     // "length")` to keep working.
     install_typed_array_proto_accessors(proto);
+    install_typed_array_iterator_symbol(proto);
+    install_constructor_static_with_call_arity(
+        ctor,
+        "from",
+        typed_array_from_thunk as *const u8,
+        1,
+        3,
+        false,
+    );
+    install_constructor_static(ctor, "of", typed_array_of_thunk as *const u8, 0, true);
     crate::object::TYPED_ARRAY_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
     crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
     (ctor, proto)
@@ -825,7 +1216,7 @@ pub(crate) fn typed_array_intrinsic_proto_ptr() -> *mut ObjectHeader {
 /// pointer instead of undefined, which is what unblocks lodash's
 /// `var arrayProto = Array.prototype` chained read inside
 /// `runInContext`.
-fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
+pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     if singleton.is_null() {
         return;
     }
@@ -859,42 +1250,148 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             continue;
         }
         let func_ptr = match name {
+            "Array" => global_this_array_thunk as *const u8,
             "Object" => global_this_object_thunk as *const u8,
             "String" => global_this_string_thunk as *const u8,
             // #2889: call-form `Number(x)` / `Boolean(x)` through a rebound
             // global value coerce like the bare-call lowering does.
             "Number" => global_this_number_thunk as *const u8,
             "Boolean" => global_this_boolean_thunk as *const u8,
+            "Error" => error_constructor_call_thunk as *const u8,
+            "TypeError" => type_error_constructor_call_thunk as *const u8,
+            "RangeError" => range_error_constructor_call_thunk as *const u8,
+            "ReferenceError" => reference_error_constructor_call_thunk as *const u8,
+            "SyntaxError" => syntax_error_constructor_call_thunk as *const u8,
+            "EvalError" => eval_error_constructor_call_thunk as *const u8,
+            "URIError" => uri_error_constructor_call_thunk as *const u8,
+            "MessageChannel" => {
+                crate::messaging::js_message_channel_constructor_call_error as *const u8
+            }
+            "MessagePort" => crate::messaging::js_message_port_constructor_call_error as *const u8,
+            "BroadcastChannel" => {
+                crate::messaging::js_broadcast_channel_constructor_call_error as *const u8
+            }
+            "Date" => global_this_date_thunk as *const u8,
+            "Storage" => crate::web_storage::storage_constructor_illegal as *const u8,
+            "Crypto" | "CryptoKey" | "SubtleCrypto" => {
+                webcrypto_illegal_constructor_thunk as *const u8
+            }
+            "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
+            | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
+            | "BigInt64Array" | "BigUint64Array" => typed_array_constructor_call_thunk as *const u8,
             _ => global_this_builtin_noop_thunk as *const u8,
         };
         let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
         if closure_ptr.is_null() {
             continue;
         }
-        if matches!(name, "Object" | "String" | "Number" | "Boolean") {
-            crate::closure::js_register_closure_arity(func_ptr, 1);
+        match name {
+            "Array" => {
+                crate::closure::js_register_closure_rest(func_ptr, 0);
+            }
+            "Date" => {
+                crate::closure::js_register_closure_arity(func_ptr, 1);
+            }
+            "Object" | "String" | "Number" | "Boolean" | "BroadcastChannel" => {
+                crate::closure::js_register_closure_arity(func_ptr, 1);
+            }
+            "Error" | "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError"
+            | "EvalError" | "URIError" => {
+                crate::closure::js_register_closure_arity(func_ptr, 1);
+            }
+            "MessageChannel" | "MessagePort" | "Storage" => {
+                crate::closure::js_register_closure_arity(func_ptr, 0);
+            }
+            "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
+            | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
+            | "BigInt64Array" | "BigUint64Array" => {
+                crate::closure::js_register_closure_arity(func_ptr, 0);
+            }
+            _ => {}
         }
         // #2889: install static methods (`Object.keys`, `Array.isArray`, ...)
         // on the constructor closure so rebound usage like
         // `const O = Object; O.keys(x)` dispatches through the real helpers.
         install_builtin_constructor_statics(name, closure_ptr);
-        if matches!(
-            name,
-            "Blob" | "File" | "EvalError" | "URIError" | "Uint8Array"
-        ) {
-            super::native_module::set_bound_native_closure_name(closure_ptr, name);
+        if name == "Number" {
+            install_number_static_data_properties(closure_ptr);
         }
+        // #3655: every constructor carries spec-correct own `name`/`length`
+        // data properties (`{ writable:false, enumerable:false,
+        // configurable:true }`). The shared no-op thunk can't carry a name via
+        // the func-ptr registry (every constructor would read the same one),
+        // so record both per-closure. Without this, a rebound constructor read
+        // `Date.name === ""` / `Date.length === 0` and test262's
+        // `verifyProperty(Ctor, 'name'|'length', …)` failed "should be an own
+        // property".
+        super::native_module::set_bound_native_closure_name(closure_ptr, name);
+        if let Some(len) = builtin_constructor_spec_length(name) {
+            super::native_module::set_builtin_closure_length(closure_ptr as usize, len);
+        }
+        super::set_builtin_property_attrs(
+            closure_ptr as usize,
+            "name".to_string(),
+            super::PropertyAttrs::new(false, false, true),
+        );
+        super::set_builtin_property_attrs(
+            closure_ptr as usize,
+            "length".to_string(),
+            super::PropertyAttrs::new(false, false, true),
+        );
         if name == "Error" {
             install_error_static_methods(closure_ptr);
         }
+        let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
         // Stash `prototype` on the closure's dynamic-prop side table.
         // `js_object_set_field_by_name` detects the CLOSURE_MAGIC tag
         // at offset 12 and dispatches into `closure_set_dynamic_prop`
         // for us; both reads and writes share that side table.
-        let proto_obj = js_object_alloc(0, 0);
+        let proto_obj = if name == "Array" {
+            crate::array::js_array_alloc(0) as *mut ObjectHeader
+        } else {
+            js_object_alloc(0, 0)
+        };
         if !proto_obj.is_null() {
             let proto_value = crate::value::js_nanbox_pointer(proto_obj as i64);
             js_object_set_field_by_name(closure_ptr as *mut ObjectHeader, proto_key, proto_value);
+            super::set_builtin_property_attrs(
+                closure_ptr as usize,
+                "prototype".to_string(),
+                super::PropertyAttrs::new(false, false, false),
+            );
+            let ctor_key = crate::string::js_string_from_bytes(
+                b"constructor".as_ptr(),
+                "constructor".len() as u32,
+            );
+            js_object_set_field_by_name(proto_obj, ctor_key, ctor_value);
+            super::set_builtin_property_attrs(
+                proto_obj as usize,
+                "constructor".to_string(),
+                super::PropertyAttrs::new(true, false, true),
+            );
+            if is_web_fetch_constructor(name) {
+                js_object_set_field_by_name(proto_obj, ctor_key, ctor_value);
+                super::set_builtin_property_attrs(
+                    proto_obj as usize,
+                    "constructor".to_string(),
+                    super::PropertyAttrs::new(true, false, true),
+                );
+            }
+            if name == "Array" {
+                let constructor_key =
+                    crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+                js_object_set_field_by_name(proto_obj, constructor_key, ctor_value);
+                super::set_builtin_property_attrs(
+                    proto_obj as usize,
+                    "constructor".to_string(),
+                    super::PropertyAttrs::new(true, false, true),
+                );
+            }
+            if name == "Navigator" || name == "TextEncoderStream" || name == "TextDecoderStream" {
+                let constructor_key =
+                    crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+                js_object_set_field_by_name(proto_obj, constructor_key, ctor_value);
+            }
             // Populate well-known method properties on the prototype
             // (currently just `Array.prototype.slice`). Methods are
             // ClosureHeader-backed thunks that read their receiver from
@@ -902,6 +1399,24 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             // entry point — works in tandem with `.call`/`.apply` since
             // those arms (#970) rebind IMPLICIT_THIS before forwarding.
             populate_builtin_prototype_methods(name, proto_obj);
+            install_error_prototype_data_properties(name, proto_obj);
+            if matches!(name, "MessageChannel" | "MessagePort" | "BroadcastChannel") {
+                crate::messaging::populate_messaging_prototype(name, proto_obj, ctor_value);
+            }
+            if name == "Storage" {
+                crate::web_storage::install_storage_globals(
+                    singleton,
+                    closure_ptr,
+                    proto_obj,
+                    ctor_value,
+                );
+            }
+            if matches!(name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
+                super::native_module::install_webcrypto_constructor_proto(proto_obj, ctor_value);
+            }
+            if name == "WebSocket" {
+                websocket_global::install_constructor_shape(closure_ptr, proto_obj);
+            }
             // #2145: link per-kind typed-array constructors into the
             // `%TypedArray%` chain. `Int8Array.__proto__ === %TypedArray%`
             // and `Object.getPrototypeOf(Int8Array.prototype) ===
@@ -939,13 +1454,23 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let name_bytes = name.as_bytes();
         let name_key =
             crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
-        let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
         js_object_set_field_by_name(singleton, name_key, ctor_value);
+        super::set_builtin_property_attrs(
+            singleton as usize,
+            name.to_string(),
+            super::PropertyAttrs::new(true, false, true),
+        );
     }
     // Callable global functions: ClosureHeader-backed values with real
     // dispatch so direct property reads and rebound calls match bare calls.
     for name in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied() {
         let (func_ptr, arity, has_rest) = match name {
+            "eval" => (global_this_eval_thunk as *const u8, 1, false),
+            "fetch" => (
+                super::global_fetch::global_this_fetch_thunk as *const u8,
+                1,
+                true,
+            ),
             "structuredClone" => (global_this_structured_clone_thunk as *const u8, 2, false),
             "atob" => (global_this_atob_thunk as *const u8, 1, false),
             "btoa" => (global_this_btoa_thunk as *const u8, 1, false),
@@ -1000,6 +1525,8 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
         let ns_value = if matches!(name, "console" | "process") {
             js_create_native_module_namespace(name_bytes.as_ptr(), name_bytes.len())
+        } else if name == "WebAssembly" {
+            global_this_webassembly::create_webassembly_namespace()
         } else {
             let ns_obj = js_object_alloc(0, 0);
             if ns_obj.is_null() {
@@ -1011,6 +1538,13 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             crate::value::js_nanbox_pointer(ns_obj as i64)
         };
         js_object_set_field_by_name(singleton, name_key, ns_value);
+        if name == "WebAssembly" {
+            super::set_builtin_property_attrs(
+                singleton as usize,
+                name.to_string(),
+                super::PropertyAttrs::new(true, false, true),
+            );
+        }
     }
     // node:perf_hooks `performance` global — bind it to the same singleton the
     // named import resolves to, so `globalThis.performance ===
@@ -1021,12 +1555,53 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let pval = crate::perf_hooks::performance_namespace();
         js_object_set_field_by_name(singleton, pkey, pval);
     }
+    // Perf_hooks constructors are globals identical to the module exports.
+    for name in [
+        "Performance",
+        "PerformanceEntry",
+        "PerformanceMark",
+        "PerformanceMeasure",
+        "PerformanceObserver",
+        "PerformanceObserverEntryList",
+        "PerformanceResourceTiming",
+    ] {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let value = super::native_module::bound_native_callable_export_value("perf_hooks", name);
+        js_object_set_field_by_name(singleton, key, value);
+    }
+    super::native_module::install_global_webcrypto(singleton);
+    let func_ptr = global_this_crypto_getter_thunk as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 0);
+    let getter = crate::closure::js_closure_alloc(func_ptr, 0);
+    let getter_bits = if getter.is_null() {
+        0
+    } else {
+        crate::value::js_nanbox_pointer(getter as i64).to_bits()
+    };
+    super::set_builtin_accessor_descriptor(
+        singleton as usize,
+        "crypto".to_string(),
+        super::AccessorDescriptor {
+            get: getter_bits,
+            set: 0,
+        },
+        super::PropertyAttrs::new(true, true, true),
+    );
     // #2923: `globalThis.navigator` — Node's browser-compatible runtime
     // metadata object. typeof is "object". Built once per process.
     {
         let nname = b"navigator";
         let nkey = crate::string::js_string_from_bytes(nname.as_ptr(), nname.len() as u32);
-        let nval = crate::navigator::js_navigator_object();
+        // Read the `Navigator` constructor we installed on the singleton above
+        // and hand it to the navigator builder directly. We must NOT call
+        // `js_navigator_object()` here: it re-fetches the constructor via
+        // `js_get_global_this_builtin_value` → `js_get_global_this`, which would
+        // re-enter this very lazy-init (GLOBAL_THIS_READY is still false until we
+        // return) and recurse/spin forever.
+        let nav_ctor_key = crate::string::js_string_from_bytes(b"Navigator".as_ptr(), 9);
+        let nav_ctor = js_object_get_field_by_name(singleton, nav_ctor_key);
+        let nval =
+            crate::navigator::navigator_object_with_constructor(f64::from_bits(nav_ctor.bits()));
         js_object_set_field_by_name(singleton, nkey, nval);
     }
 }
@@ -1187,6 +1762,19 @@ extern "C" fn object_assign_thunk(
     validated
 }
 
+/// `Object.hasOwn(obj, key)` (ES2022) reified as a callable value so the
+/// feature-detect idiom `typeof Object.hasOwn === "undefined" ? … :
+/// Object.hasOwn` (iconv-lite's merge-exports, #3527) binds a real callable
+/// instead of a non-callable handle. Backed by the same runtime helper as
+/// `Object.prototype.hasOwnProperty.call(obj, key)`.
+extern "C" fn object_hasown_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    obj: f64,
+    key: f64,
+) -> f64 {
+    super::object_ops::js_object_has_own(obj, key)
+}
+
 extern "C" fn array_is_array_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
@@ -1211,6 +1799,75 @@ extern "C" fn array_of_thunk(_closure: *const crate::closure::ClosureHeader, res
     crate::value::js_nanbox_pointer(arr as i64)
 }
 
+extern "C" fn typed_array_from_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    source: f64,
+    map_fn: f64,
+    this_arg: f64,
+) -> f64 {
+    let kind = require_typed_array_constructor_this();
+    let mapped = map_fn.to_bits() != crate::value::TAG_UNDEFINED;
+    let arr = if mapped {
+        crate::array::js_array_from_mapped(source, map_fn, this_arg)
+    } else {
+        crate::array::js_array_from_value(source)
+    };
+    let ta = crate::typedarray::js_typed_array_new_from_array(kind as i32, arr);
+    crate::value::js_nanbox_pointer(ta as i64)
+}
+
+extern "C" fn typed_array_of_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let kind = require_typed_array_constructor_this();
+    let vals = global_this_rest_array_values(rest);
+    let len = vals.len() as u32;
+    let arr = crate::array::js_array_alloc(len);
+    unsafe {
+        (*arr).length = len;
+        for (i, &v) in vals.iter().enumerate() {
+            crate::array::js_array_set_f64(arr, i as u32, v);
+        }
+    }
+    let ta = crate::typedarray::js_typed_array_new_from_array(kind as i32, arr);
+    crate::value::js_nanbox_pointer(ta as i64)
+}
+
+extern "C" fn url_can_parse_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    input: f64,
+    base: f64,
+) -> f64 {
+    let input_ptr = crate::url::js_url_coerce_string(input);
+    let ok = if base.to_bits() == crate::value::TAG_UNDEFINED {
+        crate::url::js_url_can_parse(input_ptr)
+    } else {
+        let base_ptr = crate::url::js_url_coerce_string(base);
+        crate::url::js_url_can_parse_with_base(input_ptr, base_ptr)
+    };
+    f64::from_bits(crate::value::JSValue::bool(ok != 0).bits())
+}
+
+extern "C" fn url_parse_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    input: f64,
+    base: f64,
+) -> f64 {
+    let input_ptr = crate::url::js_url_coerce_string(input);
+    let url = if base.to_bits() == crate::value::TAG_UNDEFINED {
+        crate::url::js_url_parse(input_ptr)
+    } else {
+        let base_ptr = crate::url::js_url_coerce_string(base);
+        crate::url::js_url_parse_with_base(input_ptr, base_ptr)
+    };
+    if url.is_null() {
+        f64::from_bits(crate::value::TAG_NULL)
+    } else {
+        crate::value::js_nanbox_pointer(url as i64)
+    }
+}
+
 /// Install a single callable static method on a constructor closure as a
 /// `{ writable: true, enumerable: false, configurable: true }` data property
 /// (matching Node's descriptors for built-in statics). `has_rest` registers
@@ -1222,16 +1879,28 @@ fn install_constructor_static(
     arity: u32,
     has_rest: bool,
 ) {
+    install_constructor_static_with_call_arity(ctor, name, func_ptr, arity, arity, has_rest);
+}
+
+fn install_constructor_static_with_call_arity(
+    ctor: *mut crate::closure::ClosureHeader,
+    name: &str,
+    func_ptr: *const u8,
+    spec_length: u32,
+    call_arity: u32,
+    has_rest: bool,
+) {
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     if closure.is_null() {
         return;
     }
     if has_rest {
-        crate::closure::js_register_closure_rest(func_ptr, arity);
+        crate::closure::js_register_closure_rest(func_ptr, call_arity);
     } else {
-        crate::closure::js_register_closure_arity(func_ptr, arity);
+        crate::closure::js_register_closure_arity(func_ptr, call_arity);
     }
     super::native_module::set_bound_native_closure_name(closure, name);
+    super::native_module::set_builtin_closure_length(closure as usize, spec_length);
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
     js_object_set_field_by_name(ctor as *mut ObjectHeader, key, value);
@@ -1240,6 +1909,31 @@ fn install_constructor_static(
         name.to_string(),
         super::PropertyAttrs::new(true, false, true),
     );
+}
+
+fn install_number_static_data_properties(ctor: *mut crate::closure::ClosureHeader) {
+    if ctor.is_null() {
+        return;
+    }
+    let props = [
+        ("NaN", f64::NAN),
+        ("POSITIVE_INFINITY", f64::INFINITY),
+        ("NEGATIVE_INFINITY", f64::NEG_INFINITY),
+        ("MAX_VALUE", f64::MAX),
+        ("MIN_VALUE", f64::MIN_POSITIVE),
+        ("EPSILON", f64::EPSILON),
+        ("MAX_SAFE_INTEGER", 9007199254740991.0),
+        ("MIN_SAFE_INTEGER", -9007199254740991.0),
+    ];
+    for (name, value) in props {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        js_object_set_field_by_name(ctor as *mut ObjectHeader, key, value);
+        super::set_builtin_property_attrs(
+            ctor as usize,
+            name.to_string(),
+            super::PropertyAttrs::new(false, false, false),
+        );
+    }
 }
 
 /// #2889: install the common static methods on the `Object` / `Array`
@@ -1287,6 +1981,7 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
                 false,
             );
             install_constructor_static(ctor, "assign", object_assign_thunk as *const u8, 1, true);
+            install_constructor_static(ctor, "hasOwn", object_hasown_thunk as *const u8, 2, false);
         }
         "Array" => {
             install_constructor_static(
@@ -1298,6 +1993,48 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
             );
             install_constructor_static(ctor, "from", array_from_thunk as *const u8, 1, false);
             install_constructor_static(ctor, "of", array_of_thunk as *const u8, 0, true);
+        }
+        "ArrayBuffer" => {
+            install_constructor_static(
+                ctor,
+                "isView",
+                array_buffer_is_view_thunk as *const u8,
+                1,
+                false,
+            );
+        }
+        "Response" => {
+            install_constructor_static(
+                ctor,
+                "error",
+                global_this_builtin_noop_thunk as *const u8,
+                0,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "json",
+                global_this_builtin_noop_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "redirect",
+                global_this_builtin_noop_thunk as *const u8,
+                1,
+                false,
+            );
+        }
+        "URL" => {
+            install_constructor_static(
+                ctor,
+                "canParse",
+                url_can_parse_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(ctor, "parse", url_parse_thunk as *const u8, 1, false);
         }
         _ => {}
     }
@@ -1317,15 +2054,15 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
 /// undefined) for methods we don't have a dedicated thunk for; callers
 /// that want spec-accurate call behavior pass a custom thunk instead
 /// (`array_prototype_slice_thunk`, `object_prototype_to_string_thunk`).
-fn install_proto_method(
+pub(super) fn install_proto_method(
     proto_obj: *mut ObjectHeader,
     method_name: &str,
     func_ptr: *const u8,
     arity: u32,
-) {
+) -> f64 {
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     if closure.is_null() {
-        return;
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     crate::closure::js_register_closure_arity(func_ptr, arity);
     super::native_module::set_bound_native_closure_name(closure, method_name);
@@ -1353,6 +2090,40 @@ fn install_proto_method(
     // Array.prototype.map, "name")` reports `writable: false` (it previously
     // read the dynamic-prop slot and defaulted to writable). Reflection-only —
     // no hot-path gate flip.
+    super::set_builtin_property_attrs(
+        closure as usize,
+        "name".to_string(),
+        super::PropertyAttrs::new(false, false, true),
+    );
+    super::set_builtin_property_attrs(
+        closure as usize,
+        "length".to_string(),
+        super::PropertyAttrs::new(false, false, true),
+    );
+    value
+}
+
+fn install_proto_method_rest(
+    proto_obj: *mut ObjectHeader,
+    method_name: &str,
+    func_ptr: *const u8,
+    fixed_arity: u32,
+) {
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return;
+    }
+    crate::closure::js_register_closure_rest(func_ptr, fixed_arity);
+    super::native_module::set_bound_native_closure_name(closure, method_name);
+    super::native_module::set_builtin_closure_length(closure as usize, fixed_arity);
+    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    let value = crate::value::js_nanbox_pointer(closure as i64);
+    js_object_set_field_by_name(proto_obj, key, value);
+    super::set_builtin_property_attrs(
+        proto_obj as usize,
+        method_name.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
     super::set_builtin_property_attrs(
         closure as usize,
         "name".to_string(),
@@ -1420,6 +2191,12 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
     if proto_obj.is_null() {
         return;
     }
+    // #3662: Map/Set/WeakMap/WeakSet prototypes get brand-checking thunks
+    // (own module, to keep this file under the 2000-line gate).
+    if collection_proto_thunks::install_collection_proto_methods(builtin_name, proto_obj) {
+        install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        return;
+    }
     match builtin_name {
         "Array" => {
             install_proto_method(
@@ -1472,6 +2249,37 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
+        "ArrayBuffer" => {
+            install_noop_proto_methods(proto_obj, &[("slice", 2)]);
+            unsafe {
+                crate::closure::js_register_closure_arity(
+                    array_buffer_byte_length_getter_thunk as *const u8,
+                    0,
+                );
+                let getter = crate::closure::js_closure_alloc(
+                    array_buffer_byte_length_getter_thunk as *const u8,
+                    0,
+                );
+                if !getter.is_null() {
+                    let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
+                    install_builtin_getter(proto_obj, "byteLength", getter_bits);
+                    set_accessor_descriptor(
+                        proto_obj as usize,
+                        "byteLength".to_string(),
+                        AccessorDescriptor {
+                            get: getter_bits,
+                            set: 0,
+                        },
+                    );
+                    set_property_attrs(
+                        proto_obj as usize,
+                        "byteLength".to_string(),
+                        PropertyAttrs::new(true, false, true),
+                    );
+                }
+            }
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
         "Object" => {
             install_proto_method(
                 proto_obj,
@@ -1497,15 +2305,27 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                 object_prototype_value_of_thunk as *const u8,
                 0,
             );
-            install_noop_proto_methods(
+            install_proto_method(
                 proto_obj,
-                &[("hasOwnProperty", 1), ("propertyIsEnumerable", 1)],
+                "hasOwnProperty",
+                object_prototype_has_own_property_thunk as *const u8,
+                1,
             );
+            install_noop_proto_methods(proto_obj, &[("propertyIsEnumerable", 1)]);
         }
         "Function" => {
-            install_noop_proto_methods(
+            install_proto_method(
                 proto_obj,
-                &[("apply", 2), ("bind", 1), ("call", 1), ("toString", 0)],
+                "apply",
+                function_prototype_apply_thunk as *const u8,
+                2,
+            );
+            install_noop_proto_methods(proto_obj, &[("bind", 1), ("toString", 0)]);
+            install_proto_method_rest(
+                proto_obj,
+                "call",
+                function_prototype_call_thunk as *const u8,
+                1,
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
@@ -1615,13 +2435,24 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                     ("toLocaleDateString", 0),
                     ("toLocaleString", 0),
                     ("toLocaleTimeString", 0),
-                    ("toString", 0),
                     ("toTimeString", 0),
                     ("toUTCString", 0),
                     ("valueOf", 0),
                 ],
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_proto_method(
+                proto_obj,
+                "isPrototypeOf",
+                object_prototype_is_prototype_of_thunk as *const u8,
+                1,
+            );
+            install_proto_method(
+                proto_obj,
+                "toString",
+                date_prototype_to_string_thunk as *const u8,
+                0,
+            );
         }
         "RegExp" => {
             install_noop_proto_methods(
@@ -1642,15 +2473,16 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             install_noop_proto_methods(proto_obj, &[("decode", 1)]);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
-        "Map" => {
+        "Headers" => {
             install_noop_proto_methods(
                 proto_obj,
                 &[
-                    ("clear", 0),
+                    ("append", 2),
                     ("delete", 1),
                     ("entries", 0),
                     ("forEach", 1),
                     ("get", 1),
+                    ("getSetCookie", 0),
                     ("has", 1),
                     ("keys", 0),
                     ("set", 2),
@@ -1659,37 +2491,107 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
-        "Set" => {
+        "Request" | "Response" => {
             install_noop_proto_methods(
                 proto_obj,
                 &[
-                    ("add", 1),
-                    ("clear", 0),
+                    ("arrayBuffer", 0),
+                    ("blob", 0),
+                    ("bytes", 0),
+                    ("clone", 0),
+                    ("formData", 0),
+                    ("json", 0),
+                    ("text", 0),
+                ],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "Blob" | "File" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("arrayBuffer", 0),
+                    ("bytes", 0),
+                    ("slice", 0),
+                    ("stream", 0),
+                    ("text", 0),
+                ],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "FormData" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("append", 2),
                     ("delete", 1),
                     ("entries", 0),
                     ("forEach", 1),
+                    ("get", 1),
+                    ("getAll", 1),
                     ("has", 1),
                     ("keys", 0),
+                    ("set", 2),
                     ("values", 0),
                 ],
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
-        "WeakMap" => {
-            install_noop_proto_methods(
+        "WebSocket" => {
+            websocket_global::install_proto_methods(proto_obj);
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "Crypto" => {
+            install_webcrypto_proto_getter(
                 proto_obj,
-                &[("delete", 1), ("get", 1), ("has", 1), ("set", 2)],
+                "subtle",
+                webcrypto_subtle_getter_thunk as *const u8,
+            );
+            install_webcrypto_proto_method(
+                proto_obj,
+                "getRandomValues",
+                webcrypto_get_random_values_thunk as *const u8,
+                1,
+            );
+            install_webcrypto_proto_method(
+                proto_obj,
+                "randomUUID",
+                webcrypto_random_uuid_thunk as *const u8,
+                0,
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
-        "WeakSet" => {
-            install_noop_proto_methods(proto_obj, &[("add", 1), ("delete", 1), ("has", 1)]);
+        "CryptoKey" => {
+            for name in ["algorithm", "extractable", "type", "usages"] {
+                install_webcrypto_proto_getter(
+                    proto_obj,
+                    name,
+                    cryptokey_property_getter_thunk as *const u8,
+                );
+            }
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
-        "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EvalError"
-        | "URIError" => {
-            install_noop_proto_methods(proto_obj, &[("toString", 0)]);
+        "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
+        | "AggregateError" | "EvalError" | "URIError" => {
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_proto_method(
+                proto_obj,
+                "toString",
+                error_prototype_to_string_thunk as *const u8,
+                0,
+            );
+            install_proto_method(
+                proto_obj,
+                "isPrototypeOf",
+                object_prototype_is_prototype_of_thunk as *const u8,
+                1,
+            );
+            install_proto_method(
+                proto_obj,
+                "hasOwnProperty",
+                object_prototype_has_own_property_thunk as *const u8,
+                1,
+            );
         }
         // Typed-array constructors: keep the reified per-kind prototype
         // method set (#2142) on each per-kind `.prototype` so direct
@@ -1748,4 +2650,81 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
         }
         _ => {}
     }
+}
+
+fn install_error_prototype_data_properties(builtin_name: &str, proto_obj: *mut ObjectHeader) {
+    let name = match builtin_name {
+        "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
+        | "AggregateError" | "EvalError" | "URIError" => builtin_name,
+        _ => return,
+    };
+    if proto_obj.is_null() {
+        return;
+    }
+
+    let name_key = crate::string::js_string_from_bytes(b"name".as_ptr(), 4);
+    let name_value =
+        crate::string::js_string_from_bytes(name.as_bytes().as_ptr(), name.len() as u32);
+    js_object_set_field_by_name(
+        proto_obj,
+        name_key,
+        crate::value::js_nanbox_string(name_value as i64),
+    );
+    super::set_builtin_property_attrs(
+        proto_obj as usize,
+        "name".to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+
+    let message_key = crate::string::js_string_from_bytes(b"message".as_ptr(), 7);
+    let message_value = crate::string::js_string_from_bytes(b"".as_ptr(), 0);
+    js_object_set_field_by_name(
+        proto_obj,
+        message_key,
+        crate::value::js_nanbox_string(message_value as i64),
+    );
+    super::set_builtin_property_attrs(
+        proto_obj as usize,
+        "message".to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+}
+
+fn install_webcrypto_proto_method(
+    proto_obj: *mut ObjectHeader,
+    method_name: &str,
+    func_ptr: *const u8,
+    arity: u32,
+) {
+    install_proto_method(proto_obj, method_name, func_ptr, arity);
+    super::set_builtin_property_attrs(
+        proto_obj as usize,
+        method_name.to_string(),
+        super::PropertyAttrs::new(true, true, true),
+    );
+}
+
+fn install_webcrypto_proto_getter(proto_obj: *mut ObjectHeader, name: &str, func_ptr: *const u8) {
+    if proto_obj.is_null() {
+        return;
+    }
+    crate::closure::js_register_closure_arity(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let value = if closure.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        super::native_module::set_bound_native_closure_name(closure, &format!("get {name}"));
+        crate::value::js_nanbox_pointer(closure as i64)
+    };
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_object_set_field_by_name(proto_obj, key, f64::from_bits(crate::value::TAG_UNDEFINED));
+    super::set_builtin_accessor_descriptor(
+        proto_obj as usize,
+        name.to_string(),
+        super::AccessorDescriptor {
+            get: value.to_bits(),
+            set: 0,
+        },
+        super::PropertyAttrs::new(true, true, true),
+    );
 }

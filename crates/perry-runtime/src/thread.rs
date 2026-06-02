@@ -139,6 +139,7 @@
 //! ```
 
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::bigint::{self, BigIntHeader, BIGINT_LIMBS};
 use crate::closure::{self, real_capture_count, ClosureHeader};
@@ -216,7 +217,7 @@ fn is_truthy_bits(bits: u64) -> bool {
 /// or malloc memory. These are read from the source thread's memory and stored
 /// as owned Rust data (`Vec<u8>`, `Vec<SerializedValue>`, etc.).
 #[derive(Debug)]
-pub(crate) enum SerializedValue {
+pub enum SerializedValue {
     /// A raw 64-bit value that needs no pointer fixup.
     /// Covers: f64 numbers, TAG_UNDEFINED, TAG_NULL, TAG_TRUE, TAG_FALSE, INT32_TAG.
     Inline(u64),
@@ -253,6 +254,11 @@ pub(crate) enum SerializedValue {
     /// deep-copy semantics, since the source cell's pointer is meaningless in
     /// another thread's arena.
     Date(f64),
+
+    /// An `fs.promises.FileHandle` crossing a `perry/thread` boundary.
+    /// Perry's fd registry is thread-local, so handles are not transferable;
+    /// deserialize as a FileHandle-shaped object with `fd === -1`.
+    DetachedFileHandle,
 }
 
 // Safety: SerializedValue contains no raw pointers to arena memory.
@@ -273,7 +279,7 @@ unsafe impl Sync for SerializedValue {}
 /// # Safety
 /// The `bits` must be a valid NaN-boxed JSValue. Pointer-tagged values must
 /// point to valid, live objects in the current thread's arena or malloc heap.
-pub(crate) unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
+pub unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
     let tag = bits & TAG_MASK;
 
     // Fast path: values that are just bit patterns (no pointers)
@@ -327,6 +333,12 @@ pub(crate) unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
                 return serialize_array(raw_ptr as *const crate::array::ArrayHeader);
             }
             gc::GC_TYPE_OBJECT => {
+                let value = f64::from_bits(bits);
+                if crate::fs::is_fs_filehandle_value(value)
+                    || crate::fs::filehandle_object_fd(value).is_some()
+                {
+                    return SerializedValue::DetachedFileHandle;
+                }
                 return serialize_object(raw_ptr as *const crate::object::ObjectHeader);
             }
             gc::GC_TYPE_CLOSURE => {
@@ -498,7 +510,7 @@ pub(crate) unsafe fn test_store_thread_object_field(
 ///
 /// # Returns
 /// The raw u64 bits of the NaN-boxed JSValue.
-pub(crate) unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 {
+pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 {
     match sv {
         SerializedValue::Inline(bits) => *bits,
 
@@ -601,6 +613,10 @@ pub(crate) unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) 
         SerializedValue::Date(ts) => {
             // #2089: allocate a fresh DateCell in THIS thread's arena.
             crate::date::alloc_date_cell(*ts).to_bits()
+        }
+
+        SerializedValue::DetachedFileHandle => {
+            crate::fs::build_detached_filehandle_object().to_bits()
         }
     }
 }
@@ -1057,6 +1073,8 @@ unsafe fn single_thread_filter(
 // spawn — background thread execution
 // ============================================================================
 
+static ACTIVE_THREAD_JOBS: AtomicUsize = AtomicUsize::new(0);
+
 /// The compiled closure function signature for zero-argument closures.
 /// Takes only the closure header pointer, returns f64 result.
 type ClosureCall0Fn = unsafe extern "C" fn(*const ClosureHeader) -> f64;
@@ -1112,6 +1130,7 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
     };
 
     // ── 3. Spawn background thread ───────────────────────────────────
+    ACTIVE_THREAD_JOBS.fetch_add(1, Ordering::SeqCst);
     std::thread::spawn(move || {
         // Reconstruct closure in this thread's arena
         let local_closure: *const ClosureHeader = if let Some((cc, ref cap_vals)) =
@@ -1175,6 +1194,7 @@ fn queue_thread_result(promise_usize: usize, result: SerializedValue) {
             result,
         });
     }
+    ACTIVE_THREAD_JOBS.fetch_sub(1, Ordering::SeqCst);
     // Issue #84: wake the main thread so spawn()-returned promises
     // resolve as soon as the OS thread finishes, not at the next
     // event-loop quantum.
@@ -1233,6 +1253,9 @@ pub extern "C" fn js_thread_process_pending() -> i32 {
 /// Used by the event loop to know whether to keep spinning.
 #[no_mangle]
 pub extern "C" fn js_thread_has_pending() -> i32 {
+    if ACTIVE_THREAD_JOBS.load(Ordering::SeqCst) != 0 {
+        return 1;
+    }
     let pending = PENDING_THREAD_RESULTS.lock().unwrap();
     if pending.is_empty() {
         0

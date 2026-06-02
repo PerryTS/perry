@@ -12,7 +12,9 @@
 
 use swc_ecma_ast as ast;
 
-use crate::analysis::{is_builtin_global_value_name, is_builtin_static_function_member};
+use crate::analysis::{
+    builtin_static_function_length, is_builtin_global_value_name, is_builtin_static_function_member,
+};
 use crate::ir::Expr;
 
 /// If `arg` is an AST shape we recognize as a built-in function value —
@@ -52,15 +54,38 @@ pub(super) fn builtin_fn_name_for_arg(arg: &ast::Expr) -> Option<String> {
     }
 }
 
-/// Build the spec-compliant data descriptor for a function `.name` property
-/// — `{ value, writable:false, enumerable:false, configurable:true }`.
+/// If `arg` is an AST shape we recognize as a built-in static function value,
+/// return its spec `.length`.
+pub(super) fn builtin_fn_length_for_arg(arg: &ast::Expr) -> Option<u32> {
+    match arg {
+        ast::Expr::Member(m) => {
+            if let (ast::Expr::Ident(ns_ident), ast::MemberProp::Ident(method_ident)) =
+                (m.obj.as_ref(), &m.prop)
+            {
+                return builtin_static_function_length(
+                    ns_ident.sym.as_ref(),
+                    method_ident.sym.as_ref(),
+                );
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Build the spec-compliant data descriptor for a function `.name` or `.length`
+/// property — `{ value, writable:false, enumerable:false, configurable:true }`.
 /// Mirrors `js_object_get_own_property_descriptor` in the runtime; the two
 /// must stay in sync.
-pub(super) fn name_data_descriptor(fname: String) -> Expr {
+pub(super) fn builtin_data_descriptor(value: Expr) -> Expr {
     Expr::Object(vec![
-        ("value".to_string(), Expr::String(fname)),
+        ("value".to_string(), value),
         ("writable".to_string(), Expr::Bool(false)),
         ("enumerable".to_string(), Expr::Bool(false)),
         ("configurable".to_string(), Expr::Bool(true)),
     ])
+}
+
+pub(super) fn name_data_descriptor(fname: String) -> Expr {
+    builtin_data_descriptor(Expr::String(fname))
 }

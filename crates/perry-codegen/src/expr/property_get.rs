@@ -665,6 +665,67 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &ctor_handle), (I64, &key_raw)],
                     ));
                 }
+                // #3527: `Object.hasOwn` read as a VALUE (not a direct call) —
+                // e.g. iconv-lite's merge-exports does
+                // `var hasOwn = typeof Object.hasOwn === "undefined" ? … :
+                // Object.hasOwn` then `hasOwn(obj, key)`. The ternary defeats
+                // the const-alias call-fold, so the value must be a real
+                // callable. Mirror the `Error.captureStackTrace` shape above:
+                // resolve the reified `Object` constructor closure and read the
+                // `hasOwn` static (installed by `install_builtin_constructor_statics`)
+                // off it, instead of falling through to the `0.0` sentinel.
+                if property == "hasOwn" {
+                    let object_idx = ctx.strings.intern("Object");
+                    let object_bytes_global =
+                        format!("@{}", ctx.strings.entry(object_idx).bytes_global);
+                    let object_len = "Object".len().to_string();
+                    let object_ctor = ctx.block().call(
+                        DOUBLE,
+                        "js_get_global_this_builtin_value",
+                        &[(PTR, &object_bytes_global), (I64, &object_len)],
+                    );
+                    let key_idx = ctx.strings.intern(property);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let blk = ctx.block();
+                    let ctor_handle = unbox_to_i64(blk, &object_ctor);
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_object_get_field_by_name_f64",
+                        &[(I64, &ctor_handle), (I64, &key_raw)],
+                    ));
+                }
+                // #4033: `ArrayBuffer.isView` must also work as a value
+                // (`const isView = ArrayBuffer.isView; isView(view)`). Bare
+                // builtin receivers are collapsed to `GlobalGet(0)`, so recover
+                // the populated constructor closure and read the reified static.
+                if property == "isView" {
+                    let ctor_idx = ctx.strings.intern("ArrayBuffer");
+                    let ctor_bytes_global =
+                        format!("@{}", ctx.strings.entry(ctor_idx).bytes_global);
+                    let ctor_len = "ArrayBuffer".len().to_string();
+                    let ctor = ctx.block().call(
+                        DOUBLE,
+                        "js_get_global_this_builtin_value",
+                        &[(PTR, &ctor_bytes_global), (I64, &ctor_len)],
+                    );
+                    let key_idx = ctx.strings.intern(property);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let blk = ctx.block();
+                    let ctor_handle = unbox_to_i64(blk, &ctor);
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_object_get_field_by_name_f64",
+                        &[(I64, &ctor_handle), (I64, &key_raw)],
+                    ));
+                }
                 if property == "f16round" {
                     let math_idx = ctx.strings.intern("Math");
                     let math_bytes_global =
@@ -751,6 +812,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         | "kill"
                         | "exit"
                         | "umask"
+                        | "setSourceMapsEnabled"
+                        | "hasUncaughtExceptionCaptureCallback"
+                        | "setUncaughtExceptionCaptureCallback"
+                        | "addUncaughtExceptionCaptureCallback"
                         | "threadCpuUsage"
                         | "availableMemory"
                         | "constrainedMemory"
@@ -820,19 +885,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // the `.prototype` chained read on the locally-bound
                 // alias to throw `Cannot read properties of undefined`.
                 if is_global_this_builtin_name(property) {
-                    let global_box = ctx.block().call(DOUBLE, "js_get_global_this", &[]);
                     let key_idx = ctx.strings.intern(property);
-                    let key_handle_global =
-                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                    let blk = ctx.block();
-                    let obj_handle = unbox_to_i64(blk, &global_box);
-                    let key_box = blk.load(DOUBLE, &key_handle_global);
-                    let key_bits = blk.bitcast_double_to_i64(&key_box);
-                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                    return Ok(blk.call(
+                    let key_bytes_global = format!("@{}", ctx.strings.entry(key_idx).bytes_global);
+                    let key_len = property.len().to_string();
+                    return Ok(ctx.block().call(
                         DOUBLE,
-                        "js_object_get_field_by_name_f64",
-                        &[(I64, &obj_handle), (I64, &key_raw)],
+                        "js_get_global_this_builtin_value",
+                        &[(PTR, &key_bytes_global), (I64, &key_len)],
                     ));
                 }
                 return Ok(double_literal(0.0));

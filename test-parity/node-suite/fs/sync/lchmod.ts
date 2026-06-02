@@ -24,6 +24,15 @@ if (process.platform === "darwin") {
   console.log("link is symlink:", lst.isSymbolicLink());
   console.log("link mode suffix:", (lst.mode & 0o777).toString(8));
   console.log("target mode suffix:", (fs.statSync(p).mode & 0o777).toString(8));
+
+  try {
+    (fs as any).lchmodSync(ROOT + "/missing-link.txt", 0o600);
+    console.log("lchmodSync missing code:", "no-throw");
+    console.log("lchmodSync missing syscall:", "no-throw");
+  } catch (err: any) {
+    console.log("lchmodSync missing code:", err.code);
+    console.log("lchmodSync missing syscall:", err.syscall);
+  }
 } else {
   // Match Node's "not implemented here" branch deterministically.
   console.log("link is symlink: true");

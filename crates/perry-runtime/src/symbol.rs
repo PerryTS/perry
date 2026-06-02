@@ -1312,6 +1312,67 @@ pub(crate) unsafe fn own_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f
     None
 }
 
+unsafe fn object_header_ptr_from_value_bits(bits: u64) -> Option<usize> {
+    let top16 = bits >> 48;
+    let raw = if top16 == 0x7FFD {
+        (bits & POINTER_MASK) as usize
+    } else if top16 == 0 {
+        bits as usize
+    } else {
+        return None;
+    };
+    if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let header_addr = raw - crate::gc::GC_HEADER_SIZE;
+    let gc_header = header_addr as *const crate::gc::GcHeader;
+    let tracked_malloc = crate::gc::gc_malloc_header_is_tracked(gc_header);
+    let arena_payload = !matches!(
+        crate::arena::classify_heap_space(raw),
+        crate::arena::HeapSpace::Unknown
+    );
+    let arena_header = !matches!(
+        crate::arena::classify_heap_space(header_addr),
+        crate::arena::HeapSpace::Unknown
+    );
+    if !tracked_malloc && !(arena_payload && arena_header) {
+        return None;
+    }
+    if (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT {
+        Some(raw)
+    } else {
+        None
+    }
+}
+
+unsafe fn resolve_explicit_object_prototype_symbol(obj_f64: f64, sym_f64: f64) -> Option<f64> {
+    const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+    let mut owner = object_header_ptr_from_value_bits(obj_f64.to_bits())?;
+    for _ in 0..8 {
+        let proto_bits = crate::object::prototype_chain::object_static_prototype(owner)?;
+        if proto_bits == TAG_NULL {
+            return None;
+        }
+        let proto_f64 = f64::from_bits(proto_bits);
+        if let Some(v) = own_symbol_property(proto_f64, sym_f64) {
+            return Some(v);
+        }
+        let proto_ptr = object_header_ptr_from_value_bits(proto_bits)?;
+        if proto_ptr == owner {
+            return None;
+        }
+        let proto_obj = proto_ptr as *const crate::object::ObjectHeader;
+        let cid = crate::object::js_object_get_class_id(proto_obj);
+        if cid != 0 {
+            if let Some(v) = crate::object::resolve_proto_chain_symbol(cid, sym_f64) {
+                return Some(v);
+            }
+        }
+        owner = proto_ptr;
+    }
+    None
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f64) -> f64 {
     // Check CLASS_STATIC_SYMBOLS first when receiver is a class ref
@@ -1374,6 +1435,51 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             }
         }
     }
+    // Generic small-handle `Symbol.dispose` support. Subsystems that expose
+    // a dispose method through HANDLE_PROPERTY_DISPATCH can bind it here
+    // without adding a runtime-specific special case.
+    if (bits >> 48) == 0x7FFD {
+        let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
+        if id > 0 && id < 0x100000 {
+            let dispose = well_known_symbol("dispose");
+            if !dispose.is_null() {
+                let dispose_f64 =
+                    f64::from_bits(crate::value::JSValue::pointer(dispose as *const u8).bits());
+                if sym_key_from_f64(sym_f64) == sym_key_from_f64(dispose_f64) {
+                    if let Some(dispatch) = crate::object::handle_property_dispatch() {
+                        let method = b"@@__perry_wk_dispose";
+                        let v = dispatch(id, method.as_ptr(), method.len());
+                        if v.to_bits() != TAG_UNDEFINED {
+                            return v;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Generic small-handle `Symbol.asyncDispose` support. This must run before
+    // pointer-backed symbol property lookup so small native handles are not
+    // interpreted as heap pointers when the dispatcher owns the method.
+    if (bits >> 48) == 0x7FFD {
+        let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
+        if id > 0 && id < 0x100000 {
+            let async_dispose = well_known_symbol("asyncDispose");
+            if !async_dispose.is_null() {
+                let async_dispose_f64 = f64::from_bits(
+                    crate::value::JSValue::pointer(async_dispose as *const u8).bits(),
+                );
+                if sym_key_from_f64(sym_f64) == sym_key_from_f64(async_dispose_f64) {
+                    if let Some(dispatch) = crate::object::handle_property_dispatch() {
+                        let method = b"@@__perry_wk_asyncDispose";
+                        let v = dispatch(id, method.as_ptr(), method.len());
+                        if v.to_bits() != TAG_UNDEFINED {
+                            return v;
+                        }
+                    }
+                }
+            }
+        }
+    }
     // Web Fetch and other stdlib handle-backed values are small ids
     // NaN-boxed as POINTER. A computed `handle[Symbol.iterator]` reaches the
     // symbol resolver directly, bypassing the normal string-key handle
@@ -1417,6 +1523,9 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                 }
             }
         }
+    }
+    if let Some(v) = resolve_explicit_object_prototype_symbol(obj_f64, sym_f64) {
+        return v;
     }
     // Buffer extends Uint8Array in Node, so Buffer values must expose
     // @@iterator as values(). Perry's direct Buffer.from() paths often
@@ -1509,6 +1618,19 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         bits as usize
     };
     if raw_addr >= 0x1000 && crate::buffer::is_registered_buffer(raw_addr) {
+        let iter_wk = well_known_symbol("iterator");
+        if !iter_wk.is_null() {
+            let iter_f64 =
+                f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
+            if sym_key_from_f64(sym_f64) == sym_key_from_f64(iter_f64) {
+                let this_f64 =
+                    f64::from_bits(crate::value::js_nanbox_pointer(raw_addr as i64).to_bits());
+                let mname = b"values";
+                return crate::object::js_class_method_bind(this_f64, mname.as_ptr(), mname.len());
+            }
+        }
+    }
+    if raw_addr >= 0x1000 && crate::typedarray::lookup_typed_array_kind(raw_addr).is_some() {
         let iter_wk = well_known_symbol("iterator");
         if !iter_wk.is_null() {
             let iter_f64 =
@@ -1654,6 +1776,23 @@ fn class_chain_has_method(class_id: u32, name: &str) -> bool {
     false
 }
 
+fn is_object_value(value: f64) -> bool {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let raw = crate::value::js_nanbox_get_pointer(value) as usize;
+    raw >= 0x10000 && !is_registered_symbol(raw)
+}
+
+#[cold]
+fn throw_iterator_result_not_object() -> ! {
+    let msg = b"Result of the Symbol.iterator method is not an object";
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(msg_str);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+}
+
 /// #1831: resolve the iterator for a `yield*` operand.
 ///
 /// `yield* X` must drive `X[Symbol.iterator]()` — for a generator **call** the
@@ -1702,6 +1841,9 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
                 // consumers can drive `.next()`.
                 if crate::array::js_array_is_array(iter).to_bits() == crate::value::TAG_TRUE {
                     return crate::array::array_values_iter(iter);
+                }
+                if !is_object_value(iter) {
+                    throw_iterator_result_not_object();
                 }
                 return iter;
             }

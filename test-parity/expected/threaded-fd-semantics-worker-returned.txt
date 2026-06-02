@@ -1,0 +1,2 @@
+worker returned fd type: number
+worker returned fd main fstat: EBADF:fstat

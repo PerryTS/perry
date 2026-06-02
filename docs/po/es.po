@@ -21541,14 +21541,6 @@ msgstr "`isUUID` — módulo"
 msgid "`getWorkerData` — module"
 msgstr "`getWorkerData` — módulo"
 
-#: src/api/reference.md:1126
-msgid "`parentPort` — module"
-msgstr "`parentPort` — módulo"
-
-#: src/api/reference.md:1127
-msgid "`postMessage` — instance"
-msgstr "`postMessage` — instancia"
-
 #: src/api/reference.md:1128
 msgid "`workerData` — module"
 msgstr "`workerData` — módulo"

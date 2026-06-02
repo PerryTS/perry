@@ -262,10 +262,12 @@ function buildImports() {
       },
       // object_assign(target, source) -> target handle
       object_assign: (target, source) => {
-        const t = getHandle(target);
-        const s = getHandle(source);
-        if (t && s) Object.assign(t, s);
-        return target;
+        const rawTarget = toJsValue(target);
+        if (rawTarget == null) throw new TypeError('Cannot convert undefined or null to object');
+        const t = Object(rawTarget);
+        const s = toJsValue(source);
+        if (s != null) Object.assign(t, s);
+        return isPointer(target) ? target : fromJsValue(t);
       },
 
       // ===== Phase 1: Arrays =====
@@ -1683,8 +1685,10 @@ const __memDispatch = {
     return (key in obj) ? 1 : 0;
   },
   object_assign: (target, source) => {
-    if (target && source && typeof target === 'object' && typeof source === 'object') Object.assign(target, source);
-    return target;
+    if (target == null) throw new TypeError('Cannot convert undefined or null to object');
+    const t = Object(target);
+    if (source != null) Object.assign(t, source);
+    return t;
   },
 
   // Arrays — args are plain JS values (arr is the array itself, etc.)

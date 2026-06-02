@@ -6,13 +6,179 @@
 //! runtime dispatch by checking the handle type in the registry.
 
 use super::handle::*;
-use perry_runtime::StringHeader;
 
-type EventEmitterOn = unsafe extern "C" fn(i64, *const StringHeader, i64) -> i64;
+type EventEmitterOn = unsafe extern "C" fn(i64, i64, i64) -> i64;
+
+const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001);
+const TAG_UNDEFINED_BITS: i64 = 0x7FFC_0000_0000_0001u64 as i64;
+const POINTER_TAG_BITS: u64 = 0x7FFD_0000_0000_0000;
+const POINTER_MASK_BITS: u64 = 0x0000_FFFF_FFFF_FFFF;
+
+fn nanbox_handle_value(handle: i64) -> f64 {
+    f64::from_bits(POINTER_TAG_BITS | (handle as u64 & POINTER_MASK_BITS))
+}
+
+unsafe fn pack_args_array(args: &[f64]) -> *mut perry_runtime::ArrayHeader {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let arg_handles = scope.root_nanbox_f64_slice(args);
+    let arr = perry_runtime::js_array_alloc(0);
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    for arg in &arg_handles {
+        let arr =
+            perry_runtime::js_array_push_f64(arr_handle.get_raw_mut_ptr(), arg.get_nanbox_f64());
+        arr_handle.set_raw_mut_ptr(arr);
+    }
+    arr_handle.get_raw_mut_ptr::<perry_runtime::ArrayHeader>()
+}
+
+#[cfg(feature = "bundled-events")]
+unsafe fn dispatch_event_emitter_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> {
+    if !crate::events::is_event_emitter_handle(handle) {
+        return None;
+    }
+
+    let event_bits = |index: usize| {
+        args.get(index)
+            .copied()
+            .unwrap_or(TAG_UNDEFINED_F64)
+            .to_bits() as i64
+    };
+    let nanbox_array = |ptr: *mut perry_runtime::ArrayHeader| {
+        f64::from_bits(POINTER_TAG_BITS | (ptr as u64 & POINTER_MASK_BITS))
+    };
+
+    let value = match method {
+        "on" | "addListener" if args.len() >= 2 => {
+            crate::events::js_event_emitter_on(handle, event_bits(0), event_bits(1));
+            nanbox_handle_value(handle)
+        }
+        "once" if args.len() >= 2 => {
+            crate::events::js_event_emitter_once(handle, event_bits(0), event_bits(1));
+            nanbox_handle_value(handle)
+        }
+        "prependListener" if args.len() >= 2 => {
+            crate::events::js_event_emitter_prepend_listener(handle, event_bits(0), event_bits(1));
+            nanbox_handle_value(handle)
+        }
+        "prependOnceListener" if args.len() >= 2 => {
+            crate::events::js_event_emitter_prepend_once_listener(
+                handle,
+                event_bits(0),
+                event_bits(1),
+            );
+            nanbox_handle_value(handle)
+        }
+        "off" | "removeListener" if args.len() >= 2 => {
+            crate::events::js_event_emitter_remove_listener(handle, event_bits(0), event_bits(1));
+            nanbox_handle_value(handle)
+        }
+        "removeAllListeners" => {
+            crate::events::js_event_emitter_remove_all_listeners(handle, pack_args_array(args));
+            nanbox_handle_value(handle)
+        }
+        "emit" => {
+            let rest = if args.len() > 1 { &args[1..] } else { &[] };
+            crate::events::js_event_emitter_emit(handle, event_bits(0), pack_args_array(rest))
+        }
+        "listenerCount" if !args.is_empty() => crate::events::js_event_emitter_listener_count(
+            handle,
+            event_bits(0),
+            args.get(1)
+                .copied()
+                .map(|value| value.to_bits() as i64)
+                .unwrap_or(TAG_UNDEFINED_BITS),
+        ),
+        "listeners" if !args.is_empty() => nanbox_array(crate::events::js_event_emitter_listeners(
+            handle,
+            event_bits(0),
+        )),
+        "rawListeners" if !args.is_empty() => nanbox_array(
+            crate::events::js_event_emitter_raw_listeners(handle, event_bits(0)),
+        ),
+        "eventNames" => nanbox_array(crate::events::js_event_emitter_event_names(handle)),
+        "setMaxListeners" if !args.is_empty() => {
+            crate::events::js_event_emitter_set_max_listeners(handle, args[0]);
+            nanbox_handle_value(handle)
+        }
+        "getMaxListeners" => crate::events::js_event_emitter_get_max_listeners(handle),
+        "domain" => crate::events::js_event_emitter_domain_value(handle),
+        "asyncId" if crate::events::is_event_emitter_async_resource_handle(handle) => {
+            crate::events::js_event_emitter_async_resource_async_id(handle)
+        }
+        "triggerAsyncId" if crate::events::is_event_emitter_async_resource_handle(handle) => {
+            crate::events::js_event_emitter_async_resource_trigger_async_id(handle)
+        }
+        "asyncResource" if crate::events::is_event_emitter_async_resource_handle(handle) => {
+            crate::events::js_event_emitter_async_resource_async_resource(handle)
+        }
+        "emitDestroy" if crate::events::is_event_emitter_async_resource_handle(handle) => {
+            crate::events::js_event_emitter_async_resource_emit_destroy(handle)
+        }
+        _ => return None,
+    };
+    Some(value)
+}
+
+#[cfg(feature = "bundled-events")]
+unsafe fn dispatch_event_emitter_property(handle: i64, property: &str) -> Option<f64> {
+    if !crate::events::is_event_emitter_handle(handle) {
+        return None;
+    }
+
+    let bind_method = |method: &[u8]| -> f64 {
+        extern "C" {
+            fn js_class_method_bind(
+                instance: f64,
+                method_name_ptr: *const u8,
+                method_name_len: usize,
+            ) -> f64;
+        }
+        js_class_method_bind(nanbox_handle_value(handle), method.as_ptr(), method.len())
+    };
+
+    if crate::events::is_event_emitter_async_resource_handle(handle) {
+        match property {
+            "asyncId" => {
+                return Some(crate::events::js_event_emitter_async_resource_async_id(
+                    handle,
+                ));
+            }
+            "triggerAsyncId" => {
+                return Some(
+                    crate::events::js_event_emitter_async_resource_trigger_async_id(handle),
+                );
+            }
+            "asyncResource" => {
+                return Some(crate::events::js_event_emitter_async_resource_async_resource(handle));
+            }
+            "emitDestroy" => return Some(bind_method(b"emitDestroy")),
+            _ => {}
+        }
+    }
+
+    let method = match property {
+        "on"
+        | "addListener"
+        | "once"
+        | "prependListener"
+        | "prependOnceListener"
+        | "off"
+        | "removeListener"
+        | "removeAllListeners"
+        | "emit"
+        | "listenerCount"
+        | "listeners"
+        | "rawListeners"
+        | "eventNames"
+        | "setMaxListeners"
+        | "getMaxListeners" => Some(property.as_bytes()),
+        _ => None,
+    }?;
+
+    Some(bind_method(method))
+}
 
 /// Dispatch a method call on a handle-based object.
-/// Called from perry-runtime's js_native_call_method when it detects a handle
-/// (pointer value < 0x100000, indicating an integer handle, not a real heap pointer).
 #[no_mangle]
 pub unsafe extern "C" fn js_handle_method_dispatch(
     handle: i64,
@@ -36,12 +202,13 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     };
     let arg_handles = scope.root_nanbox_f64_slice(&original_args);
     let args = perry_runtime::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    // `_` prefixes silence unused-variable warnings when every dispatch
-    // arm below is compiled out (e.g. minimal-stdlib without http-server
-    // / database-redis).
     let _ = method_name;
     let _ = args;
     let _ = handle;
+
+    if let Some(v) = crate::domain::dispatch_domain_method(handle, method_name, &args) {
+        return v;
+    }
 
     // #1545: Web Streams handles (readable/writable/transform/reader/writer)
     // live in a dedicated high id range, so this never claims another
@@ -55,6 +222,86 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
 
     // Dispatchers below gate on registry membership plus method vocabulary
     // because native handle id spaces are not unified (#91).
+
+    #[cfg(feature = "bundled-events")]
+    if let Some(value) = dispatch_event_emitter_method(handle, method_name, &args) {
+        return value;
+    }
+
+    // node:sqlite DatabaseSync handle. Keep this before the better-sqlite3
+    // SQLite fallbacks because method names like prepare/exec/close overlap
+    // but the lifecycle/error semantics are intentionally different.
+    #[cfg(feature = "database-sqlite")]
+    if matches!(
+        method_name,
+        "open"
+            | "close"
+            | "exec"
+            | "prepare"
+            | "createTagStore"
+            | "createSession"
+            | "applyChangeset"
+            | "enableLoadExtension"
+            | "loadExtension"
+            | "location"
+            | "__perry_dispose__"
+            | "@@__perry_wk_dispose"
+    ) {
+        if let Some(result) =
+            crate::sqlite::dispatch_node_sqlite_database_method(handle, method_name, &args)
+        {
+            return result;
+        }
+    }
+
+    // node:sqlite SQLTagStore handle. Keep this before StatementSync because
+    // the query execution method names overlap but tag stores consume tagged
+    // template arguments and bind them positionally.
+    #[cfg(feature = "database-sqlite")]
+    if matches!(method_name, "run" | "get" | "all" | "iterate" | "clear") {
+        if let Some(result) =
+            crate::sqlite::dispatch_node_sqlite_tag_store_method(handle, method_name, &args)
+        {
+            return result;
+        }
+    }
+
+    // node:sqlite StatementSync handle. Keep this before the better-sqlite3
+    // statement fallback because run/get/all overlap but Node's parameter and
+    // result semantics are different.
+    #[cfg(feature = "database-sqlite")]
+    if matches!(
+        method_name,
+        "run"
+            | "get"
+            | "all"
+            | "iterate"
+            | "columns"
+            | "setReadBigInts"
+            | "setReturnArrays"
+            | "setAllowBareNamedParameters"
+            | "setAllowUnknownNamedParameters"
+    ) {
+        if let Some(result) =
+            crate::sqlite::dispatch_node_sqlite_statement_method(handle, method_name, &args)
+        {
+            return result;
+        }
+    }
+
+    // node:sqlite Session handle. This follows DatabaseSync dispatch because
+    // `close` overlaps and the database lifecycle rules should win for DBs.
+    #[cfg(feature = "database-sqlite")]
+    if matches!(
+        method_name,
+        "changeset" | "patchset" | "close" | "__perry_dispose__" | "@@__perry_wk_dispose"
+    ) {
+        if let Some(result) =
+            crate::sqlite::dispatch_node_sqlite_session_method(handle, method_name, &args)
+        {
+            return result;
+        }
+    }
 
     // Fastify app: routes for HTTP verbs + lifecycle methods.
     // #1113 adds `"on"` here — `app.server.on(event, cb)` dispatches
@@ -121,7 +368,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             | "disconnect"
     ) && with_handle::<crate::ioredis::RedisClient, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return dispatch_ioredis(handle, method_name, &args);
+        return super::dispatch_ioredis::dispatch_ioredis(handle, method_name, &args);
     }
 
     // crypto Hash handle: createHash(...).update(...).digest().
@@ -285,7 +532,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     }
 
     // zlib Transform streams (#1843): `zlib.createGzip()` etc. return handles
-    // in the 0x60000+ range; their `.write`/`.end`/`.on`/`.pipe`/`.flush`/
+    // in the zlib small-handle range; their `.write`/`.end`/`.on`/`.pipe`/`.flush`/
     // `.params`/`.reset`/`.close` calls lose their static type and route here.
     // Gated on the registry AND the method vocabulary so a handle-id reused
     // across another subsystem's registry can't misroute (handle id-spaces
@@ -357,6 +604,13 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         }
     }
 
+    #[cfg(feature = "external-http-client-pump")]
+    if let Some(value) =
+        unsafe { super::dispatch_http::dispatch_client_incoming_method(handle, method_name, &args) }
+    {
+        return value;
+    }
+
     // External http-server path (#2153): when `node:http` / `node:https` /
     // `node:http2` routes through perry-ext-http-server, the HttpServer handle
     // returned by `http.createServer(...)` reaches `js_native_call_method` via
@@ -420,16 +674,16 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
 
         let is_incoming_message_method = matches!(
             method_name,
-            "on" | "addListener" | "pause" | "resume" | "destroy" | "read"
+            "on" | "addListener" | "setEncoding" | "pause" | "resume" | "destroy" | "read"
         ) || matches!(
             method_name,
-            "method" | "url" | "httpVersion"
+            "method" | "url" | "httpVersion" | "headers" | "rawHeaders"
         ) || matches!(
             method_name,
-            "__get_method" | "__get_url" | "__get_httpVersion"
+            "__get_method" | "__get_url" | "__get_httpVersion" | "__get_headers"
         ) || matches!(
             method_name,
-            "__get_complete" | "__get_aborted" | "__get_destroyed"
+            "__get_rawHeaders" | "__get_complete" | "__get_aborted" | "__get_destroyed"
         );
         if is_incoming_message_method
             && unsafe { js_ext_http_incoming_message_is_handle(handle) } != 0
@@ -522,6 +776,11 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             return v;
         }
         if let Some(v) = crate::fetch::dispatch_response_method(handle as usize, method_name, &args)
+        {
+            return v;
+        }
+        if let Some(v) =
+            crate::fetch::dispatch_form_data_method(handle as usize, method_name, &args)
         {
             return v;
         }
@@ -965,10 +1224,6 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
     fn unbox_to_i64(v: f64) -> i64 {
         (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
     }
-    // Pack a raw i64 handle back as a NaN-boxed POINTER_TAG f64 — the
-    // shape every chainable Socket method returns so subsequent
-    // `.on(...)` / `.write(...)` calls dispatch through the same
-    // small-handle range check at the top of `js_native_call_method`.
     fn nanbox_handle(h: i64) -> f64 {
         f64::from_bits(0x7FFD_0000_0000_0000u64 | (h as u64 & 0x0000_FFFF_FFFF_FFFF))
     }
@@ -1112,7 +1367,6 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
 }
 
 /// Dispatch a property access on a handle-based object.
-/// Called from perry-runtime's js_dynamic_object_get_property when it detects a handle.
 #[no_mangle]
 pub unsafe extern "C" fn js_handle_property_dispatch(
     handle: i64,
@@ -1134,6 +1388,15 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     let _ = property_name;
     let _ = handle;
 
+    if let Some(v) = crate::domain::dispatch_domain_property(handle, property_name) {
+        return v;
+    }
+
+    #[cfg(feature = "bundled-events")]
+    if let Some(value) = dispatch_event_emitter_property(handle, property_name) {
+        return value;
+    }
+
     // #1670: Web Streams handle property reads. A numeric stream id reaches
     // here via `js_object_get_field_by_name`'s stream probe (inline
     // `res.body.locked`). Route getter properties to their accessors, return
@@ -1142,10 +1405,15 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     // id-range + registry membership so unrelated small-handle reads are
     // untouched.
     #[cfg(feature = "bundled-streams")]
-    if (0x40000..0x100000).contains(&(handle as usize))
+    if (crate::streams::STREAM_HANDLE_ID_START..crate::streams::STREAM_HANDLE_ID_END)
+        .contains(&(handle as usize))
         && crate::streams::js_stream_handle_is_registered(handle as usize)
     {
         return crate::streams::dispatch_stream_property(handle as f64, property_name);
+    }
+
+    if let Some(value) = super::net_socket_bridge::bind_net_socket_property(handle, property_name) {
+        return value;
     }
 
     // zlib Transform streams: `typeof createGzip().write` must read
@@ -1185,17 +1453,82 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         }
     }
 
+    #[cfg(feature = "external-http-client-pump")]
+    {
+        extern "C" {
+            fn js_ext_http_agent_is_handle(handle: i64) -> i32;
+            fn js_ext_http_agent_dispatch_property(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+            ) -> f64;
+        }
+
+        if matches!(
+            property_name,
+            "createConnection"
+                | "createSocket"
+                | "keepSocketAlive"
+                | "reuseSocket"
+                | "getName"
+                | "destroy"
+                | "close"
+        ) && unsafe { js_ext_http_agent_is_handle(handle) } != 0
+        {
+            return unsafe {
+                js_ext_http_agent_dispatch_property(
+                    handle,
+                    property_name.as_ptr(),
+                    property_name.len(),
+                )
+            };
+        }
+    }
+
     if let Some(v) = crate::common::net_method_values::dispatch_property(handle, property_name) {
         return v;
     }
 
+    #[cfg(feature = "database-sqlite")]
+    {
+        if let Some(v) =
+            crate::sqlite::dispatch_node_sqlite_database_property(handle, property_name)
+        {
+            return v;
+        }
+        if let Some(v) =
+            crate::sqlite::dispatch_node_sqlite_tag_store_property(handle, property_name)
+        {
+            return v;
+        }
+        if let Some(v) =
+            crate::sqlite::dispatch_node_sqlite_statement_property(handle, property_name)
+        {
+            return v;
+        }
+        if let Some(v) = crate::sqlite::dispatch_node_sqlite_limits_property(handle, property_name)
+        {
+            return v;
+        }
+        if let Some(v) = crate::sqlite::dispatch_node_sqlite_session_property(handle, property_name)
+        {
+            return v;
+        }
+    }
+
     // Server-side node:http request/response handles whose static
-    // `IncomingMessage` / `ServerResponse` type was lost.
+    // `HttpServer` / `IncomingMessage` / `ServerResponse` type was lost.
     #[cfg(feature = "external-http-server-pump")]
     {
         extern "C" {
+            fn js_ext_http_server_is_handle(handle: i64) -> i32;
             fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
             fn js_ext_http_server_response_is_handle(handle: i64) -> i32;
+            fn js_ext_http_server_dispatch_property(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+            ) -> f64;
             fn js_ext_http_incoming_message_dispatch_property(
                 handle: i64,
                 property_ptr: *const u8,
@@ -1210,6 +1543,27 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
 
         if matches!(
             property_name,
+            "listen"
+                | "close"
+                | "closeAllConnections"
+                | "closeIdleConnections"
+                | "address"
+                | "on"
+                | "addListener"
+                | "setTimeout"
+        ) && unsafe { js_ext_http_server_is_handle(handle) } != 0
+        {
+            return unsafe {
+                js_ext_http_server_dispatch_property(
+                    handle,
+                    property_name.as_ptr(),
+                    property_name.len(),
+                )
+            };
+        }
+
+        if matches!(
+            property_name,
             "method"
                 | "url"
                 | "httpVersion"
@@ -1220,6 +1574,7 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "destroyed"
                 | "on"
                 | "addListener"
+                | "setEncoding"
                 | "pause"
                 | "resume"
                 | "destroy"
@@ -1373,41 +1728,11 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         }
     }
 
-    // Issue #769 — perry-ext-http `IncomingMessage` response handle.
-    // `res.statusCode` / `res.statusMessage` / `res.headers` inside the
-    // `request(url, (res) => ...)` callback hits this arm via
-    // `js_object_get_field_by_name`'s small-handle path. Gated on
-    // `external-http-client-pump` because that feature is the marker
-    // for "perry-ext-http is linked and exports these symbols".
     #[cfg(feature = "external-http-client-pump")]
-    if matches!(
-        property_name,
-        "statusCode" | "statusMessage" | "headers" | "trailers"
-    ) {
-        extern "C" {
-            fn js_http_is_incoming_message(handle: i64) -> i32;
-            fn js_http_status_code(handle: i64) -> f64;
-            fn js_http_status_message(handle: i64) -> *mut perry_runtime::StringHeader;
-            fn js_http_response_headers(handle: i64) -> f64;
-            fn js_http_response_trailers(handle: i64) -> f64;
-        }
-        if unsafe { js_http_is_incoming_message(handle) } != 0 {
-            use perry_runtime::JSValue;
-            return match property_name {
-                "statusCode" => unsafe { js_http_status_code(handle) },
-                "statusMessage" => {
-                    let ptr = unsafe { js_http_status_message(handle) };
-                    if ptr.is_null() {
-                        f64::from_bits(0x7FFC_0000_0000_0001)
-                    } else {
-                        f64::from_bits(JSValue::string_ptr(ptr).bits())
-                    }
-                }
-                "headers" => unsafe { js_http_response_headers(handle) },
-                "trailers" => unsafe { js_http_response_trailers(handle) },
-                _ => f64::from_bits(0x7FFC_0000_0000_0001),
-            };
-        }
+    if let Some(value) =
+        unsafe { super::dispatch_http::dispatch_client_incoming_property(handle, property_name) }
+    {
+        return value;
     }
 
     // Web Fetch property dispatch (refs #421 — Phase 1 of the handle-NaN-boxing
@@ -1431,6 +1756,9 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         if let Some(v) = crate::fetch::dispatch_headers_property(handle as usize, property_name) {
             return v;
         }
+        if let Some(v) = crate::fetch::dispatch_form_data_property(handle as usize, property_name) {
+            return v;
+        }
         if let Some(v) = crate::fetch::dispatch_blob_property(handle as usize, property_name) {
             return v;
         }
@@ -1445,7 +1773,14 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     // property gate as the method-dispatch arm above.
     if matches!(
         property_name,
-        "lastNeed" | "lastTotal" | "lastChar" | "encoding" | "write" | "end"
+        "lastNeed"
+            | "lastTotal"
+            | "lastChar"
+            | "encoding"
+            | "constructor"
+            | "write"
+            | "end"
+            | "text"
     ) && crate::string_decoder::is_string_decoder_handle(handle)
     {
         return crate::string_decoder::dispatch_string_decoder_property(handle, property_name);
@@ -1715,89 +2050,6 @@ unsafe fn dispatch_sqlite_db(handle: i64, method: &str, args: &[f64]) -> f64 {
     }
 }
 
-/// Dispatch method calls on ioredis Redis client handles
-#[cfg(feature = "database-redis")]
-unsafe fn dispatch_ioredis(handle: i64, method: &str, args: &[f64]) -> f64 {
-    // Helper: extract raw StringHeader pointer from NaN-boxed f64
-    fn get_string_ptr(val: f64) -> *const perry_runtime::StringHeader {
-        let bits = val.to_bits();
-        // Strip STRING_TAG (0x7FFF) to get raw pointer
-        (bits & 0x0000_FFFF_FFFF_FFFF) as *const perry_runtime::StringHeader
-    }
-
-    // Helper: NaN-box a Promise pointer with POINTER_TAG for return
-    fn nanbox_promise(promise: *mut perry_runtime::Promise) -> f64 {
-        let bits = (promise as u64) | 0x7FFD_0000_0000_0000;
-        f64::from_bits(bits)
-    }
-
-    match method {
-        "connect" => {
-            let promise = crate::ioredis::js_ioredis_connect(handle);
-            nanbox_promise(promise)
-        }
-        "get" if !args.is_empty() => {
-            let key_ptr = get_string_ptr(args[0]);
-            let promise = crate::ioredis::js_ioredis_get(handle, key_ptr);
-            nanbox_promise(promise)
-        }
-        "set" if args.len() >= 2 => {
-            let key_ptr = get_string_ptr(args[0]);
-            let value_ptr = get_string_ptr(args[1]);
-            let promise = crate::ioredis::js_ioredis_set(handle, key_ptr, value_ptr);
-            nanbox_promise(promise)
-        }
-        "setex" if args.len() >= 3 => {
-            let key_ptr = get_string_ptr(args[0]);
-            let seconds = args[1];
-            let value_ptr = get_string_ptr(args[2]);
-            let promise = crate::ioredis::js_ioredis_setex(handle, key_ptr, seconds, value_ptr);
-            nanbox_promise(promise)
-        }
-        "del" if !args.is_empty() => {
-            let key_ptr = get_string_ptr(args[0]);
-            let promise = crate::ioredis::js_ioredis_del(handle, key_ptr);
-            nanbox_promise(promise)
-        }
-        "exists" if !args.is_empty() => {
-            let key_ptr = get_string_ptr(args[0]);
-            let promise = crate::ioredis::js_ioredis_exists(handle, key_ptr);
-            nanbox_promise(promise)
-        }
-        "incr" if !args.is_empty() => {
-            let key_ptr = get_string_ptr(args[0]);
-            let promise = crate::ioredis::js_ioredis_incr(handle, key_ptr);
-            nanbox_promise(promise)
-        }
-        "decr" if !args.is_empty() => {
-            let key_ptr = get_string_ptr(args[0]);
-            let promise = crate::ioredis::js_ioredis_decr(handle, key_ptr);
-            nanbox_promise(promise)
-        }
-        "expire" if args.len() >= 2 => {
-            let key_ptr = get_string_ptr(args[0]);
-            let seconds = args[1];
-            let promise = crate::ioredis::js_ioredis_expire(handle, key_ptr, seconds);
-            nanbox_promise(promise)
-        }
-        "ping" => {
-            let promise = crate::ioredis::js_ioredis_ping(handle);
-            nanbox_promise(promise)
-        }
-        "quit" => {
-            let promise = crate::ioredis::js_ioredis_quit(handle);
-            nanbox_promise(promise)
-        }
-        "disconnect" => {
-            crate::ioredis::js_ioredis_disconnect(handle);
-            f64::from_bits(0x7FFC_0000_0000_0001) // undefined
-        }
-        _ => {
-            f64::from_bits(0x7FFC_0000_0000_0001) // undefined
-        }
-    }
-}
-
 /// Dispatch property set on a handle-based object.
 /// Called from perry-runtime's js_object_set_field_by_name when it detects a handle.
 #[no_mangle]
@@ -1819,6 +2071,11 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
     let _ = property_name;
     let _ = handle;
     let _ = value;
+
+    #[cfg(feature = "database-sqlite")]
+    if crate::sqlite::dispatch_node_sqlite_limits_set(handle, property_name, value) {
+        return;
+    }
 
     // Try Fastify context dispatch (request/reply properties)
     #[cfg(feature = "http-server")]
@@ -1851,6 +2108,22 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
             }
         }
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_handle_own_property_names_dispatch(handle: i64) -> f64 {
+    if crate::string_decoder::is_string_decoder_handle(handle) {
+        return crate::string_decoder::string_decoder_own_property_names(handle);
+    }
+    f64::from_bits(perry_runtime::JSValue::undefined().bits())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_handle_prototype_dispatch(handle: i64) -> f64 {
+    if crate::string_decoder::is_string_decoder_handle(handle) {
+        return crate::string_decoder::string_decoder_prototype_value();
+    }
+    f64::from_bits(perry_runtime::JSValue::undefined().bits())
 }
 
 /// #2533: route a captured / aliased `http`/`https`/`http2` `createServer`
@@ -1938,12 +2211,38 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         fn js_register_handle_property_set_dispatch(
             f: unsafe extern "C" fn(i64, *const u8, usize, f64),
         );
+        fn js_register_handle_own_property_names_dispatch(f: unsafe extern "C" fn(i64) -> f64);
+        fn js_register_handle_prototype_dispatch(f: unsafe extern "C" fn(i64) -> f64);
         fn js_register_event_emitter_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
+        fn js_register_event_emitter_async_resource_handle_probe(
+            f: unsafe extern "C" fn(i64) -> bool,
+        );
         fn js_register_event_emitter_on(f: EventEmitterOn);
+        #[cfg(feature = "http-client")]
+        fn js_register_global_fetch_with_options(
+            f: unsafe extern "C" fn(
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+            ) -> *mut perry_runtime::Promise,
+        );
+        fn js_register_worker_threads_namespace_getters(
+            worker_data: extern "C" fn() -> f64,
+            is_main_thread: extern "C" fn() -> f64,
+            parent_port: extern "C" fn() -> f64,
+            thread_name: extern "C" fn() -> f64,
+            resource_limits: extern "C" fn() -> f64,
+        );
     }
     js_register_handle_method_dispatch(js_handle_method_dispatch);
     js_register_handle_property_dispatch(js_handle_property_dispatch);
     js_register_handle_property_set_dispatch(js_handle_property_set_dispatch);
+    js_register_handle_own_property_names_dispatch(js_handle_own_property_names_dispatch);
+    js_register_handle_prototype_dispatch(js_handle_prototype_dispatch);
+    crate::string_decoder::string_decoder_prototype_value();
+    #[cfg(feature = "http-client")]
+    js_register_global_fetch_with_options(crate::fetch::js_fetch_with_options);
     #[cfg(feature = "bundled-events")]
     unsafe extern "C" fn event_emitter_probe(handle: i64) -> bool {
         crate::events::is_event_emitter_handle(handle)
@@ -1951,17 +2250,35 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     #[cfg(feature = "bundled-events")]
     js_register_event_emitter_handle_probe(event_emitter_probe);
     #[cfg(feature = "bundled-events")]
+    unsafe extern "C" fn event_emitter_async_resource_probe(handle: i64) -> bool {
+        crate::events::is_event_emitter_async_resource_handle(handle)
+    }
+    #[cfg(feature = "bundled-events")]
+    js_register_event_emitter_async_resource_handle_probe(event_emitter_async_resource_probe);
+    #[cfg(feature = "bundled-events")]
     js_register_event_emitter_on(crate::events::js_event_emitter_on);
+    super::net_socket_bridge::register_net_socket_handle_probe();
+    js_register_worker_threads_namespace_getters(
+        crate::worker_threads::js_worker_threads_get_worker_data,
+        crate::worker_threads::js_worker_threads_is_main_thread,
+        crate::worker_threads::js_worker_threads_parent_port,
+        crate::worker_threads::js_worker_threads_thread_name,
+        crate::worker_threads::js_worker_threads_resource_limits,
+    );
     // #1577: route captured-then-called `crypto.*` methods (which reach the
     // runtime's native-module dispatch) back to the stdlib crypto impls.
+    #[cfg(feature = "crypto")]
     perry_runtime::js_set_native_crypto_dispatch(crate::crypto::js_crypto_native_dispatch);
-    // Same contract for `zlib.*` methods so `util.promisify(zlib.gzip)` and
-    // `const f = zlib.gzipSync; f(buf)` reach the FFIs.
+    #[cfg(feature = "crypto")]
+    perry_runtime::js_set_native_webcrypto_dispatch(crate::webcrypto::js_webcrypto_native_dispatch);
     #[cfg(feature = "compression")]
     perry_runtime::js_set_native_zlib_dispatch(crate::zlib::js_zlib_native_dispatch);
     perry_runtime::js_set_native_querystring_dispatch(
         crate::querystring::js_querystring_native_dispatch,
     );
+    #[cfg(feature = "database-sqlite")]
+    perry_runtime::js_set_native_sqlite_dispatch(crate::sqlite::js_node_sqlite_native_dispatch);
+    perry_runtime::js_set_native_domain_dispatch(crate::domain::js_domain_native_dispatch);
 
     // #2533: route captured / aliased http/https/http2 `createServer` back to
     // the perry-ext-http-server factories. Only registered when the http ext
@@ -1992,5 +2309,22 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         perry_runtime::node_submodules::js_register_jsx_render_stream(
             crate::streams::js_jsx_render_stream_from_value,
         );
+        perry_runtime::fs::js_register_filehandle_readable_web_stream_factory(
+            crate::streams::js_readable_stream_deferred_byte_source,
+        );
+    }
+
+    // `instanceof` for WHATWG fetch handles (Response/Request/Headers/Blob).
+    // They are pointer-tagged small-integer ids, not heap objects, so the
+    // runtime can't walk a prototype chain — register a kind-probe so
+    // `x instanceof Response` (Hono's route-fallback guard) resolves. Gated on
+    // the same feature as the fetch module itself.
+    #[cfg(feature = "http-client")]
+    {
+        extern "C" {
+            fn js_register_fetch_handle_kind_probe(f: unsafe extern "C" fn(usize) -> u8);
+            fn js_fetch_handle_kind(id: usize) -> u8;
+        }
+        js_register_fetch_handle_kind_probe(js_fetch_handle_kind);
     }
 }

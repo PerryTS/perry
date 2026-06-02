@@ -190,7 +190,16 @@ pub(super) fn try_global_builtins(
             }
             "structuredClone" => {
                 if !args.is_empty() {
-                    return Ok(Ok(Expr::StructuredClone(Box::new(args.remove(0)))));
+                    let value = args.remove(0);
+                    let options = if !args.is_empty() {
+                        args.remove(0)
+                    } else {
+                        Expr::Undefined
+                    };
+                    return Ok(Ok(Expr::StructuredClone {
+                        value: Box::new(value),
+                        options: Box::new(options),
+                    }));
                 } else {
                     return Err(anyhow!("structuredClone requires one argument"));
                 }
@@ -767,6 +776,27 @@ pub(super) fn try_global_builtins(
                             }));
                         }
                     }
+                    // #3927: `generateKeySync(alg, options)` from a named import.
+                    // Like createSecretKey above, rewrite to the dotted-form
+                    // `crypto.generateKeySync(...)` so the call reaches the
+                    // dedicated `js_crypto_generate_key_sync` dispatch in
+                    // `expr/calls.rs` (a generic NativeMethodCall has no runtime
+                    // dispatcher for it and returns undefined).
+                    "generateKeySync" => {
+                        if args.len() >= 2 {
+                            let mut iter = args.into_iter();
+                            let alg_arg = iter.next().unwrap();
+                            let options_arg = iter.next().unwrap();
+                            return Ok(Ok(Expr::Call {
+                                callee: Box::new(Expr::PropertyGet {
+                                    object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
+                                    property: "generateKeySync".to_string(),
+                                }),
+                                args: vec![alg_arg, options_arg],
+                                type_args: vec![],
+                            }));
+                        }
+                    }
                     _ => {} // Fall through
                 }
             }
@@ -831,7 +861,7 @@ pub(super) fn try_global_builtins(
                     "version" => return Ok(Ok(Expr::OsVersion)),
                     "cpus" => return Ok(Ok(Expr::OsCpus)),
                     "networkInterfaces" => return Ok(Ok(Expr::OsNetworkInterfaces)),
-                    "userInfo" => return Ok(Ok(user_info_expr_for_call(call))),
+                    "userInfo" => return Ok(Ok(user_info_expr_for_call(call, args))),
                     "getPriority" | "setPriority" => {
                         return Ok(Ok(Expr::NativeMethodCall {
                             module: "os".to_string(),
@@ -866,10 +896,9 @@ pub(super) fn try_global_builtins(
         }
     }
 
-    // #854: lower the callee for its side effects (registration/tagging done
-    // inside `lower_expr`) even though the resulting value is unused on the
-    // fall-through path that hands the args back to the generic dispatcher.
-    let _callee_expr = lower_expr(ctx, expr)?;
-
+    // Fall through to the shared call tail. It owns lowering the callee for
+    // the generic dispatcher; doing it speculatively here relowers every
+    // receiver in a fluent generic chain and turns `a.b().c().d()` into an
+    // exponential lowering walk.
     Ok(Err(args))
 }

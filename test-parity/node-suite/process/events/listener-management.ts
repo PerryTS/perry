@@ -18,3 +18,12 @@ console.log("after removeAll one:", process.listenerCount("evt-b"));
 process.on("evt-c", fn);
 process.removeAllListeners();
 console.log("after removeAll all:", process.listenerCount("evt-c"));
+
+function onceFn() {}
+process.once("evt-once-raw", onceFn);
+const raw = process.rawListeners("evt-once-raw");
+const listeners = process.listeners("evt-once-raw");
+console.log("raw once is wrapper:", raw[0] !== onceFn);
+console.log("raw once listener:", raw[0].listener === onceFn);
+console.log("listeners unwrap:", listeners[0] === onceFn);
+process.removeAllListeners("evt-once-raw");

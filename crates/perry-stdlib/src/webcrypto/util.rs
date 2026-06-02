@@ -39,12 +39,16 @@ pub(super) use sha1::Sha1;
 pub(super) use sha2::{Digest as Sha2Digest, Sha256, Sha384, Sha512};
 
 pub(super) use perry_runtime::{
-    buffer::{
-        buffer_alloc, buffer_data_mut, is_registered_buffer, mark_as_uint8array, BufferHeader,
-    },
+    buffer::{buffer_alloc, buffer_data_mut, is_registered_buffer, BufferHeader},
     js_object_alloc, js_object_set_field_by_name, js_promise_resolved, JSValue, Promise,
     StringHeader,
 };
+
+extern "C" {
+    fn js_buffer_register_external(addr: usize);
+    fn js_buffer_mark_as_uint8array_external(addr: usize);
+    fn js_buffer_mark_as_crypto_key_external(addr: usize, algo: u8, hash: u8, kind: u8);
+}
 
 /// `buffer_data` is private to perry-runtime — open-code the same offset.
 #[inline]
@@ -116,6 +120,44 @@ pub(super) static CRYPTO_KEY_REGISTRY: Lazy<Mutex<HashMap<usize, CryptoKeyMateri
 
 pub(super) fn register_crypto_key(buf_addr: usize, mat: CryptoKeyMaterial) {
     CRYPTO_KEY_REGISTRY.lock().unwrap().insert(buf_addr, mat);
+    unsafe {
+        js_buffer_mark_as_crypto_key_external(
+            buf_addr,
+            runtime_algo_id(mat.algo),
+            runtime_hash_id(mat.hash),
+            runtime_key_kind_id(mat.kind),
+        );
+    }
+}
+
+fn runtime_algo_id(algo: KeyAlgo) -> u8 {
+    match algo {
+        KeyAlgo::Hmac => 1,
+        KeyAlgo::AesGcm => 2,
+        KeyAlgo::AesKw => 3,
+        KeyAlgo::AesCbc => 4,
+        KeyAlgo::AesCtr => 5,
+        KeyAlgo::Hkdf => 6,
+        KeyAlgo::Pbkdf2 => 7,
+        _ => 0,
+    }
+}
+
+fn runtime_hash_id(hash: HashAlgo) -> u8 {
+    match hash {
+        HashAlgo::Sha1 => 1,
+        HashAlgo::Sha256 => 2,
+        HashAlgo::Sha384 => 3,
+        HashAlgo::Sha512 => 4,
+    }
+}
+
+fn runtime_key_kind_id(kind: KeyKind) -> u8 {
+    match kind {
+        KeyKind::Secret => 1,
+        KeyKind::Private => 2,
+        KeyKind::Public => 3,
+    }
 }
 
 pub(super) fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
@@ -296,7 +338,8 @@ pub(super) unsafe fn alloc_uint8array_from_slice(bytes: &[u8]) -> *mut BufferHea
         let dst = buffer_data_mut(buf);
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len());
     }
-    mark_as_uint8array(buf as usize);
+    js_buffer_register_external(buf as usize);
+    js_buffer_mark_as_uint8array_external(buf as usize);
     buf
 }
 

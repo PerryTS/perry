@@ -114,6 +114,11 @@ pub(crate) type JsHandleTypeofFn = unsafe extern "C" fn(f64) -> i32;
 /// stdlib crypto impls, which this crate can't call directly. (#1577)
 pub(crate) type JsNativeCryptoDispatchFn =
     unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
+/// WebCrypto `crypto.subtle` namespace-method dispatcher (registered by
+/// perry-stdlib). Kept separate from node:crypto because method names such as
+/// `generateKey` overlap with top-level crypto APIs.
+pub(crate) type JsNativeWebCryptoDispatchFn =
+    unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
 /// node:zlib module-method dispatcher (registered by perry-stdlib). Same
 /// shape and rationale as the crypto dispatcher above — lets a captured /
 /// promisified zlib method (`const f = zlib.gzip; await f(buf)`) reach the
@@ -124,6 +129,13 @@ pub(crate) type JsNativeZlibDispatchFn =
 /// Same dependency-boundary pattern as crypto/zlib: captured callable exports
 /// can reach the stdlib implementation without perry-runtime depending on it.
 pub(crate) type JsNativeQuerystringDispatchFn =
+    unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
+/// node:sqlite module-method/constructor dispatcher. Same dependency-boundary
+/// pattern as crypto/zlib, with an extra construct flag so dynamic `new
+/// DatabaseSync(...)` can reach the real stdlib constructor.
+pub(crate) type JsNativeSqliteDispatchFn =
+    unsafe extern "C" fn(*const u8, usize, *const f64, usize, i32) -> f64;
+pub(crate) type JsNativeDomainDispatchFn =
     unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
 /// node:http / node:https / node:http2 server-factory dispatcher (registered
 /// by perry-stdlib under the `external-http-server-pump` feature, which is
@@ -148,6 +160,9 @@ pub static JS_NATIVE_MODULE_JS_LOADER: AtomicPtr<()> = AtomicPtr::new(std::ptr::
 pub static JS_NEW_FROM_HANDLE_V8: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_HANDLE_TYPEOF: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_CRYPTO_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+pub static JS_NATIVE_WEBCRYPTO_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_ZLIB_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_QUERYSTRING_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+pub static JS_NATIVE_SQLITE_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+pub static JS_NATIVE_DOMAIN_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_HTTP_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());

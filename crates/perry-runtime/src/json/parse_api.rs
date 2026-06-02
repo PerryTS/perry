@@ -50,6 +50,10 @@ fn syntax_error_value(message: &str) -> f64 {
     f64::from_bits(JSValue::pointer(err as *const u8).bits())
 }
 
+fn throw_syntax_error(message: &str) -> ! {
+    crate::exception::js_throw(syntax_error_value(message))
+}
+
 fn is_json_null_literal(bytes: &[u8]) -> bool {
     let Some(start) = bytes
         .iter()
@@ -126,14 +130,18 @@ pub unsafe fn js_json_parse_result(text_ptr: *const StringHeader) -> Result<JSVa
 #[no_mangle]
 pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue {
     if text_ptr.is_null() {
-        let msg = "Unexpected end of JSON input";
-        let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err_val = JSValue::string_ptr(msg_ptr);
-        crate::exception::js_throw(f64::from_bits(err_val.bits()));
+        throw_syntax_error("Unexpected end of JSON input");
     }
     let len = (*text_ptr).byte_len as usize;
     let data_ptr = (text_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
     let bytes = std::slice::from_raw_parts(data_ptr, len);
+
+    if len == 0 {
+        throw_syntax_error("Unexpected end of JSON input");
+    }
+    if let Err(err) = serde_json::from_slice::<serde_json::Value>(bytes) {
+        throw_syntax_error(&format!("JSON parse error: {}", err));
+    }
 
     crate::gc::gc_collect_pending_suppressed_parse();
 
@@ -205,13 +213,6 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
         // and handles non-array roots.
     }
 
-    if len == 0 {
-        let msg = "Unexpected end of JSON input";
-        let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err_val = JSValue::string_ptr(msg_ptr);
-        crate::exception::js_throw(f64::from_bits(err_val.bits()));
-    }
-
     // #64 follow-up: opportunistic pre-parse cleanup. When parse runs in a
     // tight loop (e.g. `for (let i=0; i<N; i++) JSON.parse(blob);`), each
     // call suppresses GC for its duration, and the post-parse malloc-trigger
@@ -267,10 +268,19 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
             let preview_len = len.min(50);
             let preview = std::str::from_utf8(&bytes[..preview_len]).unwrap_or("???");
             let msg = format!("JSON parse error: Unexpected token: {}", preview);
-            let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-            let err_val = JSValue::string_ptr(msg_ptr);
-            crate::exception::js_throw(f64::from_bits(err_val.bits()));
+            throw_syntax_error(&msg);
+        } else if parser.has_trailing_content() {
+            // Literal `null` followed by trailing tokens (`JSON.parse("null x")`)
+            // — reject like any other trailing-token case.
+            throw_syntax_error("Unexpected non-whitespace character after JSON");
         }
+    } else if parser.has_trailing_content() {
+        // A valid value was parsed but non-whitespace input remains
+        // (`JSON.parse("{}x")`, `JSON.parse("1 2")`). Node rejects trailing
+        // tokens with a SyntaxError; trailing whitespace is allowed.
+        crate::exception::js_throw(syntax_error_value(
+            "Unexpected non-whitespace character after JSON",
+        ));
     }
 
     result
@@ -450,9 +460,9 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
             let preview_len = len.min(50);
             let preview = std::str::from_utf8(&bytes[..preview_len]).unwrap_or("???");
             let msg = format!("JSON parse error: Unexpected token: {}", preview);
-            let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-            let err_val = JSValue::string_ptr(msg_ptr);
-            crate::exception::js_throw(f64::from_bits(err_val.bits()));
+            // Throw a real `SyntaxError` (not a bare string) to match Node's
+            // error identity for invalid JSON.
+            crate::exception::js_throw(syntax_error_value(&msg));
         }
     }
 

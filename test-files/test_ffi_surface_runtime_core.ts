@@ -398,6 +398,11 @@ crates/perry-runtime/src/webassembly.rs:
   - js_webassembly_call_export_2
   - js_webassembly_call_export_3
   - js_webassembly_call_export_4
+  - js_webassembly_compile
   - js_webassembly_instantiate
+  - js_webassembly_module_custom_sections
+  - js_webassembly_module_exports
+  - js_webassembly_module_imports
+  - js_webassembly_module_new
   - js_webassembly_validate
 */
