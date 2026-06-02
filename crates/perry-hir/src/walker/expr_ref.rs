@@ -4,9 +4,9 @@ use super::*;
 ///
 /// Mirrors [`walk_expr_children_mut`]; the two are kept in lockstep — see
 /// the `walker_arms_match` test below for the drift check.
-pub fn walk_expr_children<F>(expr: &Expr, f: &mut F)
+pub fn walk_expr_children<'a, F>(expr: &'a Expr, f: &mut F)
 where
-    F: FnMut(&Expr),
+    F: FnMut(&'a Expr),
 {
     match expr {
         // ─── Pure leaves: no Expr children ────────────────────────────────

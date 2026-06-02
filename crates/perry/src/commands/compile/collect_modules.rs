@@ -16,7 +16,7 @@ use perry_transform::{
     gather_cross_module_methods_with_extern_imports, inline_finally_into_returns, inline_functions,
     transform_async_to_generator, transform_generators, MethodCandidate,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -378,52 +378,101 @@ pub(super) fn collect_modules(
     progress: &VerboseProgress,
     mut parse_cache: Option<&mut ParseCache>,
 ) -> Result<()> {
-    let mut pending = vec![entry_path.clone()];
-    while let Some(next_path) = pending.pop() {
-        collect_module_one(
-            &next_path,
-            ctx,
-            visited,
-            format,
-            target,
-            next_class_id,
-            skip_transforms,
-            progress,
-            parse_cache.as_deref_mut(),
-            &mut pending,
-        )?;
+    let mut states: HashMap<PathBuf, VisitState> = HashMap::new();
+    let mut stack = vec![WorkFrame::Enter(entry_path.clone())];
+    while let Some(frame) = stack.pop() {
+        match frame {
+            WorkFrame::Enter(next_path) => {
+                let canonical = next_path.canonicalize().map_err(|e| {
+                    anyhow!("Failed to canonicalize {}: {}", next_path.display(), e)
+                })?;
+
+                if matches!(
+                    states.get(&canonical),
+                    Some(VisitState::InProgress | VisitState::Done)
+                ) {
+                    continue;
+                }
+                if visited.contains(&canonical) {
+                    states.insert(canonical, VisitState::Done);
+                    continue;
+                }
+
+                states.insert(canonical.clone(), VisitState::InProgress);
+                visited.insert(canonical.clone());
+                progress.record(ProgressSnapshot {
+                    stage: "collect-module",
+                    module_path: Some(&canonical),
+                    visited: Some(visited.len()),
+                    collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+                    ..Default::default()
+                });
+
+                let discovered = collect_module_one(
+                    &next_path,
+                    canonical.clone(),
+                    ctx,
+                    visited,
+                    format,
+                    target,
+                    next_class_id,
+                    progress,
+                    parse_cache.as_deref_mut(),
+                )?;
+
+                if let Some(prepared) = discovered.finish {
+                    stack.push(WorkFrame::Finish(prepared));
+                } else {
+                    states.insert(canonical, VisitState::Done);
+                }
+                for child in discovered.children.into_iter().rev() {
+                    stack.push(WorkFrame::Enter(child));
+                }
+            }
+            WorkFrame::Finish(prepared) => {
+                let canonical = prepared.canonical.clone();
+                collect_module_finish(prepared, ctx, visited, target, skip_transforms, progress)?;
+                states.insert(canonical, VisitState::Done);
+            }
+        }
     }
     Ok(())
+}
+
+enum VisitState {
+    InProgress,
+    Done,
+}
+
+enum WorkFrame {
+    Enter(PathBuf),
+    Finish(PreparedModule),
+}
+
+struct ModuleDiscovery {
+    finish: Option<PreparedModule>,
+    children: Vec<PathBuf>,
+}
+
+struct PreparedModule {
+    canonical: PathBuf,
+    module_name: String,
+    hir_module: perry_hir::Module,
 }
 
 #[allow(clippy::too_many_arguments)]
 fn collect_module_one(
     entry_path: &PathBuf,
+    canonical: PathBuf,
     ctx: &mut CompilationContext,
     visited: &mut HashSet<PathBuf>,
     format: OutputFormat,
     target: Option<&str>,
     next_class_id: &mut perry_hir::ClassId,
-    skip_transforms: bool,
     progress: &VerboseProgress,
     mut parse_cache: Option<&mut ParseCache>,
-    pending: &mut Vec<PathBuf>,
-) -> Result<()> {
-    let canonical = entry_path
-        .canonicalize()
-        .map_err(|e| anyhow!("Failed to canonicalize {}: {}", entry_path.display(), e))?;
-
-    if visited.contains(&canonical) {
-        return Ok(());
-    }
-    visited.insert(canonical.clone());
-    progress.record(ProgressSnapshot {
-        stage: "collect-module",
-        module_path: Some(&canonical),
-        visited: Some(visited.len()),
-        collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
-        ..Default::default()
-    });
+) -> Result<ModuleDiscovery> {
+    let mut pending = Vec::new();
 
     // Check if this file should be handled by JS runtime instead of native compilation
     // This includes: JS files, declaration files (.d.ts), JSON files, or any file in node_modules when JS runtime is enabled
@@ -465,19 +514,28 @@ fn collect_module_one(
 
     // Skip JSON files — they're data, not code (imported via `with { type: "json" }`)
     if is_json {
-        return Ok(());
+        return Ok(ModuleDiscovery {
+            finish: None,
+            children: pending,
+        });
     }
 
     if should_use_js_runtime {
         // Skip declaration files - they're just type information
         if is_declaration_file(&canonical) {
-            return Ok(());
+            return Ok(ModuleDiscovery {
+                finish: None,
+                children: pending,
+            });
         }
 
         // Perry native extension packages (ioredis, ethers, mysql2, ws, dotenv) are handled
         // entirely by Perry's built-in stdlib — they must NOT be loaded into V8.
         if is_perry_native {
-            return Ok(());
+            return Ok(ModuleDiscovery {
+                finish: None,
+                children: pending,
+            });
         }
 
         let source = fs::read_to_string(&canonical)
@@ -548,7 +606,10 @@ fn collect_module_one(
         for next in transitive_paths {
             pending.push(next);
         }
-        return Ok(());
+        return Ok(ModuleDiscovery {
+            finish: None,
+            children: pending,
+        });
     }
 
     // It's a TypeScript file to compile natively
@@ -797,7 +858,8 @@ fn collect_module_one(
     // the resolver can follow `import(localStringVar)` and
     // `` import(`./prefix_${localStringVar}.ts`) `` paths transitively.
     let module_const_locals = perry_hir::collect_module_const_locals(&hir_module);
-    perry_hir::for_each_dynamic_import_mut(&mut hir_module, &mut |expr| {
+    let mut dynamic_path_sets: Vec<Vec<String>> = Vec::new();
+    perry_hir::for_each_dynamic_import(&hir_module, &mut |expr| {
         if let perry_hir::Expr::DynamicImport { paths, arg } = expr {
             if !paths.is_empty() {
                 // Already resolved (e.g. a second pass on the same module).
@@ -805,7 +867,7 @@ fn collect_module_one(
             }
             let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
             match perry_hir::resolve_import_path_with_consts(
-                arg,
+                arg.as_ref(),
                 &module_const_locals,
                 &mut visiting,
             ) {
@@ -827,7 +889,7 @@ fn collect_module_one(
                             new_dyn_imports.push(p.clone());
                         }
                     }
-                    *paths = set;
+                    dynamic_path_sets.push(set);
                 }
                 perry_hir::Resolution::Unresolved(reason) => {
                     // #1674 sub-part B: a non-resolvable template specifier with
@@ -835,7 +897,7 @@ fn collect_module_one(
                     // (`import(`./plugins/${name}.ts`)`) globs the importing
                     // module's directory for matching files instead of erroring.
                     if let Some((prefix, suffix)) =
-                        perry_hir::dynamic_import_glob_pattern(arg, &module_const_locals)
+                        perry_hir::dynamic_import_glob_pattern(arg.as_ref(), &module_const_locals)
                     {
                         let matches = expand_dynamic_import_glob(
                             &source_file_path,
@@ -862,7 +924,7 @@ fn collect_module_one(
                                     new_dyn_imports.push(p.clone());
                                 }
                             }
-                            *paths = matches;
+                            dynamic_path_sets.push(matches);
                             return;
                         }
                     }
@@ -876,7 +938,8 @@ fn collect_module_one(
             }
         }
     });
-    perry_hir::for_each_worker_new_mut(&mut hir_module, &mut |expr| {
+    let mut worker_path_sets: Vec<Vec<String>> = Vec::new();
+    perry_hir::for_each_worker_new(&hir_module, &mut |expr| {
         if let perry_hir::Expr::WorkerNew {
             paths, filename, ..
         } = expr
@@ -886,7 +949,7 @@ fn collect_module_one(
             }
             let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
             match perry_hir::resolve_import_path_with_consts(
-                filename,
+                filename.as_ref(),
                 &module_const_locals,
                 &mut visiting,
             ) {
@@ -914,7 +977,7 @@ fn collect_module_one(
                             new_dyn_imports.push(p.clone());
                         }
                     }
-                    *paths = set;
+                    worker_path_sets.push(set);
                 }
                 perry_hir::Resolution::Unresolved(reason) => {
                     dyn_errors.push(format!(
@@ -925,9 +988,30 @@ fn collect_module_one(
             }
         }
     });
+    drop(module_const_locals);
     if !dyn_errors.is_empty() {
         return Err(anyhow!("{}", dyn_errors.join("\n")));
     }
+    let mut dynamic_path_sets = dynamic_path_sets.into_iter();
+    perry_hir::for_each_dynamic_import_mut(&mut hir_module, &mut |expr| {
+        if let perry_hir::Expr::DynamicImport { paths, .. } = expr {
+            if paths.is_empty() {
+                if let Some(set) = dynamic_path_sets.next() {
+                    *paths = set;
+                }
+            }
+        }
+    });
+    let mut worker_path_sets = worker_path_sets.into_iter();
+    perry_hir::for_each_worker_new_mut(&mut hir_module, &mut |expr| {
+        if let perry_hir::Expr::WorkerNew { paths, .. } = expr {
+            if paths.is_empty() {
+                if let Some(set) = worker_path_sets.next() {
+                    *paths = set;
+                }
+            }
+        }
+    });
     for source in new_dyn_imports {
         // A dynamic edge to the same source as a static import is folded
         // into the existing static edge: that edge already gives us full
@@ -1553,6 +1637,30 @@ fn collect_module_one(
         }
     }
 
+    return Ok(ModuleDiscovery {
+        finish: Some(PreparedModule {
+            canonical,
+            module_name,
+            hir_module,
+        }),
+        children: pending,
+    });
+}
+
+fn collect_module_finish(
+    prepared: PreparedModule,
+    ctx: &mut CompilationContext,
+    visited: &HashSet<PathBuf>,
+    target: Option<&str>,
+    skip_transforms: bool,
+    progress: &VerboseProgress,
+) -> Result<()> {
+    let PreparedModule {
+        canonical,
+        module_name,
+        mut hir_module,
+    } = prepared;
+
     // Issue #535 — `perry/ui` `state<T>` desugar pass.
     let is_harmonyos = matches!(target, Some("harmonyos") | Some("harmonyos-simulator"));
     if !is_harmonyos {
@@ -1939,8 +2047,12 @@ fn excerpt_around_offset(source: &str, lo: usize) -> Option<String> {
 }
 
 #[cfg(test)]
-mod glob_expand_tests {
-    use super::expand_dynamic_import_glob;
+mod tests {
+    use super::{collect_modules, expand_dynamic_import_glob};
+    use crate::commands::compile::CompilationContext;
+    use crate::commands::progress::VerboseProgress;
+    use crate::OutputFormat;
+    use std::collections::HashSet;
 
     #[test]
     fn expands_directory_files_matching_suffix() {
@@ -1970,5 +2082,66 @@ mod glob_expand_tests {
         assert!(none.is_empty());
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn dependency_is_transformed_before_importer_for_cross_module_inline() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let dep = root.join("dep.ts");
+        let entry = root.join("entry.ts");
+
+        std::fs::write(
+            &dep,
+            r#"
+export class Dep {
+  marker(): number {
+    return 424242;
+  }
+}
+"#,
+        )
+        .expect("write dep");
+        std::fs::write(
+            &entry,
+            r#"
+import { Dep } from "./dep";
+
+const dep = new Dep();
+const got = dep.marker();
+console.log(got);
+"#,
+        )
+        .expect("write entry");
+
+        let mut ctx = CompilationContext::new(root.to_path_buf());
+        ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+        let mut visited = HashSet::new();
+        let mut next_class_id: perry_hir::ClassId = 1;
+        let progress = VerboseProgress::new(OutputFormat::Text, 0);
+
+        collect_modules(
+            &entry,
+            &mut ctx,
+            &mut visited,
+            OutputFormat::Text,
+            None,
+            &mut next_class_id,
+            false,
+            &progress,
+            None,
+        )
+        .expect("collect modules");
+
+        let entry_hir = ctx
+            .native_modules
+            .get(&entry.canonicalize().unwrap())
+            .expect("entry module collected");
+        let entry_debug = format!("{entry_hir:?}");
+
+        assert!(
+            entry_debug.contains("424242"),
+            "entry HIR should contain the dependency method literal after cross-module inlining:\n{entry_debug}"
+        );
     }
 }
