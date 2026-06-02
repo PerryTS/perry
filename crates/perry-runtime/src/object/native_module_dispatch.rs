@@ -5,6 +5,7 @@
 //! Split out of `object/mod.rs` (issue #1103). Pure relocation — no
 //! logic changes.
 
+use super::native_module_dispatch_crypto::crypto_random_fill_sync_dispatch;
 use super::*;
 
 /// #3712: coerce a NaN-boxed value to an owned UTF-8 `String`, matching the

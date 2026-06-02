@@ -1679,32 +1679,6 @@ const CLUSTER_DEFAULT_KEYS: &[&[u8]] = &[
     b"disconnect",
 ];
 
-const STREAM_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"isDestroyed",
-    b"isDisturbed",
-    b"isErrored",
-    b"isReadable",
-    b"isWritable",
-    b"Readable",
-    b"Writable",
-    b"Duplex",
-    b"Transform",
-    b"PassThrough",
-    b"duplexPair",
-    b"pipeline",
-    b"addAbortSignal",
-    b"finished",
-    b"destroy",
-    b"compose",
-    b"setDefaultHighWaterMark",
-    b"getDefaultHighWaterMark",
-    b"promises",
-    b"Stream",
-    b"_isArrayBufferView",
-    b"_isUint8Array",
-    b"_uint8ArrayToBuffer",
-];
-
 const PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"_debugEnd",
     b"_debugProcess",
@@ -2624,7 +2598,6 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "url.default" => Some(URL_DEFAULT_KEYS),
         "util" => Some(UTIL_NAMESPACE_KEYS),
         "util.default" => Some(UTIL_DEFAULT_KEYS),
-        "stream" => Some(STREAM_NAMESPACE_KEYS),
         "net" => Some(&[
             b"BlockList",
             b"_createServerHandle",

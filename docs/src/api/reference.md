@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2639 entries across 109 modules.
+Total: 2661 entries across 109 modules.
 
 ## Modules
 
@@ -2549,13 +2549,26 @@ Total: 2639 entries across 109 modules.
 
 ### Methods
 
+- `_debugEnd` — module
+- `_debugProcess` — module
+- `_fatalException` — module
+- `_getActiveHandles` — module
+- `_getActiveRequests` — module
+- `_kill` — module
+- `_linkedBinding` — module
+- `_rawDebug` — module
+- `_startProfilerIdleNotifier` — module
+- `_stopProfilerIdleNotifier` — module
+- `_tickCallback` — module
 - `abort` — module
 - `addUncaughtExceptionCaptureCallback` — module
 - `availableMemory` — module
+- `binding` — module
 - `chdir` — module
 - `constrainedMemory` — module
 - `cpuUsage` — module
 - `cwd` — module
+- `dlopen` — module
 - `emitWarning` — module
 - `exit` — module
 - `getActiveResourcesInfo` — module
@@ -2572,6 +2585,8 @@ Total: 2639 entries across 109 modules.
 - `loadEnvFile` — module
 - `memoryUsage` — module
 - `nextTick` — module
+- `openStdin` — module
+- `reallyExit` — module
 - `resourceUsage` — module
 - `setSourceMapsEnabled` — module
 - `setSourceMapsEnabled` — module
@@ -2589,12 +2604,19 @@ Total: 2639 entries across 109 modules.
 
 ### Properties
 
+- `_eval`
+- `_events`
+- `_eventsCount`
+- `_exiting`
+- `_maxListeners`
+- `_preload_modules`
 - `allowedNodeEnvironmentFlags`
 - `arch`
 - `argv`
 - `argv0`
 - `config`
 - `debugPort`
+- `domain`
 - `env`
 - `execArgv`
 - `execPath`

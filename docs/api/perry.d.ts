@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1821 entries across 106 modules
+// Coverage: 1843 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2911,6 +2911,18 @@ declare module "pg" {
 
 declare module "process" {
   /** stdlib */
+  export const _eval: any;
+  /** stdlib */
+  export const _events: any;
+  /** stdlib */
+  export const _eventsCount: any;
+  /** stdlib */
+  export const _exiting: any;
+  /** stdlib */
+  export const _maxListeners: any;
+  /** stdlib */
+  export const _preload_modules: any;
+  /** stdlib */
   export const allowedNodeEnvironmentFlags: any;
   /** stdlib */
   export const arch: any;
@@ -2922,6 +2934,8 @@ declare module "process" {
   export const config: any;
   /** stdlib */
   export const debugPort: any;
+  /** stdlib */
+  export const domain: any;
   /** stdlib */
   export const env: any;
   /** stdlib */
@@ -2957,11 +2971,35 @@ declare module "process" {
   /** stdlib */
   export const versions: any;
   /** stdlib */
+  export function _debugEnd(...args: any[]): any;
+  /** stdlib */
+  export function _debugProcess(...args: any[]): any;
+  /** stdlib */
+  export function _fatalException(...args: any[]): any;
+  /** stdlib */
+  export function _getActiveHandles(...args: any[]): any;
+  /** stdlib */
+  export function _getActiveRequests(...args: any[]): any;
+  /** stdlib */
+  export function _kill(...args: any[]): any;
+  /** stdlib */
+  export function _linkedBinding(...args: any[]): any;
+  /** stdlib */
+  export function _rawDebug(...args: any[]): any;
+  /** stdlib */
+  export function _startProfilerIdleNotifier(...args: any[]): any;
+  /** stdlib */
+  export function _stopProfilerIdleNotifier(...args: any[]): any;
+  /** stdlib */
+  export function _tickCallback(...args: any[]): any;
+  /** stdlib */
   export function abort(...args: any[]): any;
   /** stdlib */
   export function addUncaughtExceptionCaptureCallback(...args: any[]): any;
   /** stdlib */
   export function availableMemory(...args: any[]): any;
+  /** stdlib */
+  export function binding(...args: any[]): any;
   /** stdlib */
   export function chdir(...args: any[]): any;
   /** stdlib */
@@ -2970,6 +3008,8 @@ declare module "process" {
   export function cpuUsage(...args: any[]): any;
   /** stdlib */
   export function cwd(...args: any[]): any;
+  /** stdlib */
+  export function dlopen(...args: any[]): any;
   /** stdlib */
   export function emitWarning(...args: any[]): any;
   /** stdlib */
@@ -3002,6 +3042,10 @@ declare module "process" {
   export function memoryUsage(...args: any[]): any;
   /** stdlib */
   export function nextTick(...args: any[]): any;
+  /** stdlib */
+  export function openStdin(...args: any[]): any;
+  /** stdlib */
+  export function reallyExit(...args: any[]): any;
   /** stdlib */
   export function resourceUsage(...args: any[]): any;
   /** stdlib */

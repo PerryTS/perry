@@ -2409,10 +2409,10 @@ pub extern "C" fn js_object_get_field_by_name(
         }
         // Sets: SetHeader is allocated via raw `alloc()` (no GcHeader),
         // so we can't safely read the byte preceding the pointer to
-        // determine its type. Detect via the SET_REGISTRY first and
-        // route `.size` to `js_set_size`. Other property accesses on a
-        // Set return undefined (matching Node behavior — Sets only have
-        // a `size` getter property).
+        // determine its type. Detect via the SET_REGISTRY first. Route
+        // `.size` to `js_set_size` and synthesize method values for
+        // prototype functions such as `.has`, which Node exposes through
+        // ordinary property reads.
         if crate::set::is_registered_set(obj as usize) {
             if !key.is_null() {
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
@@ -2421,6 +2421,12 @@ pub extern "C" fn js_object_get_field_by_name(
                 if key_bytes == b"size" {
                     let s = obj as *const crate::set::SetHeader;
                     return JSValue::number(crate::set::js_set_size(s) as f64);
+                }
+                if let Some(name) = set_method_value_name(key_bytes) {
+                    let this_f64 =
+                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                    let result = js_class_method_bind(this_f64, name.as_ptr(), name.len());
+                    return JSValue::from_bits(result.to_bits());
                 }
             }
             return JSValue::undefined();
@@ -3628,6 +3634,28 @@ fn is_array_method_value_name(key: &[u8]) -> bool {
         key,
         b"pop" | b"push" | b"shift" | b"unshift" | b"splice" | b"slice"
     )
+}
+
+fn set_method_value_name(key: &[u8]) -> Option<&'static [u8]> {
+    match key {
+        b"add" => Some(b"add"),
+        b"clear" => Some(b"clear"),
+        b"delete" => Some(b"delete"),
+        b"entries" => Some(b"entries"),
+        b"forEach" => Some(b"forEach"),
+        b"has" => Some(b"has"),
+        b"keys" => Some(b"keys"),
+        b"values" => Some(b"values"),
+        b"union" => Some(b"union"),
+        b"intersection" => Some(b"intersection"),
+        b"difference" => Some(b"difference"),
+        b"symmetricDifference" => Some(b"symmetricDifference"),
+        b"isSubsetOf" => Some(b"isSubsetOf"),
+        b"isSupersetOf" => Some(b"isSupersetOf"),
+        b"isDisjointFrom" => Some(b"isDisjointFrom"),
+        b"@@iterator" => Some(b"@@iterator"),
+        _ => None,
+    }
 }
 
 fn is_timer_handle_method_key(key: &[u8]) -> bool {
