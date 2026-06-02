@@ -245,15 +245,16 @@ pub(super) fn lower_meta_prop(
             // literal `{ name: <class_name> }` so:
             //   - `new.target ? a : b` is truthy → takes the `a` branch
             //   - `new.target.name` returns the class name string
-            // Outside a constructor (e.g., a regular function called
-            // without `new`), `new.target` is `undefined`.
+            // Outside a class constructor, ordinary function bodies read it
+            // dynamically from the constructor-call slot. Arrow closures can
+            // capture that value lexically during closure creation.
             if let Some(class_name) = ctx.in_constructor_class.clone() {
                 Ok(Expr::Object(vec![(
                     "name".to_string(),
                     Expr::String(class_name),
                 )]))
             } else {
-                Ok(Expr::Undefined)
+                Ok(Expr::NewTarget)
             }
         }
     }
