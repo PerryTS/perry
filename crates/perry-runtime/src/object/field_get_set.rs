@@ -117,6 +117,45 @@ unsafe fn own_data_field_by_name(
     None
 }
 
+unsafe fn ordinary_object_prototype_method_value(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Option<JSValue> {
+    if obj.is_null() || key.is_null() {
+        return None;
+    }
+    let gc = gc_header_for(obj);
+    if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+    if ((*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO) != 0 {
+        return None;
+    }
+    if super::prototype_chain::object_static_prototype(obj as usize).is_some() {
+        return None;
+    }
+    let class_id = (*obj).class_id;
+    if class_id != 0 && !is_anon_shape_class_id(class_id) {
+        return None;
+    }
+    let key_bytes = std::slice::from_raw_parts(
+        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+        (*key).byte_len as usize,
+    );
+    if !is_primitive_proto_method(key_bytes) {
+        return None;
+    }
+    let heap_name = {
+        let layout = std::alloc::Layout::from_size_align(key_bytes.len().max(1), 1).unwrap();
+        let ptr = std::alloc::alloc(layout);
+        std::ptr::copy_nonoverlapping(key_bytes.as_ptr(), ptr, key_bytes.len());
+        ptr
+    };
+    let this_f64 = f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+    let result = js_class_method_bind(this_f64, heap_name, key_bytes.len());
+    Some(JSValue::from_bits(result.to_bits()))
+}
+
 unsafe fn invoke_accessor_getter(get_bits: u64, receiver: f64) -> JSValue {
     let closure = (get_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
     if closure.is_null() {
@@ -2880,6 +2919,9 @@ pub extern "C" fn js_object_get_field_by_name(
                 {
                     return v;
                 }
+                if let Some(v) = ordinary_object_prototype_method_value(obj, key) {
+                    return v;
+                }
             }
             return JSValue::undefined();
         }
@@ -2895,6 +2937,9 @@ pub extern "C" fn js_object_get_field_by_name(
             if !key.is_null() {
                 if let Some(v) = super::prototype_chain::resolve_inherited_field(obj as usize, key)
                 {
+                    return v;
+                }
+                if let Some(v) = ordinary_object_prototype_method_value(obj, key) {
                     return v;
                 }
             }
@@ -3165,6 +3210,9 @@ pub extern "C" fn js_object_get_field_by_name(
         // (`obj.x` where `x` is an own property of the set prototype) resolve.
         if !key.is_null() {
             if let Some(v) = super::prototype_chain::resolve_inherited_field(obj as usize, key) {
+                return v;
+            }
+            if let Some(v) = ordinary_object_prototype_method_value(obj, key) {
                 return v;
             }
         }

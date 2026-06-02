@@ -88,7 +88,9 @@ pub(crate) unsafe fn default_object_prototype_for_owner(obj_ptr: usize) -> Optio
     if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
         return None;
     }
-    if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT || (*obj).class_id != 0 {
+    if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT
+        || ((*obj).class_id != 0 && !super::is_anon_shape_class_id((*obj).class_id))
+    {
         return None;
     }
     let proto_bits = default_object_prototype_bits()?;
@@ -143,10 +145,7 @@ pub(crate) fn resolve_inherited_field(
     obj_ptr: usize,
     key: *const crate::StringHeader,
 ) -> Option<crate::value::JSValue> {
-    let proto_bits = match object_static_prototype(obj_ptr) {
-        Some(bits) => bits,
-        None => unsafe { default_object_prototype_for_owner(obj_ptr)? },
-    };
+    let proto_bits = object_static_prototype(obj_ptr)?;
     if proto_bits == TAG_NULL {
         return None;
     }

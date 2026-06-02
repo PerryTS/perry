@@ -447,12 +447,30 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
     // classes is handled runtime-side in perry-runtime's object module
     // — see that crate's handling of `class_id`-tagged objects on
     // getOwnPropertyDescriptor / Object.keys / JSON.stringify / etc.
-    fn is_closed_shape(_obj: &ast::ObjectLit) -> bool {
-        // #4034: anon-shape literals currently bypass ordinary
-        // Object.prototype fallback on inherited property reads. Keep ordinary
-        // object literal lowering on the runtime object path until anon shapes
-        // model the default prototype chain equivalently.
-        false
+    fn is_closed_shape(obj: &ast::ObjectLit) -> bool {
+        if obj.props.is_empty() {
+            return false;
+        }
+        for prop in &obj.props {
+            let ast::PropOrSpread::Prop(p) = prop else {
+                return false;
+            };
+            match p.as_ref() {
+                ast::Prop::KeyValue(kv) => {
+                    if is_noncomputed_proto_key(&kv.key) {
+                        return false;
+                    }
+                    match &kv.key {
+                        ast::PropName::Ident(_) | ast::PropName::Str(_) | ast::PropName::Num(_) => {
+                        }
+                        _ => return false,
+                    }
+                }
+                ast::Prop::Shorthand(_) => {}
+                _ => return false,
+            }
+        }
+        true
     }
     if is_closed_shape(obj) {
         let mut fields: Vec<(String, Type, Expr)> = Vec::new();
