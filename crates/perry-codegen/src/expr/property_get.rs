@@ -741,7 +741,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &ctor_handle), (I64, &key_raw)],
                     ));
                 }
-                if property == "f16round" {
+                if matches!(property.as_str(), "f16round" | "random") {
                     let math_idx = ctx.strings.intern("Math");
                     let math_bytes_global =
                         format!("@{}", ctx.strings.entry(math_idx).bytes_global);

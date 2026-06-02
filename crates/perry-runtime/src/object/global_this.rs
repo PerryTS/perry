@@ -393,6 +393,10 @@ extern "C" fn math_f16round_thunk(
     crate::math::js_math_f16round(value)
 }
 
+extern "C" fn math_random_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    crate::math::js_math_random()
+}
+
 // #2905: thunks for the standard global helper functions. Each coerces its
 // arguments the same way the bare-call HIR lowering does and forwards to the
 // shared runtime helper so a rebound / property-read reference matches Node.
@@ -2008,6 +2012,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             }
             if name == "Math" {
                 install_proto_method(ns_obj, "f16round", math_f16round_thunk as *const u8, 1);
+                install_proto_method(ns_obj, "random", math_random_thunk as *const u8, 0);
             }
             crate::value::js_nanbox_pointer(ns_obj as i64)
         };
