@@ -30,6 +30,8 @@ use super::{
     parse_package_specifier, CompilationContext, JsModule, ParseCache,
 };
 
+const MAX_CROSS_MODULE_INLINE_PRIOR_MODULES: usize = 128;
+
 /// Issue #818: scan a JS module's source for static ESM imports /
 /// re-exports / string-literal dynamic imports, resolve each one
 /// against the module's directory (with `resolve_with_extensions` so
@@ -376,6 +378,37 @@ pub(super) fn collect_modules(
     progress: &VerboseProgress,
     mut parse_cache: Option<&mut ParseCache>,
 ) -> Result<()> {
+    let mut pending = vec![entry_path.clone()];
+    while let Some(next_path) = pending.pop() {
+        collect_module_one(
+            &next_path,
+            ctx,
+            visited,
+            format,
+            target,
+            next_class_id,
+            skip_transforms,
+            progress,
+            parse_cache.as_deref_mut(),
+            &mut pending,
+        )?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_module_one(
+    entry_path: &PathBuf,
+    ctx: &mut CompilationContext,
+    visited: &mut HashSet<PathBuf>,
+    format: OutputFormat,
+    target: Option<&str>,
+    next_class_id: &mut perry_hir::ClassId,
+    skip_transforms: bool,
+    progress: &VerboseProgress,
+    mut parse_cache: Option<&mut ParseCache>,
+    pending: &mut Vec<PathBuf>,
+) -> Result<()> {
     let canonical = entry_path
         .canonicalize()
         .map_err(|e| anyhow!("Failed to canonicalize {}: {}", entry_path.display(), e))?;
@@ -513,17 +546,7 @@ pub(super) fn collect_modules(
         // — covering the case where a JS file re-imports something that
         // resolves to a TypeScript file under a `compilePackages` dir.
         for next in transitive_paths {
-            collect_modules(
-                &next,
-                ctx,
-                visited,
-                format,
-                target,
-                next_class_id,
-                skip_transforms,
-                progress,
-                parse_cache.as_deref_mut(),
-            )?;
+            pending.push(next);
         }
         return Ok(());
     }
@@ -1232,18 +1255,7 @@ pub(super) fn collect_modules(
                             pkg_dir = dir.parent();
                         }
                     }
-                    // Recursively collect TypeScript modules
-                    collect_modules(
-                        &resolved_path,
-                        ctx,
-                        visited,
-                        format,
-                        target,
-                        next_class_id,
-                        skip_transforms,
-                        progress,
-                        parse_cache.as_deref_mut(),
-                    )?;
+                    pending.push(resolved_path);
                 }
                 ModuleKind::Interpreted => {
                     // Perry native extension packages (ioredis, ethers, ws, mysql2, dotenv)
@@ -1356,18 +1368,7 @@ pub(super) fn collect_modules(
                         OutputFormat::Json => {}
                     }
 
-                    // Collect JS module
-                    collect_modules(
-                        &resolved_path,
-                        ctx,
-                        visited,
-                        format,
-                        target,
-                        next_class_id,
-                        skip_transforms,
-                        progress,
-                        parse_cache.as_deref_mut(),
-                    )?;
+                    pending.push(resolved_path);
                 }
                 ModuleKind::NativeRust => {
                     // Native Rust modules are handled by stdlib
@@ -1538,19 +1539,7 @@ pub(super) fn collect_modules(
                 }
 
                 match kind {
-                    ModuleKind::NativeCompiled => {
-                        collect_modules(
-                            &resolved_path,
-                            ctx,
-                            visited,
-                            format,
-                            target,
-                            next_class_id,
-                            skip_transforms,
-                            progress,
-                            parse_cache.as_deref_mut(),
-                        )?;
-                    }
+                    ModuleKind::NativeCompiled => pending.push(resolved_path),
                     ModuleKind::Interpreted => {
                         // JS runtime (V8) support was removed, so interpreted
                         // node_modules dependencies are not followed. A direct
@@ -1604,19 +1593,31 @@ pub(super) fn collect_modules(
                     .collect::<Vec<_>>()
             );
         }
-        for prior_module in ctx.native_modules.values() {
-            // The strict harvester rejects ExternFuncRef-using methods.
-            // The loose variant records each required extern name;
-            // `inline_functions` filters by destination imports.
-            // First-write-wins on key collision (rare — issue #309 cycle
-            // breaker). Strict-harvest entries are functionally equivalent
-            // when colliding with the loose variant (same body), so
-            // either ordering is correct.
-            for (k, v) in gather_cross_module_methods_with_extern_imports(prior_module) {
-                extra_methods.entry(k).or_insert(v);
-            }
-            for (k, v) in gather_cross_module_methods(prior_module) {
-                extra_methods.entry(k).or_insert(v);
+        let enable_cross_module_inline =
+            ctx.native_modules.len() <= MAX_CROSS_MODULE_INLINE_PRIOR_MODULES;
+        if std::env::var("PERRY_INLINE_DEBUG").is_ok() && !enable_cross_module_inline {
+            eprintln!(
+                "[INLINE-DRIVER] skipping cross-module inline harvest for {}: prior_modules={} budget={}",
+                hir_module.name,
+                ctx.native_modules.len(),
+                MAX_CROSS_MODULE_INLINE_PRIOR_MODULES
+            );
+        }
+        if enable_cross_module_inline {
+            for prior_module in ctx.native_modules.values() {
+                // The strict harvester rejects ExternFuncRef-using methods.
+                // The loose variant records each required extern name;
+                // `inline_functions` filters by destination imports.
+                // First-write-wins on key collision (rare — issue #309 cycle
+                // breaker). Strict-harvest entries are functionally equivalent
+                // when colliding with the loose variant (same body), so
+                // either ordering is correct.
+                for (k, v) in gather_cross_module_methods_with_extern_imports(prior_module) {
+                    extra_methods.entry(k).or_insert(v);
+                }
+                for (k, v) in gather_cross_module_methods(prior_module) {
+                    extra_methods.entry(k).or_insert(v);
+                }
             }
         }
         // Cross-module field-type info: `(class_name, field_name) ->
@@ -1627,13 +1628,15 @@ pub(super) fn collect_modules(
         // class.fields where the type is `Named(...)`.
         let mut extra_class_fields: std::collections::HashMap<(String, String), String> =
             std::collections::HashMap::new();
-        for prior_module in ctx.native_modules.values() {
-            for class in &prior_module.classes {
-                for f in &class.fields {
-                    if let perry_types::Type::Named(field_class) = &f.ty {
-                        extra_class_fields
-                            .entry((class.name.clone(), f.name.clone()))
-                            .or_insert_with(|| field_class.clone());
+        if enable_cross_module_inline {
+            for prior_module in ctx.native_modules.values() {
+                for class in &prior_module.classes {
+                    for f in &class.fields {
+                        if let perry_types::Type::Named(field_class) = &f.ty {
+                            extra_class_fields
+                                .entry((class.name.clone(), f.name.clone()))
+                                .or_insert_with(|| field_class.clone());
+                        }
                     }
                 }
             }
@@ -1647,11 +1650,13 @@ pub(super) fn collect_modules(
         // `__AnonShape_<hash>` into this module, codegen can resolve the
         // class definition (otherwise the field list is missing and the
         // literal lowers as a bare object with all properties dropped).
-        let mut extra_anon_classes: std::collections::HashMap<String, perry_hir::Class> =
+        let mut extra_anon_classes: std::collections::HashMap<String, &perry_hir::Class> =
             std::collections::HashMap::new();
-        for prior_module in ctx.native_modules.values() {
-            for (k, v) in gather_cross_module_anon_classes(prior_module) {
-                extra_anon_classes.entry(k).or_insert(v);
+        if enable_cross_module_inline {
+            for prior_module in ctx.native_modules.values() {
+                for (k, v) in gather_cross_module_anon_classes(prior_module) {
+                    extra_anon_classes.entry(k).or_insert(v);
+                }
             }
         }
         // Interprocedural deforestation. Runs BEFORE inline_functions
@@ -1660,7 +1665,23 @@ pub(super) fn collect_modules(
         // already use the new shape). Intra-module only — see
         // `deforest::run` doc-comment for limitations and the manual
         // ABC451D validation.
+        progress.record(ProgressSnapshot {
+            stage: "transform-deforest",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         perry_transform::deforest::run(&mut hir_module);
+        progress.record(ProgressSnapshot {
+            stage: "transform-inline-functions",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         inline_functions(
             &mut hir_module,
             &extra_methods,
@@ -1676,6 +1697,14 @@ pub(super) fn collect_modules(
         // become 25 fully-unrolled stmts with `KERNEL[ky+2][kx+2]` collapsed
         // to compile-time integer literals — see crates/perry-transform/
         // src/unroll.rs.
+        progress.record(ProgressSnapshot {
+            stage: "transform-unroll-static-loops",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         perry_transform::unroll_static_loops(&mut hir_module);
         // Inline `finally` bodies before each abrupt completion
         // (`return` / `break` / `continue` / labeled-break / labeled-
@@ -1685,8 +1714,32 @@ pub(super) fn collect_modules(
         // state-machine sequence — an abrupt completion in the body
         // terminates the state, leaving the appended finally as dead
         // code. Issue #536.
+        progress.record(ProgressSnapshot {
+            stage: "transform-inline-finally",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         inline_finally_into_returns(&mut hir_module);
+        progress.record(ProgressSnapshot {
+            stage: "transform-async-to-generator",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         transform_async_to_generator(&mut hir_module);
+        progress.record(ProgressSnapshot {
+            stage: "transform-generators",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         transform_generators(&mut hir_module);
     }
 

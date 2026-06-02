@@ -437,11 +437,10 @@ fn accessor_key_expr(key: MethodKeyKind) -> Expr {
 pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> Result<Expr> {
     // Phase 3: closed-shape object literals lower to `new __AnonShape_N()`
     // so downstream field access hits the direct-GEP fast path. The
-    // anon class is synthesized with `init: Some(value_expr)` on each
-    // field, and `apply_field_initializers_recursive` at codegen time
-    // emits `PropertySet { this, field, init }` — PropertySet's
-    // direct-GEP arm at `crates/perry-codegen/src/expr.rs:2277-2293`
-    // fires because `this` resolves to the anon class via class_stack.
+    // anon class is synthesized as a shape-only class with constructor
+    // parameters for each field. The literal's lowered values move into
+    // `Expr::New { args }`, and the constructor assigns them via direct-GEP
+    // `PropertySet` because `this` resolves to the anon class via class_stack.
     //
     // Runtime parity for Object.* introspection APIs on anon-shape
     // classes is handled runtime-side in perry-runtime's object module
@@ -533,10 +532,12 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             }
         }
         if !bail {
-            // Split (name, ty, value) into parallel vecs before the
-            // synthesize call consumes ownership of the shape.
-            let args: Vec<Expr> = fields.iter().map(|(_, _, v)| v.clone()).collect();
-            let class_name = ctx.synthesize_anon_shape_class(&fields);
+            let field_shapes: Vec<(String, Type)> = fields
+                .iter()
+                .map(|(name, ty, _)| (name.clone(), ty.clone()))
+                .collect();
+            let class_name = ctx.synthesize_anon_shape_class(&field_shapes);
+            let args: Vec<Expr> = fields.into_iter().map(|(_, _, value)| value).collect();
             return Ok(Expr::New {
                 class_name,
                 args,

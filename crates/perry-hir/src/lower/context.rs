@@ -639,7 +639,7 @@ impl LoweringContext {
     }
 
     /// Phase 3: synthesize (or retrieve) an anon class for a closed-shape object
-    /// literal. `fields_with_types` is parallel to the literal's source-declared
+    /// literal. `field_shapes` is parallel to the literal's source-declared
     /// properties — source order is preserved so the anon class's field layout
     /// matches JS evaluation order. Returns the synthetic class name.
     ///
@@ -654,7 +654,7 @@ impl LoweringContext {
     /// `[a, a, a, a]`).
     pub(crate) fn synthesize_anon_shape_class(
         &mut self,
-        fields_with_types: &[(String, Type, Expr)],
+        field_shapes: &[(String, Type)],
     ) -> String {
         // Canonical shape key: each field as `name:tag` joined by ',' in source
         // order. Different declaration orders -> different classes (preserves
@@ -679,7 +679,7 @@ impl LoweringContext {
             }
         }
         let mut shape_key = String::new();
-        for (name, ty, _) in fields_with_types {
+        for (name, ty) in field_shapes {
             shape_key.push_str(name);
             shape_key.push(':');
             shape_key.push_str(tag(ty));
@@ -716,9 +716,9 @@ impl LoweringContext {
         // positional constructor args, so the class stays shape-only (no
         // per-literal state). See the method doc comment for why this
         // matters under shape-deduplication.
-        let fields: Vec<ClassField> = fields_with_types
+        let fields: Vec<ClassField> = field_shapes
             .iter()
-            .map(|(name, ty, _init_expr_unused)| ClassField {
+            .map(|(name, ty)| ClassField {
                 name: name.clone(),
                 key_expr: None,
                 ty: ty.clone(),
@@ -735,9 +735,9 @@ impl LoweringContext {
         // PropertySet's direct-GEP path fires because `this` resolves to
         // the anon class via the usual class_stack/this_stack dance in
         // lower_call.rs::lower_new.
-        let mut ctor_params: Vec<Param> = Vec::with_capacity(fields_with_types.len());
-        let mut ctor_body: Vec<Stmt> = Vec::with_capacity(fields_with_types.len());
-        for (name, ty, _value) in fields_with_types {
+        let mut ctor_params: Vec<Param> = Vec::with_capacity(field_shapes.len());
+        let mut ctor_body: Vec<Stmt> = Vec::with_capacity(field_shapes.len());
+        for (name, ty) in field_shapes {
             let param_id = self.fresh_local();
             ctor_params.push(Param {
                 id: param_id,

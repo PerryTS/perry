@@ -80,6 +80,34 @@ fn opencode_session_route_chain_lowers_without_exponential_receiver_relowering()
 }
 
 #[test]
+fn uppercase_imported_builder_chain_stays_generic() {
+    let chain = (0..80)
+        .map(|idx| format!("  .add(\"route-{idx}\", 0)"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let src = format!(
+        r#"
+        import {{ HttpApiGroup }} from "effect/unstable/httpapi";
+
+        export const out = HttpApiGroup.make("session")
+        {chain}
+        "#
+    );
+
+    let module = lower_result(&src).expect("uppercase imported builder chain should lower");
+    let debug = format!("{module:#?}");
+    assert!(
+        debug.contains("property: \"add\""),
+        "builder calls should remain generic property calls: {debug}"
+    );
+    assert!(
+        !debug.contains("NativeMethodCall"),
+        "uppercase imported builders must not be misclassified as native instance chains: {debug}"
+    );
+}
+
+#[test]
 fn native_fluent_chain_still_dispatches_through_native_methods() {
     let module = lower_result(
         r#"

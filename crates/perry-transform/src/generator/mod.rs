@@ -113,156 +113,175 @@ fn transform_generator_closures_in_stmts(
     next_local_id: &mut LocalId,
     next_func_id: &mut FuncId,
 ) {
-    for s in stmts.iter_mut() {
-        transform_generator_closures_in_stmt(s, next_local_id, next_func_id);
+    enum Frame {
+        Stmt(*mut Stmt),
+        ExprEnter(*mut Expr),
+        ExprExit(*mut Expr),
     }
-}
 
-fn transform_generator_closures_in_stmt(
-    stmt: &mut Stmt,
-    next_local_id: &mut LocalId,
-    next_func_id: &mut FuncId,
-) {
-    match stmt {
-        Stmt::Let { init: Some(e), .. } => {
-            transform_generator_closures_in_expr(e, next_local_id, next_func_id)
+    fn push_stmt_slice(stack: &mut Vec<Frame>, stmts: &mut [Stmt]) {
+        for stmt in stmts.iter_mut().rev() {
+            stack.push(Frame::Stmt(stmt as *mut Stmt));
         }
-        Stmt::Expr(e) | Stmt::Throw(e) => {
-            transform_generator_closures_in_expr(e, next_local_id, next_func_id)
-        }
-        Stmt::Return(Some(e)) => {
-            transform_generator_closures_in_expr(e, next_local_id, next_func_id)
-        }
-        Stmt::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            transform_generator_closures_in_expr(condition, next_local_id, next_func_id);
-            transform_generator_closures_in_stmts(then_branch, next_local_id, next_func_id);
-            if let Some(eb) = else_branch {
-                transform_generator_closures_in_stmts(eb, next_local_id, next_func_id);
-            }
-        }
-        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            transform_generator_closures_in_expr(condition, next_local_id, next_func_id);
-            transform_generator_closures_in_stmts(body, next_local_id, next_func_id);
-        }
-        Stmt::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            if let Some(i) = init {
-                transform_generator_closures_in_stmt(i, next_local_id, next_func_id);
-            }
-            if let Some(c) = condition {
-                transform_generator_closures_in_expr(c, next_local_id, next_func_id);
-            }
-            if let Some(u) = update {
-                transform_generator_closures_in_expr(u, next_local_id, next_func_id);
-            }
-            transform_generator_closures_in_stmts(body, next_local_id, next_func_id);
-        }
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            transform_generator_closures_in_stmts(body, next_local_id, next_func_id);
-            if let Some(c) = catch {
-                transform_generator_closures_in_stmts(&mut c.body, next_local_id, next_func_id);
-            }
-            if let Some(f) = finally {
-                transform_generator_closures_in_stmts(f, next_local_id, next_func_id);
-            }
-        }
-        Stmt::Switch {
-            discriminant,
-            cases,
-        } => {
-            transform_generator_closures_in_expr(discriminant, next_local_id, next_func_id);
-            for case in cases.iter_mut() {
-                if let Some(t) = &mut case.test {
-                    transform_generator_closures_in_expr(t, next_local_id, next_func_id);
+    }
+
+    fn push_expr(stack: &mut Vec<Frame>, expr: &mut Expr) {
+        stack.push(Frame::ExprEnter(expr as *mut Expr));
+    }
+
+    let mut stack = Vec::new();
+    push_stmt_slice(&mut stack, stmts);
+
+    while let Some(frame) = stack.pop() {
+        match frame {
+            Frame::Stmt(stmt) => {
+                // The traversal owns the only active mutable borrow for each HIR
+                // node. Raw pointers let us keep an explicit work stack instead
+                // of using Rust call stack for deeply nested generated schemas.
+                let stmt = unsafe { &mut *stmt };
+                match stmt {
+                    Stmt::Let { init: Some(e), .. }
+                    | Stmt::Expr(e)
+                    | Stmt::Throw(e)
+                    | Stmt::Return(Some(e)) => push_expr(&mut stack, e),
+                    Stmt::If {
+                        condition,
+                        then_branch,
+                        else_branch,
+                    } => {
+                        if let Some(eb) = else_branch {
+                            push_stmt_slice(&mut stack, eb);
+                        }
+                        push_stmt_slice(&mut stack, then_branch);
+                        push_expr(&mut stack, condition);
+                    }
+                    Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                        push_stmt_slice(&mut stack, body);
+                        push_expr(&mut stack, condition);
+                    }
+                    Stmt::For {
+                        init,
+                        condition,
+                        update,
+                        body,
+                    } => {
+                        push_stmt_slice(&mut stack, body);
+                        if let Some(u) = update {
+                            push_expr(&mut stack, u);
+                        }
+                        if let Some(c) = condition {
+                            push_expr(&mut stack, c);
+                        }
+                        if let Some(i) = init {
+                            stack.push(Frame::Stmt(i.as_mut() as *mut Stmt));
+                        }
+                    }
+                    Stmt::Try {
+                        body,
+                        catch,
+                        finally,
+                    } => {
+                        if let Some(f) = finally {
+                            push_stmt_slice(&mut stack, f);
+                        }
+                        if let Some(c) = catch {
+                            push_stmt_slice(&mut stack, &mut c.body);
+                        }
+                        push_stmt_slice(&mut stack, body);
+                    }
+                    Stmt::Switch {
+                        discriminant,
+                        cases,
+                    } => {
+                        for case in cases.iter_mut().rev() {
+                            push_stmt_slice(&mut stack, &mut case.body);
+                            if let Some(t) = &mut case.test {
+                                push_expr(&mut stack, t);
+                            }
+                        }
+                        push_expr(&mut stack, discriminant);
+                    }
+                    Stmt::Labeled { body, .. } => {
+                        stack.push(Frame::Stmt(body.as_mut() as *mut Stmt));
+                    }
+                    _ => {}
                 }
-                transform_generator_closures_in_stmts(&mut case.body, next_local_id, next_func_id);
             }
-        }
-        Stmt::Labeled { body, .. } => {
-            transform_generator_closures_in_stmt(body, next_local_id, next_func_id)
-        }
-        _ => {}
-    }
-}
+            Frame::ExprEnter(expr) => {
+                let expr = unsafe { &mut *expr };
+                stack.push(Frame::ExprExit(expr as *mut Expr));
 
-fn transform_generator_closures_in_expr(
-    expr: &mut Expr,
-    next_local_id: &mut LocalId,
-    next_func_id: &mut FuncId,
-) {
-    // Bottom-up: descend into this closure's own body (the expr-children walker
-    // deliberately does NOT visit Closure bodies), then into all sub-exprs, so
-    // nested generator closures are transformed before their enclosing one.
-    if let Expr::Closure { body, .. } = expr {
-        transform_generator_closures_in_stmts(body, next_local_id, next_func_id);
-    }
-    perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
-        transform_generator_closures_in_expr(child, next_local_id, next_func_id);
-    });
+                let mut children = Vec::new();
+                perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
+                    children.push(child as *mut Expr);
+                });
+                for child in children.into_iter().rev() {
+                    stack.push(Frame::ExprEnter(child));
+                }
 
-    // Now transform THIS closure if it's a generator expression.
-    if let Expr::Closure {
-        is_generator,
-        params,
-        body,
-        captures,
-        mutable_captures,
-        captures_this,
-        enclosing_class,
-        is_strict,
-        is_async,
-        ..
-    } = expr
-    {
-        if *is_generator {
-            let synth_id = {
-                let id = *next_func_id;
-                *next_func_id += 1;
-                id
-            };
-            let mut synth = Function {
-                id: synth_id,
-                name: "__gen_closure_body".to_string(),
-                type_params: Vec::new(),
-                params: params.clone(),
-                return_type: Type::Any,
-                body: std::mem::take(body),
-                is_strict: *is_strict,
-                is_async: *is_async,
-                is_generator: true,
-                is_exported: false,
-                captures: Vec::new(),
-                decorators: Vec::new(),
-                was_plain_async: false,
-                was_unrolled: false,
-            };
-            transform_generator_function_with_extra_captures(
-                &mut synth,
-                next_local_id,
-                next_func_id,
-                captures,
-                mutable_captures,
-                *captures_this,
-                enclosing_class.clone(),
-            );
-            *body = synth.body;
-            // The closure now returns a {next,return,throw} object when called;
-            // it is no longer a generator (and not async — the transform handles
-            // the async-generator Promise-wrapping internally for `async function*`).
-            *is_generator = false;
-            *is_async = false;
+                // Closure bodies are intentionally not visited by
+                // `walk_expr_children_mut`, but generator closures inside those
+                // bodies must still be transformed before the closure itself.
+                if let Expr::Closure { body, .. } = expr {
+                    push_stmt_slice(&mut stack, body);
+                }
+            }
+            Frame::ExprExit(expr) => {
+                let expr = unsafe { &mut *expr };
+                if let Expr::Closure {
+                    is_generator,
+                    params,
+                    body,
+                    captures,
+                    mutable_captures,
+                    captures_this,
+                    enclosing_class,
+                    is_strict,
+                    is_async,
+                    ..
+                } = expr
+                {
+                    if *is_generator {
+                        let synth_id = {
+                            let id = *next_func_id;
+                            *next_func_id += 1;
+                            id
+                        };
+                        let mut synth = Function {
+                            id: synth_id,
+                            name: "__gen_closure_body".to_string(),
+                            type_params: Vec::new(),
+                            params: params.clone(),
+                            return_type: Type::Any,
+                            body: std::mem::take(body),
+                            is_strict: *is_strict,
+                            is_async: *is_async,
+                            is_generator: true,
+                            is_exported: false,
+                            captures: Vec::new(),
+                            decorators: Vec::new(),
+                            was_plain_async: false,
+                            was_unrolled: false,
+                        };
+                        transform_generator_function_with_extra_captures(
+                            &mut synth,
+                            next_local_id,
+                            next_func_id,
+                            captures,
+                            mutable_captures,
+                            *captures_this,
+                            enclosing_class.clone(),
+                        );
+                        *body = synth.body;
+                        // The closure now returns a {next,return,throw} object
+                        // when called; it is no longer a generator (and not
+                        // async — the transform handles async-generator
+                        // Promise-wrapping internally).
+                        *is_generator = false;
+                        *is_async = false;
+                    }
+                }
+            }
         }
     }
 }
