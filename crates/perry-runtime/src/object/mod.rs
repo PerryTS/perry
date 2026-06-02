@@ -1319,7 +1319,11 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         Ordering::Acquire,
         Ordering::Release,
     );
-    visitor.visit_atomic_i64_slot(&GENERATOR_PROTOTYPE_PTR, Ordering::Acquire, Ordering::Release);
+    visitor.visit_atomic_i64_slot(
+        &GENERATOR_PROTOTYPE_PTR,
+        Ordering::Acquire,
+        Ordering::Release,
+    );
     visitor.visit_atomic_i64_slot(
         &ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR,
         Ordering::Acquire,
