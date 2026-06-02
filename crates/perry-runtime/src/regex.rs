@@ -121,6 +121,218 @@ fn get_or_compile_regex(pattern: &str, flags: &str) -> Arc<Regex> {
     })
 }
 
+#[derive(Clone, Copy)]
+struct CaptureSpan {
+    close: usize,
+}
+
+fn parse_decimal_escape(chars: &[char], mut i: usize) -> (usize, usize) {
+    let start = i;
+    let mut value = 0usize;
+    while i < chars.len() && chars[i].is_ascii_digit() {
+        value = value * 10 + (chars[i] as u8 - b'0') as usize;
+        i += 1;
+    }
+    (value, i - start)
+}
+
+fn collect_capture_spans(chars: &[char]) -> Vec<CaptureSpan> {
+    let mut spans = Vec::new();
+    let mut stack: Vec<(usize, usize)> = Vec::new();
+    let mut in_class = false;
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => {
+                i += 2;
+            }
+            '[' => {
+                in_class = true;
+                i += 1;
+            }
+            ']' => {
+                in_class = false;
+                i += 1;
+            }
+            '(' if !in_class => {
+                let non_capturing = i + 1 < chars.len()
+                    && chars[i + 1] == '?'
+                    && !matches!(chars.get(i + 2), Some('<'));
+                let named_lookbehind = i + 2 < chars.len()
+                    && chars[i + 1] == '?'
+                    && chars[i + 2] == '<'
+                    && matches!(chars.get(i + 3), Some('=') | Some('!'));
+                if !non_capturing && !named_lookbehind {
+                    let idx = spans.len();
+                    spans.push(CaptureSpan { close: usize::MAX });
+                    stack.push((idx, i));
+                }
+                i += 1;
+            }
+            ')' if !in_class => {
+                if let Some((idx, _)) = stack.pop() {
+                    spans[idx].close = i;
+                }
+                i += 1;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+    spans
+}
+
+fn is_forward_backreference(spans: &[CaptureSpan], escape_pos: usize, group: usize) -> bool {
+    if group == 0 || group > spans.len() {
+        return false;
+    }
+    let span = spans[group - 1];
+    span.close == usize::MAX || escape_pos < span.close
+}
+
+fn is_regex_identity_escape(ch: char) -> bool {
+    matches!(
+        ch,
+        '~' | '`'
+            | '!'
+            | '@'
+            | '#'
+            | '%'
+            | '&'
+            | '-'
+            | '='
+            | ':'
+            | ';'
+            | '\''
+            | '"'
+            | ','
+            | '<'
+            | '>'
+            | '/'
+    )
+}
+
+fn push_escaped_literal(out: &mut String, ch: char) {
+    match ch {
+        '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$' | '\\' => {
+            out.push('\\');
+            out.push(ch);
+        }
+        _ => out.push(ch),
+    }
+}
+
+fn control_escape_value(ch: char) -> Option<u8> {
+    if ch.is_ascii_alphabetic() {
+        Some((ch.to_ascii_uppercase() as u8) % 32)
+    } else {
+        None
+    }
+}
+
+fn push_hex_escape(out: &mut String, value: u8) {
+    out.push_str("\\x{");
+    out.push_str(&format!("{:02X}", value));
+    out.push('}');
+}
+
+fn is_decimal_escape(chars: &[char], i: usize) -> bool {
+    i + 1 < chars.len() && chars[i] == '\\' && chars[i + 1].is_ascii_digit()
+}
+
+fn parse_braced_quantifier(chars: &[char], start: usize) -> Option<usize> {
+    let mut i = start + 1;
+    let first_digits_start = i;
+    while i < chars.len() && chars[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == first_digits_start {
+        return None;
+    }
+    if i < chars.len() && chars[i] == ',' {
+        i += 1;
+        while i < chars.len() && chars[i].is_ascii_digit() {
+            i += 1;
+        }
+    }
+    if i < chars.len() && chars[i] == '}' {
+        Some(i)
+    } else {
+        None
+    }
+}
+
+fn has_invalid_repeated_quantifier(pattern: &str) -> bool {
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut in_class = false;
+    let mut can_quantify = false;
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\\' {
+            i += if is_decimal_escape(&chars, i) {
+                1 + parse_decimal_escape(&chars, i + 1).1
+            } else {
+                2
+            };
+            can_quantify = true;
+            continue;
+        }
+        if in_class {
+            if chars[i] == ']' {
+                in_class = false;
+                can_quantify = true;
+            }
+            i += 1;
+            continue;
+        }
+        match chars[i] {
+            '[' => {
+                in_class = true;
+                i += 1;
+            }
+            '*' | '+' | '?' => {
+                if !can_quantify {
+                    return true;
+                }
+                i += 1;
+                if i < chars.len() && chars[i] == '?' {
+                    i += 1;
+                }
+                can_quantify = false;
+            }
+            '{' => {
+                if let Some(end) = parse_braced_quantifier(&chars, i) {
+                    if !can_quantify {
+                        return true;
+                    }
+                    i = end + 1;
+                    if i < chars.len() && chars[i] == '?' {
+                        i += 1;
+                    }
+                    can_quantify = false;
+                } else {
+                    can_quantify = true;
+                    i += 1;
+                }
+            }
+            '|' => {
+                can_quantify = false;
+                i += 1;
+            }
+            ')' => {
+                can_quantify = true;
+                i += 1;
+            }
+            _ => {
+                can_quantify = true;
+                i += 1;
+            }
+        }
+    }
+    false
+}
+
 /// Header for heap-allocated RegExp objects
 #[repr(C)]
 pub struct RegExpHeader {
@@ -196,6 +408,19 @@ fn throw_replace_all_non_global_regex() -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+fn set_exec_array_metadata(arr: *mut ArrayHeader, input: &str, index: f64) {
+    if arr.is_null() {
+        return;
+    }
+    let index_key = js_string_from_str("index");
+    crate::array::js_array_set_string_key(arr, index_key, index);
+
+    let input_key = js_string_from_str("input");
+    let input_str = js_string_from_str(input);
+    let input_value = js_nanbox_string(input_str as i64);
+    crate::array::js_array_set_string_key(arr, input_key, input_value);
+}
+
 #[inline]
 fn ensure_replace_all_regex_global(re: *const RegExpHeader) {
     unsafe {
@@ -211,6 +436,7 @@ fn ensure_replace_all_regex_global(re: *const RegExpHeader) {
 fn js_regex_to_rust(pattern: &str) -> String {
     let mut result = String::with_capacity(pattern.len());
     let chars: Vec<char> = pattern.chars().collect();
+    let capture_spans = collect_capture_spans(&chars);
     let mut i = 0;
     // Track whether we're inside a `[...]` character class. JS and the Rust
     // `regex` crate disagree on how a bare `[` inside a class is read, so we
@@ -222,6 +448,36 @@ fn js_regex_to_rust(pattern: &str) -> String {
                 // JS allows \/ to escape forward slash — Rust regex doesn't need it
                 '/' => {
                     result.push('/');
+                    i += 2;
+                }
+                'c' if i + 2 < chars.len() => {
+                    if let Some(value) = control_escape_value(chars[i + 2]) {
+                        push_hex_escape(&mut result, value);
+                        i += 3;
+                    } else {
+                        result.push('\\');
+                        result.push('c');
+                        i += 2;
+                    }
+                }
+                '0' if i + 2 >= chars.len() || !chars[i + 2].is_ascii_digit() => {
+                    push_hex_escape(&mut result, 0);
+                    i += 2;
+                }
+                '1'..='9' => {
+                    let (group, digits) = parse_decimal_escape(&chars, i + 1);
+                    if is_forward_backreference(&capture_spans, i, group) {
+                        i += 1 + digits;
+                    } else {
+                        result.push('\\');
+                        for ch in &chars[i + 1..i + 1 + digits] {
+                            result.push(*ch);
+                        }
+                        i += 1 + digits;
+                    }
+                }
+                ch if is_regex_identity_escape(ch) => {
+                    push_escaped_literal(&mut result, ch);
                     i += 2;
                 }
                 // Pass through all other backslash sequences as-is. (An escaped
@@ -364,6 +620,12 @@ pub extern "C" fn js_regexp_new(
     // the fancy fallback. `get_or_compile_regex` populates FANCY_CACHE when
     // the regex crate fails but fancy-regex succeeds; check both here.
     {
+        if has_invalid_repeated_quantifier(pattern_str) {
+            throw_regexp_syntax_error(&format!(
+                "Invalid regular expression: /{}/: invalid pattern",
+                pattern_str
+            ));
+        }
         let translated = js_regex_to_rust(pattern_str);
         if regex::Regex::new(&translated).is_err() && fancy_regex::Regex::new(&translated).is_err()
         {
@@ -1133,26 +1395,36 @@ pub extern "C" fn js_regexp_exec(
             if let Some(fre) = fc.get(&(pat.to_string(), flags_str.to_string())) {
                 if let Ok(Some(caps)) = fre.captures(search_str) {
                     let full = caps.get(0).unwrap();
-                    // Build result: just the full match for now
                     let match_byte_offset = full.start() + search_start_byte;
                     let match_char_offset = str_data[..match_byte_offset].chars().count();
-                    let match_str = full.as_str();
-                    let arr = crate::array::js_array_alloc_with_length(1);
+                    let arr = crate::array::js_array_alloc(caps.len() as u32);
                     let scope = crate::gc::RuntimeHandleScope::new();
                     let arr_handle = scope.root_raw_mut_ptr(arr);
-                    let match_ptr = crate::string::js_string_from_bytes(
-                        match_str.as_ptr(),
-                        match_str.len() as u32,
-                    );
-                    let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-                    let match_bits =
-                        crate::value::STRING_TAG | (match_ptr as u64 & crate::value::POINTER_MASK);
-                    // GC_STORE_AUDIT(BARRIERED): regex exec fancy match slot uses the shared array slot-store helper.
-                    crate::array::store_array_slot(arr, 0, match_bits);
+                    (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length = caps.len() as u32;
+                    for i in 0..caps.len() {
+                        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                        if let Some(m) = caps.get(i) {
+                            let str_ptr = js_string_from_str(m.as_str());
+                            let nanboxed = js_nanbox_string(str_ptr as i64);
+                            // GC_STORE_AUDIT(BARRIERED): regex exec fancy capture slot uses the shared array slot-store helper.
+                            crate::array::store_array_slot(arr, i, nanboxed.to_bits());
+                        } else {
+                            let undefined = f64::from_bits(TAG_UNDEFINED);
+                            // GC_STORE_AUDIT(BARRIERED): regex exec fancy unmatched capture slot uses the shared array slot-store helper.
+                            crate::array::store_array_slot(arr, i, undefined.to_bits());
+                        }
+                    }
                     if global {
+                        let match_str = full.as_str();
                         (*re).last_index = (match_char_offset + match_str.chars().count()) as u32;
                     }
+                    set_exec_array_metadata(
+                        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                        str_data,
+                        match_char_offset as f64,
+                    );
                     LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = match_char_offset as f64);
+                    LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
                     return Some(arr_handle.get_raw_mut_ptr::<ArrayHeader>());
                 }
                 return Some(ptr::null_mut()); // fancy-regex tried but no match
@@ -1205,6 +1477,11 @@ pub extern "C" fn js_regexp_exec(
 
                 // Store .index in thread-local
                 LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = match_char_offset as f64);
+                set_exec_array_metadata(
+                    arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                    str_data,
+                    match_char_offset as f64,
+                );
 
                 // Build groups object if named captures exist
                 let group_names: Vec<(&str, Option<regex::Match>)> = regex
