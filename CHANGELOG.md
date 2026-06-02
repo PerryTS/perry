@@ -2,6 +2,10 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1105 — fix(stream/web): ReadableStream.from sources (#4106)
+
+Folds in external contributor PR #4106: lowers `ReadableStream.from(...)` (and the `node:stream/web` alias) to the `readable_stream` native `from` constructor so building a web `ReadableStream` from an iterable/async-iterable source works. Merged on top of current `main`; the only conflict was in `crates/perry-hir/src/lower/expr_call/native_module.rs`, where this PR's `ReadableStream.from` static-call block and main's broadened `is_process_ref` gate (#process namespace/default-import) landed in the same region — both were kept.
+
 ## v0.5.1104 — feat(repl): scripted node:repl lifecycle parity (#4116)
 
 Folds in external contributor PR #4116: adds a scripted `node:repl` lifecycle surface (`repl.start`, server `.defineCommand`/`.eval`/`.write`/`.close` and the associated REPLServer shape) so scripted REPL sessions run under Perry. Introduces the `node:repl` module to the manifest (total: 2592 entries across 109 modules; `.d.ts` coverage 1788 entries across 106 modules) plus node-suite parity fixtures. Merged on top of current `main`; only the auto-generated doc count/coverage lines conflicted and were regenerated from the manifest.
