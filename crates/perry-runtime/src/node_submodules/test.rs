@@ -421,6 +421,13 @@ enum MockRestoreTarget {
         property: String,
         original: f64,
     },
+    ObjectAccessor {
+        target: f64,
+        property: String,
+        original_accessor: Option<crate::object::AccessorDescriptor>,
+        original_attrs: Option<crate::object::PropertyAttrs>,
+        original_value: f64,
+    },
 }
 
 struct MockState {
@@ -473,6 +480,58 @@ fn property_name(value: f64) -> String {
     value_to_string(value).unwrap_or_else(|| {
         throw_invalid_arg_type("propertyName", "string", value);
     })
+}
+
+fn object_target_addr(target: f64) -> usize {
+    let raw = raw_ptr_from_value(target);
+    if raw < 0x10000 {
+        throw_invalid_arg_type("object", "object", target);
+    }
+    raw
+}
+
+fn accessor_function_value(bits: u64) -> f64 {
+    if bits == 0 {
+        undefined_value()
+    } else {
+        f64::from_bits(bits)
+    }
+}
+
+fn install_accessor_mock(target: f64, property: &str, accessor: crate::object::AccessorDescriptor) {
+    let raw = object_target_addr(target);
+    let key = js_string_from_bytes(property.as_ptr(), property.len() as u32);
+    unsafe {
+        crate::object::ensure_key_in_keys_array(raw as *mut crate::object::ObjectHeader, key);
+    }
+    crate::object::set_accessor_descriptor(raw, property.to_string(), accessor);
+    crate::object::set_property_attrs(
+        raw,
+        property.to_string(),
+        crate::object::PropertyAttrs::new(true, true, true),
+    );
+}
+
+fn restore_accessor_mock(
+    target: f64,
+    property: &str,
+    original_accessor: Option<crate::object::AccessorDescriptor>,
+    original_attrs: Option<crate::object::PropertyAttrs>,
+    original_value: f64,
+) {
+    let raw = object_target_addr(target);
+    if let Some(accessor) = original_accessor {
+        crate::object::set_accessor_descriptor(raw, property.to_string(), accessor);
+    } else {
+        crate::object::clear_accessor_descriptor(raw, property);
+        set_property_value(target, property, original_value);
+    }
+
+    if let Some(attrs) = original_attrs {
+        crate::object::set_property_attrs(raw, property.to_string(), attrs);
+    } else {
+        crate::object::clear_property_attrs(raw, property);
+    }
 }
 
 fn mock_context_object(id: i64, calls: f64, include_call_tracking: bool) -> f64 {
@@ -576,13 +635,26 @@ fn restore_mock_state(id: i64) {
         reset_mock_state_calls(state);
         Some(state.restore.clone())
     });
-    if let Some(MockRestoreTarget::ObjectProperty {
-        target,
-        property,
-        original,
-    }) = restore
-    {
-        set_property_value(target, &property, original);
+    match restore {
+        Some(MockRestoreTarget::ObjectProperty {
+            target,
+            property,
+            original,
+        }) => set_property_value(target, &property, original),
+        Some(MockRestoreTarget::ObjectAccessor {
+            target,
+            property,
+            original_accessor,
+            original_attrs,
+            original_value,
+        }) => restore_accessor_mock(
+            target,
+            &property,
+            original_accessor,
+            original_attrs,
+            original_value,
+        ),
+        _ => {}
     }
 }
 
@@ -605,13 +677,19 @@ fn record_mock_call(id: i64, args_value: f64, this_value: f64, result: f64, erro
     let result_handle = scope.root_nanbox_f64(result);
     let error_handle = scope.root_nanbox_f64(error);
     let calls_handle = scope.root_nanbox_f64(calls_value);
+    let stack_message = string_value("Error");
+    let stack = crate::error::js_error_new_with_message(
+        raw_ptr_from_value(stack_message) as *mut crate::StringHeader
+    );
+    let stack_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(stack as i64));
 
-    let call = js_object_alloc(0, 5);
+    let call = js_object_alloc(0, 6);
     set_field(call, "arguments", args_handle.get_nanbox_f64());
     set_field(call, "this", this_handle.get_nanbox_f64());
     set_field(call, "target", undefined_value());
     set_field(call, "result", result_handle.get_nanbox_f64());
     set_field(call, "error", error_handle.get_nanbox_f64());
+    set_field(call, "stack", stack_handle.get_nanbox_f64());
     let call_handle = scope.root_nanbox_f64(boxed_ptr(call));
 
     let calls_ptr =
@@ -652,13 +730,17 @@ extern "C" fn mock_function_invoke(closure: *const ClosureHeader, rest: f64) -> 
     let rest_handle = scope.root_nanbox_f64(rest);
     let arg_handles = scope.root_nanbox_f64_slice(&args);
     let call_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    match catch_js(|| unsafe {
+    let previous_this = crate::object::js_implicit_this_set(this_value);
+    let call_result = catch_js(|| unsafe {
         crate::closure::js_native_call_value(
             implementation_handle.get_nanbox_f64(),
             call_args.as_ptr(),
             call_args.len(),
         )
-    }) {
+    });
+    crate::object::js_implicit_this_set(previous_this);
+
+    match call_result {
         Ok(result) => {
             let result_handle = scope.root_nanbox_f64(result);
             record_mock_call(
@@ -792,6 +874,96 @@ extern "C" fn mock_method_thunk(
     function
 }
 
+extern "C" fn mock_getter_thunk(
+    _closure: *const ClosureHeader,
+    target: f64,
+    property: f64,
+    implementation: f64,
+) -> f64 {
+    let property = property_name(property);
+    let raw = object_target_addr(target);
+    let original_accessor = crate::object::get_accessor_descriptor(raw, &property);
+    let original_attrs = crate::object::get_property_attrs(raw, &property);
+    let original_value = if original_accessor.is_none() {
+        get_property_value(target, &property)
+    } else {
+        undefined_value()
+    };
+    let existing = original_accessor.unwrap_or_default();
+    let original = accessor_function_value(existing.get);
+    let implementation = if is_undefined_value(implementation) {
+        original
+    } else {
+        implementation
+    };
+    assert_callable_arg("implementation", implementation);
+    let function = create_mock_function(
+        original,
+        implementation,
+        MockRestoreTarget::ObjectAccessor {
+            target,
+            property: property.clone(),
+            original_accessor,
+            original_attrs,
+            original_value,
+        },
+    );
+    install_accessor_mock(
+        target,
+        &property,
+        crate::object::AccessorDescriptor {
+            get: function.to_bits(),
+            set: existing.set,
+        },
+    );
+    function
+}
+
+extern "C" fn mock_setter_thunk(
+    _closure: *const ClosureHeader,
+    target: f64,
+    property: f64,
+    implementation: f64,
+) -> f64 {
+    let property = property_name(property);
+    let raw = object_target_addr(target);
+    let original_accessor = crate::object::get_accessor_descriptor(raw, &property);
+    let original_attrs = crate::object::get_property_attrs(raw, &property);
+    let original_value = if original_accessor.is_none() {
+        get_property_value(target, &property)
+    } else {
+        undefined_value()
+    };
+    let existing = original_accessor.unwrap_or_default();
+    let original = accessor_function_value(existing.set);
+    let implementation = if is_undefined_value(implementation) {
+        original
+    } else {
+        implementation
+    };
+    assert_callable_arg("implementation", implementation);
+    let function = create_mock_function(
+        original,
+        implementation,
+        MockRestoreTarget::ObjectAccessor {
+            target,
+            property: property.clone(),
+            original_accessor,
+            original_attrs,
+            original_value,
+        },
+    );
+    install_accessor_mock(
+        target,
+        &property,
+        crate::object::AccessorDescriptor {
+            get: existing.get,
+            set: function.to_bits(),
+        },
+    );
+    function
+}
+
 extern "C" fn mock_property_thunk(
     _closure: *const ClosureHeader,
     target: f64,
@@ -875,12 +1047,12 @@ fn mock_object_value() -> f64 {
         set_field(
             mock,
             "getter",
-            closure_value(mock_method_thunk as *const u8, 3),
+            closure_value(mock_getter_thunk as *const u8, 3),
         );
         set_field(
             mock,
             "setter",
-            closure_value(mock_method_thunk as *const u8, 3),
+            closure_value(mock_setter_thunk as *const u8, 3),
         );
         set_field(
             mock,
@@ -1305,6 +1477,16 @@ pub extern "C" fn js_node_test_mock_fn(
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_method(target: f64, property: f64, implementation: f64) -> f64 {
     mock_method_thunk(std::ptr::null(), target, property, implementation)
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_test_mock_getter(target: f64, property: f64, implementation: f64) -> f64 {
+    mock_getter_thunk(std::ptr::null(), target, property, implementation)
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_test_mock_setter(target: f64, property: f64, implementation: f64) -> f64 {
+    mock_setter_thunk(std::ptr::null(), target, property, implementation)
 }
 
 #[no_mangle]

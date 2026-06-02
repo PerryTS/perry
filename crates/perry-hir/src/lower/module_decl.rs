@@ -68,6 +68,13 @@ fn is_cjs_style_native_default_import(module_name: &str) -> bool {
     )
 }
 
+fn node_submodule_default_export_key(module_name: &str) -> Option<&'static str> {
+    match module_name {
+        "test/reporters" => Some("test_reporters"),
+        _ => None,
+    }
+}
+
 pub(crate) fn lower_module_decl(
     ctx: &mut LoweringContext,
     module: &mut Module,
@@ -321,6 +328,10 @@ pub(crate) fn lower_module_decl(
                             if source == "process" {
                                 ctx.register_builtin_module_alias(local.clone(), source.clone());
                             }
+                        } else if node_submodule_default_export_key(&source).is_some() {
+                            ctx.register_imported_func(local.clone(), local.clone());
+                            specifiers.push(ImportSpecifier::Default { local });
+                            continue;
                         } else if is_node_builtin_module(&source) {
                             // #3906: a CJS-backed Node builtin *submodule* that
                             // isn't in NATIVE_MODULES (e.g. `node:timers/promises`,

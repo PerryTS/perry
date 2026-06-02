@@ -845,7 +845,10 @@ pub extern "C" fn js_object_set_field_by_name(
                                 let closure = (acc.set & crate::value::POINTER_MASK)
                                     as *const crate::closure::ClosureHeader;
                                 if !closure.is_null() {
+                                    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+                                    let previous_this = super::js_implicit_this_set(receiver);
                                     crate::closure::js_closure_call1(closure, value);
+                                    super::js_implicit_this_set(previous_this);
                                 }
                             } else {
                                 crate::error::throw_immutable_write(0, k);

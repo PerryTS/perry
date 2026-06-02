@@ -1056,7 +1056,7 @@ pub extern "C" fn js_object_define_property(
 /// so the property is enumerable-filterable and discoverable by `getOwnPropertyNames`
 /// even when the value is undefined or the property is an accessor (no underlying slot).
 #[allow(unused_assignments)]
-pub(super) unsafe fn ensure_key_in_keys_array(
+pub(crate) unsafe fn ensure_key_in_keys_array(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
 ) {

@@ -580,6 +580,14 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
     });
 }
 
+/// Remove a customized property descriptor for (obj, key), restoring default
+/// data-property attributes for subsequent writes and reflection.
+pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
+    PROPERTY_DESCRIPTORS.with(|m| {
+        m.borrow_mut().remove(&(obj, key.to_string()));
+    });
+}
+
 /// Look up the accessor descriptor (get/set) for (obj, key).
 pub(crate) fn get_accessor_descriptor(obj: usize, key: &str) -> Option<AccessorDescriptor> {
     ACCESSOR_DESCRIPTORS.with(|m| m.borrow().get(&(obj, key.to_string())).copied())
@@ -628,6 +636,14 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
     ACCESSOR_DESCRIPTORS.with(|m| {
         m.borrow_mut().insert((obj, key), acc);
+    });
+}
+
+/// Remove an accessor descriptor for (obj, key), letting ordinary data-property
+/// reads and writes use the object's stored field again.
+pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {
+    ACCESSOR_DESCRIPTORS.with(|m| {
+        m.borrow_mut().remove(&(obj, key.to_string()));
     });
 }
 
