@@ -2738,6 +2738,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "publicDecrypt", false, None),
     method("crypto", "getHashes", false, None),
     method("crypto", "getCiphers", false, None),
+    // #4033-adjacent: `crypto.getCipherInfo(nameOrNid[, options])` — the runtime
+    // (`js_crypto_get_cipher_info`) + native-module dispatch already exist; only
+    // the manifest row was missing, so the #463 gate rejected the call.
+    method("crypto", "getCipherInfo", false, None),
     method("crypto", "getCurves", false, None),
     method("crypto", "getFips", false, None),
     // Web Crypto API (issue #561) — `crypto.subtle.*`. The HIR
