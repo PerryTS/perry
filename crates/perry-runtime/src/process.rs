@@ -346,11 +346,34 @@ extern "C" fn module_source_map_noop(_closure: *const crate::closure::ClosureHea
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+type ModuleFunction1 = extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64;
+type ModuleFunction2 = extern "C" fn(*const crate::closure::ClosureHeader, f64, f64) -> f64;
+
 fn module_noop_function(name: &str) -> f64 {
     let func_ptr = module_source_map_noop as *const u8;
     crate::closure::js_register_closure_arity(func_ptr, 0);
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     crate::object::set_bound_native_closure_name(closure, name);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+fn module_function1(name: &str, thunk: ModuleFunction1, length: u32) -> f64 {
+    let func_ptr = thunk as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 1);
+    crate::closure::js_register_closure_length(func_ptr, length);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    crate::object::set_bound_native_closure_name(closure, name);
+    crate::object::set_builtin_closure_length(closure as usize, length);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+fn module_function2(name: &str, thunk: ModuleFunction2, length: u32) -> f64 {
+    let func_ptr = thunk as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 2);
+    crate::closure::js_register_closure_length(func_ptr, length);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    crate::object::set_bound_native_closure_name(closure, name);
+    crate::object::set_builtin_closure_length(closure as usize, length);
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
@@ -425,20 +448,397 @@ fn process_finalization_value() -> f64 {
     module_object_value(obj)
 }
 
+extern "C" fn process_report_function_get_report(
+    _closure: *const crate::closure::ClosureHeader,
+    err: f64,
+) -> f64 {
+    validate_report_error_arg(err);
+    process_report_object("GetReport", None)
+}
+
+extern "C" fn process_report_function_write_report(
+    _closure: *const crate::closure::ClosureHeader,
+    file: f64,
+    err: f64,
+) -> f64 {
+    let mut file_arg = file;
+    let mut err_arg = err;
+    let file_value = JSValue::from_bits(file_arg.to_bits());
+
+    if !file_value.is_undefined() && !file_value.is_any_string() {
+        if module_object_ptr(file_arg).is_some() {
+            err_arg = file_arg;
+            file_arg = undefined_value();
+        } else {
+            throw_report_invalid_arg_type("file", "string", file_arg);
+        }
+    }
+
+    validate_report_error_arg(err_arg);
+
+    let filename = module_value_to_string(file_arg)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(process_report_default_filename);
+    let report_json = process_report_json_string("API", Some(&filename));
+    if let Err(err) = std::fs::write(&filename, report_json) {
+        crate::fs::validate::throw_type_error_with_code(
+            &format!("Failed to write diagnostic report to {filename}: {err}"),
+            "ERR_REPORT_WRITE_FAILED",
+        );
+    }
+
+    eprintln!("\nWriting Node.js report to file: {filename}");
+    eprintln!("Node.js report completed");
+    module_string_value(&filename)
+}
+
+fn validate_report_error_arg(value: f64) {
+    let js = JSValue::from_bits(value.to_bits());
+    if js.is_undefined() {
+        return;
+    }
+    if module_object_ptr(value).is_none() {
+        throw_report_invalid_arg_type("err", "object", value);
+    }
+}
+
+fn throw_report_invalid_arg_type(name: &str, expected: &str, value: f64) -> ! {
+    let message = format!(
+        "The \"{}\" argument must be of type {}. Received {}",
+        name,
+        expected,
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn process_report_default_filename() -> String {
+    format!("report.{}.json", std::process::id())
+}
+
 fn process_report_value() -> f64 {
+    use std::cell::Cell;
+    thread_local! {
+        static CACHED_REPORT: Cell<f64> = const { Cell::new(0.0) };
+    }
+
+    let cached = CACHED_REPORT.with(|c| c.get());
+    if cached != 0.0 {
+        return cached;
+    }
+
+    let obj = process_report_controller_object();
+    CACHED_REPORT.with(|c| c.set(obj));
+    obj
+}
+
+fn process_report_controller_object() -> f64 {
     let obj = crate::object::js_object_alloc(0, 11);
     module_set_field(obj, "compact", bool_value(false));
     module_set_field(obj, "directory", module_string_value(""));
     module_set_field(obj, "excludeEnv", bool_value(false));
     module_set_field(obj, "excludeNetwork", bool_value(false));
     module_set_field(obj, "filename", module_string_value(""));
-    module_set_field(obj, "getReport", module_noop_function("getReport"));
+    module_set_field(
+        obj,
+        "getReport",
+        module_function1("getReport", process_report_function_get_report, 1),
+    );
     module_set_field(obj, "reportOnFatalError", bool_value(false));
     module_set_field(obj, "reportOnSignal", bool_value(false));
     module_set_field(obj, "reportOnUncaughtException", bool_value(false));
     module_set_field(obj, "signal", module_string_value("SIGUSR2"));
-    module_set_field(obj, "writeReport", module_noop_function("writeReport"));
+    module_set_field(
+        obj,
+        "writeReport",
+        module_function2("writeReport", process_report_function_write_report, 2),
+    );
     module_object_value(obj)
+}
+
+fn process_report_object(trigger: &str, filename: Option<&str>) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 11);
+    module_set_field(
+        obj,
+        "header",
+        process_report_header_object(trigger, filename),
+    );
+    module_set_field(
+        obj,
+        "javascriptStack",
+        process_report_javascript_stack_object(),
+    );
+    module_set_field(
+        obj,
+        "javascriptHeap",
+        process_report_javascript_heap_object(),
+    );
+    module_set_field(obj, "nativeStack", module_array_value(&[]));
+    module_set_field(obj, "resourceUsage", process_report_resource_usage_object());
+    module_set_field(
+        obj,
+        "uvthreadResourceUsage",
+        process_report_thread_resource_usage_object(),
+    );
+    module_set_field(obj, "libuv", module_array_value(&[]));
+    module_set_field(obj, "workers", module_array_value(&[]));
+    module_set_field(
+        obj,
+        "environmentVariables",
+        module_object_value(crate::object::js_object_alloc(0, 0)),
+    );
+    module_set_field(obj, "userLimits", process_report_user_limits_object());
+    module_set_field(obj, "sharedObjects", module_array_value(&[]));
+    module_object_value(obj)
+}
+
+fn process_report_header_object(trigger: &str, filename: Option<&str>) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 22);
+    let now_ms = process_report_unix_time_ms();
+    module_set_field(obj, "reportVersion", 5.0);
+    module_set_field(obj, "event", module_string_value("JavaScript API"));
+    module_set_field(obj, "trigger", module_string_value(trigger));
+    module_set_field(obj, "filename", module_string_value(filename.unwrap_or("")));
+    module_set_field(
+        obj,
+        "dumpEventTime",
+        module_string_value(&format!("{:.0}", now_ms / 1000.0)),
+    );
+    module_set_field(obj, "dumpEventTimeStamp", now_ms);
+    module_set_field(obj, "processId", std::process::id() as f64);
+    module_set_field(obj, "threadId", 0.0);
+    module_set_field(
+        obj,
+        "cwd",
+        module_string_value(&std::env::current_dir().map_or_else(
+            |_| String::new(),
+            |path| path.to_string_lossy().into_owned(),
+        )),
+    );
+    module_set_field(obj, "commandLine", process_report_command_line_array());
+    module_set_field(obj, "nodejsVersion", module_string_value("v22.0.0"));
+    module_set_field(obj, "wordSize", (std::mem::size_of::<usize>() * 8) as f64);
+    module_set_field(obj, "arch", module_string_value(node_arch_name()));
+    module_set_field(obj, "platform", module_string_value(node_platform_name()));
+    module_set_field(
+        obj,
+        "componentVersions",
+        process_report_component_versions(),
+    );
+    module_set_field(obj, "release", process_release_value());
+    module_set_field(obj, "osName", module_string_value(std::env::consts::OS));
+    module_set_field(obj, "osRelease", module_string_value(""));
+    module_set_field(obj, "osVersion", module_string_value(""));
+    module_set_field(
+        obj,
+        "osMachine",
+        module_string_value(std::env::consts::ARCH),
+    );
+    module_set_field(obj, "host", module_string_value(""));
+    module_object_value(obj)
+}
+
+fn process_report_javascript_stack_object() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 3);
+    module_set_field(obj, "message", module_string_value(""));
+    module_set_field(obj, "stack", module_array_value(&[]));
+    module_set_field(
+        obj,
+        "errorProperties",
+        module_object_value(crate::object::js_object_alloc(0, 0)),
+    );
+    module_object_value(obj)
+}
+
+fn process_report_javascript_heap_object() -> f64 {
+    let mut heap_used: u64 = 0;
+    let mut heap_total: u64 = 0;
+    crate::arena::js_arena_stats(&mut heap_used, &mut heap_total);
+
+    let obj = crate::object::js_object_alloc(0, 8);
+    module_set_field(obj, "totalMemory", heap_total as f64);
+    module_set_field(obj, "executableMemory", 0.0);
+    module_set_field(obj, "totalCommittedMemory", heap_total as f64);
+    module_set_field(obj, "availableMemory", js_process_available_memory());
+    module_set_field(obj, "totalGlobalHandlesMemory", 0.0);
+    module_set_field(obj, "usedGlobalHandlesMemory", 0.0);
+    module_set_field(obj, "usedMemory", heap_used as f64);
+    module_set_field(
+        obj,
+        "heapSpaces",
+        module_object_value(crate::object::js_object_alloc(0, 0)),
+    );
+    module_object_value(obj)
+}
+
+fn process_report_resource_usage_object() -> f64 {
+    let (user, system) = read_process_cpu_micros();
+    let obj = crate::object::js_object_alloc(0, 6);
+    module_set_field(obj, "userCpuSeconds", user / 1_000_000.0);
+    module_set_field(obj, "kernelCpuSeconds", system / 1_000_000.0);
+    module_set_field(obj, "cpuConsumptionPercent", 0.0);
+    module_set_field(obj, "rss", get_rss_bytes() as f64);
+    module_set_field(obj, "maxRss", get_rss_bytes() as f64);
+    module_set_field(
+        obj,
+        "fsActivity",
+        module_object_value(crate::object::js_object_alloc(0, 0)),
+    );
+    module_object_value(obj)
+}
+
+fn process_report_thread_resource_usage_object() -> f64 {
+    let (user, system) = read_thread_cpu_micros();
+    let obj = crate::object::js_object_alloc(0, 3);
+    module_set_field(obj, "userCpuSeconds", user / 1_000_000.0);
+    module_set_field(obj, "kernelCpuSeconds", system / 1_000_000.0);
+    module_set_field(obj, "cpuConsumptionPercent", 0.0);
+    module_object_value(obj)
+}
+
+fn process_report_user_limits_object() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 3);
+    module_set_field(
+        obj,
+        "core_file_size_blocks",
+        module_string_value("unlimited"),
+    );
+    module_set_field(obj, "data_size_kbytes", module_string_value("unlimited"));
+    module_set_field(obj, "file_size_blocks", module_string_value("unlimited"));
+    module_object_value(obj)
+}
+
+fn process_report_command_line_array() -> f64 {
+    let args: Vec<String> = std::env::args().collect();
+    let items = if args.is_empty() {
+        vec![process_argv0_string()]
+    } else {
+        args
+    };
+    let arr = crate::array::js_array_alloc_with_length(items.len() as u32);
+    for (i, item) in items.iter().enumerate() {
+        crate::array::js_array_set_f64(arr, i as u32, module_string_value(item));
+    }
+    f64::from_bits(JSValue::array_ptr(arr).bits())
+}
+
+fn process_report_component_versions() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 4);
+    module_set_field(obj, "node", module_string_value("22.0.0"));
+    module_set_field(obj, "v8", module_string_value("12.4.254.21"));
+    module_set_field(obj, "uv", module_string_value("1.51.0"));
+    module_set_field(obj, "perry", module_string_value("0.4.71"));
+    module_object_value(obj)
+}
+
+fn process_report_unix_time_ms() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as f64)
+        .unwrap_or(0.0)
+}
+
+fn node_platform_name() -> &'static str {
+    match std::env::consts::OS {
+        "macos" | "ios" => "darwin",
+        "windows" => "win32",
+        "linux" => "linux",
+        "freebsd" => "freebsd",
+        other => other,
+    }
+}
+
+fn process_report_json_string(trigger: &str, filename: Option<&str>) -> String {
+    let args: Vec<String> = std::env::args().collect();
+    let command_line = if args.is_empty() {
+        vec![process_argv0_string()]
+    } else {
+        args
+    };
+    let now_ms = process_report_unix_time_ms();
+    let mut heap_used: u64 = 0;
+    let mut heap_total: u64 = 0;
+    crate::arena::js_arena_stats(&mut heap_used, &mut heap_total);
+    let (proc_user, proc_system) = read_process_cpu_micros();
+    let (thread_user, thread_system) = read_thread_cpu_micros();
+
+    let value = serde_json::json!({
+        "header": {
+            "reportVersion": 5,
+            "event": "JavaScript API",
+            "trigger": trigger,
+            "filename": filename.unwrap_or(""),
+            "dumpEventTime": format!("{:.0}", now_ms / 1000.0),
+            "dumpEventTimeStamp": now_ms,
+            "processId": std::process::id(),
+            "threadId": 0,
+            "cwd": std::env::current_dir().map_or_else(
+                |_| String::new(),
+                |path| path.to_string_lossy().into_owned(),
+            ),
+            "commandLine": command_line,
+            "nodejsVersion": "v22.0.0",
+            "wordSize": std::mem::size_of::<usize>() * 8,
+            "arch": node_arch_name(),
+            "platform": node_platform_name(),
+            "componentVersions": {
+                "node": "22.0.0",
+                "v8": "12.4.254.21",
+                "uv": "1.51.0",
+                "perry": "0.4.71"
+            },
+            "release": {
+                "name": "node",
+                "sourceUrl": "",
+                "headersUrl": ""
+            },
+            "osName": std::env::consts::OS,
+            "osRelease": "",
+            "osVersion": "",
+            "osMachine": std::env::consts::ARCH,
+            "host": ""
+        },
+        "javascriptStack": {
+            "message": "",
+            "stack": [],
+            "errorProperties": {}
+        },
+        "javascriptHeap": {
+            "totalMemory": heap_total,
+            "executableMemory": 0,
+            "totalCommittedMemory": heap_total,
+            "availableMemory": js_process_available_memory(),
+            "totalGlobalHandlesMemory": 0,
+            "usedGlobalHandlesMemory": 0,
+            "usedMemory": heap_used,
+            "heapSpaces": {}
+        },
+        "nativeStack": [],
+        "resourceUsage": {
+            "userCpuSeconds": proc_user / 1_000_000.0,
+            "kernelCpuSeconds": proc_system / 1_000_000.0,
+            "cpuConsumptionPercent": 0,
+            "rss": get_rss_bytes(),
+            "maxRss": get_rss_bytes(),
+            "fsActivity": {}
+        },
+        "uvthreadResourceUsage": {
+            "userCpuSeconds": thread_user / 1_000_000.0,
+            "kernelCpuSeconds": thread_system / 1_000_000.0,
+            "cpuConsumptionPercent": 0
+        },
+        "libuv": [],
+        "workers": [],
+        "environmentVariables": {},
+        "userLimits": {
+            "core_file_size_blocks": "unlimited",
+            "data_size_kbytes": "unlimited",
+            "file_size_blocks": "unlimited"
+        },
+        "sharedObjects": []
+    });
+
+    serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string())
 }
 
 fn process_config_value() -> f64 {
