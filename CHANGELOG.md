@@ -2,6 +2,10 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1097 — fix(runtime): Object.prototype.toString brands for typed arrays, Symbol, BigInt (+ unify the callable thunk)
+
+`Object.prototype.toString.call(x)` returned the wrong brand for typed arrays (`new Int32Array()` → `"[object Number]"`), `Symbol` and `BigInt` (`"[object Object]"`) instead of Node's `"[object Int32Array]"`, `"[object Symbol]"`, `"[object BigInt]"`. Two parts: (1) added typed-array (`lookup_typed_array_kind` + the existing `name_for_kind`, all 12 kinds), `Symbol` (`is_registered_symbol`), and `BigInt` (`is_bigint`) brand arms to `js_object_to_string`. (2) **Root cause for these specific types**: the callable `Object.prototype.toString` (`object_prototype_to_string_thunk` in `global_this.rs`) had its **own** coarse brand logic — separate from `js_object_to_string` — that mis-tagged raw-i64 typed arrays as `[object Number]` (a small pointer bit pattern reads as a finite f64) and everything past Array/Error/Date as `[object Object]`. Replaced the thunk body with a delegation to `js_object_to_string`, so the callable form shares the full, correct brand table. Continues the brand-coverage work from v0.5.1095. Advances #4033 / #3989.
+
 ## v0.5.1096 — fix(runtime): #4004 — small-handle fetch ids must not be dereferenced as heap pointers
 
 **Root cause.** #4018 disambiguated the Web Fetch and node:http handle id-spaces by
@@ -35,7 +39,6 @@ regression test that allocates a live node:http server handle (low band) alongsi
 `Request` (high band) and drives the untyped `request.headers.get`/`.has` access that
 crashed. Output is byte-identical to Node. Validated: perry-runtime 962/962 and
 perry-stdlib 87/87 unit tests pass.
-
 ## v0.5.1095 — fix(runtime): Object.prototype.toString brands for Map/Set/WeakMap/WeakSet/Promise/RegExp
 
 `Object.prototype.toString.call(x)` returned `"[object Object]"` for `Map`, `Set`, `WeakMap`, `WeakSet`, `Promise`, and `RegExp` instead of Node's `"[object Map]"`, `"[object Set]"`, `"[object WeakMap]"`, `"[object WeakSet]"`, `"[object Promise]"`, and `"[object RegExp]"`. `js_object_to_string` (`object/mod.rs`) discriminated only Array/Error/Date/buffer brands and let these fall through to the generic object tag. Added per-type detection before the GC-header object discrimination: Map/Set via their registries (`is_registered_map`/`is_registered_set` — they're raw-alloc'd with no GcHeader), RegExp via `is_regex_pointer`, WeakMap/WeakSet via `weak_class_id_from_receiver`, and Promise via `js_value_is_promise`. (The RegExp *brand* is distinct from `RegExp.prototype.toString` → `/source/flags`, fixed separately in v0.5.1094.) Advances the collections / object-model / RegExp conformance issues (#3989, #3986, #4035).

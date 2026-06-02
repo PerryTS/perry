@@ -1652,6 +1652,13 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }
+    if jsv.is_bigint() {
+        // BigInt is BIGINT_TAG-tagged (not POINTER_TAG), so it bypasses the
+        // pointer brand block below; Node tags it `[object BigInt]`.
+        let bytes = b"[object BigInt]";
+        let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
     let raw_addr = if jsv.is_pointer() {
         (bits & POINTER_MASK) as usize
     } else if bits > 0x1000 && (bits >> 48) == 0 {
@@ -1686,7 +1693,7 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     // generic `[object Object]`. Map/Set are raw-alloc'd (no GcHeader) so detect
     // via their registries before the GC-header object discrimination below.
     if raw_addr >= 0x1000 {
-        let tag = if crate::map::is_registered_map(raw_addr) {
+        let tag: Option<&str> = if crate::map::is_registered_map(raw_addr) {
             Some("Map")
         } else if crate::set::is_registered_set(raw_addr) {
             Some("Set")
@@ -1694,6 +1701,13 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
             // `Object.prototype.toString.call(/a/)` is `[object RegExp]` (the
             // brand) — distinct from `/a/.toString()` which is `/a/` (the value).
             Some("RegExp")
+        } else if crate::symbol::is_registered_symbol(raw_addr) {
+            Some("Symbol")
+        } else if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw_addr) {
+            // Typed arrays are raw-i64 pointers with no brand arm; without this
+            // they fall through to the `is_number()` fallback below (a small
+            // raw-pointer bit pattern reads as a finite f64) → `[object Number]`.
+            Some(crate::typedarray::name_for_kind(kind))
         } else {
             None
         };
