@@ -2,6 +2,12 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1100 — fix(check): reconcile stale Node builtin table with modern builtins (#3744)
+
+`perry check --check-deps` reported a clean build for unsupported modern `node:*` imports that `perry compile` rejects. The cause: the hand-maintained `is_node_builtin` table in `crates/perry/src/commands/deps.rs` predated Node's newer builtins, so names like `node:sea` and `node:inspector` were not recognized as builtins at all — and the U-006 dependency diagnostic only fires for recognized-but-unsupported builtins, so they fell through to a clean result.
+
+Reconciled the table against Node v25's builtin set: added `async_hooks`, `diagnostics_channel`, `http2`, `inspector`, `sea`, `sqlite`, `test`, `trace_events`, and `wasi` to `is_node_builtin`. Each was classified by the real gate (`perry compile` of `import * as m from "node:<name>"`): the compile-accepted ones (`async_hooks`, `diagnostics_channel`, `http2`, `sqlite`, `test`/`test/reporters`, `trace_events`, `wasi`) were also added to `is_supported_node_builtin` so check does not false-positive on them, while the compile-rejected ones (`inspector`, `inspector/promises`, `sea`) are intentionally left out of the allowlist so `check --check-deps` now surfaces the `U006` diagnostic instead of a false clean bill. Added three regression tests asserting the contract (unsupported→flagged, supported→recognized+allowed, supported⊆recognized). CLI-only change; no runtime/manifest/docs impact.
+
 ## v0.5.1099 — fix(crypto): unblock crypto.getCipherInfo (manifest gate)
 
 `crypto.getCipherInfo(name[, options])` threw the #463 "not implemented in Perry" error, even though its runtime (`js_crypto_get_cipher_info`) and native-module dispatch (`object/native_module.rs`) were already complete — the manifest just lacked the method row, so the U-006 import/dispatch gate rejected the call. Added `method("crypto", "getCipherInfo", false, None)` to the API manifest (`entries.rs`), beside `getCiphers`. `crypto.getCipherInfo("aes-128-cbc")` now returns `{ name, nid, blockSize, ivLength, keyLength, mode }` matching Node across the standard AES cbc/gcm/ecb/wrap ciphers (by name and by NID). Advances the crypto argument/surface parity work (#3955). Same shape as the v0.5.1063 `generateKeySync` fix.
