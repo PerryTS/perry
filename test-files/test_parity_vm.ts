@@ -8,13 +8,13 @@ import * as vm from "node:vm";
 
 
 // ── Class: vm.Script ──
-// SKIP: new vm.Script(code[, options]) — Runtime JS compilation/execution remains open (#3127); import/constructor shape is covered in node-suite/vm.
-// SKIP: script.cachedDataRejected — Script cached-data metadata remains open (#3323).
-// SKIP: script.sourceMapURL — Script sourceMapURL metadata remains open (#3321).
-// SKIP: script.createCachedData() — Script cached-data creation remains open (#3323).
-// SKIP: script.runInContext(contextifiedObject[, options]) — Runtime eval in context remains open (#3128).
-// SKIP: script.runInNewContext([contextObject[, options]]) — Runtime eval in a new context remains open (#3128).
-// SKIP: script.runInThisContext([options]) — Runtime eval in the current context remains open (#3127).
+// TODO(class-member): new vm.Script(code[, options])
+// TODO(class-member): script.cachedDataRejected
+// TODO(class-member): script.sourceMapURL
+// TODO(class-member): script.createCachedData()
+// TODO(class-member): script.runInContext(contextifiedObject[, options])
+// TODO(class-member): script.runInNewContext([contextObject[, options]])
+// TODO(class-member): script.runInThisContext([options])
 
 // ── Class: vm.Module ──
 // SKIP: module.error — Experimental VM module state remains gated/open (#3132).
@@ -28,7 +28,7 @@ import * as vm from "node:vm";
 // SKIP: new vm.SourceTextModule(code[, options]) — Experimental VM module constructor remains gated/open (#3132).
 // SKIP: dependencySpecifiers — SourceTextModule dependency metadata remains gated/open (#3322).
 // SKIP: moduleRequests — SourceTextModule module request helpers remain gated/open (#3322).
-// SKIP: createCachedData() — SourceTextModule cached-data creation remains gated/open (#3323).
+// TODO(class-member): createCachedData()
 // SKIP: hasAsyncGraph() — SourceTextModule graph helper remains gated/open (#3132).
 // SKIP: hasTopLevelAwait() — SourceTextModule graph helper remains gated/open (#3132).
 // SKIP: instantiate() — SourceTextModule instantiation remains gated/open (#3132).
@@ -39,16 +39,16 @@ import * as vm from "node:vm";
 // SKIP: setExport(name, value) — SyntheticModule export mutation remains gated/open (#3133).
 
 // ── Functions ──
-// SKIP: vm.createContext([contextObject[, options]]) — Runtime contextification remains open (#3128).
+// TODO(call): vm.createContext([contextObject[, options]])
 // TODO(call): vm.isContext(object)
-// SKIP: vm.runInContext(code, contextifiedObject[, options]) — Runtime eval in a contextified sandbox remains open (#3128).
-// SKIP: vm.runInNewContext(code[, contextObject[, options]]) — Runtime eval in a new context remains open (#3128).
-// SKIP: vm.runInThisContext(code[, options]) — Runtime eval remains open (#3127).
-// SKIP: vm.compileFunction(code[, params[, options]]) — Runtime function construction remains open (#3130).
+// TODO(call): vm.runInContext(code, contextifiedObject[, options])
+// TODO(call): vm.runInNewContext(code[, contextObject[, options]])
+// TODO(call): vm.runInThisContext(code[, options])
+// TODO(call): vm.compileFunction(code[, params[, options]])
 // SKIP: vm.measureMemory([options]) — V8 heap measurement remains open/inapplicable (#3284).
 
 // ── Constants ──
 console.log("vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER:", vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER);
 console.log("vm.constants.DONT_CONTEXTIFY:", vm.constants.DONT_CONTEXTIFY);
 
-// Coverage: 2 auto-emitted, 1 TODO, 29 skip-listed.
+// Coverage: 2 auto-emitted, 14 TODO, 16 skip-listed.

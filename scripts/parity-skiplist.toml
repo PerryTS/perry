@@ -57,13 +57,6 @@
 
 [skip-apis]
 # Architectural — need a JS interpreter.
-"new vm.Script(code[, options])" = "Runtime JS compilation/execution remains open (#3127); import/constructor shape is covered in node-suite/vm."
-"script.cachedDataRejected" = "Script cached-data metadata remains open (#3323)."
-"script.sourceMapURL" = "Script sourceMapURL metadata remains open (#3321)."
-"script.createCachedData()" = "Script cached-data creation remains open (#3323)."
-"script.runInContext(contextifiedObject[, options])" = "Runtime eval in context remains open (#3128)."
-"script.runInNewContext([contextObject[, options]])" = "Runtime eval in a new context remains open (#3128)."
-"script.runInThisContext([options])" = "Runtime eval in the current context remains open (#3127)."
 "module.error" = "Experimental VM module state remains gated/open (#3132)."
 "module.identifier" = "Experimental VM module state remains gated/open (#3132)."
 "module.namespace" = "Experimental VM module namespace remains gated/open (#3132)."
@@ -73,19 +66,12 @@
 "new vm.SourceTextModule(code[, options])" = "Experimental VM module constructor remains gated/open (#3132)."
 "dependencySpecifiers" = "SourceTextModule dependency metadata remains gated/open (#3322)."
 "moduleRequests" = "SourceTextModule module request helpers remain gated/open (#3322)."
-"createCachedData()" = "SourceTextModule cached-data creation remains gated/open (#3323)."
 "hasAsyncGraph()" = "SourceTextModule graph helper remains gated/open (#3132)."
 "hasTopLevelAwait()" = "SourceTextModule graph helper remains gated/open (#3132)."
 "instantiate()" = "SourceTextModule instantiation remains gated/open (#3132)."
 "linkRequests(modules)" = "SourceTextModule request linking remains gated/open (#3132/#3322)."
 "new vm.SyntheticModule(exportNames, evaluateCallback[, options])" = "Experimental SyntheticModule constructor remains gated/open (#3133)."
 "setExport(name, value)" = "SyntheticModule export mutation remains gated/open (#3133)."
-"vm.createScript(code[, options])" = "Alias for Script compilation; runtime JS compilation remains open (#3127)."
-"vm.runInThisContext(code[, options])" = "Runtime eval remains open (#3127)."
-"vm.runInContext(code, contextifiedObject[, options])" = "Runtime eval in a contextified sandbox remains open (#3128)."
-"vm.runInNewContext(code[, contextObject[, options]])" = "Runtime eval in a new context remains open (#3128)."
-"vm.compileFunction(code[, params[, options]])" = "Runtime function construction remains open (#3130)."
-"vm.createContext([contextObject[, options]])" = "Runtime contextification remains open (#3128)."
 "vm.measureMemory([options])" = "V8 heap measurement remains open/inapplicable (#3284)."
 "util.compileFunction(...)" = "Same as vm.compileFunction — needs JS interpreter."
 

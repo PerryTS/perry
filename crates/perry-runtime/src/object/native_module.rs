@@ -2144,6 +2144,22 @@ const VM_NAMESPACE_KEYS: &[&[u8]] = &[
     b"constants",
 ];
 
+const VM_MODULE_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"Script",
+    b"createContext",
+    b"createScript",
+    b"runInContext",
+    b"runInNewContext",
+    b"runInThisContext",
+    b"isContext",
+    b"compileFunction",
+    b"measureMemory",
+    b"constants",
+    b"Module",
+    b"SourceTextModule",
+    b"SyntheticModule",
+];
+
 const VM_CONSTANTS_KEYS: &[&[u8]] = &[b"USE_MAIN_CONTEXT_DEFAULT_LOADER", b"DONT_CONTEXTIFY"];
 
 // Linux-only open() flags: Node only enumerates these on platforms whose libc
@@ -2613,7 +2629,11 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "events" => Some(EVENTS_NAMESPACE_KEYS),
         "repl" | "repl.default" => Some(REPL_NAMESPACE_KEYS),
         "worker_threads" => Some(WORKER_THREADS_NAMESPACE_KEYS),
-        "vm" => Some(VM_NAMESPACE_KEYS),
+        "vm" => Some(if crate::node_vm::vm_modules_enabled() {
+            VM_MODULE_NAMESPACE_KEYS
+        } else {
+            VM_NAMESPACE_KEYS
+        }),
         "vm.constants" => Some(VM_CONSTANTS_KEYS),
         "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
         "readline/promises" => Some(&[b"Interface", b"Readline", b"createInterface"]),
@@ -3333,6 +3353,9 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ) => Some(0),
         // #3127/#3128/#3130/#3284: node:vm no-flag export lengths.
         ("vm", "Script") => Some(1),
+        ("vm", "Module") => Some(0),
+        ("vm", "SourceTextModule") => Some(1),
+        ("vm", "SyntheticModule") => Some(2),
         ("vm", "createContext" | "measureMemory") => Some(0),
         ("vm", "createScript" | "runInThisContext" | "compileFunction") => Some(2),
         ("vm", "runInContext" | "runInNewContext") => Some(3),
@@ -4110,6 +4133,9 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
     let module = cjs_default_base_module(module).unwrap_or(module);
     let module = assert_instance_base_module(module).unwrap_or(module);
     let prop = canonical_native_callable_property(module, prop);
+    if module == "vm" && matches!(prop, "Module" | "SourceTextModule" | "SyntheticModule") {
+        return crate::node_vm::vm_modules_enabled();
+    }
     if module == "fs" && matches!(prop, "lchmod" | "lchmodSync") {
         return crate::fs::lchmod_is_callable_on_this_platform();
     }
@@ -6414,6 +6440,11 @@ pub(crate) unsafe fn get_native_module_constant(
         "vm" => match property {
             "default" => Some(native_namespace_or_create("vm", namespace_obj)),
             "constants" => Some(create_sub_namespace("vm.constants")),
+            "Module" | "SourceTextModule" | "SyntheticModule"
+                if crate::node_vm::vm_modules_enabled() =>
+            {
+                Some(bound_native_callable_export_value("vm", property))
+            }
             _ => None,
         },
         "vm.constants" => match property {

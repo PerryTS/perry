@@ -410,6 +410,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         | ("http", "Agent")
                                         | ("https", "Agent")
                                         | ("dns" | "dns/promises", "Resolver")
+                                        | ("vm", "SourceTextModule" | "SyntheticModule")
                                         | ("sqlite", "DatabaseSync")
                                 ) || (module_name == "stream"
                                     && STREAM_CTOR_NAMES.contains(&class_name));

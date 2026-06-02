@@ -111,4 +111,10 @@ console.log(
   hasFunction(bc, "unref"),
 );
 console.log("broadcast events:", bc.onmessage, bc.onmessageerror);
+console.log(
+  "broadcast refs:",
+  bc.ref() === bc,
+  bc.unref() === bc,
+  typeof (bc as any).hasRef,
+);
 bc.close();

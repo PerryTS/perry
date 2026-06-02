@@ -1434,6 +1434,14 @@ extern "C" fn broadcast_close(closure: *const ClosureHeader) -> f64 {
     js_undefined()
 }
 
+extern "C" fn broadcast_ref_or_unref(closure: *const ClosureHeader) -> f64 {
+    let channel_id = port_id_from_closure(closure);
+    BROADCAST_CHANNELS.with(|channels| match channels.borrow().get(&channel_id) {
+        Some(state) => f64::from_bits(state.object_bits),
+        None => js_undefined(),
+    })
+}
+
 extern "C" fn broadcast_add_event_listener(
     closure: *const ClosureHeader,
     event: f64,
@@ -1509,17 +1517,12 @@ pub extern "C" fn js_worker_threads_broadcast_channel_new(name: f64) -> f64 {
     set_object_field(
         obj,
         "ref",
-        closure_value(worker_threads_noop0 as *const u8, 0),
+        port_bound_closure(broadcast_ref_or_unref as *const u8, 0, id),
     );
     set_object_field(
         obj,
         "unref",
-        closure_value(worker_threads_noop0 as *const u8, 0),
-    );
-    set_object_field(
-        obj,
-        "hasRef",
-        closure_value(worker_threads_has_ref as *const u8, 0),
+        port_bound_closure(broadcast_ref_or_unref as *const u8, 0, id),
     );
     set_object_field(
         obj,
@@ -1970,6 +1973,8 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) {
 // [[project_auto_optimize_keepalive_3320]].
 #[used]
 static KEEP_WT_MESSAGE_CHANNEL_NEW: extern "C" fn() -> f64 = js_worker_threads_message_channel_new;
+#[used]
+static KEEP_WT_BROADCAST_NEW: extern "C" fn(f64) -> f64 = js_worker_threads_broadcast_channel_new;
 #[used]
 static KEEP_WT_RECEIVE_MESSAGE_ON_PORT: extern "C" fn(f64) -> f64 =
     js_worker_threads_receive_message_on_port;
