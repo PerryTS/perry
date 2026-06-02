@@ -194,6 +194,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             result.extend(lower_block_stmt_scoped(ctx, block)?);
         }
         ast::Stmt::Expr(expr_stmt) => {
+            result.extend(predeclare_implicit_assignment_targets(ctx, &expr_stmt.expr));
             // Desugar this.field.splice(...) to:
             //   let __temp = this.field;
             //   __temp.splice(...);
@@ -526,6 +527,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         if is_var {
                             for decl in var_decl.decls.iter() {
                                 let name = get_binding_name(&decl.name)?;
+                                if let Some(init_ast) = decl.init.as_ref() {
+                                    result.extend(predeclare_implicit_assignment_targets(
+                                        ctx, init_ast,
+                                    ));
+                                }
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
                                 let id = ctx.define_local(name.clone(), Type::Any);
@@ -542,6 +548,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         } else {
                             for decl in var_decl.decls.iter().skip(1) {
                                 let name = get_binding_name(&decl.name)?;
+                                if let Some(init_ast) = decl.init.as_ref() {
+                                    result.extend(predeclare_implicit_assignment_targets(
+                                        ctx, init_ast,
+                                    ));
+                                }
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
                                 let id = ctx.define_local(name.clone(), Type::Any);
@@ -555,6 +566,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                             }
                             if let Some(decl) = var_decl.decls.first() {
                                 let name = get_binding_name(&decl.name)?;
+                                if let Some(init_ast) = decl.init.as_ref() {
+                                    result.extend(predeclare_implicit_assignment_targets(
+                                        ctx, init_ast,
+                                    ));
+                                }
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
                                 let id = ctx.define_local(name.clone(), Type::Any);
@@ -571,6 +587,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         }
                     }
                     ast::VarDeclOrExpr::Expr(expr) => {
+                        result.extend(predeclare_implicit_assignment_targets(ctx, expr));
                         Some(Box::new(Stmt::Expr(lower_expr(ctx, expr)?)))
                     }
                 }

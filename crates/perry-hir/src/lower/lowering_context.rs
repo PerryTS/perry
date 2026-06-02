@@ -194,6 +194,10 @@ pub struct LoweringContext {
     /// Module-level variable names pre-registered in the forward-declaration pass.
     /// Used to avoid duplicate define_local calls when the actual declaration is lowered.
     pub(crate) pre_registered_module_vars: HashSet<String>,
+    /// Subset of `pre_registered_module_vars` that came from syntactic `var`
+    /// declarations. Sloppy assignments before a later `var` need an early
+    /// backing slot; `let`/`const` should not use that path.
+    pub(crate) pre_registered_module_var_decls: HashSet<String>,
     /// LocalIds that are defined at module top level (outside any function or
     /// block). Closure `captures` referencing these IDs are filtered out at
     /// lowering time because codegen loads module-level bindings from their

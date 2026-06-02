@@ -975,6 +975,9 @@ pub(crate) fn lower_stmt(
             }
         }
         ast::Stmt::Expr(expr_stmt) => {
+            module
+                .init
+                .extend(predeclare_implicit_assignment_targets(ctx, &expr_stmt.expr));
             // Check if this is a destructuring assignment that needs special handling
             if let ast::Expr::Assign(assign) = expr_stmt.expr.as_ref() {
                 if let ast::AssignTarget::Pat(pat) = &assign.left {
@@ -1100,6 +1103,11 @@ pub(crate) fn lower_stmt(
                         if is_var {
                             for decl in var_decl.decls.iter() {
                                 let name = get_binding_name(&decl.name)?;
+                                if let Some(init_ast) = decl.init.as_ref() {
+                                    module.init.extend(predeclare_implicit_assignment_targets(
+                                        ctx, init_ast,
+                                    ));
+                                }
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
                                 let id = ctx.define_local(name.clone(), Type::Any);
@@ -1116,6 +1124,11 @@ pub(crate) fn lower_stmt(
                         } else {
                             for decl in var_decl.decls.iter().skip(1) {
                                 let name = get_binding_name(&decl.name)?;
+                                if let Some(init_ast) = decl.init.as_ref() {
+                                    module.init.extend(predeclare_implicit_assignment_targets(
+                                        ctx, init_ast,
+                                    ));
+                                }
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
                                 let id = ctx.define_local(name.clone(), Type::Any);
@@ -1129,6 +1142,11 @@ pub(crate) fn lower_stmt(
                             }
                             if let Some(decl) = var_decl.decls.first() {
                                 let name = get_binding_name(&decl.name)?;
+                                if let Some(init_ast) = decl.init.as_ref() {
+                                    module.init.extend(predeclare_implicit_assignment_targets(
+                                        ctx, init_ast,
+                                    ));
+                                }
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
                                 let id = ctx.define_local(name.clone(), Type::Any);
@@ -1145,6 +1163,9 @@ pub(crate) fn lower_stmt(
                         }
                     }
                     ast::VarDeclOrExpr::Expr(expr) => {
+                        for stmt in predeclare_implicit_assignment_targets(ctx, expr) {
+                            module.init.push(stmt);
+                        }
                         Some(Box::new(Stmt::Expr(lower_expr(ctx, expr)?)))
                     }
                 }

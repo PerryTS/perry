@@ -50,6 +50,44 @@ use super::{
     TypedFeedbackKind,
 };
 
+pub(crate) fn emit_nullish_write_guard(
+    ctx: &mut FnCtx<'_>,
+    obj_bits: &str,
+    property: &str,
+    label_prefix: &str,
+) {
+    let is_undef = ctx
+        .block()
+        .icmp_eq(I64, obj_bits, crate::nanbox::TAG_UNDEFINED_I64);
+    let is_null = ctx
+        .block()
+        .icmp_eq(I64, obj_bits, crate::nanbox::TAG_NULL_I64);
+    let is_nullish = ctx.block().or(I1, &is_undef, &is_null);
+    let throw_idx = ctx.new_block(&format!("{}.throw_nullish", label_prefix));
+    let ok_idx = ctx.new_block(&format!("{}.recv_ok", label_prefix));
+    let throw_label = ctx.block_label(throw_idx);
+    let ok_label = ctx.block_label(ok_idx);
+    ctx.block().cond_br(&is_nullish, &throw_label, &ok_label);
+
+    ctx.current_block = throw_idx;
+    let key_idx = ctx.strings.intern(property);
+    let prop_entry = ctx.strings.entry(key_idx);
+    let prop_bytes_global = format!("@{}", prop_entry.bytes_global);
+    let prop_len_str = prop_entry.byte_len.to_string();
+    let is_null_i32 = ctx.block().zext(I1, &is_null, I32);
+    ctx.block().call_void(
+        "js_throw_type_error_property_access",
+        &[
+            (I32, &is_null_i32),
+            (PTR, &prop_bytes_global),
+            (I64, &prop_len_str),
+        ],
+    );
+    ctx.block().unreachable();
+
+    ctx.current_block = ok_idx;
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::PropertySet {
@@ -395,6 +433,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let key_idx = ctx.strings.intern(property);
             let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
             let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+            emit_nullish_write_guard(ctx, &obj_bits, property, "pset");
             // Issue #618-followup: pass the FULL bits (including NaN-box
             // tag) so the runtime can detect INT32-tagged class refs
             // (`SQL.Aliased = Aliased` IIFE-static-property pattern from

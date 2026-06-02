@@ -71,6 +71,7 @@ impl LoweringContext {
             func_return_types: Vec::new(),
             resolved_types: None,
             pre_registered_module_vars: HashSet::new(),
+            pre_registered_module_var_decls: HashSet::new(),
             module_level_ids: HashSet::new(),
             scope_depth: 0,
             scope_local_marks: Vec::new(),
