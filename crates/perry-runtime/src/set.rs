@@ -109,7 +109,11 @@ fn register_set(ptr: *mut SetHeader) {
 }
 
 pub fn is_registered_set(addr: usize) -> bool {
-    if addr < 0x1000 + crate::gc::GC_HEADER_SIZE {
+    // #4004: reject the `< 0x100000` small-handle band (Web Fetch / node:http /
+    // timer ids are NaN-boxed POINTER_TAG values, not heap addresses) before
+    // dereferencing the GC header. Managed Sets are arena-allocated above the
+    // cutoff. See map::is_registered_map / date::is_date_cell_addr.
+    if addr < 0x100000 {
         return false;
     }
     unsafe {
