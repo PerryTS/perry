@@ -13,8 +13,7 @@ fn is_global_this_value(expr: &Expr) -> bool {
 }
 
 /// #3663: classic-stream constructor export names from `node:stream`.
-const STREAM_CTOR_NAMES: [&str; 5] =
-    ["Readable", "Writable", "Duplex", "Transform", "PassThrough"];
+const STREAM_CTOR_NAMES: [&str; 5] = ["Readable", "Writable", "Duplex", "Transform", "PassThrough"];
 
 /// #3663: the string argument of a `require("<literal>")` call, if any. Unlike
 /// `is_require_builtin_module` (whose allowlist is just fs/path/crypto), this
