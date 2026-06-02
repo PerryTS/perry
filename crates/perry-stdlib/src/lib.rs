@@ -83,8 +83,8 @@ pub mod string_decoder;
 // Greenfield implementation (Node ships it deprecated since v11 but
 // many npm packages still import it).
 pub mod querystring;
-// vm — node:vm import/require shape scaffold. Execution remains in open VM
-// issues; the wrappers here retain direct-call FFI symbols.
+// vm — node:vm import/require shape plus narrowed local execution helpers.
+// The wrappers here retain direct-call FFI symbols.
 pub mod vm;
 pub mod worker_threads;
 

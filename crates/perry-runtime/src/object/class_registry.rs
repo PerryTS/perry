@@ -1124,6 +1124,19 @@ pub unsafe extern "C" fn js_new_function_construct(
             };
             return crate::fs::js_fs_utf8_stream_new(options);
         }
+        if module == "vm" && method == "Script" {
+            let code = if !args_ptr.is_null() && args_len > 0 {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            let options = if !args_ptr.is_null() && args_len > 1 {
+                *args_ptr.add(1)
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return crate::node_vm::js_vm_script_new(code, options);
+        }
         if module == "fs"
             && matches!(
                 method.as_str(),
