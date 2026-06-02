@@ -4149,7 +4149,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("wasi", "finalizeBindings", true, Some("WASI")),
     property("wasi", "wasiImport"),
     // --- node:vm ---
-    method_sig("vm", "createContext", false, None, &[p_any("p0")], TypeSpec::Any),
+    method_sig(
+        "vm",
+        "createContext",
+        false,
+        None,
+        &[p_any("p0")],
+        TypeSpec::Any,
+    ),
     // --- perf_hooks (W3C User Timing on `performance` + PerformanceObserver) ---
     internal_method("perf_hooks", "now", false, None),
     internal_method("perf_hooks", "mark", false, None),
