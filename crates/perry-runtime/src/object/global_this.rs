@@ -199,6 +199,19 @@ extern "C" fn uri_error_constructor_call_thunk(
     error_constructor_call(crate::error::ERROR_KIND_URI_ERROR, message)
 }
 
+pub(crate) fn builtin_prototype_value(name: &str) -> f64 {
+    let ctor = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+    let ctor_bits = ctor.to_bits();
+    if (ctor_bits >> 48) != 0x7FFD {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let ctor_ptr = (ctor_bits & crate::value::POINTER_MASK) as usize;
+    if ctor_ptr == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype")
+}
+
 pub(crate) extern "C" fn webcrypto_illegal_constructor_thunk(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
@@ -626,65 +639,14 @@ extern "C" fn global_this_queue_microtask_thunk(
 extern "C" fn object_prototype_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
-    use crate::value::JSValue;
+    // Delegate to the canonical `js_object_to_string` so this callable form
+    // (`const f = Object.prototype.toString; f.call(x)`) shares the full brand
+    // table (Map/Set/WeakMap/Promise/RegExp/Symbol/BigInt/typed arrays/Date/
+    // buffers/…). Previously this thunk duplicated a coarse discrimination that
+    // mis-tagged typed arrays as `[object Number]` and everything beyond
+    // Array/Error/Date as `[object Object]`.
     let this_bits = IMPLICIT_THIS.with(|c| c.get());
-    if let Some(tag) = crate::object::web_stream_to_string_tag(f64::from_bits(this_bits)) {
-        let formatted = format!("[object {}]", tag);
-        let bytes = formatted.as_bytes();
-        let s = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-        return f64::from_bits(crate::js_nanbox_string(s as i64).to_bits());
-    }
-    if let Some(tag) = crate::builtins::boxed_primitive_to_string_tag(f64::from_bits(this_bits)) {
-        let formatted = format!("[object {}]", tag);
-        let bytes = formatted.as_bytes();
-        let s = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-        return f64::from_bits(crate::js_nanbox_string(s as i64).to_bits());
-    }
-    let this_jsv = JSValue::from_bits(this_bits);
-    let tag: &[u8] = if this_jsv.is_undefined() {
-        b"[object Undefined]"
-    } else if this_jsv.is_null() {
-        b"[object Null]"
-    } else if this_jsv.is_bool() {
-        b"[object Boolean]"
-    } else if this_jsv.is_any_string() {
-        b"[object String]"
-    } else if this_jsv.is_int32() || this_jsv.is_number() {
-        b"[object Number]"
-    } else {
-        // Discriminate by GC header type for heap-allocated values.
-        // Accept both NaN-boxed pointers and raw-i64 pointers (the
-        // codegen's two representations for non-numeric values — see
-        // CLAUDE.md "Module-level variables"). Module-level arrays
-        // arrive here as raw i64 because the codegen stores them
-        // unboxed; function-arg-passed arrays arrive NaN-boxed.
-        let raw = if this_jsv.is_pointer() {
-            (this_bits & 0x0000_FFFF_FFFF_FFFF) as *const u8
-        } else {
-            this_bits as *const u8
-        };
-        if !raw.is_null() && (raw as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
-            unsafe {
-                let gc_header = raw.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                let gc_type = (*gc_header).obj_type;
-                if gc_type == crate::gc::GC_TYPE_DATE_CELL {
-                    b"[object Date]"
-                } else if gc_type == crate::gc::GC_TYPE_ARRAY
-                    || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY
-                {
-                    b"[object Array]"
-                } else if gc_type == crate::gc::GC_TYPE_ERROR {
-                    b"[object Error]"
-                } else {
-                    b"[object Object]"
-                }
-            }
-        } else {
-            b"[object Object]"
-        }
-    };
-    let s = crate::string::js_string_from_bytes(tag.as_ptr(), tag.len() as u32);
-    f64::from_bits(crate::js_nanbox_string(s as i64).to_bits())
+    unsafe { crate::object::js_object_to_string(f64::from_bits(this_bits)) }
 }
 
 extern "C" fn object_prototype_is_prototype_of_thunk(
@@ -2097,10 +2059,10 @@ pub(super) fn install_proto_method(
     method_name: &str,
     func_ptr: *const u8,
     arity: u32,
-) {
+) -> f64 {
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     if closure.is_null() {
-        return;
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     crate::closure::js_register_closure_arity(func_ptr, arity);
     super::native_module::set_bound_native_closure_name(closure, method_name);
@@ -2138,6 +2100,7 @@ pub(super) fn install_proto_method(
         "length".to_string(),
         super::PropertyAttrs::new(false, false, true),
     );
+    value
 }
 
 fn install_proto_method_rest(

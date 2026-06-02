@@ -491,9 +491,9 @@ thunk!(
 
 thunk!(
     thunk_readline_Interface,
-    "node:readline/promises.Interface is not yet implemented in Perry (tracked by issue #793)."
+    "node:readline/promises.Interface constructor execution is not yet implemented in Perry (tracked by issue #3213)."
 );
 thunk!(
     thunk_readline_Readline,
-    "node:readline/promises.Readline is not yet implemented in Perry (tracked by issue #793)."
+    "node:readline/promises.Readline terminal action batching is not yet implemented in Perry (tracked by issue #3214)."
 );

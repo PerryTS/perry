@@ -140,6 +140,11 @@ pub enum TypeSpec {
     /// returns a NaN-boxed JSValue whose user-side type isn't fixed
     /// (`F64` returns can be `Promise<T>`, mixed strings/numbers, etc.).
     Any,
+    /// `Promise<any>`. The call returns a runtime Promise whose resolved
+    /// value isn't statically known (e.g. `perry/thread`'s `spawn`, whose
+    /// resolution is the background closure's return value). Distinguishes
+    /// "this is awaitable" from the opaque [`TypeSpec::Any`] fallback.
+    Promise,
 }
 
 /// What shape of symbol this entry describes.
