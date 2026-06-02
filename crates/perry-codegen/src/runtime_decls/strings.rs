@@ -494,6 +494,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_trim_start", I64, &[I64]);
     module.declare_function("js_string_trim_end", I64, &[I64]);
     module.declare_function("js_string_char_at", I64, &[I64, I32]);
+    // #3987: `s[key]` canonical-index read — returns the char (NaN-boxed string)
+    // for a valid array index, else NaN-boxed `undefined`. Takes the raw key.
+    module.declare_function("js_string_index_get", DOUBLE, &[I64, DOUBLE]);
     // #2787: NaN-safe JS index coercion (undefined/NaN -> 0, trunc, clamp) for
     // the char-access methods, replacing a raw `fptosi` that is UB on a NaN.
     module.declare_function("js_string_index_to_i32", I32, &[DOUBLE]);

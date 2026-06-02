@@ -2,6 +2,14 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1084 — fix(String): indexed reads use CanonicalNumericIndexString semantics (#3987, partial)
+
+`s[NaN]`, `s[Infinity]`, `s[-1]`, `s[1.5]`, and out-of-range `s[10]` returned `""` (or a wrong/truncated char) instead of `undefined`, and `s["1"]` returned the char at index 0 instead of index 1. Codegen lowered string `s[key]` by `fptosi`-truncating the key (so `1.5`→`1`, `NaN`→`0`) and calling `js_string_char_at`, which returns `""` for out-of-range/negative — never `undefined` — and mis-resolved string keys.
+
+Fix: new runtime `js_string_index_get(s, key)` (`crates/perry-runtime/src/string/char_ops.rs`) implements ECMAScript CanonicalNumericIndexString — it returns the single UTF-16 code-unit string only when `key` is a canonical array index (a non-negative integer, or a numeric string that round-trips its `ToString`, e.g. `"1"`) within `[0, length)`; every other key (`NaN`/`Infinity`/negatives/fractions/OOB/`"01"`/non-numeric) returns `undefined`. Codegen (`expr/index_get.rs`) now routes string-receiver `IndexGet` to it with the **raw** NaN-boxed key (no `fptosi`).
+
+Validated against `node --experimental-strip-types`: `s[NaN]`/`s[Infinity]`/`s[-1]`/`s[1.5]`/`s[10]`→`undefined`, `s[0]`/`s[2]`→chars, `s["1"]`→`"e"`; loops, variable/expression indices, nested `arr[i][j]`, and object numeric-string keys all match. `perry-runtime` char_ops/string unit tests green; url/path/querystring node-suite sweep 217/0 (no regression). The lone-surrogate (astral `"😀"[1]`) result is unchanged — that's the documented WTF-8 categorical gap, not affected by this change. Focused sub-fix of #3987 — its `new String(...)` wrapper own-`length` case remains open.
+
 ## v0.5.1083 — fix(process.getBuiltinModule): punycode methods dispatch (decode/encode/toASCII/toUnicode)
 
 `process.getBuiltinModule("punycode")` returned a module whose `decode`/`encode`/`toASCII`/`toUnicode` were callable but returned `undefined` — so `punycode.decode("maana-pta")` gave `undefined` instead of `"mañana"`. (Direct `import punycode from "node:punycode"` already worked.)
