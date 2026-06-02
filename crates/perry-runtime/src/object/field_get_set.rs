@@ -1940,6 +1940,23 @@ pub extern "C" fn js_object_get_field_by_name(
                     let b = obj as *const crate::buffer::BufferHeader;
                     return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
                 }
+                // ArrayBuffer.prototype `resizable` / `maxByteLength` getters.
+                // Perry has no resizable ArrayBuffers, so `resizable` is always
+                // false and `maxByteLength` equals `byteLength`. These live only
+                // on ArrayBuffer (not DataView/SharedArrayBuffer/typed arrays),
+                // which return `undefined` for them in Node — so scope to a
+                // plain registered ArrayBuffer.
+                if (key_bytes == b"resizable" || key_bytes == b"maxByteLength")
+                    && crate::buffer::is_array_buffer(obj as usize)
+                    && !crate::buffer::is_data_view(obj as usize)
+                    && !crate::buffer::is_shared_array_buffer(obj as usize)
+                {
+                    if key_bytes == b"resizable" {
+                        return JSValue::bool(false);
+                    }
+                    let b = obj as *const crate::buffer::BufferHeader;
+                    return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
+                }
                 if key_bytes == b"constructor" {
                     if crate::buffer::crypto_key_meta(obj as usize).is_some() {
                         let ctor =

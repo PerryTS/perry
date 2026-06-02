@@ -2,6 +2,10 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1091 — fix(runtime): ArrayBuffer.prototype resizable / maxByteLength getters
+
+`new ArrayBuffer(n).resizable` and `.maxByteLength` returned `undefined` instead of Node's `false` and `n`. Perry has no resizable ArrayBuffers, so a plain ArrayBuffer is always non-resizable (`resizable === false`) and its `maxByteLength` equals its `byteLength`. Added both getters to the registered-buffer property path in `object/field_get_set.rs`, scoped to a plain ArrayBuffer (excluding `DataView`/`SharedArrayBuffer`/typed-array views, which return `undefined` for these in Node). Advances the ArrayBuffer/DataView conformance issue (#4033).
+
 ## v0.5.1090 — fix(json): JSON.parse throws a real SyntaxError
 
 `JSON.parse` on invalid input threw a **bare string** instead of a `SyntaxError` object, so `err instanceof SyntaxError` was `false` and `err.constructor.name` was `undefined` — breaking the standard `try { JSON.parse(x) } catch (e) { if (e instanceof SyntaxError) … }` idiom and test262 error-identity assertions. All four throw sites in `js_json_parse`/`json/parse_api.rs` (null input, empty input, and the two invalid-token paths) built the thrown value with `JSValue::string_ptr(msg_ptr)` rather than the `syntax_error_value` helper that already wraps `js_syntaxerror_new`. Routed them through `syntax_error_value` so `JSON.parse("")`, `JSON.parse("x")`, etc. now throw real `SyntaxError` instances (with `name`/`constructor`/`instanceof` all correct), matching Node. The separate parser-leniency gap (accepting trailing/multiple-token input) remains tracked by #4030.
