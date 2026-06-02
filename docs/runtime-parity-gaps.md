@@ -7,20 +7,20 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
 | Whole-module gaps (zero coverage) | 16 | 427 | n/a |
-| Partial-module gaps | 31 | 1485 | 578 |
+| Partial-module gaps | 31 | 1482 | 578 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2194** |  |
+| **Total true gaps** |  | **2191** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
 - `Web / Global APIs` — 282
 - `node:os` — 195
 - `node:crypto` — 128
-- `node:process (and global `process`)` — 99
-- `node:util` — 92
 - `node:http2` — 97
+- `node:process (and global `process`)` — 96
 - `node:test (and node:test/reporters, node:test/mock)` — 93
+- `node:util` — 92
 - `node:http` — 89
 - `node:zlib` — 78
 - `node:stream` — 76
@@ -480,7 +480,7 @@ Runtime-created fs SystemError metadata is covered by parity fixtures: sync, cal
 
 ### node:process (and global `process`)
 
-**Gap APIs: 97** · Already covered: 21
+**Gap APIs: 94** · Already covered: 24
 
 #### Missing from Perry
 
@@ -527,10 +527,7 @@ Runtime-created fs SystemError metadata is covered by parity fixtures: sync, cal
 - `process.binding(name)`
 - `process.platform`
 - `process.arch`
-- `process.release`
-- `process.argv0`
-- `process.execPath`
-- … and 51 more (see `runtime-parity.md` for the full list)
+- … and 48 more (see `runtime-parity.md` for the full list)
 
 #### Covered (sampled)
 

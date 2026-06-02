@@ -286,6 +286,9 @@ pub(crate) fn lower_module_decl(
                                 source.clone(),
                                 native_method,
                             );
+                            if source == "process" {
+                                ctx.register_builtin_module_alias(local.clone(), source.clone());
+                            }
                         } else if is_node_builtin_module(&source) {
                             // #3906: a CJS-backed Node builtin *submodule* that
                             // isn't in NATIVE_MODULES (e.g. `node:timers/promises`,
@@ -351,7 +354,12 @@ pub(crate) fn lower_module_decl(
                         if is_native {
                             // Namespace import of native module (e.g., import * as mysql from 'mysql2')
                             // Methods are called via the namespace, so no specific method name
-                            ctx.register_native_module(local.clone(), source.clone(), None);
+                            let native_source = if source == "process" {
+                                "process.namespace".to_string()
+                            } else {
+                                source.clone()
+                            };
+                            ctx.register_native_module(local.clone(), native_source, None);
                             // Also register as builtin module alias so method-level
                             // recognition works (child_process, fs, os, etc.)
                             ctx.register_builtin_module_alias(local.clone(), source.clone());
