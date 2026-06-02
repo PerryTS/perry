@@ -1572,6 +1572,13 @@ pub(super) fn normalize_readable_from_input(iterable: f64) -> NormalizedReadable
     if let Some(chunks) = collection_iterable_chunks(raw) {
         return normalized_readable_chunks(chunks);
     }
+    if raw >= 0x10000 {
+        if let Some(chunks) = unsafe {
+            crate::object::arguments_object_to_array(raw as *const crate::object::ObjectHeader)
+        } {
+            return normalized_readable_chunks(box_pointer(chunks as *const u8));
+        }
+    }
     if is_array_like_value(iterable) {
         return normalized_readable_chunks(iterable);
     }

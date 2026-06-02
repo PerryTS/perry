@@ -97,6 +97,52 @@ fn process_metadata_native_property(prop: &str) -> Option<Expr> {
     })
 }
 
+fn ws_ready_state_value(prop: &str) -> Option<f64> {
+    Some(match prop {
+        "CONNECTING" => 0.0,
+        "OPEN" => 1.0,
+        "CLOSING" => 2.0,
+        "CLOSED" => 3.0,
+        _ => return None,
+    })
+}
+
+fn is_ws_ready_state_receiver(
+    ctx: &LoweringContext,
+    obj_ast: &ast::Expr,
+    object_expr: &Expr,
+) -> bool {
+    fn native_ws_class_property(expr: &Expr) -> bool {
+        match expr {
+            Expr::NativeModuleRef(module) if module == "ws" => true,
+            Expr::PropertyGet { object, property }
+                if matches!(property.as_str(), "WebSocket" | "default")
+                    && matches!(object.as_ref(), Expr::NativeModuleRef(module) if module == "ws") =>
+            {
+                true
+            }
+            Expr::PropertyGet { object, property }
+                if property == "WebSocket" && matches!(object.as_ref(), Expr::GlobalGet(0)) =>
+            {
+                true
+            }
+            _ => false,
+        }
+    }
+
+    if native_ws_class_property(object_expr) {
+        return true;
+    }
+
+    let ast::Expr::Ident(obj_ident) = obj_ast else {
+        return false;
+    };
+    matches!(
+        ctx.lookup_native_module(obj_ident.sym.as_ref()),
+        Some(("ws", None | Some("default") | Some("WebSocket")))
+    )
+}
+
 fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Result<Expr> {
     // #3896: capture-and-clear the call-callee marker so it applies only to THIS
     // member (the immediate callee), not to nested member-object reads lowered
@@ -1044,6 +1090,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "url"
+                    && class_name == "URLPattern"
+                    && is_url_pattern_data_property(&property_name)
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "worker_threads"
                     && matches!(class_name.as_str(), "MessagePort" | "BroadcastChannel")
                     && matches!(
@@ -1594,6 +1649,13 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     }
 
     let mut object_expr = lower_expr(ctx, &member.obj)?;
+    if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+        if let Some(value) = ws_ready_state_value(prop_ident.sym.as_ref()) {
+            if is_ws_ready_state_receiver(ctx, member.obj.as_ref(), &object_expr) {
+                return Ok(Expr::Number(value));
+            }
+        }
+    }
     let member_reads_global_fetch = matches!(
         unwrap_transparent(member.obj.as_ref()),
         ast::Expr::Ident(i) if i.sym.as_ref() == "globalThis"
@@ -2463,6 +2525,21 @@ fn is_headers_method_name(prop: &str) -> bool {
             | "keys"
             | "set"
             | "values"
+    )
+}
+
+fn is_url_pattern_data_property(prop: &str) -> bool {
+    matches!(
+        prop,
+        "protocol"
+            | "username"
+            | "password"
+            | "hostname"
+            | "port"
+            | "pathname"
+            | "search"
+            | "hash"
+            | "hasRegExpGroups"
     )
 }
 

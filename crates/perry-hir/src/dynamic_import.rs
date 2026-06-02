@@ -18,373 +18,19 @@
 //! Here we only fold the JS-level path *string*.
 
 use crate::ir::{BinaryOp, Export, Expr, Function, Module, Stmt};
-use crate::walker::{walk_expr_children, walk_expr_children_mut};
+use crate::walker::walk_expr_children;
+use std::borrow::Borrow;
 use std::collections::HashSet;
 
 /// Hard cap on the number of paths a single `import()` site can resolve
 /// to. Over-cap produces a compile error per D2 (issue #100).
 pub const DYNAMIC_IMPORT_PATH_CAP: usize = 64;
 
-/// Walk every expression in `module` (init statements, top-level functions,
-/// class constructors/methods/getters/setters, field initializers, etc.)
-/// and invoke `f` with each `&mut Expr::DynamicImport` node found.
-///
-/// Used by the driver to run [`resolve_import_path`] over every dynamic
-/// import site in a freshly lowered module so it can register the
-/// resolved targets in the import graph and stamp `paths` on each node.
-pub fn for_each_dynamic_import_mut<F: FnMut(&mut Expr)>(module: &mut Module, f: &mut F) {
-    for stmt in &mut module.init {
-        visit_stmt_for_dyn_imports(stmt, f);
-    }
-    for func in &mut module.functions {
-        visit_function_for_dyn_imports(func, f);
-    }
-    for cls in &mut module.classes {
-        if let Some(ctor) = &mut cls.constructor {
-            visit_function_for_dyn_imports(ctor, f);
-        }
-        for m in &mut cls.methods {
-            visit_function_for_dyn_imports(m, f);
-        }
-        for (_, g) in &mut cls.getters {
-            visit_function_for_dyn_imports(g, f);
-        }
-        for (_, s) in &mut cls.setters {
-            visit_function_for_dyn_imports(s, f);
-        }
-        for m in &mut cls.static_methods {
-            visit_function_for_dyn_imports(m, f);
-        }
-        for field in &mut cls.fields {
-            if let Some(init) = &mut field.init {
-                visit_expr_for_dyn_imports(init, f);
-            }
-        }
-        for field in &mut cls.static_fields {
-            if let Some(init) = &mut field.init {
-                visit_expr_for_dyn_imports(init, f);
-            }
-        }
-    }
-    for global in &mut module.globals {
-        if let Some(init) = &mut global.init {
-            visit_expr_for_dyn_imports(init, f);
-        }
-    }
-}
-
-/// Walk every expression in `module` and invoke `f` with each
-/// `&mut Expr::WorkerNew` node found. Worker filenames use the same
-/// deterministic resolver as dynamic `import()`, but they lower to a
-/// different runtime shape at codegen.
-pub fn for_each_worker_new_mut<F: FnMut(&mut Expr)>(module: &mut Module, f: &mut F) {
-    for stmt in &mut module.init {
-        visit_stmt_for_worker_new(stmt, f);
-    }
-    for func in &mut module.functions {
-        visit_function_for_worker_new(func, f);
-    }
-    for cls in &mut module.classes {
-        if let Some(ctor) = &mut cls.constructor {
-            visit_function_for_worker_new(ctor, f);
-        }
-        for m in &mut cls.methods {
-            visit_function_for_worker_new(m, f);
-        }
-        for (_, g) in &mut cls.getters {
-            visit_function_for_worker_new(g, f);
-        }
-        for (_, s) in &mut cls.setters {
-            visit_function_for_worker_new(s, f);
-        }
-        for m in &mut cls.static_methods {
-            visit_function_for_worker_new(m, f);
-        }
-        for field in &mut cls.fields {
-            if let Some(init) = &mut field.init {
-                visit_expr_for_worker_new(init, f);
-            }
-        }
-        for field in &mut cls.static_fields {
-            if let Some(init) = &mut field.init {
-                visit_expr_for_worker_new(init, f);
-            }
-        }
-    }
-    for global in &mut module.globals {
-        if let Some(init) = &mut global.init {
-            visit_expr_for_worker_new(init, f);
-        }
-    }
-}
-
-fn visit_function_for_dyn_imports<F: FnMut(&mut Expr)>(func: &mut Function, f: &mut F) {
-    for stmt in &mut func.body {
-        visit_stmt_for_dyn_imports(stmt, f);
-    }
-    for param in &mut func.params {
-        if let Some(default) = &mut param.default {
-            visit_expr_for_dyn_imports(default, f);
-        }
-    }
-}
-
-fn visit_stmt_for_dyn_imports<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
-    match stmt {
-        Stmt::Let { init, .. } => {
-            if let Some(e) = init {
-                visit_expr_for_dyn_imports(e, f);
-            }
-        }
-        Stmt::Expr(e) => visit_expr_for_dyn_imports(e, f),
-        Stmt::Return(opt) => {
-            if let Some(e) = opt {
-                visit_expr_for_dyn_imports(e, f);
-            }
-        }
-        Stmt::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            visit_expr_for_dyn_imports(condition, f);
-            for s in then_branch {
-                visit_stmt_for_dyn_imports(s, f);
-            }
-            if let Some(eb) = else_branch {
-                for s in eb {
-                    visit_stmt_for_dyn_imports(s, f);
-                }
-            }
-        }
-        Stmt::While { condition, body } => {
-            visit_expr_for_dyn_imports(condition, f);
-            for s in body {
-                visit_stmt_for_dyn_imports(s, f);
-            }
-        }
-        Stmt::DoWhile { body, condition } => {
-            for s in body {
-                visit_stmt_for_dyn_imports(s, f);
-            }
-            visit_expr_for_dyn_imports(condition, f);
-        }
-        Stmt::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            if let Some(i) = init {
-                visit_stmt_for_dyn_imports(i, f);
-            }
-            if let Some(c) = condition {
-                visit_expr_for_dyn_imports(c, f);
-            }
-            if let Some(u) = update {
-                visit_expr_for_dyn_imports(u, f);
-            }
-            for s in body {
-                visit_stmt_for_dyn_imports(s, f);
-            }
-        }
-        Stmt::Labeled { body, .. } => visit_stmt_for_dyn_imports(body, f),
-        Stmt::Throw(e) => visit_expr_for_dyn_imports(e, f),
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            for s in body {
-                visit_stmt_for_dyn_imports(s, f);
-            }
-            if let Some(c) = catch {
-                for s in &mut c.body {
-                    visit_stmt_for_dyn_imports(s, f);
-                }
-            }
-            if let Some(fb) = finally {
-                for s in fb {
-                    visit_stmt_for_dyn_imports(s, f);
-                }
-            }
-        }
-        Stmt::Switch {
-            discriminant,
-            cases,
-        } => {
-            visit_expr_for_dyn_imports(discriminant, f);
-            for c in cases {
-                if let Some(t) = &mut c.test {
-                    visit_expr_for_dyn_imports(t, f);
-                }
-                for s in &mut c.body {
-                    visit_stmt_for_dyn_imports(s, f);
-                }
-            }
-        }
-        Stmt::Break
-        | Stmt::Continue
-        | Stmt::LabeledBreak(_)
-        | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_) => {}
-    }
-}
-
-fn visit_expr_for_dyn_imports<F: FnMut(&mut Expr)>(expr: &mut Expr, f: &mut F) {
-    if matches!(expr, Expr::DynamicImport { .. }) {
-        f(expr);
-        // After f mutates the node, still descend into the (possibly
-        // unchanged) `arg` so nested dynamic imports are visited.
-        if let Expr::DynamicImport { arg, .. } = expr {
-            visit_expr_for_dyn_imports(arg, f);
-        }
-        return;
-    }
-    // Closure bodies — descend manually (the walker intentionally
-    // doesn't).
-    if let Expr::Closure { body, .. } = expr {
-        for s in body {
-            visit_stmt_for_dyn_imports(s, f);
-        }
-    }
-    walk_expr_children_mut(expr, &mut |child| visit_expr_for_dyn_imports(child, f));
-}
-
-fn visit_function_for_worker_new<F: FnMut(&mut Expr)>(func: &mut Function, f: &mut F) {
-    for stmt in &mut func.body {
-        visit_stmt_for_worker_new(stmt, f);
-    }
-    for param in &mut func.params {
-        if let Some(default) = &mut param.default {
-            visit_expr_for_worker_new(default, f);
-        }
-    }
-}
-
-fn visit_stmt_for_worker_new<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
-    match stmt {
-        Stmt::Let { init, .. } => {
-            if let Some(e) = init {
-                visit_expr_for_worker_new(e, f);
-            }
-        }
-        Stmt::Expr(e) => visit_expr_for_worker_new(e, f),
-        Stmt::Return(opt) => {
-            if let Some(e) = opt {
-                visit_expr_for_worker_new(e, f);
-            }
-        }
-        Stmt::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            visit_expr_for_worker_new(condition, f);
-            for s in then_branch {
-                visit_stmt_for_worker_new(s, f);
-            }
-            if let Some(eb) = else_branch {
-                for s in eb {
-                    visit_stmt_for_worker_new(s, f);
-                }
-            }
-        }
-        Stmt::While { condition, body } => {
-            visit_expr_for_worker_new(condition, f);
-            for s in body {
-                visit_stmt_for_worker_new(s, f);
-            }
-        }
-        Stmt::DoWhile { body, condition } => {
-            for s in body {
-                visit_stmt_for_worker_new(s, f);
-            }
-            visit_expr_for_worker_new(condition, f);
-        }
-        Stmt::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            if let Some(i) = init {
-                visit_stmt_for_worker_new(i, f);
-            }
-            if let Some(c) = condition {
-                visit_expr_for_worker_new(c, f);
-            }
-            if let Some(u) = update {
-                visit_expr_for_worker_new(u, f);
-            }
-            for s in body {
-                visit_stmt_for_worker_new(s, f);
-            }
-        }
-        Stmt::Labeled { body, .. } => visit_stmt_for_worker_new(body, f),
-        Stmt::Throw(e) => visit_expr_for_worker_new(e, f),
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            for s in body {
-                visit_stmt_for_worker_new(s, f);
-            }
-            if let Some(c) = catch {
-                for s in &mut c.body {
-                    visit_stmt_for_worker_new(s, f);
-                }
-            }
-            if let Some(fb) = finally {
-                for s in fb {
-                    visit_stmt_for_worker_new(s, f);
-                }
-            }
-        }
-        Stmt::Switch {
-            discriminant,
-            cases,
-        } => {
-            visit_expr_for_worker_new(discriminant, f);
-            for c in cases {
-                if let Some(t) = &mut c.test {
-                    visit_expr_for_worker_new(t, f);
-                }
-                for s in &mut c.body {
-                    visit_stmt_for_worker_new(s, f);
-                }
-            }
-        }
-        Stmt::Break
-        | Stmt::Continue
-        | Stmt::LabeledBreak(_)
-        | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_) => {}
-    }
-}
-
-fn visit_expr_for_worker_new<F: FnMut(&mut Expr)>(expr: &mut Expr, f: &mut F) {
-    if matches!(expr, Expr::WorkerNew { .. }) {
-        f(expr);
-        if let Expr::WorkerNew {
-            filename, options, ..
-        } = expr
-        {
-            visit_expr_for_worker_new(filename, f);
-            if let Some(options) = options {
-                visit_expr_for_worker_new(options, f);
-            }
-        }
-        return;
-    }
-    if let Expr::Closure { body, .. } = expr {
-        for s in body {
-            visit_stmt_for_worker_new(s, f);
-        }
-    }
-    walk_expr_children_mut(expr, &mut |child| visit_expr_for_worker_new(child, f));
-}
+mod visitors;
+pub use visitors::{
+    for_each_dynamic_import, for_each_dynamic_import_mut, for_each_worker_new,
+    for_each_worker_new_mut,
+};
 
 /// The result of const-folding a dynamic `import()` path argument.
 #[derive(Debug, Clone)]
@@ -570,9 +216,11 @@ fn flatten_into<'a, F>(
 /// this by construction; a `let p = <init>` that is never written again is
 /// single-assignment in practice and resolves identically (#1674). A genuinely
 /// mutated binding falls back to Unresolved.
-pub fn collect_module_const_locals(module: &Module) -> std::collections::HashMap<u32, Expr> {
+pub fn collect_module_const_locals<'a>(
+    module: &'a Module,
+) -> std::collections::HashMap<u32, &'a Expr> {
     use std::collections::HashMap;
-    let mut consts: HashMap<u32, Expr> = HashMap::new();
+    let mut consts: HashMap<u32, &'a Expr> = HashMap::new();
 
     // Gather every function body and standalone init expression reachable in
     // the module — the SAME scope set `for_each_dynamic_import_mut` walks
@@ -649,239 +297,266 @@ pub fn collect_module_const_locals(module: &Module) -> std::collections::HashMap
 /// recursing through nested blocks (#1725). Mirrors `scan_mutations_stmt`'s
 /// traversal and additionally descends into closure bodies via
 /// `collect_const_locals_expr`.
-fn collect_const_locals_stmt(stmt: &Stmt, out: &mut std::collections::HashMap<u32, Expr>) {
-    match stmt {
-        Stmt::Let {
-            id, init: Some(e), ..
-        } => {
-            // #1674: collect both `const` and never-reassigned `let`/`var`
-            // bindings (regardless of the `mutable` flag). A `let p = <expr>`
-            // that is never written again is single-assignment in practice —
-            // `collect_module_const_locals`'s mutation scan removes any id that
-            // later receives a `LocalSet`, so a genuinely reassigned binding
-            // still falls back to Unresolved. This lets a path bound to a
-            // resolvable init resolve, e.g.
-            // `let p = cond ? './a.ts' : './b.ts'; await import(p)`.
-            out.insert(*id, e.clone());
-            collect_const_locals_expr(e, out);
-        }
-        Stmt::Let { init: None, .. } => {}
-        Stmt::Expr(e) => collect_const_locals_expr(e, out),
-        Stmt::Return(opt) => {
-            if let Some(e) = opt {
-                collect_const_locals_expr(e, out);
-            }
-        }
-        Stmt::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            collect_const_locals_expr(condition, out);
-            for s in then_branch {
-                collect_const_locals_stmt(s, out);
-            }
-            if let Some(eb) = else_branch {
-                for s in eb {
-                    collect_const_locals_stmt(s, out);
-                }
-            }
-        }
-        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            collect_const_locals_expr(condition, out);
-            for s in body {
-                collect_const_locals_stmt(s, out);
-            }
-        }
-        Stmt::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            if let Some(i) = init {
-                collect_const_locals_stmt(i, out);
-            }
-            if let Some(c) = condition {
-                collect_const_locals_expr(c, out);
-            }
-            if let Some(u) = update {
-                collect_const_locals_expr(u, out);
-            }
-            for s in body {
-                collect_const_locals_stmt(s, out);
-            }
-        }
-        Stmt::Labeled { body, .. } => collect_const_locals_stmt(body, out),
-        Stmt::Throw(e) => collect_const_locals_expr(e, out),
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            for s in body {
-                collect_const_locals_stmt(s, out);
-            }
-            if let Some(c) = catch {
-                for s in &c.body {
-                    collect_const_locals_stmt(s, out);
-                }
-            }
-            if let Some(fb) = finally {
-                for s in fb {
-                    collect_const_locals_stmt(s, out);
-                }
-            }
-        }
-        Stmt::Switch {
-            discriminant,
-            cases,
-        } => {
-            collect_const_locals_expr(discriminant, out);
-            for c in cases {
-                if let Some(t) = &c.test {
-                    collect_const_locals_expr(t, out);
-                }
-                for s in &c.body {
-                    collect_const_locals_stmt(s, out);
-                }
-            }
-        }
-        Stmt::Break
-        | Stmt::Continue
-        | Stmt::LabeledBreak(_)
-        | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_) => {}
-    }
+fn collect_const_locals_stmt<'a>(
+    stmt: &'a Stmt,
+    out: &mut std::collections::HashMap<u32, &'a Expr>,
+) {
+    collect_const_locals_from_frames(&mut vec![ConstFrame::Stmt(stmt)], out);
 }
 
 /// Descend into an expression collecting const locals declared inside closure
 /// bodies (`walk_expr_children` deliberately skips closure bodies, so handle
 /// them explicitly). #1725.
-fn collect_const_locals_expr(expr: &Expr, out: &mut std::collections::HashMap<u32, Expr>) {
-    if let Expr::Closure { body, .. } = expr {
-        for s in body {
-            collect_const_locals_stmt(s, out);
+fn collect_const_locals_expr<'a>(
+    expr: &'a Expr,
+    out: &mut std::collections::HashMap<u32, &'a Expr>,
+) {
+    collect_const_locals_from_frames(&mut vec![ConstFrame::Expr(expr)], out);
+}
+
+enum ConstFrame<'a> {
+    Stmt(&'a Stmt),
+    Expr(&'a Expr),
+}
+
+fn collect_const_locals_from_frames<'a>(
+    stack: &mut Vec<ConstFrame<'a>>,
+    out: &mut std::collections::HashMap<u32, &'a Expr>,
+) {
+    while let Some(frame) = stack.pop() {
+        match frame {
+            ConstFrame::Stmt(stmt) => {
+                match stmt {
+                    Stmt::Let {
+                        id, init: Some(e), ..
+                    } => {
+                        // #1674: collect both `const` and never-reassigned
+                        // `let`/`var` bindings. Keep a borrowed initializer so
+                        // large schema-shaped expressions are not cloned during
+                        // dynamic-import analysis.
+                        out.insert(*id, e);
+                        stack.push(ConstFrame::Expr(e));
+                    }
+                    Stmt::Let { init: None, .. } => {}
+                    Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => {
+                        stack.push(ConstFrame::Expr(e));
+                    }
+                    Stmt::Return(None) => {}
+                    Stmt::If {
+                        condition,
+                        then_branch,
+                        else_branch,
+                    } => {
+                        if let Some(eb) = else_branch {
+                            push_const_stmt_slice(stack, eb);
+                        }
+                        push_const_stmt_slice(stack, then_branch);
+                        stack.push(ConstFrame::Expr(condition));
+                    }
+                    Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                        push_const_stmt_slice(stack, body);
+                        stack.push(ConstFrame::Expr(condition));
+                    }
+                    Stmt::For {
+                        init,
+                        condition,
+                        update,
+                        body,
+                    } => {
+                        push_const_stmt_slice(stack, body);
+                        if let Some(u) = update {
+                            stack.push(ConstFrame::Expr(u));
+                        }
+                        if let Some(c) = condition {
+                            stack.push(ConstFrame::Expr(c));
+                        }
+                        if let Some(i) = init {
+                            stack.push(ConstFrame::Stmt(i.as_ref()));
+                        }
+                    }
+                    Stmt::Labeled { body, .. } => {
+                        stack.push(ConstFrame::Stmt(body.as_ref()));
+                    }
+                    Stmt::Try {
+                        body,
+                        catch,
+                        finally,
+                    } => {
+                        if let Some(fb) = finally {
+                            push_const_stmt_slice(stack, fb);
+                        }
+                        if let Some(c) = catch {
+                            push_const_stmt_slice(stack, &c.body);
+                        }
+                        push_const_stmt_slice(stack, body);
+                    }
+                    Stmt::Switch {
+                        discriminant,
+                        cases,
+                    } => {
+                        for case in cases.iter().rev() {
+                            push_const_stmt_slice(stack, &case.body);
+                            if let Some(t) = &case.test {
+                                stack.push(ConstFrame::Expr(t));
+                            }
+                        }
+                        stack.push(ConstFrame::Expr(discriminant));
+                    }
+                    Stmt::Break
+                    | Stmt::Continue
+                    | Stmt::LabeledBreak(_)
+                    | Stmt::LabeledContinue(_)
+                    | Stmt::PreallocateBoxes(_) => {}
+                }
+            }
+            ConstFrame::Expr(expr) => {
+                if let Expr::Closure { body, .. } = expr {
+                    push_const_stmt_slice(stack, body);
+                }
+                let mut children = Vec::new();
+                walk_expr_children(expr, &mut |child| {
+                    children.push(child);
+                });
+                for child in children.into_iter().rev() {
+                    stack.push(ConstFrame::Expr(child));
+                }
+            }
         }
     }
-    walk_expr_children(expr, &mut |child| collect_const_locals_expr(child, out));
+}
+
+fn push_const_stmt_slice<'a>(stack: &mut Vec<ConstFrame<'a>>, stmts: &'a [Stmt]) {
+    for stmt in stmts.iter().rev() {
+        stack.push(ConstFrame::Stmt(stmt));
+    }
 }
 
 fn scan_mutations_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<u32>) {
-    match stmt {
-        Stmt::Let { init, .. } => {
-            if let Some(e) = init {
-                scan_mutations_expr(e, out);
-            }
-        }
-        Stmt::Expr(e) => scan_mutations_expr(e, out),
-        Stmt::Return(opt) => {
-            if let Some(e) = opt {
-                scan_mutations_expr(e, out);
-            }
-        }
-        Stmt::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            scan_mutations_expr(condition, out);
-            for s in then_branch {
-                scan_mutations_stmt(s, out);
-            }
-            if let Some(eb) = else_branch {
-                for s in eb {
-                    scan_mutations_stmt(s, out);
-                }
-            }
-        }
-        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            scan_mutations_expr(condition, out);
-            for s in body {
-                scan_mutations_stmt(s, out);
-            }
-        }
-        Stmt::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            if let Some(i) = init {
-                scan_mutations_stmt(i, out);
-            }
-            if let Some(c) = condition {
-                scan_mutations_expr(c, out);
-            }
-            if let Some(u) = update {
-                scan_mutations_expr(u, out);
-            }
-            for s in body {
-                scan_mutations_stmt(s, out);
-            }
-        }
-        Stmt::Labeled { body, .. } => scan_mutations_stmt(body, out),
-        Stmt::Throw(e) => scan_mutations_expr(e, out),
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            for s in body {
-                scan_mutations_stmt(s, out);
-            }
-            if let Some(c) = catch {
-                for s in &c.body {
-                    scan_mutations_stmt(s, out);
-                }
-            }
-            if let Some(fb) = finally {
-                for s in fb {
-                    scan_mutations_stmt(s, out);
-                }
-            }
-        }
-        Stmt::Switch {
-            discriminant,
-            cases,
-        } => {
-            scan_mutations_expr(discriminant, out);
-            for c in cases {
-                if let Some(t) = &c.test {
-                    scan_mutations_expr(t, out);
-                }
-                for s in &c.body {
-                    scan_mutations_stmt(s, out);
-                }
-            }
-        }
-        Stmt::Break
-        | Stmt::Continue
-        | Stmt::LabeledBreak(_)
-        | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_) => {}
-    }
+    scan_mutations_from_frames(&mut vec![MutationFrame::Stmt(stmt as *const Stmt)], out);
 }
 
 fn scan_mutations_expr(expr: &Expr, out: &mut std::collections::HashSet<u32>) {
-    match expr {
-        Expr::LocalSet(id, _) => {
-            out.insert(*id);
+    scan_mutations_from_frames(&mut vec![MutationFrame::Expr(expr as *const Expr)], out);
+}
+
+enum MutationFrame {
+    Stmt(*const Stmt),
+    Expr(*const Expr),
+}
+
+fn scan_mutations_from_frames(
+    stack: &mut Vec<MutationFrame>,
+    out: &mut std::collections::HashSet<u32>,
+) {
+    while let Some(frame) = stack.pop() {
+        match frame {
+            MutationFrame::Stmt(stmt) => {
+                let stmt = unsafe { &*stmt };
+                match stmt {
+                    Stmt::Let { init: Some(e), .. }
+                    | Stmt::Expr(e)
+                    | Stmt::Throw(e)
+                    | Stmt::Return(Some(e)) => {
+                        stack.push(MutationFrame::Expr(e as *const Expr));
+                    }
+                    Stmt::Let { init: None, .. } | Stmt::Return(None) => {}
+                    Stmt::If {
+                        condition,
+                        then_branch,
+                        else_branch,
+                    } => {
+                        if let Some(eb) = else_branch {
+                            push_mutation_stmt_slice(stack, eb);
+                        }
+                        push_mutation_stmt_slice(stack, then_branch);
+                        stack.push(MutationFrame::Expr(condition as *const Expr));
+                    }
+                    Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                        push_mutation_stmt_slice(stack, body);
+                        stack.push(MutationFrame::Expr(condition as *const Expr));
+                    }
+                    Stmt::For {
+                        init,
+                        condition,
+                        update,
+                        body,
+                    } => {
+                        push_mutation_stmt_slice(stack, body);
+                        if let Some(u) = update {
+                            stack.push(MutationFrame::Expr(u as *const Expr));
+                        }
+                        if let Some(c) = condition {
+                            stack.push(MutationFrame::Expr(c as *const Expr));
+                        }
+                        if let Some(i) = init {
+                            stack.push(MutationFrame::Stmt(i.as_ref() as *const Stmt));
+                        }
+                    }
+                    Stmt::Labeled { body, .. } => {
+                        stack.push(MutationFrame::Stmt(body.as_ref() as *const Stmt));
+                    }
+                    Stmt::Try {
+                        body,
+                        catch,
+                        finally,
+                    } => {
+                        if let Some(fb) = finally {
+                            push_mutation_stmt_slice(stack, fb);
+                        }
+                        if let Some(c) = catch {
+                            push_mutation_stmt_slice(stack, &c.body);
+                        }
+                        push_mutation_stmt_slice(stack, body);
+                    }
+                    Stmt::Switch {
+                        discriminant,
+                        cases,
+                    } => {
+                        for case in cases.iter().rev() {
+                            push_mutation_stmt_slice(stack, &case.body);
+                            if let Some(t) = &case.test {
+                                stack.push(MutationFrame::Expr(t as *const Expr));
+                            }
+                        }
+                        stack.push(MutationFrame::Expr(discriminant as *const Expr));
+                    }
+                    Stmt::Break
+                    | Stmt::Continue
+                    | Stmt::LabeledBreak(_)
+                    | Stmt::LabeledContinue(_)
+                    | Stmt::PreallocateBoxes(_) => {}
+                }
+            }
+            MutationFrame::Expr(expr) => {
+                let expr = unsafe { &*expr };
+                match expr {
+                    Expr::LocalSet(id, _) | Expr::Update { id, .. } => {
+                        out.insert(*id);
+                    }
+                    _ => {}
+                }
+                // `walk_expr_children` deliberately skips closure bodies;
+                // descend manually so a reassignment inside a nested closure
+                // still invalidates the entry (#1725).
+                if let Expr::Closure { body, .. } = expr {
+                    push_mutation_stmt_slice(stack, body);
+                }
+                let mut children = Vec::new();
+                walk_expr_children(expr, &mut |child| {
+                    children.push(child as *const Expr);
+                });
+                for child in children.into_iter().rev() {
+                    stack.push(MutationFrame::Expr(child));
+                }
+            }
         }
-        Expr::Update { id, .. } => {
-            out.insert(*id);
-        }
-        _ => {}
     }
-    // `walk_expr_children` deliberately skips closure bodies; descend manually
-    // so a const reassigned inside a nested closure still invalidates the
-    // entry now that function/closure-scope consts are collected (#1725).
-    if let Expr::Closure { body, .. } = expr {
-        for s in body {
-            scan_mutations_stmt(s, out);
-        }
+}
+
+fn push_mutation_stmt_slice(stack: &mut Vec<MutationFrame>, stmts: &[Stmt]) {
+    for stmt in stmts.iter().rev() {
+        stack.push(MutationFrame::Stmt(stmt as *const Stmt));
     }
-    walk_expr_children(expr, &mut |child| scan_mutations_expr(child, out));
 }
 
 /// Const-fold a dynamic `import()` path argument.
@@ -905,7 +580,7 @@ fn scan_mutations_expr(expr: &Expr, out: &mut std::collections::HashSet<u32>) {
 /// non-mutated `const`. Pass an empty map to disable the local-tracking
 /// branch (matches the original signature semantics).
 pub fn resolve_import_path(arg: &Expr) -> Resolution {
-    let empty: std::collections::HashMap<u32, Expr> = std::collections::HashMap::new();
+    let empty: std::collections::HashMap<u32, &Expr> = std::collections::HashMap::new();
     resolve_import_path_with_consts(arg, &empty, &mut std::collections::HashSet::new())
 }
 
@@ -924,9 +599,9 @@ pub fn resolve_import_path(arg: &Expr) -> Resolution {
 /// templates (handled by [`resolve_import_path_with_consts`]) and patterns
 /// with no fixed, directory-bearing prefix (too broad to glob safely). The
 /// resolver itself performs no filesystem I/O; the driver owns the readdir.
-pub fn dynamic_import_glob_pattern(
+pub fn dynamic_import_glob_pattern<V: Borrow<Expr>>(
     arg: &Expr,
-    consts: &std::collections::HashMap<u32, Expr>,
+    consts: &std::collections::HashMap<u32, V>,
 ) -> Option<(String, String)> {
     // Only template-literal concatenations (`Binary(Add, …)`) can glob.
     if !matches!(
@@ -989,9 +664,9 @@ pub fn dynamic_import_glob_pattern(
     Some((prefix, suffix))
 }
 
-pub fn resolve_import_path_with_consts(
+pub fn resolve_import_path_with_consts<V: Borrow<Expr>>(
     arg: &Expr,
-    consts: &std::collections::HashMap<u32, Expr>,
+    consts: &std::collections::HashMap<u32, V>,
     visiting: &mut std::collections::HashSet<u32>,
 ) -> Resolution {
     match arg {
@@ -1058,7 +733,7 @@ pub fn resolve_import_path_with_consts(
                 );
             }
             let resolved = if let Some(init) = consts.get(id) {
-                resolve_import_path_with_consts(init, consts, visiting)
+                resolve_import_path_with_consts(init.borrow(), consts, visiting)
             } else {
                 Resolution::Unresolved(
                     "path argument references a binding that is not statically \
@@ -1300,7 +975,7 @@ mod tests {
             }),
             right: Box::new(Expr::String(".ts".into())),
         };
-        let consts = std::collections::HashMap::new();
+        let consts: std::collections::HashMap<u32, Expr> = std::collections::HashMap::new();
         let mut visiting = std::collections::HashSet::new();
         let r = resolve_import_path_with_consts(&arg, &consts, &mut visiting);
         match r {
@@ -1331,7 +1006,7 @@ mod tests {
     fn resolve_unresolved_param_local() {
         // `function f(p) { import(p) }` — p isn't in the const map.
         let arg = Expr::LocalGet(42);
-        let consts = std::collections::HashMap::new();
+        let consts: std::collections::HashMap<u32, Expr> = std::collections::HashMap::new();
         let mut visiting = std::collections::HashSet::new();
         let r = resolve_import_path_with_consts(&arg, &consts, &mut visiting);
         assert!(matches!(r, Resolution::Unresolved(_)));
@@ -1387,7 +1062,9 @@ mod tests {
             Box::new(Expr::String("./c.ts".into())),
         )));
         let consts = collect_module_const_locals(&m);
-        assert!(matches!(consts.get(&1), Some(Expr::String(s)) if s == "./a.ts"));
+        assert!(
+            matches!(consts.get(&1).map(Borrow::borrow), Some(Expr::String(s)) if s == "./a.ts")
+        );
         assert!(!consts.contains_key(&2));
     }
 
@@ -1643,7 +1320,7 @@ mod tests {
 
     #[test]
     fn glob_pattern_extracts_relative_prefix_and_suffix() {
-        let consts = std::collections::HashMap::new();
+        let consts: std::collections::HashMap<u32, Expr> = std::collections::HashMap::new();
         let arg = glob_chain("./plugins/", ".ts", 1);
         assert_eq!(
             dynamic_import_glob_pattern(&arg, &consts),
@@ -1653,7 +1330,7 @@ mod tests {
 
     #[test]
     fn glob_pattern_rejects_non_relative_or_dirless_prefix() {
-        let consts = std::collections::HashMap::new();
+        let consts: std::collections::HashMap<u32, Expr> = std::collections::HashMap::new();
         // bare prefix with no directory component — too broad to glob.
         assert_eq!(
             dynamic_import_glob_pattern(&glob_chain("locale_", ".ts", 1), &consts),
@@ -1669,7 +1346,7 @@ mod tests {
     #[test]
     fn glob_pattern_none_when_fully_resolvable() {
         // No wildcard part — the normal resolver handles this, not the glob.
-        let consts = std::collections::HashMap::new();
+        let consts: std::collections::HashMap<u32, Expr> = std::collections::HashMap::new();
         let arg = Expr::Binary {
             op: BinaryOp::Add,
             left: Box::new(Expr::String("./a".into())),

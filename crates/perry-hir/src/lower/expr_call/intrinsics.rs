@@ -118,6 +118,82 @@ pub(super) fn check_eval_function_call(ctx: &LoweringContext, call: &ast::CallEx
     crate::eval_classifier::check_site(surface, body_arg, &ctx.source_file_path, call.span)
 }
 
+pub(super) fn try_strict_eval_arguments_assignment(
+    ctx: &LoweringContext,
+    call: &ast::CallExpr,
+) -> Option<Expr> {
+    if !ctx.current_strict_mode() || call.args.len() != 1 || call.args[0].spread.is_some() {
+        return None;
+    }
+    let ast::Callee::Expr(callee_expr) = &call.callee else {
+        return None;
+    };
+    let mut callee = callee_expr.as_ref();
+    while let ast::Expr::Paren(p) = callee {
+        callee = p.expr.as_ref();
+    }
+    let ast::Expr::Ident(ident) = callee else {
+        return None;
+    };
+    if ident.sym.as_ref() != "eval"
+        || ctx.lookup_local("eval").is_some()
+        || ctx.lookup_func("eval").is_some()
+        || ctx.lookup_imported_func("eval").is_some()
+    {
+        return None;
+    }
+    let ast::Expr::Lit(ast::Lit::Str(source)) = call.args[0].expr.as_ref() else {
+        return None;
+    };
+    let source = source.value.as_str().unwrap_or("");
+    if !strict_eval_source_assigns_arguments(source) {
+        return None;
+    }
+    Some(Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: "js_throw_strict_eval_arguments_syntax_error".to_string(),
+            param_types: Vec::new(),
+            return_type: Type::Any,
+        }),
+        args: Vec::new(),
+        type_args: Vec::new(),
+    })
+}
+
+fn strict_eval_source_assigns_arguments(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    let needle = b"arguments";
+    let mut i = 0usize;
+    while i + needle.len() <= bytes.len() {
+        if &bytes[i..i + needle.len()] != needle {
+            i += 1;
+            continue;
+        }
+        let before_ok = i == 0 || !is_ident_continue(bytes[i - 1]);
+        let after = i + needle.len();
+        let after_ok = after == bytes.len() || !is_ident_continue(bytes[after]);
+        if before_ok && after_ok {
+            let mut j = after;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j < bytes.len()
+                && bytes[j] == b'='
+                && bytes.get(j + 1).copied() != Some(b'=')
+                && bytes.get(j + 1).copied() != Some(b'>')
+            {
+                return true;
+            }
+        }
+        i = after;
+    }
+    false
+}
+
+fn is_ident_continue(byte: u8) -> bool {
+    byte == b'_' || byte == b'$' || byte.is_ascii_alphanumeric()
+}
+
 /// #1681 (Phase 3 of #1677) — `precompile(EXPR)` build-time intrinsic.
 ///
 /// `precompile` marks a build-time-evaluable codegen expression: `EXPR` is
@@ -1009,6 +1085,37 @@ fn is_function_prototype_member(expr: &ast::Expr) -> bool {
     matches!(member.obj.as_ref(), ast::Expr::Ident(id) if id.sym.as_ref() == "Function")
 }
 
+/// #4100: true when `recv.<method>` is a primitive-wrapper prototype method that
+/// performs a spec `this` brand check at runtime (throws `TypeError` on an
+/// incompatible receiver). Folding `<recv>.<method>.call(x)` into `x.<method>()`
+/// would route through the lenient codegen fast-path / `Object.prototype`
+/// fallback (returns `"[object Object]"`, no throw). Keeping it reflective lets
+/// the installed brand-check thunk run. `Number.prototype.toFixed`/
+/// `toExponential`/`toPrecision` are deliberately excluded — the fold is the
+/// *correct* path for those (their reflective dispatch over-throws on a valid
+/// receiver), and only the brand-checked `valueOf`/`toString`/`toLocaleString`
+/// methods are affected. Symbol/BigInt have no codegen fold path, so they need
+/// no guard here.
+fn is_primitive_wrapper_brand_method(recv: &ast::Expr, method: &str) -> bool {
+    let ast::Expr::Member(member) = recv else {
+        return false;
+    };
+    let ast::MemberProp::Ident(prop) = &member.prop else {
+        return false;
+    };
+    if prop.sym.as_ref() != "prototype" {
+        return false;
+    }
+    let ast::Expr::Ident(base) = member.obj.as_ref() else {
+        return false;
+    };
+    match base.sym.as_ref() {
+        "Number" => matches!(method, "valueOf" | "toString" | "toLocaleString"),
+        "Boolean" => matches!(method, "valueOf" | "toString"),
+        _ => false,
+    }
+}
+
 pub(super) fn try_builtin_prototype_method_apply_call(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -1058,6 +1165,14 @@ pub(super) fn try_builtin_prototype_method_apply_call(
             if method_ident.sym.as_ref() == "toString"
                 && is_function_prototype_member(inner.obj.as_ref())
             {
+                return Ok(None);
+            }
+            // #4100: keep `Number.prototype.valueOf.call(x)` /
+            // `Boolean.prototype.toString.call(x)` reflective so the installed
+            // brand-check thunk runs (throws a `TypeError` on an incompatible
+            // `this`). Folding to `x.<method>()` routes through the lenient
+            // `Object.prototype` fallback (`"[object Object]"`, no throw).
+            if is_primitive_wrapper_brand_method(inner.obj.as_ref(), method_ident.sym.as_ref()) {
                 return Ok(None);
             }
             method_ident.clone()
@@ -1141,6 +1256,13 @@ pub(crate) fn as_builtin_proto_method_ref(
         return None;
     };
     if !is_builtin_prototype_receiver(ctx, &member.obj) {
+        return None;
+    }
+    // #4100: don't track `const v = Number.prototype.valueOf` for the fold —
+    // a later `v.call(x)` must stay reflective so the brand-check thunk runs
+    // (see `is_primitive_wrapper_brand_method`). Untracked, the value read goes
+    // through the reflective dispatch, which throws correctly.
+    if is_primitive_wrapper_brand_method(&member.obj, method.sym.as_ref()) {
         return None;
     }
     // For a `<Ctor>.prototype` receiver, any method ident is accepted (mirrors

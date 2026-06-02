@@ -62,6 +62,7 @@ pub(crate) fn class_prototype_method_value_cache_root_store(
 pub struct VTableMethodEntry {
     pub func_ptr: usize,
     pub param_count: u32,
+    pub has_synthetic_arguments: bool,
 }
 
 /// Per-class vtable with methods, getters, and setters
@@ -1044,6 +1045,16 @@ pub(crate) fn synthetic_class_id_for_function(func_value: f64) -> u32 {
     new_cid
 }
 
+thread_local! {
+    static CURRENT_NEW_TARGET: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(crate::value::TAG_UNDEFINED) };
+}
+
+#[no_mangle]
+pub extern "C" fn js_new_target_value() -> f64 {
+    f64::from_bits(CURRENT_NEW_TARGET.with(|value| value.get()))
+}
+
 /// Issue #838 followup (b): construct an instance from a function value.
 /// Pairs with `js_register_function_prototype_method` — both arms route
 /// through `synthetic_class_id_for_function` so the instance's
@@ -1538,11 +1549,50 @@ pub unsafe extern "C" fn js_new_function_construct(
         let prev_new_target = crate::object::js_new_target_get();
         crate::object::js_implicit_this_set(nan_boxed);
         crate::object::js_new_target_set(func_value);
-        let _ = crate::closure::js_native_call_value(func_value, args_ptr, args_len);
+        let prev_current_new_target =
+            CURRENT_NEW_TARGET.with(|value| value.replace(func_value.to_bits()));
+        let result = crate::closure::js_native_call_value(func_value, args_ptr, args_len);
+        CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target));
         crate::object::js_new_target_set(prev_new_target);
         crate::object::js_implicit_this_set(prev_this);
+        if constructor_return_overrides_this(result) {
+            return result;
+        }
     }
     nan_boxed
+}
+
+fn constructor_return_overrides_this(value: f64) -> bool {
+    use crate::value::JSValue;
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    if is_callable_function_value(value) {
+        return true;
+    }
+    let raw = jv.as_pointer::<u8>();
+    if raw.is_null() {
+        return false;
+    }
+    if super::is_arguments_object(raw as *const ObjectHeader) {
+        return true;
+    }
+    unsafe {
+        let arr = crate::array::clean_arr_ptr(raw as *const crate::array::ArrayHeader);
+        if !arr.is_null() {
+            return true;
+        }
+        if !is_valid_obj_ptr(raw as *const u8) {
+            return false;
+        }
+        let gc_header =
+            (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        matches!(
+            (*gc_header).obj_type,
+            crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_ERROR
+        )
+    }
 }
 
 /// Verify that a JSValue is a NaN-boxed pointer to a registered
@@ -2200,6 +2250,7 @@ pub unsafe extern "C" fn js_register_class_method(
     name_len: i64,
     func_ptr: i64,
     param_count: i64,
+    has_synthetic_arguments: i64,
 ) {
     let name = if name_ptr.is_null() || name_len <= 0 {
         return;
@@ -2224,6 +2275,7 @@ pub unsafe extern "C" fn js_register_class_method(
         VTableMethodEntry {
             func_ptr: func_ptr as usize,
             param_count: param_count as u32,
+            has_synthetic_arguments: has_synthetic_arguments != 0,
         },
     );
     VTABLE_GEN.fetch_add(1, Ordering::Release);
@@ -2336,7 +2388,7 @@ struct VTableICEntry {
     method_name_ptr: usize,
     func_ptr: usize,
     param_count: u32,
-    _pad2: u32,
+    has_synthetic_arguments: u32,
 }
 
 const EMPTY_VTABLE_IC_ENTRY: VTableICEntry = VTableICEntry {
@@ -2346,7 +2398,7 @@ const EMPTY_VTABLE_IC_ENTRY: VTableICEntry = VTableICEntry {
     method_name_ptr: 0,
     func_ptr: 0,
     param_count: 0,
-    _pad2: 0,
+    has_synthetic_arguments: 0,
 };
 
 thread_local! {
@@ -2371,7 +2423,7 @@ fn vtable_ic_slot(class_id: u32, method_name_ptr: usize) -> usize {
 pub(crate) unsafe fn vtable_ic_lookup(
     class_id: u32,
     method_name_ptr: usize,
-) -> Option<(usize, u32)> {
+) -> Option<(usize, u32, bool)> {
     if method_name_ptr == 0 {
         return None;
     }
@@ -2384,7 +2436,11 @@ pub(crate) unsafe fn vtable_ic_lookup(
             && entry.class_id == class_id
             && entry.method_name_ptr == method_name_ptr
         {
-            Some((entry.func_ptr, entry.param_count))
+            Some((
+                entry.func_ptr,
+                entry.param_count,
+                entry.has_synthetic_arguments != 0,
+            ))
         } else {
             None
         }
@@ -2397,6 +2453,7 @@ pub(crate) unsafe fn vtable_ic_insert(
     method_name_ptr: usize,
     func_ptr: usize,
     param_count: u32,
+    has_synthetic_arguments: bool,
 ) {
     if method_name_ptr == 0 {
         return;
@@ -2412,7 +2469,7 @@ pub(crate) unsafe fn vtable_ic_insert(
             method_name_ptr,
             func_ptr,
             param_count,
-            _pad2: 0,
+            has_synthetic_arguments: if has_synthetic_arguments { 1 } else { 0 },
         };
     });
 }
@@ -2425,6 +2482,7 @@ pub(crate) unsafe fn call_vtable_method(
     args_ptr: *const f64,
     args_len: usize,
     param_count: u32,
+    has_synthetic_arguments: bool,
 ) -> f64 {
     #[inline(always)]
     unsafe fn arg_or_nan(args_ptr: *const f64, args_len: usize, idx: usize) -> f64 {
@@ -2463,6 +2521,26 @@ pub(crate) unsafe fn call_vtable_method(
         }
     };
 
+    let mut adjusted_args_storage: Option<Vec<f64>> = None;
+    let (call_args_ptr, call_args_len) = if has_synthetic_arguments {
+        let visible_params = (param_count as usize).saturating_sub(1);
+        let raw_args = crate::array::js_array_alloc_with_length(args_len as u32);
+        for i in 0..args_len {
+            crate::array::js_array_set_f64(raw_args, i as u32, arg_or_nan(args_ptr, args_len, i));
+        }
+        let raw_args_value = crate::value::js_nanbox_pointer(raw_args as i64);
+        let mut args = Vec::with_capacity(param_count as usize);
+        for i in 0..visible_params {
+            args.push(arg_or_nan(args_ptr, args_len, i));
+        }
+        args.push(raw_args_value);
+        adjusted_args_storage = Some(args);
+        let adjusted_args = adjusted_args_storage.as_ref().unwrap();
+        (adjusted_args.as_ptr(), adjusted_args.len())
+    } else {
+        (args_ptr, args_len)
+    };
+
     match param_count {
         0 => {
             let f: extern "C" fn(f64) -> f64 = std::mem::transmute(func_ptr);
@@ -2470,33 +2548,33 @@ pub(crate) unsafe fn call_vtable_method(
         }
         1 => {
             let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(func_ptr);
-            f(this_f64, arg_or_nan(args_ptr, args_len, 0))
+            f(this_f64, arg_or_nan(call_args_ptr, call_args_len, 0))
         }
         2 => {
             let f: extern "C" fn(f64, f64, f64) -> f64 = std::mem::transmute(func_ptr);
             f(
                 this_f64,
-                arg_or_nan(args_ptr, args_len, 0),
-                arg_or_nan(args_ptr, args_len, 1),
+                arg_or_nan(call_args_ptr, call_args_len, 0),
+                arg_or_nan(call_args_ptr, call_args_len, 1),
             )
         }
         3 => {
             let f: extern "C" fn(f64, f64, f64, f64) -> f64 = std::mem::transmute(func_ptr);
             f(
                 this_f64,
-                arg_or_nan(args_ptr, args_len, 0),
-                arg_or_nan(args_ptr, args_len, 1),
-                arg_or_nan(args_ptr, args_len, 2),
+                arg_or_nan(call_args_ptr, call_args_len, 0),
+                arg_or_nan(call_args_ptr, call_args_len, 1),
+                arg_or_nan(call_args_ptr, call_args_len, 2),
             )
         }
         4 => {
             let f: extern "C" fn(f64, f64, f64, f64, f64) -> f64 = std::mem::transmute(func_ptr);
             f(
                 this_f64,
-                arg_or_nan(args_ptr, args_len, 0),
-                arg_or_nan(args_ptr, args_len, 1),
-                arg_or_nan(args_ptr, args_len, 2),
-                arg_or_nan(args_ptr, args_len, 3),
+                arg_or_nan(call_args_ptr, call_args_len, 0),
+                arg_or_nan(call_args_ptr, call_args_len, 1),
+                arg_or_nan(call_args_ptr, call_args_len, 2),
+                arg_or_nan(call_args_ptr, call_args_len, 3),
             )
         }
         5 => {
@@ -2504,11 +2582,11 @@ pub(crate) unsafe fn call_vtable_method(
                 std::mem::transmute(func_ptr);
             f(
                 this_f64,
-                arg_or_nan(args_ptr, args_len, 0),
-                arg_or_nan(args_ptr, args_len, 1),
-                arg_or_nan(args_ptr, args_len, 2),
-                arg_or_nan(args_ptr, args_len, 3),
-                arg_or_nan(args_ptr, args_len, 4),
+                arg_or_nan(call_args_ptr, call_args_len, 0),
+                arg_or_nan(call_args_ptr, call_args_len, 1),
+                arg_or_nan(call_args_ptr, call_args_len, 2),
+                arg_or_nan(call_args_ptr, call_args_len, 3),
+                arg_or_nan(call_args_ptr, call_args_len, 4),
             )
         }
         6 => {
@@ -2516,12 +2594,12 @@ pub(crate) unsafe fn call_vtable_method(
                 std::mem::transmute(func_ptr);
             f(
                 this_f64,
-                arg_or_nan(args_ptr, args_len, 0),
-                arg_or_nan(args_ptr, args_len, 1),
-                arg_or_nan(args_ptr, args_len, 2),
-                arg_or_nan(args_ptr, args_len, 3),
-                arg_or_nan(args_ptr, args_len, 4),
-                arg_or_nan(args_ptr, args_len, 5),
+                arg_or_nan(call_args_ptr, call_args_len, 0),
+                arg_or_nan(call_args_ptr, call_args_len, 1),
+                arg_or_nan(call_args_ptr, call_args_len, 2),
+                arg_or_nan(call_args_ptr, call_args_len, 3),
+                arg_or_nan(call_args_ptr, call_args_len, 4),
+                arg_or_nan(call_args_ptr, call_args_len, 5),
             )
         }
         7 => {
@@ -2529,13 +2607,13 @@ pub(crate) unsafe fn call_vtable_method(
                 std::mem::transmute(func_ptr);
             f(
                 this_f64,
-                arg_or_nan(args_ptr, args_len, 0),
-                arg_or_nan(args_ptr, args_len, 1),
-                arg_or_nan(args_ptr, args_len, 2),
-                arg_or_nan(args_ptr, args_len, 3),
-                arg_or_nan(args_ptr, args_len, 4),
-                arg_or_nan(args_ptr, args_len, 5),
-                arg_or_nan(args_ptr, args_len, 6),
+                arg_or_nan(call_args_ptr, call_args_len, 0),
+                arg_or_nan(call_args_ptr, call_args_len, 1),
+                arg_or_nan(call_args_ptr, call_args_len, 2),
+                arg_or_nan(call_args_ptr, call_args_len, 3),
+                arg_or_nan(call_args_ptr, call_args_len, 4),
+                arg_or_nan(call_args_ptr, call_args_len, 5),
+                arg_or_nan(call_args_ptr, call_args_len, 6),
             )
         }
         8 => {
@@ -2543,14 +2621,14 @@ pub(crate) unsafe fn call_vtable_method(
                 std::mem::transmute(func_ptr);
             f(
                 this_f64,
-                arg_or_nan(args_ptr, args_len, 0),
-                arg_or_nan(args_ptr, args_len, 1),
-                arg_or_nan(args_ptr, args_len, 2),
-                arg_or_nan(args_ptr, args_len, 3),
-                arg_or_nan(args_ptr, args_len, 4),
-                arg_or_nan(args_ptr, args_len, 5),
-                arg_or_nan(args_ptr, args_len, 6),
-                arg_or_nan(args_ptr, args_len, 7),
+                arg_or_nan(call_args_ptr, call_args_len, 0),
+                arg_or_nan(call_args_ptr, call_args_len, 1),
+                arg_or_nan(call_args_ptr, call_args_len, 2),
+                arg_or_nan(call_args_ptr, call_args_len, 3),
+                arg_or_nan(call_args_ptr, call_args_len, 4),
+                arg_or_nan(call_args_ptr, call_args_len, 5),
+                arg_or_nan(call_args_ptr, call_args_len, 6),
+                arg_or_nan(call_args_ptr, call_args_len, 7),
             )
         }
         9 => {
@@ -2558,15 +2636,15 @@ pub(crate) unsafe fn call_vtable_method(
                 std::mem::transmute(func_ptr);
             f(
                 this_f64,
-                arg_or_nan(args_ptr, args_len, 0),
-                arg_or_nan(args_ptr, args_len, 1),
-                arg_or_nan(args_ptr, args_len, 2),
-                arg_or_nan(args_ptr, args_len, 3),
-                arg_or_nan(args_ptr, args_len, 4),
-                arg_or_nan(args_ptr, args_len, 5),
-                arg_or_nan(args_ptr, args_len, 6),
-                arg_or_nan(args_ptr, args_len, 7),
-                arg_or_nan(args_ptr, args_len, 8),
+                arg_or_nan(call_args_ptr, call_args_len, 0),
+                arg_or_nan(call_args_ptr, call_args_len, 1),
+                arg_or_nan(call_args_ptr, call_args_len, 2),
+                arg_or_nan(call_args_ptr, call_args_len, 3),
+                arg_or_nan(call_args_ptr, call_args_len, 4),
+                arg_or_nan(call_args_ptr, call_args_len, 5),
+                arg_or_nan(call_args_ptr, call_args_len, 6),
+                arg_or_nan(call_args_ptr, call_args_len, 7),
+                arg_or_nan(call_args_ptr, call_args_len, 8),
             )
         }
         _ => {
@@ -2574,16 +2652,16 @@ pub(crate) unsafe fn call_vtable_method(
                 std::mem::transmute(func_ptr);
             f(
                 this_f64,
-                arg_or_nan(args_ptr, args_len, 0),
-                arg_or_nan(args_ptr, args_len, 1),
-                arg_or_nan(args_ptr, args_len, 2),
-                arg_or_nan(args_ptr, args_len, 3),
-                arg_or_nan(args_ptr, args_len, 4),
-                arg_or_nan(args_ptr, args_len, 5),
-                arg_or_nan(args_ptr, args_len, 6),
-                arg_or_nan(args_ptr, args_len, 7),
-                arg_or_nan(args_ptr, args_len, 8),
-                arg_or_nan(args_ptr, args_len, 9),
+                arg_or_nan(call_args_ptr, call_args_len, 0),
+                arg_or_nan(call_args_ptr, call_args_len, 1),
+                arg_or_nan(call_args_ptr, call_args_len, 2),
+                arg_or_nan(call_args_ptr, call_args_len, 3),
+                arg_or_nan(call_args_ptr, call_args_len, 4),
+                arg_or_nan(call_args_ptr, call_args_len, 5),
+                arg_or_nan(call_args_ptr, call_args_len, 6),
+                arg_or_nan(call_args_ptr, call_args_len, 7),
+                arg_or_nan(call_args_ptr, call_args_len, 8),
+                arg_or_nan(call_args_ptr, call_args_len, 9),
             )
         }
     }
@@ -2868,6 +2946,10 @@ pub unsafe extern "C" fn js_register_class_computed_method(
             VTableMethodEntry {
                 func_ptr: func_ptr as usize,
                 param_count: param_count as u32,
+                // Computed class methods don't carry synthetic-`arguments`
+                // metadata through this registration path (only `has_rest`),
+                // so they never receive a synthesized arguments object.
+                has_synthetic_arguments: false,
             },
         );
     }
@@ -3421,17 +3503,22 @@ pub(crate) fn get_parent_class_id(class_id: u32) -> Option<u32> {
 }
 
 /// Look up a method by name in the class vtable, walking the parent chain.
-/// Returns `Some((func_ptr, param_count))` if found, `None` otherwise.
+/// Returns `Some((func_ptr, param_count, has_synthetic_arguments))` if found,
+/// `None` otherwise.
 /// Used by `js_assimilate_thenable` (refs #586) and other runtime callers
 /// that need to probe a class for a method without invoking it.
-pub fn lookup_class_method_in_chain(class_id: u32, name: &str) -> Option<(usize, u32)> {
+pub fn lookup_class_method_in_chain(class_id: u32, name: &str) -> Option<(usize, u32, bool)> {
     let registry = CLASS_VTABLE_REGISTRY.read().unwrap();
     let reg = registry.as_ref()?;
     let mut cur = class_id;
     for _ in 0..32 {
         if let Some(vt) = reg.get(&cur) {
             if let Some(entry) = vt.methods.get(name) {
-                return Some((entry.func_ptr, entry.param_count));
+                return Some((
+                    entry.func_ptr,
+                    entry.param_count,
+                    entry.has_synthetic_arguments,
+                ));
             }
         }
         match get_parent_class_id(cur) {

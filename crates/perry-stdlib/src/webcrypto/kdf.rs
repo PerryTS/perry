@@ -9,6 +9,20 @@ pub unsafe extern "C" fn js_webcrypto_derive_bits(
     base_key_bits: f64,
     length_bits: f64,
 ) -> *mut Promise {
+    let base_addr = strip_ptr(base_key_bits.to_bits());
+    let base_mat = match lookup_crypto_key(base_addr) {
+        Some(m) => m,
+        None => {
+            return reject_with_dom_exception("InvalidAccessError", "Key is not a valid CryptoKey")
+        }
+    };
+    if let Err((name, message)) = require_usage(
+        base_mat,
+        USAGE_DERIVE_BITS,
+        "The requested operation is not valid for the provided key",
+    ) {
+        return reject_with_dom_exception(name, message);
+    }
     let bit_len = match number_from_bits(length_bits.to_bits()) {
         Some(n) => n,
         None => return reject_with_dom_exception("OperationError", "The operation failed"),
@@ -35,9 +49,24 @@ pub unsafe extern "C" fn js_webcrypto_derive_key(
     algo_bits: f64,
     base_key_bits: f64,
     derived_algo_bits: f64,
-    _extractable_bits: f64,
-    _usages_bits: f64,
+    extractable_bits: f64,
+    usages_bits: f64,
 ) -> *mut Promise {
+    let base_addr = strip_ptr(base_key_bits.to_bits());
+    let base_mat = match lookup_crypto_key(base_addr) {
+        Some(m) => m,
+        None => {
+            return reject_with_dom_exception("InvalidAccessError", "Key is not a valid CryptoKey")
+        }
+    };
+    if let Err((name, message)) = require_usage(
+        base_mat,
+        USAGE_DERIVE_KEY,
+        "The requested operation is not valid for the provided key",
+    ) {
+        return reject_with_dom_exception(name, message);
+    }
+    let extractable = bool_from_jsvalue(extractable_bits.to_bits());
     let derived_name = match extract_algo_name(derived_algo_bits.to_bits()) {
         Some(s) => s,
         None => {
@@ -73,6 +102,17 @@ pub unsafe extern "C" fn js_webcrypto_derive_key(
     if bit_len % 8 != 0 || bit_len == 0 || bit_len > 256 {
         return reject_with_dom_exception("OperationError", "The operation failed");
     }
+    let usages = match validate_key_usages(
+        key_algo,
+        KeyKind::Secret,
+        usages_bits.to_bits(),
+        false,
+        "Usages cannot be empty when creating a key.",
+        "Unsupported key usage for the requested algorithm",
+    ) {
+        Ok(u) => u,
+        Err((name, message)) => return reject_with_dom_exception(name, message),
+    };
     let byte_len = (bit_len / 8) as usize;
     let key_bytes = if let Some(bytes) =
         kdf_derive_bytes(algo_bits.to_bits(), base_key_bits.to_bits(), byte_len)
@@ -94,11 +134,7 @@ pub unsafe extern "C" fn js_webcrypto_derive_key(
     }
     register_crypto_key(
         buf as usize,
-        CryptoKeyMaterial {
-            algo: key_algo,
-            hash,
-            kind: KeyKind::Secret,
-        },
+        CryptoKeyMaterial::new(key_algo, hash, KeyKind::Secret, extractable, usages),
     );
     resolve_with_bits(JSValue::pointer(buf as *const u8).bits())
 }

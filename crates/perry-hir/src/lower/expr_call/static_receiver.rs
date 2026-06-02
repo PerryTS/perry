@@ -67,6 +67,7 @@ pub(super) fn static_receiver_class(
             return match class_name {
                 "Date" => Some("Date"),
                 "URL" => Some("URL"),
+                "URLPattern" => Some("URLPattern"),
                 "Buffer" => Some("Buffer"),
                 "BlockList" => Some("BlockList"),
                 "SocketAddress" => Some("SocketAddress"),
@@ -132,6 +133,7 @@ pub(super) fn static_receiver_class(
                 return match n.as_str() {
                     "Date" => Some("Date"),
                     "URL" => Some("URL"),
+                    "URLPattern" => Some("URLPattern"),
                     "Buffer" => Some("Buffer"),
                     "BlockList" => Some("BlockList"),
                     "SocketAddress" => Some("SocketAddress"),

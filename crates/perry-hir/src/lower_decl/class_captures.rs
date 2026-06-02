@@ -292,6 +292,7 @@ pub fn synthesize_class_captures(
             default: None,
             decorators: Vec::new(),
             is_rest: false,
+            arguments_object: None,
         });
         assignment_stmts.push(Stmt::Expr(Expr::PropertySet {
             object: Box::new(Expr::This),

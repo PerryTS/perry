@@ -19,6 +19,7 @@ pub fn lower_constructor(
     ctor: &ast::Constructor,
 ) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
+    ctx.enter_strict_mode(true);
 
     // Track that we're inside a constructor body so `new.target` can resolve
     // to a placeholder object with `.name = class_name`. Saved/restored in
@@ -51,6 +52,7 @@ pub fn lower_constructor(
                     default: param_default,
                     decorators: lower_decorators(ctx, &p.decorators),
                     is_rest,
+                    arguments_object: None,
                 });
                 let inner_pat = if let ast::Pat::Assign(assign) = &p.pat {
                     assign.left.as_ref()
@@ -107,6 +109,7 @@ pub fn lower_constructor(
                     default: param_default,
                     decorators: lower_decorators(ctx, &ts_prop.decorators),
                     is_rest: false, // TsParamProp cannot be a rest parameter
+                    arguments_object: None,
                 });
             }
         }
@@ -116,16 +119,14 @@ pub fn lower_constructor(
     // param already binds it (TsParamProp can't be a rest, so the only
     // conflicts come from explicit `arguments` params or other rest params).
     let user_has_arguments_param = params.iter().any(|p| p.name == "arguments");
-    let user_has_rest = params.iter().any(|p| p.is_rest);
     let needs_arguments_synth = !user_has_arguments_param
-        && !user_has_rest
         && ctor
             .body
             .as_ref()
             .map(|b| body_uses_arguments(&b.stmts))
             .unwrap_or(false);
     if needs_arguments_synth {
-        append_synthetic_arguments_param(ctx, &mut params);
+        append_synthetic_arguments_param(ctx, &mut params, true, false, true, Vec::new());
     }
 
     // Issue #572: generate destructuring extractions BEFORE lowering the
@@ -207,6 +208,7 @@ pub fn lower_constructor(
         body = new_body;
     }
 
+    ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
     ctx.in_constructor_class = saved_ctor_class;
 
@@ -464,6 +466,7 @@ pub fn lower_class_method_with_name(
     ctx.enter_type_param_scope(&type_params);
 
     let scope_mark = ctx.enter_scope();
+    ctx.enter_strict_mode(true);
 
     // Add 'this' for instance methods
     if !method.is_static {
@@ -499,6 +502,7 @@ pub fn lower_class_method_with_name(
             default: param_default,
             decorators: lower_decorators(ctx, &param.decorators),
             is_rest,
+            arguments_object: None,
         });
         // Mirror the lower_fn_decl shape: an `Assign` pattern can wrap a
         // destructure (e.g. `({ a } = {}) => ...`). Unwrap before testing.
@@ -518,9 +522,7 @@ pub fn lower_class_method_with_name(
         .params
         .iter()
         .any(|p| get_pat_name(&p.pat).ok().as_deref() == Some("arguments"));
-    let user_has_rest = method.function.params.iter().any(|p| is_rest_param(&p.pat));
     let needs_arguments_synth = !user_has_arguments_param
-        && !user_has_rest
         && method
             .function
             .body
@@ -528,7 +530,7 @@ pub fn lower_class_method_with_name(
             .map(|b| body_uses_arguments(&b.stmts))
             .unwrap_or(false);
     if needs_arguments_synth {
-        append_synthetic_arguments_param(ctx, &mut params);
+        append_synthetic_arguments_param(ctx, &mut params, true, false, true, Vec::new());
     }
 
     // Extract return type (with context). Phase 4: when the method has no
@@ -619,6 +621,7 @@ pub fn lower_class_method_with_name(
         }
     }
 
+    ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
 
     // Exit method's type param scope
@@ -671,6 +674,7 @@ pub fn lower_getter_method_with_name(
     name: String,
 ) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
+    ctx.enter_strict_mode(true);
 
     // Add 'this' for instance getters
     ctx.define_local("this".to_string(), Type::Any);
@@ -705,6 +709,7 @@ pub fn lower_getter_method_with_name(
         }
     }
 
+    ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
 
     Ok(Function {
@@ -744,6 +749,7 @@ pub fn lower_setter_method_with_name(
     name: String,
 ) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
+    ctx.enter_strict_mode(true);
 
     // Add 'this' for instance setters
     ctx.define_local("this".to_string(), Type::Any);
@@ -768,6 +774,7 @@ pub fn lower_setter_method_with_name(
             default: None,
             decorators: Vec::new(),
             is_rest: false,
+            arguments_object: None,
         });
         let inner_pat = if let ast::Pat::Assign(assign) = &param.pat {
             assign.left.as_ref()
@@ -798,6 +805,7 @@ pub fn lower_setter_method_with_name(
         body = destructuring_stmts;
     }
 
+    ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
 
     Ok(Function {

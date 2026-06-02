@@ -133,6 +133,8 @@ static PUMP: Pump = Pump {
 /// an actual `cvar.wait_timeout` sleep counts as progress.
 static NOTIFIED: AtomicBool = AtomicBool::new(false);
 static WAITER_COUNT: AtomicI64 = AtomicI64::new(0);
+#[cfg(test)]
+static TEST_FORCE_ZERO_BUDGET: AtomicBool = AtomicBool::new(false);
 
 /// Idle-cap: even if every notify path were silent, the consumer
 /// re-checks every second. Acts as a safety net only — the design
@@ -371,6 +373,10 @@ pub extern "C" fn js_wait_for_event() {
             }
         }
     }
+    #[cfg(test)]
+    if TEST_FORCE_ZERO_BUDGET.load(Ordering::Acquire) {
+        budget_ms = 0;
+    }
 
     if budget_ms == 0 {
         // A timer reads as due now — don't block. Transient hits stay
@@ -466,6 +472,21 @@ mod tests {
     /// budget. (`js_wait_for_event`'s budget is computed from global
     /// timer state — there is no per-thread injection point.)
     static SERIAL: StdMutex<()> = StdMutex::new(());
+
+    struct ForcedZeroBudgetGuard;
+
+    impl ForcedZeroBudgetGuard {
+        fn new() -> Self {
+            TEST_FORCE_ZERO_BUDGET.store(true, Ordering::Release);
+            Self
+        }
+    }
+
+    impl Drop for ForcedZeroBudgetGuard {
+        fn drop(&mut self) {
+            TEST_FORCE_ZERO_BUDGET.store(false, Ordering::Release);
+        }
+    }
 
     /// Spec: wait returns within microseconds of a notify, well below the
     /// idle cap (1 s).
@@ -609,10 +630,10 @@ mod tests {
             "throttle must be on by default for this test"
         );
 
-        // A 0ms promise timer keeps `budget_ms == 0` every call (it is
-        // never ticked, so it stays perpetually "due"). This is exactly
-        // the #1114 wedge shape: a deadline pinned in the past.
-        crate::timer::js_set_timeout(0.0);
+        // Force the event-pump budget to zero without depending on the
+        // process-global timer queue. Other runtime tests may clear that
+        // queue in parallel, turning this warm-up into 1,025 idle-cap waits.
+        let _budget = ForcedZeroBudgetGuard::new();
 
         // Transient zero-latency: a single budget-0 call with a fresh
         // streak returns effectively immediately. (A racing notify only
@@ -687,9 +708,6 @@ mod tests {
             t2.elapsed()
         );
 
-        // Cleanup so the perpetually-due timer can't leak into another
-        // serialized test.
-        crate::timer::js_timer_tick();
         NOTIFIED.swap(false, Ordering::Acquire);
     }
 
@@ -715,8 +733,9 @@ mod tests {
             "throttle must be on by default for this test"
         );
 
-        // Perpetually-due timer = budget_ms == 0 on every call.
-        crate::timer::js_set_timeout(0.0);
+        // Force the same budget-0 shape as a perpetually-due timer while
+        // staying isolated from parallel tests that mutate the timer queue.
+        let _budget = ForcedZeroBudgetGuard::new();
 
         let mut throttled = Duration::ZERO;
         // Retry loop guards against a parallel test pushing a notify
@@ -757,8 +776,6 @@ mod tests {
             throttled
         );
 
-        // Cleanup.
-        crate::timer::js_timer_tick();
         NOTIFIED.swap(false, Ordering::Acquire);
     }
 }

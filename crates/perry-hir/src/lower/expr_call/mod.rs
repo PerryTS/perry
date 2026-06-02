@@ -62,6 +62,7 @@ use intrinsics::{
     try_namespace_static_method_apply_call_bind, try_native_arena_intrinsics,
     try_native_arena_public_api, try_native_memory_public_api, try_native_module_method_apply_call,
     try_pod_layout_constants, try_precompile, try_require_literal_bail,
+    try_strict_eval_arguments_assignment,
 };
 use local_array_methods::try_local_array_methods;
 use module_class_static::try_module_class_static;
@@ -214,6 +215,9 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
     // Runs after the `Function('return this')()` fold; before the Phase 0
     // refusal so const-foldable sites compile instead of being classified.
     if let Some(expr) = super::const_fold_fn::try_eval_function_call_fold(ctx, call)? {
+        return Ok(expr);
+    }
+    if let Some(expr) = try_strict_eval_arguments_assignment(ctx, call) {
         return Ok(expr);
     }
     // #1678: classify `Function(...)` / `eval(...)`. Bails on the

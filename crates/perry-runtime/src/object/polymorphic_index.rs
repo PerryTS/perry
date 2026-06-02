@@ -78,6 +78,12 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         return f64::from_bits(v.bits());
     }
 
+    if let Some(value) =
+        unsafe { arguments_object_get_index(raw as *const ObjectHeader, idx_i32 as u32) }
+    {
+        return value;
+    }
+
     if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
         if idx_i32 < 0 || idx != (idx_i32 as f64) {
             let key = unsafe { property_key_string_ptr(idx) };
@@ -142,6 +148,10 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         return;
     }
     let idx_i32 = idx as i32;
+
+    if unsafe { arguments_object_set_index(raw as *mut ObjectHeader, idx_i32 as u32, value) } {
+        return;
+    }
 
     if crate::buffer::is_registered_buffer(raw as usize) {
         crate::buffer::js_buffer_set(

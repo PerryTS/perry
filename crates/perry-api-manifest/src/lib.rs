@@ -667,6 +667,19 @@ mod tests {
     }
 
     #[test]
+    fn ws_ready_state_constants_are_manifest_properties() {
+        for name in ["CONNECTING", "OPEN", "CLOSING", "CLOSED"] {
+            let entry = module_has_symbol("ws", name)
+                .unwrap_or_else(|| panic!("ws.{name} should be in the manifest"));
+            assert!(matches!(entry.kind, ApiKind::Property));
+            assert!(
+                module_has_public_named_export("ws", name),
+                "ws.{name} should be available to named imports"
+            );
+        }
+    }
+
+    #[test]
     fn fs_promises_manifest_matches_runtime_backed_exports() {
         assert!(is_known_module("fs/promises"));
         assert!(is_known_module("node:fs/promises"));

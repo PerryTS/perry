@@ -969,6 +969,12 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
                 collect_assigned_locals_expr(base_expr, assigned);
             }
         }
+        Expr::UrlPatternNew { input, base } => {
+            collect_assigned_locals_expr(input, assigned);
+            if let Some(base_expr) = base {
+                collect_assigned_locals_expr(base_expr, assigned);
+            }
+        }
         Expr::UrlGetHref(url)
         | Expr::UrlGetPathname(url)
         | Expr::UrlGetProtocol(url)
@@ -1071,6 +1077,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::PodLayoutSizeOf { .. }
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. }
+        | Expr::NewTarget
         | Expr::ClassRef(_)
         | Expr::Number(_)
         | Expr::Integer(_)

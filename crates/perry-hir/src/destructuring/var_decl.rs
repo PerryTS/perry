@@ -1655,6 +1655,12 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 None
                             }
                         }
+                        (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(method_ident))
+                            if obj_ident.sym.as_ref() == "Array"
+                                && method_ident.sym.as_ref() == "isArray" =>
+                        {
+                            Some("Array.isArray".to_string())
+                        }
                         _ => None,
                     },
                     _ => None,

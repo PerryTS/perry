@@ -39,6 +39,7 @@ use crate::runtime_decls;
 use crate::strings::StringPool;
 use crate::types::{LlvmType, DOUBLE, I64, VOID};
 
+pub(crate) mod arguments;
 mod artifacts;
 mod closure;
 mod entry;
@@ -1794,15 +1795,20 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // forward/recursive calls without worrying about emission order.
     // Names are scoped by module prefix to avoid cross-module collisions.
     let mut func_names: HashMap<u32, String> = HashMap::new();
-    let mut func_signatures: HashMap<u32, (usize, bool, bool)> = HashMap::new();
+    let mut func_signatures: HashMap<u32, (usize, bool, bool, bool)> = HashMap::new();
     let mut func_synthetic_arguments: std::collections::HashSet<u32> =
         std::collections::HashSet::new();
     for f in &hir.functions {
         func_names.insert(f.id, scoped_fn_name(&module_prefix, &f.name));
         let has_rest = f.params.iter().any(|p| p.is_rest);
+        let synthetic_is_rest = f
+            .params
+            .last()
+            .map(|p| p.arguments_object.is_some() && p.is_rest)
+            .unwrap_or(false);
         if f.params
             .last()
-            .map(|p| p.is_rest && p.name == "arguments")
+            .map(|p| p.arguments_object.is_some())
             .unwrap_or(false)
         {
             func_synthetic_arguments.insert(f.id);
@@ -1811,7 +1817,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             f.return_type,
             perry_types::Type::Number | perry_types::Type::Int32
         );
-        func_signatures.insert(f.id, (f.params.len(), has_rest, returns_number));
+        func_signatures.insert(
+            f.id,
+            (f.params.len(), has_rest, returns_number, synthetic_is_rest),
+        );
     }
 
     // Module-level boxed_vars: union of every per-function/method/
@@ -2010,9 +2019,34 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             if let perry_hir::Expr::Closure { params, .. } = expr {
                 let last_is_synth_args = params
                     .last()
-                    .map(|p| p.is_rest && p.name == "arguments")
+                    .map(|p| p.arguments_object.is_some())
                     .unwrap_or(false);
-                if last_is_synth_args {
+                let has_user_rest = params
+                    .iter()
+                    .any(|p| p.is_rest && p.arguments_object.is_none());
+                if last_is_synth_args && !has_user_rest {
+                    Some(*fid)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let closure_rest_and_arguments: std::collections::HashSet<u32> = closures
+        .iter()
+        .filter_map(|(fid, expr)| {
+            if let perry_hir::Expr::Closure { params, .. } = expr {
+                let last_is_synth_args = params
+                    .last()
+                    .map(|p| p.arguments_object.is_some())
+                    .unwrap_or(false);
+                let has_user_rest = params
+                    .iter()
+                    .any(|p| p.is_rest && p.arguments_object.is_none());
+                if last_is_synth_args && has_user_rest {
                     Some(*fid)
                 } else {
                     None
@@ -2260,6 +2294,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         module_local_types: &module_local_types,
         closure_rest_params: &closure_rest_params,
         closure_synthetic_arguments: &closure_synthetic_arguments,
+        closure_rest_and_arguments: &closure_rest_and_arguments,
         closure_arities: &closure_arities,
         closure_lengths: &closure_lengths,
         closure_arrow_functions: &closure_arrow_functions,

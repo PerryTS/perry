@@ -47,7 +47,14 @@ pub(super) use perry_runtime::{
 extern "C" {
     fn js_buffer_register_external(addr: usize);
     fn js_buffer_mark_as_uint8array_external(addr: usize);
-    fn js_buffer_mark_as_crypto_key_external(addr: usize, algo: u8, hash: u8, kind: u8);
+    fn js_buffer_mark_as_crypto_key_external(
+        addr: usize,
+        algo: u8,
+        hash: u8,
+        kind: u8,
+        extractable: u8,
+        usages: u32,
+    );
 }
 
 /// `buffer_data` is private to perry-runtime — open-code the same offset.
@@ -105,6 +112,15 @@ pub(super) enum KeyKind {
     Public,
 }
 
+pub(super) const USAGE_ENCRYPT: u32 = 1 << 0;
+pub(super) const USAGE_DECRYPT: u32 = 1 << 1;
+pub(super) const USAGE_SIGN: u32 = 1 << 2;
+pub(super) const USAGE_VERIFY: u32 = 1 << 3;
+pub(super) const USAGE_DERIVE_KEY: u32 = 1 << 4;
+pub(super) const USAGE_DERIVE_BITS: u32 = 1 << 5;
+pub(super) const USAGE_WRAP_KEY: u32 = 1 << 6;
+pub(super) const USAGE_UNWRAP_KEY: u32 = 1 << 7;
+
 #[derive(Copy, Clone, Debug)]
 pub(super) struct CryptoKeyMaterial {
     pub(super) algo: KeyAlgo,
@@ -113,6 +129,26 @@ pub(super) struct CryptoKeyMaterial {
     /// the struct stays `Copy`).
     pub(super) hash: HashAlgo,
     pub(super) kind: KeyKind,
+    pub(super) extractable: bool,
+    pub(super) usages: u32,
+}
+
+impl CryptoKeyMaterial {
+    pub(super) fn new(
+        algo: KeyAlgo,
+        hash: HashAlgo,
+        kind: KeyKind,
+        extractable: bool,
+        usages: u32,
+    ) -> Self {
+        Self {
+            algo,
+            hash,
+            kind,
+            extractable,
+            usages,
+        }
+    }
 }
 
 pub(super) static CRYPTO_KEY_REGISTRY: Lazy<Mutex<HashMap<usize, CryptoKeyMaterial>>> =
@@ -126,6 +162,8 @@ pub(super) fn register_crypto_key(buf_addr: usize, mat: CryptoKeyMaterial) {
             runtime_algo_id(mat.algo),
             runtime_hash_id(mat.hash),
             runtime_key_kind_id(mat.kind),
+            u8::from(mat.extractable),
+            mat.usages,
         );
     }
 }
@@ -139,7 +177,13 @@ fn runtime_algo_id(algo: KeyAlgo) -> u8 {
         KeyAlgo::AesCtr => 5,
         KeyAlgo::Hkdf => 6,
         KeyAlgo::Pbkdf2 => 7,
-        _ => 0,
+        KeyAlgo::EcdsaP256 => 8,
+        KeyAlgo::EcdhP256 => 9,
+        KeyAlgo::Ed25519 => 10,
+        KeyAlgo::X25519 => 11,
+        KeyAlgo::RsassaPkcs1 => 12,
+        KeyAlgo::RsaOaep => 13,
+        KeyAlgo::RsaPss => 14,
     }
 }
 
@@ -167,7 +211,8 @@ pub(super) fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
         .get(&buf_addr)
         .copied()
         .or_else(|| {
-            let (algo, hash, kind) = perry_runtime::buffer::crypto_key_meta(buf_addr)?;
+            let (algo, hash, kind, extractable, usages) =
+                perry_runtime::buffer::crypto_key_meta(buf_addr)?;
             let algo = match algo {
                 1 => KeyAlgo::Hmac,
                 2 => KeyAlgo::AesGcm,
@@ -176,6 +221,13 @@ pub(super) fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
                 5 => KeyAlgo::AesCtr,
                 6 => KeyAlgo::Hkdf,
                 7 => KeyAlgo::Pbkdf2,
+                8 => KeyAlgo::EcdsaP256,
+                9 => KeyAlgo::EcdhP256,
+                10 => KeyAlgo::Ed25519,
+                11 => KeyAlgo::X25519,
+                12 => KeyAlgo::RsassaPkcs1,
+                13 => KeyAlgo::RsaOaep,
+                14 => KeyAlgo::RsaPss,
                 _ => return None,
             };
             let hash = match hash {
@@ -191,7 +243,13 @@ pub(super) fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
                 3 => KeyKind::Public,
                 _ => KeyKind::Secret,
             };
-            Some(CryptoKeyMaterial { algo, hash, kind })
+            Some(CryptoKeyMaterial {
+                algo,
+                hash,
+                kind,
+                extractable,
+                usages,
+            })
         })
 }
 
@@ -324,6 +382,128 @@ pub(super) unsafe fn extract_algorithm_hash(algo_bits: u64, default: HashAlgo) -
     let key_ptr = perry_runtime::js_string_from_bytes(key.as_ptr(), key.len() as u32);
     let hash_val = perry_runtime::js_object_get_field_by_name(obj_ptr, key_ptr);
     extract_hash_algo(hash_val.bits()).unwrap_or(default)
+}
+
+pub(super) fn bool_from_jsvalue(bits: u64) -> bool {
+    matches!(bits, TAG_TRUE)
+}
+
+pub(super) unsafe fn key_usages_from_jsvalue(bits: u64) -> Option<u32> {
+    let is_array =
+        JSValue::from_bits(perry_runtime::array::js_array_is_array(f64::from_bits(bits)).to_bits());
+    if !is_array.is_bool() || !is_array.as_bool() {
+        return Some(0);
+    }
+    let arr = strip_ptr(bits) as *const perry_runtime::ArrayHeader;
+    if (arr as usize) < 0x1000 {
+        return Some(0);
+    }
+    let len = perry_runtime::array::js_array_length(arr);
+    let mut usages = 0u32;
+    for i in 0..len {
+        let item = perry_runtime::array::js_array_get(arr, i);
+        let name = string_from_jsvalue(item.bits())?;
+        let bit = usage_bit(&name)?;
+        usages |= bit;
+    }
+    Some(usages)
+}
+
+pub(super) fn usage_bit(name: &str) -> Option<u32> {
+    match name {
+        "encrypt" => Some(USAGE_ENCRYPT),
+        "decrypt" => Some(USAGE_DECRYPT),
+        "sign" => Some(USAGE_SIGN),
+        "verify" => Some(USAGE_VERIFY),
+        "deriveKey" => Some(USAGE_DERIVE_KEY),
+        "deriveBits" => Some(USAGE_DERIVE_BITS),
+        "wrapKey" => Some(USAGE_WRAP_KEY),
+        "unwrapKey" => Some(USAGE_UNWRAP_KEY),
+        _ => None,
+    }
+}
+
+pub(super) fn supported_usages(algo: KeyAlgo, kind: KeyKind) -> u32 {
+    match (algo, kind) {
+        (KeyAlgo::Hmac, KeyKind::Secret) => USAGE_SIGN | USAGE_VERIFY,
+        (KeyAlgo::AesGcm | KeyAlgo::AesCbc | KeyAlgo::AesCtr, KeyKind::Secret) => {
+            USAGE_ENCRYPT | USAGE_DECRYPT | USAGE_WRAP_KEY | USAGE_UNWRAP_KEY
+        }
+        (KeyAlgo::AesKw, KeyKind::Secret) => USAGE_WRAP_KEY | USAGE_UNWRAP_KEY,
+        (KeyAlgo::Hkdf | KeyAlgo::Pbkdf2, KeyKind::Secret) => USAGE_DERIVE_KEY | USAGE_DERIVE_BITS,
+        (
+            KeyAlgo::EcdsaP256 | KeyAlgo::Ed25519 | KeyAlgo::RsassaPkcs1 | KeyAlgo::RsaPss,
+            KeyKind::Private,
+        ) => USAGE_SIGN,
+        (
+            KeyAlgo::EcdsaP256 | KeyAlgo::Ed25519 | KeyAlgo::RsassaPkcs1 | KeyAlgo::RsaPss,
+            KeyKind::Public,
+        ) => USAGE_VERIFY,
+        (KeyAlgo::EcdhP256 | KeyAlgo::X25519, KeyKind::Private) => {
+            USAGE_DERIVE_KEY | USAGE_DERIVE_BITS
+        }
+        (KeyAlgo::EcdhP256 | KeyAlgo::X25519, KeyKind::Public) => 0,
+        (KeyAlgo::RsaOaep, KeyKind::Public) => USAGE_ENCRYPT | USAGE_WRAP_KEY,
+        (KeyAlgo::RsaOaep, KeyKind::Private) => USAGE_DECRYPT | USAGE_UNWRAP_KEY,
+        _ => 0,
+    }
+}
+
+pub(super) unsafe fn validate_key_usages(
+    algo: KeyAlgo,
+    kind: KeyKind,
+    usages_bits: u64,
+    empty_allowed: bool,
+    empty_message: &'static str,
+    bad_message: &'static str,
+) -> Result<u32, (&'static str, &'static str)> {
+    let usages = match key_usages_from_jsvalue(usages_bits) {
+        Some(u) => u,
+        None => return Err(("SyntaxError", bad_message)),
+    };
+    let supported = supported_usages(algo, kind);
+    if usages & !supported != 0 {
+        return Err(("SyntaxError", bad_message));
+    }
+    if usages == 0 && !empty_allowed {
+        return Err(("SyntaxError", empty_message));
+    }
+    Ok(usages)
+}
+
+pub(super) unsafe fn validate_key_pair_usages(
+    algo: KeyAlgo,
+    usages_bits: u64,
+    empty_message: &'static str,
+    bad_message: &'static str,
+) -> Result<(u32, u32), (&'static str, &'static str)> {
+    let requested = match key_usages_from_jsvalue(usages_bits) {
+        Some(u) => u,
+        None => return Err(("SyntaxError", bad_message)),
+    };
+    let private_supported = supported_usages(algo, KeyKind::Private);
+    let public_supported = supported_usages(algo, KeyKind::Public);
+    if requested & !(private_supported | public_supported) != 0 {
+        return Err(("SyntaxError", bad_message));
+    }
+    let private_usages = requested & private_supported;
+    let public_usages = requested & public_supported;
+    if private_usages == 0 && public_usages == 0 {
+        return Err(("SyntaxError", empty_message));
+    }
+    Ok((private_usages, public_usages))
+}
+
+pub(super) fn require_usage(
+    mat: CryptoKeyMaterial,
+    usage: u32,
+    message: &'static str,
+) -> Result<(), (&'static str, &'static str)> {
+    if mat.usages & usage == 0 {
+        Err(("InvalidAccessError", message))
+    } else {
+        Ok(())
+    }
 }
 
 /// Allocate a fresh Buffer marked as Uint8Array (so `instanceof Uint8Array`

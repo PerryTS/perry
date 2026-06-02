@@ -12,6 +12,7 @@ pub mod node_compat;
 pub mod parse;
 pub mod search_params;
 pub mod url_class;
+pub mod url_pattern;
 
 // Explicit named re-exports for all public FFI symbols + helpers used by the
 // rest of the runtime / codegen layer. Globs are intentionally avoided so
@@ -49,6 +50,9 @@ pub use self::url_class::{
     js_url_new_with_base, js_url_parse, js_url_parse_with_base, js_url_set_hash,
     js_url_set_hostname, js_url_set_href, js_url_set_password, js_url_set_pathname,
     js_url_set_port, js_url_set_protocol, js_url_set_search, js_url_set_username,
+};
+pub use self::url_pattern::{
+    js_url_pattern_constructor_call, js_url_pattern_exec, js_url_pattern_new, js_url_pattern_test,
 };
 
 // ---------------------------------------------------------------------------

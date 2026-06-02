@@ -308,6 +308,12 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
 /// Returns 1 (true) on success, 0 (false) on failure.
 #[no_mangle]
 pub extern "C" fn js_array_delete(arr: *mut ArrayHeader, index: u32) -> i32 {
+    let obj = arr as *mut crate::object::ObjectHeader;
+    if crate::object::is_arguments_object(obj) {
+        let name = index.to_string();
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        return crate::object::js_object_delete_field(obj, key);
+    }
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return 1;

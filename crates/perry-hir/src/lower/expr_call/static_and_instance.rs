@@ -467,17 +467,7 @@ fn may_lower_to_native_method_call(ctx: &LoweringContext, expr: &ast::Expr) -> b
 }
 
 fn ident_may_start_native_method_call(ctx: &LoweringContext, name: &str) -> bool {
-    if ctx.lookup_native_instance(name).is_some() || ctx.lookup_native_module(name).is_some() {
-        return true;
-    }
-
-    ctx.lookup_imported_func(name).is_some()
-        && !ctx.namespace_import_locals.contains(name)
-        && name
-            .chars()
-            .next()
-            .map(|c| c.is_uppercase())
-            .unwrap_or(false)
+    ctx.lookup_native_instance(name).is_some() || ctx.lookup_native_module(name).is_some()
 }
 
 /// Resolve the native `(module, class)` produced by an inline factory call

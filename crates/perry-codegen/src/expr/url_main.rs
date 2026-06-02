@@ -85,6 +85,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(ctx.block(), &obj))
         }
 
+        Expr::UrlPatternNew { input, base } => {
+            let input_v = lower_expr(ctx, input)?;
+            let base_v = if let Some(base) = base {
+                lower_expr(ctx, base)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let obj = ctx.block().call(
+                I64,
+                "js_url_pattern_new",
+                &[(DOUBLE, &input_v), (DOUBLE, &base_v)],
+            );
+            Ok(nanbox_pointer_inline(ctx.block(), &obj))
+        }
+
         // The nine scalar URL getters. Runtime returns an already-NaN-boxed
         // f64 string, so no retagging needed.
         Expr::UrlGetHref(u) => lower_url_string_getter(ctx, u, "js_url_get_href"),
