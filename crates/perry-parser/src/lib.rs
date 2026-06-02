@@ -5,6 +5,7 @@
 
 use anyhow::Result;
 use perry_diagnostics::{Diagnostic, DiagnosticCode, Diagnostics, FileId, SourceCache, Span};
+use std::path::Path;
 use swc_common::{input::StringInput, sync::Lrc, FileName, SourceMap};
 use swc_ecma_ast::{Module, ModuleItem, Script};
 use swc_ecma_parser::{lexer::Lexer, EsSyntax, Parser, Syntax, TsSyntax};
@@ -167,19 +168,155 @@ fn parse_module_or_script(
 
 fn should_parse_as_script(filename: &str, source: &str) -> bool {
     let path = filename.split(['?', '#']).next().unwrap_or(filename);
-    (path.ends_with(".js") || path.ends_with(".cjs") || path.ends_with(".jsx"))
-        && !looks_like_es_module(source)
+    if !(path.ends_with(".js") || path.ends_with(".cjs") || path.ends_with(".jsx")) {
+        return false;
+    }
+    if !path.ends_with(".cjs") && file_is_in_esm_package_context(path) {
+        return false;
+    }
+    !looks_like_es_module(source)
 }
 
 fn looks_like_es_module(source: &str) -> bool {
-    source.lines().any(|line| {
-        let trimmed = line.trim_start();
-        trimmed.starts_with("import ")
-            || trimmed.starts_with("import{")
-            || trimmed.starts_with("export ")
-            || trimmed.starts_with("export{")
-            || trimmed.starts_with("export*")
-    })
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum State {
+        Code,
+        String(u8),
+        LineComment,
+        BlockComment,
+    }
+
+    fn is_ident(b: u8) -> bool {
+        b == b'_' || b == b'$' || b.is_ascii_alphanumeric()
+    }
+
+    fn prev_allows_module_item(bytes: &[u8], mut i: usize) -> bool {
+        while i > 0 {
+            i -= 1;
+            match bytes[i] {
+                b' ' | b'\t' | b'\r' | b'\n' => continue,
+                b';' | b'{' | b'}' => return true,
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    fn next_after_keyword(bytes: &[u8], i: usize, keyword: &[u8]) -> Option<usize> {
+        let end = i.checked_add(keyword.len())?;
+        if bytes.get(i..end)? != keyword {
+            return None;
+        }
+        if i > 0 && is_ident(bytes[i - 1]) {
+            return None;
+        }
+        if bytes.get(end).is_some_and(|b| is_ident(*b)) {
+            return None;
+        }
+        Some(end)
+    }
+
+    let bytes = source.as_bytes();
+    let mut i = 0;
+    let mut state = State::Code;
+    while i < bytes.len() {
+        match state {
+            State::Code => {
+                if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
+                    state = State::String(bytes[i]);
+                    i += 1;
+                } else if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'/') {
+                    state = State::LineComment;
+                    i += 2;
+                } else if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
+                    state = State::BlockComment;
+                    i += 2;
+                } else {
+                    if prev_allows_module_item(bytes, i) {
+                        if let Some(end) = next_after_keyword(bytes, i, b"export") {
+                            if matches!(
+                                bytes.get(end),
+                                Some(b' ' | b'\t' | b'\r' | b'\n' | b'{' | b'*')
+                            ) {
+                                return true;
+                            }
+                        }
+                        if let Some(end) = next_after_keyword(bytes, i, b"import") {
+                            if matches!(
+                                bytes.get(end),
+                                Some(b' ' | b'\t' | b'\r' | b'\n' | b'{' | b'*' | b'"' | b'\'')
+                            ) || bytes.get(end) == Some(&b'.')
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                    i += 1;
+                }
+            }
+            State::String(quote) => {
+                if bytes[i] == b'\\' {
+                    i += 2;
+                } else {
+                    if bytes[i] == quote {
+                        state = State::Code;
+                    }
+                    i += 1;
+                }
+            }
+            State::LineComment => {
+                if bytes[i] == b'\n' {
+                    state = State::Code;
+                }
+                i += 1;
+            }
+            State::BlockComment => {
+                if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                    i += 2;
+                    state = State::Code;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn file_is_in_esm_package_context(filename: &str) -> bool {
+    let path = Path::new(filename);
+    let mut current = Path::new(filename).parent();
+    while let Some(dir) = current {
+        let package_json = dir.join("package.json");
+        if package_json.exists() {
+            if let Ok(content) = std::fs::read_to_string(&package_json) {
+                if package_json_declares_esm_context(&content, dir, path) {
+                    return true;
+                }
+            }
+        }
+        current = dir.parent();
+    }
+    false
+}
+
+fn package_json_declares_esm_context(content: &str, package_dir: &Path, file_path: &Path) -> bool {
+    let compact: String = content.chars().filter(|ch| !ch.is_whitespace()).collect();
+    if compact.contains(r#""type":"module""#) {
+        return true;
+    }
+
+    let relative = match file_path.strip_prefix(package_dir) {
+        Ok(path) => path.to_string_lossy().replace('\\', "/"),
+        Err(_) => return false,
+    };
+    let relative_dot = format!("./{relative}");
+    let quoted_relative = format!(r#""{relative}""#);
+    let quoted_relative_dot = format!(r#""{relative_dot}""#);
+    let metadata_mentions_file =
+        compact.contains(&quoted_relative) || compact.contains(&quoted_relative_dot);
+
+    metadata_mentions_file && (compact.contains(r#""module":"#) || compact.contains(r#""import":"#))
 }
 
 fn script_to_module(script: Script) -> Module {
@@ -557,6 +694,16 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_minified_js_module_syntax_uses_module_parser() {
+        let source = r#"const value=1;export{value};"#;
+        let mut cache = SourceCache::new();
+
+        let result = parse_typescript_with_cache(source, "test.js", &mut cache).unwrap();
+
+        assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
     fn test_parse_js_script_regex_preserves_control_unicode_escapes() {
         let source = r#"
 'use strict'
@@ -589,5 +736,64 @@ if (!ASCII_WHITESPACE_REPLACE_REGEX.test(' ')) {
             normalize_unicode_identifier_escapes(source),
             r#"let a = "\u0062";"#
         );
+    }
+
+    #[test]
+    fn test_parse_js_inside_type_module_package_uses_module_parser() {
+        let dir =
+            std::env::temp_dir().join(format!("perry_parser_type_module_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("package.json"), r#"{ "type": "module" }"#).unwrap();
+        let source_path = dir.join("index.js");
+        let mut cache = SourceCache::new();
+
+        let result = parse_typescript_with_cache(
+            "const value = 1; export { value };",
+            source_path.to_str().unwrap(),
+            &mut cache,
+        )
+        .unwrap();
+
+        assert!(result.diagnostics.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_parse_js_referenced_by_import_export_metadata_uses_module_parser() {
+        let dir = std::env::temp_dir().join(format!(
+            "perry_parser_exports_module_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let esm_dir = dir.join("dist/esm");
+        std::fs::create_dir_all(&esm_dir).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{
+  "name": "pkg",
+  "exports": {
+    ".": {
+      "import": {
+        "default": "./dist/esm/index.js"
+      }
+    }
+  },
+  "module": "./dist/esm/index.js"
+}"#,
+        )
+        .unwrap();
+        let source_path = esm_dir.join("index.js");
+        let mut cache = SourceCache::new();
+
+        let result = parse_typescript_with_cache(
+            "await Promise.resolve(1);",
+            source_path.to_str().unwrap(),
+            &mut cache,
+        )
+        .unwrap();
+
+        assert!(result.diagnostics.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

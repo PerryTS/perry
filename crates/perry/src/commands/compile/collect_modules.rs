@@ -521,6 +521,7 @@ fn collect_module_one(
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("input.ts");
+    let parse_filename = canonical.to_str().unwrap_or(filename);
 
     // Use a relative path from project root for unique module names
     // This ensures files like "routes/auth.ts" and "middleware/auth.ts" have different names
@@ -544,7 +545,7 @@ fn collect_module_one(
     });
     let ast_module_owned: swc_ecma_ast::Module;
     let ast_module: &swc_ecma_ast::Module = match parse_cache.as_deref_mut() {
-        Some(cache) => match parse_cached(cache, &canonical, &source, filename) {
+        Some(cache) => match parse_cached(cache, &canonical, &source, parse_filename) {
             Ok(m) => m,
             Err(e) => {
                 return Err(annotate_parse_error(
@@ -555,7 +556,7 @@ fn collect_module_one(
                 ))
             }
         },
-        None => match perry_parser::parse_typescript(&source, filename) {
+        None => match perry_parser::parse_typescript(&source, parse_filename) {
             Ok(m) => {
                 ast_module_owned = m;
                 &ast_module_owned
@@ -1924,6 +1925,97 @@ console.log(got);
         assert!(
             entry_debug.contains("424242"),
             "entry HIR should contain the dependency method literal after cross-module inlining:\n{entry_debug}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bun_compile_package_js_esm_realpath_parses_as_module() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let node_modules = root.join("node_modules");
+        let glob_pkg = node_modules.join(".bun/glob@13.0.5/node_modules/glob");
+        let esm_dir = glob_pkg.join("dist/esm");
+        std::fs::create_dir_all(&esm_dir).expect("create glob esm dir");
+        std::fs::write(
+            glob_pkg.join("package.json"),
+            r#"{
+  "name": "glob",
+  "version": "13.0.5",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": {
+        "default": "./dist/esm/index.min.js"
+      },
+      "require": {
+        "default": "./dist/commonjs/index.min.js"
+      }
+    }
+  },
+  "module": "./dist/esm/index.min.js",
+  "main": "./dist/commonjs/index.min.js"
+}"#,
+        )
+        .expect("write package json");
+        std::fs::write(esm_dir.join("package.json"), r#"{ "type": "module" }"#)
+            .expect("write esm package json");
+        std::fs::write(esm_dir.join("dep.js"), "export const dep=41;\n").expect("write dep");
+        std::fs::write(
+            esm_dir.join("index.min.js"),
+            r#"import{dep}from"./dep.js";const value=dep+1;export{value};"#,
+        )
+        .expect("write index");
+
+        std::os::unix::fs::symlink(
+            ".bun/glob@13.0.5/node_modules/glob",
+            node_modules.join("glob"),
+        )
+        .expect("symlink glob");
+
+        let entry = root.join("entry.ts");
+        std::fs::write(
+            &entry,
+            r#"
+import { value } from "glob";
+console.log(value);
+"#,
+        )
+        .expect("write entry");
+
+        let mut ctx = CompilationContext::new(root.to_path_buf());
+        ctx.compile_packages.insert("glob".to_string());
+        ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+        let mut visited = HashSet::new();
+        let mut next_class_id: perry_hir::ClassId = 1;
+        let progress = VerboseProgress::new(OutputFormat::Text, 0);
+
+        collect_modules(
+            &entry,
+            &mut ctx,
+            &mut visited,
+            OutputFormat::Text,
+            None,
+            &mut next_class_id,
+            false,
+            &progress,
+            None,
+        )
+        .expect("collect modules");
+
+        let canonical_index = esm_dir.join("index.min.js").canonicalize().unwrap();
+        let canonical_dep = esm_dir.join("dep.js").canonicalize().unwrap();
+        assert!(
+            ctx.native_modules.contains_key(&canonical_index),
+            "glob ESM entry should be compiled natively from Bun realpath"
+        );
+        assert!(
+            ctx.native_modules.contains_key(&canonical_dep),
+            "glob ESM dependency should be compiled natively from Bun realpath"
+        );
+        assert!(
+            ctx.js_modules.is_empty(),
+            "compilePackages ESM files should not route through JS runtime"
         );
     }
 }
