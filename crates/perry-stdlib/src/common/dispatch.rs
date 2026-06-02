@@ -446,6 +446,13 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return crate::crypto::dispatch_diffie_hellman(handle, method_name, &args);
     }
 
+    #[cfg(feature = "crypto")]
+    if matches!(method_name, "toString" | "toJSON")
+        && with_handle::<crate::crypto::X509Handle, bool, _>(handle, |_| true).unwrap_or(false)
+    {
+        return crate::crypto::dispatch_x509_method(handle, method_name, &args);
+    }
+
     // crypto Cipher handle: createCipheriv(...) / createDecipheriv(...)
     // followed by .update(...).final() / .getAuthTag() / .setAuthTag() —
     // issue #1075. Method-gated like the Hash handle above so handle id
@@ -1877,20 +1884,25 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         return crate::crypto::dispatch_diffie_hellman_property(handle, property_name);
     }
 
-    // #1367: X509Certificate read-only properties (data values, not
-    // bound-method closures).
+    // #1367/#2563: X509Certificate data properties plus bound conversion
+    // methods.
     #[cfg(feature = "crypto")]
     if matches!(
         property_name,
         "subject"
             | "issuer"
             | "validFrom"
+            | "validFromDate"
             | "validTo"
+            | "validToDate"
             | "serialNumber"
             | "fingerprint"
             | "fingerprint256"
+            | "fingerprint512"
             | "ca"
             | "raw"
+            | "toString"
+            | "toJSON"
     ) && with_handle::<crate::crypto::X509Handle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_x509_property(handle, property_name);

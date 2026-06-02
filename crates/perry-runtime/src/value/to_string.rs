@@ -482,6 +482,23 @@ pub extern "C" fn js_jsvalue_to_string_method(value: f64) -> *mut crate::string:
         let prop = b"toString";
         crate::error::js_throw_type_error_property_access(is_null, prop.as_ptr(), prop.len());
     }
+    if jsval.is_pointer() {
+        let handle = jsval.as_pointer::<u8>() as usize;
+        if (1..0x100000).contains(&handle) {
+            if let Some(dispatch) = crate::object::handle_method_dispatch() {
+                let result = unsafe {
+                    dispatch(handle as i64, b"toString".as_ptr(), 8, std::ptr::null(), 0)
+                };
+                let result_jsval = JSValue::from_bits(result.to_bits());
+                if result_jsval.is_string() {
+                    return result_jsval.as_string_ptr() as *mut crate::string::StringHeader;
+                }
+                if result_jsval.is_short_string() {
+                    return crate::string::js_string_materialize_to_heap(result);
+                }
+            }
+        }
+    }
     js_jsvalue_to_string(value)
 }
 
