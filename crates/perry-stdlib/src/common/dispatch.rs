@@ -532,7 +532,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     }
 
     // zlib Transform streams (#1843): `zlib.createGzip()` etc. return handles
-    // in the 0x60000+ range; their `.write`/`.end`/`.on`/`.pipe`/`.flush`/
+    // in the zlib small-handle range; their `.write`/`.end`/`.on`/`.pipe`/`.flush`/
     // `.params`/`.reset`/`.close` calls lose their static type and route here.
     // Gated on the registry AND the method vocabulary so a handle-id reused
     // across another subsystem's registry can't misroute (handle id-spaces
@@ -1405,7 +1405,8 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     // id-range + registry membership so unrelated small-handle reads are
     // untouched.
     #[cfg(feature = "bundled-streams")]
-    if (0x40000..0x100000).contains(&(handle as usize))
+    if (crate::streams::STREAM_HANDLE_ID_START..crate::streams::STREAM_HANDLE_ID_END)
+        .contains(&(handle as usize))
         && crate::streams::js_stream_handle_is_registered(handle as usize)
     {
         return crate::streams::dispatch_stream_property(handle as f64, property_name);

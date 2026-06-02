@@ -320,6 +320,9 @@ pub fn is_node_core_module(module: &str) -> bool {
 
 /// Public named-export filter shared by the import gate and docs emitters.
 pub fn entry_is_public_named_export(entry: &ApiEntry) -> bool {
+    if !entry.module_export {
+        return false;
+    }
     if is_node_core_private_named_export(entry.module, entry.name) {
         return false;
     }
@@ -768,11 +771,14 @@ mod tests {
 
     #[test]
     fn known_modules_consistent_with_manifest() {
-        // Every entry's module must appear in NATIVE_MODULES.
-        // Catches typos and entries on un-registered modules.
+        // Every entry's module must be either importable or an explicit
+        // internal dispatch key. Catches typos and entries on unregistered
+        // modules without making private namespaces public modules.
         for entry in API_MANIFEST {
+            let normalized = entry.module.strip_prefix("node:").unwrap_or(entry.module);
             assert!(
-                is_known_module(entry.module),
+                is_known_module(entry.module)
+                    || entries::INTERNAL_MODULE_KEYS.contains(&normalized),
                 "manifest entry {}::{} on unknown module",
                 entry.module,
                 entry.name
@@ -1000,6 +1006,7 @@ mod tests {
             ("child_process", &["Stream"][..]),
             ("cluster", &["addListener", "on", "worker"][..]),
             ("stream", &["from", "fromWeb", "prototype", "toWeb"][..]),
+            ("punycode.ucs2", &["decode", "encode"][..]),
         ] {
             for name in names {
                 assert!(
@@ -1011,6 +1018,26 @@ mod tests {
                     "{module}.{name} must not be accepted as a top-level module export"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn punycode_ucs2_is_internal_namespace_not_builtin_submodule() {
+        assert!(is_known_module("punycode"));
+        assert!(is_known_module("node:punycode"));
+        assert!(!is_known_module("punycode.ucs2"));
+        assert!(!is_known_module("node:punycode.ucs2"));
+        assert!(module_has_public_named_export("punycode", "ucs2"));
+
+        for name in ["decode", "encode"] {
+            assert!(
+                module_has_symbol("punycode.ucs2", name).is_some(),
+                "punycode.ucs2.{name} should remain available for namespace dispatch"
+            );
+            assert!(
+                !module_has_public_named_export("punycode.ucs2", name),
+                "punycode.ucs2.{name} must not be advertised as a module export"
+            );
         }
     }
 

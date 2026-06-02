@@ -41,6 +41,11 @@ fn is_array_only_method_name(name: &str) -> bool {
     )
 }
 
+fn is_date_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    matches!(object, Expr::DateNew(_))
+        || receiver_class_name(ctx, object).as_deref() == Some("Date")
+}
+
 /// Try to lower a `Call { callee: PropertyGet { .. } }` via the
 /// string/array/class/Map/Set/Promise/fetch/static/instance dispatch tower.
 pub fn try_lower_property_get_method_call(
@@ -129,6 +134,7 @@ pub fn try_lower_property_get_method_call(
         && args.len() == 1
         && !is_string_expr(ctx, object)
         && !is_array_expr(ctx, object)
+        && !is_date_receiver(ctx, object)
         && is_string_expr(ctx, &args[0])
     {
         let has_user_to_string = receiver_class_name(ctx, object)
@@ -186,6 +192,7 @@ pub fn try_lower_property_get_method_call(
         && args.len() == 1
         && !is_string_expr(ctx, object)
         && !is_array_expr(ctx, object)
+        && !is_date_receiver(ctx, object)
     {
         // Only treat as radix call if class doesn't have toString.
         let has_user_to_string = receiver_class_name(ctx, object)
@@ -230,6 +237,7 @@ pub fn try_lower_property_get_method_call(
         && args.len() <= 1
         && !is_string_expr(ctx, object)
         && !is_array_expr(ctx, object)
+        && !is_date_receiver(ctx, object)
     {
         // Check whether the receiver class (if any) defines
         // toString itself or via inheritance.

@@ -124,6 +124,9 @@ unsafe impl Send for WritableStreamData {}
 unsafe impl Send for ReaderData {}
 unsafe impl Send for WriterData {}
 
+pub(crate) const STREAM_HANDLE_ID_START: usize = 0x100000;
+pub(crate) const STREAM_HANDLE_ID_END: usize = 0x200000;
+
 lazy_static::lazy_static! {
     static ref READABLE_STREAMS: Mutex<HashMap<usize, ReadableStreamData>> = Mutex::new(HashMap::new());
     static ref WRITABLE_STREAMS: Mutex<HashMap<usize, WritableStreamData>> = Mutex::new(HashMap::new());
@@ -131,17 +134,12 @@ lazy_static::lazy_static! {
     static ref READERS: Mutex<HashMap<usize, ReaderData>> = Mutex::new(HashMap::new());
     static ref WRITERS: Mutex<HashMap<usize, WriterData>> = Mutex::new(HashMap::new());
     // #1545: ONE id counter shared across all five Web Streams registries.
-    // Two reasons: (1) ids are globally unique across readable/writable/
-    // transform/reader/writer, so the runtime handle dispatcher can tell which
-    // registry a handle belongs to unambiguously; (2) the high base (0x40000)
-    // puts stream handles well above every other handle subsystem's id range
-    // (commander/fastify/net/... all start at 1 and never approach it), so a
-    // stream handle never collides with another subsystem's handle while still
-    // staying under the 0x100000 small-handle detection threshold. This is what
-    // lets `js_handle_method_dispatch` safely route stream methods at runtime
-    // for receivers whose static type the codegen lost (e.g.
-    // `src.pipeThrough(ts).getReader()`, `ts.readable.getReader()`).
-    static ref NEXT_STREAM_ID: Mutex<usize> = Mutex::new(0x40000);
+    // Stream handles are raw numeric f64 values, not POINTER_TAG small handles,
+    // so they live just above the runtime's `< 0x100000` small-handle band.
+    // That keeps them disjoint from Fetch/native/proxy pointer-tagged ids while
+    // the runtime's finite-number stream probes still route dynamic calls like
+    // `src.pipeThrough(ts).getReader()`.
+    static ref NEXT_STREAM_ID: Mutex<usize> = Mutex::new(STREAM_HANDLE_ID_START);
 }
 
 static GC_REGISTERED: std::sync::Once = std::sync::Once::new();
@@ -241,6 +239,9 @@ fn scan_stream_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>
 fn next_id(slot: &Mutex<usize>) -> usize {
     let mut guard = slot.lock().unwrap();
     let id = *guard;
+    if id >= STREAM_HANDLE_ID_END {
+        panic!("Web Streams handle id range exhausted");
+    }
     *guard += 1;
     id
 }
@@ -2183,7 +2184,7 @@ pub extern "C" fn js_stream_handle_is_registered(id: usize) -> bool {
 /// 4 = writer, 5 = TransformStream.
 #[no_mangle]
 pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
-    if !(0x40000..0x100000).contains(&id) {
+    if !(STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&id) {
         return 0;
     }
     if READABLE_STREAMS
@@ -2226,8 +2227,9 @@ pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
 /// `js_handle_method_dispatch` with a bare numeric handle.
 ///
 /// Because every Web Streams handle now lives in one shared id space based at
-/// `0x40000` (see `NEXT_STREAM_ID`), the handle is (a) recognisable by range
-/// and (b) present in exactly one of the five registries, so routing by
+/// `STREAM_HANDLE_ID_START` (see `NEXT_STREAM_ID`), the handle is (a)
+/// recognisable by range and (b) present in exactly one of the five registries,
+/// so routing by
 /// `(registry-membership, method-name)` is unambiguous and can never collide
 /// with another handle subsystem. Returns `None` when the handle isn't a stream
 /// handle or the method isn't a stream method, so the generic dispatcher falls
@@ -2238,7 +2240,7 @@ pub(crate) unsafe fn dispatch_stream_method(
     args: &[f64],
 ) -> Option<f64> {
     let id = handle as usize;
-    if !(0x40000..0x100000).contains(&id) {
+    if !(STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&id) {
         return None;
     }
     let arg0 = args
@@ -2470,6 +2472,19 @@ pub fn drain_readable_into_bytes(stream_id: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_ids_live_outside_pointer_tag_small_handle_band() {
+        let id = next_id(&NEXT_STREAM_ID);
+        assert!(
+            (STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&id),
+            "stream id {id:#x} must stay in the raw numeric stream band"
+        );
+        assert!(
+            id >= 0x100000,
+            "stream id {id:#x} must not overlap pointer-tagged small handles"
+        );
+    }
 
     #[test]
     fn root_scanner_emits_callbacks_chunks_and_promises() {

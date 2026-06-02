@@ -151,13 +151,6 @@ pub const NODE_SUBMODULES: &[&str] = &[
     "stream/consumers",
     "stream/web",
     "readline/promises",
-    // #3925: `punycode.ucs2` is a Perry-internal dispatch namespace backing
-    // `punycode.ucs2.decode/encode` member access — NOT a real Node builtin.
-    // Node has no `node:punycode.ucs2` module (`ucs2` is a property of
-    // `punycode`), so the import gate in `perry-hir` rejects the specifier even
-    // though it stays registered here for member dispatch + manifest
-    // consistency.
-    "punycode.ucs2",
     "sys",
     "test",
     "test/reporters",
@@ -168,6 +161,11 @@ pub const NODE_SUBMODULES: &[&str] = &[
     "timers",
     "timers/promises",
 ];
+
+/// Internal manifest keys used by dispatch/property gates but not importable
+/// module specifiers.
+#[cfg(test)]
+pub(crate) const INTERNAL_MODULE_KEYS: &[&str] = &["punycode.ucs2"];
 
 /// Modules handled entirely by `perry-runtime` — the linker doesn't
 /// need to pull in `perry-stdlib` for these. Migrated from
@@ -4000,7 +3998,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Resource timing entries are recorded through the perf_hooks timeline.
     internal_method("perf_hooks", "markResourceTiming", false, None),
     // timerify returns a wrapper that emits observer-visible function entries.
-    internal_method("perf_hooks", "timerify", false, None),
+    method("perf_hooks", "timerify", false, None),
     // #1336: monitorEventLoopDelay() / createHistogram() return a
     // Histogram-shaped object whose method/property reads route
     // through the internal `perf_histogram` namespace (not listed in
@@ -4164,10 +4162,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("punycode", "version"),
     // #2607: the `ucs2` code-point helper sub-namespace. The sub-namespace
     // object is a `property` on `punycode`; its `decode`/`encode` methods carry
-    // the `punycode.ucs2` module key (mirrors `util/types`).
+    // the internal `punycode.ucs2` dispatch key. Node does not expose
+    // `node:punycode.ucs2` as an importable builtin module.
     property("punycode", "ucs2"),
-    method("punycode.ucs2", "decode", false, None),
-    method("punycode.ucs2", "encode", false, None),
+    internal_method("punycode.ucs2", "decode", false, None),
+    internal_method("punycode.ucs2", "encode", false, None),
     // --- http (perry-ext-http surface + classes the framework spec
     //     exposes). Both http and https route through the same crate. ---
     method("http", "createServer", false, None),

@@ -109,10 +109,9 @@ pub fn transform_generator_function_with_extra_captures(
     });
 
     // Collect hoisted var IDs first so we know which Lets to rewrite
-    let hoisted_ids: std::collections::HashSet<LocalId> = collect_hoisted_vars(&func.body)
-        .iter()
-        .map(|(id, _, _)| *id)
-        .collect();
+    let hoisted_for_rewrite = collect_hoisted_vars(&func.body);
+    let hoisted_ids: std::collections::HashSet<LocalId> =
+        hoisted_for_rewrite.iter().map(|(id, _, _)| *id).collect();
 
     // Rewrite `Let { id, init: Some(expr) }` → `Expr(LocalSet(id, expr))` for hoisted
     // variables inside state bodies. Without this, the Let creates a fresh local that
@@ -273,7 +272,17 @@ pub fn transform_generator_function_with_extra_captures(
 
     // Hoist variable declarations from the original body — collected
     // here (before the prealloc emit) so the prealloc set is complete.
-    let hoisted = collect_hoisted_vars(&func.body);
+    let mut hoisted = hoisted_for_rewrite;
+    for route in &catches {
+        if let (Some(param_id), Some(param_name)) = (route.param_id, route.param_name.as_ref()) {
+            if !hoisted.iter().any(|(id, _, _)| *id == param_id) {
+                // Lifted catch routes run in the async throw arm, outside
+                // codegen's normal Stmt::Try catch binding path, so their
+                // params need cross-state boxes.
+                hoisted.push((param_id, param_name.clone(), Type::Any));
+            }
+        }
+    }
 
     // Issue #1029: the state-machine internals (`state`, `done`, `sent`)
     // plus hoisted user-vars and the transform-allocated `extra_local_ids`

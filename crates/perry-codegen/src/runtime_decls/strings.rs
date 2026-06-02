@@ -977,6 +977,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // is a runtime expression (function arg holding class ref).
     module.declare_function("js_instanceof_dynamic", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_register_class_extends_error", VOID, &[I32]);
+    module.declare_function("js_register_class_extends_data_view", VOID, &[I32]);
     module.declare_function("js_register_class_id", VOID, &[I32]);
     // #1021 NestJS: surface Perry class names to V8 so `metatype.name`
     // is non-empty. Codegen emits one call per registered class id at

@@ -461,7 +461,7 @@ pub unsafe extern "C" fn js_zlib_brotli_decompress(data_value: f64, callback_val
 // `zlib.createGzip()` / `createGunzip()` / `createDeflate()` /
 // `createInflate()` / `createDeflateRaw()` / `createInflateRaw()` /
 // `createUnzip()` / `createBrotliCompress()` / `createBrotliDecompress()`
-// return small-int handles (base 0x60000, under the 0x100000 small-handle
+// return small-int handles (base 0xE0000, under the 0x100000 small-handle
 // dispatch threshold) that the codegen NaN-boxes with POINTER_TAG. Subsequent
 // `s.write()` / `s.end()` / `s.on()` / `s.pipe()` calls lose their static type
 // and route through `js_native_call_method` → HANDLE_METHOD_DISPATCH →
@@ -505,8 +505,11 @@ lazy_static::lazy_static! {
     static ref ZLIB_LISTENERS: Mutex<HashMap<i64, HashMap<String, Vec<i64>>>> =
         Mutex::new(HashMap::new());
     static ref ZLIB_PENDING_EVENTS: Mutex<Vec<ZlibEvent>> = Mutex::new(Vec::new());
-    static ref NEXT_ZLIB_ID: Mutex<i64> = Mutex::new(0x60000);
+    static ref NEXT_ZLIB_ID: Mutex<i64> = Mutex::new(ZLIB_STREAM_HANDLE_ID_START);
 }
+
+const ZLIB_STREAM_HANDLE_ID_START: i64 = 0xE0000;
+const ZLIB_STREAM_HANDLE_ID_END: i64 = 0xF0000;
 
 static ZLIB_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 
@@ -546,6 +549,9 @@ fn scan_zlib_roots(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
 fn next_zlib_id() -> i64 {
     let mut g = NEXT_ZLIB_ID.lock().unwrap();
     let id = *g;
+    if id >= ZLIB_STREAM_HANDLE_ID_END {
+        panic!("zlib stream handle id range exhausted");
+    }
     *g += 1;
     id
 }
@@ -1271,6 +1277,15 @@ pub unsafe extern "C" fn js_zlib_native_dispatch(
 #[cfg(test)]
 mod stream_tests {
     use super::*;
+
+    #[test]
+    fn zlib_stream_ids_live_in_dedicated_small_handle_band() {
+        let id = next_zlib_id();
+        assert!(
+            (ZLIB_STREAM_HANDLE_ID_START..ZLIB_STREAM_HANDLE_ID_END).contains(&id),
+            "zlib stream id {id:#x} must stay in the zlib small-handle band"
+        );
+    }
 
     /// Drive the streaming codec like the FFI ops do: write + drain, flush +
     /// drain between chunks, then finish — reassembling the full stream.

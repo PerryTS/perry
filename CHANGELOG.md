@@ -2,6 +2,30 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1094 — fix(regexp): RegExp.prototype.toString returns /source/flags
+
+`/a/gi.toString()`, `String(/a/gi)`, and `` `${/a/gi}` `` all returned `"[object Object]"` instead of `"/a/gi"` — a RegExp fell through to `Object.prototype.toString` for both the explicit method call and ToString coercion. Added a shared `js_regexp_to_string(re)` helper (`/{source}/{flags}`, reusing the existing `source`/`flags` accessors) and wired it through three paths: the `regex.toString()` method dispatch (`dispatch_regex_receiver_method` + the `native_call_method` receiver gate, now `test|exec|toString`) and the ToString coercion in `js_jsvalue_to_string` (covers `String()` / template literals). Advances the RegExp conformance issue (#4035).
+
+## v0.5.1093 — fix(json): JSON.parse rejects trailing tokens
+
+`JSON.parse("{}x")`, `JSON.parse("1 2")`, `JSON.parse('"a"b')`, etc. silently accepted the leading value and ignored trailing non-whitespace input; Node rejects these with a `SyntaxError`. `js_json_parse` parsed a value via `DirectParser` but never checked that the input was fully consumed. Added `DirectParser::has_trailing_content` (skips trailing whitespace, reports any remaining input) and, after a successful non-null parse, throws a `SyntaxError` when trailing tokens remain. Trailing whitespace (`"{}\n"`, `"{} "`) is still allowed; valid single-value JSON is unaffected (verified across 18 valid shapes incl. nested/scalars/whitespace-surrounded). Covers object/array/string/number/boolean/`null` leading values. Completes the parser-leniency half of #4030 (the SyntaxError-identity half shipped in v0.5.1090). Note: the large-array tape fast-path (top-level arrays ≥1 KB) is left untouched — a rarer edge case.
+
+## v0.5.1092 — fix(error): Error.prototype.toString honors instance name/message overrides
+
+`err.toString()` ignored instance-assigned `name`/`message` overrides and used the baked `ErrorHeader` values: `const e = new Error("orig"); e.name = "Custom"; e.message = "new"; e.toString()` returned `"Error: orig"` where Node returns `"Custom: new"`. The override was already stored (reading `e.name`/`e.message` returned the new values via the per-error side table), but `js_error_to_string` read only the baked `js_error_get_name`/`js_error_get_message`. It now consults `error_user_prop(error, "name"/"message")` first (ToString-coercing the override via `js_jsvalue_to_string`), falling back to the baked getters — matching `Error.prototype.toString` reading the overridable `name`/`message` own properties. Constructor-set names (subclasses), `String(err)`, and template-literal coercion are unaffected. Advances the Error conformance issue (#4032).
+
+## v0.5.1091 — fix(runtime): ArrayBuffer.prototype resizable / maxByteLength getters
+
+`new ArrayBuffer(n).resizable` and `.maxByteLength` returned `undefined` instead of Node's `false` and `n`. Perry has no resizable ArrayBuffers, so a plain ArrayBuffer is always non-resizable (`resizable === false`) and its `maxByteLength` equals its `byteLength`. Added both getters to the registered-buffer property path in `object/field_get_set.rs`, scoped to a plain ArrayBuffer (excluding `DataView`/`SharedArrayBuffer`/typed-array views, which return `undefined` for these in Node). Advances the ArrayBuffer/DataView conformance issue (#4033).
+
+## v0.5.1090 — fix(json): JSON.parse throws a real SyntaxError
+
+`JSON.parse` on invalid input threw a **bare string** instead of a `SyntaxError` object, so `err instanceof SyntaxError` was `false` and `err.constructor.name` was `undefined` — breaking the standard `try { JSON.parse(x) } catch (e) { if (e instanceof SyntaxError) … }` idiom and test262 error-identity assertions. All four throw sites in `js_json_parse`/`json/parse_api.rs` (null input, empty input, and the two invalid-token paths) built the thrown value with `JSValue::string_ptr(msg_ptr)` rather than the `syntax_error_value` helper that already wraps `js_syntaxerror_new`. Routed them through `syntax_error_value` so `JSON.parse("")`, `JSON.parse("x")`, etc. now throw real `SyntaxError` instances (with `name`/`constructor`/`instanceof` all correct), matching Node. The separate parser-leniency gap (accepting trailing/multiple-token input) remains tracked by #4030.
+
+## v0.5.1089 — fix(runtime): Object.prototype.toString.call(date) is [object Date]
+
+`Object.prototype.toString.call(new Date())` returned `"[object Object]"` instead of `"[object Date]"`. A Perry `Date` is a NaN-boxed pointer to a `DateCell` (#2089), and `js_object_to_string` (`object/mod.rs`) discriminated heap pointers into `Array`/`Error`/`Object` by GC-header type but had no `Date` arm, so dates fell through to the generic `Object` tag. Added a `crate::date::is_date_value` check (the same brand predicate `instanceof Date` uses) before the heap discrimination, covering valid dates and Invalid Date alike. Advances the Date conformance issue (#4031).
+
 ## v0.5.1088 — fix(diagnostics_channel): drop non-Node withStoreScope; null bindStore transform throws
 
 Two `node:diagnostics_channel` store-subsystem parity fixes (epic #3839):

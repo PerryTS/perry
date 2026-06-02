@@ -166,6 +166,16 @@ impl<'a> DirectParser<'a> {
         }
     }
 
+    /// After parsing the top-level value, returns `true` if any
+    /// non-whitespace input remains. JSON.parse must reject such trailing
+    /// tokens (`JSON.parse("{}x")`, `JSON.parse("1 2")`) with a `SyntaxError`;
+    /// trailing whitespace (`"{}\n"`) is allowed.
+    #[inline]
+    pub(crate) fn has_trailing_content(&mut self) -> bool {
+        self.skip_whitespace();
+        self.pos < self.input.len()
+    }
+
     #[inline]
     pub(crate) fn expect(&mut self, ch: u8) -> bool {
         self.skip_whitespace();

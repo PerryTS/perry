@@ -213,7 +213,7 @@ pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
         // …) — small ids bit-OR'd with POINTER_TAG, not real heap pointers,
         // which always live above 0x100000. `typeof aHandle` is "object".
         // Reading a fake handle's `[ptr+12]` type tag otherwise segfaults
-        // (e.g. zlib's 0x60000 stream base).
+        // (e.g. zlib's reserved stream base).
         let ptr = jsval.as_pointer::<u8>();
         if !ptr.is_null() && (ptr as usize) >= 0x100000 {
             // Symbols: registered in SYMBOL_POINTERS (handles both gc_malloc'd

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2523 entries across 106 modules
+// Coverage: 1734 entries across 102 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -64,9 +64,6 @@ declare module "@perryts/pdf" {
   export function pdfNewPage(...args: any[]): any;
   /** stdlib */
   export function pdfSave(...args: any[]): any;
-}
-
-declare module "__disposable__" {
 }
 
 declare module "argon2" {
@@ -312,9 +309,6 @@ declare module "cluster" {
   export function setupMaster(...args: any[]): any;
   /** stdlib */
   export function setupPrimary(...args: any[]): any;
-}
-
-declare module "commander" {
 }
 
 declare module "console" {
@@ -986,9 +980,6 @@ declare module "dayjs" {
   export function dayjs(...args: any[]): any;
   /** stdlib */
   export default function (...args: any[]): any;
-}
-
-declare module "decimal.js" {
 }
 
 declare module "dgram" {
@@ -2180,8 +2171,6 @@ declare module "perf_hooks" {
   /** stdlib */
   export function createHistogram(...args: any[]): any;
   /** stdlib */
-  export function eventLoopUtilization(...args: any[]): any;
-  /** stdlib */
   export function monitorEventLoopDelay(...args: any[]): any;
   /** stdlib */
   export function timerify(...args: any[]): any;
@@ -2943,13 +2932,6 @@ declare module "punycode" {
   export function toASCII(...args: any[]): any;
   /** stdlib */
   export function toUnicode(...args: any[]): any;
-}
-
-declare module "punycode.ucs2" {
-  /** stdlib */
-  export function decode(...args: any[]): any;
-  /** stdlib */
-  export function encode(...args: any[]): any;
 }
 
 declare module "querystring" {

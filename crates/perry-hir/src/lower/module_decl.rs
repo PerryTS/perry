@@ -50,6 +50,14 @@ pub(crate) fn lower_module_decl(
                 .unwrap_or(&raw_source)
                 .to_string();
 
+            if raw_source.starts_with("node:") && source == "punycode.ucs2" {
+                crate::lower_bail!(
+                    import_decl.src.span,
+                    "No such built-in module: {}",
+                    raw_source
+                );
+            }
+
             if source == "reflect-metadata" {
                 emit_reflect_metadata_shim_note();
                 return Ok(());

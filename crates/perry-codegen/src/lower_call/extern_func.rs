@@ -1297,10 +1297,10 @@ pub fn try_lower_extern_func_call(
         // the ABI is uniform regardless of whether the type arg is a string or
         // a component reference — avoiding the PTR vs DOUBLE divergence that
         // the generic ExternFuncRef path would otherwise produce for string
-        // literals.  The runtime stubs `js_jsx`/`js_jsxs` are no-op link
-        // stubs that return TAG_UNDEFINED; real JSX rendering should be
-        // implemented by importing a JSX runtime package (e.g. react or
-        // preact) via the `perry.compilePackages` mechanism.
+        // literals.  The runtime adapter `js_jsx`/`js_jsxs` handles Perry's
+        // built-in TSX path: intrinsic HTML-style tags render to boxed HTML,
+        // fragments render their children, and function components are called
+        // with the props object.
         //
         // perry/tui JSX intrinsic rewriter (#689). When the first arg
         // is `ExternFuncRef { name: "__perry_jsx_intrinsic::<mod>::<method>__" }`
@@ -1311,10 +1311,10 @@ pub fn try_lower_extern_func_call(
         // to the same widget builder the function-call form would.
         // Today this covers Box + Text from `perry/tui`; other
         // intrinsics (Spacer / Input / Spinner / List / Select /
-        // ProgressBar / Table / Tabs / TextArea) are listed as
-        // follow-up scope in #689 and continue to fall through to
-        // `js_jsx` (returns TAG_UNDEFINED until the rewriter is
-        // extended).
+        // ProgressBar / Table / Tabs / TextArea) are listed as follow-up
+        // scope in #689 and continue to fall through to `js_jsx`; the runtime
+        // returns `undefined` for those unrecognised intrinsic sentinels until
+        // the rewriter is extended.
         "jsx" | "jsxs" => {
             if let Some(call) = try_rewrite_perry_tui_jsx_intrinsic(ctx, name == "jsxs", args)? {
                 return Ok(Some(call));

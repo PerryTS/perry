@@ -406,7 +406,7 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
 /// method body and crashing on the bogus `this` pointer.
 #[no_mangle]
 pub extern "C" fn js_object_get_class_id(obj: *const ObjectHeader) -> u32 {
-    if obj.is_null() || (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+    if obj.is_null() || (obj as usize) < 0x100000 {
         return 0;
     }
     let addr = obj as usize;
@@ -1203,7 +1203,7 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         let f = f64::from_bits(obj.to_bits());
         if key_val.is_any_string() && f.is_finite() && f > 0.0 && f.fract() == 0.0 {
             let id = f as usize;
-            if (0x40000..0x100000).contains(&id) {
+            if (0x100000..0x200000).contains(&id) {
                 if let Some(probe) = crate::object::stream_handle_probe() {
                     unsafe {
                         if probe(id) {
@@ -1503,10 +1503,10 @@ pub extern "C" fn js_object_get_field_by_name(
     // Node. `js_proxy_is_proxy` validates the value is a *registered* proxy so a
     // real heap object whose address happens to be small isn't misrouted.
     {
-        // Proxy ids live in [0x50000, 0x100000); `js_proxy_is_proxy` confirms
+        // Proxy ids live in [0xF0000, 0x100000); `js_proxy_is_proxy` confirms
         // it is a *registered* proxy before we route to the proxy getter.
         let addr = obj as u64;
-        if (0x50000..0x100000).contains(&addr) && !key.is_null() {
+        if (0xF0000..0x100000).contains(&addr) && !key.is_null() {
             const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
             let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
             if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
@@ -1789,9 +1789,9 @@ pub extern "C" fn js_object_get_field_by_name(
         }
     }
     // #1670: Web Streams handles are returned as `id as f64` (a normal
-    // float, NOT NaN-boxed) in the reserved range 0x40000..0x100000, so an
-    // inline `res.body.locked` reaches this generic field-get with `obj`
-    // carrying the float bits of the stream id (e.g. 0x4110_… for 262144).
+    // float, NOT NaN-boxed) just above the pointer-tagged small-handle band, so
+    // an inline `res.body.locked` reaches this generic field-get with `obj`
+    // carrying the IEEE-754 bits of the stream id.
     // The NaN-box-strip + small-handle branches below don't recognise it
     // (top16 is an ordinary exponent, not a tag; the value as a pointer is
     // far above 0x100000), so it would be dereferenced as a heap pointer →
@@ -1805,7 +1805,7 @@ pub extern "C" fn js_object_get_field_by_name(
         let f = f64::from_bits(obj as u64);
         if !key.is_null() && f.is_finite() && f > 0.0 && f.fract() == 0.0 {
             let id = f as usize;
-            if (0x40000..0x100000).contains(&id) {
+            if (0x100000..0x200000).contains(&id) {
                 if let Some(probe) = crate::object::stream_handle_probe() {
                     unsafe {
                         if probe(id) {
@@ -1991,6 +1991,23 @@ pub extern "C" fn js_object_get_field_by_name(
                 let key_len = (*key).byte_len as usize;
                 let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
                 if key_bytes == b"length" || key_bytes == b"byteLength" {
+                    let b = obj as *const crate::buffer::BufferHeader;
+                    return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
+                }
+                // ArrayBuffer.prototype `resizable` / `maxByteLength` getters.
+                // Perry has no resizable ArrayBuffers, so `resizable` is always
+                // false and `maxByteLength` equals `byteLength`. These live only
+                // on ArrayBuffer (not DataView/SharedArrayBuffer/typed arrays),
+                // which return `undefined` for them in Node — so scope to a
+                // plain registered ArrayBuffer.
+                if (key_bytes == b"resizable" || key_bytes == b"maxByteLength")
+                    && crate::buffer::is_array_buffer(obj as usize)
+                    && !crate::buffer::is_data_view(obj as usize)
+                    && !crate::buffer::is_shared_array_buffer(obj as usize)
+                {
+                    if key_bytes == b"resizable" {
+                        return JSValue::bool(false);
+                    }
                     let b = obj as *const crate::buffer::BufferHeader;
                     return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
                 }

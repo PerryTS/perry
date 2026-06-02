@@ -27,6 +27,7 @@ mod class_gc_roots;
 mod class_handles;
 mod class_registry;
 mod collection_proto_thunks;
+mod data_view_registry;
 mod delete_rest;
 mod descriptors;
 mod field_get_set;
@@ -63,6 +64,7 @@ pub(crate) use class_gc_roots::{
     test_seed_class_parent_closure_root,
 };
 pub use class_registry::*;
+pub(crate) use data_view_registry::extends_builtin_data_view;
 pub use delete_rest::*;
 pub use descriptors::*;
 pub use field_get_set::*;
@@ -1655,6 +1657,10 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     } else {
         0
     };
+    if raw_addr >= 0x1000 && crate::date::is_date_cell_addr(raw_addr) {
+        let str_ptr = crate::string::js_string_from_bytes(b"[object Date]".as_ptr(), 13);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
     if raw_addr >= 0x1000 && crate::buffer::is_registered_buffer(raw_addr) {
         let tag = if crate::buffer::crypto_key_meta(raw_addr).is_some() {
             "CryptoKey"
@@ -1686,6 +1692,13 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     }
     if jsv.is_int32() || jsv.is_number() {
         let bytes = b"[object Number]";
+        let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
+    // A Date is a NaN-boxed pointer to a `DateCell` (#2089). Node tags it
+    // `[object Date]`; without this it falls through to `[object Object]`.
+    if crate::date::is_date_value(value) {
+        let bytes = b"[object Date]";
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }

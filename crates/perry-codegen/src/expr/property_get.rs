@@ -672,6 +672,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &ctor_handle), (I64, &key_raw)],
                     ));
                 }
+                // #4033: `ArrayBuffer.isView` must also work as a value
+                // (`const isView = ArrayBuffer.isView; isView(view)`). Bare
+                // builtin receivers are collapsed to `GlobalGet(0)`, so recover
+                // the populated constructor closure and read the reified static.
+                if property == "isView" {
+                    let ctor_idx = ctx.strings.intern("ArrayBuffer");
+                    let ctor_bytes_global =
+                        format!("@{}", ctx.strings.entry(ctor_idx).bytes_global);
+                    let ctor_len = "ArrayBuffer".len().to_string();
+                    let ctor = ctx.block().call(
+                        DOUBLE,
+                        "js_get_global_this_builtin_value",
+                        &[(PTR, &ctor_bytes_global), (I64, &ctor_len)],
+                    );
+                    let key_idx = ctx.strings.intern(property);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let blk = ctx.block();
+                    let ctor_handle = unbox_to_i64(blk, &ctor);
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_object_get_field_by_name_f64",
+                        &[(I64, &ctor_handle), (I64, &key_raw)],
+                    ));
+                }
                 if property == "f16round" {
                     let math_idx = ctx.strings.intern("Math");
                     let math_bytes_global =
