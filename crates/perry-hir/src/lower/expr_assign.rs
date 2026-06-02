@@ -40,6 +40,42 @@ fn throw_reference_error_unresolvable_assignment(name: &str) -> Expr {
     }
 }
 
+fn simple_ident_target_name(target: &ast::AssignTarget) -> Option<&str> {
+    match target {
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) => {
+            Some(ident.id.sym.as_ref())
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::Paren(paren)) => {
+            expr_ident_name(paren.expr.as_ref())
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsAs(ts_as)) => {
+            expr_ident_name(ts_as.expr.as_ref())
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsNonNull(ts_nn)) => {
+            expr_ident_name(ts_nn.expr.as_ref())
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsTypeAssertion(ts_ta)) => {
+            expr_ident_name(ts_ta.expr.as_ref())
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsSatisfies(ts_sat)) => {
+            expr_ident_name(ts_sat.expr.as_ref())
+        }
+        _ => None,
+    }
+}
+
+fn expr_ident_name(expr: &ast::Expr) -> Option<&str> {
+    match expr {
+        ast::Expr::Ident(ident) => Some(ident.sym.as_ref()),
+        ast::Expr::Paren(paren) => expr_ident_name(paren.expr.as_ref()),
+        ast::Expr::TsAs(ts_as) => expr_ident_name(ts_as.expr.as_ref()),
+        ast::Expr::TsNonNull(ts_nn) => expr_ident_name(ts_nn.expr.as_ref()),
+        ast::Expr::TsTypeAssertion(ts_ta) => expr_ident_name(ts_ta.expr.as_ref()),
+        ast::Expr::TsSatisfies(ts_sat) => expr_ident_name(ts_sat.expr.as_ref()),
+        _ => None,
+    }
+}
+
 pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) -> Result<Expr> {
     // Detect assignments from native module calls and register for cross-function tracking.
     // e.g., `mongoClient = await MongoClient.connect(uri)` registers mongoClient as a mongodb instance.
@@ -115,6 +151,15 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                     ));
                 }
             }
+        }
+    }
+
+    if let Some(name) = simple_ident_target_name(&assign.left)
+        .zip(expr_ident_name(assign.right.as_ref()))
+        .and_then(|(left, right)| (left == right).then_some(left))
+    {
+        if ctx.lookup_local(name).is_none() || ctx.pre_registered_module_var_decls.contains(name) {
+            return Ok(throw_reference_error_unresolvable_assignment(name));
         }
     }
 
@@ -304,7 +349,13 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                             Expr::String(format!("#{}", p.name.as_str()))
                         }
                     });
-                    return Ok(Expr::ProxySet { proxy, key, value });
+                    return Ok(Expr::PutValueSet {
+                        target: proxy.clone(),
+                        key,
+                        value,
+                        receiver: proxy,
+                        strict: ctx.current_strict,
+                    });
                 }
             }
             // Check if this is a static field assignment (e.g., Counter.count = 5)
@@ -703,7 +754,8 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                 }
             }
 
-            let object = Box::new(lower_expr(ctx, &member.obj)?);
+            let object_expr = lower_expr(ctx, &member.obj)?;
+            let object = Box::new(object_expr.clone());
             match &member.prop {
                 ast::MemberProp::Ident(ident) => {
                     let property = ident.sym.to_string();
@@ -736,10 +788,12 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                             }
                         }
                     }
-                    Ok(Expr::PropertySet {
-                        object,
-                        property,
+                    Ok(Expr::PutValueSet {
+                        target: object.clone(),
+                        key: Box::new(Expr::String(property)),
                         value,
+                        receiver: object,
+                        strict: ctx.current_strict,
                     })
                 }
                 ast::MemberProp::Computed(computed) => {
@@ -768,17 +822,21 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                             && key.chars().all(|c| c.is_ascii_digit())
                             && !(key.len() > 1 && key.starts_with('0'));
                         if !is_numeric_string {
-                            return Ok(Expr::PropertySet {
-                                object,
-                                property: key.clone(),
+                            return Ok(Expr::PutValueSet {
+                                target: object.clone(),
+                                key: Box::new(Expr::String(key.clone())),
                                 value,
+                                receiver: object,
+                                strict: ctx.current_strict,
                             });
                         }
                     }
-                    Ok(Expr::IndexSet {
-                        object,
-                        index,
+                    Ok(Expr::PutValueSet {
+                        target: object.clone(),
+                        key: index,
                         value,
+                        receiver: object,
+                        strict: ctx.current_strict,
                     })
                 }
                 ast::MemberProp::PrivateName(private) => {

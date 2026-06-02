@@ -1874,6 +1874,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ProxyRevoke(..)
         | Expr::ReflectGet { .. }
         | Expr::ReflectSet { .. }
+        | Expr::PutValueSet { .. }
         | Expr::ReflectHas { .. }
         | Expr::ReflectDelete { .. }
         | Expr::ReflectOwnKeys(..)

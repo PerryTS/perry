@@ -148,7 +148,15 @@ fn collect_assigned_function_binding_candidates(ast_module: &ast::Module) -> Has
                 if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) =
                     &assign.left
                 {
-                    out.insert(ident.id.sym.to_string());
+                    let name = ident.id.sym.as_ref();
+                    let is_self_read = assign.op == ast::AssignOp::Assign
+                        && matches!(
+                            assign.right.as_ref(),
+                            ast::Expr::Ident(rhs) if rhs.sym.as_ref() == name
+                        );
+                    if !is_self_read {
+                        out.insert(name.to_string());
+                    }
                 }
                 collect_from_expr(&assign.right, out);
             }

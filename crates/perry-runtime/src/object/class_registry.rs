@@ -1588,6 +1588,21 @@ fn is_arrow_function_value(value: f64) -> bool {
     crate::closure::closure_is_arrow(ptr)
 }
 
+pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Option<f64> {
+    if !is_callable_function_value(func_value) || is_arrow_function_value(func_value) {
+        return None;
+    }
+    let cid = synthetic_class_id_for_function(func_value);
+    if cid == 0 {
+        return None;
+    }
+    let proto = ensure_function_prototype_object(func_value, cid);
+    if proto.is_null() {
+        return None;
+    }
+    Some(crate::value::js_nanbox_pointer(proto as i64))
+}
+
 /// Lookup helper: returns the registered prototype-method value for
 /// `(class_id, name)`, or None if no assignment matched. Walks the
 /// parent-class chain so methods registered on a base class are found

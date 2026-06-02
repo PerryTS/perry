@@ -488,29 +488,201 @@ pub extern "C" fn js_proxy_set(proxy_boxed: f64, key: f64, value: f64) -> f64 {
 /// strict-mode assignment does (#2756 / #615). Returns `false` when the write
 /// cannot be applied.
 fn reflect_ordinary_set(target: f64, key: f64, value: f64) -> f64 {
-    // Non-writable existing data property → write fails.
-    if let Some((writable, _configurable)) = crate::object::obj_value_attrs(target, key) {
-        if !writable {
-            return nanbox_bool(false);
-        }
-    }
-    // New property on a non-extensible object → write fails.
-    if crate::object::obj_value_no_extend(target)
-        && !crate::object::obj_value_has_own_key(target, key)
-    {
-        return nanbox_bool(false);
-    }
-    target_set(target, key, value);
-    nanbox_bool(true)
+    nanbox_bool(ordinary_set_with_receiver(target, key, value, target))
 }
 
 fn target_set(target: f64, key: f64, value: f64) {
+    if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(target, key, value);
+        }
+        return;
+    }
     let obj_ptr = extract_pointer(target.to_bits()) as *mut crate::ObjectHeader;
     let key_ptr = extract_pointer(key.to_bits()) as *const crate::StringHeader;
     if obj_ptr.is_null() || key_ptr.is_null() {
         return;
     }
     crate::object::js_object_set_field_by_name(obj_ptr, key_ptr, value);
+}
+
+#[derive(Clone, Copy)]
+enum OwnSetDescriptor {
+    Data { writable: bool },
+    Accessor { setter_bits: u64 },
+}
+
+fn key_to_rust_string(value: f64) -> Option<String> {
+    if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
+        return None;
+    }
+    let key_str = crate::builtins::js_string_coerce(value);
+    if key_str.is_null() {
+        return None;
+    }
+    unsafe {
+        let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let name_len = (*key_str).byte_len as usize;
+        std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
+            .ok()
+            .map(|s| s.to_string())
+    }
+}
+
+fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
+    if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+        let value = unsafe { crate::symbol::js_object_get_symbol_property(target, key) };
+        return (value.to_bits() != TAG_UNDEFINED)
+            .then_some(OwnSetDescriptor::Data { writable: true });
+    }
+
+    let obj_ptr = extract_pointer(target.to_bits()) as usize;
+    if obj_ptr == 0 {
+        return None;
+    }
+    let key_name = key_to_rust_string(key)?;
+    if let Some(acc) = crate::object::get_accessor_descriptor(obj_ptr, &key_name) {
+        return Some(OwnSetDescriptor::Accessor {
+            setter_bits: acc.set,
+        });
+    }
+    if let Some(attrs) = crate::object::get_property_attrs(obj_ptr, &key_name) {
+        return Some(OwnSetDescriptor::Data {
+            writable: attrs.writable(),
+        });
+    }
+    if crate::object::obj_value_has_own_key(target, key) {
+        return Some(OwnSetDescriptor::Data { writable: true });
+    }
+    None
+}
+
+fn prototype_of_for_set(value: f64) -> Option<f64> {
+    if !reflect_value_is_object(value) {
+        return None;
+    }
+    let bits = value.to_bits();
+    if (bits >> 48) == (POINTER_TAG >> 48) {
+        let raw = (bits & POINTER_MASK) as usize;
+        if raw >= (crate::gc::GC_HEADER_SIZE as usize) + 0x1000 {
+            if let Some(proto_bits) = crate::object::prototype_chain::object_static_prototype(raw) {
+                if proto_bits == TAG_NULL || proto_bits == TAG_UNDEFINED || proto_bits == bits {
+                    return None;
+                }
+                return Some(f64::from_bits(proto_bits));
+            }
+            let obj = raw as *const crate::ObjectHeader;
+            if crate::object::is_valid_obj_ptr(obj as *const u8) {
+                unsafe {
+                    let class_id = (*obj).class_id;
+                    if class_id != 0 {
+                        let proto = crate::object::class_prototype_object(class_id);
+                        if !proto.is_null() && proto as usize != raw {
+                            return Some(crate::value::js_nanbox_pointer(proto as i64));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let proto = crate::object::js_object_get_prototype_of(value);
+    let bits = proto.to_bits();
+    if bits == TAG_NULL || bits == TAG_UNDEFINED || bits == value.to_bits() {
+        None
+    } else {
+        Some(proto)
+    }
+}
+
+fn call_setter_with_receiver(setter_bits: u64, receiver: f64, value: f64) -> bool {
+    if setter_bits == 0 {
+        return false;
+    }
+    let rebound = crate::closure::clone_closure_rebind_this(setter_bits, receiver);
+    let closure = closure_from(f64::from_bits(rebound));
+    if closure.is_null() {
+        return false;
+    }
+    let prev = crate::object::js_implicit_this_set(receiver);
+    let _ = js_closure_call1(closure, value);
+    crate::object::js_implicit_this_set(prev);
+    true
+}
+
+fn create_or_update_receiver_property(receiver: f64, key: f64, value: f64) -> bool {
+    if !reflect_value_is_object(receiver) {
+        return false;
+    }
+    if let Some(desc) = own_set_descriptor(receiver, key) {
+        match desc {
+            OwnSetDescriptor::Data { writable } => {
+                if !writable {
+                    return false;
+                }
+            }
+            OwnSetDescriptor::Accessor { setter_bits } => {
+                return call_setter_with_receiver(setter_bits, receiver, value);
+            }
+        }
+    } else if crate::object::obj_value_no_extend(receiver) {
+        return false;
+    }
+    target_set(receiver, key, value);
+    true
+}
+
+fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) -> bool {
+    let mut current = target;
+    for _ in 0..64 {
+        if let Some(desc) = own_set_descriptor(current, key) {
+            return match desc {
+                OwnSetDescriptor::Data { writable } => {
+                    if !writable {
+                        false
+                    } else {
+                        create_or_update_receiver_property(receiver, key, value)
+                    }
+                }
+                OwnSetDescriptor::Accessor { setter_bits } => {
+                    call_setter_with_receiver(setter_bits, receiver, value)
+                }
+            };
+        }
+        let Some(proto) = prototype_of_for_set(current) else {
+            return create_or_update_receiver_property(receiver, key, value);
+        };
+        current = proto;
+    }
+    false
+}
+
+/// Assignment PutValue for a property reference. Returns the assigned RHS value
+/// on success or sloppy failure, and throws TypeError when strict code attempts
+/// a failed [[Set]].
+#[no_mangle]
+pub extern "C" fn js_put_value_set(
+    target: f64,
+    key: f64,
+    value: f64,
+    receiver: f64,
+    strict: i32,
+) -> f64 {
+    let target_bits = target.to_bits();
+    if target_bits == TAG_NULL || target_bits == TAG_UNDEFINED {
+        let key_name = key_to_rust_string(key).unwrap_or_else(|| "property".to_string());
+        let msg = format!("Cannot set properties of null or undefined (setting '{key_name}')");
+        return throw_type_error(&msg);
+    }
+    let ok = if lookup(target).is_some() {
+        js_proxy_set(target, key, value).to_bits() == TAG_TRUE
+    } else {
+        ordinary_set_with_receiver(target, key, value, receiver)
+    };
+    if !ok && strict != 0 {
+        let key_name = key_to_rust_string(key).unwrap_or_else(|| "property".to_string());
+        crate::error::throw_immutable_write(0, &key_name);
+    }
+    value
 }
 
 /// `key in proxy` — if handler.has exists, call it; otherwise delegate to

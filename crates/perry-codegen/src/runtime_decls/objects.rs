@@ -248,6 +248,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_proxy_construct", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_reflect_get", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_reflect_set", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_put_value_set",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, I32],
+    );
     module.declare_function("js_reflect_has", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_reflect_delete", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_reflect_own_keys", DOUBLE, &[DOUBLE]);

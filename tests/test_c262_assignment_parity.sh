@@ -97,6 +97,76 @@ try {
 }
 check(caught && count === 10, "super computed assignment stops when key throws");
 
+caught = false;
+try {
+  (function() {
+    "use strict";
+    Number.MAX_VALUE = 42;
+  })();
+} catch (e) {
+  caught = e instanceof TypeError;
+}
+check(caught, "strict assignment to Number.MAX_VALUE throws TypeError");
+
+caught = false;
+try {
+  (function() {
+    "use strict";
+    Math.PI = 20;
+  })();
+} catch (e) {
+  caught = e instanceof TypeError;
+}
+check(caught, "strict assignment to Math.PI throws TypeError");
+
+caught = false;
+try {
+  (function() {
+    "use strict";
+    Function.length = 42;
+  })();
+} catch (e) {
+  caught = e instanceof TypeError;
+}
+check(caught, "strict assignment to Function.length throws TypeError");
+
+function Foo() {}
+Object.defineProperty(Foo.prototype, "bar", { value: "unwritable" });
+var foo = new Foo();
+foo.bar = "overridden";
+check(!foo.hasOwnProperty("bar") && foo.bar === "unwritable", "sloppy inherited non-writable assignment is ignored");
+
+caught = false;
+try {
+  (function() {
+    "use strict";
+    foo.bar = "overridden";
+  })();
+} catch (e) {
+  caught = e instanceof TypeError;
+}
+check(caught && foo.bar === "unwritable", "strict inherited non-writable assignment throws");
+
+var receiverHit = "";
+var receiverBase = {};
+Object.defineProperty(receiverBase, "seen", {
+  set: function(v) {
+    this.recorded = v;
+    receiverHit = this === receiverObj ? "receiver" : "base";
+  }
+});
+var receiverObj = Object.create(receiverBase);
+var assignedResult = receiverObj.seen = "ok";
+check(receiverObj.recorded === "ok" && receiverHit === "receiver" && assignedResult === "ok", "inherited setter uses receiver and assignment returns rhs");
+
+caught = false;
+try {
+  missingPutValueName = missingPutValueName;
+} catch (e) {
+  caught = e instanceof ReferenceError;
+}
+check(caught, "unresolved assignment evaluates RHS reference before PutValue");
+
 if (failures.length !== 0) {
   throw new Error(failures);
 }

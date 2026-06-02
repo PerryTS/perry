@@ -2398,6 +2398,12 @@ pub extern "C" fn js_object_get_field_by_name(
                         {
                             return JSValue::from_bits(proto.to_bits());
                         }
+                        let func_value = crate::value::js_nanbox_pointer(obj as i64);
+                        if let Some(proto) =
+                            super::ordinary_function_prototype_value_for_read(func_value)
+                        {
+                            return JSValue::from_bits(proto.to_bits());
+                        }
                     }
                     // #2059: `fn.name` — every function carries a built-in own
                     // `name` data property. Resolve the codegen-registered name

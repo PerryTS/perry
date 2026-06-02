@@ -351,6 +351,56 @@ fn collect_implicit_assignment_target_names(
     }
 }
 
+fn simple_assign_target_ident_name(target: &ast::AssignTarget) -> Option<&str> {
+    match target {
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) => {
+            Some(ident.id.sym.as_ref())
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::Paren(paren)) => {
+            expr_ident_name(paren.expr.as_ref())
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsAs(ts_as)) => {
+            expr_ident_name(ts_as.expr.as_ref())
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsNonNull(ts_nn)) => {
+            expr_ident_name(ts_nn.expr.as_ref())
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsTypeAssertion(ts_ta)) => {
+            expr_ident_name(ts_ta.expr.as_ref())
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsSatisfies(ts_sat)) => {
+            expr_ident_name(ts_sat.expr.as_ref())
+        }
+        _ => None,
+    }
+}
+
+fn expr_ident_name(expr: &ast::Expr) -> Option<&str> {
+    match expr {
+        ast::Expr::Ident(ident) => Some(ident.sym.as_ref()),
+        ast::Expr::Paren(paren) => expr_ident_name(paren.expr.as_ref()),
+        ast::Expr::TsAs(ts_as) => expr_ident_name(ts_as.expr.as_ref()),
+        ast::Expr::TsNonNull(ts_nn) => expr_ident_name(ts_nn.expr.as_ref()),
+        ast::Expr::TsTypeAssertion(ts_ta) => expr_ident_name(ts_ta.expr.as_ref()),
+        ast::Expr::TsSatisfies(ts_sat) => expr_ident_name(ts_sat.expr.as_ref()),
+        _ => None,
+    }
+}
+
+fn direct_self_read_assignment_name(expr: &ast::Expr) -> Option<&str> {
+    match expr {
+        ast::Expr::Assign(assign) => simple_assign_target_ident_name(&assign.left)
+            .zip(expr_ident_name(assign.right.as_ref()))
+            .and_then(|(left, right)| (left == right).then_some(left)),
+        ast::Expr::Paren(paren) => direct_self_read_assignment_name(paren.expr.as_ref()),
+        ast::Expr::TsAs(ts_as) => direct_self_read_assignment_name(ts_as.expr.as_ref()),
+        ast::Expr::TsNonNull(ts_nn) => direct_self_read_assignment_name(ts_nn.expr.as_ref()),
+        ast::Expr::TsTypeAssertion(ts_ta) => direct_self_read_assignment_name(ts_ta.expr.as_ref()),
+        ast::Expr::TsSatisfies(ts_sat) => direct_self_read_assignment_name(ts_sat.expr.as_ref()),
+        _ => None,
+    }
+}
+
 fn collect_implicit_assignment_expr_names(
     ctx: &LoweringContext,
     expr: &ast::Expr,
@@ -359,7 +409,12 @@ fn collect_implicit_assignment_expr_names(
     match expr {
         ast::Expr::Assign(assign) => {
             if assign.op == ast::AssignOp::Assign {
-                collect_implicit_assignment_target_names(ctx, &assign.left, names);
+                let self_read = simple_assign_target_ident_name(&assign.left)
+                    .zip(expr_ident_name(assign.right.as_ref()))
+                    .is_some_and(|(left, right)| left == right);
+                if !self_read {
+                    collect_implicit_assignment_target_names(ctx, &assign.left, names);
+                }
             }
             collect_implicit_assignment_expr_names(ctx, &assign.right, names);
         }
@@ -451,6 +506,10 @@ pub(crate) fn predeclare_implicit_assignment_targets(
     expr: &ast::Expr,
 ) -> Vec<Stmt> {
     if ctx.current_strict {
+        return Vec::new();
+    }
+
+    if direct_self_read_assignment_name(expr).is_some() {
         return Vec::new();
     }
 

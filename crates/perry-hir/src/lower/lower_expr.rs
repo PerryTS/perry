@@ -207,7 +207,8 @@ pub(crate) fn lower_expr_assignment(
                     }
                 }
             }
-            let object = Box::new(lower_expr(ctx, &member.obj)?);
+            let object_expr = lower_expr(ctx, &member.obj)?;
+            let object = Box::new(object_expr.clone());
             match &member.prop {
                 ast::MemberProp::Ident(ident) => {
                     let property = ident.sym.to_string();
@@ -230,18 +231,22 @@ pub(crate) fn lower_expr_assignment(
                             proto: value,
                         });
                     }
-                    Ok(Expr::PropertySet {
-                        object,
-                        property,
+                    Ok(Expr::PutValueSet {
+                        target: object.clone(),
+                        key: Box::new(Expr::String(property)),
                         value,
+                        receiver: object,
+                        strict: ctx.current_strict,
                     })
                 }
                 ast::MemberProp::Computed(computed) => {
                     let index = Box::new(lower_expr(ctx, &computed.expr)?);
-                    Ok(Expr::IndexSet {
-                        object,
-                        index,
+                    Ok(Expr::PutValueSet {
+                        target: object.clone(),
+                        key: index,
                         value,
+                        receiver: object,
+                        strict: ctx.current_strict,
                     })
                 }
                 ast::MemberProp::PrivateName(private) => {

@@ -202,6 +202,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &[(DOUBLE, &t), (DOUBLE, &k), (DOUBLE, &v)],
             ))
         }
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            strict,
+        } => {
+            let t = lower_expr(ctx, target)?;
+            let k = lower_expr(ctx, key)?;
+            let v = lower_expr(ctx, value)?;
+            let r = lower_expr(ctx, receiver)?;
+            let strict_i32 = if *strict { "1" } else { "0" };
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_put_value_set",
+                &[
+                    (DOUBLE, &t),
+                    (DOUBLE, &k),
+                    (DOUBLE, &v),
+                    (DOUBLE, &r),
+                    (I32, strict_i32),
+                ],
+            ))
+        }
         Expr::ReflectHas { target, key } => {
             let t = lower_expr(ctx, target)?;
             let k = lower_expr(ctx, key)?;

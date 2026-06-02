@@ -2206,6 +2206,17 @@ pub enum Expr {
         key: Box<Expr>,
         value: Box<Expr>,
     },
+    /// Assignment PutValue for property references. Evaluates target/key/value
+    /// in source order, performs ordinary [[Set]] with an explicit receiver,
+    /// returns the RHS value, and throws when `strict` is true and [[Set]]
+    /// reports false.
+    PutValueSet {
+        target: Box<Expr>,
+        key: Box<Expr>,
+        value: Box<Expr>,
+        receiver: Box<Expr>,
+        strict: bool,
+    },
     ReflectHas {
         target: Box<Expr>,
         key: Box<Expr>,
