@@ -270,7 +270,20 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
             // Throw a real `SyntaxError` (not a bare string) to match Node's
             // error identity for invalid JSON.
             crate::exception::js_throw(syntax_error_value(&msg));
+        } else if parser.has_trailing_content() {
+            // Literal `null` followed by trailing tokens (`JSON.parse("null x")`)
+            // — reject like any other trailing-token case.
+            crate::exception::js_throw(syntax_error_value(
+                "Unexpected non-whitespace character after JSON",
+            ));
         }
+    } else if parser.has_trailing_content() {
+        // A valid value was parsed but non-whitespace input remains
+        // (`JSON.parse("{}x")`, `JSON.parse("1 2")`). Node rejects trailing
+        // tokens with a SyntaxError; trailing whitespace is allowed.
+        crate::exception::js_throw(syntax_error_value(
+            "Unexpected non-whitespace character after JSON",
+        ));
     }
 
     result

@@ -2,6 +2,10 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1093 — fix(json): JSON.parse rejects trailing tokens
+
+`JSON.parse("{}x")`, `JSON.parse("1 2")`, `JSON.parse('"a"b')`, etc. silently accepted the leading value and ignored trailing non-whitespace input; Node rejects these with a `SyntaxError`. `js_json_parse` parsed a value via `DirectParser` but never checked that the input was fully consumed. Added `DirectParser::has_trailing_content` (skips trailing whitespace, reports any remaining input) and, after a successful non-null parse, throws a `SyntaxError` when trailing tokens remain. Trailing whitespace (`"{}\n"`, `"{} "`) is still allowed; valid single-value JSON is unaffected (verified across 18 valid shapes incl. nested/scalars/whitespace-surrounded). Covers object/array/string/number/boolean/`null` leading values. Completes the parser-leniency half of #4030 (the SyntaxError-identity half shipped in v0.5.1090). Note: the large-array tape fast-path (top-level arrays ≥1 KB) is left untouched — a rarer edge case.
+
 ## v0.5.1092 — fix(error): Error.prototype.toString honors instance name/message overrides
 
 `err.toString()` ignored instance-assigned `name`/`message` overrides and used the baked `ErrorHeader` values: `const e = new Error("orig"); e.name = "Custom"; e.message = "new"; e.toString()` returned `"Error: orig"` where Node returns `"Custom: new"`. The override was already stored (reading `e.name`/`e.message` returned the new values via the per-error side table), but `js_error_to_string` read only the baked `js_error_get_name`/`js_error_get_message`. It now consults `error_user_prop(error, "name"/"message")` first (ToString-coercing the override via `js_jsvalue_to_string`), falling back to the baked getters — matching `Error.prototype.toString` reading the overridable `name`/`message` own properties. Constructor-set names (subclasses), `String(err)`, and template-literal coercion are unaffected. Advances the Error conformance issue (#4032).
