@@ -267,6 +267,25 @@ pub fn check_array_escapes_in_expr(
             check_array_escapes_in_expr(index, candidates, escaped);
             check_array_escapes_in_expr(value, candidates, escaped);
         }
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            if let (Expr::LocalGet(id), Expr::LocalGet(receiver_id)) =
+                (target.as_ref(), receiver.as_ref())
+            {
+                if id == receiver_id && candidates.contains_key(id) {
+                    escaped.insert(*id);
+                }
+            }
+            check_array_escapes_in_expr(target, candidates, escaped);
+            check_array_escapes_in_expr(key, candidates, escaped);
+            check_array_escapes_in_expr(value, candidates, escaped);
+            check_array_escapes_in_expr(receiver, candidates, escaped);
+        }
 
         Expr::IndexUpdate { object, index, .. } => {
             if let Expr::LocalGet(id) = object.as_ref() {

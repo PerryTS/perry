@@ -261,6 +261,36 @@ pub fn check_escapes_in_expr(
             check_escapes_in_expr(object, candidates, classes, escaped);
             check_escapes_in_expr(value, candidates, classes, escaped);
         }
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            if let (Expr::LocalGet(id), Expr::LocalGet(receiver_id), Expr::String(property)) =
+                (target.as_ref(), receiver.as_ref(), key.as_ref())
+            {
+                if id == receiver_id {
+                    if let Some(class_name) = candidates.get(id) {
+                        if is_class_setter(classes, class_name, property) {
+                            escaped.insert(*id);
+                            check_escapes_in_expr(value, candidates, classes, escaped);
+                            return;
+                        }
+                        if expr_contains_local_get(value, *id) {
+                            escaped.insert(*id);
+                        }
+                        check_escapes_in_expr(value, candidates, classes, escaped);
+                        return;
+                    }
+                }
+            }
+            check_escapes_in_expr(target, candidates, classes, escaped);
+            check_escapes_in_expr(key, candidates, classes, escaped);
+            check_escapes_in_expr(value, candidates, classes, escaped);
+            check_escapes_in_expr(receiver, candidates, classes, escaped);
+        }
 
         // Safe uses: PropertyUpdate on a candidate local — *unless* the
         // property is a getter+setter pair (both fire on `obj.x++`).

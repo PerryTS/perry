@@ -260,6 +260,34 @@ pub fn check_object_literal_escapes_in_expr(
             check_object_literal_escapes_in_expr(object, candidates, escaped);
             check_object_literal_escapes_in_expr(value, candidates, escaped);
         }
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            if let (Expr::LocalGet(id), Expr::LocalGet(receiver_id), Expr::String(property)) =
+                (target.as_ref(), receiver.as_ref(), key.as_ref())
+            {
+                if id == receiver_id {
+                    if let Some(keys) = candidates.get(id) {
+                        let key_known = keys.iter().any(|k| k == property);
+                        if !key_known {
+                            escaped.insert(*id);
+                        } else if expr_contains_local_get(value, *id) {
+                            escaped.insert(*id);
+                        }
+                        check_object_literal_escapes_in_expr(value, candidates, escaped);
+                        return;
+                    }
+                }
+            }
+            check_object_literal_escapes_in_expr(target, candidates, escaped);
+            check_object_literal_escapes_in_expr(key, candidates, escaped);
+            check_object_literal_escapes_in_expr(value, candidates, escaped);
+            check_object_literal_escapes_in_expr(receiver, candidates, escaped);
+        }
 
         // Safe: `o.known_field++`.
         Expr::PropertyUpdate { object, property, .. } => {
