@@ -311,7 +311,11 @@ enum Codec {
     Unzip,
     BrotliCompress,
     BrotliDecompress,
+    ZstdCompress,
+    ZstdDecompress,
 }
+
+const ZSTD_DEFAULT_LEVEL: i32 = 3;
 
 fn run_one_shot_codec(codec: Codec, input: &[u8]) -> std::io::Result<Vec<u8>> {
     let mut out = Vec::new();
@@ -346,6 +350,12 @@ fn run_one_shot_codec(codec: Codec, input: &[u8]) -> std::io::Result<Vec<u8>> {
         }
         Codec::BrotliDecompress => {
             out = brotli_decompress_bytes(input)?;
+        }
+        Codec::ZstdCompress => {
+            out = zstd_compress_bytes(input)?;
+        }
+        Codec::ZstdDecompress => {
+            out = zstd_decompress_bytes(input)?;
         }
     }
     Ok(out)
@@ -458,6 +468,56 @@ pub unsafe extern "C" fn js_zlib_brotli_compress(data_value: f64, callback_value
 #[no_mangle]
 pub unsafe extern "C" fn js_zlib_brotli_decompress(data_value: f64, callback_value: f64) {
     queue_zlib_callback(Codec::BrotliDecompress, data_value, callback_value);
+}
+
+// ============================================================================
+// Zstd one-shot functions (#2510)
+// ============================================================================
+
+fn zstd_compress_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
+    zstd::stream::encode_all(data, ZSTD_DEFAULT_LEVEL)
+}
+
+fn zstd_decompress_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
+    zstd::stream::decode_all(data)
+}
+
+/// `zlib.zstdCompressSync(data)` -> Buffer
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_zstd_compress_sync(
+    data_value: f64,
+    _opts: f64,
+) -> *mut BufferHeader {
+    let data = codec_bytes(data_value);
+    match zstd_compress_bytes(&data) {
+        Ok(out) => buffer_from_slice(&out),
+        Err(e) => throw_zlib_error(&format!("zstd: {}", e)),
+    }
+}
+
+/// `zlib.zstdDecompressSync(data)` -> Buffer
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_zstd_decompress_sync(
+    data_value: f64,
+    _opts: f64,
+) -> *mut BufferHeader {
+    let data = codec_bytes(data_value);
+    match zstd_decompress_bytes(&data) {
+        Ok(out) => buffer_from_slice(&out),
+        Err(e) => throw_zlib_error(&format!("zstd: {}", e)),
+    }
+}
+
+/// `zlib.zstdCompress(data, callback)` -> undefined
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_zstd_compress(data_value: f64, callback_value: f64) {
+    queue_zlib_callback(Codec::ZstdCompress, data_value, callback_value);
+}
+
+/// `zlib.zstdDecompress(data, callback)` -> undefined
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_zstd_decompress(data_value: f64, callback_value: f64) {
+    queue_zlib_callback(Codec::ZstdDecompress, data_value, callback_value);
 }
 
 // ============================================================================
@@ -657,6 +717,18 @@ pub unsafe extern "C" fn js_zlib_create_brotli_compress(_opts: f64) -> i64 {
 pub unsafe extern "C" fn js_zlib_create_brotli_decompress(_opts: f64) -> i64 {
     create_zlib_stream(Codec::BrotliDecompress)
 }
+/// # Safety
+/// FFI entry; `_opts` is the (ignored) NaN-boxed options object.
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_create_zstd_compress(_opts: f64) -> i64 {
+    create_zlib_stream(Codec::ZstdCompress)
+}
+/// # Safety
+/// FFI entry; `_opts` is the (ignored) NaN-boxed options object.
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_create_zstd_decompress(_opts: f64) -> i64 {
+    create_zlib_stream(Codec::ZstdDecompress)
+}
 
 // ── one-shot codec used by the streams on .end() ─────────────────────────────
 
@@ -694,6 +766,12 @@ fn run_codec(codec: Codec, input: &[u8]) -> std::io::Result<Vec<u8>> {
         }
         Codec::BrotliDecompress => {
             out = brotli_decompress_bytes(input)?;
+        }
+        Codec::ZstdCompress => {
+            out = zstd_compress_bytes(input)?;
+        }
+        Codec::ZstdDecompress => {
+            out = zstd_decompress_bytes(input)?;
         }
     }
     Ok(out)
@@ -790,7 +868,9 @@ fn make_codec_state(codec: Codec) -> Option<CodecState> {
         Codec::BrotliDecompress => {
             CodecState::BrotliDec(brotli::DecompressorWriter::new(Vec::new(), 4096))
         }
-        Codec::Unzip => return None,
+        // Zstd streams stay buffer-until-end for this compatibility cut,
+        // matching the existing `createUnzip` path.
+        Codec::Unzip | Codec::ZstdCompress | Codec::ZstdDecompress => return None,
     })
 }
 
@@ -1243,6 +1323,10 @@ pub unsafe extern "C" fn js_zlib_native_dispatch(
         "unzipSync" => ptr_to_f64(js_zlib_unzip_sync(arg(0)) as *const u8),
         "brotliCompressSync" => ptr_to_f64(js_zlib_brotli_compress_sync(arg(0)) as *const u8),
         "brotliDecompressSync" => ptr_to_f64(js_zlib_brotli_decompress_sync(arg(0)) as *const u8),
+        "zstdCompressSync" => ptr_to_f64(js_zlib_zstd_compress_sync(arg(0), arg(1)) as *const u8),
+        "zstdDecompressSync" => {
+            ptr_to_f64(js_zlib_zstd_decompress_sync(arg(0), arg(1)) as *const u8)
+        }
         "crc32" => {
             let seed = if args_len >= 2 { arg(1) } else { 0.0 };
             js_zlib_crc32(arg(0), seed)
@@ -1284,6 +1368,16 @@ pub unsafe extern "C" fn js_zlib_native_dispatch(
             js_zlib_brotli_decompress(arg(0), arg(1));
             undefined
         }
+        "zstdCompress" => {
+            js_zlib_zstd_compress(arg(0), arg(1));
+            undefined
+        }
+        "zstdDecompress" => {
+            js_zlib_zstd_decompress(arg(0), arg(1));
+            undefined
+        }
+        "createZstdCompress" => ptr_to_f64(js_zlib_create_zstd_compress(arg(0)) as *const u8),
+        "createZstdDecompress" => ptr_to_f64(js_zlib_create_zstd_decompress(arg(0)) as *const u8),
         _ => undefined,
     }
 }
@@ -1339,6 +1433,29 @@ mod stream_tests {
         assert_eq!(
             run_codec(Codec::BrotliDecompress, &c).unwrap(),
             b"brotli stream test"
+        );
+    }
+
+    #[test]
+    fn zstd_one_shot_roundtrips() {
+        let c = run_one_shot_codec(Codec::ZstdCompress, b"zstd one-shot test").unwrap();
+        assert!(!c.is_empty());
+        assert_eq!(
+            run_one_shot_codec(Codec::ZstdDecompress, &c).unwrap(),
+            b"zstd one-shot test"
+        );
+    }
+
+    #[test]
+    fn zstd_buffer_until_end_stream_roundtrips() {
+        assert!(make_codec_state(Codec::ZstdCompress).is_none());
+        assert!(make_codec_state(Codec::ZstdDecompress).is_none());
+
+        let c = run_codec(Codec::ZstdCompress, b"zstd stream test").unwrap();
+        assert!(!c.is_empty());
+        assert_eq!(
+            run_codec(Codec::ZstdDecompress, &c).unwrap(),
+            b"zstd stream test"
         );
     }
 }

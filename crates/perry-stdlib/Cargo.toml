@@ -231,7 +231,7 @@ bundled-ethers = []
 # Compression (zlib + brotli)
 # `brotli` rides under the same `compression` umbrella; needed by
 # axios's `zlib.createBrotliDecompress` feature-check (#axios e2e).
-compression = ["dep:flate2", "dep:brotli"]
+compression = ["dep:flate2", "dep:brotli", "dep:zstd"]
 
 # Email (nodemailer) — `email` umbrella retained for
 # backwards-compat; v0.5.558's well-known flip toggles
@@ -371,6 +371,8 @@ hkdf = { version = "0.13", optional = true }
 flate2 = { version = "1.0", optional = true }
 # Brotli decompression — feature-checked by axios at module init.
 brotli = { version = "8.0.2", optional = true }
+# Zstd codecs — exposed by modern Node alongside gzip/deflate/Brotli.
+zstd = { version = "0.13.3", optional = true }
 
 # Email
 lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "builder", "hostname", "pool"], optional = true }

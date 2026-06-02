@@ -528,6 +528,10 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_zlib_brotli_decompress_sync", I64, &[DOUBLE]);
     module.declare_function("js_zlib_brotli_compress", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_brotli_decompress", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_zstd_compress_sync", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_zstd_decompress_sync", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_zstd_compress", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_zstd_decompress", VOID, &[DOUBLE, DOUBLE]);
     // #1843 — Transform-stream factories: `_opts` (DOUBLE) in, i64 handle out.
     // (`js_zlib_create_brotli_decompress` is declared alongside the other
     // crypto/zlib helpers in runtime_decls/strings.rs.)
@@ -539,6 +543,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_zlib_create_inflate_raw", I64, &[DOUBLE]);
     module.declare_function("js_zlib_create_unzip", I64, &[DOUBLE]);
     module.declare_function("js_zlib_create_brotli_compress", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_create_zstd_compress", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_create_zstd_decompress", I64, &[DOUBLE]);
 
     // ========== Buffer ==========
     module.declare_function("js_buffer_alloc_unsafe", I64, &[I32]);

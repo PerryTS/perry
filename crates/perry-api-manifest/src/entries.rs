@@ -2140,6 +2140,39 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         ZLIB_CALLBACK_ARGS,
         TypeSpec::Void,
     ),
+    // #2510 — Zstd one-shot compress/decompress (sync + callback-form).
+    method_sig(
+        "zlib",
+        "zstdCompressSync",
+        false,
+        None,
+        &[p_any("p0"), ZLIB_OPTIONS_PARAM],
+        TypeSpec::String,
+    ),
+    method_sig(
+        "zlib",
+        "zstdDecompressSync",
+        false,
+        None,
+        &[p_any("p0"), ZLIB_OPTIONS_PARAM],
+        TypeSpec::String,
+    ),
+    method_sig(
+        "zlib",
+        "zstdCompress",
+        false,
+        None,
+        ZLIB_CALLBACK_ARGS,
+        TypeSpec::Void,
+    ),
+    method_sig(
+        "zlib",
+        "zstdDecompress",
+        false,
+        None,
+        ZLIB_CALLBACK_ARGS,
+        TypeSpec::Void,
+    ),
     // #1843 — Transform-stream factories. Each returns a stream handle
     // supporting `.write`/`.end`/`.on('data'|'end'|'error')`/`.pipe`.
     zlib_stream_factory("createGzip"),

@@ -7,10 +7,10 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
 | Whole-module gaps (zero coverage) | 15 | 410 | n/a |
-| Partial-module gaps | 32 | 1480 | 597 |
+| Partial-module gaps | 32 | 1472 | 605 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2172** |  |
+| **Total true gaps** |  | **2164** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
@@ -22,7 +22,7 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 - `node:test (and node:test/reporters, node:test/mock)` — 93
 - `node:util` — 92
 - `node:http` — 89
-- `node:zlib` — 78
+- `node:zlib` — 70
 - `node:stream` — 76
 - `node:worker_threads` — 60
 
@@ -782,8 +782,6 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `zlib.Unzip`
 - `zlib.BrotliCompress`
 - `zlib.BrotliDecompress`
-- `zlib.ZstdCompress`
-- `zlib.ZstdDecompress`
 - `zlib.createDeflate([options])`
 - `zlib.createDeflateRaw([options])`
 - `zlib.createGunzip([options])`
@@ -793,8 +791,6 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `zlib.createUnzip([options])`
 - `zlib.createBrotliCompress([options])`
 - `zlib.createBrotliDecompress([options])`
-- `zlib.createZstdCompress([options])`
-- `zlib.createZstdDecompress([options])`
 - `zlib.deflateRaw(buffer[, options], callback)`
 - `zlib.deflateRawSync(buffer[, options])`
 - `zlib.inflateRaw(buffer[, options], callback)`
@@ -805,10 +801,6 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `zlib.brotliCompressSync(buffer[, options])`
 - `zlib.brotliDecompress(buffer[, options], callback)`
 - `zlib.brotliDecompressSync(buffer[, options])`
-- `zlib.zstdCompress(buffer[, options], callback)`
-- `zlib.zstdCompressSync(buffer[, options])`
-- `zlib.zstdDecompress(buffer[, options], callback)`
-- `zlib.zstdDecompressSync(buffer[, options])`
 - `zlib.close([callback])`
 - `zlib.flush([kind,] callback)`
 - `zlib.params(level, strategy, callback)`

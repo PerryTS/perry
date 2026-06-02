@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1798 entries across 106 modules
+// Coverage: 1802 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3969,4 +3969,12 @@ declare module "zlib" {
   export function unzip(buffer: any, callback: any): void;
   /** stdlib */
   export function unzipSync(p0: string): any;
+  /** stdlib */
+  export function zstdCompress(buffer: any, callback: any): void;
+  /** stdlib */
+  export function zstdCompressSync(p0: any, options?: any): string;
+  /** stdlib */
+  export function zstdDecompress(buffer: any, callback: any): void;
+  /** stdlib */
+  export function zstdDecompressSync(p0: any, options?: any): string;
 }

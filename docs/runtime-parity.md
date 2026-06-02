@@ -2660,8 +2660,8 @@ Bun status: 🟢 Fully implemented. 98% of Node.js's test suite passes.
 | `zlib.Unzip` | ✓ | ✓ |  |
 | `zlib.BrotliCompress` | ✓ | ✓ |  |
 | `zlib.BrotliDecompress` | ✓ | ✓ |  |
-| `zlib.ZstdCompress` | ✓ | ⚠ | experimental |
-| `zlib.ZstdDecompress` | ✓ | ⚠ | experimental |
+| `zlib.ZstdCompress` | ✓ | ✓ | experimental |
+| `zlib.ZstdDecompress` | ✓ | ✓ | experimental |
 | `zlib.ZlibBase` (base class) | ✓ | ✓ |  |
 
 #### Factory Functions
@@ -2677,8 +2677,8 @@ Bun status: 🟢 Fully implemented. 98% of Node.js's test suite passes.
 | `zlib.createUnzip([options])` | ✓ | ✓ |  |
 | `zlib.createBrotliCompress([options])` | ✓ | ✓ |  |
 | `zlib.createBrotliDecompress([options])` | ✓ | ✓ |  |
-| `zlib.createZstdCompress([options])` | ✓ | ⚠ |  |
-| `zlib.createZstdDecompress([options])` | ✓ | ⚠ |  |
+| `zlib.createZstdCompress([options])` | ✓ | ✓ |  |
+| `zlib.createZstdDecompress([options])` | ✓ | ✓ |  |
 
 #### Convenience Functions (callback + sync)
 
@@ -2702,10 +2702,10 @@ Bun status: 🟢 Fully implemented. 98% of Node.js's test suite passes.
 | `zlib.brotliCompressSync(buffer[, options])` | ✓ | ✓ |  |
 | `zlib.brotliDecompress(buffer[, options], callback)` | ✓ | ✓ |  |
 | `zlib.brotliDecompressSync(buffer[, options])` | ✓ | ✓ |  |
-| `zlib.zstdCompress(buffer[, options], callback)` | ✓ | ⚠ |  |
-| `zlib.zstdCompressSync(buffer[, options])` | ✓ | ⚠ |  |
-| `zlib.zstdDecompress(buffer[, options], callback)` | ✓ | ⚠ |  |
-| `zlib.zstdDecompressSync(buffer[, options])` | ✓ | ⚠ |  |
+| `zlib.zstdCompress(buffer[, options], callback)` | ✓ | ✓ |  |
+| `zlib.zstdCompressSync(buffer[, options])` | ✓ | ✓ |  |
+| `zlib.zstdDecompress(buffer[, options], callback)` | ✓ | ✓ |  |
+| `zlib.zstdDecompressSync(buffer[, options])` | ✓ | ✓ |  |
 
 #### ZlibBase Methods / Properties
 
