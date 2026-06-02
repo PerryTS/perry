@@ -350,10 +350,10 @@ pub fn collect_vars_recursive(stmts: &[Stmt], vars: &mut Vec<(LocalId, String, T
             } => {
                 collect_vars_recursive(body, vars);
                 if let Some(c) = catch {
-                    // Hoist the catch parameter so the .throw() closure can assign to it.
-                    if let Some((pid, pname)) = &c.param {
-                        vars.push((*pid, pname.clone(), Type::Any));
-                    }
+                    // Catch params are hoisted only for catch routes that
+                    // linearize_body lifts into the async throw path. Ordinary
+                    // post-await Stmt::Try bodies must keep codegen's direct
+                    // catch binding slot.
                     collect_vars_recursive(&c.body, vars);
                 }
                 if let Some(f) = finally {
