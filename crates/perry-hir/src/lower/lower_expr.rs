@@ -1478,7 +1478,10 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                 index: Box::new(index),
                             }
                         }
-                        _ => return Err(anyhow!("Unsupported optional chain property type")),
+                        ast::MemberProp::PrivateName(private) => Expr::PropertyGet {
+                            object: Box::new(obj_expr.clone()),
+                            property: format!("#{}", private.name),
+                        },
                     };
 
                     // Issue #388: optional chaining short-circuits on
@@ -1537,7 +1540,10 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                             index: Box::new(idx),
                                         }
                                     }
-                                    _ => return Err(anyhow!("Unsupported optional chain member")),
+                                    ast::MemberProp::PrivateName(private) => Expr::PropertyGet {
+                                        object: Box::new(obj.clone()),
+                                        property: format!("#{}", private.name),
+                                    },
                                 };
                                 Ok((obj, prop))
                             };
