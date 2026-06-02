@@ -118,9 +118,12 @@ fn is_known_global_identifier_name(name: &str) -> bool {
             | "URL"
             | "URLSearchParams"
             | "AbortController"
+            | "Blob"
             | "FormData"
             | "File"
             | "Headers"
+            | "Request"
+            | "Response"
             | "fetch"
             | "crypto"
             | "performance"
@@ -131,6 +134,13 @@ fn is_known_global_identifier_name(name: &str) -> bool {
             | "BigInt"
             | "WebAssembly"
     ) || is_builtin_global_value_name(name)
+}
+
+fn is_fetch_global_value_name(name: &str) -> bool {
+    matches!(
+        name,
+        "fetch" | "Blob" | "File" | "FormData" | "Headers" | "Request" | "Response"
+    )
 }
 
 fn is_cjs_style_native_default_import(module_name: &str) -> bool {
@@ -505,7 +515,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 // `Expr::Date*Get(...)` — so they don't reach this arm.
                 // date-fns / drizzle / lodash duck-typing path.
                 if is_builtin_global_value_name(&name) {
-                    if name == "fetch" {
+                    if is_fetch_global_value_name(&name) {
                         ctx.uses_fetch = true;
                     }
                     return Ok(Expr::PropertyGet {

@@ -78,6 +78,15 @@ pub(super) fn try_object_static_alias_call(
                 let name = ident.sym.to_string();
                 if let Some(id) = ctx.lookup_local(&name) {
                     if let Some(method) = ctx.object_static_method_aliases.get(&id).cloned() {
+                        if let Some(method) = method.strip_prefix("Response.") {
+                            return Ok(Expr::NativeMethodCall {
+                                module: "fetch".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method.to_string(),
+                                args,
+                            });
+                        }
                         if method == "Array.isArray" {
                             let value = args.first().cloned().unwrap_or(Expr::Undefined);
                             return Ok(Expr::ArrayIsArray(Box::new(value)));

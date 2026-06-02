@@ -2490,6 +2490,45 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
                 *const perry_runtime::StringHeader,
             ) -> *mut perry_runtime::Promise,
         );
+        #[cfg(feature = "http-client")]
+        fn js_register_global_fetch_constructors(
+            blob_new: unsafe extern "C" fn(f64, f64) -> f64,
+            headers_new: extern "C" fn() -> f64,
+            headers_init_from_value: unsafe extern "C" fn(f64, f64) -> f64,
+            request_new: unsafe extern "C" fn(
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                f64,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                f64,
+                *const perry_runtime::StringHeader,
+                f64,
+            ) -> f64,
+            response_new: unsafe extern "C" fn(
+                *const perry_runtime::StringHeader,
+                f64,
+                *const perry_runtime::StringHeader,
+                f64,
+            ) -> f64,
+            response_static_json: unsafe extern "C" fn(
+                f64,
+                f64,
+                *const perry_runtime::StringHeader,
+                f64,
+            ) -> f64,
+            response_static_redirect: unsafe extern "C" fn(
+                *const perry_runtime::StringHeader,
+                f64,
+            ) -> f64,
+            response_static_error: extern "C" fn() -> f64,
+        );
         fn js_register_worker_threads_namespace_getters(
             worker_data: extern "C" fn() -> f64,
             is_main_thread: extern "C" fn() -> f64,
@@ -2510,6 +2549,17 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     crate::string_decoder::string_decoder_prototype_value();
     #[cfg(feature = "http-client")]
     js_register_global_fetch_with_options(crate::fetch::js_fetch_with_options);
+    #[cfg(feature = "http-client")]
+    js_register_global_fetch_constructors(
+        crate::fetch_blob::js_blob_new,
+        crate::fetch::js_headers_new,
+        crate::fetch::js_headers_init_from_value,
+        crate::fetch::js_request_new,
+        crate::fetch::js_response_new,
+        crate::fetch::js_response_static_json,
+        crate::fetch::js_response_static_redirect,
+        crate::fetch::js_response_static_error,
+    );
     #[cfg(feature = "bundled-events")]
     unsafe extern "C" fn event_emitter_probe(handle: i64) -> bool {
         crate::events::is_event_emitter_handle(handle)

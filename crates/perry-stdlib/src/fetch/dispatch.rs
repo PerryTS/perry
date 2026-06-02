@@ -499,7 +499,7 @@ pub fn dispatch_form_data_method(form_id: usize, method: &str, args: &[f64]) -> 
     let form_f64 = handle_to_f64(form_id);
     let str_arg = |i: usize| -> *const StringHeader {
         if i < args.len() {
-            (args[i].to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader
+            js_get_string_pointer_unified(args[i]) as *const StringHeader
         } else {
             std::ptr::null()
         }
@@ -585,12 +585,12 @@ pub fn dispatch_headers_method(headers_id: usize, method: &str, args: &[f64]) ->
         guard.get(&headers_id)?;
     }
     let h_f64 = handle_to_f64(headers_id);
-    // String args arrive as NaN-boxed STRING_TAG f64 values; extract the raw
-    // StringHeader pointer for the runtime helpers.
+    // String args can arrive as heap strings or SSO/short-string values; use
+    // the runtime's unified coercion helper before passing a StringHeader to
+    // the FFI helpers.
     let str_arg = |i: usize| -> *const StringHeader {
         if i < args.len() {
-            let v = args[i];
-            (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader
+            js_get_string_pointer_unified(args[i]) as *const StringHeader
         } else {
             std::ptr::null()
         }
@@ -637,6 +637,25 @@ pub fn dispatch_headers_method(headers_id: usize, method: &str, args: &[f64]) ->
 pub fn dispatch_blob_property(blob_id: usize, prop: &str) -> Option<f64> {
     let guard = BLOB_REGISTRY.lock().unwrap();
     let blob = guard.get(&blob_id)?;
+    if matches!(prop, "text" | "arrayBuffer" | "bytes" | "slice") {
+        extern "C" {
+            fn js_class_method_bind(
+                instance: f64,
+                method_name_ptr: *const u8,
+                method_name_len: usize,
+            ) -> f64;
+        }
+        let name: &'static [u8] = match prop {
+            "text" => b"text",
+            "arrayBuffer" => b"arrayBuffer",
+            "bytes" => b"bytes",
+            "slice" => b"slice",
+            _ => unreachable!(),
+        };
+        return Some(unsafe {
+            js_class_method_bind(handle_to_f64(blob_id), name.as_ptr(), name.len())
+        });
+    }
     let bits = match prop {
         "size" => return Some(blob.body.len() as f64),
         "type" => {

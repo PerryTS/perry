@@ -2,7 +2,7 @@
 
 use super::*;
 
-fn is_global_this_value(expr: &Expr) -> bool {
+fn is_global_this_value(ctx: &LoweringContext, expr: &Expr) -> bool {
     matches!(expr, Expr::GlobalGet(_))
         || matches!(
             expr,
@@ -10,6 +10,7 @@ fn is_global_this_value(expr: &Expr) -> bool {
                 if matches!(object.as_ref(), Expr::GlobalGet(_))
                     && property == "globalThis"
         )
+        || matches!(expr, Expr::LocalGet(id) if ctx.global_this_aliases.contains(id))
 }
 
 /// #3663: classic-stream constructor export names from `node:stream`.
@@ -1678,6 +1679,27 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         {
                             Some("Array.isArray".to_string())
                         }
+                        (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(method_ident))
+                            if matches!(
+                                method_ident.sym.as_ref(),
+                                "json" | "redirect" | "error"
+                            ) && {
+                                let obj_name = obj_ident.sym.as_ref();
+                                (obj_name == "Response" && ctx.lookup_local("Response").is_none())
+                                    || ctx
+                                        .resolve_class_alias(obj_name)
+                                        .as_deref()
+                                        .is_some_and(|resolved| resolved == "Response")
+                            } =>
+                        {
+                            let method = match method_ident.sym.as_ref() {
+                                "json" => "Response.static_json",
+                                "redirect" => "Response.static_redirect",
+                                "error" => "Response.static_error",
+                                _ => unreachable!(),
+                            };
+                            Some(method.to_string())
+                        }
                         _ => None,
                     },
                     _ => None,
@@ -1710,6 +1732,21 @@ pub(crate) fn lower_var_decl_with_destructuring(
             if let Some(method_name) = array_method_alias {
                 ctx.array_static_method_aliases.insert(id, method_name);
             }
+            if let Some(Expr::NativeMethodCall { module, method, .. }) = &init {
+                if module == "fetch"
+                    && matches!(
+                        method.as_str(),
+                        "static_json" | "static_redirect" | "static_error"
+                    )
+                {
+                    ctx.register_native_instance(
+                        name.clone(),
+                        "fetch".to_string(),
+                        "Response".to_string(),
+                    );
+                    ctx.uses_fetch = true;
+                }
+            }
 
             // Issue #740: track `let/const/var <name> = ClassRef(...)` so
             // `new <name>(...)` can resolve captures via the alias chain.
@@ -1727,6 +1764,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 // expression assigned to a local).
                 if matches!(init_expr, Expr::Closure { .. } | Expr::FuncRef(_)) {
                     ctx.function_valued_locals.insert(id);
+                }
+                if is_global_this_value(ctx, init_expr) {
+                    ctx.global_this_aliases.insert(id);
                 }
                 match init_expr {
                     Expr::ClassRef(class_name) => {
@@ -1778,7 +1818,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         }
                     }
                     Expr::PropertyGet { object, property }
-                        if is_global_this_value(object.as_ref())
+                        if is_global_this_value(ctx, object.as_ref())
                             && matches!(
                                 property.as_str(),
                                 "URL"
@@ -1787,11 +1827,18 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     | "TextDecoder"
                                     | "Blob"
                                     | "File"
+                                    | "FormData"
+                                    | "Headers"
+                                    | "Request"
+                                    | "Response"
                                     | "WebSocket"
                             ) =>
                     {
                         ctx.register_let_class_alias(name.clone(), property.clone());
-                        if matches!(property.as_str(), "Blob" | "File") {
+                        if matches!(
+                            property.as_str(),
+                            "Blob" | "File" | "FormData" | "Headers" | "Request" | "Response"
+                        ) {
                             ctx.uses_fetch = true;
                         }
                     }

@@ -825,7 +825,11 @@ pub unsafe extern "C" fn js_native_call_method(
         } else {
             0
         };
-        if crate::closure::is_closure_ptr(raw_addr)
+        // Fetch, stream, and other runtime objects use small tagged handles that
+        // are pointer-shaped but not heap allocations. Avoid asking the closure
+        // probe to dereference those handles as addresses.
+        if raw_addr >= 0x100000
+            && crate::closure::is_closure_ptr(raw_addr)
             && !crate::closure::closure_is_key_deleted(raw_addr, method_name)
         {
             let dyn_val = crate::closure::closure_get_dynamic_prop(raw_addr, method_name);
@@ -886,7 +890,7 @@ pub unsafe extern "C" fn js_native_call_method(
         // codegen-registered text (or a synthesized native form), rather than
         // falling through to the generic `"[object Object]"`.
         let raw_addr = crate::value::js_nanbox_get_pointer(object) as usize;
-        if crate::closure::is_closure_ptr(raw_addr) {
+        if raw_addr >= 0x100000 && crate::closure::is_closure_ptr(raw_addr) {
             let func_ptr = (*(raw_addr as *const crate::closure::ClosureHeader)).func_ptr as usize;
             let s = crate::builtins::function_source_for_func_ptr(func_ptr);
             let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);

@@ -102,6 +102,184 @@ pub(crate) extern "C" fn global_this_date_thunk(
     crate::value::js_nanbox_string(string as i64)
 }
 
+fn global_this_fetch_option(init: f64, name: &[u8]) -> f64 {
+    let value = crate::value::JSValue::from_bits(init.to_bits());
+    if !value.is_pointer() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let raw = crate::value::js_nanbox_get_pointer(init);
+    if raw < 0x10000 || !is_valid_obj_ptr(raw as *const u8) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_object_get_field_by_name_f64(raw as *const ObjectHeader, key)
+}
+
+fn global_this_fetch_option_string_ptr(init: f64, name: &[u8]) -> *const crate::StringHeader {
+    let value = global_this_fetch_option(init, name);
+    if matches!(
+        value.to_bits(),
+        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
+    ) {
+        return std::ptr::null();
+    }
+    crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader
+}
+
+fn global_this_body_string_ptr(value: f64) -> *const crate::StringHeader {
+    if matches!(
+        value.to_bits(),
+        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
+    ) {
+        return std::ptr::null();
+    }
+    crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader
+}
+
+fn global_this_headers_handle_from_value(value: f64) -> f64 {
+    if matches!(
+        value.to_bits(),
+        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
+    ) {
+        return 0.0;
+    }
+    let headers = super::global_fetch::call_global_headers_new();
+    if headers.to_bits() == crate::value::TAG_UNDEFINED {
+        return 0.0;
+    }
+    super::global_fetch::call_global_headers_init_from_value(headers, value);
+    headers
+}
+
+fn global_this_init_headers_handle(init: f64) -> f64 {
+    global_this_headers_handle_from_value(global_this_fetch_option(init, b"headers"))
+}
+
+pub(crate) extern "C" fn global_this_blob_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    parts: f64,
+    options: f64,
+) -> f64 {
+    let type_value = global_this_fetch_option(options, b"type");
+    super::global_fetch::call_global_blob_new(parts, type_value)
+}
+
+pub(crate) extern "C" fn global_this_headers_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    init: f64,
+) -> f64 {
+    let headers = super::global_fetch::call_global_headers_new();
+    if headers.to_bits() == crate::value::TAG_UNDEFINED {
+        return headers;
+    }
+    if init.to_bits() != crate::value::TAG_UNDEFINED {
+        super::global_fetch::call_global_headers_init_from_value(headers, init);
+    }
+    headers
+}
+
+pub(crate) extern "C" fn global_this_response_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    body: f64,
+    init: f64,
+) -> f64 {
+    let body_ptr = global_this_body_string_ptr(body);
+    let status = global_this_fetch_option(init, b"status");
+    let status = if status.to_bits() == crate::value::TAG_UNDEFINED {
+        0.0
+    } else {
+        status
+    };
+    let status_text_ptr = global_this_fetch_option_string_ptr(init, b"statusText");
+    let headers_handle = global_this_init_headers_handle(init);
+    super::global_fetch::call_global_response_new(body_ptr, status, status_text_ptr, headers_handle)
+}
+
+pub(crate) extern "C" fn global_this_request_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    input: f64,
+    init: f64,
+) -> f64 {
+    let url_ptr = crate::value::js_get_string_pointer_unified(input) as *const crate::StringHeader;
+    let method_ptr = global_this_fetch_option_string_ptr(init, b"method");
+    let body_ptr = global_this_fetch_option_string_ptr(init, b"body");
+    let headers_handle = global_this_init_headers_handle(init);
+    let referrer_ptr = global_this_fetch_option_string_ptr(init, b"referrer");
+    let referrer_policy_ptr = global_this_fetch_option_string_ptr(init, b"referrerPolicy");
+    let mode_ptr = global_this_fetch_option_string_ptr(init, b"mode");
+    let credentials_ptr = global_this_fetch_option_string_ptr(init, b"credentials");
+    let cache_ptr = global_this_fetch_option_string_ptr(init, b"cache");
+    let redirect_ptr = global_this_fetch_option_string_ptr(init, b"redirect");
+    let integrity_ptr = global_this_fetch_option_string_ptr(init, b"integrity");
+    let keepalive = {
+        let value = global_this_fetch_option(init, b"keepalive");
+        if value.to_bits() == crate::value::TAG_UNDEFINED {
+            f64::from_bits(crate::value::TAG_FALSE)
+        } else {
+            value
+        }
+    };
+    let duplex_ptr = global_this_fetch_option_string_ptr(init, b"duplex");
+    let signal = global_this_fetch_option(init, b"signal");
+    super::global_fetch::call_global_request_new(
+        url_ptr,
+        method_ptr,
+        body_ptr,
+        headers_handle,
+        referrer_ptr,
+        referrer_policy_ptr,
+        mode_ptr,
+        credentials_ptr,
+        cache_ptr,
+        redirect_ptr,
+        integrity_ptr,
+        keepalive,
+        duplex_ptr,
+        signal,
+    )
+}
+
+extern "C" fn global_this_response_error_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    super::global_fetch::call_global_response_static_error()
+}
+
+extern "C" fn global_this_response_json_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+    init: f64,
+) -> f64 {
+    let init_status = global_this_fetch_option(init, b"status");
+    let init_status = if init_status.to_bits() == crate::value::TAG_UNDEFINED {
+        0.0
+    } else {
+        init_status
+    };
+    let init_status_text_ptr = global_this_fetch_option_string_ptr(init, b"statusText");
+    let headers_handle = global_this_init_headers_handle(init);
+    super::global_fetch::call_global_response_static_json(
+        value,
+        init_status,
+        init_status_text_ptr,
+        headers_handle,
+    )
+}
+
+extern "C" fn global_this_response_redirect_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    url: f64,
+    status: f64,
+) -> f64 {
+    let url_ptr = crate::value::js_jsvalue_to_string(url) as *const crate::StringHeader;
+    let status = if status.to_bits() == crate::value::TAG_UNDEFINED {
+        302.0
+    } else {
+        status
+    };
+    super::global_fetch::call_global_response_static_redirect(url_ptr, status)
+}
+
 extern "C" fn global_this_eval_thunk(
     _closure: *const crate::closure::ClosureHeader,
     source: f64,
@@ -1788,6 +1966,10 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                 crate::messaging::js_broadcast_channel_constructor_call_error as *const u8
             }
             "Date" => global_this_date_thunk as *const u8,
+            "Blob" => global_this_blob_thunk as *const u8,
+            "Headers" => global_this_headers_thunk as *const u8,
+            "Request" => global_this_request_thunk as *const u8,
+            "Response" => global_this_response_thunk as *const u8,
             "URLPattern" => global_this_url_pattern_call_thunk as *const u8,
             "Storage" => crate::web_storage::storage_constructor_illegal as *const u8,
             "Crypto" | "CryptoKey" | "SubtleCrypto" => {
@@ -1811,6 +1993,12 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             }
             "Object" | "String" | "Number" | "Boolean" | "BroadcastChannel" => {
                 crate::closure::js_register_closure_arity(func_ptr, 1);
+            }
+            "Headers" => {
+                crate::closure::js_register_closure_arity(func_ptr, 1);
+            }
+            "Blob" | "Request" | "Response" => {
+                crate::closure::js_register_closure_arity(func_ptr, 2);
             }
             "Error" | "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError"
             | "EvalError" | "URIError" => {
@@ -2710,22 +2898,24 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
             install_constructor_static(
                 ctor,
                 "error",
-                global_this_builtin_noop_thunk as *const u8,
+                global_this_response_error_thunk as *const u8,
                 0,
                 false,
             );
-            install_constructor_static(
+            install_constructor_static_with_call_arity(
                 ctor,
                 "json",
-                global_this_builtin_noop_thunk as *const u8,
+                global_this_response_json_thunk as *const u8,
                 1,
+                2,
                 false,
             );
-            install_constructor_static(
+            install_constructor_static_with_call_arity(
                 ctor,
                 "redirect",
-                global_this_builtin_noop_thunk as *const u8,
+                global_this_response_redirect_thunk as *const u8,
                 1,
+                2,
                 false,
             );
         }

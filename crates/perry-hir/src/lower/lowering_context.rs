@@ -417,6 +417,10 @@ pub struct LoweringContext {
     /// the HIR (where codegen consumes them) rather than being patched in
     /// after lowering.
     pub(crate) let_class_aliases: Vec<(String, String)>,
+    /// LocalIds known to hold the global object (`globalThis`). This lets
+    /// value-read recognisers treat `const g = globalThis; g.Response` like
+    /// `globalThis.Response` without relying on source-level names.
+    pub(crate) global_this_aliases: HashSet<LocalId>,
     /// Issue #838: locals whose initializer is `<ClassName>.prototype`.
     /// Lets the assignment lowering recognise `proto.method = fn` as a
     /// prototype-method assignment on the underlying class (rather than

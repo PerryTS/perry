@@ -90,8 +90,10 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 return Ok(Some(handle));
             }
             "static_redirect" => {
-                let url_ptr = if !args.is_empty() {
-                    get_raw_string_ptr(ctx, &args[0])?
+                let url_ptr = if let Some(url_expr) = args.first() {
+                    let url_value = lower_expr(ctx, url_expr)?;
+                    ctx.block()
+                        .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &url_value)])
                 } else {
                     "0".to_string()
                 };

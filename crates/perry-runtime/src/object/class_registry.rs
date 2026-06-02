@@ -698,6 +698,10 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
             || func_ptr == global_this_array_thunk as *const u8 as usize
             || func_ptr == global_this_object_thunk as *const u8 as usize
             || func_ptr == global_this_date_thunk as *const u8 as usize
+            || func_ptr == global_this_blob_thunk as *const u8 as usize
+            || func_ptr == global_this_headers_thunk as *const u8 as usize
+            || func_ptr == global_this_request_thunk as *const u8 as usize
+            || func_ptr == global_this_response_thunk as *const u8 as usize
             || func_ptr == webcrypto_illegal_constructor_thunk as *const u8 as usize
             || func_ptr
                 == crate::messaging::js_message_channel_constructor_call_error as *const u8
@@ -1349,6 +1353,46 @@ pub unsafe extern "C" fn js_new_function_construct(
                     .copied()
                     .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::js_object_coerce(value);
+            }
+            "Blob" => {
+                let parts = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let options = args
+                    .get(1)
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::object::global_this_blob_thunk(std::ptr::null(), parts, options);
+            }
+            "Headers" => {
+                let init = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::object::global_this_headers_thunk(std::ptr::null(), init);
+            }
+            "Request" => {
+                let input = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let init = args
+                    .get(1)
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::object::global_this_request_thunk(std::ptr::null(), input, init);
+            }
+            "Response" => {
+                let body = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let init = args
+                    .get(1)
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::object::global_this_response_thunk(std::ptr::null(), body, init);
             }
             "Event" => {
                 let event_type = args

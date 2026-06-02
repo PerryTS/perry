@@ -1657,16 +1657,36 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             }
         }
     }
-    let member_reads_global_fetch = matches!(
+    let member_object_is_global_this = matches!(
         unwrap_transparent(member.obj.as_ref()),
         ast::Expr::Ident(i) if i.sym.as_ref() == "globalThis"
-    ) && match &member.prop {
-        ast::MemberProp::Ident(p) => p.sym.as_ref() == "fetch",
-        ast::MemberProp::Computed(c) => {
-            matches!(c.expr.as_ref(), ast::Expr::Lit(ast::Lit::Str(s)) if s.value.as_str() == Some("fetch"))
-        }
-        ast::MemberProp::PrivateName(_) => false,
-    };
+    ) || matches!(&object_expr, Expr::LocalGet(id) if ctx.global_this_aliases.contains(id));
+    let member_reads_global_fetch = member_object_is_global_this
+        && match &member.prop {
+            ast::MemberProp::Ident(p) => matches!(
+                p.sym.as_ref(),
+                "fetch" | "Blob" | "File" | "FormData" | "Headers" | "Request" | "Response"
+            ),
+            ast::MemberProp::Computed(c) => {
+                matches!(
+                    c.expr.as_ref(),
+                    ast::Expr::Lit(ast::Lit::Str(s))
+                        if matches!(
+                            s.value.as_str(),
+                            Some(
+                                "fetch"
+                                    | "Blob"
+                                    | "File"
+                                    | "FormData"
+                                    | "Headers"
+                                    | "Request"
+                                    | "Response"
+                            )
+                        )
+                )
+            }
+            ast::MemberProp::PrivateName(_) => false,
+        };
     if member_reads_global_fetch {
         ctx.uses_fetch = true;
     }

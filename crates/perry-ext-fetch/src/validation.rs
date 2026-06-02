@@ -6,6 +6,8 @@
 
 use perry_ffi::{alloc_string, JsValue, StringHeader};
 
+const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+
 // Web Fetch constructor validation throws real TypeError / RangeError
 // objects. perry-ffi doesn't re-export the runtime error/throw entry
 // points, but with the `runtime-link` feature the `#[no_mangle]` symbols
@@ -58,4 +60,25 @@ pub(crate) fn normalize_method(raw: &str) -> String {
         "DELETE" | "GET" | "HEAD" | "OPTIONS" | "POST" | "PUT" => upper,
         _ => raw.to_string(),
     }
+}
+
+pub(crate) fn redirect_status_from_value(status: f64) -> i32 {
+    if status.to_bits() == TAG_UNDEFINED {
+        return 302;
+    }
+    let number = JsValue::from_bits(status.to_bits()).to_number();
+    if !number.is_finite() {
+        return 0;
+    }
+    (number.trunc() % 65536.0) as i32
+}
+
+pub(crate) fn is_redirect_status(status: i32) -> bool {
+    matches!(status, 301 | 302 | 303 | 307 | 308)
+}
+
+pub(crate) fn parse_redirect_location(raw: &str) -> Result<String, ()> {
+    reqwest::Url::parse(raw)
+        .map(|parsed| parsed.to_string())
+        .map_err(|_| ())
 }

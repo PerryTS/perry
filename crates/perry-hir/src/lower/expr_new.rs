@@ -243,6 +243,18 @@ fn is_worker_threads_module_name(module_name: &str) -> bool {
     module_name == "worker_threads" || module_name == "node:worker_threads"
 }
 
+fn is_fetch_constructor_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Blob" | "File" | "FormData" | "Headers" | "Request" | "Response"
+    )
+}
+
+fn is_global_object_expr(ctx: &LoweringContext, expr: &Expr) -> bool {
+    matches!(expr, Expr::GlobalGet(_))
+        || matches!(expr, Expr::LocalGet(id) if ctx.global_this_aliases.contains(id))
+}
+
 pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
     let callee_expr = peel_new_callee(new_expr.callee.as_ref());
 
@@ -1450,8 +1462,17 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .unwrap_or_default();
             if ctx.lookup_class(&class_name).is_none() {
                 if let Some(resolved) = ctx.resolve_class_alias(&class_name) {
-                    if matches!(resolved.as_str(), "Blob" | "File" | "WebSocket") {
-                        if matches!(resolved.as_str(), "Blob" | "File") {
+                    if matches!(
+                        resolved.as_str(),
+                        "Blob"
+                            | "File"
+                            | "FormData"
+                            | "Headers"
+                            | "Request"
+                            | "Response"
+                            | "WebSocket"
+                    ) {
+                        if is_fetch_constructor_name(&resolved) {
                             ctx.uses_fetch = true;
                         }
                         return Ok(Expr::New {
@@ -1593,10 +1614,19 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 {
                     return Ok(nonconstructable_builtin_throw_expr(property, args));
                 }
-                if matches!(object.as_ref(), Expr::GlobalGet(_))
-                    && matches!(property.as_str(), "Blob" | "File" | "WebSocket")
+                if is_global_object_expr(ctx, object.as_ref())
+                    && matches!(
+                        property.as_str(),
+                        "Blob"
+                            | "File"
+                            | "FormData"
+                            | "Headers"
+                            | "Request"
+                            | "Response"
+                            | "WebSocket"
+                    )
                 {
-                    if matches!(property.as_str(), "Blob" | "File") {
+                    if is_fetch_constructor_name(property) {
                         ctx.uses_fetch = true;
                     }
                     return Ok(Expr::New {
