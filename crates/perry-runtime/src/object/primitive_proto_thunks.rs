@@ -1,160 +1,322 @@
-//! Primitive-wrapper prototype-method thunks (#4100, part of the #3662 cluster).
+//! Primitive wrapper prototype-method thunks.
 //!
-//! `Number.prototype.valueOf` & friends are reachable as plain values (e.g.
-//! `Number.prototype.valueOf.call(x)`, `Reflect.apply`, method extraction).
-//! The fast path `n.valueOf()` is lowered directly by codegen and never touches
-//! these thunks, so they only fire on the reflective path — which previously
-//! resolved to `global_this_builtin_noop_thunk` (Number/Boolean) or fell back
-//! to `Object.prototype.toString` (Symbol/BigInt, whose prototypes had no own
-//! methods). Both produced `"[object Object]"`/`"[object Symbol]"` instead of
-//! the spec behaviour.
-//!
-//! Per spec these methods must perform a `this` brand check and throw a
-//! `TypeError` when called on an incompatible receiver. The thunks below read
-//! the `IMPLICIT_THIS` receiver (set by the `.call`/`.apply` dispatch),
-//! brand-check it against the matching primitive (or its boxed wrapper), throw
-//! on mismatch, and otherwise re-dispatch to the canonical per-type logic via
-//! `js_native_call_method` — which also returns the correct value, fixing the
-//! wrong-value reflective `toString` (`Symbol("x").toString()` → `"Symbol(x)"`,
-//! `(5n).toString(2)` → `"101"`).
-//!
-//! Installed onto each wrapper's `.prototype` by
-//! `global_this::populate_builtin_prototype_methods`.
+//! These methods are observable as function values
+//! (`Number.prototype.valueOf.call(x)`, `Symbol.prototype.toString.call(x)`)
+//! and must brand-check their `this` receiver instead of falling through to
+//! Object defaults.
 
 use super::*;
 
-/// Throw `TypeError: Method <proto>.<method> called on incompatible receiver`.
-/// Mirrors the collection-thunk wording; Test262's brand-check tests assert
-/// only the error *type*, so the exact message is informational. Never returns.
-fn throw_incompatible_receiver(proto: &str, method: &str) -> ! {
-    let msg = format!("Method {proto}.{method} called on incompatible receiver");
-    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(f64::from_bits(
-        crate::value::JSValue::pointer(err as *const u8).bits(),
+const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_0060;
+const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_0062;
+const CLASS_ID_BOXED_BIGINT: u32 = 0xFFFF_0063;
+const CLASS_ID_BOXED_SYMBOL: u32 = 0xFFFF_0064;
+
+pub(super) fn install_primitive_proto_methods(
+    builtin_name: &str,
+    proto_obj: *mut ObjectHeader,
+) -> bool {
+    use super::global_this::install_proto_method as ipm;
+
+    match builtin_name {
+        "Number" => {
+            ipm(
+                proto_obj,
+                "toExponential",
+                number_proto_to_exponential_thunk as *const u8,
+                1,
+            );
+            ipm(
+                proto_obj,
+                "toFixed",
+                number_proto_to_fixed_thunk as *const u8,
+                1,
+            );
+            ipm(
+                proto_obj,
+                "toLocaleString",
+                number_proto_to_locale_string_thunk as *const u8,
+                0,
+            );
+            ipm(
+                proto_obj,
+                "toPrecision",
+                number_proto_to_precision_thunk as *const u8,
+                1,
+            );
+            ipm(
+                proto_obj,
+                "toString",
+                number_proto_to_string_thunk as *const u8,
+                1,
+            );
+            ipm(
+                proto_obj,
+                "valueOf",
+                number_proto_value_of_thunk as *const u8,
+                0,
+            );
+        }
+        "Boolean" => {
+            ipm(
+                proto_obj,
+                "toString",
+                boolean_proto_to_string_thunk as *const u8,
+                0,
+            );
+            ipm(
+                proto_obj,
+                "valueOf",
+                boolean_proto_value_of_thunk as *const u8,
+                0,
+            );
+        }
+        "Symbol" => {
+            ipm(
+                proto_obj,
+                "toString",
+                symbol_proto_to_string_thunk as *const u8,
+                0,
+            );
+            ipm(
+                proto_obj,
+                "valueOf",
+                symbol_proto_value_of_thunk as *const u8,
+                0,
+            );
+        }
+        "BigInt" => {
+            ipm(
+                proto_obj,
+                "toString",
+                bigint_proto_to_string_thunk as *const u8,
+                1,
+            );
+            ipm(
+                proto_obj,
+                "valueOf",
+                bigint_proto_value_of_thunk as *const u8,
+                0,
+            );
+        }
+        _ => return false,
+    }
+    true
+}
+
+pub(crate) fn primitive_proto_method_value(builtin_name: &str, method_name: &str) -> Option<f64> {
+    let (func_ptr, arity) = match (builtin_name, method_name) {
+        ("Number", "toExponential") => (number_proto_to_exponential_thunk as *const u8, 1),
+        ("Number", "toFixed") => (number_proto_to_fixed_thunk as *const u8, 1),
+        ("Number", "toLocaleString") => (number_proto_to_locale_string_thunk as *const u8, 0),
+        ("Number", "toPrecision") => (number_proto_to_precision_thunk as *const u8, 1),
+        ("Number", "toString") => (number_proto_to_string_thunk as *const u8, 1),
+        ("Number", "valueOf") => (number_proto_value_of_thunk as *const u8, 0),
+        ("Boolean", "toString") => (boolean_proto_to_string_thunk as *const u8, 0),
+        ("Boolean", "valueOf") => (boolean_proto_value_of_thunk as *const u8, 0),
+        ("Symbol", "toString") => (symbol_proto_to_string_thunk as *const u8, 0),
+        ("Symbol", "valueOf") => (symbol_proto_value_of_thunk as *const u8, 0),
+        ("BigInt", "toString") => (bigint_proto_to_string_thunk as *const u8, 1),
+        ("BigInt", "valueOf") => (bigint_proto_value_of_thunk as *const u8, 0),
+        _ => return None,
+    };
+    Some(primitive_proto_method_closure_value(
+        method_name,
+        func_ptr,
+        arity,
     ))
 }
 
-fn receiver_bits() -> f64 {
+fn primitive_proto_method_closure_value(method_name: &str, func_ptr: *const u8, arity: u32) -> f64 {
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    crate::closure::js_register_closure_arity(func_ptr, arity);
+    super::native_module::set_bound_native_closure_name(closure, method_name);
+    super::native_module::set_builtin_closure_length(closure as usize, arity);
+    super::set_builtin_property_attrs(
+        closure as usize,
+        "name".to_string(),
+        super::PropertyAttrs::new(false, false, true),
+    );
+    super::set_builtin_property_attrs(
+        closure as usize,
+        "length".to_string(),
+        super::PropertyAttrs::new(false, false, true),
+    );
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+fn receiver_value() -> f64 {
     f64::from_bits(IMPLICIT_THIS.with(|c| c.get()))
 }
 
-#[inline]
+fn throw_incompatible_receiver(proto: &str, method: &str) -> ! {
+    let msg = format!("{proto}.{method} called on incompatible receiver");
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(s);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn boxed_payload(receiver: f64, expected_class_id: u32) -> Option<f64> {
+    let (class_id, payload) = crate::builtins::boxed_primitive_payload(receiver)?;
+    (class_id == expected_class_id).then_some(payload)
+}
+
 fn number_receiver_or_throw(method: &str) -> f64 {
-    let this = receiver_bits();
-    let jsv = crate::value::JSValue::from_bits(this.to_bits());
-    if jsv.is_number()
-        || jsv.is_int32()
-        || crate::builtins::boxed_primitive_to_string_tag(this) == Some("Number")
-    {
-        this
-    } else {
-        throw_incompatible_receiver("Number.prototype", method)
+    let receiver = receiver_value();
+    if let Some(payload) = boxed_payload(receiver, CLASS_ID_BOXED_NUMBER) {
+        return payload;
     }
+    let jv = crate::value::JSValue::from_bits(receiver.to_bits());
+    if jv.is_int32() {
+        return jv.as_int32() as f64;
+    }
+    if jv.is_number() {
+        return receiver;
+    }
+    throw_incompatible_receiver("Number.prototype", method)
 }
 
-#[inline]
 fn boolean_receiver_or_throw(method: &str) -> f64 {
-    let this = receiver_bits();
-    let jsv = crate::value::JSValue::from_bits(this.to_bits());
-    if jsv.is_bool() || crate::builtins::boxed_primitive_to_string_tag(this) == Some("Boolean") {
-        this
-    } else {
-        throw_incompatible_receiver("Boolean.prototype", method)
+    let receiver = receiver_value();
+    if let Some(payload) = boxed_payload(receiver, CLASS_ID_BOXED_BOOLEAN) {
+        return payload;
     }
+    let jv = crate::value::JSValue::from_bits(receiver.to_bits());
+    if jv.is_bool() {
+        return receiver;
+    }
+    throw_incompatible_receiver("Boolean.prototype", method)
 }
 
-#[inline]
 fn symbol_receiver_or_throw(method: &str) -> f64 {
-    let this = receiver_bits();
-    let is_symbol = unsafe { crate::symbol::js_is_symbol(this) != 0 };
-    if is_symbol || crate::builtins::boxed_primitive_to_string_tag(this) == Some("Symbol") {
-        this
-    } else {
-        throw_incompatible_receiver("Symbol.prototype", method)
+    let receiver = receiver_value();
+    if let Some(payload) = boxed_payload(receiver, CLASS_ID_BOXED_SYMBOL) {
+        return payload;
     }
+    if unsafe { crate::symbol::js_is_symbol(receiver) } != 0 {
+        return receiver;
+    }
+    throw_incompatible_receiver("Symbol.prototype", method)
 }
 
-#[inline]
 fn bigint_receiver_or_throw(method: &str) -> f64 {
-    let this = receiver_bits();
-    let jsv = crate::value::JSValue::from_bits(this.to_bits());
-    if jsv.is_bigint() || crate::builtins::boxed_primitive_to_string_tag(this) == Some("BigInt") {
-        this
-    } else {
-        throw_incompatible_receiver("BigInt.prototype", method)
+    let receiver = receiver_value();
+    if let Some(payload) = boxed_payload(receiver, CLASS_ID_BOXED_BIGINT) {
+        return payload;
     }
+    if crate::value::JSValue::from_bits(receiver.to_bits()).is_bigint() {
+        return receiver;
+    }
+    throw_incompatible_receiver("BigInt.prototype", method)
 }
 
-/// Re-dispatch the brand-checked receiver to the canonical method logic, which
-/// also produces the correct value for the wrong-value reflective `toString`.
-fn redispatch(this: f64, method: &str, args: &[f64]) -> f64 {
-    unsafe {
-        super::js_native_call_method(
-            this,
-            method.as_ptr() as *const i8,
-            method.len(),
-            args.as_ptr(),
-            args.len(),
-        )
-    }
+fn string_value(ptr: *mut crate::string::StringHeader) -> f64 {
+    f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
 }
 
 pub(super) extern "C" fn number_proto_value_of_thunk(
-    _c: *const crate::closure::ClosureHeader,
+    _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
-    let this = number_receiver_or_throw("valueOf");
-    redispatch(this, "valueOf", &[])
+    number_receiver_or_throw("valueOf")
+}
+
+pub(super) extern "C" fn number_proto_to_string_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    radix: f64,
+) -> f64 {
+    string_value(crate::value::js_jsvalue_to_string_radix(
+        number_receiver_or_throw("toString"),
+        radix,
+    ))
+}
+
+pub(super) extern "C" fn number_proto_to_fixed_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    decimals: f64,
+) -> f64 {
+    string_value(crate::string::js_number_to_fixed(
+        number_receiver_or_throw("toFixed"),
+        decimals,
+    ))
+}
+
+pub(super) extern "C" fn number_proto_to_precision_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    precision: f64,
+) -> f64 {
+    string_value(crate::string::js_number_to_precision(
+        number_receiver_or_throw("toPrecision"),
+        precision,
+    ))
+}
+
+pub(super) extern "C" fn number_proto_to_exponential_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    decimals: f64,
+) -> f64 {
+    string_value(crate::string::js_number_to_exponential(
+        number_receiver_or_throw("toExponential"),
+        decimals,
+    ))
 }
 
 pub(super) extern "C" fn number_proto_to_locale_string_thunk(
-    _c: *const crate::closure::ClosureHeader,
+    _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
-    let this = number_receiver_or_throw("toLocaleString");
-    redispatch(this, "toLocaleString", &[])
-}
-
-pub(super) extern "C" fn boolean_proto_to_string_thunk(
-    _c: *const crate::closure::ClosureHeader,
-) -> f64 {
-    let this = boolean_receiver_or_throw("toString");
-    redispatch(this, "toString", &[])
+    let n = number_receiver_or_throw("toLocaleString");
+    let s = crate::date::js_number_to_locale_string(n);
+    string_value(s)
 }
 
 pub(super) extern "C" fn boolean_proto_value_of_thunk(
-    _c: *const crate::closure::ClosureHeader,
+    _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
-    let this = boolean_receiver_or_throw("valueOf");
-    redispatch(this, "valueOf", &[])
+    boolean_receiver_or_throw("valueOf")
 }
 
-pub(super) extern "C" fn symbol_proto_to_string_thunk(
-    _c: *const crate::closure::ClosureHeader,
+pub(super) extern "C" fn boolean_proto_to_string_thunk(
+    _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
-    let this = symbol_receiver_or_throw("toString");
-    redispatch(this, "toString", &[])
+    let value = boolean_receiver_or_throw("toString");
+    let bytes = if crate::value::JSValue::from_bits(value.to_bits()).as_bool() {
+        b"true".as_slice()
+    } else {
+        b"false".as_slice()
+    };
+    let s = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+    string_value(s)
 }
 
 pub(super) extern "C" fn symbol_proto_value_of_thunk(
-    _c: *const crate::closure::ClosureHeader,
+    _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
-    let this = symbol_receiver_or_throw("valueOf");
-    redispatch(this, "valueOf", &[])
+    symbol_receiver_or_throw("valueOf")
 }
 
-pub(super) extern "C" fn bigint_proto_to_string_thunk(
-    _c: *const crate::closure::ClosureHeader,
-    radix: f64,
+pub(super) extern "C" fn symbol_proto_to_string_thunk(
+    _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
-    let this = bigint_receiver_or_throw("toString");
-    // Forward an explicit radix; a missing arg arrives as `undefined`, which the
-    // canonical BigInt `toString` arm treats as decimal.
-    redispatch(this, "toString", &[radix])
+    let symbol = symbol_receiver_or_throw("toString");
+    let s =
+        unsafe { crate::symbol::js_symbol_to_string(symbol) } as *mut crate::string::StringHeader;
+    string_value(s)
 }
 
 pub(super) extern "C" fn bigint_proto_value_of_thunk(
-    _c: *const crate::closure::ClosureHeader,
+    _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
-    let this = bigint_receiver_or_throw("valueOf");
-    redispatch(this, "valueOf", &[])
+    bigint_receiver_or_throw("valueOf")
+}
+
+pub(super) extern "C" fn bigint_proto_to_string_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    radix: f64,
+) -> f64 {
+    string_value(crate::value::js_jsvalue_to_string_radix(
+        bigint_receiver_or_throw("toString"),
+        radix,
+    ))
 }

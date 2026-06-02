@@ -1023,6 +1023,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // so `inst.constructor === Date` (date-fns / drizzle / lodash duck
     // checks) holds.
     module.declare_function("js_get_global_this_builtin_value", DOUBLE, &[PTR, I64]);
+    module.declare_function(
+        "js_builtin_prototype_method_value",
+        DOUBLE,
+        &[PTR, I64, PTR, I64],
+    );
     // Inline-allocator class registration: emitted once per class
     // with a parent in the entry-block init prelude. The runtime
     // allocators register on every alloc; the inline allocator skips

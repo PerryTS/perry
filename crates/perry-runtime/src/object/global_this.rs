@@ -2710,6 +2710,23 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
         install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         return;
     }
+    // #4100: primitive wrapper prototypes need real thunks for their own
+    // methods so reflective calls brand-check `this` instead of hitting the
+    // generic Object no-op/valueOf fallbacks.
+    if primitive_proto_thunks::install_primitive_proto_methods(builtin_name, proto_obj) {
+        install_noop_proto_methods(
+            proto_obj,
+            &[
+                ("hasOwnProperty", 1),
+                ("isPrototypeOf", 1),
+                ("propertyIsEnumerable", 1),
+            ],
+        );
+        if !matches!(builtin_name, "Number") {
+            install_noop_proto_methods(proto_obj, &[("toLocaleString", 0)]);
+        }
+        return;
+    }
     match builtin_name {
         "Array" => {
             install_proto_method(

@@ -89,6 +89,7 @@ pub use object_literal_ops::*;
 pub use object_ops::*;
 pub use object_ops_frozen::*;
 pub use polymorphic_index::*;
+pub(crate) use primitive_proto_thunks::primitive_proto_method_value;
 pub use property_key::*;
 pub(crate) use prototype_helpers::*;
 pub(crate) use reflect_support::*;

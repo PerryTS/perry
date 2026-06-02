@@ -1299,7 +1299,9 @@ fn is_builtin_prototype_receiver(ctx: &LoweringContext, recv: &ast::Expr) -> boo
                 return false;
             };
             let name = base.sym.as_ref();
-            matches!(name, "Array" | "String" | "Number" | "Boolean" | "Function")
+            // Number/Boolean primitive methods need to stay reflective so
+            // their prototype thunks brand-check `this` (#4100).
+            matches!(name, "Array" | "String" | "Function")
                 && ctx.lookup_local(name).is_none()
                 && ctx.lookup_func(name).is_none()
         }

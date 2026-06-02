@@ -107,6 +107,46 @@ fn lower_runtime_property_get_by_name(
     ))
 }
 
+fn is_primitive_builtin_proto_method(builtin_name: &str, method_name: &str) -> bool {
+    match builtin_name {
+        "Number" => matches!(
+            method_name,
+            "toExponential" | "toFixed" | "toLocaleString" | "toPrecision" | "toString" | "valueOf"
+        ),
+        "Boolean" | "Symbol" => matches!(method_name, "toString" | "valueOf"),
+        "BigInt" => matches!(method_name, "toString" | "valueOf"),
+        _ => false,
+    }
+}
+
+fn builtin_prototype_method_read<'a>(
+    object: &'a Expr,
+    property: &'a str,
+) -> Option<(&'a str, &'a str)> {
+    let Expr::PropertyGet {
+        object: ctor_object,
+        property: proto_property,
+    } = object
+    else {
+        return None;
+    };
+    if proto_property != "prototype" {
+        return None;
+    }
+    let Expr::PropertyGet {
+        object: global_object,
+        property: builtin_name,
+    } = ctor_object.as_ref()
+    else {
+        return None;
+    };
+    if !matches!(global_object.as_ref(), Expr::GlobalGet(_)) {
+        return None;
+    }
+    is_primitive_builtin_proto_method(builtin_name, property)
+        .then_some((builtin_name.as_str(), property))
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::PropertyGet { object, property }
@@ -429,6 +469,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `js_array_set_f64` (no return value, no realloc) since there's
         // no local to write a possibly-realloc'd pointer back to.
         Expr::PropertyGet { object, property } => {
+            if let Some((builtin_name, method_name)) =
+                builtin_prototype_method_read(object, property)
+            {
+                let builtin_idx = ctx.strings.intern(builtin_name);
+                let builtin_bytes_global =
+                    format!("@{}", ctx.strings.entry(builtin_idx).bytes_global);
+                let builtin_len = builtin_name.len().to_string();
+                let method_idx = ctx.strings.intern(method_name);
+                let method_bytes_global =
+                    format!("@{}", ctx.strings.entry(method_idx).bytes_global);
+                let method_len = method_name.len().to_string();
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_builtin_prototype_method_value",
+                    &[
+                        (PTR, &builtin_bytes_global),
+                        (I64, &builtin_len),
+                        (PTR, &method_bytes_global),
+                        (I64, &method_len),
+                    ],
+                ));
+            }
             // date-fns `constructFrom(date, value)` reads `date.constructor`
             // to clone Dates without naming Date directly. Perry stores
             // Date as a raw f64 timestamp (no ObjectHeader), so the
