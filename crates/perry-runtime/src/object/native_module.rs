@@ -2345,6 +2345,26 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"getDefaultAutoSelectFamilyAttemptTimeout",
             b"setDefaultAutoSelectFamilyAttemptTimeout",
         ]),
+        "http" | "http.default" => Some(&[
+            b"METHODS",
+            b"STATUS_CODES",
+            b"createServer",
+            b"Server",
+            b"IncomingMessage",
+            b"ServerResponse",
+            b"ClientRequest",
+            b"Agent",
+            b"WebSocket",
+            b"_connectionListener",
+            b"get",
+            b"request",
+            b"maxHeaderSize",
+            b"globalAgent",
+            b"validateHeaderName",
+            b"validateHeaderValue",
+            b"setMaxIdleHTTPParsers",
+            b"setGlobalProxyFromEnv",
+        ]),
         "https" => Some(&[
             b"Agent",
             b"Server",
@@ -2779,6 +2799,8 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
         native_callable_export_display_name(export_module_name, property_name)
     } else if export_module_name == "url" && property_name == "resolveObject" {
         "urlResolveObject"
+    } else if export_module_name == "http" && property_name == "_connectionListener" {
+        "connectionListener"
     } else if export_module_name == "fs" && property_name == "_toUnixTimestamp" {
         "toUnixTimestamp"
     } else {
@@ -3113,6 +3135,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         // #3712: node:http module-level helper exports.
         ("http", "validateHeaderName" | "validateHeaderValue") => Some(2),
         ("http", "setMaxIdleHTTPParsers" | "setGlobalProxyFromEnv") => Some(1),
+        ("http", "_connectionListener") => Some(1),
         // #3904: modern V8 diagnostics/profiler exports (Node .length values).
         ("v8", "getCppHeapStatistics" | "startCpuProfile") => Some(0),
         ("v8", "getHeapSnapshot" | "isStringOneByteRepresentation" | "queryObjects") => Some(1),
@@ -3979,6 +4002,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("http", "validateHeaderValue")
             | ("http", "setMaxIdleHTTPParsers")
             | ("http", "setGlobalProxyFromEnv")
+            | ("http", "_connectionListener")
             | ("module", "createRequire")
             | ("module", "findPackageJSON")
             | ("module", "findSourceMap")
@@ -6323,6 +6347,10 @@ pub(crate) unsafe fn get_native_module_constant(
             "globalAgent" => Some(unsafe { http_global_agent_object() }),
             // #2519: `http.STATUS_CODES` maps status codes to reason phrases.
             "STATUS_CODES" => Some(unsafe { http_status_codes_object() }),
+            "WebSocket" => Some(js_get_global_this_builtin_value(
+                b"WebSocket".as_ptr(),
+                "WebSocket".len(),
+            )),
             _ => None,
         },
         "https" => match property {

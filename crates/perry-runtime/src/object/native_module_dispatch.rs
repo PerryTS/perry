@@ -219,6 +219,11 @@ pub extern "C" fn js_http_setter_noop(_value: f64) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+#[no_mangle]
+pub extern "C" fn js_http_connection_listener_noop(_socket: f64) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 /// Dispatch a method call on a native module namespace object.
 /// Extracts the module name from the object and dispatches to the appropriate
 /// runtime function based on (module_name, method_name).
@@ -655,6 +660,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("http", "setMaxIdleHTTPParsers") | ("http", "setGlobalProxyFromEnv") => {
             js_http_setter_noop(arg(0))
         }
+        ("http", "_connectionListener") => js_http_connection_listener_noop(arg(0)),
         ("events", "init") => f64::from_bits(crate::value::TAG_UNDEFINED),
         ("events", "EventEmitterAsyncResource") => {
             let message =

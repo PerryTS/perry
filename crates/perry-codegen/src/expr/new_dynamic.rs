@@ -187,6 +187,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
 
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if property == "WebSocket" {
+                    if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
+                        if mod_name == "http" || mod_name == "node:http" {
+                            return lower_new(ctx, property, args);
+                        }
+                    }
+                }
+            }
+
             // `new crypto.Certificate()` is a legacy constructor in Node, but
             // the implementation is a stateless namespace over the same SPKAC
             // helper methods as `crypto.Certificate.*`. Represent instances as
