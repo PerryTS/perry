@@ -2269,6 +2269,18 @@ pub extern "C" fn js_object_get_field_by_name(
                             return JSValue::from_bits(ctor.to_bits());
                         }
                     }
+                    // #3664: `g.prototype` for a generator/async-generator
+                    // function is a lazily-created object whose [[Prototype]] is
+                    // `%Generator.prototype%`. Non-generator functions fall
+                    // through (unchanged). The dynamic-prop check above already
+                    // returned any cached/user-assigned `prototype`.
+                    if name_str == "prototype" {
+                        if let Some(proto) =
+                            crate::object::generator_function_prototype_of(obj as usize)
+                        {
+                            return JSValue::from_bits(proto.to_bits());
+                        }
+                    }
                     // #2059: `fn.name` — every function carries a built-in own
                     // `name` data property. Resolve the codegen-registered name
                     // (keyed by the wrapper func_ptr, the same registry the

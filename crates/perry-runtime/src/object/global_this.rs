@@ -1283,6 +1283,36 @@ pub(crate) fn generator_function_constructor_of(closure_ptr: usize) -> Option<f6
     intrinsic_pointer_value(slot)
 }
 
+/// `g.prototype` for a generator-function closure `g`: a lazily-created object
+/// whose `[[Prototype]]` is `%Generator.prototype%` / `%AsyncGenerator.prototype%`,
+/// cached as the closure's own `prototype` dynamic-prop so the identity is
+/// stable across reads (`g.prototype === g.prototype`). Returns `None` for
+/// non-generator closures (their `.prototype` keeps its existing behaviour).
+/// A live generator instance's `[[Prototype]]` is set to this object (Phase 3b),
+/// completing the spec chain `g() → g.prototype → %Generator.prototype%`. (#3664)
+pub(crate) fn generator_function_prototype_of(closure_ptr: usize) -> Option<f64> {
+    let kind = closure_generator_kind(closure_ptr)?;
+    // A previously-created (or user-assigned) `prototype` wins — preserves
+    // identity and lets `g.prototype = X` overrides stick.
+    let existing = crate::closure::closure_get_dynamic_prop(closure_ptr, "prototype");
+    if existing.to_bits() != crate::value::TAG_UNDEFINED {
+        return Some(f64::from_bits(existing.to_bits()));
+    }
+    ensure_generator_intrinsics();
+    let gen_proto = generator_prototype_ptr(matches!(kind, GeneratorKind::Async));
+    let obj = js_object_alloc(0, 0);
+    if obj.is_null() {
+        return None;
+    }
+    if !gen_proto.is_null() {
+        let proto_bits = crate::value::js_nanbox_pointer(gen_proto as i64).to_bits();
+        super::prototype_chain::object_set_static_prototype(obj as usize, proto_bits);
+    }
+    let obj_value = crate::value::js_nanbox_pointer(obj as i64);
+    crate::closure::closure_set_dynamic_prop(closure_ptr, "prototype", obj_value);
+    Some(obj_value)
+}
+
 /// `%Generator.prototype%` / `%AsyncGenerator.prototype%` pointer (the object
 /// carrying `next`/`return`/`throw`). Used by Phase 2/3 to wire `g.prototype`'s
 /// `[[Prototype]]` and the live generator-object chain. Null until
@@ -1325,6 +1355,91 @@ fn set_intrinsic_to_string_tag(obj: *mut ObjectHeader, tag: &str) {
             f64::from_bits(crate::js_nanbox_string(tag_str as i64).to_bits()),
         );
     }
+}
+
+/// Build a `TypeError` value for a `%Generator.prototype%` method invoked on a
+/// receiver that isn't a generator object (NaN-boxed pointer, not thrown). (#3664)
+fn generator_receiver_type_error_value(method: &[u8]) -> f64 {
+    let mut msg = b"Generator.prototype.".to_vec();
+    msg.extend_from_slice(method);
+    msg.extend_from_slice(b" called on incompatible receiver");
+    let h = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(h);
+    crate::value::js_nanbox_pointer(err as i64)
+}
+
+/// Shared body for `%Generator.prototype%`/`%AsyncGenerator.prototype%`'s
+/// `next`/`return`/`throw`. These prototype methods exist so test262's
+/// brand-check cases (`GeneratorPrototype.next.call(nonGenerator)`) and method-
+/// identity reads resolve. The real state machine lives in each generator
+/// instance's OWN `next`/`return`/`throw` closures (Perry lowers a generator
+/// call to a `{next,return,throw}` object), so for a valid receiver we delegate
+/// to the instance's own same-named method. Normal `iter.next()` reads the own
+/// property directly and never reaches here, so generator execution is
+/// unaffected.
+///
+/// `is_async` selects the spec's incompatible-receiver behaviour: sync
+/// generators throw a `TypeError` synchronously, async generators return a
+/// rejected promise (their methods always return promises). (#3664)
+fn generator_proto_method(method: &[u8], arg: f64, is_async: bool) -> f64 {
+    let bad_receiver = |method: &[u8]| -> f64 {
+        let errv = generator_receiver_type_error_value(method);
+        if is_async {
+            let promise = crate::promise::js_promise_rejected(errv);
+            crate::value::js_nanbox_pointer(promise as i64)
+        } else {
+            crate::exception::js_throw(errv)
+        }
+    };
+    let this = crate::object::js_implicit_this_get();
+    if crate::object::js_util_types_is_generator_object(this).to_bits() != crate::value::TAG_TRUE {
+        return bad_receiver(method);
+    }
+    let this_obj = JSValue::from_bits(this.to_bits()).as_pointer::<ObjectHeader>();
+    let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
+    let own = js_object_get_field_by_name(this_obj, key);
+    if !own.is_pointer() {
+        return bad_receiver(method);
+    }
+    let own_closure = own.as_pointer::<crate::closure::ClosureHeader>();
+    crate::closure::js_closure_call1(own_closure, arg)
+}
+
+extern "C" fn generator_proto_next_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    arg: f64,
+) -> f64 {
+    generator_proto_method(b"next", arg, false)
+}
+extern "C" fn generator_proto_return_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    arg: f64,
+) -> f64 {
+    generator_proto_method(b"return", arg, false)
+}
+extern "C" fn generator_proto_throw_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    arg: f64,
+) -> f64 {
+    generator_proto_method(b"throw", arg, false)
+}
+extern "C" fn async_generator_proto_next_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    arg: f64,
+) -> f64 {
+    generator_proto_method(b"next", arg, true)
+}
+extern "C" fn async_generator_proto_return_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    arg: f64,
+) -> f64 {
+    generator_proto_method(b"return", arg, true)
+}
+extern "C" fn async_generator_proto_throw_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    arg: f64,
+) -> f64 {
+    generator_proto_method(b"throw", arg, true)
 }
 
 /// Build one generator-intrinsic tower (sync or async) and store its three
@@ -1403,9 +1518,22 @@ fn build_generator_tower(
         crate::value::js_nanbox_pointer(proto as i64),
         configurable,
     );
-    install_proto_method(gen_proto, "next", noop, 1);
-    install_proto_method(gen_proto, "return", noop, 1);
-    install_proto_method(gen_proto, "throw", noop, 1);
+    let (next_thunk, return_thunk, throw_thunk) = if is_async {
+        (
+            async_generator_proto_next_thunk as *const u8,
+            async_generator_proto_return_thunk as *const u8,
+            async_generator_proto_throw_thunk as *const u8,
+        )
+    } else {
+        (
+            generator_proto_next_thunk as *const u8,
+            generator_proto_return_thunk as *const u8,
+            generator_proto_throw_thunk as *const u8,
+        )
+    };
+    install_proto_method(gen_proto, "next", next_thunk, 1);
+    install_proto_method(gen_proto, "return", return_thunk, 1);
+    install_proto_method(gen_proto, "throw", throw_thunk, 1);
     set_intrinsic_to_string_tag(gen_proto, inst_tag);
 
     ctor_slot.store(ctor as i64, Ordering::Release);
