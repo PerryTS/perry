@@ -2856,6 +2856,10 @@ static KEEP_JS_MODULE_SET_SOURCE_MAPS_SUPPORT: extern "C" fn(f64, f64) -> f64 =
 #[used]
 static KEEP_JS_MODULE_STRIP_TYPESCRIPT_TYPES: extern "C" fn(f64, f64) -> f64 =
     js_module_strip_typescript_types;
+#[used]
+static KEEP_JS_MODULE_REGISTER: extern "C" fn(f64, f64, f64) -> f64 = js_module_register;
+#[used]
+static KEEP_JS_MODULE_REGISTER_HOOKS: extern "C" fn(f64) -> f64 = js_module_register_hooks;
 
 /// Unset an environment variable. Backs `delete process.env.X` (#1344).
 #[no_mangle]
@@ -3489,6 +3493,12 @@ fn module_get_named_field(obj: *const crate::object::ObjectHeader, name: &str) -
     crate::object::js_object_get_field_by_name_f64(obj, key)
 }
 
+fn module_throw_plain_type_error(message: &str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 fn module_throw_syntax_error_with_code(message: &str, code: &'static str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
@@ -3653,6 +3663,100 @@ pub extern "C" fn js_module_enable_compile_cache(cache_dir: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_module_flush_compile_cache() -> f64 {
+    module_undefined()
+}
+
+fn module_hook_member(value: f64, name: &str) -> f64 {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() || jv.is_null() || is_function_value(value) {
+        return value;
+    }
+    let message = format!(
+        "The \"hooks.{}\" property must be of type function. Received {}",
+        name,
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+fn module_hooks_deregister_prototype() -> *mut crate::object::ObjectHeader {
+    let proto = crate::object::js_object_alloc(0, 1);
+    module_set_field(proto, "deregister", module_noop_function("deregister"));
+    crate::object::set_property_attrs(
+        proto as usize,
+        "deregister".to_string(),
+        crate::object::PropertyAttrs::new(true, false, true),
+    );
+    proto
+}
+
+/// `module.registerHooks(options)` — synchronous loader customization entry
+/// surface. Perry records Node-compatible hook handles and validation, while
+/// dynamic import resolution/loading still follows Perry's compile-time graph.
+#[no_mangle]
+pub extern "C" fn js_module_register_hooks(hooks: f64) -> f64 {
+    let hooks_value = JSValue::from_bits(hooks.to_bits());
+    if hooks_value.is_undefined() {
+        module_throw_plain_type_error(
+            "Cannot destructure property 'resolve' of 'hooks' as it is undefined.",
+        );
+    }
+    if hooks_value.is_null() {
+        module_throw_plain_type_error(
+            "Cannot destructure property 'resolve' of 'hooks' as it is null.",
+        );
+    }
+
+    let mut resolve = module_undefined();
+    let mut load = module_undefined();
+    if let Some(hooks_obj) = module_object_ptr(hooks) {
+        resolve = module_hook_member(module_get_named_field(hooks_obj, "resolve"), "resolve");
+        load = module_hook_member(module_get_named_field(hooks_obj, "load"), "load");
+    }
+
+    let handle = crate::object::js_object_alloc(0, 2);
+    module_set_field(handle, "resolve", resolve);
+    module_set_field(handle, "load", load);
+
+    let proto = module_hooks_deregister_prototype();
+    let proto_value = module_object_value(proto);
+    crate::object::prototype_chain::object_set_static_prototype(
+        handle as usize,
+        proto_value.to_bits(),
+    );
+    module_object_value(handle)
+}
+
+fn module_register_invalid_specifier(specifier: &str) -> bool {
+    if specifier.starts_with("data:")
+        || specifier.starts_with("file:")
+        || specifier.starts_with("./")
+        || specifier.starts_with("../")
+        || specifier.starts_with('/')
+    {
+        return false;
+    }
+    specifier.is_empty()
+        || specifier.contains('%')
+        || specifier.chars().any(|ch| ch.is_ascii_whitespace())
+}
+
+/// `module.register(specifier[, parentURL][, options])`. Perry does not load
+/// customization modules into the resolver pipeline yet; this entry point
+/// matches Node's observable return value for accepted registrations and
+/// deterministic invalid specifier errors.
+#[no_mangle]
+pub extern "C" fn js_module_register(specifier: f64, _parent_url: f64, _options: f64) -> f64 {
+    let Some(specifier_str) = module_value_to_string(specifier) else {
+        return module_undefined();
+    };
+    if module_register_invalid_specifier(&specifier_str) {
+        let message = format!(
+            "Invalid module \"{}\" is not a valid package name",
+            specifier_str
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_MODULE_SPECIFIER");
+    }
     module_undefined()
 }
 

@@ -504,6 +504,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("module", "getCompileCacheDir") => crate::process::js_module_get_compile_cache_dir(),
         ("module", "getSourceMapsSupport") => crate::process::js_module_get_source_maps_support(),
         ("module", "isBuiltin") => crate::process::js_module_is_builtin(arg(0)),
+        ("module", "register") => crate::process::js_module_register(arg(0), arg(1), arg(2)),
+        ("module", "registerHooks") => crate::process::js_module_register_hooks(arg(0)),
         ("module", "setSourceMapsSupport") => {
             crate::process::js_module_set_source_maps_support(arg(0), arg(1))
         }

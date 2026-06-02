@@ -1767,14 +1767,12 @@ The FileHandle stream-iter tail is runtime-backed for the direct no-transform so
 
 ### node:module
 
-**Gap APIs: 26** · Already covered: 13
+**Gap APIs: 24** · Already covered: 15
 
 #### Missing from Perry
 
 - `Module.createRequire(filename)`
 - `Module.getSourceMapsSupport()`
-- `Module.register(specifier[, parentURL][, options])`
-- `Module.registerHooks(options)`
 - `Module.runMain()`
 - `Module.setSourceMapsSupport(enabled[, options])`
 - `Module.stripTypeScriptTypes(code[, options])`
@@ -1808,6 +1806,8 @@ The FileHandle stream-iter tail is runtime-backed for the direct no-transform so
 | `Module.flushCompileCache()` | `manifest:module.flushCompileCache`; `test-parity/node-suite/module/compile-cache/controls.ts` |
 | `Module.getCompileCacheDir()` | `manifest:module.getCompileCacheDir`; `test-parity/node-suite/module/compile-cache/controls.ts` |
 | `Module.isBuiltin(moduleName)` | `manifest:module.isBuiltin`; `test-parity/node-suite/module/methods/is-builtin.ts` |
+| `Module.register(specifier[, parentURL][, options])` | `manifest:module.register`; `test-parity/node-suite/module/loader/register.ts` |
+| `Module.registerHooks(options)` | `manifest:module.registerHooks`; `test-parity/node-suite/module/loader/register-hooks.ts` |
 | `Module.constants.compileCacheStatus` | `manifest:module.constants`; `test-parity/node-suite/module/compile-cache/controls.ts` |
 | `Module.enableCompileCache([cacheDir])` | `manifest:module.enableCompileCache`; `test-parity/node-suite/module/compile-cache/controls.ts` |
 | `new SourceMap(payload[, options])` | `manifest:module.SourceMap`; `test-parity/node-suite/module/source-map/basic.ts` |
