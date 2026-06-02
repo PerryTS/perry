@@ -7,15 +7,14 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
 | Whole-module gaps (zero coverage) | 15 | 410 | n/a |
-| Partial-module gaps | 32 | 1469 | 608 |
+| Partial-module gaps | 32 | 1285 | 607 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2161** |  |
+| **Total true gaps** |  | **1977** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
 - `Web / Global APIs` — 282
-- `node:os` — 195
 - `node:crypto` — 128
 - `node:http2` — 97
 - `node:process (and global `process`)` — 94
@@ -243,80 +242,44 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:os
 
-**Gap APIs: 195** · Already covered: 14
+**Gap APIs: 0** · Already covered: 24
 
-#### Missing from Perry
-
-- `os.availableParallelism()`
-- `os.endianness()`
-- `os.getPriority([pid])`
-- `os.loadavg()`
-- `os.machine()`
-- `os.setPriority([pid, ]priority)`
-- `os.version()`
-- `os.devNull`
-- `os.constants`
-- `SIGHUP`
-- `SIGINT`
-- `SIGQUIT`
-- `SIGILL`
-- `SIGTRAP`
-- `SIGABRT`
-- `SIGIOT`
-- `SIGBUS`
-- `SIGFPE`
-- `SIGKILL`
-- `SIGUSR1`
-- `SIGUSR2`
-- `SIGSEGV`
-- `SIGPIPE`
-- `SIGALRM`
-- `SIGTERM`
-- `SIGCHLD`
-- `SIGSTKFLT`
-- `SIGCONT`
-- `SIGSTOP`
-- `SIGTSTP`
-- `SIGBREAK`
-- `SIGTTIN`
-- `SIGTTOU`
-- `SIGURG`
-- `SIGXCPU`
-- `SIGXFSZ`
-- `SIGVTALRM`
-- `SIGPROF`
-- `SIGWINCH`
-- `SIGIO`
-- `SIGPOLL`
-- `SIGLOST`
-- `SIGPWR`
-- `SIGINFO`
-- `SIGSYS`
-- `SIGUNUSED`
-- `E2BIG`
-- `EACCES`
-- `EADDRINUSE`
-- `EADDRNOTAVAIL`
-- … and 145 more (see `runtime-parity.md` for the full list)
+`node:os` has no remaining public API surface gaps in the manifest-based
+reconciliation. The current manifest includes the modern host helpers
+(`availableParallelism`, `machine`, `version`, `getPriority`, `setPriority`),
+collection helpers (`cpus`, `networkInterfaces`), `userInfo`, `devNull`,
+`EOL`, `constants`, and the ESM/CJS namespace forms. Host-dependent values are
+kept out of exact comparisons; the curated `test-parity/node-suite/os`
+fixtures assert deterministic Node semantics such as return types, object
+shape, nested constants identity, import forms, and validation/error codes.
 
 #### Covered (sampled)
 
 | API | Coverage source |
 |-----|-----------------|
 | `os.arch()` | `manifest:os.arch` |
+| `os.availableParallelism()` | `manifest:os.availableParallelism`; `test-parity/node-suite/os/methods/available-parallelism.ts` |
 | `os.cpus()` | `manifest:os.cpus` |
+| `os.devNull` | `manifest:os.devNull`; `test-parity/node-suite/os/properties/dev-null.ts` |
+| `os.endianness()` | `manifest:os.endianness` |
 | `os.freemem()` | `manifest:os.freemem` |
+| `os.getPriority([pid])` | `manifest:os.getPriority`; `test-parity/node-suite/os/methods/priority.ts` |
 | `os.homedir()` | `manifest:os.homedir` |
 | `os.hostname()` | `manifest:os.hostname` |
+| `os.loadavg()` | `manifest:os.loadavg` |
+| `os.machine()` | `manifest:os.machine`; `test-parity/node-suite/os/methods/endianness-machine.ts` |
 | `os.networkInterfaces()` | `manifest:os.networkInterfaces` |
 | `os.platform()` | `manifest:os.platform` |
 | `os.release()` | `manifest:os.release` |
+| `os.setPriority([pid, ]priority)` | `manifest:os.setPriority`; `test-parity/node-suite/os/methods/priority.ts` |
 | `os.tmpdir()` | `manifest:os.tmpdir` |
 | `os.totalmem()` | `manifest:os.totalmem` |
 | `os.type()` | `manifest:os.type` |
 | `os.uptime()` | `manifest:os.uptime` |
 | `os.userInfo([options])` | `manifest:os.userInfo` |
+| `os.version()` | `manifest:os.version`; `test-parity/node-suite/os/methods/version.ts` |
 | `os.EOL` | `expr:OsEOL` |
+| `os.constants` | `manifest:os.constants`; `test-parity/node-suite/os/constants/` |
 
 ### node:fs
 
