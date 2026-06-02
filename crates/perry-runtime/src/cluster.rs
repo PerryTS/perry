@@ -48,6 +48,11 @@ thread_local! {
 
 static CLUSTER_INIT: Once = Once::new();
 
+fn empty_object_value() -> f64 {
+    let obj = js_object_alloc(0, 0);
+    f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits())
+}
+
 pub fn cluster_property(property: &str) -> Option<f64> {
     ensure_cluster_runtime();
 
@@ -74,6 +79,9 @@ pub fn cluster_property(property: &str) -> Option<f64> {
         "settings" => Some(settings_value()),
         "schedulingPolicy" | "SCHED_RR" => Some(2.0),
         "SCHED_NONE" => Some(1.0),
+        "_events" => Some(empty_object_value()),
+        "_eventsCount" => Some(0.0),
+        "_maxListeners" => Some(TAG_UNDEFINED_F64),
         "on" | "addListener" => Some(TAG_UNDEFINED_F64),
         _ => None,
     }

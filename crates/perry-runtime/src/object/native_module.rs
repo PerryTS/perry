@@ -1640,7 +1640,88 @@ const CHILD_PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"spawnSync",
 ];
 
+const CLUSTER_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"SCHED_NONE",
+    b"SCHED_RR",
+    b"Worker",
+    b"_events",
+    b"_eventsCount",
+    b"_maxListeners",
+    b"default",
+    b"disconnect",
+    b"fork",
+    b"isMaster",
+    b"isPrimary",
+    b"isWorker",
+    b"schedulingPolicy",
+    b"settings",
+    b"setupMaster",
+    b"setupPrimary",
+    b"workers",
+];
+
+const CLUSTER_DEFAULT_KEYS: &[&[u8]] = &[
+    b"_events",
+    b"_eventsCount",
+    b"_maxListeners",
+    b"isWorker",
+    b"isMaster",
+    b"isPrimary",
+    b"Worker",
+    b"workers",
+    b"settings",
+    b"SCHED_NONE",
+    b"SCHED_RR",
+    b"schedulingPolicy",
+    b"setupPrimary",
+    b"setupMaster",
+    b"fork",
+    b"disconnect",
+];
+
+const STREAM_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"isDestroyed",
+    b"isDisturbed",
+    b"isErrored",
+    b"isReadable",
+    b"isWritable",
+    b"Readable",
+    b"Writable",
+    b"Duplex",
+    b"Transform",
+    b"PassThrough",
+    b"duplexPair",
+    b"pipeline",
+    b"addAbortSignal",
+    b"finished",
+    b"destroy",
+    b"compose",
+    b"setDefaultHighWaterMark",
+    b"getDefaultHighWaterMark",
+    b"promises",
+    b"Stream",
+    b"_isArrayBufferView",
+    b"_isUint8Array",
+    b"_uint8ArrayToBuffer",
+];
+
 const PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"_debugEnd",
+    b"_debugProcess",
+    b"_events",
+    b"_eventsCount",
+    b"_exiting",
+    b"_fatalException",
+    b"_getActiveHandles",
+    b"_getActiveRequests",
+    b"_kill",
+    b"_linkedBinding",
+    b"_maxListeners",
+    b"_preload_modules",
+    b"_rawDebug",
+    b"_startProfilerIdleNotifier",
+    b"_stopProfilerIdleNotifier",
+    b"_tickCallback",
     b"abort",
     b"addListener",
     b"addUncaughtExceptionCaptureCallback",
@@ -1648,12 +1729,15 @@ const PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"argv",
     b"argv0",
     b"arch",
+    b"binding",
     b"chdir",
     b"config",
     b"cpuUsage",
     b"cwd",
     b"debugPort",
     b"default",
+    b"dlopen",
+    b"domain",
     b"env",
     b"eventNames",
     b"execArgv",
@@ -1673,6 +1757,7 @@ const PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"off",
     b"on",
     b"once",
+    b"openStdin",
     b"pid",
     b"platform",
     b"ppid",
@@ -1684,6 +1769,7 @@ const PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"removeListener",
     b"report",
     b"resourceUsage",
+    b"reallyExit",
     b"setMaxListeners",
     b"setSourceMapsEnabled",
     b"sourceMapsEnabled",
@@ -1694,6 +1780,22 @@ const PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
 ];
 
 const PROCESS_DEFAULT_KEYS: &[&[u8]] = &[
+    b"_debugEnd",
+    b"_debugProcess",
+    b"_events",
+    b"_eventsCount",
+    b"_exiting",
+    b"_fatalException",
+    b"_getActiveHandles",
+    b"_getActiveRequests",
+    b"_kill",
+    b"_linkedBinding",
+    b"_maxListeners",
+    b"_preload_modules",
+    b"_rawDebug",
+    b"_startProfilerIdleNotifier",
+    b"_stopProfilerIdleNotifier",
+    b"_tickCallback",
     b"abort",
     b"addListener",
     b"addUncaughtExceptionCaptureCallback",
@@ -1701,11 +1803,14 @@ const PROCESS_DEFAULT_KEYS: &[&[u8]] = &[
     b"argv",
     b"argv0",
     b"arch",
+    b"binding",
     b"chdir",
     b"config",
     b"cpuUsage",
     b"cwd",
     b"debugPort",
+    b"dlopen",
+    b"domain",
     b"env",
     b"eventNames",
     b"execArgv",
@@ -1725,6 +1830,7 @@ const PROCESS_DEFAULT_KEYS: &[&[u8]] = &[
     b"off",
     b"on",
     b"once",
+    b"openStdin",
     b"pid",
     b"platform",
     b"ppid",
@@ -1736,6 +1842,7 @@ const PROCESS_DEFAULT_KEYS: &[&[u8]] = &[
     b"removeListener",
     b"report",
     b"resourceUsage",
+    b"reallyExit",
     b"setMaxListeners",
     b"setSourceMapsEnabled",
     b"sourceMapsEnabled",
@@ -2498,6 +2605,9 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "dns/promises.default" => Some(DNS_PROMISES_DEFAULT_KEYS),
         "child_process" => Some(CHILD_PROCESS_NAMESPACE_KEYS),
         "child_process.default" => Some(CHILD_PROCESS_DEFAULT_KEYS),
+        "cluster" => Some(CLUSTER_NAMESPACE_KEYS),
+        "cluster.default" => Some(CLUSTER_DEFAULT_KEYS),
+        "stream" => Some(STREAM_NAMESPACE_KEYS),
         "process" => Some(PROCESS_DEFAULT_KEYS),
         "process.namespace" => Some(PROCESS_NAMESPACE_KEYS),
         "process.default" => Some(PROCESS_DEFAULT_KEYS),
@@ -3356,6 +3466,23 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("crypto", "scryptSync") => Some(3),
         ("url", "Url") => Some(0),
         ("url", "resolveObject") => Some(2),
+        ("process", "binding" | "_linkedBinding") => Some(1),
+        (
+            "process",
+            "dlopen"
+            | "_rawDebug"
+            | "_debugProcess"
+            | "_debugEnd"
+            | "_startProfilerIdleNotifier"
+            | "_stopProfilerIdleNotifier"
+            | "reallyExit"
+            | "_tickCallback"
+            | "_getActiveHandles"
+            | "_getActiveRequests"
+            | "openStdin"
+            | "_kill",
+        ) => Some(0),
+        ("process", "_fatalException") => Some(2),
         ("process", "setSourceMapsEnabled") => Some(1),
         (
             "process",
@@ -3387,14 +3514,32 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("net", "BlockList" | "SocketAddress") => Some(0),
         // #3720: `http2.performServerHandshake(socket[, options])` — length 1.
         ("http2", "performServerHandshake") => Some(1),
+        ("http2", "getDefaultSettings") => Some(0),
+        ("http2", "getPackedSettings" | "getUnpackedSettings") => Some(1),
         // #3905: Node `.length` — connect(authority,options,listener)=3,
         // createServer(options,handler)=2.
         ("http2", "connect") => Some(3),
-        ("http2", "createServer") => Some(2),
+        ("http2", "createServer" | "createSecureServer") => Some(2),
         // #3697: node:https module-level exports (Node `.length`).
         ("https", "request") => Some(0),
         ("https", "get") => Some(3),
         ("https", "Agent") => Some(1),
+        (
+            "stream",
+            "isDestroyed"
+            | "isDisturbed"
+            | "isErrored"
+            | "isReadable"
+            | "isWritable"
+            | "getDefaultHighWaterMark"
+            | "_isArrayBufferView"
+            | "_isUint8Array"
+            | "_uint8ArrayToBuffer",
+        ) => Some(1),
+        ("stream", "finished") => Some(3),
+        ("stream", "addAbortSignal" | "destroy" | "setDefaultHighWaterMark") => Some(2),
+        ("stream", "compose" | "pipeline") => Some(0),
+        ("stream", "duplexPair") => Some(1),
         // #3712: node:http module-level helper exports.
         ("http", "validateHeaderName" | "validateHeaderValue") => Some(2),
         ("http", "setMaxIdleHTTPParsers" | "setGlobalProxyFromEnv") => Some(1),
@@ -4389,6 +4534,21 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("process", "setMaxListeners")
             | ("process", "getMaxListeners")
             | ("process", "getBuiltinModule")
+            | ("process", "binding")
+            | ("process", "_linkedBinding")
+            | ("process", "dlopen")
+            | ("process", "_rawDebug")
+            | ("process", "_debugProcess")
+            | ("process", "_debugEnd")
+            | ("process", "_startProfilerIdleNotifier")
+            | ("process", "_stopProfilerIdleNotifier")
+            | ("process", "reallyExit")
+            | ("process", "_fatalException")
+            | ("process", "_tickCallback")
+            | ("process", "_getActiveHandles")
+            | ("process", "_getActiveRequests")
+            | ("process", "openStdin")
+            | ("process", "_kill")
             | ("process", "cpuUsage")
             | ("process", "resourceUsage")
             | ("process", "getActiveResourcesInfo")
@@ -5062,6 +5222,9 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("http2", "createServer")
             | ("http2", "createSecureServer")
             | ("http2", "Server")
+            | ("http2", "getDefaultSettings")
+            | ("http2", "getPackedSettings")
+            | ("http2", "getUnpackedSettings")
             // #3905: `http2.connect(authority[, options][, listener])` client
             // session factory reads as a function.
             | ("http2", "connect")

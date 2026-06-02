@@ -18,8 +18,14 @@ pub(crate) fn is_global_constructor_expr(e: &Expr, name: &str) -> bool {
         )
 }
 
+fn is_process_module_ref_name(module: &str) -> bool {
+    let module = module.strip_prefix("node:").unwrap_or(module);
+    matches!(module, "process" | "process.namespace" | "process.default")
+}
+
 fn is_process_namespace_version_property(object: &Expr, property: &str) -> bool {
-    property == "version" && matches!(object, Expr::NativeModuleRef(module) if module == "process")
+    property == "version"
+        && matches!(object, Expr::NativeModuleRef(module) if is_process_module_ref_name(module))
 }
 
 /// Refine an `Any`-typed local's static type based on its initializer

@@ -845,6 +845,27 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             {
                                 return Ok(Expr::String("function".to_string()));
                             }
+                            let is_process_object = ctx.lookup_local(obj_name).is_none()
+                                && (obj_name == "process"
+                                    || matches!(
+                                        ctx.lookup_builtin_module_alias(obj_name),
+                                        Some("process" | "node:process")
+                                    )
+                                    || matches!(
+                                        ctx.lookup_native_module(obj_name),
+                                        Some((
+                                            "process"
+                                                | "node:process"
+                                                | "process.namespace"
+                                                | "node:process.namespace"
+                                                | "process.default"
+                                                | "node:process.default",
+                                            None
+                                        ))
+                                    ));
+                            if is_process_object && prop_name == "sourceMapsEnabled" {
+                                return Ok(Expr::String("boolean".to_string()));
+                            }
                             // #1410 / #1400 / #1398 / #1409: `typeof
                             // process.ref` / `typeof process.unref` /
                             // `typeof process.setSourceMapsEnabled` /
@@ -855,7 +876,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             // through to the generic process member path
                             // (returns 0 / "number" typeof), so fold to
                             // "function" here to match Node.
-                            if obj_name == "process"
+                            if is_process_object
                                 && matches!(
                                     prop_name,
                                     "ref"
@@ -867,7 +888,6 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                         | "setUncaughtExceptionCaptureCallback"
                                         | "loadEnvFile"
                                 )
-                                && ctx.lookup_local("process").is_none()
                             {
                                 return Ok(Expr::String("function".to_string()));
                             }

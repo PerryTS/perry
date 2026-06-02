@@ -516,6 +516,27 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "constrainedMemory") => crate::process::js_process_constrained_memory(),
         ("process", "resourceUsage") => crate::process::js_process_resource_usage(),
         ("process", "getActiveResourcesInfo") => crate::process::js_process_active_resources_info(),
+        ("process", "binding") => crate::process::js_process_binding(arg(0)),
+        ("process", "_linkedBinding") => crate::process::js_process_linked_binding(arg(0)),
+        ("process", "dlopen") => crate::process::js_process_dlopen(),
+        ("process", "_rawDebug") => crate::process::js_process_raw_debug(),
+        ("process", "_debugProcess") => crate::process::js_process_debug_process(),
+        ("process", "_debugEnd") => crate::process::js_process_debug_end(),
+        ("process", "_startProfilerIdleNotifier") => {
+            crate::process::js_process_start_profiler_idle_notifier()
+        }
+        ("process", "_stopProfilerIdleNotifier") => {
+            crate::process::js_process_stop_profiler_idle_notifier()
+        }
+        ("process", "reallyExit") => crate::process::js_process_really_exit(),
+        ("process", "_fatalException") => {
+            crate::process::js_process_fatal_exception(arg(0), arg(1))
+        }
+        ("process", "_tickCallback") => crate::process::js_process_tick_callback(),
+        ("process", "_getActiveHandles") => crate::process::js_process_get_active_handles(),
+        ("process", "_getActiveRequests") => crate::process::js_process_get_active_requests(),
+        ("process", "openStdin") => crate::process::js_process_open_stdin(),
+        ("process", "_kill") => crate::process::js_process_internal_kill(),
         ("process", "getuid") => crate::process::js_process_getuid(),
         ("process", "geteuid") => crate::process::js_process_geteuid(),
         ("process", "getgid") => crate::process::js_process_getgid(),

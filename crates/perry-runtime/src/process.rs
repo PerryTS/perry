@@ -1189,6 +1189,13 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         "report" => process_report_value(),
         "sourceMapsEnabled" => js_process_source_maps_enabled(),
         "title" => js_process_title(),
+        "_eval" => undefined_value(),
+        "_events" => empty_object_value(),
+        "_eventsCount" => 0.0,
+        "_exiting" => bool_value(false),
+        "_maxListeners" => undefined_value(),
+        "_preload_modules" => module_array_value(&[]),
+        "domain" => f64::from_bits(crate::value::TAG_NULL),
         _ => return None,
     })
 }
@@ -2019,6 +2026,90 @@ pub extern "C" fn js_process_active_resources_info() -> f64 {
         arr = crate::array::js_array_push(arr, JSValue::string_ptr(s));
     }
     f64::from_bits(JSValue::pointer(arr as *const u8).bits())
+}
+
+fn empty_array_value() -> f64 {
+    let arr = crate::array::js_array_alloc_with_length(0);
+    f64::from_bits(JSValue::array_ptr(arr).bits())
+}
+
+fn empty_object_value() -> f64 {
+    module_object_value(crate::object::js_object_alloc(0, 0))
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_binding(_name: f64) -> f64 {
+    empty_object_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_linked_binding(_name: f64) -> f64 {
+    empty_object_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_dlopen() -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_raw_debug() -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_debug_process() -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_debug_end() -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_start_profiler_idle_notifier() -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_stop_profiler_idle_notifier() -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_really_exit() -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_fatal_exception(_err: f64, _from_promise: f64) -> f64 {
+    bool_value(false)
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_tick_callback() -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_get_active_handles() -> f64 {
+    empty_array_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_get_active_requests() -> f64 {
+    empty_array_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_open_stdin() -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_internal_kill() -> f64 {
+    undefined_value()
 }
 
 /// process.cpuUsage(prior?) -> { user, system } µs.
