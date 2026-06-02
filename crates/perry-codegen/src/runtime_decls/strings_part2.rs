@@ -95,6 +95,9 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_typed_array_new_from_array", I64, &[I32, I64]);
     // Runtime-dispatched constructor: handles numeric length OR source-array arg.
     module.declare_function("js_typed_array_new", I64, &[I32, DOUBLE]);
+    // #4103: `new TA(buffer, byteOffset, length?)` view constructor with spec
+    // offset/length validation (kind, source, offset_value, length_value).
+    module.declare_function("js_typed_array_view", I64, &[I32, DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_typed_array_length", I32, &[I64]);
     module.declare_function("js_typed_array_get", DOUBLE, &[I64, I32]);
     // #2063: string / dynamic-key `ta[key]` [[Get]] dispatcher (canonical

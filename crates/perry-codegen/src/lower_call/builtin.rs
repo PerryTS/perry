@@ -151,6 +151,36 @@ pub(super) fn lower_builtin_new(
             );
             Ok(Some(nanbox_pointer_inline(ctx.block(), &handle)))
         }
+        // #4103: `new TA(buffer, byteOffset, length?)` view constructor for the
+        // non-`Uint8Array` kinds. The runtime applies the spec offset/length
+        // bounds + alignment checks (RangeError) — Uint8Array piggybacks on the
+        // BufferHeader path above. Pass the raw NaN-boxed offset/length so
+        // ToIndex (and the `undefined` length default) is honored in the runtime.
+        name @ ("Int8Array" | "Uint16Array" | "Int16Array" | "Uint32Array" | "Int32Array"
+        | "Float32Array" | "Float64Array" | "Uint8ClampedArray" | "BigInt64Array"
+        | "BigUint64Array" | "Float16Array")
+            if args.len() >= 2 =>
+        {
+            let kind = typed_array_view_kind(name);
+            let source = lower_expr(ctx, &args[0])?;
+            let offset_box = lower_expr(ctx, &args[1])?;
+            let length_box = if args.len() >= 3 {
+                lower_expr(ctx, &args[2])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let handle = ctx.block().call(
+                I64,
+                "js_typed_array_view",
+                &[
+                    (I32, &kind.to_string()),
+                    (DOUBLE, &source),
+                    (DOUBLE, &offset_box),
+                    (DOUBLE, &length_box),
+                ],
+            );
+            Ok(Some(nanbox_pointer_inline(ctx.block(), &handle)))
+        }
         // Minimal DataView support for BufferSource consumers such as
         // StringDecoder: Perry models ArrayBuffer/Uint8Array storage as a
         // BufferHeader, so `new DataView(buffer)` can create a registered view
@@ -1460,5 +1490,26 @@ pub(super) fn lower_builtin_new(
         }
 
         _ => Ok(None),
+    }
+}
+
+/// Map a typed-array constructor name to its runtime `KIND_*` integer (mirrors
+/// `perry_runtime::typedarray::KIND_*`). Used by the `#4103` view-constructor
+/// arm to tell `js_typed_array_view` which element type to build.
+fn typed_array_view_kind(name: &str) -> i32 {
+    match name {
+        "Int8Array" => 0,
+        "Uint8Array" => 1,
+        "Int16Array" => 2,
+        "Uint16Array" => 3,
+        "Int32Array" => 4,
+        "Uint32Array" => 5,
+        "Float32Array" => 6,
+        "Float64Array" => 7,
+        "Uint8ClampedArray" => 8,
+        "BigInt64Array" => 9,
+        "BigUint64Array" => 10,
+        "Float16Array" => 11,
+        _ => 7,
     }
 }

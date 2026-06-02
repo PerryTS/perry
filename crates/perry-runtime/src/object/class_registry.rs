@@ -641,6 +641,14 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
         let is_global_builtin_func = func_ptr
             == global_this_builtin_noop_thunk as *const u8 as usize
             || func_ptr == typed_array_constructor_call_thunk as *const u8 as usize
+            // #4102: `Array`/`Object`/`Date` constructor *values* carry their own
+            // coercion thunks (not the shared noop thunk), so the dynamic
+            // `instanceof` / reflective `@@hasInstance` path could not recover
+            // their name. Accept those thunks too; the singleton walk below maps
+            // each back to "Array"/"Object"/"Date".
+            || func_ptr == global_this_array_thunk as *const u8 as usize
+            || func_ptr == global_this_object_thunk as *const u8 as usize
+            || func_ptr == global_this_date_thunk as *const u8 as usize
             || func_ptr == webcrypto_illegal_constructor_thunk as *const u8 as usize
             || func_ptr
                 == crate::messaging::js_message_channel_constructor_call_error as *const u8

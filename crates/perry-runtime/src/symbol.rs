@@ -1346,6 +1346,25 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             }
         }
     }
+    // #4102: every function value inherits `%Function.prototype%`, so reading a
+    // well-known symbol off a constructor *value* whose own / explicit-prototype
+    // lookups missed must fall back to Function.prototype's own symbols. Most
+    // importantly this exposes `@@hasInstance` (#4098), so
+    // `(Array as any)[Symbol.hasInstance]([])` resolves the installed
+    // `OrdinaryHasInstance` thunk instead of `undefined`. Perry does not link a
+    // closure's static prototype to Function.prototype, so this is the hop that
+    // models that inheritance for the symbol-read path.
+    if (bits >> 48) == 0x7FFD {
+        let ptr = crate::value::js_nanbox_get_pointer(obj_f64) as usize;
+        if ptr != 0 && crate::closure::is_closure_ptr(ptr) {
+            let func_proto = crate::object::builtin_prototype_value("Function");
+            if (func_proto.to_bits() >> 48) == 0x7FFD {
+                if let Some(v) = own_symbol_property(func_proto, sym_f64) {
+                    return v;
+                }
+            }
+        }
+    }
     // #1545: Web ReadableStream handles are normal finite numbers, not
     // heap objects. Expose `rs[Symbol.asyncIterator]` as the same bound method
     // as `rs.values`, matching Node's Web Streams surface while leaving

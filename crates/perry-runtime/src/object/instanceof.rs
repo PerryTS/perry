@@ -203,13 +203,18 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             // the compile-time `instanceof` operator emits — see
             // perry-codegen/src/expr/instance_misc1.rs — which `js_instanceof`
             // resolves via the per-type registries (#3662). `Array`/`Object`/
-            // `Date` constructor *values* aren't identified here (they are not
-            // noop-thunk closures), so they stay a known gap for the dynamic
-            // path; the literal-RHS operator handles them at compile time.
+            // `Date` carry their own coercion thunks rather than the shared
+            // noop thunk; #4102 added those thunks to the
+            // `identify_global_builtin_constructor` allow-list so the dynamic /
+            // reflective path now resolves them here just like the literal-RHS
+            // operator does at compile time.
             "Map" => 0xFFFF0022,
             "Set" => 0xFFFF0023,
             "RegExp" => 0xFFFF0021,
             "ArrayBuffer" => 0xFFFF0025,
+            "Array" => 0xFFFF0024,
+            "Object" => 0xFFFF0050,
+            "Date" => 0xFFFF0020,
             "Error" => crate::error::CLASS_ID_ERROR,
             "TypeError" => crate::error::CLASS_ID_TYPE_ERROR,
             "RangeError" => crate::error::CLASS_ID_RANGE_ERROR,

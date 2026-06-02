@@ -94,7 +94,7 @@ pub(crate) extern "C" fn global_this_builtin_noop_thunk(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-extern "C" fn global_this_date_thunk(
+pub(crate) extern "C" fn global_this_date_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _arg: f64,
 ) -> f64 {
@@ -347,7 +347,7 @@ extern "C" fn global_this_string_thunk(
     crate::value::js_nanbox_string(string_ptr as i64)
 }
 
-extern "C" fn global_this_object_thunk(
+pub(crate) extern "C" fn global_this_object_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
 ) -> f64 {
