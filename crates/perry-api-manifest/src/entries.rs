@@ -3291,6 +3291,18 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("process", "stdout"),
     property("process", "stderr"),
     property("process", "env"),
+    property("process", "allowedNodeEnvironmentFlags"),
+    property("process", "argv0"),
+    property("process", "config"),
+    property("process", "debugPort"),
+    property("process", "execArgv"),
+    property("process", "execPath"),
+    property("process", "features"),
+    property("process", "finalization"),
+    property("process", "moduleLoadList"),
+    property("process", "release"),
+    property("process", "report"),
+    property("process", "title"),
     // ===========================================================
     // Class exports (constructors `new Foo(...)` from a module).
     // ===========================================================
