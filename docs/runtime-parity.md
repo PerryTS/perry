@@ -336,8 +336,8 @@ Bun column reflects [bun.sh/docs/runtime/nodejs-apis](https://bun.sh/docs/runtim
 | `filehandle.createReadStream([options])` | ✓ | ✓ |  |
 | `filehandle.createWriteStream([options])` | ✓ | ✓ |  |
 | `filehandle.datasync()` | ✓ | ✓ |  |
-| `filehandle.pull([...transforms][, options])` | ✓ | ⚠ | Experimental in Node |
-| `filehandle.pullSync([...transforms][, options])` | ✓ | ⚠ | Experimental in Node |
+| `filehandle.pull([...transforms][, options])` | ✓ | ⚠ | Experimental in Node; Perry supports no-transform source iteration |
+| `filehandle.pullSync([...transforms][, options])` | ✓ | ⚠ | Experimental in Node; Perry supports no-transform source iteration |
 | `filehandle.read(buffer, offset, length, position)` | ✓ | ✓ |  |
 | `filehandle.read([options])` | ✓ | ✓ |  |
 | `filehandle.read(buffer[, options])` | ✓ | ✓ |  |
@@ -354,7 +354,7 @@ Bun column reflects [bun.sh/docs/runtime/nodejs-apis](https://bun.sh/docs/runtim
 | `filehandle.write(string[, position[, encoding]])` | ✓ | ✓ |  |
 | `filehandle.writeFile(data, options)` | ✓ | ✓ |  |
 | `filehandle.writev(buffers[, position])` | ✓ | ✓ |  |
-| `filehandle.writer([options])` | ✓ | ⚠ | Newer API |
+| `filehandle.writer([options])` | ✓ | ⚠ | Newer API; Perry supports direct FileHandle writes |
 | `filehandle[Symbol.asyncDispose]()` | ✓ | ✓ |  |
 
 #### Events

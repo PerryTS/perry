@@ -1,0 +1,42 @@
+fh pull typeof: function 0
+fh pullSync typeof: function 0
+fh writer typeof: function 0
+fh pull data: abcdef
+fh pull first: ab
+fh pull batches positive: true
+fh pull uint8: true
+fh pull keep fd: true
+fh pull start limit: cde
+fh pull auto fd: -1
+fh pull current prefix: ab
+fh pull current data: cdef
+fh pullSync data: abcdef
+fh pullSync first: ab
+fh pullSync batches positive: true
+fh pullSync uint8: true
+fh pullSync keep fd: true
+fh pullSync start limit: bcde
+fh pullSync auto fd: -1
+fh pull closed code: ERR_INVALID_STATE
+fh pullSync closed code: ERR_INVALID_STATE
+fh writer closed code: ERR_INVALID_STATE
+fh pull autoClose code: ERR_INVALID_ARG_TYPE
+fh pull chunkSize code: ERR_OUT_OF_RANGE
+fh writer autoClose code: ERR_INVALID_ARG_TYPE
+fh writer keys: write,writev,writeSync,writevSync,end,endSync,fail
+fh writer method types: function function function function function function function
+fh writer writeSync: true
+fh writer writevSync: true
+fh writer endSync: 6
+fh writer sync fd alive: true
+fh writer sync data: abcdef
+fh writer write await: true
+fh writer writev await: true
+fh writer end await: 3
+fh writer async fd: -1
+fh writer async data: xyz
+fh writer limit first: true
+fh writer limit overflow: false
+fh writer limit async: true
+fh writer limit end: 3
+fh writer limit data: 123

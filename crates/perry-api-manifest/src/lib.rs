@@ -696,7 +696,27 @@ mod tests {
             "node:fs/promises::constants should be an object-valued property"
         );
 
-        for not_implemented in ["FileHandle", "Dir", "Dirent"] {
+        for name in ["pull", "pullSync", "writer"] {
+            let entry = module_has_symbol("node:fs/promises", name).unwrap_or_else(|| {
+                panic!("node:fs/promises missing FileHandle receiver method: {name}")
+            });
+            assert!(
+                matches!(
+                    entry.kind,
+                    ApiKind::Method {
+                        has_receiver: true,
+                        class_filter: Some("FileHandle")
+                    }
+                ),
+                "node:fs/promises::{name} should be a FileHandle receiver method"
+            );
+            assert!(
+                !module_has_public_named_export("node:fs/promises", name),
+                "node:fs/promises::{name} should stay out of named exports"
+            );
+        }
+
+        for not_implemented in ["Dir", "Dirent"] {
             assert!(
                 module_has_symbol("node:fs/promises", not_implemented).is_none(),
                 "node:fs/promises::{not_implemented} should stay out of the manifest until runtime-backed"

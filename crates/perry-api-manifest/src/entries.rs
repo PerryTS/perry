@@ -3666,9 +3666,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- node:fs/promises direct submodule (#2728). Only the named exports
     // Perry actually backs with runtime thunks (see
     // `perry-runtime::node_submodules::fs_promises`) are declared. FileHandle
-    // methods (ftruncate/fchown/futimes etc.) are intentionally omitted — they
-    // are tracked separately (#2133). The parent `fs.promises` namespace above
-    // still resolves to the same surface.
+    // receiver-only methods are represented with class filters when runtime
+    // backed; the parent `fs.promises` namespace above still resolves to the
+    // same surface.
     property("fs/promises", "default"),
     property("fs/promises", "constants"),
     method("fs/promises", "access", false, None),
@@ -3703,6 +3703,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fs/promises", "utimes", false, None),
     method("fs/promises", "watch", false, None),
     method("fs/promises", "writeFile", false, None),
+    method("fs/promises", "pull", true, Some("FileHandle")),
+    method("fs/promises", "pullSync", true, Some("FileHandle")),
+    method("fs/promises", "writer", true, Some("FileHandle")),
     // --- console (Node global console exposed as node:console too). ---
     class("console", "Console"),
     method("console", "log", false, None),

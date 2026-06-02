@@ -7,8 +7,8 @@ reviewed upstream sources, and the follow-up gap list.
 
 ## Current coverage
 
-- `node:fs/promises`: 80 fixture files, with 79 parity-pass fixtures and 1 host-Node `node_fail` fixture.
-- Full reconciliation run: 79 parity passes, 0 parity failures, 0 compile failures, and 1 host Node `node_fail`.
-- Report: `test-parity/reports/parity_report_20260531_231620.json`
+- `node:fs/promises`: 81 fixture files, with 77 parity-pass fixtures, 4 parity-fail fixtures, and 1 host-Node `node_fail` fixture.
+- Full reconciliation run: 77 parity passes, 4 parity failures, 0 compile failures, and 1 host Node `node_fail`.
+- Report: `test-parity/reports/parity_report_20260602_140649.json`
 
-The direct submodule manifest rows are present for the runtime-backed promise exports, including `mkdtempDisposable`, `glob`, `watch`, and `constants`. Covered promise fixtures include Node-shaped SystemError metadata (`err.errno`, `err.code`, `err.syscall`, `err.path`, and `err.dest`) for one-path and two-path rejection cases. The remaining unsupported FileHandle tail APIs are `pull`, `pullSync`, and `writer` (#3952).
+The direct submodule manifest rows are present for the runtime-backed promise exports, including `mkdtempDisposable`, `glob`, `watch`, and `constants`. Covered promise fixtures include Node-shaped SystemError metadata (`err.errno`, `err.code`, `err.syscall`, `err.path`, and `err.dest`) for one-path and two-path rejection cases. FileHandle `pull`, `pullSync`, and `writer` are covered for no-transform source/writer paths (#3952); transform pipelines remain outside the current support boundary. Current non-FileHandle parity failures are `arg-validation`, `glob/async-iterator`, `imports/namespace-default-shape`, and `readlink/encoding-pathlike`.
