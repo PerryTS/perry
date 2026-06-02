@@ -537,7 +537,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating
+            // (validated up front so even an empty array throws, per spec).
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             // Load length (null-guarded).
             let len_i32 = blk.safe_load_i32_from_ptr(&arr_handle);
             // Loop: for i = 0; i < len; i++

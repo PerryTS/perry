@@ -438,19 +438,22 @@ unsafe fn dispatch_typed_array_method(
             f64::NAN
         }
     };
-    let arg_closure = |i: usize| -> *const crate::closure::ClosureHeader {
-        if i < args_len && !args_ptr.is_null() {
-            let v = *args_ptr.add(i);
-            let bits = v.to_bits();
-            let tag = (bits >> 48) as u16;
-            if tag == 0x7FFD {
-                (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::closure::ClosureHeader
-            } else {
-                std::ptr::null()
-            }
+    // #4091: validate the 1st argument is callable, throwing a spec `TypeError`
+    // otherwise (this dynamic dispatch tower is the inline-`new` /
+    // `Uint8Array`-local path, where the boxed callback is still available).
+    // `map` uses %TypedArray%.prototype.map's distinct non-callable rendering.
+    let validate_cb = |map_form: bool| -> *const crate::closure::ClosureHeader {
+        let boxed = if args_len >= 1 && !args_ptr.is_null() {
+            *args_ptr
         } else {
-            std::ptr::null()
-        }
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        };
+        let p = if map_form {
+            crate::array::js_validate_array_map_callback(ta as i64, boxed)
+        } else {
+            crate::array::js_validate_array_callback(boxed)
+        };
+        p as *const crate::closure::ClosureHeader
     };
     let r = match method_name {
         "length" => crate::typedarray::js_typed_array_length(ta) as f64,
@@ -520,21 +523,9 @@ unsafe fn dispatch_typed_array_method(
             };
             f64::from_bits(crate::typedarray::js_typed_array_with(ta, idx, val) as u64)
         }
-        "findLast" => {
-            let cb = arg_closure(0);
-            if cb.is_null() {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            } else {
-                crate::typedarray::js_typed_array_find_last(ta, cb)
-            }
-        }
+        "findLast" => crate::typedarray::js_typed_array_find_last(ta, validate_cb(false)),
         "findLastIndex" => {
-            let cb = arg_closure(0);
-            if cb.is_null() {
-                -1.0
-            } else {
-                crate::typedarray::js_typed_array_find_last_index(ta, cb)
-            }
+            crate::typedarray::js_typed_array_find_last_index(ta, validate_cb(false))
         }
         // #2797/#2798/#2799: callback-bearing %TypedArray% methods. The codegen
         // lowerers only fire for receivers it can statically prove are plain
@@ -542,18 +533,18 @@ unsafe fn dispatch_typed_array_method(
         // where these arms previously fell through to the undefined catch-all
         // (so `ta.map`/`ta.reduce`/`ta.find` silently no-op'd).
         "map" => {
-            let result = crate::typedarray::js_typed_array_map(ta, arg_closure(0));
+            let result = crate::typedarray::js_typed_array_map(ta, validate_cb(true));
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
         "filter" => {
-            let result = crate::typedarray::js_typed_array_filter(ta, arg_closure(0));
+            let result = crate::typedarray::js_typed_array_filter(ta, validate_cb(false));
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
-        "forEach" => crate::typedarray::js_typed_array_for_each(ta, arg_closure(0)),
-        "some" => crate::typedarray::js_typed_array_some(ta, arg_closure(0)),
-        "every" => crate::typedarray::js_typed_array_every(ta, arg_closure(0)),
-        "find" => crate::typedarray::js_typed_array_find(ta, arg_closure(0)),
-        "findIndex" => crate::typedarray::js_typed_array_find_index(ta, arg_closure(0)),
+        "forEach" => crate::typedarray::js_typed_array_for_each(ta, validate_cb(false)),
+        "some" => crate::typedarray::js_typed_array_some(ta, validate_cb(false)),
+        "every" => crate::typedarray::js_typed_array_every(ta, validate_cb(false)),
+        "find" => crate::typedarray::js_typed_array_find(ta, validate_cb(false)),
+        "findIndex" => crate::typedarray::js_typed_array_find_index(ta, validate_cb(false)),
         "values" | "Symbol.iterator" | "@@iterator" => {
             let iter =
                 crate::array::js_array_values_iter_obj(ta as *const crate::array::ArrayHeader);
@@ -581,7 +572,7 @@ unsafe fn dispatch_typed_array_method(
             }
         }
         "reduce" | "reduceRight" => {
-            let cb = arg_closure(0);
+            let cb = validate_cb(false);
             // initial value present only when a 2nd arg was passed.
             let (has_init, init) = if args_len >= 2 && !args_ptr.is_null() {
                 (1, *args_ptr.add(1))
@@ -1664,15 +1655,18 @@ pub unsafe extern "C" fn js_native_call_method(
                     }
                     "map" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr =
+                            crate::array::js_validate_array_map_callback(arr as i64, *args_ptr)
+                                as *const crate::closure::ClosureHeader;
                         let result = crate::array::js_array_map(arr, cb_ptr);
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
                     "filter" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         let result = crate::array::js_array_filter(arr, cb_ptr);
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
@@ -1689,8 +1683,9 @@ pub unsafe extern "C" fn js_native_call_method(
                     // pattern.
                     "forEach" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         crate::array::js_array_forEach(arr, cb_ptr);
                         return f64::from_bits(crate::value::TAG_UNDEFINED);
                     }
@@ -1812,39 +1807,45 @@ pub unsafe extern "C" fn js_native_call_method(
                     // `triggerMultiComponentHooks`, so on_set never fired.
                     "some" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         return crate::array::js_array_some(arr, cb_ptr);
                     }
                     "every" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         return crate::array::js_array_every(arr, cb_ptr);
                     }
                     "find" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         return crate::array::js_array_find(arr, cb_ptr);
                     }
                     "findIndex" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         let idx = crate::array::js_array_findIndex(arr, cb_ptr);
                         return idx as f64;
                     }
                     "findLast" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         return crate::array::js_array_find_last(arr, cb_ptr);
                     }
                     "findLastIndex" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         let idx = crate::array::js_array_find_last_index(arr, cb_ptr);
                         return idx as f64;
                     }
@@ -1882,8 +1883,9 @@ pub unsafe extern "C" fn js_native_call_method(
                     }
                     "reduce" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         let (has_init, init) = if args_len >= 2 {
                             (1i32, *args_ptr.add(1))
                         } else {
@@ -1893,8 +1895,9 @@ pub unsafe extern "C" fn js_native_call_method(
                     }
                     "reduceRight" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         let (has_init, init) = if args_len >= 2 {
                             (1i32, *args_ptr.add(1))
                         } else {
@@ -1917,8 +1920,9 @@ pub unsafe extern "C" fn js_native_call_method(
                     }
                     "flatMap" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         let result = crate::array::js_array_flatMap(arr, cb_ptr);
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }

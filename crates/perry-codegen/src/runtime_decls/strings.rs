@@ -924,6 +924,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_array_sort_with_comparator", I64, &[I64, I64]);
     // #2796: validate sort/toSorted comparator (function | undefined) before sorting.
     module.declare_function("js_validate_array_comparator", I64, &[DOUBLE]);
+    // #4091: non-callable callback validators for higher-order array /
+    // TypedArray methods. Standard form takes the boxed callback; the `map`
+    // form also takes the receiver handle so it can pick the typed-array
+    // message format.
+    module.declare_function("js_validate_array_callback", I64, &[DOUBLE]);
+    module.declare_function("js_validate_array_map_callback", I64, &[I64, DOUBLE]);
     // ES2023 immutable array methods
     module.declare_function("js_array_to_reversed", I64, &[I64]);
     module.declare_function("js_array_to_sorted_default", I64, &[I64]);
