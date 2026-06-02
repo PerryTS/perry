@@ -86,7 +86,6 @@
 "vm.runInNewContext(code[, contextObject[, options]])" = "Runtime eval in a new context remains open (#3128)."
 "vm.compileFunction(code[, params[, options]])" = "Runtime function construction remains open (#3130)."
 "vm.createContext([contextObject[, options]])" = "Runtime contextification remains open (#3128)."
-"vm.measureMemory([options])" = "V8 heap measurement remains open/inapplicable (#3284)."
 "util.compileFunction(...)" = "Same as vm.compileFunction — needs JS interpreter."
 
 # Out-of-scope — native addons / V8 internals.

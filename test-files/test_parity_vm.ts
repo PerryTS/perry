@@ -45,10 +45,10 @@ import * as vm from "node:vm";
 // SKIP: vm.runInNewContext(code[, contextObject[, options]]) — Runtime eval in a new context remains open (#3128).
 // SKIP: vm.runInThisContext(code[, options]) — Runtime eval remains open (#3127).
 // SKIP: vm.compileFunction(code[, params[, options]]) — Runtime function construction remains open (#3130).
-// SKIP: vm.measureMemory([options]) — V8 heap measurement remains open/inapplicable (#3284).
+// TODO(call): vm.measureMemory([options])
 
 // ── Constants ──
 console.log("vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER:", vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER);
 console.log("vm.constants.DONT_CONTEXTIFY:", vm.constants.DONT_CONTEXTIFY);
 
-// Coverage: 2 auto-emitted, 1 TODO, 29 skip-listed.
+// Coverage: 2 auto-emitted, 2 TODO, 28 skip-listed.
