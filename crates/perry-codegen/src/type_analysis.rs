@@ -369,6 +369,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
                         | "generateKeySync"
                         | "scryptSync"
                         | "pbkdf2Sync"
+                        | "argon2Sync"
                         | "hkdfSync"
                         | "randomBytes" => {
                             return Some(HirType::Named("Buffer".into()));

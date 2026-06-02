@@ -153,6 +153,181 @@ pub unsafe extern "C" fn js_crypto_scrypt_async(
     f64::from_bits(JSValue::undefined().bits())
 }
 
+struct NodeArgon2Params {
+    message: Vec<u8>,
+    nonce: Vec<u8>,
+    parallelism: u32,
+    tag_length: usize,
+    memory: u32,
+    passes: u32,
+}
+
+fn argon2_invalid_algorithm(algorithm: &str) -> ! {
+    let message = format!(
+        "The argument 'algorithm' must be one of: 'argon2d', 'argon2i', 'argon2id'. Received '{}'",
+        algorithm
+    );
+    perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
+}
+
+fn argon2_range_error(name: &str, min: u64, max: u64, received: u64) -> ! {
+    let message = format!(
+        "The value of \"parameters.{name}\" is out of range. It must be >= {min} && <= {max}. Received {received}"
+    );
+    perry_runtime::fs::validate::throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
+}
+
+fn argon2_type_error(name: &str) -> ! {
+    let message = format!(
+        "The \"parameters.{name}\" property must be of type string or an instance of ArrayBuffer, Buffer, TypedArray, or DataView. Received undefined"
+    );
+    perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+fn argon2_number_type_error(name: &str) -> ! {
+    let message = format!("The \"parameters.{name}\" property must be of type number.");
+    perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+unsafe fn argon2_value_bytes(bits: u64) -> Option<Vec<u8>> {
+    if let Some(s) = string_from_jsvalue(bits) {
+        return Some(s.into_bytes());
+    }
+    let addr = if (bits >> 48) >= 0x7FF8 {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else {
+        bits as usize
+    };
+    if addr < 0x1000 {
+        return None;
+    }
+    if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
+        let ta = addr as *const perry_runtime::typedarray::TypedArrayHeader;
+        return perry_runtime::typedarray::typed_array_bytes(ta).map(|bytes| bytes.to_vec());
+    }
+    if perry_runtime::buffer::is_registered_buffer(addr) {
+        return Some(bytes_from_ptr(addr as i64));
+    }
+    None
+}
+
+unsafe fn argon2_bytes_field(params_bits: u64, name: &[u8], display_name: &str) -> Vec<u8> {
+    let Some(bits) = object_field_bits(params_bits, name) else {
+        argon2_type_error(display_name);
+    };
+    argon2_value_bytes(bits).unwrap_or_else(|| argon2_type_error(display_name))
+}
+
+unsafe fn argon2_u32_field(
+    params_bits: u64,
+    name: &[u8],
+    display_name: &str,
+    min: u64,
+    max: u64,
+) -> u32 {
+    let Some(bits) = object_field_bits(params_bits, name) else {
+        argon2_number_type_error(display_name);
+    };
+    let value = JSValue::from_bits(bits);
+    let number = value.to_number();
+    if !number.is_finite() || number < min as f64 || number > max as f64 {
+        let received = if number.is_sign_negative() {
+            0
+        } else {
+            number as u64
+        };
+        argon2_range_error(display_name, min, max, received);
+    }
+    number as u32
+}
+
+unsafe fn parse_node_argon2_params(params_bits: f64) -> NodeArgon2Params {
+    let bits = params_bits.to_bits();
+    let message = argon2_bytes_field(bits, b"message", "message");
+    let nonce = argon2_bytes_field(bits, b"nonce", "nonce");
+    if nonce.len() < 8 {
+        argon2_range_error("nonce.byteLength", 8, u32::MAX as u64, nonce.len() as u64);
+    }
+    let parallelism = argon2_u32_field(bits, b"parallelism", "parallelism", 1, 0xFF_FFFF);
+    let memory_min = (parallelism as u64).saturating_mul(8).max(8);
+    let memory = argon2_u32_field(bits, b"memory", "memory", memory_min, u32::MAX as u64);
+    let passes = argon2_u32_field(bits, b"passes", "passes", 1, u32::MAX as u64);
+    let tag_length = argon2_u32_field(bits, b"tagLength", "tagLength", 4, u32::MAX as u64) as usize;
+
+    NodeArgon2Params {
+        message,
+        nonce,
+        parallelism,
+        tag_length,
+        memory,
+        passes,
+    }
+}
+
+unsafe fn node_argon2_key(
+    algorithm_ptr: i64,
+    params_bits: f64,
+) -> *mut perry_runtime::buffer::BufferHeader {
+    use argon2::{Algorithm, Argon2, Params, Version};
+
+    let algorithm = String::from_utf8_lossy(&bytes_from_ptr(algorithm_ptr)).to_string();
+    let algorithm_kind = match algorithm.as_str() {
+        "argon2d" => Algorithm::Argon2d,
+        "argon2i" => Algorithm::Argon2i,
+        "argon2id" => Algorithm::Argon2id,
+        _ => argon2_invalid_algorithm(&algorithm),
+    };
+
+    let params = parse_node_argon2_params(params_bits);
+    let argon_params = Params::new(
+        params.memory,
+        params.passes,
+        params.parallelism,
+        Some(params.tag_length),
+    )
+    .unwrap_or_else(|_| {
+        argon2_range_error(
+            "memory",
+            (params.parallelism as u64).saturating_mul(8).max(8),
+            u32::MAX as u64,
+            params.memory as u64,
+        )
+    });
+    let argon = Argon2::new(algorithm_kind, Version::V0x13, argon_params);
+    let mut out = vec![0u8; params.tag_length];
+    if argon
+        .hash_password_into(&params.message, &params.nonce, &mut out)
+        .is_err()
+    {
+        return alloc_buffer_from_slice(&[]);
+    }
+    alloc_buffer_from_slice(&out)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_argon2_sync(
+    algorithm_ptr: i64,
+    params_bits: f64,
+) -> *mut perry_runtime::buffer::BufferHeader {
+    node_argon2_key(algorithm_ptr, params_bits)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_argon2_async(
+    algorithm_ptr: i64,
+    params_bits: f64,
+    callback_bits: f64,
+) -> f64 {
+    let buf = node_argon2_key(algorithm_ptr, params_bits);
+    let value = if buf.is_null() {
+        f64::from_bits(JSValue::undefined().bits())
+    } else {
+        f64::from_bits(JSValue::pointer(buf as *const u8).bits())
+    };
+    call_node_style_callback2(callback_bits, f64::from_bits(JSValue::null().bits()), value);
+    f64::from_bits(JSValue::undefined().bits())
+}
+
 /// Constant-time equality for equal-length byte inputs.
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_timing_safe_equal(a_bits: f64, b_bits: f64) -> f64 {

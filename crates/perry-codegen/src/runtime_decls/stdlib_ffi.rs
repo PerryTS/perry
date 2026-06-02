@@ -939,6 +939,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // crypto.hkdfSync(digest, ikm, salt, info, keylen) -> ArrayBuffer.
     module.declare_function("js_crypto_hkdf_sync", I64, &[I64, I64, I64, I64, DOUBLE]);
     module.declare_function("js_crypto_pbkdf2", I64, &[I64, I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_crypto_argon2_sync", I64, &[I64, DOUBLE]);
+    module.declare_function("js_crypto_argon2_async", DOUBLE, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_crypto_random_bytes_hex", I64, &[DOUBLE]);
     module.declare_function("js_crypto_random_nonce", I64, &[]);
     module.declare_function("js_crypto_scrypt", I64, &[I64, I64, DOUBLE]);

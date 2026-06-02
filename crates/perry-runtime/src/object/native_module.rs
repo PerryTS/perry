@@ -3468,6 +3468,8 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("crypto", "hkdfSync") => Some(5),
         ("crypto", "scrypt") => Some(4),
         ("crypto", "scryptSync") => Some(3),
+        ("crypto", "argon2") => Some(3),
+        ("crypto", "argon2Sync") => Some(2),
         ("url", "Url") => Some(0),
         ("url", "resolveObject") => Some(2),
         ("process", "binding" | "_linkedBinding") => Some(1),
@@ -5139,6 +5141,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("crypto", "Hmac")
             | ("crypto", "pbkdf2Sync")
             | ("crypto", "pbkdf2")
+            | ("crypto", "argon2Sync")
+            | ("crypto", "argon2")
             | ("crypto", "hash")
             | ("crypto", "hkdfSync")
             | ("crypto", "hkdf")

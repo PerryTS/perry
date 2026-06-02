@@ -1448,6 +1448,56 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
 
+        // crypto.argon2Sync(algorithm, parameters) -> Buffer.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "argon2Sync" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 2 {
+                return Ok(double_literal(0.0));
+            }
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let params_box = lower_expr(ctx, &args[1])?;
+            let blk = ctx.block();
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            let buf_handle = blk.call(
+                I64,
+                "js_crypto_argon2_sync",
+                &[(I64, &alg_handle), (DOUBLE, &params_box)],
+            );
+            Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
+
+        // crypto.argon2(algorithm, parameters, callback)
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "argon2" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 3 {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let params_box = lower_expr(ctx, &args[1])?;
+            let cb_box = lower_expr(ctx, &args[2])?;
+            let blk = ctx.block();
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_argon2_async",
+                &[(I64, &alg_handle), (DOUBLE, &params_box), (DOUBLE, &cb_box)],
+            ))
+        }
+
         // crypto.hkdfSync(algorithm, ikm, salt, info, keylen) -> Buffer.
         Expr::Call { callee, args, .. }
             if matches!(
