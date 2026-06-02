@@ -16,12 +16,39 @@ fn is_global_this_value(expr: &Expr) -> bool {
 const STREAM_CTOR_NAMES: [&str; 5] =
     ["Readable", "Writable", "Duplex", "Transform", "PassThrough"];
 
+/// #3663: the string argument of a `require("<literal>")` call, if any. Unlike
+/// `is_require_builtin_module` (whose allowlist is just fs/path/crypto), this
+/// returns the specifier verbatim so the caller can match the module it cares
+/// about (`"stream"`).
+fn require_literal_specifier(init: &ast::Expr) -> Option<String> {
+    let ast::Expr::Call(call) = init else {
+        return None;
+    };
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return None;
+    };
+    let ast::Expr::Ident(ident) = callee.as_ref() else {
+        return None;
+    };
+    if ident.sym.as_ref() != "require" {
+        return None;
+    }
+    let arg = call.args.first()?;
+    if arg.spread.is_some() {
+        return None;
+    }
+    let ast::Expr::Lit(ast::Lit::Str(s)) = arg.expr.as_ref() else {
+        return None;
+    };
+    s.value.as_str().map(|s| s.to_string())
+}
+
 /// #3663: resolve the builtin module that a destructuring RHS reads from.
 /// Handles `const { Readable } = require('stream')` (CJS), and the namespace
 /// forms `const { Readable } = stream` where `stream` is an `import * as` /
 /// `const stream = require('stream')` alias. Returns the canonical module name.
 fn destructure_builtin_module_source(ctx: &LoweringContext, init: &ast::Expr) -> Option<String> {
-    if let Some(module) = is_require_builtin_module(init) {
+    if let Some(module) = require_literal_specifier(init) {
         return Some(module);
     }
     if let ast::Expr::Ident(ident) = init {
