@@ -956,6 +956,11 @@ impl LoweringContext {
             .iter()
             .rev()
             .find(|(n, _, _)| n == name)
+            // `node:repl` constructors allocate real heap objects/errors with
+            // bound methods; routing them through handle-dispatch native
+            // getters turns ordinary fields like `Recoverable.err` into
+            // zero-arg FFI calls.
+            .filter(|(_, module, _)| module != "repl")
             .map(|(_, module, class)| (module.as_str(), class.as_str()))
             .or_else(|| {
                 // Check module-level instances (survive scope exits).
@@ -964,6 +969,7 @@ impl LoweringContext {
                     .iter()
                     .rev()
                     .find(|(n, _, _)| n == name)
+                    .filter(|(_, module, _)| module != "repl")
                     .map(|(_, module, class)| (module.as_str(), class.as_str()))
             })
     }

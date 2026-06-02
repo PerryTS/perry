@@ -130,6 +130,16 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         if module == "wasi" && method == "WASI" && crate::wasi::is_wasi_instance(value) {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
+        if module == "repl" {
+            let matched = match method.as_str() {
+                "Recoverable" => crate::node_repl::is_recoverable_value(value),
+                "REPLServer" => crate::node_repl::is_repl_server_value(value),
+                _ => false,
+            };
+            if matched {
+                return f64::from_bits(crate::value::TAG_TRUE);
+            }
+        }
         // #2689: `net.Stream` is an alias for `net.Socket`; both should match
         // a live socket handle via the runtime probe.
         if module == "net" && matches!(method.as_str(), "Socket" | "Stream") {

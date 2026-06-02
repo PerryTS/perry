@@ -650,6 +650,23 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
         if crate::closure::is_closure_ptr(ptr) {
             return js_closure_dynamic_keys(ptr);
         }
+        if ptr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+            unsafe {
+                let gc_header =
+                    (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                if (*gc_header).obj_type == crate::gc::GC_TYPE_ERROR {
+                    let props = crate::node_submodules::error_user_props(ptr);
+                    let arr = crate::array::js_array_alloc(props.len() as u32);
+                    let mut out = arr;
+                    for (name, _) in props {
+                        let key =
+                            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                        out = crate::array::js_array_push(out, JSValue::string_ptr(key));
+                    }
+                    return out;
+                }
+            }
+        }
         return js_object_keys(ptr as *const ObjectHeader);
     }
     crate::array::js_array_alloc(0)

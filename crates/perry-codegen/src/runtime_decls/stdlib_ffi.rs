@@ -14,6 +14,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // ========== node:vm ==========
     module.declare_function("js_vm_create_context", DOUBLE, &[DOUBLE]);
 
+    // ========== node:repl ==========
+    module.declare_function("js_repl_start", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_repl_repl_server_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_repl_recoverable_new", DOUBLE, &[DOUBLE]);
+
     // ========== worker_threads ==========
     module.declare_function("js_worker_threads_worker_new", DOUBLE, &[I64, DOUBLE]);
     module.declare_function(

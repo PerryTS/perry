@@ -2098,6 +2098,15 @@ const EVENTS_NAMESPACE_KEYS: &[&[u8]] = &[
 
 const VM_NAMESPACE_KEYS: &[&[u8]] = &[b"createContext"];
 
+const REPL_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"REPLServer",
+    b"REPL_MODE_SLOPPY",
+    b"REPL_MODE_STRICT",
+    b"Recoverable",
+    b"builtinModules",
+    b"start",
+];
+
 const WORKER_THREADS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"BroadcastChannel",
     b"MessageChannel",
@@ -2588,6 +2597,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         ]),
         "events" => Some(EVENTS_NAMESPACE_KEYS),
         "vm" => Some(VM_NAMESPACE_KEYS),
+        "repl" | "repl.default" => Some(REPL_NAMESPACE_KEYS),
         "worker_threads" => Some(WORKER_THREADS_NAMESPACE_KEYS),
         "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
         "readline/promises" => Some(&[b"Interface", b"Readline", b"createInterface"]),
@@ -2637,6 +2647,7 @@ fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
         "process.default" => Some("process"),
         "punycode.default" => Some("punycode"),
         "querystring.default" => Some("querystring"),
+        "repl.default" => Some("repl"),
         "url.default" => Some("url"),
         "util.default" => Some("util"),
         _ => None,
@@ -2660,6 +2671,7 @@ fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
         "process" => Some("process.default"),
         "punycode" => Some("punycode.default"),
         "querystring" => Some("querystring.default"),
+        "repl" => Some("repl.default"),
         "url" => Some("url.default"),
         "util" => Some("util.default"),
         _ => None,
@@ -2689,7 +2701,7 @@ fn cjs_default_export_value(module_name: &str) -> Option<f64> {
             "process".len(),
         )),
         "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "os" | "path"
-        | "path.posix" | "path.win32" | "punycode" | "querystring" | "url" | "util"
+        | "path.posix" | "path.win32" | "punycode" | "querystring" | "repl" | "url" | "util"
         | "inspector" | "inspector/promises" => create_cjs_default_namespace(module_name),
         _ => None,
     }
@@ -2751,6 +2763,8 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "punycode.ucs2"
             | "querystring"
             | "querystring.default"
+            | "repl"
+            | "repl.default"
             | "process"
             | "process.namespace"
             | "process.default"
@@ -3308,6 +3322,8 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("fs", "openAsBlob") => Some(1),
         ("fs", "_toUnixTimestamp") => Some(1),
         ("events", "init") => Some(1),
+        ("repl", "Recoverable") => Some(1),
+        ("repl", "REPLServer" | "start") => Some(6),
         ("wasi", "WASI") => Some(0),
         ("perf_hooks", "Performance") => Some(0),
         ("perf_hooks", "PerformanceEntry") => Some(0),
@@ -4924,6 +4940,9 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("v8.promiseHooks", "onAfter")
             | ("v8.promiseHooks", "onSettled")
             | ("v8.promiseHooks", "createHook")
+            | ("repl", "Recoverable")
+            | ("repl", "REPLServer")
+            | ("repl", "start")
     )
 }
 
@@ -6373,6 +6392,16 @@ pub(crate) unsafe fn get_native_module_constant(
                     "stream_promises".len() as u32,
                 )
             }),
+            _ => None,
+        },
+        "repl" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("repl"),
+            "builtinModules" => Some(crate::process::js_module_builtin_modules()),
+            "REPL_MODE_SLOPPY" => Some(crate::node_repl::repl_mode_sloppy()),
+            "REPL_MODE_STRICT" => Some(crate::node_repl::repl_mode_strict()),
+            "Recoverable" => Some(bound_native_callable_export_value("repl", "Recoverable")),
+            "REPLServer" => Some(bound_native_callable_export_value("repl", "REPLServer")),
+            "start" => Some(bound_native_callable_export_value("repl", "start")),
             _ => None,
         },
         "url" => match property {

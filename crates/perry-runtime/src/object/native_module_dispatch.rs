@@ -1868,6 +1868,11 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("v8.GCProfiler", "start") => f64::from_bits(JSValue::undefined().bits()),
         ("v8.GCProfiler", "stop") => crate::node_v8::js_v8_gc_profiler_report(),
 
+        // node:repl non-interactive server and constructor surface.
+        ("repl", "start") => crate::node_repl::js_repl_start(arg(0)),
+        ("repl", "REPLServer") => crate::node_repl::js_repl_repl_server_new(arg(0)),
+        ("repl", "Recoverable") => crate::node_repl::js_repl_recoverable_new(arg(0)),
+
         // #3680: `v8.Serializer` / `v8.DefaultSerializer` instance methods.
         // The registry id lives in field[1] of the namespace object; the
         // runtime re-derives it from the receiver value.

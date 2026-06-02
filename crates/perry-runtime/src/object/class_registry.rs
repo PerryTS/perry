@@ -1164,6 +1164,18 @@ pub unsafe extern "C" fn js_new_function_construct(
             };
             return crate::node_submodules::js_readline_promises_readline_new(output, options);
         }
+        if module == "repl" && matches!(method.as_str(), "Recoverable" | "REPLServer") {
+            let first = if !args_ptr.is_null() && args_len > 0 {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return if method == "Recoverable" {
+                crate::node_repl::js_repl_recoverable_new(first)
+            } else {
+                crate::node_repl::js_repl_repl_server_new(first)
+            };
+        }
         // #3663: `new Readable(opts)` (and Writable/Duplex/Transform/PassThrough)
         // where the constructor binding came through any aliasing path the
         // compiler can't resolve to a bare `Expr::New` — `const { Readable } =

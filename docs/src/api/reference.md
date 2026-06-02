@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2564 entries across 108 modules.
+Total: 2582 entries across 109 modules.
 
 ## Modules
 
@@ -86,6 +86,7 @@ Total: 2564 entries across 108 modules.
 - [`readline`](#readline)
 - [`readline/promises`](#readline-promises)
 - [`redis`](#redis)
+- [`repl`](#repl)
 - [`sharp`](#sharp)
 - [`slugify`](#slugify)
 - [`sqlite`](#sqlite)
@@ -2677,6 +2678,35 @@ Total: 2564 entries across 108 modules.
 ### Methods
 
 - `createClient` — module
+
+## `repl`
+
+### Classes
+
+- `REPLServer`
+- `Recoverable`
+
+### Methods
+
+- `REPLServer` — module
+- `Recoverable` — module
+- `addListener` — instance *(class: `REPLServer`)*
+- `clearBufferedCommand` — instance *(class: `REPLServer`)*
+- `defineCommand` — instance *(class: `REPLServer`)*
+- `displayPrompt` — instance *(class: `REPLServer`)*
+- `emit` — instance *(class: `REPLServer`)*
+- `on` — instance *(class: `REPLServer`)*
+- `once` — instance *(class: `REPLServer`)*
+- `setupHistory` — instance *(class: `REPLServer`)*
+- `start` — module
+- `write` — instance *(class: `REPLServer`)*
+
+### Properties
+
+- `REPL_MODE_SLOPPY`
+- `REPL_MODE_STRICT`
+- `builtinModules`
+- `default`
 
 ## `sharp`
 

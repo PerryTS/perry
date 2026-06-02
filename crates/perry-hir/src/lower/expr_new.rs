@@ -675,6 +675,25 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
 
+            let repl_constructor = ctx.lookup_native_module(&class_name).and_then(
+                |(module_name, export_name)| match (module_name, export_name) {
+                    ("repl", Some("Recoverable" | "REPLServer")) => {
+                        export_name.map(|name| (module_name.to_string(), name.to_string()))
+                    }
+                    _ => None,
+                },
+            );
+            if let Some((module_name, method_name)) = repl_constructor {
+                let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                return Ok(Expr::NewDynamic {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::NativeModuleRef(module_name)),
+                        property: method_name,
+                    }),
+                    args,
+                });
+            }
+
             if matches!(class_name.as_str(), "MIMEType" | "MIMEParams") {
                 if let Some((module_name, Some(method_name))) =
                     ctx.lookup_native_module(&class_name)

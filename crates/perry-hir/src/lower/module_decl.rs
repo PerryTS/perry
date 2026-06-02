@@ -563,7 +563,8 @@ pub(crate) fn lower_module_decl(
                                     // call routes through HANDLE_METHOD_DISPATCH back
                                     // to the same `dispatch_string_decoder` impl.
                                     let module_name = match (class_name, module_name.as_deref()) {
-                                        ("StringDecoder", Some("string_decoder")) => None,
+                                        ("StringDecoder", Some("string_decoder"))
+                                        | ("Recoverable" | "REPLServer", Some("repl")) => None,
                                         _ => module_name,
                                     };
                                     if let Some(native_module) = module_name {
@@ -625,7 +626,8 @@ pub(crate) fn lower_module_decl(
                                         // which is unusual but legal TS.
                                         let module_name = match (class_name, module_name.as_deref())
                                         {
-                                            ("StringDecoder", Some("string_decoder")) => None,
+                                            ("StringDecoder", Some("string_decoder"))
+                                            | ("Recoverable" | "REPLServer", Some("repl")) => None,
                                             _ => module_name,
                                         };
                                         if let Some(native_module) = module_name {
@@ -883,7 +885,9 @@ pub(crate) fn lower_module_decl(
                                     let native_info = ctx
                                         .lookup_native_module(class_name_str)
                                         .map(|(m, _)| m.to_string());
-                                    if let Some(module_name) = native_info {
+                                    if let Some(module_name) =
+                                        native_info.filter(|module_name| module_name != "repl")
+                                    {
                                         ctx.register_native_instance(
                                             name.clone(),
                                             module_name.clone(),

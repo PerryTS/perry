@@ -507,7 +507,10 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         // route through `js_instanceof_dynamic`, which derives the same
                         // `synthetic_class_id_for_function` that `new Foo()` stamps onto
                         // the instance (see js_new_function_construct).
-                        if ctx.lookup_local(name).is_some() || ctx.lookup_func(name).is_some() {
+                        if ctx.lookup_local(name).is_some()
+                            || ctx.lookup_func(name).is_some()
+                            || ctx.lookup_native_module(name).is_some()
+                        {
                             match lower_expr(ctx, &bin.right) {
                                 Ok(e) => Some(Box::new(e)),
                                 Err(_) => None,

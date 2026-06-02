@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1774 entries across 105 modules
+// Coverage: 1783 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3072,6 +3072,28 @@ declare module "redis" {
   export class Redis { [key: string]: any; }
   /** stdlib */
   export function createClient(...args: any[]): any;
+}
+
+declare module "repl" {
+  /** stdlib */
+  export class REPLServer { [key: string]: any; }
+  /** stdlib */
+  export class Recoverable { [key: string]: any; }
+  /** stdlib */
+  export const REPL_MODE_SLOPPY: any;
+  /** stdlib */
+  export const REPL_MODE_STRICT: any;
+  /** stdlib */
+  export const builtinModules: any;
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function REPLServer(...args: any[]): any;
+  /** stdlib */
+  export function Recoverable(...args: any[]): any;
+  /** stdlib */
+  export function start(...args: any[]): any;
 }
 
 declare module "sharp" {

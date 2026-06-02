@@ -6,11 +6,11 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
-| Whole-module gaps (zero coverage) | 16 | 427 | n/a |
-| Partial-module gaps | 31 | 1480 | 580 |
+| Whole-module gaps (zero coverage) | 15 | 410 | n/a |
+| Partial-module gaps | 32 | 1480 | 597 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2189** |  |
+| **Total true gaps** |  | **2172** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
@@ -18,9 +18,9 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 - `node:os` — 195
 - `node:crypto` — 128
 - `node:http2` — 97
+- `node:process (and global `process`)` — 96
 - `node:test (and node:test/reporters, node:test/mock)` — 93
 - `node:util` — 92
-- `node:process (and global `process`)` — 92
 - `node:http` — 89
 - `node:zlib` — 78
 - `node:stream` — 76
@@ -197,26 +197,6 @@ Selected highlights (full list in `runtime-parity.md`):
 - `inspector.Network.requestWillBeSent(params)`
 - `inspector.Network.responseReceived(params)`
 - … and 7 more
-
-### node:repl
-
-**Total APIs: 17** · Perry covers: 0 · Gap: 17
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `repl.start([options])`
-- `repl.builtinModules`
-- `repl.REPL_MODE_SLOPPY`
-- `repl.REPL_MODE_STRICT`
-- `repl.Recoverable`
-- `replServer.context`
-- `replServer.editorMode`
-- `replServer.useColors`
-- `replServer.useGlobal`
-- `replServer.ignoreUndefined`
-- `replServer.replMode`
-- `replServer.defineCommand(keyword, cmd)`
-- … and 5 more
 
 ### node:domain
 
@@ -404,6 +384,36 @@ Runtime-created fs SystemError metadata is covered by parity fixtures: sync, cal
 | `fs.Utf8Stream` | `manifest:fs.Utf8Stream` |
 | `fs._toUnixTimestamp(value)` | `ffi:js_fs_to_unix_timestamp` |
 | … | remaining fs APIs covered by manifest, FFI, or lowering entries |
+
+### node:repl
+
+**Gap APIs: 0** · Already covered: 17
+
+The public `node:repl` inventory rows are covered for deterministic scripted sessions: ESM/CJS module metadata, `start(options)`, `new REPLServer(options)`, mode symbols, `Recoverable`, core server flags/context, custom dot commands, prompt display/reset events, line writes, and `setupHistory`.
+
+Behavior caveats remain around live terminal integration, readline inheritance depth, multiline JavaScript parsing, persistent history files, and advanced interactive editor behavior. Those are semantic parity gaps rather than missing public API rows in `runtime-parity.md`.
+
+#### Covered (sampled)
+
+| API | Coverage source |
+|-----|-----------------|
+| `repl.start([options])` | `ffi:js_repl_start`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
+| `repl.builtinModules` | `rt:crate::process::js_module_builtin_modules`; `test-parity/node-suite/repl/imports/module-metadata.ts` |
+| `repl.REPL_MODE_SLOPPY` | `rt:crate::node_repl::repl_mode_sloppy`; `test-parity/node-suite/repl/imports/module-metadata.ts` |
+| `repl.REPL_MODE_STRICT` | `rt:crate::node_repl::repl_mode_strict`; `test-parity/node-suite/repl/imports/module-metadata.ts` |
+| `repl.Recoverable` | `ffi:js_repl_recoverable_new`; `test-parity/node-suite/repl/imports/module-metadata.ts` |
+| `replServer.context` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
+| `replServer.editorMode` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
+| `replServer.useColors` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
+| `replServer.useGlobal` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
+| `replServer.ignoreUndefined` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
+| `replServer.replMode` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
+| `replServer.defineCommand(keyword, cmd)` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/commands-reset.ts` |
+| `replServer.displayPrompt([preserveCursor])` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/commands-reset.ts` |
+| `replServer.clearBufferedCommand()` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/commands-reset.ts` |
+| `replServer.setupHistory(historyConfig, callback)` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/setup-history.ts` |
+| `'exit'` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
+| `'reset'` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/commands-reset.ts` |
 
 ### node:crypto
 

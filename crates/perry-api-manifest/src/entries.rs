@@ -104,6 +104,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     // instance-method dispatch (no JS import surface).
     "__disposable__",
     "readline",
+    "repl",
     "string_decoder",
     "querystring",
     "cluster",
@@ -211,6 +212,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "wasi",
     "perf_hooks",
     "v8",
+    "repl",
 ];
 
 const fn method(
@@ -4201,6 +4203,25 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_any("p0")],
         TypeSpec::Any,
     ),
+    // --- node:repl ---
+    property("repl", "default"),
+    property("repl", "builtinModules"),
+    property("repl", "REPL_MODE_SLOPPY"),
+    property("repl", "REPL_MODE_STRICT"),
+    class("repl", "REPLServer"),
+    class("repl", "Recoverable"),
+    method("repl", "start", false, None),
+    method("repl", "REPLServer", false, None),
+    method("repl", "Recoverable", false, None),
+    internal_method("repl", "on", true, Some("REPLServer")),
+    internal_method("repl", "addListener", true, Some("REPLServer")),
+    internal_method("repl", "once", true, Some("REPLServer")),
+    internal_method("repl", "emit", true, Some("REPLServer")),
+    internal_method("repl", "write", true, Some("REPLServer")),
+    internal_method("repl", "defineCommand", true, Some("REPLServer")),
+    internal_method("repl", "displayPrompt", true, Some("REPLServer")),
+    internal_method("repl", "clearBufferedCommand", true, Some("REPLServer")),
+    internal_method("repl", "setupHistory", true, Some("REPLServer")),
     // --- perf_hooks (W3C User Timing on `performance` + PerformanceObserver) ---
     internal_method("perf_hooks", "now", false, None),
     internal_method("perf_hooks", "mark", false, None),
