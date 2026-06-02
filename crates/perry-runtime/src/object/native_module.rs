@@ -1990,6 +1990,28 @@ const PUNYCODE_NAMESPACE_KEYS: &[&[u8]] = &[
 
 const PUNYCODE_UCS2_KEYS: &[&[u8]] = &[b"decode", b"encode"];
 
+const INSPECTOR_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"open",
+    b"close",
+    b"url",
+    b"waitForDebugger",
+    b"console",
+    b"Session",
+    b"Network",
+];
+
+const INSPECTOR_NETWORK_KEYS: &[&[u8]] = &[
+    b"requestWillBeSent",
+    b"responseReceived",
+    b"loadingFinished",
+    b"loadingFailed",
+    b"dataSent",
+    b"dataReceived",
+    b"webSocketCreated",
+    b"webSocketClosed",
+    b"webSocketHandshakeResponseReceived",
+];
+
 const FS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"_toUnixTimestamp",
     b"access",
@@ -2593,6 +2615,8 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "punycode" => Some(PUNYCODE_NAMESPACE_KEYS),
         "punycode.default" => Some(PUNYCODE_DEFAULT_KEYS),
         "punycode.ucs2" => Some(PUNYCODE_UCS2_KEYS),
+        "inspector" | "inspector.default" => Some(INSPECTOR_NAMESPACE_KEYS),
+        "inspector.Network" => Some(INSPECTOR_NETWORK_KEYS),
         "timers" => Some(TIMERS_NAMESPACE_KEYS),
         "os" => Some(OS_NAMESPACE_KEYS),
         "os.default" => Some(OS_DEFAULT_KEYS),
@@ -2907,6 +2931,7 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "fs.constants"
             | "inspector"
             | "inspector.default"
+            | "inspector.Network"
             | "inspector/promises"
             | "inspector/promises.default"
             | "os"
@@ -3467,6 +3492,18 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("process", "_fatalException") => Some(2),
         ("process", "execve") => Some(1),
         ("process", "setSourceMapsEnabled") => Some(1),
+        (
+            "inspector.Network",
+            "requestWillBeSent"
+            | "responseReceived"
+            | "loadingFinished"
+            | "loadingFailed"
+            | "dataSent"
+            | "dataReceived"
+            | "webSocketCreated"
+            | "webSocketClosed"
+            | "webSocketHandshakeResponseReceived",
+        ) => Some(1),
         (
             "process",
             "setUncaughtExceptionCaptureCallback" | "addUncaughtExceptionCaptureCallback",
@@ -4435,6 +4472,18 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | (
                 "inspector",
                 "open" | "close" | "url" | "waitForDebugger" | "Session",
+            )
+            | (
+                "inspector.Network",
+                "requestWillBeSent"
+                    | "responseReceived"
+                    | "loadingFinished"
+                    | "loadingFailed"
+                    | "dataSent"
+                    | "dataReceived"
+                    | "webSocketCreated"
+                    | "webSocketClosed"
+                    | "webSocketHandshakeResponseReceived",
             )
             | ("inspector/promises", "Session")
             | (
@@ -6463,6 +6512,7 @@ pub(crate) unsafe fn get_native_module_constant(
         "inspector" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("inspector"),
             "console" => Some(crate::node_inspector::js_node_inspector_console_object()),
+            "Network" => Some(create_sub_namespace("inspector.Network")),
             "Session" => Some(bound_native_callable_export_value("inspector", "Session")),
             _ => None,
         },

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1845 entries across 106 modules
+// Coverage: 1846 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1805,6 +1805,8 @@ declare module "https" {
 declare module "inspector" {
   /** stdlib */
   export class Session { [key: string]: any; }
+  /** stdlib */
+  export const Network: any;
   /** stdlib */
   export const console: any;
   /** stdlib */

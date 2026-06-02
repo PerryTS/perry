@@ -519,6 +519,11 @@ pub extern "C" fn js_node_inspector_console_object() -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_node_inspector_network_notify(_params: f64) -> f64 {
+    undefined()
+}
+
+#[no_mangle]
 pub extern "C" fn js_node_inspector_open(port: f64, host: f64, _wait: f64) -> f64 {
     let host = string_to_rust(host).unwrap_or_else(|| "127.0.0.1".to_string());
     let port = allocate_endpoint_port(port);

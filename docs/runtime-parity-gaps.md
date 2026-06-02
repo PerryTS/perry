@@ -199,9 +199,7 @@ Selected highlights (full list in `runtime-parity.md`):
 - `session.connectToMainThread()`
 - `session.disconnect()`
 - `'inspectorNotification'`
-- `inspector.Network.requestWillBeSent(params)`
-- `inspector.Network.responseReceived(params)`
-- … and 7 more
+Deeper protocol transport/frontend fidelity remains partial.
 
 ### node:domain
 

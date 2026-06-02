@@ -56,6 +56,8 @@ fn is_cjs_style_native_default_import(module_name: &str) -> bool {
             | "dns"
             | "dns/promises"
             | "events"
+            | "inspector"
+            | "inspector/promises"
             | "os"
             | "path"
             | "path/posix"
@@ -224,6 +226,8 @@ pub(crate) fn lower_module_decl(
                                     ("util.types".to_string(), None)
                                 } else if source == "punycode" && imported == "ucs2" {
                                     ("punycode.ucs2".to_string(), None)
+                                } else if source == "inspector" && imported == "Network" {
+                                    ("inspector.Network".to_string(), None)
                                 } else {
                                     (source.clone(), Some(imported.clone()))
                                 };

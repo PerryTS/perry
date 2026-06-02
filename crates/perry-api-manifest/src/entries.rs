@@ -169,7 +169,7 @@ pub const NODE_SUBMODULES: &[&str] = &[
 /// Internal manifest keys used by dispatch/property gates but not importable
 /// module specifiers.
 #[cfg(test)]
-pub(crate) const INTERNAL_MODULE_KEYS: &[&str] = &["punycode.ucs2"];
+pub(crate) const INTERNAL_MODULE_KEYS: &[&str] = &["inspector.Network", "punycode.ucs2"];
 
 /// Modules handled entirely by `perry-runtime` — the linker doesn't
 /// need to pull in `perry-stdlib` for these. Migrated from
@@ -697,6 +697,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("inspector", "url", false, None),
     method("inspector", "waitForDebugger", false, None),
     property("inspector", "console"),
+    property("inspector", "Network"),
     class("inspector", "Session"),
     method("inspector", "Session", false, None),
     method("inspector", "connect", true, Some("Session")),
@@ -705,6 +706,20 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("inspector", "post", true, Some("Session")),
     method("inspector", "on", true, Some("Session")),
     method("inspector", "once", true, Some("Session")),
+    internal_method("inspector.Network", "requestWillBeSent", false, None),
+    internal_method("inspector.Network", "responseReceived", false, None),
+    internal_method("inspector.Network", "loadingFinished", false, None),
+    internal_method("inspector.Network", "loadingFailed", false, None),
+    internal_method("inspector.Network", "dataSent", false, None),
+    internal_method("inspector.Network", "dataReceived", false, None),
+    internal_method("inspector.Network", "webSocketCreated", false, None),
+    internal_method("inspector.Network", "webSocketClosed", false, None),
+    internal_method(
+        "inspector.Network",
+        "webSocketHandshakeResponseReceived",
+        false,
+        None,
+    ),
     property("inspector/promises", "default"),
     class("inspector/promises", "Session"),
     method("inspector/promises", "Session", false, None),

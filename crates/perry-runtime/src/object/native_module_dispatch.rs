@@ -375,6 +375,17 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("inspector/promises", "Session") => {
             crate::node_inspector::js_node_inspector_promises_session_new()
         }
+        ("inspector.Network", "requestWillBeSent")
+        | ("inspector.Network", "responseReceived")
+        | ("inspector.Network", "loadingFinished")
+        | ("inspector.Network", "loadingFailed")
+        | ("inspector.Network", "dataSent")
+        | ("inspector.Network", "dataReceived")
+        | ("inspector.Network", "webSocketCreated")
+        | ("inspector.Network", "webSocketClosed")
+        | ("inspector.Network", "webSocketHandshakeResponseReceived") => {
+            crate::node_inspector::js_node_inspector_network_notify(arg(0))
+        }
         // ── Buffer constructor static API ──
         // `class MyBuffer extends Buffer {}; MyBuffer.from(...)` reaches this
         // path through js_class_static_method_call's native-superclass
