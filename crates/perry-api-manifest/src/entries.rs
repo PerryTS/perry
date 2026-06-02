@@ -4370,6 +4370,25 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("vm", "measureMemory", false, None),
     property("vm", "constants"),
     property("vm", "default"),
+    // Experimental VM module rows are gated at runtime and are not public
+    // no-flag named exports, but the codegen dispatch table still needs
+    // manifest counterparts for the lifecycle/cached-data methods.
+    internal_method("vm", "SourceTextModule", false, None),
+    internal_method("vm", "SyntheticModule", false, None),
+    internal_method("vm", "status", true, None),
+    internal_method("vm", "identifier", true, None),
+    internal_method("vm", "error", true, None),
+    internal_method("vm", "namespace", true, None),
+    internal_method("vm", "dependencySpecifiers", true, None),
+    internal_method("vm", "moduleRequests", true, None),
+    internal_method("vm", "link", true, None),
+    internal_method("vm", "evaluate", true, None),
+    internal_method("vm", "createCachedData", true, None),
+    internal_method("vm", "linkRequests", true, None),
+    internal_method("vm", "instantiate", true, None),
+    internal_method("vm", "hasTopLevelAwait", true, None),
+    internal_method("vm", "hasAsyncGraph", true, None),
+    internal_method("vm", "setExport", true, None),
     // --- buffer (module-level helpers in addition to the Buffer class
     //     already registered above) ---
     internal_method("buffer", "alloc", false, None),

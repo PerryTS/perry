@@ -453,6 +453,7 @@ for test_file in "${TEST_FILES[@]}"; do
     perry_binary="/tmp/perry_parity_$safe_test_id"
     parity_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-argv:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
     parity_node_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-node-argv:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
+    parity_env_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-env:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
     test_argv=()
     if [[ -n "$parity_argv_line" ]]; then
         read -r -a test_argv <<< "$parity_argv_line"
@@ -460,6 +461,10 @@ for test_file in "${TEST_FILES[@]}"; do
     node_argv=()
     if [[ -n "$parity_node_argv_line" ]]; then
         read -r -a node_argv <<< "$parity_node_argv_line"
+    fi
+    parity_env=()
+    if [[ -n "$parity_env_line" ]]; then
+        read -r -a parity_env <<< "$parity_env_line"
     fi
 
     # Check if test should be skipped
@@ -524,10 +529,10 @@ for test_file in "${TEST_FILES[@]}"; do
     # be pulling QuickJS in), and if the error names `perry-jsruntime`,
     # retry once with `--enable-js-runtime`. Avoids hand-curating a list
     # of test names that need V8.
-    compile_output=$(env $compile_env "$PERRY_BIN" $BACKEND_FLAG "$test_file" -o "$perry_binary" 2>&1)
+    compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" $BACKEND_FLAG "$test_file" -o "$perry_binary" 2>&1)
     compile_exit=$?
     if [[ $compile_exit -ne 0 ]] && grep -q "perry-jsruntime" <<<"$compile_output"; then
-        compile_output=$(env $compile_env "$PERRY_BIN" $BACKEND_FLAG --enable-js-runtime "$test_file" -o "$perry_binary" 2>&1)
+        compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" $BACKEND_FLAG --enable-js-runtime "$test_file" -o "$perry_binary" 2>&1)
         compile_exit=$?
     fi
 
@@ -549,7 +554,7 @@ for test_file in "${TEST_FILES[@]}"; do
 
     # Run Perry binary — same cap-via-tempfile protocol as Node above (#796).
     perry_tmp=$(mktemp)
-    run_with_timeout 10 "$perry_binary" "${test_argv[@]}" > "$perry_tmp" 2>&1
+    run_with_timeout 10 env "${parity_env[@]}" "$perry_binary" "${test_argv[@]}" > "$perry_tmp" 2>&1
     perry_exit=$?
     perry_output=$(cap_output < "$perry_tmp")
     rm -f "$perry_tmp"

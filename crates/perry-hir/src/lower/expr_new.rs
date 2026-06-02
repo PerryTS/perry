@@ -389,6 +389,39 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     args,
                 });
             }
+            let is_vm_module = obj_name == "vm"
+                || ctx.lookup_builtin_module_alias(obj_name) == Some("vm")
+                || ctx
+                    .lookup_native_module(obj_name)
+                    .map(|(module_name, method)| {
+                        module_name == "vm"
+                            && (method.is_none() || method.as_deref() == Some("default"))
+                    })
+                    .unwrap_or(false);
+            if is_vm_module
+                && matches!(
+                    prop_ident.sym.as_ref(),
+                    "SourceTextModule" | "SyntheticModule"
+                )
+            {
+                let args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                return Ok(Expr::NativeMethodCall {
+                    module: "vm".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: prop_ident.sym.to_string(),
+                    args,
+                });
+            }
             if obj_name == "WebAssembly" && prop_ident.sym.as_ref() == "Module" {
                 let args = new_expr
                     .args
