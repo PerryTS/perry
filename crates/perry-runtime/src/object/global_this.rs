@@ -237,7 +237,7 @@ pub(crate) fn webcrypto_method_value(property_name: &str) -> Option<f64> {
     Some(crate::value::js_nanbox_pointer(closure as i64))
 }
 
-extern "C" fn global_this_array_thunk(
+pub(crate) extern "C" fn global_this_array_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
 ) -> f64 {
