@@ -84,6 +84,8 @@ fn inflate_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
 /// `{ level }` throws `RangeError` before any compression runs (#2935).
 #[no_mangle]
 pub unsafe extern "C" fn js_zlib_gzip_sync(data_bits: i64, opts: f64) -> *mut StringHeader {
+    stream::js_zlib_validate_options(opts, 9); // gzip needs windowBits >= 9 (#3662)
+    stream::js_zlib_validate_buffer_arg(data_bits); // options validate before the buffer
     let level = stream::compression_from_opts(opts);
     match stream::read_input_from_bits(data_bits).map(|d| gzip_bytes_with(&d, level)) {
         Some(Ok(out)) => alloc_bytes(&out).as_raw(),
@@ -98,6 +100,7 @@ pub unsafe extern "C" fn js_zlib_gzip_sync(data_bits: i64, opts: f64) -> *mut St
 /// `data_bits` is the raw NaN-box bit pattern of the data argument (#2935).
 #[no_mangle]
 pub unsafe extern "C" fn js_zlib_gunzip_sync(data_bits: i64) -> *mut StringHeader {
+    stream::js_zlib_validate_buffer_arg(data_bits); // #3662
     match stream::read_input_from_bits(data_bits).map(|d| gunzip_bytes(&d)) {
         Some(Ok(out)) => alloc_bytes(&out).as_raw(),
         _ => std::ptr::null_mut(),
@@ -113,6 +116,8 @@ pub unsafe extern "C" fn js_zlib_gunzip_sync(data_bits: i64) -> *mut StringHeade
 /// `RangeError` before any compression runs (#2935).
 #[no_mangle]
 pub unsafe extern "C" fn js_zlib_deflate_sync(data_bits: i64, opts: f64) -> *mut StringHeader {
+    stream::js_zlib_validate_options(opts, 8); // deflate accepts windowBits >= 8 (#3662)
+    stream::js_zlib_validate_buffer_arg(data_bits);
     let level = stream::compression_from_opts(opts);
     match stream::read_input_from_bits(data_bits).map(|d| deflate_bytes_with(&d, level)) {
         Some(Ok(out)) => alloc_bytes(&out).as_raw(),
@@ -127,6 +132,7 @@ pub unsafe extern "C" fn js_zlib_deflate_sync(data_bits: i64, opts: f64) -> *mut
 /// `data_bits` is the raw NaN-box bit pattern of the data argument (#2935).
 #[no_mangle]
 pub unsafe extern "C" fn js_zlib_inflate_sync(data_bits: i64) -> *mut StringHeader {
+    stream::js_zlib_validate_buffer_arg(data_bits); // #3662
     match stream::read_input_from_bits(data_bits).map(|d| inflate_bytes(&d)) {
         Some(Ok(out)) => alloc_bytes(&out).as_raw(),
         _ => std::ptr::null_mut(),

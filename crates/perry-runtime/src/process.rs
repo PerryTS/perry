@@ -1038,6 +1038,23 @@ fn warning_value_to_string(v: f64) -> String {
     }
 }
 
+/// Validate the optional `type` positional of `process.emitWarning` (#3662).
+///
+/// Node only type-checks `type` when it is supplied as a non-object value:
+/// `undefined`/`null`, a string, an object (the `{ type, code, detail }`
+/// overload), or a function (custom error ctor) are all accepted. A non-string
+/// *primitive* (number/boolean/bigint/symbol) throws
+/// `TypeError [ERR_INVALID_ARG_TYPE]` with the `"type"` argument message.
+fn validate_emit_warning_type(type_name: f64) {
+    let jv = JSValue::from_bits(type_name.to_bits());
+    if jv.is_undefined() || jv.is_null() || jv.is_any_string() || jv.is_pointer() {
+        return;
+    }
+    let received = crate::fs::validate::describe_received(type_name);
+    let message = format!("The \"type\" argument must be of type string. Received {received}");
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
 fn object_from_value(value: f64) -> Option<*mut crate::object::ObjectHeader> {
     let jv = JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
@@ -1163,6 +1180,23 @@ fn schedule_warning(warning: f64, label: &str, code: &str, msg: &str, detail: &s
 /// after the current synchronous frame.
 #[no_mangle]
 pub extern "C" fn js_process_emit_warning(warning: f64, type_name: f64, code: f64) {
+    // #3662 — Node validates the optional `type` (when supplied as a non-object
+    // positional) and then the `warning` argument before building the warning,
+    // throwing `TypeError [ERR_INVALID_ARG_TYPE]`. The object overload (where
+    // `type_name` carries `{ type, code, detail }`) is exempt, as is the
+    // function (custom ctor) form — both are valid Node usages.
+    validate_emit_warning_type(type_name);
+    let warning_jv = JSValue::from_bits(warning.to_bits());
+    let warning_is_valid = warning_jv.is_any_string()
+        || crate::error::js_error_is_error(warning).to_bits() == crate::value::TAG_TRUE;
+    if !warning_is_valid {
+        let received = crate::fs::validate::describe_received(warning);
+        let message = format!(
+            "The \"warning\" argument must be of type string or an instance of Error. Received {received}"
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+
     let msg = warning_value_to_string(warning);
 
     let (raw_type, raw_code, detail) = if let Some(options) = object_from_value(type_name) {

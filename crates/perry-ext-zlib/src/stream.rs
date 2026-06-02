@@ -52,6 +52,16 @@ extern "C" {
     // non-numeric arg and `RangeError [ERR_OUT_OF_RANGE]` for an out-of-range
     // level/strategy, matching Node — the throwing path lives in perry-runtime.
     pub(crate) fn js_zlib_validate_params(level: f64, strategy: f64) -> i32;
+    // #3662: validate the full options object (windowBits/level/memLevel/
+    // strategy/chunkSize/flush) the way Node's Zlib constructor does, throwing
+    // the spec `TypeError`/`RangeError` before any compression runs.
+    // `min_window_bits` is 9 for gzip compression, 8 for every other codec.
+    pub(crate) fn js_zlib_validate_options(opts: f64, min_window_bits: i32);
+    // #3662: reject a non-string/non-Buffer/TypedArray/DataView/ArrayBuffer
+    // `buffer` argument with `TypeError [ERR_INVALID_ARG_TYPE]` before reading
+    // any bytes. The in-tree codecs validate inline; this shared helper gives
+    // the ext crate the same rejection without the runtime's value typing.
+    pub(crate) fn js_zlib_validate_buffer_arg(data_bits: i64);
     fn js_native_call_method_str_key(
         object: f64,
         name_handle: i64,
@@ -449,27 +459,34 @@ fn create_stream(codec: Codec, level: Compression) -> i64 {
 // ── factories ────────────────────────────────────────────────────────────────
 
 macro_rules! factory {
-    ($name:ident, $codec:expr) => {
+    // `$min_wb` is the lower `windowBits` bound for option validation (#3662):
+    // 9 for gzip compression, 8 for every other deflate-family codec, and 0 to
+    // skip zlib option validation entirely (brotli has its own option shape).
+    ($name:ident, $codec:expr, $min_wb:expr) => {
         /// # Safety
-        /// FFI entry; `opts` is the NaN-boxed options object. Its `{ level }`
-        /// (if present) sets the initial compression level for deflate-family
-        /// encoders; an out-of-range `level` throws via `js_zlib_resolve_level`.
+        /// FFI entry; `opts` is the NaN-boxed options object. It is validated
+        /// the way Node's constructor does (#3662), then its `{ level }` (if
+        /// present) sets the initial compression level for deflate-family
+        /// encoders.
         #[no_mangle]
         pub unsafe extern "C" fn $name(opts: f64) -> i64 {
+            if $min_wb != 0 {
+                js_zlib_validate_options(opts, $min_wb);
+            }
             let level = Compression::new(js_zlib_resolve_level(opts) as u32);
             create_stream($codec, level)
         }
     };
 }
-factory!(js_zlib_create_gzip, Codec::Gzip);
-factory!(js_zlib_create_gunzip, Codec::Gunzip);
-factory!(js_zlib_create_deflate, Codec::Deflate);
-factory!(js_zlib_create_inflate, Codec::Inflate);
-factory!(js_zlib_create_deflate_raw, Codec::DeflateRaw);
-factory!(js_zlib_create_inflate_raw, Codec::InflateRaw);
-factory!(js_zlib_create_unzip, Codec::Unzip);
-factory!(js_zlib_create_brotli_compress, Codec::BrotliCompress);
-factory!(js_zlib_create_brotli_decompress, Codec::BrotliDecompress);
+factory!(js_zlib_create_gzip, Codec::Gzip, 9);
+factory!(js_zlib_create_gunzip, Codec::Gunzip, 8);
+factory!(js_zlib_create_deflate, Codec::Deflate, 8);
+factory!(js_zlib_create_inflate, Codec::Inflate, 8);
+factory!(js_zlib_create_deflate_raw, Codec::DeflateRaw, 8);
+factory!(js_zlib_create_inflate_raw, Codec::InflateRaw, 8);
+factory!(js_zlib_create_unzip, Codec::Unzip, 8);
+factory!(js_zlib_create_brotli_compress, Codec::BrotliCompress, 0);
+factory!(js_zlib_create_brotli_decompress, Codec::BrotliDecompress, 0);
 
 // ── chunk / buffer helpers ─────────────────────────────────────────────────────
 

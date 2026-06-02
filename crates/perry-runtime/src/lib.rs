@@ -68,7 +68,9 @@ pub mod node_test;
 pub mod node_v8;
 // #2935: surface the zlib option-level resolver at the crate root so
 // perry-stdlib's bundled codecs (and the `perry-ext-zlib` extern) can reach it.
-pub use node_submodules::js_zlib_resolve_level;
+pub use node_submodules::{
+    js_zlib_resolve_level, js_zlib_validate_buffer_arg, js_zlib_validate_options,
+};
 pub mod object;
 pub mod os;
 pub mod path;
