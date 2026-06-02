@@ -81,6 +81,36 @@ pub(crate) fn lower_native_method_call(
     object: Option<&Expr>,
     args: &[Expr],
 ) -> Result<String> {
+    if module == "__perry_runtime" && class_name.is_none() && object.is_none() {
+        match method {
+            "iteratorNextResult" => {
+                let iter = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                return Ok(ctx
+                    .block()
+                    .call(DOUBLE, "js_iterator_next_result", &[(DOUBLE, &iter)]));
+            }
+            "iteratorCloseIfNotDone" => {
+                let iter = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                let done = args.get(1).map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_iterator_close_if_not_done",
+                    &[(DOUBLE, &iter), (DOUBLE, &done)],
+                ));
+            }
+            _ => {}
+        }
+    }
+
     // Web Fetch API dispatch — Response / Headers / Request / static
     // factories. Handled before the receiver-less early-out so that
     // `Response.json(v)` (object.is_none()) finds its runtime function.

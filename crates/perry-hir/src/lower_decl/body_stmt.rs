@@ -301,7 +301,15 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             }
 
             // Check if this is a destructuring assignment that needs special handling
-            if let ast::Expr::Assign(assign) = expr_stmt.expr.as_ref() {
+            let maybe_assign = match expr_stmt.expr.as_ref() {
+                ast::Expr::Assign(assign) => Some(assign),
+                ast::Expr::Paren(paren) => match paren.expr.as_ref() {
+                    ast::Expr::Assign(assign) => Some(assign),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(assign) = maybe_assign {
                 if let ast::AssignTarget::Pat(pat) = &assign.left {
                     // This is a destructuring assignment at statement level
                     // We can emit proper Let statements for temporaries

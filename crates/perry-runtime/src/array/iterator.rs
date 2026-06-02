@@ -291,6 +291,67 @@ pub extern "C" fn js_array_spread_append(dest: *mut ArrayHeader, source: f64) ->
     js_array_concat(dest, arr)
 }
 
+fn is_object_like_value(value: f64) -> bool {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        let bits = value.to_bits();
+        return bits != 0
+            && bits <= 0x0000_FFFF_FFFF_FFFF
+            && bits > 0x10000
+            && crate::closure::is_closure_ptr(bits as usize);
+    }
+    let raw = crate::value::js_nanbox_get_pointer(value) as usize;
+    raw >= 0x10000 && !crate::symbol::is_registered_symbol(raw)
+}
+
+#[cold]
+fn throw_iterator_result_not_object() -> ! {
+    let msg = b"Iterator result is not an object";
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(msg_str);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// `IteratorNext(iterator)` for assignment destructuring lowering.
+#[no_mangle]
+pub extern "C" fn js_iterator_next_result(iter_f64: f64) -> f64 {
+    let next = named_field(iter_f64, b"next");
+    if !is_callable_value(next) {
+        crate::closure::throw_not_callable();
+    }
+    let prev_this = crate::object::js_implicit_this_set(iter_f64);
+    let result = unsafe { crate::closure::js_native_call_value(next, std::ptr::null(), 0) };
+    crate::object::js_implicit_this_set(prev_this);
+    if !is_object_like_value(result) {
+        throw_iterator_result_not_object();
+    }
+    result
+}
+
+/// `IteratorClose(iterator)` when destructuring exits before the iterator is done.
+#[no_mangle]
+pub extern "C" fn js_iterator_close_if_not_done(iter_f64: f64, done_f64: f64) -> f64 {
+    if crate::value::js_is_truthy(done_f64) != 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+
+    let ret = named_field(iter_f64, b"return");
+    if ret.to_bits() == crate::value::TAG_UNDEFINED {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    if !is_callable_value(ret) {
+        crate::closure::throw_not_callable();
+    }
+
+    let prev_this = crate::object::js_implicit_this_set(iter_f64);
+    let result = unsafe { crate::closure::js_native_call_value(ret, std::ptr::null(), 0) };
+    crate::object::js_implicit_this_set(prev_this);
+    if !is_object_like_value(result) {
+        throw_iterator_result_not_object();
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 /// Issue #1572 — node:stream uses this from `node_stream::ns_iter_flat_map`
 /// to drive an async-iterable mapper result (an `async function*` return
 /// value) without re-deriving the `Symbol.asyncIterator` lookup +
