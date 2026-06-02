@@ -58,25 +58,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // (POINTER_TAG, not STRING_TAG).
         Expr::Array(elements) => lower_array_literal(ctx, elements),
 
-        // `[a, ...b, c]` literal with spread elements. Each Spread
-        // element calls `js_array_concat(dest, src)` to copy from
-        // source; each Expr element calls `js_array_push_f64`. Both
-        // may realloc, so we thread the pointer through.
+        // `[a, ...b, c]` literal with spread elements. Spread operands go
+        // through the runtime iterator materializer so `GetIterator` errors
+        // and iterator value/getter order match JavaScript semantics.
         Expr::ArraySpread(elements) => {
             use perry_hir::ArrayElement;
             if let [ArrayElement::Spread(e)] = elements.as_slice() {
-                // Hot path for `[...arr]` / `[...set]` / `[...string]`:
-                // avoid allocating an empty destination and then routing
-                // through `js_array_concat`'s append machinery. The clone
-                // helper already contains the same array/string/set/map/
-                // typed-array materialization arms used by Array.from.
-                //
-                // Spread of `null` / `undefined` must throw `TypeError`
-                // per ES2015 §12.2.5 (GetIterator). Route through
-                // `js_array_clone_for_spread`, which checks the NaN-box
-                // tag bits on the raw boxed value before stripping, so
-                // null/undefined throws while every other input is
-                // forwarded to the regular clone path.
                 let src_box = lower_expr(ctx, e)?;
                 let cloned =
                     ctx.block()
@@ -95,30 +82,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &[(I64, &current_arr), (DOUBLE, &v)],
                         );
                     }
+                    ArrayElement::Hole => {
+                        current_arr =
+                            ctx.block()
+                                .call(I64, "js_array_push_hole", &[(I64, &current_arr)]);
+                    }
                     ArrayElement::Spread(e) => {
-                        if is_string_expr(ctx, e) {
-                            // String spread: `[..."hello"]` → split into
-                            // individual character strings.
-                            let src_box = lower_expr(ctx, e)?;
-                            let blk = ctx.block();
-                            let src_handle = unbox_to_i64(blk, &src_box);
-                            let char_arr =
-                                blk.call(I64, "js_string_to_char_array", &[(I64, &src_handle)]);
-                            current_arr = blk.call(
-                                I64,
-                                "js_array_concat",
-                                &[(I64, &current_arr), (I64, &char_arr)],
-                            );
-                        } else {
-                            let src_box = lower_expr(ctx, e)?;
-                            let blk = ctx.block();
-                            let src_handle = unbox_to_i64(blk, &src_box);
-                            current_arr = blk.call(
-                                I64,
-                                "js_array_concat",
-                                &[(I64, &current_arr), (I64, &src_handle)],
-                            );
-                        }
+                        let src_box = lower_expr(ctx, e)?;
+                        current_arr = ctx.block().call(
+                            I64,
+                            "js_array_spread_append",
+                            &[(I64, &current_arr), (DOUBLE, &src_box)],
+                        );
                     }
                 }
             }

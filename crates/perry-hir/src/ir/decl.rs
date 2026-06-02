@@ -192,6 +192,9 @@ pub struct Class {
     pub static_fields: Vec<ClassField>,
     /// Static methods
     pub static_methods: Vec<Function>,
+    /// Computed-key methods/accessors, preserved in source order so
+    /// declaration-time key side effects fire in the same order as JS.
+    pub computed_members: Vec<ClassComputedMember>,
     /// Legacy TypeScript decorators applied to the class.
     pub decorators: Vec<Decorator>,
     /// Whether this class is exported from the module
@@ -200,6 +203,21 @@ pub struct Class {
     /// `var X = class _X { ... new _X() ... }` records `_X` here so codegen
     /// can look it up as the same class. Refs #486.
     pub aliases: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClassComputedMemberKind {
+    Method,
+    Getter,
+    Setter,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClassComputedMember {
+    pub key_expr: Expr,
+    pub function: Function,
+    pub is_static: bool,
+    pub kind: ClassComputedMemberKind,
 }
 
 /// A class field

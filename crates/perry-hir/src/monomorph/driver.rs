@@ -337,6 +337,7 @@ fn collect_instantiations_in_expr(
                     ArrayElement::Spread(expr) => {
                         collect_instantiations_in_expr(expr, ctx, module, idx)
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -364,6 +365,28 @@ fn collect_instantiations_in_expr(
             }
         }
         Expr::SuperMethodCall { args, .. } => {
+            for arg in args {
+                collect_instantiations_in_expr(arg, ctx, module, idx);
+            }
+        }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            collect_instantiations_in_expr(home, ctx, module, idx);
+            collect_instantiations_in_expr(key, ctx, module, idx);
+            collect_instantiations_in_expr(receiver, ctx, module, idx);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            collect_instantiations_in_expr(home, ctx, module, idx);
+            collect_instantiations_in_expr(key, ctx, module, idx);
+            collect_instantiations_in_expr(receiver, ctx, module, idx);
             for arg in args {
                 collect_instantiations_in_expr(arg, ctx, module, idx);
             }

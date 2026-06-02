@@ -1245,6 +1245,7 @@ pub fn collect_localset_ids_in_expr_filtered(
             for el in elements {
                 match el {
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => walk(e, out),
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -1396,6 +1397,28 @@ pub fn collect_localset_ids_in_expr_filtered(
         Expr::SuperCall(args)
         | Expr::SuperMethodCall { args, .. }
         | Expr::StaticMethodCall { args, .. } => {
+            for a in args {
+                walk(a, out);
+            }
+        }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            walk(home, out);
+            walk(key, out);
+            walk(receiver, out);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            walk(home, out);
+            walk(key, out);
+            walk(receiver, out);
             for a in args {
                 walk(a, out);
             }

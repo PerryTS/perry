@@ -14,6 +14,38 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
+fn class_computed_member_registration_expr(class_name: &str, member: &ClassComputedMember) -> Expr {
+    match member.kind {
+        ClassComputedMemberKind::Method => Expr::RegisterClassComputedMethod {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            method_name: member.function.name.clone(),
+            is_static: member.is_static,
+            param_count: member.function.params.len() as u32,
+            has_rest: member
+                .function
+                .params
+                .last()
+                .map(|p| p.is_rest)
+                .unwrap_or(false),
+        },
+        ClassComputedMemberKind::Getter => Expr::RegisterClassComputedAccessor {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            getter_name: Some(member.function.name.clone()),
+            setter_name: None,
+            is_static: member.is_static,
+        },
+        ClassComputedMemberKind::Setter => Expr::RegisterClassComputedAccessor {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            getter_name: None,
+            setter_name: Some(member.function.name.clone()),
+            is_static: member.is_static,
+        },
+    }
+}
+
 /// Recursively walk a destructuring pattern collecting every leaf identifier
 /// (and pre-defining each as a local). Used by the for-of binding pre-pass so
 /// the loop body can reference variables introduced by *nested* patterns like
@@ -727,6 +759,7 @@ pub(crate) fn lower_stmt(
                                     ("http", "createServer") => Some("HttpServer"),
                                     ("https", "createServer") => Some("HttpsServer"),
                                     ("http2", "createSecureServer") => Some("Http2SecureServer"),
+                                    ("tls", "createServer" | "Server") => Some("Server"),
                                     ("async_hooks", "createHook") => Some("AsyncHook"),
                                     _ => None,
                                 };
@@ -852,6 +885,14 @@ pub(crate) fn lower_stmt(
                                 parent_expr: extends_expr.clone(),
                             }));
                     }
+                    for member in &class.computed_members {
+                        module
+                            .init
+                            .push(Stmt::Expr(class_computed_member_registration_expr(
+                                &class.name,
+                                member,
+                            )));
+                    }
                     // Inject static-field-init statements at the source
                     // position of the class declaration. Per ES spec, a
                     // class declaration's static initializers run when the
@@ -975,6 +1016,9 @@ pub(crate) fn lower_stmt(
             }
         }
         ast::Stmt::Expr(expr_stmt) => {
+            module
+                .init
+                .extend(predeclare_implicit_assignment_targets(ctx, &expr_stmt.expr));
             // Check if this is a destructuring assignment that needs special handling
             if let ast::Expr::Assign(assign) = expr_stmt.expr.as_ref() {
                 if let ast::AssignTarget::Pat(pat) = &assign.left {
@@ -1100,6 +1144,11 @@ pub(crate) fn lower_stmt(
                         if is_var {
                             for decl in var_decl.decls.iter() {
                                 let name = get_binding_name(&decl.name)?;
+                                if let Some(init_ast) = decl.init.as_ref() {
+                                    module.init.extend(predeclare_implicit_assignment_targets(
+                                        ctx, init_ast,
+                                    ));
+                                }
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
                                 let id = ctx.define_local(name.clone(), Type::Any);
@@ -1116,6 +1165,11 @@ pub(crate) fn lower_stmt(
                         } else {
                             for decl in var_decl.decls.iter().skip(1) {
                                 let name = get_binding_name(&decl.name)?;
+                                if let Some(init_ast) = decl.init.as_ref() {
+                                    module.init.extend(predeclare_implicit_assignment_targets(
+                                        ctx, init_ast,
+                                    ));
+                                }
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
                                 let id = ctx.define_local(name.clone(), Type::Any);
@@ -1129,6 +1183,11 @@ pub(crate) fn lower_stmt(
                             }
                             if let Some(decl) = var_decl.decls.first() {
                                 let name = get_binding_name(&decl.name)?;
+                                if let Some(init_ast) = decl.init.as_ref() {
+                                    module.init.extend(predeclare_implicit_assignment_targets(
+                                        ctx, init_ast,
+                                    ));
+                                }
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
                                 let id = ctx.define_local(name.clone(), Type::Any);
@@ -1145,6 +1204,9 @@ pub(crate) fn lower_stmt(
                         }
                     }
                     ast::VarDeclOrExpr::Expr(expr) => {
+                        for stmt in predeclare_implicit_assignment_targets(ctx, expr) {
+                            module.init.push(stmt);
+                        }
                         Some(Box::new(Stmt::Expr(lower_expr(ctx, expr)?)))
                     }
                 }

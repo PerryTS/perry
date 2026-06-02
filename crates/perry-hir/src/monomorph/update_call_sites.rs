@@ -261,6 +261,7 @@ fn update_call_sites_in_expr(
                 match e {
                     ArrayElement::Expr(expr) => update_call_sites_in_expr(expr, ctx, lookup),
                     ArrayElement::Spread(expr) => update_call_sites_in_expr(expr, ctx, lookup),
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -288,6 +289,28 @@ fn update_call_sites_in_expr(
             }
         }
         Expr::SuperMethodCall { args, .. } => {
+            for arg in args.iter_mut() {
+                update_call_sites_in_expr(arg, ctx, lookup);
+            }
+        }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            update_call_sites_in_expr(home, ctx, lookup);
+            update_call_sites_in_expr(key, ctx, lookup);
+            update_call_sites_in_expr(receiver, ctx, lookup);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            update_call_sites_in_expr(home, ctx, lookup);
+            update_call_sites_in_expr(key, ctx, lookup);
+            update_call_sites_in_expr(receiver, ctx, lookup);
             for arg in args.iter_mut() {
                 update_call_sites_in_expr(arg, ctx, lookup);
             }

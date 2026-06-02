@@ -912,6 +912,7 @@ pub fn inline_calls_in_expr(
                         ));
                         kill_referenced_exact_receivers(e, exact_receiver_facts);
                     }
+                    perry_hir::ArrayElement::Hole => {}
                 }
             }
         }
@@ -1836,7 +1837,9 @@ mod tests {
                 captures: Vec::new(),
                 mutable_captures: Vec::new(),
                 captures_this: false,
+                captures_new_target: false,
                 enclosing_class: None,
+                is_arrow: false,
                 is_async: false,
                 is_generator: false,
                 is_strict: false,

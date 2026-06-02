@@ -181,7 +181,14 @@ external-fastify-pump = ["async-runtime"]
 # TLS — direct `tls.connect()` and `socket.upgradeToTLS()` (Postgres SSLRequest flow).
 # Uses rustls (not native-tls) to avoid OpenSSL on every platform and keep Android
 # cross-compile unblocked; matches reqwest/tokio-tungstenite/mongodb feature flags.
-tls = ["bundled-net", "dep:tokio-rustls", "dep:rustls", "dep:rustls-native-certs"]
+tls = [
+    "bundled-net",
+    "dep:tokio-rustls",
+    "dep:rustls",
+    "dep:rustls-native-certs",
+    "dep:rustls-pemfile",
+    "dep:base64",
+]
 
 # Databases
 database = ["database-postgres", "database-mysql", "database-sqlite", "database-redis", "database-mongodb"]
@@ -317,6 +324,7 @@ futures-util = { version = "0.3", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
 rustls = { version = "0.23", optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
+rustls-pemfile = { version = "2", optional = true }
 
 # Database
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "mysql", "postgres", "chrono"], optional = true }

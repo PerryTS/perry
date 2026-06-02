@@ -149,6 +149,9 @@ unsafe fn crc32_bytes(value: f64) -> Vec<u8> {
 /// out-of-range throws `RangeError [ERR_OUT_OF_RANGE]` before compression).
 #[no_mangle]
 pub unsafe extern "C" fn js_zlib_gzip_sync(data_bits: i64, opts: f64) -> *mut BufferHeader {
+    // Gzip compression requires `windowBits >= 9`; option validation runs
+    // before the buffer is touched so a bad option reports Node's error first.
+    perry_runtime::js_zlib_validate_options(opts, 9);
     let level = Compression::new(perry_runtime::js_zlib_resolve_level(opts) as u32);
     let data = codec_bytes(f64::from_bits(data_bits as u64));
 
@@ -185,6 +188,8 @@ pub unsafe extern "C" fn js_zlib_gunzip_sync(data_bits: i64) -> *mut BufferHeade
 /// #2935: honor `options.level` (see `js_zlib_gzip_sync`).
 #[no_mangle]
 pub unsafe extern "C" fn js_zlib_deflate_sync(data_bits: i64, opts: f64) -> *mut BufferHeader {
+    // Raw/zlib deflate accepts `windowBits >= 8` (only gzip needs 9).
+    perry_runtime::js_zlib_validate_options(opts, 8);
     let level = Compression::new(perry_runtime::js_zlib_resolve_level(opts) as u32);
     let data = codec_bytes(f64::from_bits(data_bits as u64));
 
@@ -587,43 +592,52 @@ pub fn is_zlib_stream_handle(handle: i64) -> bool {
 /// # Safety
 /// FFI entry; `_opts` is the (ignored) NaN-boxed options object.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_create_gzip(_opts: f64) -> i64 {
+pub unsafe extern "C" fn js_zlib_create_gzip(opts: f64) -> i64 {
+    // Node validates the options object in the stream constructor, before any
+    // data flows. Gzip compression needs `windowBits >= 9` (#3662).
+    perry_runtime::js_zlib_validate_options(opts, 9);
     create_zlib_stream(Codec::Gzip)
 }
 /// # Safety
-/// FFI entry; `_opts` is the (ignored) NaN-boxed options object.
+/// FFI entry; `opts` is the NaN-boxed options object (validated, then ignored).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_create_gunzip(_opts: f64) -> i64 {
+pub unsafe extern "C" fn js_zlib_create_gunzip(opts: f64) -> i64 {
+    perry_runtime::js_zlib_validate_options(opts, 8);
     create_zlib_stream(Codec::Gunzip)
 }
 /// # Safety
-/// FFI entry; `_opts` is the (ignored) NaN-boxed options object.
+/// FFI entry; `opts` is the NaN-boxed options object (validated, then ignored).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_create_deflate(_opts: f64) -> i64 {
+pub unsafe extern "C" fn js_zlib_create_deflate(opts: f64) -> i64 {
+    perry_runtime::js_zlib_validate_options(opts, 8);
     create_zlib_stream(Codec::Deflate)
 }
 /// # Safety
-/// FFI entry; `_opts` is the (ignored) NaN-boxed options object.
+/// FFI entry; `opts` is the NaN-boxed options object (validated, then ignored).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_create_inflate(_opts: f64) -> i64 {
+pub unsafe extern "C" fn js_zlib_create_inflate(opts: f64) -> i64 {
+    perry_runtime::js_zlib_validate_options(opts, 8);
     create_zlib_stream(Codec::Inflate)
 }
 /// # Safety
-/// FFI entry; `_opts` is the (ignored) NaN-boxed options object.
+/// FFI entry; `opts` is the NaN-boxed options object (validated, then ignored).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_create_deflate_raw(_opts: f64) -> i64 {
+pub unsafe extern "C" fn js_zlib_create_deflate_raw(opts: f64) -> i64 {
+    perry_runtime::js_zlib_validate_options(opts, 8);
     create_zlib_stream(Codec::DeflateRaw)
 }
 /// # Safety
-/// FFI entry; `_opts` is the (ignored) NaN-boxed options object.
+/// FFI entry; `opts` is the NaN-boxed options object (validated, then ignored).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_create_inflate_raw(_opts: f64) -> i64 {
+pub unsafe extern "C" fn js_zlib_create_inflate_raw(opts: f64) -> i64 {
+    perry_runtime::js_zlib_validate_options(opts, 8);
     create_zlib_stream(Codec::InflateRaw)
 }
 /// # Safety
-/// FFI entry; `_opts` is the (ignored) NaN-boxed options object.
+/// FFI entry; `opts` is the NaN-boxed options object (validated, then ignored).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_create_unzip(_opts: f64) -> i64 {
+pub unsafe extern "C" fn js_zlib_create_unzip(opts: f64) -> i64 {
+    perry_runtime::js_zlib_validate_options(opts, 8);
     create_zlib_stream(Codec::Unzip)
 }
 /// # Safety

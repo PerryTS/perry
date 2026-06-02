@@ -12,6 +12,101 @@ fn is_global_this_value(expr: &Expr) -> bool {
         )
 }
 
+/// #3663: classic-stream constructor export names from `node:stream`.
+const STREAM_CTOR_NAMES: [&str; 5] = ["Readable", "Writable", "Duplex", "Transform", "PassThrough"];
+
+/// #3663: the string argument of a `require("<literal>")` call, if any. Unlike
+/// `is_require_builtin_module` (whose allowlist is just fs/path/crypto), this
+/// returns the specifier verbatim so the caller can match the module it cares
+/// about (`"stream"`).
+fn require_literal_specifier(init: &ast::Expr) -> Option<String> {
+    let ast::Expr::Call(call) = init else {
+        return None;
+    };
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return None;
+    };
+    let ast::Expr::Ident(ident) = callee.as_ref() else {
+        return None;
+    };
+    if ident.sym.as_ref() != "require" {
+        return None;
+    }
+    let arg = call.args.first()?;
+    if arg.spread.is_some() {
+        return None;
+    }
+    let ast::Expr::Lit(ast::Lit::Str(s)) = arg.expr.as_ref() else {
+        return None;
+    };
+    s.value.as_str().map(|s| s.to_string())
+}
+
+/// #3663: resolve the builtin module that a destructuring RHS reads from.
+/// Handles `const { Readable } = require('stream')` (CJS), and the namespace
+/// forms `const { Readable } = stream` where `stream` is an `import * as` /
+/// `const stream = require('stream')` alias. Returns the canonical module name.
+fn destructure_builtin_module_source(ctx: &LoweringContext, init: &ast::Expr) -> Option<String> {
+    if let Some(module) = require_literal_specifier(init) {
+        return Some(module);
+    }
+    if let ast::Expr::Ident(ident) = init {
+        let name = ident.sym.as_ref();
+        if let Some(module) = ctx.lookup_builtin_module_alias(name) {
+            return Some(module.to_string());
+        }
+        if let Some((module, None)) = ctx.lookup_native_module(name) {
+            return Some(module.to_string());
+        }
+    }
+    None
+}
+
+/// #3663: register destructured `node:stream` constructor bindings as
+/// native-module member aliases, mirroring `import { Readable } from 'stream'`.
+/// Without this, `const { Readable } = require('stream')` leaves `Readable` as a
+/// plain local, so the later `const r = new Readable(...)` binding is never
+/// tagged as a stream instance — and `r.on()/.write()/.pipe()` then fall through
+/// to no-op stub closures instead of routing to the real stream pump (the
+/// `NativeMethodCall` path the named-import form already takes).
+fn register_destructured_stream_ctors(ctx: &mut LoweringContext, decl: &ast::VarDeclarator) {
+    let ast::Pat::Object(obj_pat) = &decl.name else {
+        return;
+    };
+    let Some(init) = decl.init.as_deref() else {
+        return;
+    };
+    let Some(module) = destructure_builtin_module_source(ctx, init) else {
+        return;
+    };
+    if module != "stream" {
+        return;
+    }
+    for prop in &obj_pat.props {
+        let (key, binding) = match prop {
+            ast::ObjectPatProp::Assign(assign) => {
+                let name = assign.key.sym.to_string();
+                (name.clone(), name)
+            }
+            ast::ObjectPatProp::KeyValue(kv) => {
+                let key = match &kv.key {
+                    ast::PropName::Ident(i) => i.sym.to_string(),
+                    ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                    _ => continue,
+                };
+                let ast::Pat::Ident(binding) = kv.value.as_ref() else {
+                    continue;
+                };
+                (key, binding.id.sym.to_string())
+            }
+            _ => continue,
+        };
+        if STREAM_CTOR_NAMES.contains(&key.as_str()) {
+            ctx.register_native_module(binding, "stream".to_string(), Some(key));
+        }
+    }
+}
+
 /// Lower a variable declaration, handling array destructuring patterns.
 /// Returns a vector of statements (multiple for destructuring, single for simple bindings).
 pub(crate) fn lower_var_decl_with_destructuring(
@@ -314,7 +409,8 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         | ("https", "Agent")
                                         | ("dns" | "dns/promises", "Resolver")
                                         | ("sqlite", "DatabaseSync")
-                                );
+                                ) || (module_name == "stream"
+                                    && STREAM_CTOR_NAMES.contains(&class_name));
                                 if is_known_native_class {
                                     let (mod_for_class, cls_for_class) = if class_name == "Agent" {
                                         ("http", "Agent")
@@ -469,6 +565,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                             // HttpServer arm → returns NaN.
                                             ("http", "createServer") => Some("HttpServer"),
                                             ("https", "createServer") => Some("HttpsServer"),
+                                            ("tls", "createServer" | "Server") => Some("Server"),
                                             ("http2", "createSecureServer") => {
                                                 Some("Http2SecureServer")
                                             }
@@ -1396,12 +1493,27 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 None
             };
 
+            if let Some(init_ast) = decl.init.as_ref() {
+                result.extend(predeclare_implicit_assignment_targets(ctx, init_ast));
+            }
             let init = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
             if matches!(ty, Type::Any) {
-                if let Some(Expr::NativeMethodCall { module, method, .. }) = &init {
-                    if module == "stream" && method == "from" {
-                        ty = Type::Named("Readable".to_string());
+                match &init {
+                    Some(Expr::NativeMethodCall { module, method, .. }) => {
+                        if module == "stream" && method == "from" {
+                            ty = Type::Named("Readable".to_string());
+                        }
                     }
+                    Some(Expr::NewDynamic { callee, .. }) => {
+                        if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                            if matches!(object.as_ref(), Expr::NativeModuleRef(module) if module == "net" || module == "node:net")
+                                && matches!(property.as_str(), "BlockList" | "SocketAddress")
+                            {
+                                ty = Type::Named(property.clone());
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             // #321: a generator function EXPRESSION bound to a name (`const g =
@@ -1427,6 +1539,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 && ctx.inside_block_scope == 0
                 && ctx.pre_registered_module_vars.remove(&name)
             {
+                ctx.pre_registered_module_var_decls.remove(&name);
                 // Reuse pre-registered LocalId from module-level forward-declaration pass.
                 // #1758: gated on MODULE scope — a nested local of the same name
                 // (`function helper() { const zipWith = ... }` where the module also
@@ -1698,6 +1811,11 @@ pub(crate) fn lower_var_decl_with_destructuring(
             });
         }
         ast::Pat::Array(_) | ast::Pat::Object(_) => {
+            // #3663: tag destructured `node:stream` constructors as native-module
+            // aliases so subsequent `new Readable(...)` bindings register as
+            // stream instances and their methods route to the real pump.
+            register_destructured_stream_ctors(ctx, decl);
+
             // Delegate to the recursive pattern binding helper so that all
             // destructuring features (nested patterns, defaults, rest, computed
             // keys) work consistently across all call sites.
@@ -1728,6 +1846,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
             // For other patterns, fall back to existing behavior
             let name = get_binding_name(&decl.name)?;
             let ty = extract_binding_type(&decl.name);
+            if let Some(init_ast) = decl.init.as_ref() {
+                result.extend(predeclare_implicit_assignment_targets(ctx, init_ast));
+            }
             let init = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
             // #321: a generator function EXPRESSION bound to a name (`const g =
             // function*(){}`) — register the name so `for (x of g())` / `[...g()]`
@@ -1750,6 +1871,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 && ctx.inside_block_scope == 0
                 && ctx.pre_registered_module_vars.remove(&name)
             {
+                ctx.pre_registered_module_var_decls.remove(&name);
                 // #1758: module-scope only — see the sibling guard above.
                 let id = ctx.lookup_local(&name).unwrap();
                 if let Some((_, _, existing_ty)) =

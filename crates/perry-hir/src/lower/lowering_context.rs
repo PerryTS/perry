@@ -160,6 +160,9 @@ pub struct LoweringContext {
     pub(crate) ui_widget_type_aliases: HashMap<String, String>,
     /// Current class being lowered (for arrow function `this` capture)
     pub(crate) current_class: Option<String>,
+    /// Home-object local for object-literal methods while their bodies are
+    /// lowered. Used to preserve `super` in object methods.
+    pub(crate) object_super_home_stack: Vec<LocalId>,
     /// Extern function types: name -> (param_types, return_type)
     /// Stores type information for declare function statements (FFI)
     pub(crate) extern_func_types: Vec<(String, Vec<Type>, Type)>,
@@ -178,6 +181,10 @@ pub struct LoweringContext {
     /// (static property key); flushed into `Module.closure_display_names`
     /// alongside `pending_functions`.
     pub(crate) closure_display_names: HashMap<FuncId, String>,
+    /// #4101: original source text keyed by FuncId, captured by slicing the
+    /// module source against each function's AST span at lowering time.
+    /// Flushed into `Module.closure_source_text` alongside `pending_functions`.
+    pub(crate) closure_source_text: HashMap<FuncId, String>,
     /// Functions that return native module instances: func_name -> (module_name, class_name)
     /// Tracks user-defined functions whose return type annotation is a native module type
     /// (e.g., initializePool(): mysql.Pool -> ("mysql2/promise", "Pool"))
@@ -194,6 +201,10 @@ pub struct LoweringContext {
     /// Module-level variable names pre-registered in the forward-declaration pass.
     /// Used to avoid duplicate define_local calls when the actual declaration is lowered.
     pub(crate) pre_registered_module_vars: HashSet<String>,
+    /// Subset of `pre_registered_module_vars` that came from syntactic `var`
+    /// declarations. Sloppy assignments before a later `var` need an early
+    /// backing slot; `let`/`const` should not use that path.
+    pub(crate) pre_registered_module_var_decls: HashSet<String>,
     /// LocalIds that are defined at module top level (outside any function or
     /// block). Closure `captures` referencing these IDs are filtered out at
     /// lowering time because codegen loads module-level bindings from their

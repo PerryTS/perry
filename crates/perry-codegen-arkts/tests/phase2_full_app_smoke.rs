@@ -53,6 +53,8 @@ fn empty_module() -> Module {
         init_kind: perry_hir::ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        closure_source_text: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
     }
 }
 
@@ -75,7 +77,9 @@ fn closure(params: Vec<Param>, body: Vec<Stmt>) -> Expr {
         captures: vec![],
         mutable_captures: vec![],
         captures_this: false,
+        captures_new_target: false,
         enclosing_class: None,
+        is_arrow: false,
         is_async: false,
         is_generator: false,
         is_strict: false,

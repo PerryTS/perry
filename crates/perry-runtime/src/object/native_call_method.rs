@@ -67,12 +67,102 @@ pub unsafe extern "C" fn js_native_call_method_value(
     args_len: usize,
 ) -> f64 {
     let key_jsval = JSValue::from_bits(key.to_bits());
+    let is_symbol_key = crate::symbol::js_is_symbol(key) != 0;
+
+    if is_symbol_key {
+        let sym_key = crate::symbol::sym_key_from_f64(key);
+        if sym_key != 0 {
+            let bits = object.to_bits();
+            let top16 = bits >> 48;
+            if top16 == 0x7FFE {
+                let class_id = (bits & 0xFFFF_FFFF) as u32;
+                let is_prototype_ref = crate::object::class_prototype_ref_id(object).is_some();
+                if is_prototype_ref {
+                    if let Some((func_ptr, param_count, _has_rest)) =
+                        lookup_class_symbol_method_in_chain(class_id, sym_key, false)
+                    {
+                        return call_vtable_method(
+                            func_ptr,
+                            object.to_bits() as i64,
+                            args_ptr,
+                            args_len,
+                            param_count,
+                        );
+                    }
+                } else {
+                    if let Some((func_ptr, param_count, has_rest)) =
+                        lookup_class_symbol_method_in_chain(class_id, sym_key, true)
+                    {
+                        let prev_this = crate::object::js_implicit_this_set(object);
+                        let result = call_registered_static_method(
+                            func_ptr,
+                            args_ptr,
+                            args_len,
+                            param_count,
+                            has_rest,
+                        );
+                        crate::object::js_implicit_this_set(prev_this);
+                        return result;
+                    }
+                }
+            } else if is_class_object_value(object) {
+                let obj = JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
+                let class_id = js_object_get_class_id(obj);
+                if let Some((func_ptr, param_count, has_rest)) =
+                    lookup_class_symbol_method_in_chain(class_id, sym_key, true)
+                {
+                    let prev_this = crate::object::js_implicit_this_set(object);
+                    let result = call_registered_static_method(
+                        func_ptr,
+                        args_ptr,
+                        args_len,
+                        param_count,
+                        has_rest,
+                    );
+                    crate::object::js_implicit_this_set(prev_this);
+                    return result;
+                }
+            } else if key_jsval.is_pointer() || JSValue::from_bits(bits).is_pointer() {
+                let obj_val = JSValue::from_bits(bits);
+                if obj_val.is_pointer() {
+                    let obj = obj_val.as_pointer::<ObjectHeader>();
+                    if !obj.is_null() && is_valid_obj_ptr(obj as *const u8) {
+                        let class_id = js_object_get_class_id(obj);
+                        if class_id != 0 {
+                            if let Some((func_ptr, param_count, _has_rest)) =
+                                lookup_class_symbol_method_in_chain(class_id, sym_key, false)
+                            {
+                                let this_i64 = obj as i64;
+                                return call_vtable_method(
+                                    func_ptr,
+                                    this_i64,
+                                    args_ptr,
+                                    args_len,
+                                    param_count,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let property_key = if is_symbol_key {
+        key
+    } else {
+        crate::object::js_to_property_key(key)
+    };
+    if !is_symbol_key && crate::symbol::js_is_symbol(property_key) != 0 {
+        return js_native_call_method_value(object, property_key, args_ptr, args_len);
+    }
 
     // String key (incl. SSO short strings): forward to the dispatch tower,
     // which both finds own-field closures and binds `this`.
-    if key_jsval.is_any_string() {
+    let property_key_jsval = JSValue::from_bits(property_key.to_bits());
+    if property_key_jsval.is_any_string() {
         let str_ptr =
-            crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+            crate::value::js_get_string_pointer_unified(property_key) as *const crate::StringHeader;
         if !str_ptr.is_null() {
             let bytes_ptr = (str_ptr as *const i8).add(std::mem::size_of::<crate::StringHeader>());
             let bytes_len = (*str_ptr).byte_len as usize;
@@ -83,11 +173,10 @@ pub unsafe extern "C" fn js_native_call_method_value(
     // Non-string key: read the property value, then invoke it with `this`
     // bound to the receiver (the codegen `Expr::This` fallback reads
     // `IMPLICIT_THIS` when there's no lexical `this`).
-    let is_symbol_key = crate::symbol::js_is_symbol(key) != 0;
     let field = if is_symbol_key {
         crate::symbol::js_object_get_symbol_property(object, key)
     } else {
-        crate::object::js_object_get_index_polymorphic(object.to_bits() as i64, key)
+        crate::object::js_object_get_index_polymorphic(object.to_bits() as i64, property_key)
     };
     let fv = JSValue::from_bits(field.to_bits());
     if fv.is_undefined() || fv.is_null() {
@@ -438,19 +527,22 @@ unsafe fn dispatch_typed_array_method(
             f64::NAN
         }
     };
-    let arg_closure = |i: usize| -> *const crate::closure::ClosureHeader {
-        if i < args_len && !args_ptr.is_null() {
-            let v = *args_ptr.add(i);
-            let bits = v.to_bits();
-            let tag = (bits >> 48) as u16;
-            if tag == 0x7FFD {
-                (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::closure::ClosureHeader
-            } else {
-                std::ptr::null()
-            }
+    // #4091: validate the 1st argument is callable, throwing a spec `TypeError`
+    // otherwise (this dynamic dispatch tower is the inline-`new` /
+    // `Uint8Array`-local path, where the boxed callback is still available).
+    // `map` uses %TypedArray%.prototype.map's distinct non-callable rendering.
+    let validate_cb = |map_form: bool| -> *const crate::closure::ClosureHeader {
+        let boxed = if args_len >= 1 && !args_ptr.is_null() {
+            *args_ptr
         } else {
-            std::ptr::null()
-        }
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        };
+        let p = if map_form {
+            crate::array::js_validate_array_map_callback(ta as i64, boxed)
+        } else {
+            crate::array::js_validate_array_callback(boxed)
+        };
+        p as *const crate::closure::ClosureHeader
     };
     let r = match method_name {
         "length" => crate::typedarray::js_typed_array_length(ta) as f64,
@@ -520,21 +612,9 @@ unsafe fn dispatch_typed_array_method(
             };
             f64::from_bits(crate::typedarray::js_typed_array_with(ta, idx, val) as u64)
         }
-        "findLast" => {
-            let cb = arg_closure(0);
-            if cb.is_null() {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            } else {
-                crate::typedarray::js_typed_array_find_last(ta, cb)
-            }
-        }
+        "findLast" => crate::typedarray::js_typed_array_find_last(ta, validate_cb(false)),
         "findLastIndex" => {
-            let cb = arg_closure(0);
-            if cb.is_null() {
-                -1.0
-            } else {
-                crate::typedarray::js_typed_array_find_last_index(ta, cb)
-            }
+            crate::typedarray::js_typed_array_find_last_index(ta, validate_cb(false))
         }
         // #2797/#2798/#2799: callback-bearing %TypedArray% methods. The codegen
         // lowerers only fire for receivers it can statically prove are plain
@@ -542,18 +622,18 @@ unsafe fn dispatch_typed_array_method(
         // where these arms previously fell through to the undefined catch-all
         // (so `ta.map`/`ta.reduce`/`ta.find` silently no-op'd).
         "map" => {
-            let result = crate::typedarray::js_typed_array_map(ta, arg_closure(0));
+            let result = crate::typedarray::js_typed_array_map(ta, validate_cb(true));
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
         "filter" => {
-            let result = crate::typedarray::js_typed_array_filter(ta, arg_closure(0));
+            let result = crate::typedarray::js_typed_array_filter(ta, validate_cb(false));
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
-        "forEach" => crate::typedarray::js_typed_array_for_each(ta, arg_closure(0)),
-        "some" => crate::typedarray::js_typed_array_some(ta, arg_closure(0)),
-        "every" => crate::typedarray::js_typed_array_every(ta, arg_closure(0)),
-        "find" => crate::typedarray::js_typed_array_find(ta, arg_closure(0)),
-        "findIndex" => crate::typedarray::js_typed_array_find_index(ta, arg_closure(0)),
+        "forEach" => crate::typedarray::js_typed_array_for_each(ta, validate_cb(false)),
+        "some" => crate::typedarray::js_typed_array_some(ta, validate_cb(false)),
+        "every" => crate::typedarray::js_typed_array_every(ta, validate_cb(false)),
+        "find" => crate::typedarray::js_typed_array_find(ta, validate_cb(false)),
+        "findIndex" => crate::typedarray::js_typed_array_find_index(ta, validate_cb(false)),
         "values" | "Symbol.iterator" | "@@iterator" => {
             let iter =
                 crate::array::js_array_values_iter_obj(ta as *const crate::array::ArrayHeader);
@@ -581,7 +661,7 @@ unsafe fn dispatch_typed_array_method(
             }
         }
         "reduce" | "reduceRight" => {
-            let cb = arg_closure(0);
+            let cb = validate_cb(false);
             // initial value present only when a 2nd arg was passed.
             let (has_init, init) = if args_len >= 2 && !args_ptr.is_null() {
                 (1, *args_ptr.add(1))
@@ -648,6 +728,43 @@ pub(crate) unsafe fn try_dispatch_value_called_proto_method(
     ))
 }
 
+/// #3662: classify a `Function.prototype.{apply,call,bind}` receiver. Returns
+/// `true` when the receiver is *definitively not callable* — any primitive
+/// (`undefined`/`null`/number/bool/string/bigint/symbol) or a recognized
+/// ordinary heap object — so the spec brand check must throw a `TypeError`.
+/// An *ambiguous* pointer (e.g. a native-callable value that isn't a real
+/// closure) returns `false` so the caller keeps its prior conservative
+/// behavior, mirroring the additive collection-thunk approach in #3662.
+unsafe fn fn_proto_receiver_not_callable(object: f64) -> bool {
+    let jsval = JSValue::from_bits(object.to_bits());
+    if !jsval.is_pointer() {
+        return true; // primitive — never callable
+    }
+    let raw = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+    if crate::closure::is_closure_ptr(raw) {
+        return false; // a real closure is callable
+    }
+    // A recognized ordinary object (plain object, array, Map, …) is not
+    // callable. Unrecognized pointers stay ambiguous (return false).
+    is_valid_obj_ptr(raw as *const u8)
+}
+
+/// #3662: throw the spec `TypeError` for a `Function.prototype.{apply,call,
+/// bind}` invoked on a non-callable `this`. Test262's brand-check tests assert
+/// only the error *type*; the wording mirrors V8/Node (`bind` has its own
+/// distinct message). Never returns.
+#[cold]
+fn throw_fn_proto_not_callable(method: &str) -> ! {
+    let message = if method == "bind" {
+        "Bind must be called on a function".to_string()
+    } else {
+        format!("Function.prototype.{method} was called on a value that is not a function")
+    };
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_native_call_method(
     object: f64,
@@ -706,8 +823,46 @@ pub unsafe extern "C" fn js_native_call_method(
     }
 
     let jsval = JSValue::from_bits(object.to_bits());
+    if (object.to_bits() >> 48) == 0x7FFE {
+        let class_id = (object.to_bits() & 0xFFFF_FFFF) as u32;
+        if crate::object::class_prototype_ref_id(object).is_some() {
+            if let Some((func_ptr, param_count)) =
+                crate::object::class_registry::lookup_class_method_in_chain(class_id, method_name)
+            {
+                return crate::object::class_registry::call_vtable_method(
+                    func_ptr,
+                    object.to_bits() as i64,
+                    args_ptr,
+                    args_len,
+                    param_count,
+                );
+            }
+        } else if class_id != 0
+            && crate::object::class_registry::lookup_static_method_in_chain(class_id, method_name)
+                .is_some()
+        {
+            let args = refreshed_args();
+            return crate::object::class_registry::js_class_static_method_call(
+                object_handle.get_nanbox_f64(),
+                method_name_ptr as *const u8,
+                method_name_len,
+                args.as_ptr(),
+                args.len(),
+            );
+        }
+    }
 
     if method_name == "toString" && jsval.is_pointer() {
+        // #4101: `fn.toString()` — reconstruct the function's source from the
+        // codegen-registered text (or a synthesized native form), rather than
+        // falling through to the generic `"[object Object]"`.
+        let raw_addr = crate::value::js_nanbox_get_pointer(object) as usize;
+        if crate::closure::is_closure_ptr(raw_addr) {
+            let func_ptr = (*(raw_addr as *const crate::closure::ClosureHeader)).func_ptr as usize;
+            let s = crate::builtins::function_source_for_func_ptr(func_ptr);
+            let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
+        }
         let raw = crate::value::js_nanbox_get_pointer(object) as *const u8;
         if !raw.is_null() && crate::object::is_valid_obj_ptr(raw) {
             unsafe {
@@ -1627,15 +1782,18 @@ pub unsafe extern "C" fn js_native_call_method(
                     }
                     "map" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr =
+                            crate::array::js_validate_array_map_callback(arr as i64, *args_ptr)
+                                as *const crate::closure::ClosureHeader;
                         let result = crate::array::js_array_map(arr, cb_ptr);
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
                     "filter" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         let result = crate::array::js_array_filter(arr, cb_ptr);
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
@@ -1652,8 +1810,9 @@ pub unsafe extern "C" fn js_native_call_method(
                     // pattern.
                     "forEach" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         crate::array::js_array_forEach(arr, cb_ptr);
                         return f64::from_bits(crate::value::TAG_UNDEFINED);
                     }
@@ -1775,39 +1934,45 @@ pub unsafe extern "C" fn js_native_call_method(
                     // `triggerMultiComponentHooks`, so on_set never fired.
                     "some" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         return crate::array::js_array_some(arr, cb_ptr);
                     }
                     "every" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         return crate::array::js_array_every(arr, cb_ptr);
                     }
                     "find" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         return crate::array::js_array_find(arr, cb_ptr);
                     }
                     "findIndex" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         let idx = crate::array::js_array_findIndex(arr, cb_ptr);
                         return idx as f64;
                     }
                     "findLast" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         return crate::array::js_array_find_last(arr, cb_ptr);
                     }
                     "findLastIndex" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         let idx = crate::array::js_array_find_last_index(arr, cb_ptr);
                         return idx as f64;
                     }
@@ -1845,8 +2010,9 @@ pub unsafe extern "C" fn js_native_call_method(
                     }
                     "reduce" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         let (has_init, init) = if args_len >= 2 {
                             (1i32, *args_ptr.add(1))
                         } else {
@@ -1856,8 +2022,9 @@ pub unsafe extern "C" fn js_native_call_method(
                     }
                     "reduceRight" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         let (has_init, init) = if args_len >= 2 {
                             (1i32, *args_ptr.add(1))
                         } else {
@@ -1880,8 +2047,9 @@ pub unsafe extern "C" fn js_native_call_method(
                     }
                     "flatMap" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        // #4091: throw TypeError for a non-callable callback.
+                        let cb_ptr = crate::array::js_validate_array_callback(*args_ptr)
+                            as *const crate::closure::ClosureHeader;
                         let result = crate::array::js_array_flatMap(arr, cb_ptr);
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
@@ -2712,6 +2880,13 @@ pub unsafe extern "C" fn js_native_call_method(
             if jsval.is_pointer() && crate::closure::is_closure_ptr(raw_ptr) {
                 return crate::closure::js_function_bind(object, args_ptr, args_len);
             }
+            // #3662: a non-callable `this` (primitive or recognized plain
+            // object) is a spec `TypeError` — `Function.prototype.bind.call(x)`.
+            // Ambiguous pointers (possible native callables) keep the prior
+            // conservative return-unchanged behavior.
+            if fn_proto_receiver_not_callable(object) {
+                throw_fn_proto_not_callable("bind");
+            }
             return object;
         }
 
@@ -2931,7 +3106,7 @@ pub unsafe extern "C" fn js_native_call_method(
         // `_curry3`) build their dispatch chain around
         // `fn.apply(this, arguments)` / `fn.call(this, x)`, so without these
         // arms ramda fails immediately on the first curried export.
-        "call" if jsval.is_pointer() => {
+        "call" => {
             // Proxy receiver (#3656): `p.call(thisArg, ...args)` routes through
             // the proxy `apply` trap (or, absent a trap, forwards to the target).
             if crate::proxy::js_proxy_is_proxy(object) == 1 {
@@ -2968,6 +3143,11 @@ pub unsafe extern "C" fn js_native_call_method(
                 IMPLICIT_THIS.with(|c| c.set(prev_this));
                 return result;
             }
+            // #3662: `Function.prototype.call.call(x, …)` on a non-callable
+            // `this` throws a `TypeError`; ambiguous pointers fall through.
+            if fn_proto_receiver_not_callable(object) {
+                throw_fn_proto_not_callable("call");
+            }
         }
 
         // Function.prototype.apply(thisArg, argsArray) — invoke the receiver
@@ -2976,7 +3156,7 @@ pub unsafe extern "C" fn js_native_call_method(
         // null / undefined (treat as no args). Mirrors `js_native_call_method_apply`
         // but for the `Function.prototype.apply` path rather than the
         // dynamic-spread method-call codegen path.
-        "apply" if jsval.is_pointer() => {
+        "apply" => {
             // Proxy receiver (#3656): `p.apply(thisArg, argsArray)` routes
             // through the proxy `apply` trap (or forwards to the target).
             if crate::proxy::js_proxy_is_proxy(object) == 1 {
@@ -3038,6 +3218,11 @@ pub unsafe extern "C" fn js_native_call_method(
                 IMPLICIT_THIS.with(|c| c.set(prev_this));
                 return result;
             }
+            // #3662: `Function.prototype.apply.call(x, …)` on a non-callable
+            // `this` throws a `TypeError`; ambiguous pointers fall through.
+            if fn_proto_receiver_not_callable(object) {
+                throw_fn_proto_not_callable("apply");
+            }
         }
 
         // Common string methods on string values
@@ -3091,6 +3276,22 @@ pub unsafe extern "C" fn js_native_call_method(
                 return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
             } else if jsval.is_number() {
                 let n = jsval.as_number();
+                // #3146 + #2864: honour an explicit radix argument. With no
+                // argument (or an explicit `undefined`) use the default decimal
+                // formatting; otherwise delegate to the canonical radix path,
+                // which ToNumber/ToInteger-coerces + validates the radix (spec
+                // `RangeError` outside 2..=36) and formats via the shortest-
+                // round-trip V8 algorithm (`double_to_radix_string`).
+                let radix_arg = refreshed_args().first().copied();
+                let has_radix = match radix_arg {
+                    None => false,
+                    Some(r) => !JSValue::from_bits(r.to_bits()).is_undefined(),
+                };
+                if has_radix {
+                    let str_ptr =
+                        crate::value::js_jsvalue_to_string_radix(object, radix_arg.unwrap());
+                    return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
+                }
                 let s = if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
                     (n as i64).to_string()
                 } else {
@@ -3102,15 +3303,12 @@ pub unsafe extern "C" fn js_native_call_method(
                 let s = if jsval.as_bool() { "true" } else { "false" };
                 let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
                 return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
-            } else if jsval.is_undefined() {
-                let s = "undefined";
-                let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
-            } else if jsval.is_null() {
-                let s = "null";
-                let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
             }
+            // #3146: `undefined.toString()` / `null.toString()` must throw a
+            // TypeError (property read on a nullish base), not return the
+            // string "undefined"/"null". Falling through this arm without a
+            // `return` reaches the nullish-receiver throw below, which raises
+            // `Cannot read properties of <undefined|null> (reading 'toString')`.
         }
 
         // Array methods - delegate to array runtime

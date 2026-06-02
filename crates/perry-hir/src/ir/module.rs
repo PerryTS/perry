@@ -83,6 +83,21 @@ pub struct Module {
     /// Keyed by the closure/function's HIR FuncId; consumed by codegen
     /// when emitting `js_register_function_name` calls.
     pub closure_display_names: std::collections::HashMap<perry_types::FuncId, String>,
+    /// #4101: original source text for each user function, keyed by HIR
+    /// FuncId. Populated at lowering by slicing the module source against the
+    /// AST span of every function declaration / expression / arrow. Consumed
+    /// by codegen to emit `js_register_function_source` so `fn.toString()`
+    /// (and `Function.prototype.toString.call(fn)`) reconstruct the source
+    /// instead of returning the generic `"[object Object]"`.
+    pub closure_source_text: std::collections::HashMap<perry_types::FuncId, String>,
+    /// #3664: func_ids of `async function*` declarations and `async function*(){}`
+    /// expressions. The generator transform clears `is_async`/`is_generator`
+    /// before codegen, erasing the async-vs-sync distinction (both lower to a
+    /// `{next,return,throw}` wrapper). This set preserves it so codegen can
+    /// register async-generator closures in the runtime's dedicated async-
+    /// generator registry, which drives `%AsyncGeneratorFunction%` / `%Async
+    /// Generator%` intrinsic resolution. Populated by `transform_generators`.
+    pub async_generator_funcs: std::collections::HashSet<perry_types::FuncId>,
 }
 
 impl Module {
@@ -111,6 +126,8 @@ impl Module {
             init_kind: ModuleInitKind::Eager,
             async_step_closures: std::collections::HashSet::new(),
             closure_display_names: std::collections::HashMap::new(),
+            closure_source_text: std::collections::HashMap::new(),
+            async_generator_funcs: std::collections::HashSet::new(),
         }
     }
 }

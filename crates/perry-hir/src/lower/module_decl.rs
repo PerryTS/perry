@@ -14,6 +14,38 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
+fn class_computed_member_registration_expr(class_name: &str, member: &ClassComputedMember) -> Expr {
+    match member.kind {
+        ClassComputedMemberKind::Method => Expr::RegisterClassComputedMethod {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            method_name: member.function.name.clone(),
+            is_static: member.is_static,
+            param_count: member.function.params.len() as u32,
+            has_rest: member
+                .function
+                .params
+                .last()
+                .map(|p| p.is_rest)
+                .unwrap_or(false),
+        },
+        ClassComputedMemberKind::Getter => Expr::RegisterClassComputedAccessor {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            getter_name: Some(member.function.name.clone()),
+            setter_name: None,
+            is_static: member.is_static,
+        },
+        ClassComputedMemberKind::Setter => Expr::RegisterClassComputedAccessor {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            getter_name: None,
+            setter_name: Some(member.function.name.clone()),
+            is_static: member.is_static,
+        },
+    }
+}
+
 fn is_cjs_style_native_default_import(module_name: &str) -> bool {
     matches!(
         module_name,
@@ -286,6 +318,9 @@ pub(crate) fn lower_module_decl(
                                 source.clone(),
                                 native_method,
                             );
+                            if source == "process" {
+                                ctx.register_builtin_module_alias(local.clone(), source.clone());
+                            }
                         } else if is_node_builtin_module(&source) {
                             // #3906: a CJS-backed Node builtin *submodule* that
                             // isn't in NATIVE_MODULES (e.g. `node:timers/promises`,
@@ -351,7 +386,12 @@ pub(crate) fn lower_module_decl(
                         if is_native {
                             // Namespace import of native module (e.g., import * as mysql from 'mysql2')
                             // Methods are called via the namespace, so no specific method name
-                            ctx.register_native_module(local.clone(), source.clone(), None);
+                            let native_source = if source == "process" {
+                                "process.namespace".to_string()
+                            } else {
+                                source.clone()
+                            };
+                            ctx.register_native_module(local.clone(), native_source, None);
                             // Also register as builtin module alias so method-level
                             // recognition works (child_process, fs, os, etc.)
                             ctx.register_builtin_module_alias(local.clone(), source.clone());
@@ -661,6 +701,8 @@ pub(crate) fn lower_module_decl(
                                                         ("https", "createServer") => {
                                                             Some("HttpsServer")
                                                         }
+                                                        ("tls", "createServer")
+                                                        | ("tls", "Server") => Some("Server"),
                                                         ("http2", "createSecureServer") => {
                                                             Some("Http2SecureServer")
                                                         }
@@ -741,6 +783,8 @@ pub(crate) fn lower_module_decl(
                                                 ("https", Some("createServer")) => {
                                                     Some("HttpsServer")
                                                 }
+                                                ("tls", Some("createServer"))
+                                                | ("tls", Some("Server")) => Some("Server"),
                                                 ("http2", Some("createSecureServer")) => {
                                                     Some("Http2SecureServer")
                                                 }
@@ -869,6 +913,10 @@ pub(crate) fn lower_module_decl(
                                                     "async_hooks",
                                                     "AsyncLocalStorage" | "AsyncResource"
                                                 ) | ("dns" | "dns/promises", "Resolver")
+                                                    | (
+                                                        "inspector" | "inspector/promises",
+                                                        "Session"
+                                                    )
                                                     | (
                                                         "sqlite",
                                                         "DatabaseSync"
@@ -1040,6 +1088,7 @@ pub(crate) fn lower_module_decl(
 
                             let expr = lower_expr(ctx, init)?;
                             let id = if ctx.pre_registered_module_vars.remove(&name) {
+                                ctx.pre_registered_module_var_decls.remove(&name);
                                 let id = ctx.lookup_local(&name).unwrap();
                                 if let Some((_, _, existing_ty)) =
                                     ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)
@@ -1098,6 +1147,14 @@ pub(crate) fn lower_module_decl(
                                 class_name: class_name.clone(),
                                 parent_expr: extends_expr.clone(),
                             }));
+                    }
+                    for member in &class.computed_members {
+                        module
+                            .init
+                            .push(Stmt::Expr(class_computed_member_registration_expr(
+                                &class_name,
+                                member,
+                            )));
                     }
                     // Inject static-field-init statements in source order
                     // (see non-export class arm below for rationale).
@@ -1721,6 +1778,7 @@ pub(crate) fn lower_namespace_as_class(
                 setters: Vec::new(),
                 static_fields: Vec::new(),
                 static_methods: Vec::new(),
+                computed_members: Vec::new(),
                 decorators: Vec::new(),
                 is_exported,
                 aliases: Vec::new(),
@@ -1755,7 +1813,10 @@ pub(crate) fn lower_namespace_as_class(
                                 if ctx.lookup_local(&name).is_none() {
                                     let ty = extract_binding_type(&decl.name);
                                     ctx.define_local(name.clone(), ty);
-                                    ctx.pre_registered_module_vars.insert(name);
+                                    ctx.pre_registered_module_vars.insert(name.clone());
+                                    if var_decl.kind == ast::VarDeclKind::Var {
+                                        ctx.pre_registered_module_var_decls.insert(name);
+                                    }
                                 }
                             }
                         }
@@ -1785,7 +1846,10 @@ pub(crate) fn lower_namespace_as_class(
                                 .map(|ann| extract_ts_type(&ann.type_ann))
                                 .unwrap_or(Type::Any);
                             ctx.define_local(name.clone(), ty);
-                            ctx.pre_registered_module_vars.insert(name);
+                            ctx.pre_registered_module_vars.insert(name.clone());
+                            if var_decl.kind == ast::VarDeclKind::Var {
+                                ctx.pre_registered_module_var_decls.insert(name);
+                            }
                         }
                     }
                 }
@@ -1843,6 +1907,7 @@ pub(crate) fn lower_namespace_as_class(
                             if let Some(init) = &decl.init {
                                 let expr = lower_expr(ctx, init)?;
                                 let id = if ctx.pre_registered_module_vars.remove(&name) {
+                                    ctx.pre_registered_module_var_decls.remove(&name);
                                     let id = ctx.lookup_local(&name).unwrap();
                                     if let Some((_, _, existing_ty)) =
                                         ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)
@@ -1903,6 +1968,7 @@ pub(crate) fn lower_namespace_as_class(
         setters: Vec::new(),
         static_fields: Vec::new(),
         static_methods,
+        computed_members: Vec::new(),
         decorators: Vec::new(),
         is_exported,
         aliases: Vec::new(),

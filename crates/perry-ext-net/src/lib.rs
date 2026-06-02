@@ -61,6 +61,8 @@ mod tls;
 // the rest of the FFI surface.
 mod lifecycle;
 pub use lifecycle::*;
+mod classes;
+pub use classes::*;
 // #2154 — raw-consumer bridge so perry-ext-http can drive an HTTP exchange
 // over a socket produced by `agent.createConnection` (split out for the gate).
 mod raw_bridge;
@@ -71,9 +73,12 @@ use raw_bridge::RawReadState;
 // validator `extern` declarations are imported for the listen/connect sites.
 mod option_setters;
 pub use option_setters::{
-    js_net_server_noop_self, js_net_socket_noop_self, js_net_socket_set_timeout,
+    js_net_server_noop_self, js_net_socket_get_type_of_service, js_net_socket_noop_self,
+    js_net_socket_set_timeout, js_net_socket_set_type_of_service,
 };
 use option_setters::{js_net_validate_connect_port, js_net_validate_listen_port};
+mod server_state;
+pub use server_state::*;
 
 use crate::tls::do_tls_handshake;
 
@@ -196,6 +201,9 @@ pub(crate) struct ServerState {
     pub bound_port: u16,
     pub bound_host: String,
     pub listening: bool,
+    pub active_connections: usize,
+    pub max_connections: Option<usize>,
+    pub drop_max_connection: Option<bool>,
 }
 
 static NET_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
@@ -253,6 +261,8 @@ pub(crate) struct SocketState {
     pub(crate) bytes_read: u64,
     pub(crate) bytes_written: u64,
     pub(crate) timeout: Option<u64>,
+    pub(crate) type_of_service: u8,
+    pub(crate) server_id: Option<i64>,
 }
 
 pub(crate) enum SocketCommand {
@@ -295,6 +305,7 @@ enum PendingNetEvent {
     /// Fires `'error'` listeners with an Error-shaped object.
     ///   `.0` = server id, `.1` = error message.
     ServerError(i64, String),
+    ServerDrop(i64, server_state::DropInfo),
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -316,6 +327,7 @@ pub(crate) unsafe fn string_from_header_i64(ptr: i64) -> Option<String> {
 extern "C" {
     fn js_string_from_bytes(data: *const u8, len: u32) -> *mut StringHeader;
     fn js_object_get_field_by_name_f64(obj: *const ObjectHeader, key: *const StringHeader) -> f64;
+    fn js_net_callback_ptr(value: f64) -> i64;
     /// Issue #1131 — returns 1 if `ptr` is a registered Buffer /
     /// Uint8Array in the runtime's `BUFFER_REGISTRY`. This is the only
     /// safe way to tell a `BufferHeader` apart from a `StringHeader`
@@ -428,7 +440,7 @@ unsafe fn unbox_pointer(val_f64: f64) -> *mut u8 {
 /// Extract a string field from a NaN-boxed JS object. Accepts string
 /// values and numeric values (numbers stringified) — Node accepts both
 /// shapes for `port` etc.
-unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> Option<String> {
+pub(crate) unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> Option<String> {
     if !is_nanboxed_pointer(obj_f64) {
         return None;
     }
@@ -451,7 +463,7 @@ unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> Option<Stri
     None
 }
 
-unsafe fn get_object_number_field(obj_f64: f64, field_name: &str) -> Option<f64> {
+pub(crate) unsafe fn get_object_number_field(obj_f64: f64, field_name: &str) -> Option<f64> {
     if !is_nanboxed_pointer(obj_f64) {
         return None;
     }
@@ -501,7 +513,7 @@ unsafe fn build_error_object(msg: &str) -> f64 {
     f64::from_bits(obj_v.bits())
 }
 
-fn next_id() -> i64 {
+pub(crate) fn next_id() -> i64 {
     let mut g = statics::next_net_id().lock().unwrap();
     let id = *g;
     *g += 1;
@@ -517,9 +529,27 @@ fn push_event(ev: PendingNetEvent) {
     perry_ffi::notify_main_thread();
 }
 
+fn is_local_server_target(host: &str, port: u16) -> bool {
+    let local_host = matches!(host, "localhost" | "127.0.0.1" | "::1" | "0.0.0.0");
+    if !local_host {
+        return false;
+    }
+    statics::servers().lock().ok().is_some_and(|servers| {
+        servers
+            .values()
+            .any(|server| server.listening && server.bound_port == port)
+    })
+}
+
 fn mark_closed(id: i64) {
-    if let Some(s) = statics::sockets().lock().unwrap().get_mut(&id) {
+    let owner = if let Some(s) = statics::sockets().lock().unwrap().get_mut(&id) {
         s.is_open = false;
+        s.server_id.take()
+    } else {
+        None
+    };
+    if let Some(server_id) = owner {
+        server_state::socket_closed(server_id);
     }
 }
 
@@ -693,6 +723,8 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             bytes_read: 0,
             bytes_written: 0,
             timeout: None,
+            type_of_service: 0,
+            server_id: None,
         },
     );
     statics::listeners()
@@ -704,32 +736,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
 
 // ─── FFI: net.createServer(options?, connectionListener?) ────────────────────
 
-/// Issue #1123 — `net.createServer(options?, connectionListener?)`. Allocates
-/// a placeholder server handle so the dotted (`net.createServer(...)`) and
-/// named-import (`import { createServer } from "node:net"`) forms both have
-/// a non-undefined return value to bind to `server`. The full event-driven
-/// accept loop (mirroring `js_node_http_server_listen`) is a separate
-/// follow-up — today this is just enough for the codegen lowering (`Expr::
-/// NetCreateServer` in `crates/perry-codegen/src/expr.rs`) and the HIR
-/// named-import bridge (`crates/perry-hir/src/lower/expr_call.rs`'s
-/// `("net", "createServer")` arm) to compile + link + run without
-/// "expression NetCreateServer not yet supported" / `_js_net_create_server`
-/// link errors.
-///
-/// Returns a positive integer handle as `f64` (the same convention as
-/// `js_net_socket_alloc` for the i64 socket id — callers store it through
-/// the codegen's DOUBLE return slot, so a raw small-integer f64 is the
-/// expected wire format here). If a `connectionListener` closure is
-/// provided (POINTER_TAG-tagged i64 from the codegen's `unbox_to_i64`),
-/// we stash it under the `'connection'` event slot in `NET_LISTENERS`
-/// so a future full implementation of `js_net_server_listen` can fire
-/// it. Options are accepted but ignored for now.
-///
-/// # Safety
-///
-/// `connection_listener_i64` may be 0 (no listener provided) or a raw
-/// (`POINTER_TAG`-stripped) `*const RawClosureHeader`. We only walk the
-/// pointer through `JsClosure::from_raw`'s null-tolerant API.
+/// `net.createServer(options?, connectionListener?)`.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_create_server(
     _options_i64: i64,
@@ -753,6 +760,9 @@ pub unsafe extern "C" fn js_net_create_server(
             bound_port: 0,
             bound_host: String::new(),
             listening: false,
+            active_connections: 0,
+            max_connections: None,
+            drop_max_connection: None,
         },
     );
     if connection_listener_i64 != 0 {
@@ -765,35 +775,10 @@ pub unsafe extern "C" fn js_net_create_server(
                 .push(connection_listener_i64);
         }
     }
-    // Issue #1123 followup — return the raw `i64` handle so the codegen
-    // can NaN-box it with POINTER_TAG (mirroring `js_node_http_create_server`).
-    // Without this, downstream `server.listen(...)` couldn't recover
-    // the handle: `unbox_to_i64` on a bare `1.0` would mask to 0 because
-    // the lower 48 bits of `0x3FF0_0000_0000_0000` are all zero.
-    //
-    // Side effect: `typeof server` now reports `"object"` (the canonical
-    // Node value — `net.Server extends EventEmitter`) instead of the
-    // `"number"` the initial #1123 placeholder briefly surfaced. The
-    // existing test fixture's expected stdout was updated to match.
     id
 }
 
 // ─── FFI: net.Server.listen / .close / .address / .on ────────────────────────
-//
-// Issue #1123 followup — full accept-loop wiring for the server handle
-// allocated by `js_net_create_server` above. Mirrors the shape of
-// `perry-ext-http-server::js_node_http_server_listen` (bind + spawn
-// accept loop on the multi-thread tokio runtime, then return
-// immediately; per-event dispatch happens on the main thread inside
-// `js_net_process_pending`).
-//
-// **Why not reuse the http-server scaffolding?** That crate hard-wires
-// hyper's HTTP/1 service path into every accepted connection — every
-// byte goes through `service_fn` + `Response<Full<Bytes>>`. raw TCP
-// (`net.createServer`) emits the accepted `TcpStream` directly to the
-// user's `'connection'` listener wrapped in a `net.Socket` handle. The
-// two paths share the "spawn accept loop + drain on main thread"
-// pattern but nothing past the listener.bind() call.
 
 /// `server.listen(port, callback?)` — bind a tokio `TcpListener` on
 /// `0.0.0.0:port` and spawn an accept loop on the shared multi-thread
@@ -814,8 +799,12 @@ pub unsafe extern "C" fn js_net_create_server(
 /// `callback_i64` may be 0 (no callback) or a raw `*const RawClosureHeader`
 /// cast to `i64` — the codegen ABI for NA_PTR-unboxed closures.
 #[no_mangle]
-pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, callback_i64: i64) {
+pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64, arg3: f64) {
     ensure_gc_scanner_registered();
+    let callback_i64 = match js_net_callback_ptr(arg3) {
+        0 => js_net_callback_ptr(arg2),
+        cb => cb,
+    };
     // #2013: a numeric `port` must be an integer in [0, 65536); Node throws
     // RangeError [ERR_SOCKET_BAD_PORT] otherwise. (A string is a pipe path and
     // is left alone.)
@@ -918,6 +907,12 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, callback_i
                     accepted = listener.accept() => {
                         match accepted {
                             Ok((stream, _peer)) => {
+                                if let Some(info) =
+                                    server_state::should_drop_connection(server_id, &stream)
+                                {
+                                    push_event(PendingNetEvent::ServerDrop(server_id, info));
+                                    continue;
+                                }
                                 // Allocate a fresh Socket handle that
                                 // shares the existing socket machinery
                                 // (run_socket_task, command channel,
@@ -949,6 +944,8 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, callback_i
                                         bytes_read: 0,
                                         bytes_written: 0,
                                         timeout: None,
+                                        type_of_service: 0,
+                                        server_id: Some(server_id),
                                     },
                                 );
                                 statics::listeners()
@@ -1166,6 +1163,11 @@ pub unsafe extern "C" fn js_net_socket_method_connect(handle: i64, port: f64, ho
                 s.is_open = true;
                 s.local_addr = local;
             }
+            if is_local_server_target(&host, port) {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            } else {
+                tokio::task::yield_now().await;
+            }
             push_event(PendingNetEvent::Connect(handle));
 
             run_socket_task(handle, Transport::Plain(tcp), &mut rx).await;
@@ -1223,6 +1225,8 @@ fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>
             bytes_read: 0,
             bytes_written: 0,
             timeout: None,
+            type_of_service: 0,
+            server_id: None,
         },
     );
     statics::listeners()
@@ -1266,6 +1270,11 @@ fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>
             if let Some(s) = statics::sockets().lock().unwrap().get_mut(&id) {
                 s.is_open = true;
                 s.local_addr = local;
+            }
+            if is_local_server_target(&host, port) {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            } else {
+                tokio::task::yield_now().await;
             }
             push_event(PendingNetEvent::Connect(id));
 
@@ -1567,9 +1576,10 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                 lifecycle::drain_once_listeners(id, "end");
             }
             PendingNetEvent::Close(id) => {
+                let had_error = f64::from_bits(JsValue::from_bool(false).bits());
                 for cb in listeners_for(id, "close") {
                     if cb != 0 {
-                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
+                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(had_error);
                     }
                 }
                 statics::listeners().lock().unwrap().remove(&id);
@@ -1671,6 +1681,20 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                     }
                 }
                 lifecycle::drain_once_listeners(server_id, "error");
+            }
+            PendingNetEvent::ServerDrop(server_id, info) => {
+                let cbs = listeners_for(server_id, "drop");
+                if cbs.is_empty() {
+                    lifecycle::drain_once_listeners(server_id, "drop");
+                    continue;
+                }
+                let info = server_state::build_drop_object(&info);
+                for cb in cbs {
+                    if cb != 0 {
+                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(info);
+                    }
+                }
+                lifecycle::drain_once_listeners(server_id, "drop");
             }
         }
     }

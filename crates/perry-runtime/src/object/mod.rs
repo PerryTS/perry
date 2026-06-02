@@ -38,6 +38,7 @@ mod global_this_tables;
 mod groupby;
 pub(crate) mod has_own_helpers;
 mod instanceof;
+mod namespace_create;
 mod native_call_method;
 mod native_module;
 mod native_module_dispatch;
@@ -46,6 +47,8 @@ mod object_literal_ops;
 mod object_ops;
 mod object_ops_frozen;
 mod polymorphic_index;
+mod primitive_proto_thunks;
+mod property_key;
 pub(crate) mod prototype_chain;
 mod prototype_helpers;
 mod reflect_support;
@@ -75,6 +78,7 @@ pub use global_this::*;
 pub(crate) use global_this_tables::*;
 pub use groupby::*;
 pub use instanceof::*;
+pub use namespace_create::*;
 pub use native_call_method::*;
 pub use native_module::*;
 pub(crate) use native_module_dispatch::*;
@@ -83,6 +87,7 @@ pub use object_literal_ops::*;
 pub use object_ops::*;
 pub use object_ops_frozen::*;
 pub use polymorphic_index::*;
+pub use property_key::*;
 pub(crate) use prototype_helpers::*;
 pub(crate) use reflect_support::*;
 pub use util_types::*;
@@ -100,6 +105,20 @@ static GLOBAL_THIS_READY: AtomicBool = AtomicBool::new(false);
 // array constructors and scanned by `scan_object_cache_roots_mut`.
 pub(crate) static TYPED_ARRAY_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
 pub(crate) static TYPED_ARRAY_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
+// #3664: the generator / async-generator intrinsic prototype towers.
+// `*_FUNCTION_INTRINSIC_PTR` = `%GeneratorFunction%` / `%AsyncGeneratorFunction%`
+// (the constructor closures); `*_INTRINSIC_PROTO_PTR` = `%Generator%` /
+// `%AsyncGenerator%` (a.k.a. `<Ctor>.prototype`), the object
+// `Object.getPrototypeOf(function*(){})` resolves to; `*_PROTOTYPE_PTR` =
+// `%Generator.prototype%` / `%AsyncGenerator.prototype%` (a.k.a.
+// `<Ctor>.prototype.prototype`), carrying `next`/`return`/`throw`. All six are
+// GC roots scanned by `scan_object_cache_roots_mut`.
+pub(crate) static GENERATOR_FUNCTION_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static GENERATOR_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static GENERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static ASYNC_GENERATOR_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static ASYNC_GENERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
 pub(crate) static LOCAL_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
 pub(crate) static SESSION_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
 
@@ -305,6 +324,7 @@ thread_local! {
 // in strict mode, which matches.
 thread_local! {
     static IMPLICIT_THIS: Cell<u64> = const { Cell::new(crate::value::TAG_UNDEFINED) };
+    static NEW_TARGET: Cell<u64> = const { Cell::new(crate::value::TAG_UNDEFINED) };
 }
 
 /// Read the current implicit `this` (issue #519).
@@ -344,6 +364,18 @@ pub extern "C" fn js_implicit_this_set(value: f64) -> f64 {
     IMPLICIT_THIS.with(|c| f64::from_bits(c.replace(value.to_bits())))
 }
 
+/// Read the current `new.target` value for ordinary function bodies.
+#[no_mangle]
+pub extern "C" fn js_new_target_get() -> f64 {
+    NEW_TARGET.with(|c| f64::from_bits(c.get()))
+}
+
+/// Set `new.target` and return the previous value.
+#[no_mangle]
+pub extern "C" fn js_new_target_set(value: f64) -> f64 {
+    NEW_TARGET.with(|c| f64::from_bits(c.replace(value.to_bits())))
+}
+
 /// GC mutable-root scanner for the implicit-`this` cell (issue #1813).
 ///
 /// `IMPLICIT_THIS` holds the NaN-boxed receiver for the duration of a
@@ -369,6 +401,12 @@ pub extern "C" fn js_implicit_this_set(value: f64) -> f64 {
 /// is safe.
 pub fn scan_implicit_this_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     IMPLICIT_THIS.with(|c| {
+        let mut bits = c.get();
+        if visitor.visit_nanbox_u64_slot(&mut bits) {
+            c.set(bits);
+        }
+    });
+    NEW_TARGET.with(|c| {
         let mut bits = c.get();
         if visitor.visit_nanbox_u64_slot(&mut bits) {
             c.set(bits);
@@ -1291,6 +1329,37 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
     );
     visitor.visit_atomic_i64_slot(
         &TYPED_ARRAY_INTRINSIC_PROTO_PTR,
+        Ordering::Acquire,
+        Ordering::Release,
+    );
+    // #3664: generator / async-generator intrinsic tower roots.
+    visitor.visit_atomic_i64_slot(
+        &GENERATOR_FUNCTION_INTRINSIC_PTR,
+        Ordering::Acquire,
+        Ordering::Release,
+    );
+    visitor.visit_atomic_i64_slot(
+        &GENERATOR_INTRINSIC_PROTO_PTR,
+        Ordering::Acquire,
+        Ordering::Release,
+    );
+    visitor.visit_atomic_i64_slot(
+        &GENERATOR_PROTOTYPE_PTR,
+        Ordering::Acquire,
+        Ordering::Release,
+    );
+    visitor.visit_atomic_i64_slot(
+        &ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR,
+        Ordering::Acquire,
+        Ordering::Release,
+    );
+    visitor.visit_atomic_i64_slot(
+        &ASYNC_GENERATOR_INTRINSIC_PROTO_PTR,
+        Ordering::Acquire,
+        Ordering::Release,
+    );
+    visitor.visit_atomic_i64_slot(
+        &ASYNC_GENERATOR_PROTOTYPE_PTR,
         Ordering::Acquire,
         Ordering::Release,
     );

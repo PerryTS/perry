@@ -54,14 +54,44 @@ pub(crate) use rewrite_returns::{
     rewrite_yield_to_await_in_stmts,
 };
 
+// #3664: per-thread accumulator for async-generator func_ids discovered while
+// transforming a module. The generator transform clears `is_async`/
+// `is_generator` (both async and sync generators lower to an identical
+// `{next,return,throw}` wrapper), so we record the async ones here BEFORE the
+// flags are cleared, then drain into `module.async_generator_funcs` at the end
+// of `transform_generators`. A thread_local keeps this isolated when modules
+// are transformed in parallel; `transform_generators` clears it on entry so a
+// reused worker thread never leaks IDs across modules.
+thread_local! {
+    static ASYNC_GENERATOR_FUNC_IDS: std::cell::RefCell<std::collections::HashSet<FuncId>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Record a func_id as belonging to an `async function*` (declaration or
+/// expression). Called from the generator transform while the original
+/// `is_async` flag is still observable. (#3664)
+fn record_async_generator_func(id: FuncId) {
+    ASYNC_GENERATOR_FUNC_IDS.with(|s| {
+        s.borrow_mut().insert(id);
+    });
+}
+
 /// Transform all generator functions in a module into state machine form.
 pub fn transform_generators(module: &mut Module) {
+    // #3664: reset the per-thread async-generator accumulator for this module.
+    ASYNC_GENERATOR_FUNC_IDS.with(|s| s.borrow_mut().clear());
+
     // Compute the next available local and func IDs by scanning the module
     let mut next_local_id = compute_max_local_id(module) + 1;
     let mut next_func_id = compute_max_func_id(module) + 1;
 
     for func in &mut module.functions {
         if func.is_generator {
+            // #3664: `async function* name(){}` — record before the transform
+            // clears `is_async`.
+            if func.is_async {
+                record_async_generator_func(func.id);
+            }
             transform_generator_function(func, &mut next_local_id, &mut next_func_id);
         }
     }
@@ -89,6 +119,29 @@ pub fn transform_generators(module: &mut Module) {
     // Class method / constructor / accessor bodies can also hold generator
     // expressions (effect's classes do).
     for class in &mut module.classes {
+        for m in class
+            .methods
+            .iter_mut()
+            .chain(class.static_methods.iter_mut())
+            .chain(
+                class
+                    .computed_members
+                    .iter_mut()
+                    .map(|member| &mut member.function),
+            )
+        {
+            if m.is_generator {
+                transform_generator_function_with_extra_captures(
+                    m,
+                    &mut next_local_id,
+                    &mut next_func_id,
+                    &[],
+                    &[],
+                    true,
+                    Some(class.name.clone()),
+                );
+            }
+        }
         if let Some(ctor) = &mut class.constructor {
             let mut b = std::mem::take(&mut ctor.body);
             transform_generator_closures_in_stmts(&mut b, &mut next_local_id, &mut next_func_id);
@@ -98,6 +151,12 @@ pub fn transform_generators(module: &mut Module) {
             .methods
             .iter_mut()
             .chain(class.static_methods.iter_mut())
+            .chain(
+                class
+                    .computed_members
+                    .iter_mut()
+                    .map(|member| &mut member.function),
+            )
             .chain(class.getters.iter_mut().map(|(_, f)| f))
             .chain(class.setters.iter_mut().map(|(_, f)| f))
         {
@@ -106,6 +165,13 @@ pub fn transform_generators(module: &mut Module) {
             m.body = b;
         }
     }
+
+    // #3664: drain the async-generator func_ids collected above (named + closure
+    // expressions) into the module so codegen can register them.
+    ASYNC_GENERATOR_FUNC_IDS.with(|s| {
+        let collected = std::mem::take(&mut *s.borrow_mut());
+        module.async_generator_funcs.extend(collected);
+    });
 }
 
 fn transform_generator_closures_in_stmts(
@@ -229,6 +295,7 @@ fn transform_generator_closures_in_stmts(
             Frame::ExprExit(expr) => {
                 let expr = unsafe { &mut *expr };
                 if let Expr::Closure {
+                    func_id,
                     is_generator,
                     params,
                     body,
@@ -242,6 +309,12 @@ fn transform_generator_closures_in_stmts(
                 } = expr
                 {
                     if *is_generator {
+                        // #3664: `async function*(){}` expression — record its func_id
+                        // (the symbol codegen registers) before `is_async` is cleared
+                        // below.
+                        if *is_async {
+                            record_async_generator_func(*func_id);
+                        }
                         let synth_id = {
                             let id = *next_func_id;
                             *next_func_id += 1;

@@ -13,6 +13,100 @@ use crate::lower_types::*;
 
 use super::*;
 
+fn generic_computed_member_key<'a>(
+    ctx: &LoweringContext,
+    method: &'a ast::ClassMethod,
+) -> Option<&'a ast::ComputedPropName> {
+    let ast::PropName::Computed(computed) = &method.key else {
+        return None;
+    };
+    if is_symbol_iterator_key(&computed.expr)
+        || is_inspect_custom_key(ctx, &computed.expr)
+        || symbol_well_known_key(&computed.expr).is_some()
+    {
+        return None;
+    }
+    Some(computed)
+}
+
+fn computed_member_name(kind: ast::MethodKind, computed: &ast::ComputedPropName) -> String {
+    let base = match kind {
+        ast::MethodKind::Method => "__computed_method",
+        ast::MethodKind::Getter => "__computed_getter",
+        ast::MethodKind::Setter => "__computed_setter",
+    };
+    format!("{}_{}_{}", base, computed.span.lo.0, computed.span.hi.0)
+}
+
+fn lower_generic_computed_class_member(
+    ctx: &mut LoweringContext,
+    method: &ast::ClassMethod,
+    computed: &ast::ComputedPropName,
+) -> Result<ClassComputedMember> {
+    let key_expr = lower_expr(ctx, &computed.expr)?;
+    let function_name = computed_member_name(method.kind, computed);
+    let (kind, function) = match method.kind {
+        ast::MethodKind::Method => (
+            ClassComputedMemberKind::Method,
+            lower_class_method_with_name(ctx, method, function_name)?,
+        ),
+        ast::MethodKind::Getter => (
+            ClassComputedMemberKind::Getter,
+            lower_getter_method_with_name(ctx, method, function_name)?,
+        ),
+        ast::MethodKind::Setter => (
+            ClassComputedMemberKind::Setter,
+            lower_setter_method_with_name(ctx, method, function_name)?,
+        ),
+    };
+    Ok(ClassComputedMember {
+        key_expr,
+        function,
+        is_static: method.is_static,
+        kind,
+    })
+}
+
+fn noncomputed_member_registration_name(
+    kind: ast::MethodKind,
+    method: &ast::ClassMethod,
+) -> String {
+    let base = match kind {
+        ast::MethodKind::Method => "__computed_method_named",
+        ast::MethodKind::Getter => "__computed_getter_named",
+        ast::MethodKind::Setter => "__computed_setter_named",
+    };
+    format!("{}_{}_{}", base, method.span.lo.0, method.span.hi.0)
+}
+
+fn lower_noncomputed_class_member_registration(
+    ctx: &mut LoweringContext,
+    method: &ast::ClassMethod,
+    prop_name: &str,
+) -> Result<ClassComputedMember> {
+    let function_name = noncomputed_member_registration_name(method.kind, method);
+    let (kind, function) = match method.kind {
+        ast::MethodKind::Method => (
+            ClassComputedMemberKind::Method,
+            lower_class_method_with_name(ctx, method, function_name)?,
+        ),
+        ast::MethodKind::Getter => (
+            ClassComputedMemberKind::Getter,
+            lower_getter_method_with_name(ctx, method, function_name)?,
+        ),
+        ast::MethodKind::Setter => (
+            ClassComputedMemberKind::Setter,
+            lower_setter_method_with_name(ctx, method, function_name)?,
+        ),
+    };
+    Ok(ClassComputedMember {
+        key_expr: Expr::String(prop_name.to_string()),
+        function,
+        is_static: method.is_static,
+        kind,
+    })
+}
+
 pub fn lower_class_decl(
     ctx: &mut LoweringContext,
     class_decl: &ast::ClassDecl,
@@ -287,6 +381,8 @@ pub fn lower_class_decl(
     let mut static_methods = Vec::new();
     let mut getters = Vec::new();
     let mut setters = Vec::new();
+    let mut computed_members = Vec::new();
+    let mut seen_generic_computed_member = false;
 
     // Second pass: actually lower the class members
     for member in &class_decl.class.body {
@@ -299,26 +395,11 @@ pub fn lower_class_decl(
                 if method.function.body.is_none() {
                     continue;
                 }
-                // Generic computed-key methods (`[OpCodes.OP_SYNC](op) {...}`,
-                // not a well-known symbol / iterator / inspect key) can't be
-                // reduced to a static vtable name — install them as a
-                // per-instance closure field keyed by the runtime-evaluated key
-                // (`this[expr] = function (...) {...}`). Refs #321 (effect
-                // FiberRuntime op dispatch `this[(cur)._op](cur)`). Scoped to
-                // instance methods: static computed-key *methods* need
-                // closure-valued static-field dispatch that codegen doesn't
-                // wire up yet, so they stay on the legacy path below.
-                if matches!(method.kind, ast::MethodKind::Method) && !method.is_static {
-                    if let ast::PropName::Computed(computed) = &method.key {
-                        if !is_symbol_iterator_key(&computed.expr)
-                            && !is_inspect_custom_key(ctx, &computed.expr)
-                            && symbol_well_known_key(&computed.expr).is_none()
-                        {
-                            let field = lower_computed_key_method_as_field(ctx, method, computed)?;
-                            fields.push(field);
-                            continue;
-                        }
-                    }
+                if let Some(computed) = generic_computed_member_key(ctx, method) {
+                    computed_members
+                        .push(lower_generic_computed_class_member(ctx, method, computed)?);
+                    seen_generic_computed_member = true;
+                    continue;
                 }
                 // Get the property name for getters/setters. Computed
                 // keys are accepted for `[Symbol.iterator]` (registered
@@ -327,12 +408,12 @@ pub fn lower_class_decl(
                 // with a `__perry_wk_<hook>_<class>` prefix so the LLVM
                 // backend's `init_static_fields` picks them up and
                 // registers them with the runtime).
-                let prop_name = match &method.key {
-                    ast::PropName::Ident(ident) => ident.sym.to_string(),
-                    ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                let (prop_name, can_source_order_register) = match &method.key {
+                    ast::PropName::Ident(ident) => (ident.sym.to_string(), true),
+                    ast::PropName::Str(s) => (s.value.as_str().unwrap_or("").to_string(), true),
                     ast::PropName::Computed(computed) => {
                         if is_symbol_iterator_key(&computed.expr) {
-                            "@@iterator".to_string()
+                            ("@@iterator".to_string(), false)
                         } else if is_inspect_custom_key(ctx, &computed.expr)
                             && !method.is_static
                             && matches!(method.kind, ast::MethodKind::Method)
@@ -342,7 +423,7 @@ pub fn lower_class_decl(
                             // picks it up. `format_object_as_json` looks up
                             // this name on the object's vtable when there is no
                             // per-instance entry. Refs #1248.
-                            "__perry_inspect_custom__".to_string()
+                            ("__perry_inspect_custom__".to_string(), false)
                         } else if let Some(wk) = symbol_well_known_key(&computed.expr) {
                             // hasInstance (static method): lift the method
                             // body to a top-level function named
@@ -415,9 +496,9 @@ pub fn lower_class_decl(
                                 && matches!(method.kind, ast::MethodKind::Method)
                             {
                                 if wk == "asyncDispose" {
-                                    "__perry_async_dispose__".to_string()
+                                    ("__perry_async_dispose__".to_string(), false)
                                 } else {
-                                    "__perry_dispose__".to_string()
+                                    ("__perry_dispose__".to_string(), false)
                                 }
                             } else if wk == "asyncIterator"
                                 && !method.is_static
@@ -430,7 +511,7 @@ pub fn lower_class_decl(
                                 // `instance[Symbol.asyncIterator]`. Mirrors the
                                 // `@@iterator` path; for-await over a class
                                 // instance picks the same vtable entry.
-                                "@@asyncIterator".to_string()
+                                ("@@asyncIterator".to_string(), false)
                             } else if wk == "toPrimitive"
                                 && !method.is_static
                                 && matches!(method.kind, ast::MethodKind::Method)
@@ -448,7 +529,7 @@ pub fn lower_class_decl(
                                 // / `@@asyncIterator` path. Pre-fix the method
                                 // was dropped here, so class instances coerced to
                                 // `NaN` / `[object Object]`.
-                                "@@toPrimitive".to_string()
+                                ("@@toPrimitive".to_string(), false)
                             } else {
                                 // Other well-known on a class: not yet
                                 // implemented, skip.
@@ -465,11 +546,21 @@ pub fn lower_class_decl(
                     ast::MethodKind::Getter => {
                         // Getter: no parameters, returns a value
                         let func = lower_getter_method(ctx, method)?;
+                        if seen_generic_computed_member && can_source_order_register {
+                            computed_members.push(lower_noncomputed_class_member_registration(
+                                ctx, method, &prop_name,
+                            )?);
+                        }
                         getters.push((prop_name, func));
                     }
                     ast::MethodKind::Setter => {
                         // Setter: takes one parameter
                         let func = lower_setter_method(ctx, method)?;
+                        if seen_generic_computed_member && can_source_order_register {
+                            computed_members.push(lower_noncomputed_class_member_registration(
+                                ctx, method, &prop_name,
+                            )?);
+                        }
                         setters.push((prop_name, func));
                     }
                     ast::MethodKind::Method => {
@@ -528,6 +619,11 @@ pub fn lower_class_decl(
                             ctx.pending_functions.push(top_fn);
                             ctx.iterator_func_for_class.insert(name.clone(), top_fn_id);
                             continue;
+                        }
+                        if seen_generic_computed_member && can_source_order_register {
+                            computed_members.push(lower_noncomputed_class_member_registration(
+                                ctx, method, &prop_name,
+                            )?);
                         }
                         if method.is_static {
                             static_methods.push(func);
@@ -834,6 +930,7 @@ pub fn lower_class_decl(
         &mut methods,
         &mut getters,
         &mut setters,
+        &mut computed_members,
         &mut constructor,
     );
 
@@ -876,6 +973,7 @@ pub fn lower_class_decl(
         setters,
         static_fields,
         static_methods,
+        computed_members,
         decorators: lower_decorators(ctx, &class_decl.class.decorators),
         is_exported,
         aliases: Vec::new(),
@@ -1027,6 +1125,8 @@ pub fn lower_class_from_ast(
     let mut static_methods = Vec::new();
     let mut getters = Vec::new();
     let mut setters = Vec::new();
+    let mut computed_members = Vec::new();
+    let mut seen_generic_computed_member = false;
 
     for member in &class.body {
         match member {
@@ -1038,44 +1138,51 @@ pub fn lower_class_from_ast(
                 if method.function.body.is_none() {
                     continue;
                 }
-                // Generic computed-key methods → per-instance closure field
-                // (see lower_class_decl above; instance-only). Refs #321.
-                if matches!(method.kind, ast::MethodKind::Method) && !method.is_static {
-                    if let ast::PropName::Computed(computed) = &method.key {
-                        if !is_symbol_iterator_key(&computed.expr)
-                            && !is_inspect_custom_key(ctx, &computed.expr)
-                            && symbol_well_known_key(&computed.expr).is_none()
-                        {
-                            let field = lower_computed_key_method_as_field(ctx, method, computed)?;
-                            fields.push(field);
-                            continue;
-                        }
-                    }
+                if let Some(computed) = generic_computed_member_key(ctx, method) {
+                    computed_members
+                        .push(lower_generic_computed_class_member(ctx, method, computed)?);
+                    seen_generic_computed_member = true;
+                    continue;
                 }
-                let prop_name = match &method.key {
-                    ast::PropName::Ident(ident) => ident.sym.to_string(),
-                    ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                let (prop_name, can_source_order_register) = match &method.key {
+                    ast::PropName::Ident(ident) => (ident.sym.to_string(), true),
+                    ast::PropName::Str(s) => (s.value.as_str().unwrap_or("").to_string(), true),
                     ast::PropName::Computed(computed)
                         if is_inspect_custom_key(ctx, &computed.expr)
                             && !method.is_static
                             && matches!(method.kind, ast::MethodKind::Method) =>
                     {
                         // Refs #1248: see class_decl.rs Method handling above.
-                        "__perry_inspect_custom__".to_string()
+                        ("__perry_inspect_custom__".to_string(), false)
                     }
                     _ => continue,
                 };
                 match method.kind {
                     ast::MethodKind::Getter => {
                         let func = lower_getter_method(ctx, method)?;
+                        if seen_generic_computed_member && can_source_order_register {
+                            computed_members.push(lower_noncomputed_class_member_registration(
+                                ctx, method, &prop_name,
+                            )?);
+                        }
                         getters.push((prop_name, func));
                     }
                     ast::MethodKind::Setter => {
                         let func = lower_setter_method(ctx, method)?;
+                        if seen_generic_computed_member && can_source_order_register {
+                            computed_members.push(lower_noncomputed_class_member_registration(
+                                ctx, method, &prop_name,
+                            )?);
+                        }
                         setters.push((prop_name, func));
                     }
                     ast::MethodKind::Method => {
                         let func = lower_class_method(ctx, method)?;
+                        if seen_generic_computed_member && can_source_order_register {
+                            computed_members.push(lower_noncomputed_class_member_registration(
+                                ctx, method, &prop_name,
+                            )?);
+                        }
                         if method.is_static {
                             static_methods.push(func);
                         } else {
@@ -1210,6 +1317,7 @@ pub fn lower_class_from_ast(
         &mut methods,
         &mut getters,
         &mut setters,
+        &mut computed_members,
         &mut constructor,
     );
 
@@ -1228,6 +1336,7 @@ pub fn lower_class_from_ast(
         setters,
         static_fields,
         static_methods,
+        computed_members,
         decorators: lower_decorators(ctx, &class.decorators),
         is_exported,
         aliases: Vec::new(),

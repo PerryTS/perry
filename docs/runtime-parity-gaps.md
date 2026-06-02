@@ -7,20 +7,20 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
 | Whole-module gaps (zero coverage) | 16 | 427 | n/a |
-| Partial-module gaps | 31 | 1485 | 578 |
+| Partial-module gaps | 31 | 1480 | 580 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2194** |  |
+| **Total true gaps** |  | **2189** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
 - `Web / Global APIs` — 282
 - `node:os` — 195
 - `node:crypto` — 128
-- `node:process (and global `process`)` — 99
-- `node:util` — 92
 - `node:http2` — 97
 - `node:test (and node:test/reporters, node:test/mock)` — 93
+- `node:util` — 92
+- `node:process (and global `process`)` — 92
 - `node:http` — 89
 - `node:zlib` — 78
 - `node:stream` — 76
@@ -480,7 +480,7 @@ Runtime-created fs SystemError metadata is covered by parity fixtures: sync, cal
 
 ### node:process (and global `process`)
 
-**Gap APIs: 97** · Already covered: 21
+**Gap APIs: 92** · Already covered: 26
 
 #### Missing from Perry
 
@@ -522,15 +522,10 @@ Runtime-created fs SystemError metadata is covered by parity fixtures: sync, cal
 - `process.finalization.unregister(ref)`
 - `process.ref(maybeRefable)`
 - `process.unref(maybeRefable)`
-- `process.report.getReport([err])`
-- `process.report.writeReport([filename][, err])`
 - `process.binding(name)`
 - `process.platform`
 - `process.arch`
-- `process.release`
-- `process.argv0`
-- `process.execPath`
-- … and 51 more (see `runtime-parity.md` for the full list)
+- … and 46 more (see `runtime-parity.md` for the full list)
 
 #### Covered (sampled)
 
@@ -686,7 +681,7 @@ Runtime-created fs SystemError metadata is covered by parity fixtures: sync, cal
 
 ### node:http
 
-**Gap APIs: 89** · Already covered: 52
+**Gap APIs: 88** · Already covered: 53
 
 #### Missing from Perry
 
@@ -728,10 +723,8 @@ Runtime-created fs SystemError metadata is covered by parity fixtures: sync, cal
 - `request.socket`
 - `request.writableEnded`
 - `request.writableFinished`
-- `server[Symbol.asyncDispose]()`
 - `server.headersTimeout`
 - `server.keepAliveTimeout`
-- `server.keepAliveTimeoutBuffer`
 - `server.listening`
 - `server.maxHeadersCount`
 - `server.maxRequestsPerSocket`

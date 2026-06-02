@@ -67,12 +67,32 @@ pub(crate) fn lower_process_named_property(prop: &str) -> Option<Expr> {
         "stdin" => Expr::ProcessStdin,
         "stdout" => Expr::ProcessStdout,
         "stderr" => Expr::ProcessStderr,
-        "execArgv" | "moduleLoadList" => Expr::Array(Vec::new()),
-        "title" => Expr::ProcessTitle,
-        "argv0" | "execPath" => Expr::IndexGet {
-            object: Box::new(Expr::ProcessArgv),
-            index: Box::new(Expr::Number(0.0)),
-        },
+        _ => return process_metadata_native_property(prop),
+    })
+}
+
+fn process_native_property(prop: &str) -> Expr {
+    Expr::PropertyGet {
+        object: Box::new(Expr::NativeModuleRef("process".to_string())),
+        property: prop.to_string(),
+    }
+}
+
+fn process_metadata_native_property(prop: &str) -> Option<Expr> {
+    Some(match prop {
+        "allowedNodeEnvironmentFlags"
+        | "argv0"
+        | "config"
+        | "debugPort"
+        | "execArgv"
+        | "execPath"
+        | "features"
+        | "finalization"
+        | "moduleLoadList"
+        | "release"
+        | "report"
+        | "sourceMapsEnabled"
+        | "title" => process_native_property(prop),
         _ => return None,
     })
 }
@@ -183,10 +203,11 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     });
                 }
                 // Outside a constructor: `new.target` is undefined and
-                // `undefined.<prop>` throws TypeError. We model the
-                // observable result as Undefined (matches Node when
-                // wrapped in `new.target?.<prop>` short-circuiting).
-                return Ok(Expr::Undefined);
+                // ordinary functions resolve it dynamically at runtime.
+                return Ok(Expr::PropertyGet {
+                    object: Box::new(Expr::NewTarget),
+                    property: prop_name.to_string(),
+                });
             }
         }
     }
@@ -227,11 +248,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         let is_process_obj = obj_ident.sym.as_ref() == "process"
             || matches!(
                 ctx.lookup_native_module(obj_ident.sym.as_ref()),
-                Some(("process", None))
+                Some(("process", None)) | Some(("process.namespace", None))
             );
         if is_process_obj {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
-                match prop_ident.sym.as_ref() {
+                let prop = prop_ident.sym.as_ref();
+                if let Some(expr) = process_metadata_native_property(prop) {
+                    return Ok(expr);
+                }
+                match prop {
                     "argv" => return Ok(Expr::ProcessArgv),
                     "platform" => return Ok(Expr::OsPlatform),
                     "arch" => return Ok(Expr::OsArch),
@@ -351,7 +376,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "allowedNodeEnvironmentFlags" => {
                         return Ok(process_allowed_node_flags_literal())
                     }
-                    "report" => return Ok(process_report_literal()),
+                    "report" => return Ok(process_native_property("report")),
                     // #1346: process.argv0 / execPath / title — Node
                     // documents these as strings (program-invocation
                     // name / resolved-binary path / OS-displayed
@@ -469,7 +494,11 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         );
         if inner_is_global_process {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
-                match prop_ident.sym.as_ref() {
+                let prop = prop_ident.sym.as_ref();
+                if let Some(expr) = process_metadata_native_property(prop) {
+                    return Ok(expr);
+                }
+                match prop {
                     "argv" => return Ok(Expr::ProcessArgv),
                     "platform" => return Ok(Expr::OsPlatform),
                     "arch" => return Ok(Expr::OsArch),
@@ -515,7 +544,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "allowedNodeEnvironmentFlags" => {
                         return Ok(process_allowed_node_flags_literal())
                     }
-                    "report" => return Ok(process_report_literal()),
+                    "report" => return Ok(process_native_property("report")),
                     "argv0" | "execPath" => {
                         return Ok(Expr::IndexGet {
                             object: Box::new(Expr::ProcessArgv),
@@ -1207,6 +1236,18 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if matches!(module_name.as_str(), "inspector" | "inspector/promises")
+                    && class_name == "Session"
+                    && matches!(
+                        property_name.as_str(),
+                        "connect" | "connectToMainThread" | "disconnect" | "post" | "on" | "once"
+                    )
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "net"
                     && ((class_name == "Socket" && is_net_socket_method_name(&property_name))
                         || (class_name == "Server" && is_net_server_method_name(&property_name)))
@@ -1429,12 +1470,14 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             // the live hyper accept-loop state).
                             | ("HttpServer", "headersTimeout")
                             | ("HttpServer", "keepAliveTimeout")
+                            | ("HttpServer", "keepAliveTimeoutBuffer")
                             | ("HttpServer", "requestTimeout")
                             | ("HttpServer", "timeout")
                             | ("HttpServer", "maxHeadersCount")
                             | ("HttpServer", "maxRequestsPerSocket")
                             | ("HttpsServer", "headersTimeout")
                             | ("HttpsServer", "keepAliveTimeout")
+                            | ("HttpsServer", "keepAliveTimeoutBuffer")
                             | ("HttpsServer", "requestTimeout")
                             | ("HttpsServer", "timeout")
                             | ("HttpsServer", "maxHeadersCount")
@@ -2508,20 +2551,6 @@ fn is_worker_instance_value_property(prop: &str) -> bool {
 /// generally branch on `openssl_is_boringssl` / `quic` / `typescript`
 /// rather than rejecting any unrecognised value, so a Perry-honest
 /// shape is safer than parroting Node's.
-/// process.report — Node 22's diagnostic-report control surface
-/// (`compact` / `directory` / `filename` / `signal` and the four
-/// `reportOn*` booleans, plus `getReport` / `writeReport` methods).
-/// Perry doesn't yet generate real diagnostic reports, but the shape
-/// must be present so shape-only consumers
-/// (`typeof process.report === "object"`, `Object.keys`,
-/// `process.report.directory = "..."`) don't fall over the 0.0
-/// sentinel. Methods are exposed as `undefined`; setting writable
-/// fields silently no-ops (PropertyGet/Set on a fresh object literal
-/// — Perry's runtime doesn't track an explicit cache, matching the
-/// `process.features` pattern (#1378)).
-///
-/// See #1396.
-
 /// `process.allowedNodeEnvironmentFlags` (#2589) — the Set of flags Node
 /// accepts from `NODE_OPTIONS` / the V8 environment. Perry binaries are
 /// AOT and don't honour `NODE_OPTIONS`-style runtime flags, but consumers
@@ -2816,28 +2845,6 @@ fn process_allowed_node_flags_literal() -> Expr {
             .map(|f| Expr::String((*f).to_string()))
             .collect(),
     )))
-}
-
-fn process_report_literal() -> Expr {
-    fn b(k: &str, v: bool) -> (String, Expr) {
-        (k.to_string(), Expr::Bool(v))
-    }
-    fn s(k: &str, v: &str) -> (String, Expr) {
-        (k.to_string(), Expr::String(v.to_string()))
-    }
-    Expr::Object(vec![
-        b("compact", false),
-        s("directory", ""),
-        b("excludeEnv", false),
-        b("excludeNetwork", false),
-        s("filename", ""),
-        ("getReport".to_string(), Expr::Undefined),
-        b("reportOnFatalError", false),
-        b("reportOnSignal", false),
-        b("reportOnUncaughtException", false),
-        s("signal", "SIGUSR2"),
-        ("writeReport".to_string(), Expr::Undefined),
-    ])
 }
 
 fn process_features_literal() -> Expr {

@@ -461,10 +461,36 @@ pub extern "C" fn js_uint8array_from_array(arr_ptr: *const ArrayHeader) -> *mut 
     buf
 }
 
+/// Validate a `new Uint8Array(length)` argument with `ToIndex` semantics and
+/// throw the spec `RangeError: Invalid typed array length: <n>` on a negative
+/// or out-of-range length, matching Node (#3662). `Uint8Array` is backed by a
+/// `BufferHeader` in Perry, so this lives here rather than in `typedarray.rs`.
+#[inline]
+fn uint8array_length_or_throw(val: f64) -> u32 {
+    let integer = if val.is_nan() { 0.0 } else { val.trunc() };
+    if integer < 0.0 || integer > 9_007_199_254_740_991.0 {
+        // Node reports the ORIGINAL argument, not the truncated integer
+        // (`new Uint8Array(-1.5)` → "Invalid typed array length: -1.5"), with
+        // integral values shown without a decimal point (#3146).
+        let shown = if val.is_infinite() {
+            if val > 0.0 { "Infinity" } else { "-Infinity" }.to_string()
+        } else if val.fract() == 0.0 && val.abs() < (i64::MAX as f64) {
+            format!("{}", val as i64)
+        } else {
+            format!("{val}")
+        };
+        let msg = format!("Invalid typed array length: {shown}");
+        let m = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err = crate::error::js_rangeerror_new(m);
+        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    }
+    integer as u32
+}
+
 /// `new Uint8Array(length)` — zero-filled buffer marked as Uint8Array.
 #[no_mangle]
 pub extern "C" fn js_uint8array_alloc(length: i32) -> *mut BufferHeader {
-    let length = length.max(0) as u32;
+    let length = uint8array_length_or_throw(length as f64);
     let buf = buffer_alloc(length);
     unsafe {
         (*buf).length = length;
@@ -524,13 +550,11 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
         return js_uint8array_from_array(raw as *const ArrayHeader);
     }
     // Plain IEEE double (upper16 < 0x7FFC or > 0x7FFF) — numeric length.
+    // Node applies ToIndex (NaN → 0, truncate toward zero) and throws a
+    // RangeError on a negative / out-of-range length (#3662).
     if !(0x7FFC..=0x7FFF).contains(&top16) {
-        let len = if val.is_finite() && val >= 0.0 {
-            val as i32
-        } else {
-            0
-        };
-        return js_uint8array_alloc(len);
+        let len = uint8array_length_or_throw(val);
+        return js_uint8array_alloc(len.min(i32::MAX as u32) as i32);
     }
     // Any other tag (undefined/null/bool/string/bigint) → empty buffer,
     // matching the JS semantics of `new Uint8Array(undefined)` et al.
@@ -557,6 +581,19 @@ pub extern "C" fn js_uint8array_view(
     let src = raw as *const BufferHeader;
     unsafe {
         let total_len = (*src).length as i32;
+        // #4103: spec `RangeError` for an out-of-range view. `BYTES_PER_ELEMENT`
+        // is 1 for `Uint8Array`, so there is no alignment constraint — only the
+        // offset and (offset + length) bounds against the backing buffer.
+        if byte_offset < 0 || byte_offset > total_len {
+            crate::fs::validate::throw_range_error_with_code(&format!(
+                "Start offset {byte_offset} is outside the bounds of the buffer"
+            ));
+        }
+        if requested_length >= 0 && byte_offset.saturating_add(requested_length) > total_len {
+            crate::fs::validate::throw_range_error_with_code(&format!(
+                "Invalid typed array length: {requested_length}"
+            ));
+        }
         let start = byte_offset.clamp(0, total_len);
         let len = if requested_length < 0 {
             total_len.saturating_sub(start)

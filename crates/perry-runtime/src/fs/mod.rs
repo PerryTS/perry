@@ -567,6 +567,7 @@ pub extern "C" fn js_fs_mkdir_sync(path_value: f64) -> i32 {
 
 pub(crate) unsafe fn js_fs_mkdir_result(path_value: f64, options_value: f64) -> Result<(), f64> {
     validate::validate_path("path", path_value);
+    validate::validate_mkdir_options(options_value);
     let path_str = match decode_path_value(path_value) {
         Some(s) => s,
         None => validate::throw_invalid_path_arg("path", path_value),

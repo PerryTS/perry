@@ -303,6 +303,26 @@ pub enum Expr {
         value_expr: Box<Expr>,
     },
 
+    /// Register a computed class method after evaluating the source key
+    /// through runtime `ToPropertyKey` semantics.
+    RegisterClassComputedMethod {
+        class_name: String,
+        key_expr: Box<Expr>,
+        method_name: String,
+        is_static: bool,
+        param_count: u32,
+        has_rest: bool,
+    },
+
+    /// Register one side of a computed class accessor.
+    RegisterClassComputedAccessor {
+        class_name: String,
+        key_expr: Box<Expr>,
+        getter_name: Option<String>,
+        setter_name: Option<String>,
+        is_static: bool,
+    },
+
     /// Issue #1772: per-evaluation identity for a class EXPRESSION
     /// (`class C { ... }` in value position, e.g. effect's `make(ast) =>
     /// class SchemaClass { static ast = ast }`). Codegen allocates a real
@@ -412,6 +432,10 @@ pub enum Expr {
     // This expression
     This,
 
+    // `new.target` meta-property. Ordinary function bodies read this from
+    // the runtime constructor-call slot; arrows may capture it lexically.
+    NewTarget,
+
     // Super constructor call: super(args)
     SuperCall(Vec<Expr>),
 
@@ -425,6 +449,23 @@ pub enum Expr {
     // codegen by walking the parent class's method table (issue #774).
     SuperPropertyGet {
         property: String,
+    },
+
+    // Object-literal method `super[key]` read. `home` is the hidden home
+    // object captured when the method literal is created; `receiver` is the
+    // dynamic `this` for the current call.
+    ObjectSuperPropertyGet {
+        home: Box<Expr>,
+        key: Box<Expr>,
+        receiver: Box<Expr>,
+    },
+
+    // Object-literal method `super[key](args...)` call.
+    ObjectSuperMethodCall {
+        home: Box<Expr>,
+        key: Box<Expr>,
+        receiver: Box<Expr>,
+        args: Vec<Expr>,
     },
 
     // Environment variable access: process.env.VARNAME
@@ -1817,8 +1858,12 @@ pub enum Expr {
         mutable_captures: Vec<LocalId>,
         /// Whether this closure captures `this` from the enclosing scope (arrow function semantics)
         captures_this: bool,
+        /// Whether this closure captures `new.target` from the enclosing scope.
+        captures_new_target: bool,
         /// The enclosing class name if this closure captures `this` (for field access during codegen)
         enclosing_class: Option<String>,
+        /// Whether this closure came from an arrow function expression.
+        is_arrow: bool,
         /// Whether this is an async closure
         is_async: bool,
         /// Whether this is a generator closure (a `function*(){}` expression).

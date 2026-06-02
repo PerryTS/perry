@@ -460,6 +460,7 @@ pub fn check_escapes_in_expr(
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => {
                         check_escapes_in_expr(e, candidates, classes, escaped);
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -644,6 +645,28 @@ pub fn check_escapes_in_expr(
         Expr::SuperCall(args)
         | Expr::StaticMethodCall { args, .. }
         | Expr::SuperMethodCall { args, .. } => {
+            for a in args {
+                check_escapes_in_expr(a, candidates, classes, escaped);
+            }
+        }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            check_escapes_in_expr(home, candidates, classes, escaped);
+            check_escapes_in_expr(key, candidates, classes, escaped);
+            check_escapes_in_expr(receiver, candidates, classes, escaped);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            check_escapes_in_expr(home, candidates, classes, escaped);
+            check_escapes_in_expr(key, candidates, classes, escaped);
+            check_escapes_in_expr(receiver, candidates, classes, escaped);
             for a in args {
                 check_escapes_in_expr(a, candidates, classes, escaped);
             }

@@ -28,6 +28,7 @@ where
         | Expr::PodLayoutOffsetOf { .. }
         | Expr::ClassRef(_)
         | Expr::This
+        | Expr::NewTarget
         | Expr::SuperPropertyGet { .. }
         | Expr::EnumMember { .. }
         | Expr::StaticFieldGet { .. }
@@ -580,6 +581,10 @@ where
             f(key_expr);
             f(value_expr);
         }
+        Expr::RegisterClassComputedMethod { key_expr, .. }
+        | Expr::RegisterClassComputedAccessor { key_expr, .. } => {
+            f(key_expr);
+        }
         Expr::ClassExprFresh {
             named_statics,
             symbol_statics,
@@ -772,6 +777,28 @@ where
                 f(e);
             }
         }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            f(home);
+            f(key);
+            f(receiver);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            f(home);
+            f(key);
+            f(receiver);
+            for a in args {
+                f(a);
+            }
+        }
         Expr::SuperMethodCall { args, .. }
         | Expr::StaticMethodCall { args, .. }
         | Expr::New { args, .. } => {
@@ -797,6 +824,7 @@ where
             for el in elements {
                 match el {
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => f(e),
+                    ArrayElement::Hole => {}
                 }
             }
         }

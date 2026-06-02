@@ -201,7 +201,10 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
             captures_this: true,
             ..
         } => true,
-        Expr::SuperCall(_) | Expr::SuperMethodCall { .. } => true,
+        Expr::SuperCall(_)
+        | Expr::SuperMethodCall { .. }
+        | Expr::ObjectSuperPropertyGet { .. }
+        | Expr::ObjectSuperMethodCall { .. } => true,
         // PropertyGet/Set/Update with `this.<field>` is the safe pattern —
         // scalar replacement intercepts it. With `this.<method>` it falls
         // through to the heap-dispatch path which materializes `this`.
@@ -294,6 +297,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
         Expr::Array(elements) => elements.iter().any(|e| expr_uses_this_as_value(e, fields)),
         Expr::ArraySpread(elements) => elements.iter().any(|el| match el {
             ArrayElement::Expr(e) | ArrayElement::Spread(e) => expr_uses_this_as_value(e, fields),
+            ArrayElement::Hole => false,
         }),
         Expr::Object(props) => props
             .iter()

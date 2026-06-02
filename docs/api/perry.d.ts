@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1743 entries across 102 modules
+// Coverage: 1778 entries across 105 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -177,12 +177,16 @@ declare module "async_hooks" {
   /** stdlib */
   export class AsyncResource { [key: string]: any; }
   /** stdlib */
+  export const asyncWrapProviders: any;
+  /** stdlib */
   const _default: any;
   export default _default;
   /** stdlib */
   export function createHook(...args: any[]): any;
   /** stdlib */
   export function executionAsyncId(...args: any[]): any;
+  /** stdlib */
+  export function executionAsyncResource(...args: any[]): any;
   /** stdlib */
   export function triggerAsyncId(...args: any[]): any;
 }
@@ -1688,6 +1692,8 @@ declare module "http" {
   /** stdlib */
   export class ServerResponse { [key: string]: any; }
   /** stdlib */
+  export class WebSocket { [key: string]: any; }
+  /** stdlib */
   export const METHODS: any;
   /** stdlib */
   export const STATUS_CODES: any;
@@ -1699,6 +1705,8 @@ declare module "http" {
   export function Agent(...args: any[]): any;
   /** stdlib */
   export function Server(...args: any[]): any;
+  /** stdlib */
+  export function _connectionListener(...args: any[]): any;
   /** stdlib */
   export function createServer(...args: any[]): any;
   /** stdlib */
@@ -1762,6 +1770,36 @@ declare module "https" {
   export function get(...args: any[]): any;
   /** stdlib */
   export function request(...args: any[]): any;
+}
+
+declare module "inspector" {
+  /** stdlib */
+  export class Session { [key: string]: any; }
+  /** stdlib */
+  export const console: any;
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function Session(...args: any[]): any;
+  /** stdlib */
+  export function close(...args: any[]): any;
+  /** stdlib */
+  export function open(...args: any[]): any;
+  /** stdlib */
+  export function url(...args: any[]): any;
+  /** stdlib */
+  export function waitForDebugger(...args: any[]): any;
+}
+
+declare module "inspector/promises" {
+  /** stdlib */
+  export class Session { [key: string]: any; }
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function Session(...args: any[]): any;
 }
 
 declare module "ioredis" {
@@ -1925,15 +1963,23 @@ declare module "nanoid" {
 
 declare module "net" {
   /** stdlib */
+  export class BlockList { [key: string]: any; }
+  /** stdlib */
   export class Server { [key: string]: any; }
   /** stdlib */
   export class Socket { [key: string]: any; }
   /** stdlib */
+  export class SocketAddress { [key: string]: any; }
+  /** stdlib */
   export class Stream { [key: string]: any; }
+  /** stdlib */
+  export function BlockList(...args: any[]): any;
   /** stdlib */
   export function Server(p0: any, p1: any): any;
   /** stdlib */
   export function Socket(...args: any[]): any;
+  /** stdlib */
+  export function SocketAddress(options: any): any;
   /** stdlib */
   export function Stream(...args: any[]): any;
   /** stdlib */
@@ -2835,11 +2881,29 @@ declare module "pg" {
 
 declare module "process" {
   /** stdlib */
+  export const allowedNodeEnvironmentFlags: any;
+  /** stdlib */
   export const arch: any;
   /** stdlib */
   export const argv: any;
   /** stdlib */
+  export const argv0: any;
+  /** stdlib */
+  export const config: any;
+  /** stdlib */
+  export const debugPort: any;
+  /** stdlib */
   export const env: any;
+  /** stdlib */
+  export const execArgv: any;
+  /** stdlib */
+  export const execPath: any;
+  /** stdlib */
+  export const features: any;
+  /** stdlib */
+  export const finalization: any;
+  /** stdlib */
+  export const moduleLoadList: any;
   /** stdlib */
   export const pid: any;
   /** stdlib */
@@ -2847,11 +2911,17 @@ declare module "process" {
   /** stdlib */
   export const ppid: any;
   /** stdlib */
+  export const release: any;
+  /** stdlib */
+  export const report: any;
+  /** stdlib */
   export const stderr: any;
   /** stdlib */
   export const stdin: any;
   /** stdlib */
   export const stdout: any;
+  /** stdlib */
+  export const title: any;
   /** stdlib */
   export const version: any;
   /** stdlib */
@@ -3348,19 +3418,25 @@ declare module "tls" {
   /** stdlib */
   export const rootCertificates: any;
   /** stdlib */
-  export function SecureContext(...args: any[]): any;
+  export function SecureContext(options: any): any;
   /** stdlib */
-  export function checkServerIdentity(...args: any[]): any;
+  export function Server(options: any, secureConnectionListener: any): any;
+  /** stdlib */
+  export function TLSSocket(socket: any, options: any): any;
+  /** stdlib */
+  export function checkServerIdentity(hostname: any, cert: any): any;
   /** stdlib */
   export function connect(p0: string, p1: any, p2: string, p3: any): any;
   /** stdlib */
-  export function createSecureContext(...args: any[]): any;
+  export function createSecureContext(options: any): any;
   /** stdlib */
-  export function getCACertificates(...args: any[]): any;
+  export function createServer(options: any, secureConnectionListener: any): any;
+  /** stdlib */
+  export function getCACertificates(type: any): any;
   /** stdlib */
   export function getCiphers(...args: any[]): any;
   /** stdlib */
-  export function setDefaultCACertificates(...args: any[]): any;
+  export function setDefaultCACertificates(certs: any): any;
 }
 
 declare module "tty" {
@@ -3653,6 +3729,11 @@ declare module "validator" {
   export function isURL(s: string): boolean;
   /** stdlib */
   export function isUUID(s: string): boolean;
+}
+
+declare module "vm" {
+  /** stdlib */
+  export function createContext(p0: any): any;
 }
 
 declare module "wasi" {

@@ -126,6 +126,13 @@ fn collect_assigned_function_binding_candidates(ast_module: &ast::Module) -> Has
                 }
             }
             ast::Stmt::Throw(throw_stmt) => collect_from_expr(&throw_stmt.arg, out),
+            ast::Stmt::Decl(ast::Decl::Var(var_decl)) => {
+                for decl in &var_decl.decls {
+                    if let Some(init) = &decl.init {
+                        collect_from_expr(init, out);
+                    }
+                }
+            }
             ast::Stmt::Decl(_)
             | ast::Stmt::Break(_)
             | ast::Stmt::Continue(_)
@@ -201,6 +208,15 @@ fn collect_assigned_function_binding_candidates(ast_module: &ast::Module) -> Has
     for item in &ast_module.body {
         match item {
             ast::ModuleItem::Stmt(stmt) => collect_from_stmt(stmt, &mut out),
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(export_decl)) => {
+                if let ast::Decl::Var(var_decl) = &export_decl.decl {
+                    for decl in &var_decl.decls {
+                        if let Some(init) = &decl.init {
+                            collect_from_expr(init, &mut out);
+                        }
+                    }
+                }
+            }
             ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultExpr(default_expr)) => {
                 collect_from_expr(&default_expr.expr, &mut out);
             }
@@ -460,6 +476,10 @@ pub fn lower_module_full(
                             .unwrap_or(Type::Any);
                         ctx.define_local(name.clone(), ty);
                         ctx.pre_registered_module_vars.insert(name);
+                        if var_decl.kind == ast::VarDeclKind::Var {
+                            ctx.pre_registered_module_var_decls
+                                .insert(ident.id.sym.to_string());
+                        }
                     }
                 }
             }
@@ -521,6 +541,26 @@ pub fn lower_module_full(
         }
     }
 
+    if !ctx.current_strict {
+        let mut implicit_globals: Vec<_> = reassigned_function_candidates.iter().cloned().collect();
+        implicit_globals.sort();
+        for name in implicit_globals {
+            if ctx.lookup_local(&name).is_none()
+                && ctx.lookup_func(&name).is_none()
+                && ctx.lookup_class(&name).is_none()
+            {
+                let id = ctx.define_local(name.clone(), Type::Any);
+                module.init.push(Stmt::Let {
+                    id,
+                    name,
+                    ty: Type::Any,
+                    mutable: true,
+                    init: Some(Expr::Undefined),
+                });
+            }
+        }
+    }
+
     // Main pass: lower everything
     for item in &ast_module.body {
         match item {
@@ -540,6 +580,10 @@ pub fn lower_module_full(
         // expressions and object-literal methods.
         for (id, name) in ctx.closure_display_names.drain() {
             module.closure_display_names.insert(id, name);
+        }
+        // #4101: flush captured function source text for `fn.toString()`.
+        for (id, src) in ctx.closure_source_text.drain() {
+            module.closure_source_text.insert(id, src);
         }
         // Flush any pending classes created during expression lowering
         // (e.g., class expressions in `new (class extends Command { ... })()`)

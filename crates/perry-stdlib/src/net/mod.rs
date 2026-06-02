@@ -641,7 +641,9 @@ pub unsafe extern "C" fn js_tls_connect(
     };
     let port = port as u16;
     let verify = verify != 0.0;
-    spawn_socket_task(host, port, Some((servername, verify)))
+    let handle = spawn_socket_task(host, port, Some((servername, verify)));
+    crate::tls::record_tls_client_handle(handle);
+    handle
 }
 
 /// Internal: allocate the handle, spawn the tokio task.
@@ -789,6 +791,7 @@ async fn run_socket_task(
                                 match do_tls_handshake(tcp, &servername, verify).await {
                                     Ok(tls) => {
                                         transport = Some(Transport::Tls(Box::new(tls)));
+                                        crate::tls::record_tls_client_handle(id);
                                         let _ = reply.send(Ok(()));
                                     }
                                     Err(e) => {
@@ -1007,6 +1010,11 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
         match ev {
             PendingNetEvent::Connect(id) => {
                 for cb in listeners_for(id, "connect") {
+                    if cb != 0 {
+                        js_closure_call0(cb as *const ClosureHeader);
+                    }
+                }
+                for cb in listeners_for(id, "secureConnect") {
                     if cb != 0 {
                         js_closure_call0(cb as *const ClosureHeader);
                     }

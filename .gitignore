@@ -66,6 +66,7 @@ tests/test-*
 !tests/test_native_abi_evidence_report.py
 !tests/test_typed_feedback_runtime_evidence.py
 !tests/test_perf_frontier_report.py
+!tests/test_test262_focused_report.py
 !tests/test_perf_frontier_gate_smoke.sh
 !tests/*/
 bench_*
@@ -192,6 +193,7 @@ test-files/.perry-cache/
 !/test-compat/test262/
 !/test-compat/test262/**
 /test-compat/test262/report.json
+/test-compat/test262/reports/
 
 # Vendored upstream corpora for the compat radars (large; never committed).
 /vendor/

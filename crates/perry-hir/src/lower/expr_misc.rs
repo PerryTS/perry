@@ -68,15 +68,33 @@ pub(super) fn lower_super_prop(
     // NestJS patterns are all ident-form method calls, which go
     // through SuperMethodCall anyway).
     match &super_prop.prop {
-        ast::SuperProp::Ident(ident) => Ok(Expr::SuperPropertyGet {
-            property: ident.sym.to_string(),
-        }),
+        ast::SuperProp::Ident(ident) => {
+            if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
+                Ok(Expr::ObjectSuperPropertyGet {
+                    home: Box::new(Expr::LocalGet(home_id)),
+                    key: Box::new(Expr::String(ident.sym.to_string())),
+                    receiver: Box::new(Expr::This),
+                })
+            } else {
+                Ok(Expr::SuperPropertyGet {
+                    property: ident.sym.to_string(),
+                })
+            }
+        }
         ast::SuperProp::Computed(computed) => {
             let index = Box::new(lower_expr(ctx, &computed.expr)?);
-            Ok(Expr::IndexGet {
-                object: Box::new(Expr::This),
-                index,
-            })
+            if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
+                Ok(Expr::ObjectSuperPropertyGet {
+                    home: Box::new(Expr::LocalGet(home_id)),
+                    key: index,
+                    receiver: Box::new(Expr::This),
+                })
+            } else {
+                Ok(Expr::IndexGet {
+                    object: Box::new(Expr::This),
+                    index,
+                })
+            }
         }
     }
 }
@@ -245,15 +263,16 @@ pub(super) fn lower_meta_prop(
             // literal `{ name: <class_name> }` so:
             //   - `new.target ? a : b` is truthy → takes the `a` branch
             //   - `new.target.name` returns the class name string
-            // Outside a constructor (e.g., a regular function called
-            // without `new`), `new.target` is `undefined`.
+            // Outside a class constructor, ordinary function bodies read it
+            // dynamically from the constructor-call slot. Arrow closures can
+            // capture that value lexically during closure creation.
             if let Some(class_name) = ctx.in_constructor_class.clone() {
                 Ok(Expr::Object(vec![(
                     "name".to_string(),
                     Expr::String(class_name),
                 )]))
             } else {
-                Ok(Expr::Undefined)
+                Ok(Expr::NewTarget)
             }
         }
     }

@@ -21,6 +21,7 @@ use perry_runtime::thread::{
 };
 use perry_runtime::value::JSValue;
 
+mod direct_message;
 mod parent_port;
 mod worker_options;
 mod worker_surface;
@@ -143,6 +144,11 @@ type WorkerEntry = extern "C" fn();
 
 enum WorkerCommand {
     Message(SerializedValue),
+    DirectMessage {
+        message: SerializedValue,
+        source_thread_id: u64,
+        ack: Sender<direct_message::DirectMessageResult>,
+    },
     Terminate,
 }
 
@@ -1054,10 +1060,15 @@ pub extern "C" fn js_worker_threads_mark_as_uncloneable(value: f64) -> f64 {
     js_undefined()
 }
 
-/// worker_threads.moveMessagePortToContext(port, context)
 #[no_mangle]
 pub extern "C" fn js_worker_threads_move_message_port_to_context(port: f64, _context: f64) -> f64 {
-    port
+    let Some(port_id) = port_id_from_object(port) else {
+        return js_undefined();
+    };
+    if !MESSAGE_PORTS.with(|ports| ports.borrow().contains_key(&port_id)) {
+        return js_undefined();
+    }
+    object_value(message_port_object(port_id))
 }
 
 /// worker_threads.receiveMessageOnPort(port)
@@ -1120,17 +1131,6 @@ fn object_u64_field(value: f64, field_name: &str) -> Option<u64> {
         return None;
     }
     Some(field.to_bits())
-}
-
-/// worker_threads.postMessageToThread(threadId, value[, transferList][, timeout])
-#[no_mangle]
-pub extern "C" fn js_worker_threads_post_message_to_thread(
-    _thread_id: f64,
-    _value: f64,
-    _transfer_list: f64,
-    _timeout: f64,
-) -> f64 {
-    js_undefined()
 }
 
 /// new worker_threads.MessageChannel()
@@ -1601,6 +1601,15 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
                             let closure = callback_ptr as *const ClosureHeader;
                             perry_runtime::closure::js_closure_call1(closure, f64::from_bits(bits));
                         }
+                    }
+                    Ok(WorkerCommand::DirectMessage {
+                        message,
+                        source_thread_id,
+                        ack,
+                    }) => {
+                        let result =
+                            direct_message::deliver_worker_message(&message, source_thread_id);
+                        let _ = ack.send(result);
                     }
                     Ok(WorkerCommand::Terminate) => {
                         exit_code = 1;

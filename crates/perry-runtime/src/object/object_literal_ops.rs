@@ -102,6 +102,12 @@ pub extern "C" fn js_object_define_accessor(
         if obj.is_null() {
             return obj_value;
         }
+        let key_value = js_to_property_key(key_value);
+        if crate::symbol::js_is_symbol(key_value) != 0 {
+            return crate::symbol::js_object_define_symbol_accessor(
+                obj_value, key_value, getter, setter,
+            );
+        }
         let key_str = object_literal_key_to_string(key_value);
         if key_str.is_null() {
             return obj_value;

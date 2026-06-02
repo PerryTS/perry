@@ -257,7 +257,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             Ok(blk.call(
                 DOUBLE,
                 "js_array_find",
@@ -269,7 +270,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let i32_v = blk.call(
                 I32,
                 "js_array_findIndex",
@@ -282,7 +284,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             Ok(blk.call(
                 DOUBLE,
                 "js_array_find_last",
@@ -294,7 +297,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let i32_v = blk.call(
                 I32,
                 "js_array_find_last_index",
@@ -854,9 +858,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     Ok(ctx.block().bitcast_i64_to_double(&p))
                 }
                 Some(arg_expr) => match arg_expr.as_ref() {
-                    // Literal integer length: `new Int32Array(3)`.
+                    // Literal integer length: `new Int32Array(3)`. A negative
+                    // literal (`new Int32Array(-1)`) is passed through verbatim
+                    // so the runtime throws the spec RangeError (#3662).
                     Expr::Integer(n) => {
-                        let len_str = (*n as i32).max(0).to_string();
+                        let len_str = (*n as i32).to_string();
                         let p = ctx.block().call(
                             I64,
                             "js_typed_array_new_empty",

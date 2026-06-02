@@ -33,6 +33,8 @@ impl SH for Module {
             init_kind,
             async_step_closures,
             closure_display_names,
+            closure_source_text,
+            async_generator_funcs,
         } = self;
         name.hash(h);
         imports.hash(h);
@@ -59,6 +61,11 @@ impl SH for Module {
         let mut ids: Vec<u32> = async_step_closures.iter().copied().collect();
         ids.sort_unstable();
         ids.hash(h);
+        // #3664: async-generator func_ids participate in codegen (drive the
+        // async-generator registry calls), so they're part of the stable hash.
+        let mut async_gen_ids: Vec<u32> = async_generator_funcs.iter().copied().collect();
+        async_gen_ids.sort_unstable();
+        async_gen_ids.hash(h);
         // HashMap has nondeterministic iteration order; sort by key.
         let mut display_pairs: Vec<(u32, &String)> =
             closure_display_names.iter().map(|(k, v)| (*k, v)).collect();
@@ -66,6 +73,15 @@ impl SH for Module {
         for (id, name) in display_pairs {
             id.hash(h);
             name.hash(h);
+        }
+        // #4101: function source text participates in codegen (drives the
+        // js_register_function_source calls), so include it in the hash.
+        let mut source_pairs: Vec<(u32, &String)> =
+            closure_source_text.iter().map(|(k, v)| (*k, v)).collect();
+        source_pairs.sort_unstable_by_key(|(k, _)| *k);
+        for (id, src) in source_pairs {
+            id.hash(h);
+            src.hash(h);
         }
     }
 }

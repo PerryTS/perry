@@ -8,7 +8,7 @@ use crate::native_value::{
     LoweredValue, MaterializationReason, NativeOwnedViewSlot, NativeRep, PodLayoutDecision,
     PodLocal, SemanticKind,
 };
-use crate::types::{I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
 fn is_global_this_value(expr: &perry_hir::Expr) -> bool {
     matches!(expr, perry_hir::Expr::GlobalGet(_))
@@ -1436,7 +1436,13 @@ fn lower_unused_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> Result<bool
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = crate::expr::unbox_to_i64(blk, &arr_box);
-            let cb_handle = crate::expr::unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating
+            // (the discarded-result path still validates per spec).
+            let cb_handle = blk.call(
+                I64,
+                "js_validate_array_map_callback",
+                &[(I64, &arr_handle), (DOUBLE, &cb_box)],
+            );
             blk.call_void(
                 "js_array_map_discard",
                 &[(I64, &arr_handle), (I64, &cb_handle)],

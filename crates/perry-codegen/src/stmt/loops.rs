@@ -971,6 +971,7 @@ pub(crate) fn expr_preserves_array_length(
         Expr::Array(elements) => elements.iter().all(&walk),
         Expr::ArraySpread(elements) => elements.iter().all(|el| match el {
             ArrayElement::Expr(e) | ArrayElement::Spread(e) => walk(e),
+            ArrayElement::Hole => true,
         }),
         Expr::Object(fields) => fields.iter().all(|(_, v)| walk(v)),
         Expr::LocalGet(_)
