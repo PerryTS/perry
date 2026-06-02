@@ -1730,6 +1730,40 @@ pub(crate) fn web_stream_to_string_tag(value: f64) -> Option<&'static str> {
     }
 }
 
+unsafe fn string_value_to_owned(value: f64) -> Option<String> {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv.is_any_string() {
+        return None;
+    }
+    let s = crate::builtins::js_string_coerce(value);
+    if s.is_null() {
+        return None;
+    }
+    let len = (*s).byte_len as usize;
+    let data = (s as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+    std::str::from_utf8(std::slice::from_raw_parts(data, len))
+        .ok()
+        .map(ToOwned::to_owned)
+}
+
+unsafe fn object_to_string_tag_property(value: f64) -> Option<String> {
+    let bits = value.to_bits();
+    if (bits & 0xFFFF_0000_0000_0000) != 0x7FFD_0000_0000_0000 {
+        return None;
+    }
+    let raw_addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+    if raw_addr < 0x1000 {
+        return None;
+    }
+    let sym = crate::symbol::well_known_symbol("toStringTag");
+    if sym.is_null() {
+        return None;
+    }
+    let sym_f64 = f64::from_bits(0x7FFD_0000_0000_0000 | (sym as u64 & 0x0000_FFFF_FFFF_FFFF));
+    let tag_value = crate::symbol::own_symbol_property(value, sym_f64)?;
+    string_value_to_owned(tag_value)
+}
+
 /// `Object.prototype.toString.call(x)` — returns `[object <tag>]` where
 /// `<tag>` is read from the value's class-level `Symbol.toStringTag` getter
 /// if registered, otherwise `Object` (matching Node for plain objects).
@@ -1853,6 +1887,12 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }
     if let Some(tag) = crate::builtins::boxed_primitive_to_string_tag(value) {
+        let formatted = format!("[object {}]", tag);
+        let bytes = formatted.as_bytes();
+        let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
+    if let Some(tag) = object_to_string_tag_property(value) {
         let formatted = format!("[object {}]", tag);
         let bytes = formatted.as_bytes();
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);

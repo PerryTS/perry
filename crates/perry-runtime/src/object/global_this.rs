@@ -575,6 +575,154 @@ extern "C" fn math_random_thunk(_closure: *const crate::closure::ClosureHeader) 
     crate::math::js_math_random()
 }
 
+fn math_number_arg(value: f64) -> f64 {
+    crate::builtins::js_number_coerce(value)
+}
+
+fn math_to_int32(value: f64) -> i32 {
+    let n = math_number_arg(value);
+    if !n.is_finite() || n == 0.0 {
+        return 0;
+    }
+    const TWO_32: f64 = 4_294_967_296.0;
+    (n.trunc().rem_euclid(TWO_32) as u32) as i32
+}
+
+fn math_to_uint32(value: f64) -> u32 {
+    math_to_int32(value) as u32
+}
+
+macro_rules! math_unary_thunk {
+    ($name:ident, $body:expr) => {
+        extern "C" fn $name(_closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+            let x = math_number_arg(value);
+            ($body)(x)
+        }
+    };
+}
+
+math_unary_thunk!(math_abs_thunk, |x: f64| x.abs());
+math_unary_thunk!(math_acos_thunk, |x: f64| crate::math::js_math_acos(x));
+math_unary_thunk!(math_acosh_thunk, |x: f64| crate::math::js_math_acosh(x));
+math_unary_thunk!(math_asin_thunk, |x: f64| crate::math::js_math_asin(x));
+math_unary_thunk!(math_asinh_thunk, |x: f64| crate::math::js_math_asinh(x));
+math_unary_thunk!(math_atan_thunk, |x: f64| crate::math::js_math_atan(x));
+math_unary_thunk!(math_atanh_thunk, |x: f64| crate::math::js_math_atanh(x));
+math_unary_thunk!(math_cbrt_thunk, |x: f64| crate::math::js_math_cbrt(x));
+math_unary_thunk!(math_ceil_thunk, |x: f64| x.ceil());
+math_unary_thunk!(math_cos_thunk, |x: f64| crate::math::js_math_cos(x));
+math_unary_thunk!(math_cosh_thunk, |x: f64| crate::math::js_math_cosh(x));
+math_unary_thunk!(math_exp_thunk, |x: f64| x.exp());
+math_unary_thunk!(math_expm1_thunk, |x: f64| crate::math::js_math_expm1(x));
+math_unary_thunk!(math_floor_thunk, |x: f64| x.floor());
+math_unary_thunk!(math_fround_thunk, |x: f64| crate::math::js_math_fround(x));
+math_unary_thunk!(math_log_thunk, |x: f64| crate::math::js_math_log(x));
+math_unary_thunk!(math_log10_thunk, |x: f64| crate::math::js_math_log10(x));
+math_unary_thunk!(math_log1p_thunk, |x: f64| crate::math::js_math_log1p(x));
+math_unary_thunk!(math_log2_thunk, |x: f64| crate::math::js_math_log2(x));
+math_unary_thunk!(math_sin_thunk, |x: f64| crate::math::js_math_sin(x));
+math_unary_thunk!(math_sinh_thunk, |x: f64| crate::math::js_math_sinh(x));
+math_unary_thunk!(math_sqrt_thunk, |x: f64| x.sqrt());
+math_unary_thunk!(math_tan_thunk, |x: f64| crate::math::js_math_tan(x));
+math_unary_thunk!(math_tanh_thunk, |x: f64| crate::math::js_math_tanh(x));
+math_unary_thunk!(math_trunc_thunk, |x: f64| x.trunc());
+
+extern "C" fn math_round_thunk(_closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+    let x = math_number_arg(value);
+    if x == 0.0 || x.is_nan() || x.is_infinite() {
+        return x;
+    }
+    let rounded = (x + 0.5).floor();
+    if rounded == 0.0 && x.is_sign_negative() {
+        -0.0
+    } else {
+        rounded
+    }
+}
+
+extern "C" fn math_sign_thunk(_closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+    let x = math_number_arg(value);
+    if x == 0.0 || x.is_nan() {
+        x
+    } else if x.is_sign_negative() {
+        -1.0
+    } else {
+        1.0
+    }
+}
+
+extern "C" fn math_clz32_thunk(_closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+    math_to_uint32(value).leading_zeros() as f64
+}
+
+extern "C" fn math_atan2_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    y: f64,
+    x: f64,
+) -> f64 {
+    crate::math::js_math_atan2(math_number_arg(y), math_number_arg(x))
+}
+
+extern "C" fn math_imul_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    a: f64,
+    b: f64,
+) -> f64 {
+    math_to_int32(a).wrapping_mul(math_to_int32(b)) as f64
+}
+
+extern "C" fn math_pow_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    base: f64,
+    exp: f64,
+) -> f64 {
+    crate::math::js_math_pow(math_number_arg(base), math_number_arg(exp))
+}
+
+extern "C" fn math_min_thunk(_closure: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
+    let values = global_this_rest_array_values(rest);
+    if values.is_empty() {
+        return f64::INFINITY;
+    }
+    let mut result = f64::INFINITY;
+    for value in values {
+        let n = math_number_arg(value);
+        if n.is_nan() {
+            return f64::NAN;
+        }
+        if n < result || (n == 0.0 && result == 0.0 && n.is_sign_negative()) {
+            result = n;
+        }
+    }
+    result
+}
+
+extern "C" fn math_max_thunk(_closure: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
+    let values = global_this_rest_array_values(rest);
+    if values.is_empty() {
+        return f64::NEG_INFINITY;
+    }
+    let mut result = f64::NEG_INFINITY;
+    for value in values {
+        let n = math_number_arg(value);
+        if n.is_nan() {
+            return f64::NAN;
+        }
+        if n > result || (n == 0.0 && result == 0.0 && n.is_sign_positive()) {
+            result = n;
+        }
+    }
+    result
+}
+
+extern "C" fn math_hypot_thunk(_closure: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
+    let mut result = 0.0;
+    for value in global_this_rest_array_values(rest) {
+        result = crate::math::js_math_hypot(result, math_number_arg(value).abs());
+    }
+    result
+}
+
 // #2905: thunks for the standard global helper functions. Each coerces its
 // arguments the same way the bare-call HIR lowering does and forwards to the
 // shared runtime helper so a rebound / property-read reference matches Node.
@@ -1896,6 +2044,75 @@ fn ensure_generator_intrinsics() {
     }
 }
 
+fn install_math_namespace(ns_obj: *mut ObjectHeader) {
+    if ns_obj.is_null() {
+        return;
+    }
+    for (name, func_ptr, arity) in [
+        ("abs", math_abs_thunk as *const u8, 1),
+        ("acos", math_acos_thunk as *const u8, 1),
+        ("acosh", math_acosh_thunk as *const u8, 1),
+        ("asin", math_asin_thunk as *const u8, 1),
+        ("asinh", math_asinh_thunk as *const u8, 1),
+        ("atan", math_atan_thunk as *const u8, 1),
+        ("atanh", math_atanh_thunk as *const u8, 1),
+        ("atan2", math_atan2_thunk as *const u8, 2),
+        ("ceil", math_ceil_thunk as *const u8, 1),
+        ("cbrt", math_cbrt_thunk as *const u8, 1),
+        ("expm1", math_expm1_thunk as *const u8, 1),
+        ("clz32", math_clz32_thunk as *const u8, 1),
+        ("cos", math_cos_thunk as *const u8, 1),
+        ("cosh", math_cosh_thunk as *const u8, 1),
+        ("exp", math_exp_thunk as *const u8, 1),
+        ("floor", math_floor_thunk as *const u8, 1),
+        ("fround", math_fround_thunk as *const u8, 1),
+    ] {
+        install_proto_method(ns_obj, name, func_ptr, arity);
+    }
+    install_proto_method_rest_with_length(ns_obj, "hypot", math_hypot_thunk as *const u8, 2, 0);
+    for (name, func_ptr, arity) in [
+        ("imul", math_imul_thunk as *const u8, 2),
+        ("log", math_log_thunk as *const u8, 1),
+        ("log1p", math_log1p_thunk as *const u8, 1),
+        ("log2", math_log2_thunk as *const u8, 1),
+        ("log10", math_log10_thunk as *const u8, 1),
+    ] {
+        install_proto_method(ns_obj, name, func_ptr, arity);
+    }
+    install_proto_method_rest_with_length(ns_obj, "max", math_max_thunk as *const u8, 2, 0);
+    install_proto_method_rest_with_length(ns_obj, "min", math_min_thunk as *const u8, 2, 0);
+    for (name, func_ptr, arity) in [
+        ("pow", math_pow_thunk as *const u8, 2),
+        ("random", math_random_thunk as *const u8, 0),
+        ("round", math_round_thunk as *const u8, 1),
+        ("sign", math_sign_thunk as *const u8, 1),
+        ("sin", math_sin_thunk as *const u8, 1),
+        ("sinh", math_sinh_thunk as *const u8, 1),
+        ("sqrt", math_sqrt_thunk as *const u8, 1),
+        ("tan", math_tan_thunk as *const u8, 1),
+        ("tanh", math_tanh_thunk as *const u8, 1),
+        ("trunc", math_trunc_thunk as *const u8, 1),
+    ] {
+        install_proto_method(ns_obj, name, func_ptr, arity);
+    }
+
+    let constant_attrs = super::PropertyAttrs::new(false, false, false);
+    for (name, value) in [
+        ("E", std::f64::consts::E),
+        ("LN10", std::f64::consts::LN_10),
+        ("LN2", std::f64::consts::LN_2),
+        ("LOG10E", std::f64::consts::LOG10_E),
+        ("LOG2E", std::f64::consts::LOG2_E),
+        ("PI", std::f64::consts::PI),
+        ("SQRT1_2", std::f64::consts::FRAC_1_SQRT_2),
+        ("SQRT2", std::f64::consts::SQRT_2),
+    ] {
+        set_intrinsic_data_prop(ns_obj, name, value, constant_attrs);
+    }
+
+    install_proto_method(ns_obj, "f16round", math_f16round_thunk as *const u8, 1);
+}
+
 /// Populate the freshly-allocated globalThis singleton with built-in
 /// constructor / namespace properties. Called exactly once from the CAS
 /// winner in `js_get_global_this`. Constructors get a ClosureHeader-
@@ -2276,13 +2493,14 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             if ns_obj.is_null() {
                 continue;
             }
-            // #4139: reify each namespace's own members as real properties so
-            // the reflection APIs (`getOwnPropertyDescriptor`,
+            // #4139 + #4149: reify each namespace's own members as real
+            // properties so the reflection APIs (`getOwnPropertyDescriptor`,
             // `getOwnPropertyNames`) observe them. Call sites (`Math.max(...)`,
             // `JSON.stringify(...)`, `Reflect.get(...)`) are codegen intrinsics
-            // gated on the AST shape and never read these fields.
+            // gated on the AST shape and never read these fields. Math uses the
+            // richer install that also exposes per-method name/length descriptors.
             match name {
-                "Math" => install_math_namespace_members(ns_obj),
+                "Math" => install_math_namespace(ns_obj),
                 "JSON" => install_json_namespace_members(ns_obj),
                 "Reflect" => install_reflect_namespace_members(ns_obj),
                 _ => {}
@@ -2290,13 +2508,11 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             crate::value::js_nanbox_pointer(ns_obj as i64)
         };
         js_object_set_field_by_name(singleton, name_key, ns_value);
-        if name == "WebAssembly" {
-            super::set_builtin_property_attrs(
-                singleton as usize,
-                name.to_string(),
-                super::PropertyAttrs::new(true, false, true),
-            );
-        }
+        super::set_builtin_property_attrs(
+            singleton as usize,
+            name.to_string(),
+            super::PropertyAttrs::new(true, false, true),
+        );
     }
     // node:perf_hooks `performance` global — bind it to the same singleton the
     // named import resolves to, so `globalThis.performance ===
@@ -3024,13 +3240,29 @@ fn install_proto_method_rest(
     func_ptr: *const u8,
     fixed_arity: u32,
 ) {
+    install_proto_method_rest_with_length(
+        proto_obj,
+        method_name,
+        func_ptr,
+        fixed_arity,
+        fixed_arity,
+    );
+}
+
+fn install_proto_method_rest_with_length(
+    proto_obj: *mut ObjectHeader,
+    method_name: &str,
+    func_ptr: *const u8,
+    spec_length: u32,
+    call_fixed_arity: u32,
+) -> f64 {
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     if closure.is_null() {
-        return;
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    crate::closure::js_register_closure_rest(func_ptr, fixed_arity);
+    crate::closure::js_register_closure_rest(func_ptr, call_fixed_arity);
     super::native_module::set_bound_native_closure_name(closure, method_name);
-    super::native_module::set_builtin_closure_length(closure as usize, fixed_arity);
+    super::native_module::set_builtin_closure_length(closure as usize, spec_length);
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
     js_object_set_field_by_name(proto_obj, key, value);
@@ -3049,89 +3281,11 @@ fn install_proto_method_rest(
         "length".to_string(),
         super::PropertyAttrs::new(false, false, true),
     );
-}
-
-/// #4139: reify the `Math` namespace's own members (methods + constants) as
-/// real own properties so reflection (`Object.getOwnPropertyDescriptor`,
-/// `Object.getOwnPropertyNames`) sees them. The actual `Math.<m>(...)` call
-/// sites are codegen intrinsics gated on the AST shape and never read these
-/// fields — this is reflection parity only, so the methods are backed by the
-/// shared no-op thunk (mirroring `install_proto_method`'s default). Methods
-/// are spec'd `{ writable:true, enumerable:false, configurable:true }`
-/// (set by `install_proto_method`); constants are `{ writable:false,
-/// enumerable:false, configurable:false }`. Member order matches V8/Node's
-/// own-key enumeration: methods, then constants, then the newer `f16round`.
-fn install_math_namespace_members(ns_obj: *mut ObjectHeader) {
-    let noop = global_this_builtin_noop_thunk as *const u8;
-    const METHODS: &[(&str, u32)] = &[
-        ("abs", 1),
-        ("acos", 1),
-        ("acosh", 1),
-        ("asin", 1),
-        ("asinh", 1),
-        ("atan", 1),
-        ("atanh", 1),
-        ("atan2", 2),
-        ("ceil", 1),
-        ("cbrt", 1),
-        ("expm1", 1),
-        ("clz32", 1),
-        ("cos", 1),
-        ("cosh", 1),
-        ("exp", 1),
-        ("floor", 1),
-        ("fround", 1),
-        ("hypot", 2),
-        ("imul", 2),
-        ("log", 1),
-        ("log1p", 1),
-        ("log2", 1),
-        ("log10", 1),
-        ("max", 2),
-        ("min", 2),
-        ("pow", 2),
-        ("random", 0),
-        ("round", 1),
-        ("sign", 1),
-        ("sin", 1),
-        ("sinh", 1),
-        ("sqrt", 1),
-        ("tan", 1),
-        ("tanh", 1),
-        ("trunc", 1),
-    ];
-    for (name, arity) in METHODS.iter().copied() {
-        // `random` keeps its dedicated thunk so the value-call path
-        // (`const r = Math.random; r()`) returns a real random number; the
-        // rest are reflection-only and share the no-op thunk. Installed in
-        // enumeration position so `getOwnPropertyNames(Math)` order matches V8.
-        let thunk = if name == "random" {
-            math_random_thunk as *const u8
-        } else {
-            noop
-        };
-        install_proto_method(ns_obj, name, thunk, arity);
-    }
-    let non_writable = super::PropertyAttrs::new(false, false, false);
-    const CONSTS: &[(&str, f64)] = &[
-        ("E", std::f64::consts::E),
-        ("LN10", std::f64::consts::LN_10),
-        ("LN2", std::f64::consts::LN_2),
-        ("LOG10E", std::f64::consts::LOG10_E),
-        ("LOG2E", std::f64::consts::LOG2_E),
-        ("PI", std::f64::consts::PI),
-        ("SQRT1_2", std::f64::consts::FRAC_1_SQRT_2),
-        ("SQRT2", std::f64::consts::SQRT_2),
-    ];
-    for (name, value) in CONSTS.iter().copied() {
-        set_intrinsic_data_prop(ns_obj, name, value, non_writable);
-    }
-    // `f16round` keeps its dedicated thunk (the only Math member with one).
-    install_proto_method(ns_obj, "f16round", math_f16round_thunk as *const u8, 1);
+    value
 }
 
 /// #4139: reify the `JSON` namespace's own methods for reflection parity. See
-/// `install_math_namespace_members` for the rationale (call sites are codegen
+/// `install_math_namespace` for the rationale (call sites are codegen
 /// intrinsics; these no-op-backed fields exist only for reflection).
 fn install_json_namespace_members(ns_obj: *mut ObjectHeader) {
     let noop = global_this_builtin_noop_thunk as *const u8;
@@ -3147,7 +3301,7 @@ fn install_json_namespace_members(ns_obj: *mut ObjectHeader) {
 }
 
 /// #4139: reify the `Reflect` namespace's own methods for reflection parity.
-/// See `install_math_namespace_members` for the rationale.
+/// See `install_math_namespace` for the rationale.
 fn install_reflect_namespace_members(ns_obj: *mut ObjectHeader) {
     let noop = global_this_builtin_noop_thunk as *const u8;
     const METHODS: &[(&str, u32)] = &[

@@ -827,7 +827,45 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &ctor_handle), (I64, &key_raw)],
                     ));
                 }
-                if matches!(property.as_str(), "f16round" | "random") {
+                if matches!(
+                    property.as_str(),
+                    "abs"
+                        | "acos"
+                        | "acosh"
+                        | "asin"
+                        | "asinh"
+                        | "atan"
+                        | "atan2"
+                        | "atanh"
+                        | "cbrt"
+                        | "ceil"
+                        | "clz32"
+                        | "cos"
+                        | "cosh"
+                        | "exp"
+                        | "expm1"
+                        | "f16round"
+                        | "floor"
+                        | "fround"
+                        | "hypot"
+                        | "imul"
+                        | "log"
+                        | "log1p"
+                        | "log2"
+                        | "log10"
+                        | "max"
+                        | "min"
+                        | "pow"
+                        | "random"
+                        | "round"
+                        | "sign"
+                        | "sin"
+                        | "sinh"
+                        | "sqrt"
+                        | "tan"
+                        | "tanh"
+                        | "trunc"
+                ) {
                     let math_idx = ctx.strings.intern("Math");
                     let math_bytes_global =
                         format!("@{}", ctx.strings.entry(math_idx).bytes_global);
