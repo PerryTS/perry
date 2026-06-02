@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1799 entries across 106 modules
+// Coverage: 1821 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -866,6 +866,10 @@ declare module "crypto" {
   /** stdlib */
   export class Decipheriv { [key: string]: any; }
   /** stdlib */
+  export class DiffieHellman { [key: string]: any; }
+  /** stdlib */
+  export class DiffieHellmanGroup { [key: string]: any; }
+  /** stdlib */
   export class ECDH { [key: string]: any; }
   /** stdlib */
   export class KeyObject { [key: string]: any; }
@@ -887,6 +891,10 @@ declare module "crypto" {
   export function Sign(...args: any[]): any;
   /** stdlib */
   export function Verify(...args: any[]): any;
+  /** stdlib */
+  export function checkPrime(...args: any[]): any;
+  /** stdlib */
+  export function checkPrimeSync(...args: any[]): any;
   /** stdlib */
   export function createCipheriv(...args: any[]): any;
   /** stdlib */
@@ -912,9 +920,19 @@ declare module "crypto" {
   /** stdlib */
   export function createVerify(...args: any[]): any;
   /** stdlib */
+  export function diffieHellman(...args: any[]): any;
+  /** stdlib */
+  export function generateKey(...args: any[]): any;
+  /** stdlib */
+  export function generateKeyPair(...args: any[]): any;
+  /** stdlib */
   export function generateKeyPairSync(...args: any[]): any;
   /** stdlib */
   export function generateKeySync(...args: any[]): any;
+  /** stdlib */
+  export function generatePrime(...args: any[]): any;
+  /** stdlib */
+  export function generatePrimeSync(...args: any[]): any;
   /** stdlib */
   export function getCipherInfo(...args: any[]): any;
   /** stdlib */
@@ -931,6 +949,8 @@ declare module "crypto" {
   export function getRandomValues(...args: any[]): any;
   /** stdlib */
   export function hash(...args: any[]): any;
+  /** stdlib */
+  export function hkdf(...args: any[]): any;
   /** stdlib */
   export function hkdfSync(...args: any[]): any;
   /** stdlib */
@@ -956,7 +976,13 @@ declare module "crypto" {
   /** stdlib */
   export function randomUUID(...args: any[]): any;
   /** stdlib */
+  export function scrypt(...args: any[]): any;
+  /** stdlib */
   export function scryptSync(...args: any[]): any;
+  /** stdlib */
+  export function secureHeapUsed(...args: any[]): any;
+  /** stdlib */
+  export function setFips(...args: any[]): any;
   /** stdlib */
   export function sign(...args: any[]): any;
   /** stdlib */
@@ -3153,6 +3179,12 @@ declare module "stream" {
   /** stdlib */
   export const promises: any;
   /** stdlib */
+  export function _isArrayBufferView(...args: any[]): any;
+  /** stdlib */
+  export function _isUint8Array(...args: any[]): any;
+  /** stdlib */
+  export function _uint8ArrayToBuffer(...args: any[]): any;
+  /** stdlib */
   export function addAbortSignal(...args: any[]): any;
   /** stdlib */
   export function compose(...args: any[]): any;
@@ -3164,6 +3196,8 @@ declare module "stream" {
   export function finished(...args: any[]): any;
   /** stdlib */
   export function getDefaultHighWaterMark(...args: any[]): any;
+  /** stdlib */
+  export function isDestroyed(...args: any[]): any;
   /** stdlib */
   export function isDisturbed(...args: any[]): any;
   /** stdlib */
@@ -3973,4 +4007,12 @@ declare module "zlib" {
   export function unzip(buffer: any, callback: any): void;
   /** stdlib */
   export function unzipSync(p0: string): any;
+  /** stdlib */
+  export function zstdCompress(buffer: any, callback: any): void;
+  /** stdlib */
+  export function zstdCompressSync(p0: any, options?: any): string;
+  /** stdlib */
+  export function zstdDecompress(buffer: any, callback: any): void;
+  /** stdlib */
+  export function zstdDecompressSync(p0: any, options?: any): string;
 }

@@ -2868,15 +2868,24 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "createDiffieHellman", false, None),
     method("crypto", "createDiffieHellmanGroup", false, None),
     method("crypto", "getDiffieHellman", false, None),
+    // #2706/#2716: Node also exposes the legacy DH factories as
+    // constructor-named exports and exposes the one-shot `diffieHellman`
+    // helper. Runtime/codegen routes these to the same classic-DH and X25519
+    // helpers as the existing factory forms.
+    class("crypto", "DiffieHellman"),
+    class("crypto", "DiffieHellmanGroup"),
+    method("crypto", "diffieHellman", false, None),
     method("crypto", "createPrivateKey", false, None),
     method("crypto", "createPublicKey", false, None),
     method("crypto", "generateKeyPairSync", false, None),
+    method("crypto", "generateKeyPair", false, None),
     // #3927: `crypto.generateKeySync("aes"|"hmac", { length })` — the codegen
     // dispatch (expr/calls.rs → js_crypto_generate_key_sync) and the secret-key
     // KeyObject metadata (type/symmetricKeySize/export, fixed for 192/256 by
     // #3930) were already complete; only this manifest row was missing, so the
     // #463 unimplemented-API gate rejected the call before codegen ran.
     method("crypto", "generateKeySync", false, None),
+    method("crypto", "generateKey", false, None),
     method("crypto", "createHmac", false, None),
     // `crypto.createCipheriv(alg, key, iv)` / `createDecipheriv(...)` —
     // issue #1075. Registers a CipherHandle dispatched via the
@@ -2910,8 +2919,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // crypto.scryptSync(password, salt, keylen, options?) -> Buffer. Wired in
     // codegen `expr/calls.rs`; HIR types the result as Uint8Array.
     method("crypto", "scryptSync", false, None),
+    method("crypto", "scrypt", false, None),
     // crypto.hkdfSync(digest, ikm, salt, info, keylen) -> ArrayBuffer.
     method("crypto", "hkdfSync", false, None),
+    method("crypto", "hkdf", false, None),
     // crypto.generateKeyPairSync(type, options) -> { publicKey, privateKey }
     // PEM strings (RSA / EC P-256). Wired in codegen `expr/calls.rs`.
     method("crypto", "generateKeyPairSync", false, None),
@@ -2938,6 +2949,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "getCipherInfo", false, None),
     method("crypto", "getCurves", false, None),
     method("crypto", "getFips", false, None),
+    method("crypto", "setFips", false, None),
+    method("crypto", "secureHeapUsed", false, None),
+    method("crypto", "generatePrime", false, None),
+    method("crypto", "generatePrimeSync", false, None),
+    method("crypto", "checkPrime", false, None),
+    method("crypto", "checkPrimeSync", false, None),
     // Web Crypto API (issue #561) — `crypto.subtle.*`. The HIR
     // lowering at `crates/perry-hir/src/lower/expr_call.rs` recognizes
     // the `crypto.subtle.<method>(args)` chain and emits a

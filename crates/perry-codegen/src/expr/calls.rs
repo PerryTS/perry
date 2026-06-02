@@ -560,12 +560,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(blk.call(DOUBLE, "js_crypto_create_ecdh", &[(I64, &curve_handle)]))
         }
 
-        // `crypto.createDiffieHellman(...)` / `crypto.getDiffieHellman(name)`
-        // / `crypto.createDiffieHellmanGroup(name)` classic DH handles.
+        // `crypto.createDiffieHellman(...)` / legacy constructor alias
+        // `crypto.DiffieHellman(...)` / `crypto.getDiffieHellman(name)` /
+        // `crypto.createDiffieHellmanGroup(name)` / constructor alias
+        // `crypto.DiffieHellmanGroup(name)` classic DH handles.
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if (property == "createDiffieHellman" || property == "getDiffieHellman" || property == "createDiffieHellmanGroup") && matches!(
+                Expr::PropertyGet { object, property } if (property == "createDiffieHellman" || property == "DiffieHellman" || property == "getDiffieHellman" || property == "createDiffieHellmanGroup" || property == "DiffieHellmanGroup") && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -576,7 +578,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 unreachable!()
             };
-            if property == "getDiffieHellman" || property == "createDiffieHellmanGroup" {
+            if property == "getDiffieHellman"
+                || property == "createDiffieHellmanGroup"
+                || property == "DiffieHellmanGroup"
+            {
                 let group = if let Some(arg) = args.first() {
                     lower_expr(ctx, arg)?
                 } else {

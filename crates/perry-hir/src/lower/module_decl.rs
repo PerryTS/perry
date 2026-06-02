@@ -547,24 +547,17 @@ pub(crate) fn lower_module_decl(
                                             _ => None,
                                         }
                                     };
-                                    // Issue #848: StringDecoder runs entirely through
-                                    // HANDLE_METHOD_DISPATCH / HANDLE_PROPERTY_DISPATCH
-                                    // — registering it as a typed native instance would
-                                    // re-route `d.write` (property read) through the
-                                    // NativeMethodCall-with-empty-args path that
-                                    // pre-invokes the FFI as a getter, so
-                                    // `typeof d.write === "function"` would silently
-                                    // become `"number"` (the empty-string write return,
-                                    // misclassified). Skipping the registration lets
-                                    // the regular PropertyGet path fall into
-                                    // HANDLE_PROPERTY_DISPATCH which returns the bound-
-                                    // method closure built by `js_class_method_bind` —
-                                    // `typeof` reads `"function"`, and the eventual
-                                    // call routes through HANDLE_METHOD_DISPATCH back
-                                    // to the same `dispatch_string_decoder` impl.
+                                    // Handle-backed constructors dispatch through
+                                    // HANDLE_*_DISPATCH; don't register them as
+                                    // typed native instances or property reads can
+                                    // be routed through native-class method lowering.
                                     let module_name = match (class_name, module_name.as_deref()) {
                                         ("StringDecoder", Some("string_decoder"))
-                                        | ("Recoverable" | "REPLServer", Some("repl")) => None,
+                                        | ("Recoverable" | "REPLServer", Some("repl"))
+                                        | (
+                                            "DiffieHellman" | "DiffieHellmanGroup",
+                                            Some("crypto" | "node:crypto"),
+                                        ) => None,
                                         _ => module_name,
                                     };
                                     if let Some(native_module) = module_name {
@@ -618,16 +611,16 @@ pub(crate) fn lower_module_decl(
                                                 _ => None,
                                             }
                                         };
-                                        // Issue #848: StringDecoder runs entirely through
-                                        // HANDLE_*_DISPATCH (see the gate on the sync path
-                                        // above for the full rationale). Defensive mirror
-                                        // on this awaited-new branch so the same skip
-                                        // applies to `await new StringDecoder(...)` —
-                                        // which is unusual but legal TS.
+                                        // Mirror the handle-backed constructor skip
+                                        // on this awaited-new branch.
                                         let module_name = match (class_name, module_name.as_deref())
                                         {
                                             ("StringDecoder", Some("string_decoder"))
-                                            | ("Recoverable" | "REPLServer", Some("repl")) => None,
+                                            | ("Recoverable" | "REPLServer", Some("repl"))
+                                            | (
+                                                "DiffieHellman" | "DiffieHellmanGroup",
+                                                Some("crypto" | "node:crypto"),
+                                            ) => None,
                                             _ => module_name,
                                         };
                                         if let Some(native_module) = module_name {
@@ -885,19 +878,32 @@ pub(crate) fn lower_module_decl(
                                     let native_info = ctx
                                         .lookup_native_module(class_name_str)
                                         .map(|(m, _)| m.to_string());
-                                    if let Some(module_name) =
-                                        native_info.filter(|module_name| module_name != "repl")
-                                    {
-                                        ctx.register_native_instance(
-                                            name.clone(),
-                                            module_name.clone(),
-                                            class_name_str.to_string(),
+                                    if let Some(module_name) = native_info {
+                                        let is_handle_backed_constructor = matches!(
+                                            (class_name_str, module_name.as_str()),
+                                            (
+                                                "StringDecoder",
+                                                "string_decoder" | "node:string_decoder"
+                                            ) | (
+                                                "Recoverable" | "REPLServer",
+                                                "repl" | "node:repl"
+                                            ) | (
+                                                "DiffieHellman" | "DiffieHellmanGroup",
+                                                "crypto" | "node:crypto"
+                                            )
                                         );
-                                        ctx.module_native_instances.push((
-                                            name.clone(),
-                                            module_name,
-                                            class_name_str.to_string(),
-                                        ));
+                                        if !is_handle_backed_constructor {
+                                            ctx.register_native_instance(
+                                                name.clone(),
+                                                module_name.clone(),
+                                                class_name_str.to_string(),
+                                            );
+                                            ctx.module_native_instances.push((
+                                                name.clone(),
+                                                module_name,
+                                                class_name_str.to_string(),
+                                            ));
+                                        }
                                     }
                                 } else if let ast::Expr::Member(member) = new_expr.callee.as_ref() {
                                     if let (

@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2603 entries across 109 modules.
+Total: 2639 entries across 109 modules.
 
 ## Modules
 
@@ -688,7 +688,10 @@ Total: 2603 entries across 109 modules.
 
 - `Cipheriv`
 - `Decipheriv`
+- `DiffieHellman`
+- `DiffieHellmanGroup`
 - `ECDH`
+- `KeyObject`
 - `X509Certificate`
 
 ### Methods
@@ -697,6 +700,8 @@ Total: 2603 entries across 109 modules.
 - `Hmac` — module
 - `Sign` — module
 - `Verify` — module
+- `checkPrime` — module
+- `checkPrimeSync` — module
 - `createCipheriv` — module
 - `createDecipheriv` — module
 - `createDiffieHellman` — module
@@ -711,9 +716,14 @@ Total: 2603 entries across 109 modules.
 - `createSign` — module
 - `createVerify` — module
 - `createVerify` — module
+- `diffieHellman` — module
+- `generateKey` — module
+- `generateKeyPair` — module
 - `generateKeyPairSync` — module
 - `generateKeyPairSync` — module
 - `generateKeySync` — module
+- `generatePrime` — module
+- `generatePrimeSync` — module
 - `getCipherInfo` — module
 - `getCiphers` — module
 - `getCurves` — module
@@ -722,6 +732,7 @@ Total: 2603 entries across 109 modules.
 - `getHashes` — module
 - `getRandomValues` — module
 - `hash` — module
+- `hkdf` — module
 - `hkdfSync` — module
 - `pbkdf2` — module
 - `pbkdf2Sync` — module
@@ -735,7 +746,10 @@ Total: 2603 entries across 109 modules.
 - `randomInt` — module
 - `randomInt` — module
 - `randomUUID` — module
+- `scrypt` — module
 - `scryptSync` — module
+- `secureHeapUsed` — module
+- `setFips` — module
 - `sign` — module
 - `timingSafeEqual` — module
 - `verify` — module
@@ -2813,6 +2827,9 @@ Total: 2603 entries across 109 modules.
 
 ### Methods
 
+- `_isArrayBufferView` — module
+- `_isUint8Array` — module
+- `_uint8ArrayToBuffer` — module
 - `addAbortSignal` — module
 - `addListener` — instance
 - `allowHalfOpen` — instance
@@ -2830,6 +2847,7 @@ Total: 2603 entries across 109 modules.
 - `finished` — module
 - `getDefaultHighWaterMark` — module
 - `getMaxListeners` — instance
+- `isDestroyed` — module
 - `isDisturbed` — module
 - `isErrored` — module
 - `isPaused` — instance
@@ -3377,13 +3395,27 @@ Total: 2603 entries across 109 modules.
 ### Methods
 
 - `compileFunction` — module
+- `createCachedData` — instance
 - `createContext` — module
 - `createScript` — module
+- `dependencySpecifiers` — instance
+- `error` — instance
+- `evaluate` — instance
+- `hasAsyncGraph` — instance
+- `hasTopLevelAwait` — instance
+- `identifier` — instance
+- `instantiate` — instance
 - `isContext` — module
+- `link` — instance
+- `linkRequests` — instance
 - `measureMemory` — module
+- `moduleRequests` — instance
+- `namespace` — instance
 - `runInContext` — module
 - `runInNewContext` — module
 - `runInThisContext` — module
+- `setExport` — instance
+- `status` — instance
 
 ### Properties
 
@@ -3540,6 +3572,10 @@ Total: 2603 entries across 109 modules.
 - `inflateSync` — module
 - `unzip` — module
 - `unzipSync` — module
+- `zstdCompress` — module
+- `zstdCompressSync` — module
+- `zstdDecompress` — module
+- `zstdDecompressSync` — module
 
 ### Properties
 

@@ -676,6 +676,29 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
 
+            let crypto_constructor_export =
+                ctx.lookup_native_module(&class_name)
+                    .and_then(|(module_name, export_name)| {
+                        if matches!(module_name, "crypto" | "node:crypto")
+                            && matches!(export_name, Some("DiffieHellman" | "DiffieHellmanGroup"))
+                        {
+                            export_name.map(str::to_string)
+                        } else {
+                            None
+                        }
+                    });
+            if let Some(method_name) = crypto_constructor_export {
+                let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                return Ok(Expr::Call {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
+                        property: method_name,
+                    }),
+                    args,
+                    type_args: Vec::new(),
+                });
+            }
+
             // #3157: `import { MessageChannel } from "worker_threads"` then
             // `new MessageChannel()` — the bare-ident form must route to the
             // same receiver-less worker_threads NativeMethodCall as the

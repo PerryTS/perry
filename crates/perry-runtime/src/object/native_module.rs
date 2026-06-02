@@ -3342,6 +3342,18 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("crypto", "Cipheriv" | "Decipheriv") => Some(4),
         ("crypto", "KeyObject") => Some(2),
         ("crypto.KeyObject", "from") => Some(1),
+        // #2706/#2716 and #2694: crypto module-level callable exports.
+        ("crypto", "DiffieHellman") => Some(4),
+        ("crypto", "DiffieHellmanGroup") => Some(1),
+        ("crypto", "diffieHellman") => Some(2),
+        ("crypto", "generateKey" | "generateKeyPair" | "generatePrime") => Some(3),
+        ("crypto", "generateKeySync" | "generateKeyPairSync") => Some(2),
+        ("crypto", "generatePrimeSync" | "checkPrime" | "checkPrimeSync" | "setFips") => Some(1),
+        ("crypto", "secureHeapUsed") => Some(0),
+        ("crypto", "hkdf") => Some(6),
+        ("crypto", "hkdfSync") => Some(5),
+        ("crypto", "scrypt") => Some(4),
+        ("crypto", "scryptSync") => Some(3),
         ("url", "Url") => Some(0),
         ("url", "resolveObject") => Some(2),
         ("process", "setSourceMapsEnabled") => Some(1),
@@ -4919,8 +4931,11 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("crypto", "ECDH")
             | ("crypto", "createECDH")
             | ("crypto", "createDiffieHellman")
+            | ("crypto", "DiffieHellman")
             | ("crypto", "createDiffieHellmanGroup")
+            | ("crypto", "DiffieHellmanGroup")
             | ("crypto", "getDiffieHellman")
+            | ("crypto", "diffieHellman")
             | ("crypto", "createPrivateKey")
             | ("crypto", "createPublicKey")
             | ("crypto", "generateKeyPairSync")

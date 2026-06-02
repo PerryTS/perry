@@ -274,14 +274,76 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
             perry_runtime::js_nanbox_get_pointer(v)
         }
     };
+    let pointer_value = |ptr: *mut u8| -> f64 {
+        if ptr.is_null() {
+            undefined
+        } else {
+            f64::from_bits(JSValue::pointer(ptr as *const u8).bits())
+        }
+    };
     match method {
         "createHash" => js_crypto_create_hash(str_ptr(0)),
         "createHmac" => js_crypto_create_hmac(str_ptr(0), bytes_ptr(1)),
+        "createDiffieHellman" | "DiffieHellman" => {
+            js_crypto_create_diffie_hellman(arg(0), arg(1), arg(2))
+        }
+        "createDiffieHellmanGroup" | "getDiffieHellman" | "DiffieHellmanGroup" => {
+            js_crypto_get_diffie_hellman(arg(0))
+        }
+        "diffieHellman" => pointer_value(js_crypto_diffie_hellman(arg(0)) as *mut u8),
         "randomUUID" => f64::from_bits(JSValue::string_ptr(js_crypto_random_uuid(arg(0))).bits()),
         "randomUUIDv7" => f64::from_bits(JSValue::string_ptr(js_crypto_random_uuidv7()).bits()),
         "randomBytes" => {
             let buf = js_crypto_random_bytes_buffer(arg(0));
             f64::from_bits(JSValue::pointer(buf as *const u8).bits())
+        }
+        "generateKeyPair" => js_crypto_generate_key_pair_async(str_ptr(0), arg(1), arg(2)),
+        "generateKeyPairSync" => {
+            let alg = bytes_from_ptr(str_ptr(0));
+            let pair = match alg.as_slice() {
+                b"ec" => js_crypto_generate_key_pair_sync_ec_p256(arg(1)),
+                b"ed25519" => js_crypto_generate_key_pair_sync_ed25519(arg(1)),
+                b"x25519" => js_crypto_generate_key_pair_sync_x25519(arg(1)),
+                _ => js_crypto_generate_key_pair_sync_rsa(arg(1)),
+            };
+            pointer_value(pair as *mut u8)
+        }
+        "generateKey" => js_crypto_generate_key_async(str_ptr(0), arg(1), arg(2)),
+        "generateKeySync" => {
+            pointer_value(js_crypto_generate_key_sync(str_ptr(0), arg(1)) as *mut u8)
+        }
+        "generatePrime" if args_len >= 3 => js_crypto_generate_prime_async(arg(0), arg(1), arg(2)),
+        "generatePrime" | "generatePrimeSync" => {
+            pointer_value(js_crypto_generate_prime_sync(arg(0), arg(1)) as *mut u8)
+        }
+        "checkPrime" if args_len >= 3 => js_crypto_check_prime_async(arg(0), arg(1), arg(2)),
+        "checkPrime" | "checkPrimeSync" => js_crypto_check_prime_sync(arg(0), arg(1)),
+        "setFips" => undefined,
+        "secureHeapUsed" => pointer_value(js_crypto_secure_heap_used() as *mut u8),
+        "hkdf" => js_crypto_hkdf_async_alg(
+            str_ptr(0),
+            bytes_ptr(1),
+            bytes_ptr(2),
+            bytes_ptr(3),
+            arg(4),
+            arg(5),
+        ),
+        "hkdfSync" => pointer_value(js_crypto_hkdf_bytes_alg(
+            str_ptr(0),
+            bytes_ptr(1),
+            bytes_ptr(2),
+            bytes_ptr(3),
+            arg(4),
+        ) as *mut u8),
+        "scrypt" => {
+            let callback = if args_len >= 5 { arg(4) } else { arg(3) };
+            js_crypto_scrypt_async(bytes_ptr(0), bytes_ptr(1), arg(2), callback)
+        }
+        "scryptSync" => {
+            let options_ptr = if args_len >= 4 { bytes_ptr(3) } else { 0 };
+            pointer_value(
+                js_crypto_scrypt_bytes(bytes_ptr(0), bytes_ptr(1), arg(2), options_ptr) as *mut u8,
+            )
         }
         // Node: randomInt(max) → [0,max); randomInt(min,max) → [min,max).
         "randomInt" if args_len >= 2 => js_crypto_random_int(arg(0), arg(1)),

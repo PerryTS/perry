@@ -494,13 +494,11 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
                         base: name,
                         type_args: Vec::new(),
                     },
-                    // #1367: `new X509Certificate(...)` returns a runtime
-                    // crypto HANDLE (like `createECDH()`), not a user class.
-                    // Typing it `Named` sends property reads down the broken
-                    // class-field path (returns 0); leave it `Any` so reads
-                    // route through HANDLE_PROPERTY_DISPATCH to the X509
-                    // property dispatch (matching how ECDH handles work).
-                    "X509Certificate" => Type::Any,
+                    // Crypto handle constructors return runtime HANDLEs, not
+                    // user classes. Typing them `Named` sends property reads
+                    // down the native-class path; leave them `Any` so reads
+                    // route through handle dispatch, matching createECDH().
+                    "X509Certificate" | "DiffieHellman" | "DiffieHellmanGroup" => Type::Any,
                     _ => Type::Named(name),
                 }
             } else {

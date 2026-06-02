@@ -221,6 +221,51 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
 
+            // `new crypto.DiffieHellman(...)` /
+            // `new crypto.DiffieHellmanGroup(name)` are legacy constructor
+            // aliases for the existing classic-DH factory helpers.
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if matches!(property.as_str(), "DiffieHellman" | "DiffieHellmanGroup") {
+                    if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
+                        if mod_name == "crypto" {
+                            if property == "DiffieHellmanGroup" {
+                                let group = if let Some(arg) = args.first() {
+                                    lower_expr(ctx, arg)?
+                                } else {
+                                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                                };
+                                return Ok(ctx.block().call(
+                                    DOUBLE,
+                                    "js_crypto_get_diffie_hellman",
+                                    &[(DOUBLE, &group)],
+                                ));
+                            }
+
+                            let first = if let Some(arg) = args.first() {
+                                lower_expr(ctx, arg)?
+                            } else {
+                                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                            };
+                            let second = if let Some(arg) = args.get(1) {
+                                lower_expr(ctx, arg)?
+                            } else {
+                                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                            };
+                            let third = if let Some(arg) = args.get(2) {
+                                lower_expr(ctx, arg)?
+                            } else {
+                                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                            };
+                            return Ok(ctx.block().call(
+                                DOUBLE,
+                                "js_crypto_create_diffie_hellman",
+                                &[(DOUBLE, &first), (DOUBLE, &second), (DOUBLE, &third)],
+                            ));
+                        }
+                    }
+                }
+            }
+
             // `new v8.GCProfiler()` (#3142) — represent the profiler instance
             // as the `"v8.GCProfiler"` native-module namespace so its
             // `start()` / `stop()` methods dispatch through the runtime

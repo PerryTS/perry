@@ -2,6 +2,10 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1108 — feat(crypto): expose implemented helper exports (#4123)
+
+Folds in external contributor PR #4123: surfaces the already-implemented `crypto` helper exports through the manifest and lowering so they are importable/callable — `DiffieHellman`/`DiffieHellmanGroup`/`diffieHellman`, the `generateKey*`/`generatePrime*`/`checkPrime*` family, `secureHeapUsed`, `hkdf`/`hkdfSync`, and `scrypt`/`scryptSync`. Adds the codegen/HIR new-expression + destructuring wiring plus a node-suite DH export-aliases fixture. Merged on top of current `main`; the `native_callable_export_arity` crypto arms conflicted with #4132's freshly-landed `KeyObject` arms (both kept) and the auto-generated doc lines are reconciled by the end-of-batch manifest regen.
+
 ## v0.5.1107 — feat(crypto): expose KeyObject shape for secret keys (#4132)
 
 Folds in external contributor PR #4132: exposes the `crypto` `KeyObject` shape for secret keys — `createSecretKey(...)` returns a `KeyObject` with the expected `type`/`symmetricKeySize`/`asymmetricKeyType` surface and `KeyObject`/`instanceof` branding. Adds `crates/perry-runtime/src/object/native_module_crypto_key_object.rs` plus supporting dispatch wiring and a node-suite fixture. Merged on top of current `main`; only the auto-generated doc count/coverage lines conflicted and are reconciled by the end-of-batch manifest regen.
