@@ -158,6 +158,17 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
+        if module == "crypto" && method == "KeyObject" {
+            let addr = value_addr(value);
+            return if addr != 0
+                && (crate::buffer::is_secret_key(addr)
+                    || crate::buffer::asymmetric_key_meta(addr).is_some())
+            {
+                f64::from_bits(crate::value::TAG_TRUE)
+            } else {
+                f64::from_bits(TAG_FALSE)
+            };
+        }
         if module == "perf_hooks" {
             let class_id = match method.as_str() {
                 "Performance" => crate::perf_hooks::CLASS_ID_PERFORMANCE,

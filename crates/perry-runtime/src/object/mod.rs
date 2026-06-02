@@ -42,6 +42,8 @@ mod instanceof;
 mod namespace_create;
 mod native_call_method;
 mod native_module;
+mod native_module_crypto_key_object;
+mod native_module_crypto_random;
 mod native_module_dispatch;
 mod native_module_stream;
 mod object_literal_ops;

@@ -2858,6 +2858,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // #1367: X509Certificate — `new X509Certificate(pem|der)` + read-only
     // subject/issuer/validFrom/validTo/serialNumber/fingerprint/ca props.
     class("crypto", "X509Certificate"),
+    // #2565: public `KeyObject` constructor export. Runtime exposes the
+    // class-like function and the supported secret-key `KeyObject.from`.
+    class("crypto", "KeyObject"),
     // Legacy Netscape SPKAC helper namespace:
     // crypto.Certificate.{verifySpkac,exportPublicKey,exportChallenge}.
     property("crypto", "Certificate"),
