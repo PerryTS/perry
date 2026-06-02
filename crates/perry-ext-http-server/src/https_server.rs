@@ -323,6 +323,9 @@ async fn handle_https_request(
         server_handle,
         request_handle: im_handle,
         response_handle: sr_handle,
+        skip_default_response: false,
+        h2_stream_handle: 0,
+        h2_stream_headers: Vec::new(),
         request_listeners,
         handler,
     };

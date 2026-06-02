@@ -258,7 +258,9 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         &[I64, DOUBLE, I64],
     );
     // node:http2 secure server (HTTP/2 with ALPN):
+    module.declare_function("js_node_http2_create_server", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_node_http2_create_secure_server", I64, &[DOUBLE, I64]);
+    module.declare_function("js_node_http2_connect", I64, &[DOUBLE, DOUBLE, I64]);
     module.declare_function("js_node_http2_server_listen", I64, &[I64, I64]);
     module.declare_function("js_node_http2_server_close", VOID, &[I64, I64]);
     module.declare_function("js_node_http2_server_address_json", I64, &[I64]);

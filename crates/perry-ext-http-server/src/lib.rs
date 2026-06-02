@@ -141,6 +141,15 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
     iter_handles_of_mut::<ServerResponse, _>(|sr| {
         scan_listener_roots(&mut sr.listeners, visitor);
     });
+    iter_handles_of_mut::<Http2SessionHandle, _>(|session| {
+        scan_listener_roots(&mut session.listeners, visitor);
+        for cb in session.close_callbacks.iter_mut() {
+            visitor.visit_i64_slot(cb);
+        }
+    });
+    iter_handles_of_mut::<Http2StreamHandle, _>(|stream| {
+        scan_listener_roots(&mut stream.listeners, visitor);
+    });
 }
 
 #[cfg(test)]
@@ -320,6 +329,7 @@ mod tests {
         let h2_handle = register_handle(Http2SecureServer {
             handler: h2_handler,
             tls_config: None,
+            plaintext: false,
             base: http_server(h2_base_handler, listener_map("close", h2_listener)),
         });
 

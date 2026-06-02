@@ -644,6 +644,8 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             fn js_ext_http_server_is_handle(handle: i64) -> i32;
             fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
             fn js_ext_http_server_response_is_handle(handle: i64) -> i32;
+            fn js_ext_http2_session_is_handle(handle: i64) -> i32;
+            fn js_ext_http2_stream_is_handle(handle: i64) -> i32;
             fn js_ext_http_server_dispatch_method(
                 handle: i64,
                 method_ptr: *const u8,
@@ -659,6 +661,20 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
                 args_len: usize,
             ) -> f64;
             fn js_ext_http_server_response_dispatch_method(
+                handle: i64,
+                method_ptr: *const u8,
+                method_len: usize,
+                args_ptr: *const f64,
+                args_len: usize,
+            ) -> f64;
+            fn js_ext_http2_session_dispatch_method(
+                handle: i64,
+                method_ptr: *const u8,
+                method_len: usize,
+                args_ptr: *const f64,
+                args_len: usize,
+            ) -> f64;
+            fn js_ext_http2_stream_dispatch_method(
                 handle: i64,
                 method_ptr: *const u8,
                 method_len: usize,
@@ -734,6 +750,59 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         {
             return unsafe {
                 js_ext_http_server_response_dispatch_method(
+                    handle,
+                    method_name.as_ptr(),
+                    method_name.len(),
+                    args.as_ptr(),
+                    args.len(),
+                )
+            };
+        }
+
+        let is_h2_session_method = matches!(
+            method_name,
+            "request"
+                | "on"
+                | "addListener"
+                | "close"
+                | "destroy"
+                | "ref"
+                | "unref"
+                | "setTimeout"
+                | "ping"
+                | "settings"
+                | "goaway"
+        );
+        if is_h2_session_method && unsafe { js_ext_http2_session_is_handle(handle) } != 0 {
+            return unsafe {
+                js_ext_http2_session_dispatch_method(
+                    handle,
+                    method_name.as_ptr(),
+                    method_name.len(),
+                    args.as_ptr(),
+                    args.len(),
+                )
+            };
+        }
+
+        let is_h2_stream_method = matches!(
+            method_name,
+            "on" | "addListener"
+                | "setEncoding"
+                | "respond"
+                | "end"
+                | "close"
+                | "setTimeout"
+                | "priority"
+                | "additionalHeaders"
+                | "pushStream"
+                | "respondWithFD"
+                | "respondWithFile"
+                | "sendTrailers"
+        );
+        if is_h2_stream_method && unsafe { js_ext_http2_stream_is_handle(handle) } != 0 {
+            return unsafe {
+                js_ext_http2_stream_dispatch_method(
                     handle,
                     method_name.as_ptr(),
                     method_name.len(),
@@ -1561,6 +1630,8 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             fn js_ext_http_server_is_handle(handle: i64) -> i32;
             fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
             fn js_ext_http_server_response_is_handle(handle: i64) -> i32;
+            fn js_ext_http2_session_is_handle(handle: i64) -> i32;
+            fn js_ext_http2_stream_is_handle(handle: i64) -> i32;
             fn js_ext_http_server_dispatch_property(
                 handle: i64,
                 property_ptr: *const u8,
@@ -1572,6 +1643,16 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 property_len: usize,
             ) -> f64;
             fn js_ext_http_server_response_dispatch_property(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+            ) -> f64;
+            fn js_ext_http2_session_dispatch_property(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+            ) -> f64;
+            fn js_ext_http2_stream_dispatch_property(
                 handle: i64,
                 property_ptr: *const u8,
                 property_len: usize,
@@ -1651,6 +1732,77 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         {
             return unsafe {
                 js_ext_http_server_response_dispatch_property(
+                    handle,
+                    property_name.as_ptr(),
+                    property_name.len(),
+                )
+            };
+        }
+
+        if matches!(
+            property_name,
+            "request"
+                | "on"
+                | "addListener"
+                | "close"
+                | "destroy"
+                | "ref"
+                | "unref"
+                | "setTimeout"
+                | "ping"
+                | "settings"
+                | "goaway"
+                | "type"
+                | "encrypted"
+                | "connecting"
+                | "closed"
+                | "destroyed"
+                | "alpnProtocol"
+                | "localSettings"
+                | "remoteSettings"
+                | "state"
+                | "socket"
+        ) && unsafe { js_ext_http2_session_is_handle(handle) } != 0
+        {
+            return unsafe {
+                js_ext_http2_session_dispatch_property(
+                    handle,
+                    property_name.as_ptr(),
+                    property_name.len(),
+                )
+            };
+        }
+
+        if matches!(
+            property_name,
+            "on" | "addListener"
+                | "setEncoding"
+                | "respond"
+                | "end"
+                | "close"
+                | "setTimeout"
+                | "priority"
+                | "additionalHeaders"
+                | "pushStream"
+                | "respondWithFD"
+                | "respondWithFile"
+                | "sendTrailers"
+                | "id"
+                | "pending"
+                | "closed"
+                | "destroyed"
+                | "aborted"
+                | "rstCode"
+                | "headersSent"
+                | "sentHeaders"
+                | "session"
+                | "state"
+                | "bufferSize"
+                | "endAfterHeaders"
+        ) && unsafe { js_ext_http2_stream_is_handle(handle) } != 0
+        {
+            return unsafe {
+                js_ext_http2_stream_dispatch_property(
                     handle,
                     property_name.as_ptr(),
                     property_name.len(),
@@ -2193,8 +2345,8 @@ pub unsafe extern "C" fn js_handle_prototype_dispatch(handle: i64) -> f64 {
 unsafe extern "C" fn js_node_http_native_dispatch(
     module_ptr: *const u8,
     module_len: usize,
-    _method_ptr: *const u8,
-    _method_len: usize,
+    method_ptr: *const u8,
+    method_len: usize,
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
@@ -2202,6 +2354,7 @@ unsafe extern "C" fn js_node_http_native_dispatch(
     extern "C" {
         fn js_node_http_create_server_with_options(first_arg: f64, second_arg: f64) -> i64;
         fn js_node_https_create_server(opts_f64: f64, handler: i64) -> i64;
+        fn js_node_http2_create_server(first_arg: f64, second_arg: f64) -> i64;
         fn js_node_http2_create_secure_server(opts_f64: f64, handler: i64) -> i64;
         fn js_value_is_closure(value_bits: i64) -> i32;
     }
@@ -2210,6 +2363,11 @@ unsafe extern "C" fn js_node_http_native_dispatch(
         ""
     } else {
         std::str::from_utf8(std::slice::from_raw_parts(module_ptr, module_len)).unwrap_or("")
+    };
+    let method = if method_ptr.is_null() || method_len == 0 {
+        ""
+    } else {
+        std::str::from_utf8(std::slice::from_raw_parts(method_ptr, method_len)).unwrap_or("")
     };
     let arg = |n: usize| -> f64 {
         if n < args_len && !args_ptr.is_null() {
@@ -2238,7 +2396,10 @@ unsafe extern "C" fn js_node_http_native_dispatch(
     let handle = match module {
         "http" => js_node_http_create_server_with_options(options_f64, handler_f64),
         "https" => js_node_https_create_server(options_f64, handler_ptr),
-        "http2" => js_node_http2_create_secure_server(options_f64, handler_ptr),
+        "http2" if method == "createSecureServer" => {
+            js_node_http2_create_secure_server(options_f64, handler_ptr)
+        }
+        "http2" => js_node_http2_create_server(options_f64, handler_f64),
         _ => return undefined,
     };
     if handle == 0 {

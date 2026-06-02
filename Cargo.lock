@@ -5277,6 +5277,7 @@ name = "perry-ext-http-server"
 version = "0.5.1105"
 dependencies = [
  "bytes",
+ "h2",
  "http-body-util",
  "hyper",
  "hyper-util",

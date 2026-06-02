@@ -24,6 +24,7 @@
 
 use perry_ffi::{alloc_string, get_handle, JsValue, StringHeader};
 
+use crate::http2_server::Http2SecureServer;
 use crate::https_server::HttpsServer;
 use crate::request::IncomingMessage;
 use crate::response::ServerResponse;
@@ -58,6 +59,14 @@ extern "C" {
         callback: i64,
     ) -> f64;
     fn js_node_https_server_set_timeout_method(handle: i64, msecs: f64, callback: i64) -> i64;
+    fn js_node_http2_server_listen(server_handle: i64, args_array: i64) -> i64;
+    fn js_node_http2_server_close(server_handle: i64, callback: i64);
+    fn js_node_http2_server_address_json(handle: i64) -> *mut StringHeader;
+    fn js_node_http2_server_on(
+        handle: i64,
+        event_name_ptr: *const StringHeader,
+        callback: i64,
+    ) -> f64;
     /// Runtime-side JSON.parse — converts the JSON-encoded `address()`
     /// payload into the `{ port, address, family }` object Node returns.
     /// Returns the JSValue bits as u64 (NaN-boxed value).
@@ -123,7 +132,10 @@ extern "C" {
 /// misroute.
 #[no_mangle]
 pub extern "C" fn js_ext_http_server_is_handle(handle: i64) -> i32 {
-    if get_handle::<HttpServer>(handle).is_some() || get_handle::<HttpsServer>(handle).is_some() {
+    if get_handle::<HttpServer>(handle).is_some()
+        || get_handle::<HttpsServer>(handle).is_some()
+        || get_handle::<Http2SecureServer>(handle).is_some()
+    {
         1
     } else {
         0
@@ -220,6 +232,7 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
         &[]
     };
     let is_https = get_handle::<HttpsServer>(handle).is_some();
+    let is_h2 = get_handle::<Http2SecureServer>(handle).is_some();
     // Server re-boxed as POINTER_TAG so chained calls (`server.on(...).on(...)`,
     // `server.listen(...).address()`) keep flowing through this same dispatcher.
     let self_ref = f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK));
@@ -236,7 +249,9 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                 inline.args[i] = args[i].to_bits();
             }
             let args_array = &inline as *const _ as i64;
-            if is_https {
+            if is_h2 {
+                js_node_http2_server_listen(handle, args_array);
+            } else if is_https {
                 js_node_https_server_listen(handle, args_array);
             } else {
                 js_node_http_server_listen(handle, args_array);
@@ -246,7 +261,9 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
         }
         "close" => {
             let cb = closure_arg(args.first().copied());
-            if is_https {
+            if is_h2 {
+                js_node_http2_server_close(handle, cb);
+            } else if is_https {
                 js_node_https_server_close(handle, cb);
             } else {
                 js_node_http_server_close(handle, cb);
@@ -254,7 +271,10 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
             self_ref
         }
         "closeAllConnections" => {
-            if is_https {
+            if is_h2 {
+                // HTTP/2 close-all is represented by close() in this surface.
+                js_node_http2_server_close(handle, 0);
+            } else if is_https {
                 js_node_https_server_close_all_connections(handle);
             } else {
                 js_node_http_server_close_all_connections(handle);
@@ -262,7 +282,9 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
             undef
         }
         "closeIdleConnections" => {
-            if is_https {
+            if is_h2 {
+                // No separate idle-connection tracking for HTTP/2 yet.
+            } else if is_https {
                 js_node_https_server_close_idle_connections(handle);
             } else {
                 js_node_http_server_close_idle_connections(handle);
@@ -273,7 +295,9 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
             // Node returns `{ port, address, family }` or null. The FFI hands
             // back a JSON-encoded string (`"null"` when not listening); run
             // it through JSON.parse so the value the caller sees matches Node.
-            let s = if is_https {
+            let s = if is_h2 {
+                js_node_http2_server_address_json(handle)
+            } else if is_https {
                 js_node_https_server_address_json(handle)
             } else {
                 js_node_http_server_address_json(handle)
@@ -290,7 +314,9 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                 return self_ref;
             }
             let cb = closure_arg(Some(args[1]));
-            if is_https {
+            if is_h2 {
+                js_node_http2_server_on(handle, event_ptr, cb);
+            } else if is_https {
                 js_node_https_server_on(handle, event_ptr, cb);
             } else {
                 js_node_http_server_on(handle, event_ptr, cb);
@@ -300,7 +326,9 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
         "setTimeout" => {
             let msecs = args.first().copied().unwrap_or(0.0);
             let cb = closure_arg(args.get(1).copied());
-            if is_https {
+            if is_h2 {
+                // Timeout storage is not surfaced separately on the HTTP/2 handle yet.
+            } else if is_https {
                 js_node_https_server_set_timeout_method(handle, msecs, cb);
             } else {
                 js_node_http_server_set_timeout_method(handle, msecs, cb);
@@ -308,8 +336,10 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
             self_ref
         }
         "@@__perry_wk_asyncDispose" => {
-            if server_is_listening(handle, is_https) {
-                if is_https {
+            if server_is_listening(handle, is_https, is_h2) {
+                if is_h2 {
+                    js_node_http2_server_close(handle, 0);
+                } else if is_https {
                     js_node_https_server_close(handle, 0);
                 } else {
                     js_node_http_server_close(handle, 0);
@@ -744,8 +774,12 @@ fn closure_arg(value: Option<f64>) -> i64 {
     (bits & PTR_MASK) as i64
 }
 
-fn server_is_listening(handle: i64, is_https: bool) -> bool {
-    if is_https {
+fn server_is_listening(handle: i64, is_https: bool, is_h2: bool) -> bool {
+    if is_h2 {
+        get_handle::<Http2SecureServer>(handle)
+            .map(|server| server.base.listening)
+            .unwrap_or(false)
+    } else if is_https {
         get_handle::<HttpsServer>(handle)
             .map(|server| server.base.listening)
             .unwrap_or(false)

@@ -1615,10 +1615,28 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "http2",
         has_receiver: false,
+        method: "createServer",
+        class_filter: None,
+        runtime: "js_node_http2_create_server",
+        args: &[NA_F64, NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http2",
+        has_receiver: false,
         method: "createSecureServer",
         class_filter: None,
         runtime: "js_node_http2_create_secure_server",
         args: &[NA_F64, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http2",
+        has_receiver: false,
+        method: "connect",
+        class_filter: None,
+        runtime: "js_node_http2_connect",
+        args: &[NA_F64, NA_F64, NA_PTR],
         ret: NR_PTR,
     },
     NativeModSig {

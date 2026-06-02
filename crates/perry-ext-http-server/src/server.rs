@@ -121,6 +121,9 @@ pub struct HttpPendingRequest {
     pub server_handle: i64,
     pub request_handle: i64,
     pub response_handle: i64,
+    pub skip_default_response: bool,
+    pub h2_stream_handle: i64,
+    pub h2_stream_headers: Vec<(String, String)>,
     /// `'request'` listeners snapshotted at request time so the
     /// dispatch loop doesn't need to re-borrow the server handle.
     pub request_listeners: Vec<i64>,
@@ -666,6 +669,9 @@ async fn handle_request(
         server_handle,
         request_handle: im_handle,
         response_handle: sr_handle,
+        skip_default_response: false,
+        h2_stream_handle: 0,
+        h2_stream_headers: Vec::new(),
         request_listeners,
         handler,
     };
@@ -828,6 +834,9 @@ pub extern "C" fn js_node_http_server_has_active() -> i32 {
             active = 1;
         }
     });
+    if active == 0 && crate::http2_server::has_active_h2_clients() {
+        active = 1;
+    }
     active
 }
 
@@ -898,11 +907,14 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
         h2_handles.push(id)
     });
     for h in h2_handles {
+        count += crate::http2_server::process_pending_h2_events();
         while let Some(p) = crate::http2_server::try_recv_pending_h2_nonblocking(h) {
             crate::http2_server::process_pending_h2(p);
             count += 1;
+            count += crate::http2_server::process_pending_h2_events();
         }
     }
+    count += crate::http2_server::process_pending_h2_events();
 
     count
 }
@@ -1000,7 +1012,9 @@ fn process_pending(pending: HttpPendingRequest) {
     // If the handler didn't call `res.end()` (still has the channel),
     // synthesize a default 200 with empty body so hyper's service fn
     // doesn't hang.
-    synthesize_default_response_if_needed(pending.response_handle);
+    if !pending.skip_default_response {
+        synthesize_default_response_if_needed(pending.response_handle);
+    }
 
     // Free the per-request handles.
     perry_ffi::drop_handle(pending.request_handle);
