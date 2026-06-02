@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2456 entries across 105 modules.
+Total: 2462 entries across 105 modules.
 
 ## Modules
 
@@ -1405,6 +1405,7 @@ Total: 2456 entries across 105 modules.
 - `__get_keepAlive` — instance *(class: `Agent`)*
 - `__get_keepAliveMsecs` — instance *(class: `Agent`)*
 - `__get_keepAliveTimeout` — instance *(class: `HttpServer`)*
+- `__get_keepAliveTimeoutBuffer` — instance *(class: `HttpServer`)*
 - `__get_maxFreeSockets` — instance *(class: `Agent`)*
 - `__get_maxHeadersCount` — instance *(class: `HttpServer`)*
 - `__get_maxRequestsPerSocket` — instance *(class: `HttpServer`)*
@@ -1432,6 +1433,7 @@ Total: 2456 entries across 105 modules.
 - `__set_keepAlive` — instance *(class: `Agent`)*
 - `__set_keepAliveMsecs` — instance *(class: `Agent`)*
 - `__set_keepAliveTimeout` — instance *(class: `HttpServer`)*
+- `__set_keepAliveTimeoutBuffer` — instance *(class: `HttpServer`)*
 - `__set_maxFreeSockets` — instance *(class: `Agent`)*
 - `__set_maxHeadersCount` — instance *(class: `HttpServer`)*
 - `__set_maxRequestsPerSocket` — instance *(class: `HttpServer`)*
@@ -1471,6 +1473,7 @@ Total: 2456 entries across 105 modules.
 - `keepAlive` — instance *(class: `Agent`)*
 - `keepAliveMsecs` — instance *(class: `Agent`)*
 - `keepAliveTimeout` — instance *(class: `HttpServer`)*
+- `keepAliveTimeoutBuffer` — instance *(class: `HttpServer`)*
 - `keepSocketAlive` — instance *(class: `Agent`)*
 - `listen` — instance *(class: `HttpServer`)*
 - `listenerCount` — instance *(class: `ClientRequest`)*
@@ -1556,12 +1559,14 @@ Total: 2456 entries across 105 modules.
 - `Server` — module
 - `__get_headersTimeout` — instance *(class: `HttpsServer`)*
 - `__get_keepAliveTimeout` — instance *(class: `HttpsServer`)*
+- `__get_keepAliveTimeoutBuffer` — instance *(class: `HttpsServer`)*
 - `__get_maxHeadersCount` — instance *(class: `HttpsServer`)*
 - `__get_maxRequestsPerSocket` — instance *(class: `HttpsServer`)*
 - `__get_requestTimeout` — instance *(class: `HttpsServer`)*
 - `__get_timeout` — instance *(class: `HttpsServer`)*
 - `__set_headersTimeout` — instance *(class: `HttpsServer`)*
 - `__set_keepAliveTimeout` — instance *(class: `HttpsServer`)*
+- `__set_keepAliveTimeoutBuffer` — instance *(class: `HttpsServer`)*
 - `__set_maxHeadersCount` — instance *(class: `HttpsServer`)*
 - `__set_maxRequestsPerSocket` — instance *(class: `HttpsServer`)*
 - `__set_requestTimeout` — instance *(class: `HttpsServer`)*
@@ -1576,6 +1581,7 @@ Total: 2456 entries across 105 modules.
 - `get` — module
 - `headersTimeout` — instance *(class: `HttpsServer`)*
 - `keepAliveTimeout` — instance *(class: `HttpsServer`)*
+- `keepAliveTimeoutBuffer` — instance *(class: `HttpsServer`)*
 - `listen` — instance *(class: `HttpsServer`)*
 - `maxHeadersCount` — instance *(class: `HttpsServer`)*
 - `maxRequestsPerSocket` — instance *(class: `HttpsServer`)*
