@@ -238,6 +238,15 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
             raw_ptr as *const crate::typedarray::TypedArrayHeader,
         );
     }
+    // Arguments objects spread like arrays (spec:
+    // `arguments[Symbol.iterator] === Array.prototype.values`).
+    if crate::object::is_arguments_object(raw_ptr as *const crate::object::ObjectHeader) {
+        if let Some(arr) = unsafe {
+            crate::object::arguments_object_to_array(raw_ptr as *const crate::object::ObjectHeader)
+        } {
+            return arr;
+        }
+    }
 
     let iter_wk = crate::symbol::well_known_symbol("iterator");
     if !iter_wk.is_null() {
