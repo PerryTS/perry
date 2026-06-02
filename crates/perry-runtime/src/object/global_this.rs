@@ -1392,17 +1392,41 @@ fn generator_proto_method(method: &[u8], arg: f64, is_async: bool) -> f64 {
         }
     };
     let this = crate::object::js_implicit_this_get();
-    if crate::object::js_util_types_is_generator_object(this).to_bits() != crate::value::TAG_TRUE {
+    let jv = JSValue::from_bits(this.to_bits());
+    if !jv.is_pointer() {
         return bad_receiver(method);
     }
-    let this_obj = JSValue::from_bits(this.to_bits()).as_pointer::<ObjectHeader>();
-    let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
-    let own = js_object_get_field_by_name(this_obj, key);
-    if !own.is_pointer() {
+    let this_obj = jv.as_pointer::<ObjectHeader>();
+    // Reject the prototype singletons themselves: they carry these methods as
+    // OWN thunks, so delegating below would re-enter this thunk forever. A real
+    // generator instance is never the prototype object.
+    if this_obj == generator_prototype_ptr(false) || this_obj == generator_prototype_ptr(true) {
         return bad_receiver(method);
     }
-    let own_closure = own.as_pointer::<crate::closure::ClosureHeader>();
-    crate::closure::js_closure_call1(own_closure, arg)
+    // Brand-check + delegation use OWN properties only. A generator instance
+    // (Perry's `{next,return,throw}` object) owns all three state-machine
+    // closures; an object that merely INHERITS them (e.g. `g.prototype`, whose
+    // [[Prototype]] is `%Generator.prototype%`) is not a generator — and reading
+    // the inherited method would resolve back to this very thunk and recurse.
+    let own_method = |name: &[u8]| -> Option<*const crate::closure::ClosureHeader> {
+        let v = crate::object::js_object_get_own_field_or_undef(this, name.as_ptr(), name.len());
+        let vv = JSValue::from_bits(v.to_bits());
+        if vv.is_pointer() && crate::closure::is_closure_ptr(vv.as_pointer::<u8>() as usize) {
+            Some(vv.as_pointer::<crate::closure::ClosureHeader>())
+        } else {
+            None
+        }
+    };
+    if own_method(b"next").is_none()
+        || own_method(b"return").is_none()
+        || own_method(b"throw").is_none()
+    {
+        return bad_receiver(method);
+    }
+    match own_method(method) {
+        Some(own_closure) => crate::closure::js_closure_call1(own_closure, arg),
+        None => bad_receiver(method),
+    }
 }
 
 extern "C" fn generator_proto_next_thunk(
