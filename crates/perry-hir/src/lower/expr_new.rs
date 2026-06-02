@@ -1131,18 +1131,10 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
 
                 if args.is_empty() {
                     return match class_name.as_str() {
-                        "TypeError" => {
-                            Ok(Expr::TypeErrorNew(Box::new(Expr::String("".to_string()))))
-                        }
-                        "RangeError" => {
-                            Ok(Expr::RangeErrorNew(Box::new(Expr::String("".to_string()))))
-                        }
-                        "ReferenceError" => Ok(Expr::ReferenceErrorNew(Box::new(Expr::String(
-                            "".to_string(),
-                        )))),
-                        "SyntaxError" => {
-                            Ok(Expr::SyntaxErrorNew(Box::new(Expr::String("".to_string()))))
-                        }
+                        "TypeError" => Ok(Expr::TypeErrorNew(Box::new(Expr::Undefined))),
+                        "RangeError" => Ok(Expr::RangeErrorNew(Box::new(Expr::Undefined))),
+                        "ReferenceError" => Ok(Expr::ReferenceErrorNew(Box::new(Expr::Undefined))),
+                        "SyntaxError" => Ok(Expr::SyntaxErrorNew(Box::new(Expr::Undefined))),
                         _ => Ok(Expr::ErrorNew(None)),
                     };
                 } else {

@@ -27,6 +27,10 @@ pub const ERROR_KIND_AGGREGATE_ERROR: u32 = 5;
 pub const ERROR_KIND_EVAL_ERROR: u32 = 6;
 pub const ERROR_KIND_URI_ERROR: u32 = 7;
 
+const ERROR_FLAG_HAS_MESSAGE: u32 = 1 << 0;
+const ERROR_FLAG_HAS_CAUSE: u32 = 1 << 1;
+const ERROR_FLAG_HAS_ERRORS: u32 = 1 << 2;
+
 /// Special class IDs for `instanceof` checks (must match perry-codegen/src/expr.rs)
 pub const CLASS_ID_ERROR: u32 = 0xFFFF0001;
 pub const CLASS_ID_TYPE_ERROR: u32 = 0xFFFF0010;
@@ -50,6 +54,8 @@ pub struct ErrorHeader {
     pub object_type: u32,
     /// Error kind discriminator (TypeError, RangeError, etc.)
     pub error_kind: u32,
+    /// Own-property presence bits for spec-visible slots.
+    pub flags: u32,
     /// Error message as a string pointer
     pub message: *mut StringHeader,
     /// Error name (e.g., "Error", "TypeError")
@@ -77,6 +83,7 @@ unsafe fn alloc_error(
     kind: u32,
     name_bytes: &[u8],
     message: *mut StringHeader,
+    has_message: bool,
 ) -> *mut ErrorHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     // #321 frontier issue #69 (sibling to #2230's `dyn_index_get` guard):
@@ -127,6 +134,11 @@ unsafe fn alloc_error(
 
     (*ptr).object_type = OBJECT_TYPE_ERROR;
     (*ptr).error_kind = kind;
+    (*ptr).flags = if has_message {
+        ERROR_FLAG_HAS_MESSAGE
+    } else {
+        0
+    };
     (*ptr).message = message_handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader;
     (*ptr).name = error_name_handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader;
     (*ptr).stack = stack_handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader;
@@ -142,6 +154,7 @@ pub(crate) unsafe fn error_set_cause(error: *mut ErrorHeader, cause: f64) {
         &(*error).cause as *const f64 as usize,
         cause.to_bits(),
     );
+    (*error).flags |= ERROR_FLAG_HAS_CAUSE;
 }
 
 pub(crate) unsafe fn error_set_errors(
@@ -153,18 +166,19 @@ pub(crate) unsafe fn error_set_errors(
         &(*error).errors as *const _ as usize,
         errors as u64,
     );
+    (*error).flags |= ERROR_FLAG_HAS_ERRORS;
 }
 
 /// Create a new Error with no message
 #[no_mangle]
 pub extern "C" fn js_error_new() -> *mut ErrorHeader {
-    unsafe { alloc_error(ERROR_KIND_ERROR, b"Error", std::ptr::null_mut()) }
+    unsafe { alloc_error(ERROR_KIND_ERROR, b"Error", std::ptr::null_mut(), false) }
 }
 
 /// Create a new Error with a message
 #[no_mangle]
 pub extern "C" fn js_error_new_with_message(message: *mut StringHeader) -> *mut ErrorHeader {
-    unsafe { alloc_error(ERROR_KIND_ERROR, b"Error", message) }
+    unsafe { alloc_error(ERROR_KIND_ERROR, b"Error", message, true) }
 }
 
 /// Create a new Error-like object with a custom `.name` and stack prefix.
@@ -172,7 +186,7 @@ pub(crate) fn js_error_new_with_name_message(
     name: &'static [u8],
     message: *mut StringHeader,
 ) -> *mut ErrorHeader {
-    unsafe { alloc_error(ERROR_KIND_ERROR, name, message) }
+    unsafe { alloc_error(ERROR_KIND_ERROR, name, message, true) }
 }
 
 /// Create a new Error-like object with a dynamically supplied `.name`.
@@ -180,7 +194,7 @@ pub(crate) fn js_error_new_with_name_message_bytes(
     name: &[u8],
     message: *mut StringHeader,
 ) -> *mut ErrorHeader {
-    unsafe { alloc_error(ERROR_KIND_ERROR, name, message) }
+    unsafe { alloc_error(ERROR_KIND_ERROR, name, message, true) }
 }
 
 /// Create a new Error with a message and a cause (raw f64 NaN-boxed)
@@ -190,7 +204,7 @@ pub extern "C" fn js_error_new_with_cause(
     cause: f64,
 ) -> *mut ErrorHeader {
     unsafe {
-        let ptr = alloc_error(ERROR_KIND_ERROR, b"Error", message);
+        let ptr = alloc_error(ERROR_KIND_ERROR, b"Error", message, true);
         error_set_cause(ptr, cause);
         ptr
     }
@@ -199,19 +213,19 @@ pub extern "C" fn js_error_new_with_cause(
 /// Create a new TypeError with a message
 #[no_mangle]
 pub extern "C" fn js_typeerror_new(message: *mut StringHeader) -> *mut ErrorHeader {
-    unsafe { alloc_error(ERROR_KIND_TYPE_ERROR, b"TypeError", message) }
+    unsafe { alloc_error(ERROR_KIND_TYPE_ERROR, b"TypeError", message, true) }
 }
 
 /// Create a new RangeError with a message
 #[no_mangle]
 pub extern "C" fn js_rangeerror_new(message: *mut StringHeader) -> *mut ErrorHeader {
-    unsafe { alloc_error(ERROR_KIND_RANGE_ERROR, b"RangeError", message) }
+    unsafe { alloc_error(ERROR_KIND_RANGE_ERROR, b"RangeError", message, true) }
 }
 
 /// Create a new ReferenceError with a message
 #[no_mangle]
 pub extern "C" fn js_referenceerror_new(message: *mut StringHeader) -> *mut ErrorHeader {
-    unsafe { alloc_error(ERROR_KIND_REFERENCE_ERROR, b"ReferenceError", message) }
+    unsafe { alloc_error(ERROR_KIND_REFERENCE_ERROR, b"ReferenceError", message, true) }
 }
 
 thread_local! {
@@ -288,19 +302,19 @@ static KEEP_JS_THROW_ERROR_WITH_CODE: unsafe extern "C" fn(
 /// Create a new SyntaxError with a message
 #[no_mangle]
 pub extern "C" fn js_syntaxerror_new(message: *mut StringHeader) -> *mut ErrorHeader {
-    unsafe { alloc_error(ERROR_KIND_SYNTAX_ERROR, b"SyntaxError", message) }
+    unsafe { alloc_error(ERROR_KIND_SYNTAX_ERROR, b"SyntaxError", message, true) }
 }
 
 /// Create a new EvalError with a message
 #[no_mangle]
 pub extern "C" fn js_evalerror_new(message: *mut StringHeader) -> *mut ErrorHeader {
-    unsafe { alloc_error(ERROR_KIND_EVAL_ERROR, b"EvalError", message) }
+    unsafe { alloc_error(ERROR_KIND_EVAL_ERROR, b"EvalError", message, true) }
 }
 
 /// Create a new URIError with a message
 #[no_mangle]
 pub extern "C" fn js_urierror_new(message: *mut StringHeader) -> *mut ErrorHeader {
-    unsafe { alloc_error(ERROR_KIND_URI_ERROR, b"URIError", message) }
+    unsafe { alloc_error(ERROR_KIND_URI_ERROR, b"URIError", message, true) }
 }
 
 /// Create a new AggregateError with an errors array and a message
@@ -310,7 +324,12 @@ pub extern "C" fn js_aggregateerror_new(
     message: *mut StringHeader,
 ) -> *mut ErrorHeader {
     unsafe {
-        let ptr = alloc_error(ERROR_KIND_AGGREGATE_ERROR, b"AggregateError", message);
+        let ptr = alloc_error(
+            ERROR_KIND_AGGREGATE_ERROR,
+            b"AggregateError",
+            message,
+            !message.is_null(),
+        );
         error_set_errors(ptr, errors);
         ptr
     }
@@ -368,7 +387,7 @@ pub extern "C" fn js_error_new_kind_with_options(
         } else {
             kind
         };
-        let ptr = alloc_error(resolved_kind, name, message);
+        let ptr = alloc_error(resolved_kind, name, message, !message.is_null());
         apply_cause_from_options(ptr, options);
         ptr
     }
@@ -379,6 +398,70 @@ fn throw_not_iterable_type_error() -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = js_typeerror_new(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn error_kind_name(kind: u32) -> (&'static [u8], u32) {
+    match kind {
+        ERROR_KIND_TYPE_ERROR => (b"TypeError", ERROR_KIND_TYPE_ERROR),
+        ERROR_KIND_RANGE_ERROR => (b"RangeError", ERROR_KIND_RANGE_ERROR),
+        ERROR_KIND_REFERENCE_ERROR => (b"ReferenceError", ERROR_KIND_REFERENCE_ERROR),
+        ERROR_KIND_SYNTAX_ERROR => (b"SyntaxError", ERROR_KIND_SYNTAX_ERROR),
+        ERROR_KIND_AGGREGATE_ERROR => (b"AggregateError", ERROR_KIND_AGGREGATE_ERROR),
+        ERROR_KIND_EVAL_ERROR => (b"EvalError", ERROR_KIND_EVAL_ERROR),
+        ERROR_KIND_URI_ERROR => (b"URIError", ERROR_KIND_URI_ERROR),
+        _ => (b"Error", ERROR_KIND_ERROR),
+    }
+}
+
+fn coerce_error_message_value(value: f64) -> Option<*mut StringHeader> {
+    let jsv = crate::value::JSValue::from_bits(value.to_bits());
+    if jsv.is_undefined() {
+        return None;
+    }
+    if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
+        let msg = js_string_from_bytes(b"Cannot convert a Symbol value to a string".as_ptr(), 41);
+        let err = js_typeerror_new(msg);
+        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    }
+    Some(crate::builtins::js_string_coerce(value))
+}
+
+#[no_mangle]
+pub extern "C" fn js_error_new_from_value(value: f64) -> *mut ErrorHeader {
+    js_error_new_kind_from_value(ERROR_KIND_ERROR, value)
+}
+
+#[no_mangle]
+pub extern "C" fn js_error_new_kind_from_value(kind: u32, value: f64) -> *mut ErrorHeader {
+    let (name, resolved_kind) = error_kind_name(kind);
+    unsafe {
+        match coerce_error_message_value(value) {
+            Some(message) => alloc_error(resolved_kind, name, message, true),
+            None => alloc_error(resolved_kind, name, std::ptr::null_mut(), false),
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_error_new_with_cause_from_value(value: f64, cause: f64) -> *mut ErrorHeader {
+    unsafe {
+        let ptr = js_error_new_from_value(value);
+        error_set_cause(ptr, cause);
+        ptr
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_error_new_kind_with_options_from_value(
+    kind: u32,
+    value: f64,
+    options: f64,
+) -> *mut ErrorHeader {
+    unsafe {
+        let ptr = js_error_new_kind_from_value(kind, value);
+        apply_cause_from_options(ptr, options);
+        ptr
+    }
 }
 
 /// #2838/#2836: full `new AggregateError(errors, message?, options?)`
@@ -406,7 +489,12 @@ pub extern "C" fn js_aggregateerror_new_full(
         Err(_) => throw_not_iterable_type_error(),
     };
     unsafe {
-        let ptr = alloc_error(ERROR_KIND_AGGREGATE_ERROR, b"AggregateError", message);
+        let ptr = alloc_error(
+            ERROR_KIND_AGGREGATE_ERROR,
+            b"AggregateError",
+            message,
+            !message.is_null(),
+        );
         error_set_errors(ptr, arr);
         apply_cause_from_options(ptr, options);
         ptr
@@ -455,6 +543,41 @@ pub extern "C" fn js_error_get_name(error: *mut ErrorHeader) -> *mut StringHeade
             return js_string_from_bytes(b"Error".as_ptr(), 5);
         }
         (*error).name
+    }
+}
+
+pub(crate) unsafe fn js_error_has_own_property(error: *mut ErrorHeader, key: &str) -> bool {
+    if error.is_null() {
+        return false;
+    }
+    if crate::node_submodules::error_user_prop(error as usize, key).is_some() {
+        return true;
+    }
+    match key {
+        "message" => ((*error).flags & ERROR_FLAG_HAS_MESSAGE) != 0,
+        "cause" => ((*error).flags & ERROR_FLAG_HAS_CAUSE) != 0,
+        "errors" => ((*error).flags & ERROR_FLAG_HAS_ERRORS) != 0,
+        "stack" => true,
+        _ => false,
+    }
+}
+
+pub(crate) unsafe fn js_error_builtin_own_property_is_enumerable(
+    error: *mut ErrorHeader,
+    key: &str,
+) -> Option<bool> {
+    if error.is_null() {
+        return Some(false);
+    }
+    if crate::node_submodules::error_user_prop(error as usize, key).is_some() {
+        return Some(true);
+    }
+    match key {
+        "message" if ((*error).flags & ERROR_FLAG_HAS_MESSAGE) != 0 => Some(false),
+        "cause" if ((*error).flags & ERROR_FLAG_HAS_CAUSE) != 0 => Some(false),
+        "errors" if ((*error).flags & ERROR_FLAG_HAS_ERRORS) != 0 => Some(false),
+        "stack" => Some(false),
+        _ => None,
     }
 }
 
@@ -613,18 +736,8 @@ unsafe fn read_string_header_owned(ptr: *const StringHeader) -> String {
 #[no_mangle]
 pub extern "C" fn js_error_to_string(error: *mut ErrorHeader) -> *mut StringHeader {
     unsafe {
-        // Instance overrides (`err.name = ...` / `err.message = ...`) recorded
-        // in the per-error side table take precedence over the baked
-        // ErrorHeader values — Node's `Error.prototype.toString` reads the
-        // overridable `name`/`message` own properties, ToString-coercing them.
-        let name = match crate::node_submodules::error_user_prop(error as usize, "name") {
-            Some(v) => read_string_header_owned(crate::value::js_jsvalue_to_string(v)),
-            None => read_string_header_owned(js_error_get_name(error)),
-        };
-        let message = match crate::node_submodules::error_user_prop(error as usize, "message") {
-            Some(v) => read_string_header_owned(crate::value::js_jsvalue_to_string(v)),
-            None => read_string_header_owned(js_error_get_message(error)),
-        };
+        let name = error_to_string_part(error, "name", js_error_get_name(error), "Error");
+        let message = error_to_string_part(error, "message", js_error_get_message(error), "");
         let result = if name.is_empty() {
             message
         } else if message.is_empty() {
@@ -634,6 +747,22 @@ pub extern "C" fn js_error_to_string(error: *mut ErrorHeader) -> *mut StringHead
         };
         js_string_from_bytes(result.as_ptr(), result.len() as u32)
     }
+}
+
+unsafe fn error_to_string_part(
+    error: *mut ErrorHeader,
+    key: &str,
+    fallback: *const StringHeader,
+    undefined_default: &str,
+) -> String {
+    if let Some(value) = crate::node_submodules::error_user_prop(error as usize, key) {
+        let value_jsv = crate::value::JSValue::from_bits(value.to_bits());
+        if value_jsv.is_undefined() {
+            return undefined_default.to_string();
+        }
+        return read_string_header_owned(crate::value::js_jsvalue_to_string(value));
+    }
+    read_string_header_owned(fallback)
 }
 
 /// Get the cause property of an Error (raw f64 NaN-boxed value)

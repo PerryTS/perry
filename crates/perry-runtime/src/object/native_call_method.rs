@@ -387,7 +387,9 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
             Some(info) => info,
             None => return false,
         };
-        if target_gc_type != crate::gc::GC_TYPE_CLOSURE {
+        if target_gc_type != crate::gc::GC_TYPE_CLOSURE
+            && target_gc_type != crate::gc::GC_TYPE_ERROR
+        {
             return false;
         }
     }
@@ -704,6 +706,19 @@ pub unsafe extern "C" fn js_native_call_method(
     }
 
     let jsval = JSValue::from_bits(object.to_bits());
+
+    if method_name == "toString" && jsval.is_pointer() {
+        let raw = crate::value::js_nanbox_get_pointer(object) as *const u8;
+        if !raw.is_null() && crate::object::is_valid_obj_ptr(raw) {
+            unsafe {
+                let gc = raw.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                if (*gc).obj_type == crate::gc::GC_TYPE_ERROR {
+                    let s = crate::error::js_error_to_string(raw as *mut crate::error::ErrorHeader);
+                    return f64::from_bits(JSValue::string_ptr(s).bits());
+                }
+            }
+        }
+    }
 
     if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(object) {
         match method_name {
@@ -2741,6 +2756,17 @@ pub unsafe extern "C" fn js_native_call_method(
                 if raw >= crate::gc::GC_HEADER_SIZE + 0x1000 {
                     let gc_header = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                         as *const crate::gc::GcHeader;
+                    if (*gc_header).obj_type == crate::gc::GC_TYPE_ERROR {
+                        let present = super::has_own_helpers::str_from_string_header(key_str)
+                            .map(|key| {
+                                crate::error::js_error_has_own_property(
+                                    raw as *mut crate::error::ErrorHeader,
+                                    key,
+                                )
+                            })
+                            .unwrap_or(false);
+                        return f64::from_bits(JSValue::bool(present).bits());
+                    }
                     if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
                         let present = super::has_own_helpers::array_own_key_present(
                             raw as *const crate::array::ArrayHeader,
@@ -2802,6 +2828,18 @@ pub unsafe extern "C" fn js_native_call_method(
             if raw >= crate::gc::GC_HEADER_SIZE + 0x1000 {
                 let gc_header =
                     (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                if (*gc_header).obj_type == crate::gc::GC_TYPE_ERROR {
+                    let Some(key_name) = super::has_own_helpers::str_from_string_header(key_str)
+                    else {
+                        return f64::from_bits(JSValue::bool(false).bits());
+                    };
+                    let enumerable = crate::error::js_error_builtin_own_property_is_enumerable(
+                        raw as *mut crate::error::ErrorHeader,
+                        key_name,
+                    )
+                    .unwrap_or(false);
+                    return f64::from_bits(JSValue::bool(enumerable).bits());
+                }
                 if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
                     let Some(key_name) = super::has_own_helpers::str_from_string_header(key_str)
                     else {

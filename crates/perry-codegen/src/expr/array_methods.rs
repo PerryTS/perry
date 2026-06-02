@@ -328,11 +328,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let msg = lower_expr(ctx, message)?;
             let c = lower_expr(ctx, cause)?;
             let blk = ctx.block();
-            let msg_handle = unbox_to_i64(blk, &msg);
             let err_handle = blk.call(
                 I64,
-                "js_error_new_with_cause",
-                &[(I64, &msg_handle), (DOUBLE, &c)],
+                "js_error_new_with_cause_from_value",
+                &[(DOUBLE, &msg), (DOUBLE, &c)],
             );
             Ok(nanbox_pointer_inline(blk, &err_handle))
         }
@@ -348,12 +347,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let msg = lower_expr(ctx, message)?;
             let opts = lower_expr(ctx, options)?;
             let blk = ctx.block();
-            let msg_handle = unbox_to_i64(blk, &msg);
             let kind_lit = (*kind as i64).to_string();
             let err_handle = blk.call(
                 I64,
-                "js_error_new_kind_with_options",
-                &[(I32, &kind_lit), (I64, &msg_handle), (DOUBLE, &opts)],
+                "js_error_new_kind_with_options_from_value",
+                &[(I32, &kind_lit), (DOUBLE, &msg), (DOUBLE, &opts)],
             );
             Ok(nanbox_pointer_inline(blk, &err_handle))
         }

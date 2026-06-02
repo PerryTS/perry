@@ -2283,6 +2283,12 @@ pub extern "C" fn js_object_get_field_by_name(
                         let v = crate::error::js_error_get_cause(err_ptr);
                         return JSValue::from_bits(v.to_bits());
                     }
+                    b"toString" => {
+                        let this_f64 =
+                            f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                        let result = js_class_method_bind(this_f64, b"toString".as_ptr(), 8);
+                        return JSValue::from_bits(result.to_bits());
+                    }
                     b"constructor" => {
                         let name = match (*err_ptr).error_kind {
                             crate::error::ERROR_KIND_TYPE_ERROR => b"TypeError".as_slice(),

@@ -525,6 +525,23 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
                     .unwrap_or(false);
                 return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
             }
+            if ptr >= crate::gc::GC_HEADER_SIZE + 0x1000
+                && crate::object::is_valid_obj_ptr(ptr as *const u8)
+            {
+                let gc_header =
+                    (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                if (*gc_header).obj_type == crate::gc::GC_TYPE_ERROR {
+                    let present = super::has_own_helpers::str_from_string_header(key_str)
+                        .map(|key| {
+                            crate::error::js_error_has_own_property(
+                                ptr as *mut crate::error::ErrorHeader,
+                                key,
+                            )
+                        })
+                        .unwrap_or(false);
+                    return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+                }
+            }
         }
 
         let obj = extract_obj_ptr(obj_value);
@@ -1538,6 +1555,12 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                         return f64::from_bits(crate::value::js_nanbox_pointer(p as i64).to_bits());
                     }
                 }
+                if (*gc).obj_type == crate::gc::GC_TYPE_ERROR {
+                    let err = raw_addr as *const crate::error::ErrorHeader;
+                    if let Some(proto) = error_kind_prototype_value((*err).error_kind) {
+                        return proto;
+                    }
+                }
                 if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY {
                     if let Some(proto) = super::array_get_prototype_of_addr(raw_addr as usize) {
                         return proto;
@@ -1588,6 +1611,12 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                         return f64::from_bits(crate::value::js_nanbox_pointer(p as i64).to_bits());
                     }
                 }
+                if (*gc).obj_type == crate::gc::GC_TYPE_ERROR {
+                    let err = bits as *const crate::error::ErrorHeader;
+                    if let Some(proto) = error_kind_prototype_value((*err).error_kind) {
+                        return proto;
+                    }
+                }
                 if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY {
                     if let Some(proto) = super::array_get_prototype_of_addr(bits as usize) {
                         return proto;
@@ -1613,6 +1642,28 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
         }
     }
     f64::from_bits(TAG_NULL)
+}
+
+fn error_kind_prototype_value(kind: u32) -> Option<f64> {
+    let name = match kind {
+        crate::error::ERROR_KIND_TYPE_ERROR => "TypeError",
+        crate::error::ERROR_KIND_RANGE_ERROR => "RangeError",
+        crate::error::ERROR_KIND_REFERENCE_ERROR => "ReferenceError",
+        crate::error::ERROR_KIND_SYNTAX_ERROR => "SyntaxError",
+        crate::error::ERROR_KIND_EVAL_ERROR => "EvalError",
+        crate::error::ERROR_KIND_URI_ERROR => "URIError",
+        crate::error::ERROR_KIND_AGGREGATE_ERROR => "AggregateError",
+        _ => "Error",
+    };
+    let ctor = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+    let ctor_jsv = crate::value::JSValue::from_bits(ctor.to_bits());
+    if !ctor_jsv.is_pointer() {
+        return None;
+    }
+    let ctor_ptr = ctor_jsv.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto_jsv = crate::value::JSValue::from_bits(proto.to_bits());
+    proto_jsv.is_pointer().then_some(proto)
 }
 
 /// `Object.defineProperties(target, descriptors)` — iterate the descriptor

@@ -145,6 +145,60 @@ pub(crate) extern "C" fn typed_array_constructor_call_thunk(
     super::object_ops::throw_object_type_error(b"Constructor %TypedArray% requires 'new'")
 }
 
+fn error_constructor_call(kind: u32, message: f64) -> f64 {
+    let error = crate::error::js_error_new_kind_from_value(kind, message);
+    crate::value::js_nanbox_pointer(error as i64)
+}
+
+extern "C" fn error_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    message: f64,
+) -> f64 {
+    error_constructor_call(crate::error::ERROR_KIND_ERROR, message)
+}
+
+extern "C" fn type_error_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    message: f64,
+) -> f64 {
+    error_constructor_call(crate::error::ERROR_KIND_TYPE_ERROR, message)
+}
+
+extern "C" fn range_error_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    message: f64,
+) -> f64 {
+    error_constructor_call(crate::error::ERROR_KIND_RANGE_ERROR, message)
+}
+
+extern "C" fn reference_error_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    message: f64,
+) -> f64 {
+    error_constructor_call(crate::error::ERROR_KIND_REFERENCE_ERROR, message)
+}
+
+extern "C" fn syntax_error_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    message: f64,
+) -> f64 {
+    error_constructor_call(crate::error::ERROR_KIND_SYNTAX_ERROR, message)
+}
+
+extern "C" fn eval_error_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    message: f64,
+) -> f64 {
+    error_constructor_call(crate::error::ERROR_KIND_EVAL_ERROR, message)
+}
+
+extern "C" fn uri_error_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    message: f64,
+) -> f64 {
+    error_constructor_call(crate::error::ERROR_KIND_URI_ERROR, message)
+}
+
 pub(crate) extern "C" fn webcrypto_illegal_constructor_thunk(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
@@ -649,6 +703,73 @@ extern "C" fn date_prototype_to_string_thunk(
     let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
     let string = crate::date::js_date_to_string(this_value);
     crate::value::js_nanbox_string(string as i64)
+}
+
+extern "C" fn object_prototype_has_own_property_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    key: f64,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    unsafe {
+        super::js_native_call_method(
+            this_value,
+            b"hasOwnProperty".as_ptr() as *const i8,
+            "hasOwnProperty".len(),
+            &key as *const f64,
+            1,
+        )
+    }
+}
+
+extern "C" fn error_prototype_to_string_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this_jsv = crate::value::JSValue::from_bits(this_value.to_bits());
+    if !this_jsv.is_pointer() || this_jsv.is_null() || this_jsv.is_undefined() {
+        super::object_ops::throw_object_type_error(
+            b"Error.prototype.toString called on non-object",
+        );
+    }
+    let raw = crate::value::js_nanbox_get_pointer(this_value) as *const u8;
+    if raw.is_null() || !crate::object::is_valid_obj_ptr(raw) {
+        super::object_ops::throw_object_type_error(
+            b"Error.prototype.toString called on non-object",
+        );
+    }
+
+    let name = error_to_string_property(this_value, b"name", "Error");
+    let message = error_to_string_property(this_value, b"message", "");
+    let result = if name.is_empty() {
+        message
+    } else if message.is_empty() {
+        name
+    } else {
+        format!("{name}: {message}")
+    };
+    let s = crate::string::js_string_from_bytes(result.as_ptr(), result.len() as u32);
+    crate::value::js_nanbox_string(s as i64)
+}
+
+fn error_to_string_property(this_value: f64, key: &'static [u8], default: &str) -> String {
+    let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    let obj = crate::value::js_nanbox_get_pointer(this_value) as *const ObjectHeader;
+    let value = crate::object::js_object_get_field_by_name_f64(obj, key_ptr);
+    let value_jsv = crate::value::JSValue::from_bits(value.to_bits());
+    if value_jsv.is_undefined() {
+        return default.to_string();
+    }
+    let string = crate::value::js_jsvalue_to_string(value);
+    unsafe { string_header_to_owned(string) }
+}
+
+unsafe fn string_header_to_owned(ptr: *const crate::StringHeader) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+    let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let len = (*ptr).byte_len as usize;
+    String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
 }
 
 extern "C" fn object_prototype_value_of_thunk(
@@ -1174,6 +1295,13 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             // global value coerce like the bare-call lowering does.
             "Number" => global_this_number_thunk as *const u8,
             "Boolean" => global_this_boolean_thunk as *const u8,
+            "Error" => error_constructor_call_thunk as *const u8,
+            "TypeError" => type_error_constructor_call_thunk as *const u8,
+            "RangeError" => range_error_constructor_call_thunk as *const u8,
+            "ReferenceError" => reference_error_constructor_call_thunk as *const u8,
+            "SyntaxError" => syntax_error_constructor_call_thunk as *const u8,
+            "EvalError" => eval_error_constructor_call_thunk as *const u8,
+            "URIError" => uri_error_constructor_call_thunk as *const u8,
             "MessageChannel" => {
                 crate::messaging::js_message_channel_constructor_call_error as *const u8
             }
@@ -1203,6 +1331,10 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                 crate::closure::js_register_closure_arity(func_ptr, 1);
             }
             "Object" | "String" | "Number" | "Boolean" | "BroadcastChannel" => {
+                crate::closure::js_register_closure_arity(func_ptr, 1);
+            }
+            "Error" | "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError"
+            | "EvalError" | "URIError" => {
                 crate::closure::js_register_closure_arity(func_ptr, 1);
             }
             "MessageChannel" | "MessagePort" | "Storage" => {
@@ -1305,6 +1437,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             // entry point — works in tandem with `.call`/`.apply` since
             // those arms (#970) rebind IMPLICIT_THIS before forwarding.
             populate_builtin_prototype_methods(name, proto_obj);
+            install_error_prototype_data_properties(name, proto_obj);
             if matches!(name, "MessageChannel" | "MessagePort" | "BroadcastChannel") {
                 crate::messaging::populate_messaging_prototype(name, proto_obj, ctor_value);
             }
@@ -2209,10 +2342,13 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                 object_prototype_value_of_thunk as *const u8,
                 0,
             );
-            install_noop_proto_methods(
+            install_proto_method(
                 proto_obj,
-                &[("hasOwnProperty", 1), ("propertyIsEnumerable", 1)],
+                "hasOwnProperty",
+                object_prototype_has_own_property_thunk as *const u8,
+                1,
             );
+            install_noop_proto_methods(proto_obj, &[("propertyIsEnumerable", 1)]);
         }
         "Function" => {
             install_proto_method(
@@ -2472,10 +2608,27 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             }
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
-        "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EvalError"
-        | "URIError" => {
-            install_noop_proto_methods(proto_obj, &[("toString", 0)]);
+        "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
+        | "AggregateError" | "EvalError" | "URIError" => {
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_proto_method(
+                proto_obj,
+                "toString",
+                error_prototype_to_string_thunk as *const u8,
+                0,
+            );
+            install_proto_method(
+                proto_obj,
+                "isPrototypeOf",
+                object_prototype_is_prototype_of_thunk as *const u8,
+                1,
+            );
+            install_proto_method(
+                proto_obj,
+                "hasOwnProperty",
+                object_prototype_has_own_property_thunk as *const u8,
+                1,
+            );
         }
         // Typed-array constructors: keep the reified per-kind prototype
         // method set (#2142) on each per-kind `.prototype` so direct
@@ -2534,6 +2687,44 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
         }
         _ => {}
     }
+}
+
+fn install_error_prototype_data_properties(builtin_name: &str, proto_obj: *mut ObjectHeader) {
+    let name = match builtin_name {
+        "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
+        | "AggregateError" | "EvalError" | "URIError" => builtin_name,
+        _ => return,
+    };
+    if proto_obj.is_null() {
+        return;
+    }
+
+    let name_key = crate::string::js_string_from_bytes(b"name".as_ptr(), 4);
+    let name_value =
+        crate::string::js_string_from_bytes(name.as_bytes().as_ptr(), name.len() as u32);
+    js_object_set_field_by_name(
+        proto_obj,
+        name_key,
+        crate::value::js_nanbox_string(name_value as i64),
+    );
+    super::set_builtin_property_attrs(
+        proto_obj as usize,
+        "name".to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+
+    let message_key = crate::string::js_string_from_bytes(b"message".as_ptr(), 7);
+    let message_value = crate::string::js_string_from_bytes(b"".as_ptr(), 0);
+    js_object_set_field_by_name(
+        proto_obj,
+        message_key,
+        crate::value::js_nanbox_string(message_value as i64),
+    );
+    super::set_builtin_property_attrs(
+        proto_obj as usize,
+        "message".to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
 }
 
 fn install_webcrypto_proto_method(
