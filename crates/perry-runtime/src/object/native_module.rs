@@ -1617,6 +1617,7 @@ const DNS_PROMISES_NAMESPACE_KEYS: &[&[u8]] = &[
 
 const CHILD_PROCESS_DEFAULT_KEYS: &[&[u8]] = &[
     b"ChildProcess",
+    b"_forkChild",
     b"exec",
     b"execFile",
     b"execFileSync",
@@ -1628,6 +1629,7 @@ const CHILD_PROCESS_DEFAULT_KEYS: &[&[u8]] = &[
 
 const CHILD_PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"ChildProcess",
+    b"_forkChild",
     b"default",
     b"exec",
     b"execFile",
@@ -3439,6 +3441,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("tls", "connect") => Some(4),
         ("tls", "createServer" | "Server") => Some(2),
         ("tls", "TLSSocket") => Some(2),
+        ("child_process", "_forkChild") => Some(2),
         _ => None,
     }
 }
@@ -4383,6 +4386,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             // (`cp.spawn(...)`) already lowers through a dedicated codegen path;
             // this just keeps the value-read form coherent so it dispatches
             // through dispatch_native_module_method.
+            | ("child_process", "_forkChild")
             | ("child_process", "exec")
             | ("child_process", "execFile")
             | ("child_process", "execSync")

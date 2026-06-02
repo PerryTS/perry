@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2620 entries across 109 modules.
+Total: 2603 entries across 109 modules.
 
 ## Modules
 
@@ -345,6 +345,7 @@ Total: 2620 entries across 109 modules.
 
 ### Methods
 
+- `_forkChild` — module
 - `exec` — module
 - `execFile` — module
 - `execFileSync` — module
@@ -2812,9 +2813,6 @@ Total: 2620 entries across 109 modules.
 
 ### Methods
 
-- `_isArrayBufferView` — module
-- `_isUint8Array` — module
-- `_uint8ArrayToBuffer` — module
 - `addAbortSignal` — module
 - `addListener` — instance
 - `allowHalfOpen` — instance
@@ -2832,7 +2830,6 @@ Total: 2620 entries across 109 modules.
 - `finished` — module
 - `getDefaultHighWaterMark` — module
 - `getMaxListeners` — instance
-- `isDestroyed` — module
 - `isDisturbed` — module
 - `isErrored` — module
 - `isPaused` — instance
@@ -3380,27 +3377,13 @@ Total: 2620 entries across 109 modules.
 ### Methods
 
 - `compileFunction` — module
-- `createCachedData` — instance
 - `createContext` — module
 - `createScript` — module
-- `dependencySpecifiers` — instance
-- `error` — instance
-- `evaluate` — instance
-- `hasAsyncGraph` — instance
-- `hasTopLevelAwait` — instance
-- `identifier` — instance
-- `instantiate` — instance
 - `isContext` — module
-- `link` — instance
-- `linkRequests` — instance
 - `measureMemory` — module
-- `moduleRequests` — instance
-- `namespace` — instance
 - `runInContext` — module
 - `runInNewContext` — module
 - `runInThisContext` — module
-- `setExport` — instance
-- `status` — instance
 
 ### Properties
 
@@ -3557,10 +3540,6 @@ Total: 2620 entries across 109 modules.
 - `inflateSync` — module
 - `unzip` — module
 - `unzipSync` — module
-- `zstdCompress` — module
-- `zstdCompressSync` — module
-- `zstdDecompress` — module
-- `zstdDecompressSync` — module
 
 ### Properties
 

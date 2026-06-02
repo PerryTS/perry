@@ -98,6 +98,7 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     // Distinct shape band from spawn's ChildProcess (which carries no send/disconnect).
     let cp_obj = cp_build_object(&cp_methods, CP_SHAPE_ID + 0x20 + cp_methods.len() as u32);
     let cp = cp_box_ptr(cp_obj as *const u8);
+    cp_install_dispose(cp);
 
     cp_set_field(cp, b"stdout", stdout_obj);
     cp_set_field(cp, b"stderr", stderr_obj);

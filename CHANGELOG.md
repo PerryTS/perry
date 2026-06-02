@@ -2,6 +2,10 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1106 — fix(child_process): fork lifecycle exports (#4110)
+
+Folds in external contributor PR #4110: rounds out the `child_process` fork lifecycle surface — `subprocess[Symbol.dispose]`, the `fork(...).send(...)` callback firing once the IPC channel has closed, and the forked-child object shape. Adds the supporting runtime wiring in `crates/perry-runtime/src/child_process/` plus node-suite parity fixtures. Merged on top of current `main`; only the auto-generated doc count/coverage lines conflicted and were regenerated from the manifest.
+
 ## v0.5.1105 — fix(stream/web): ReadableStream.from sources (#4106)
 
 Folds in external contributor PR #4106: lowers `ReadableStream.from(...)` (and the `node:stream/web` alias) to the `readable_stream` native `from` constructor so building a web `ReadableStream` from an iterable/async-iterable source works. Merged on top of current `main`; the only conflict was in `crates/perry-hir/src/lower/expr_call/native_module.rs`, where this PR's `ReadableStream.from` static-call block and main's broadened `is_process_ref` gate (#process namespace/default-import) landed in the same region — both were kept.

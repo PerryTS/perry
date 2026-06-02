@@ -826,6 +826,21 @@ extern "C" fn cp_method_kill(closure: *const ClosureHeader, signal: f64) -> f64 
     }
     TAG_TRUE_F64
 }
+/// `child[Symbol.dispose]()` — Node aliases this to `kill()` and returns
+/// `undefined`, so `using child = spawn(...)` terminates the subprocess on
+/// scope exit. #2556.
+extern "C" fn cp_method_dispose(closure: *const ClosureHeader) -> f64 {
+    let _ = cp_method_kill(closure, cp_undefined());
+    cp_undefined()
+}
+pub(crate) fn js_fork_child(args_len: usize) -> f64 {
+    if args_len < 2 {
+        crate::node_submodules::diagnostics::throw_type_error_no_code(
+            b"Cannot destructure property 'initMessageChannel' of 'serialization[serializationMode]' as it is undefined.",
+        );
+    }
+    f64::from_bits(JSValue::undefined().bits())
+}
 /// `removeListener(event, cb)` / `off(event, cb)` — rebuild the `event`
 /// listener array without the matching closure (compared by NaN-boxed bits).
 /// #1780.
@@ -1091,6 +1106,8 @@ fn cp_register_arities() {
     js_register_closure_arity(cp_method_remove_listener as *const u8, 2);
     js_register_closure_arity(cp_method_remove_all_listeners as *const u8, 1);
     js_register_closure_arity(cp_method_kill as *const u8, 1);
+    js_register_closure_arity(cp_method_dispose as *const u8, 0);
+    crate::closure::js_register_closure_length(cp_method_dispose as *const u8, 0);
     js_register_closure_arity(cp_method_read as *const u8, 1);
     js_register_closure_arity(cp_method_pipe as *const u8, 1);
     js_register_closure_arity(cp_method_write2 as *const u8, 2);
@@ -1126,6 +1143,35 @@ fn cp_build_object(methods: &[(&str, CpFn)], shape_id: u32) -> *mut ObjectHeader
         js_object_set_field(obj, i as u32, JSValue::pointer(closure as *const u8));
     }
     obj
+}
+
+fn cp_install_dispose(cp: f64) {
+    let Some(obj) = cp_object_ptr(cp) else {
+        return;
+    };
+
+    let closure = js_closure_alloc(cp_method_dispose as *const u8, 1);
+    if closure.is_null() {
+        return;
+    }
+    js_closure_set_capture_ptr(closure, 0, cp.to_bits() as i64);
+    crate::object::set_bound_native_closure_name(closure, "");
+    crate::object::set_builtin_closure_length(closure as usize, 0);
+    let dispose_value = cp_box_ptr(closure as *const u8);
+
+    let hidden_attrs = crate::object::PropertyAttrs::new(true, false, true);
+    for key in ["__perry_dispose__", "@@__perry_wk_dispose"] {
+        cp_set_field(cp, key.as_bytes(), dispose_value);
+        crate::object::set_builtin_property_attrs(obj as usize, key.to_string(), hidden_attrs);
+    }
+
+    let dispose_sym = crate::symbol::well_known_symbol("dispose");
+    if !dispose_sym.is_null() {
+        let dispose_sym_value = cp_box_ptr(dispose_sym as *const u8);
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(cp, dispose_sym_value, dispose_value);
+        }
+    }
 }
 
 /// Build a stdout/stderr Readable-shaped EventEmitter.

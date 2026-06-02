@@ -1678,8 +1678,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // codegen arms (`expr/child_proc.rs`); this arm mirrors them for the
         // value-call form. `cmd` / `file` / `module` strings come in NaN-boxed
         // (SSO-safe via `js_string_materialize_to_heap`); `args` is the array
-        // pointer (or null); `opts` is the options-object pointer (or 0 →
-        // undefined inside the impls).
+        // pointer (or null); `opts` is the options-object pointer (or 0).
         ("child_process", "spawn") => {
             let cmd = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
             let args_p = optional_ptr_addr(arg(1)) as i64;
@@ -1710,6 +1709,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             let file = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
             crate::child_process::js_child_process_exec_file_sync(file, arg(1), arg(2))
         }
+        ("child_process", "_forkChild") => crate::child_process::js_fork_child(args_len),
         ("child_process", "fork") => {
             let module = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
             let args_p = optional_ptr_addr(arg(1)) as i64;

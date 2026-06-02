@@ -4200,6 +4200,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("stream", "destroyed", true, None),
     // --- child_process (synchronous + async exec surface;
     //     spawn/fork are documented but not yet codegen'd) ---
+    method("child_process", "_forkChild", false, None),
     method("child_process", "exec", false, None),
     method("child_process", "execSync", false, None),
     method("child_process", "execFile", false, None),
