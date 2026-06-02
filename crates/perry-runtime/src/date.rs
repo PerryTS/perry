@@ -58,7 +58,16 @@ pub fn date_invalid() -> f64 {
 /// with no side-table registry to keep in sync.
 #[inline]
 pub fn is_date_cell_addr(addr: usize) -> bool {
-    if addr < 0x1000 + crate::gc::GC_HEADER_SIZE {
+    // #4004: small-handle registry ids (Web Fetch Request/Headers/Response,
+    // perry-ffi/node:http handles, timer ids, …) are NaN-boxed as POINTER_TAG
+    // values but are NOT real heap addresses — they live in the `< 0x100000`
+    // small-handle band. Real `DateCell`s are arena-allocated, always at or
+    // above the small-handle cutoff. Dereferencing `addr - GC_HEADER_SIZE` on a
+    // small handle reads unmapped memory: once #4018 moved fetch handles up to
+    // 0x40000 (past the old 0x1000 floor), any untyped `request.headers.get()`
+    // dispatch routed its receiver through `is_date_value` here and segfaulted.
+    // Reject the whole small-handle band so this is an exact heap-pointer check.
+    if addr < 0x100000 {
         return false;
     }
     unsafe {

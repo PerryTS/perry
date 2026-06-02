@@ -85,7 +85,13 @@ pub fn is_registered_map(addr: usize) -> bool {
     // Profile (samply, perf-comprehensive): ~5.7% inclusive samples
     // were attributed to is_registered_map's HashSet lookup before
     // this fast path landed.
-    if addr < 0x1000 + crate::gc::GC_HEADER_SIZE {
+    // #4004: small-handle registry ids (Web Fetch, perry-ffi/node:http, timers,
+    // …) are NaN-boxed POINTER_TAG values living below the `0x100000`
+    // small-handle cutoff; they are not heap addresses. Managed Maps are
+    // arena-allocated above it, so reject the whole small-handle band before
+    // dereferencing `addr - GC_HEADER_SIZE` (deref'ing e.g. a 0x40000 fetch
+    // handle reads unmapped memory and segfaults — see is_date_cell_addr).
+    if addr < 0x100000 {
         return false;
     }
     unsafe {
