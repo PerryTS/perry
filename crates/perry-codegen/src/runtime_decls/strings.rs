@@ -280,6 +280,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     );
     // `new assert.AssertionError({...})` — Expr::NewDynamic special-case.
     module.declare_function("js_assert_assertion_error_ctor", DOUBLE, &[DOUBLE]);
+    // `new assert.Assert(options)` — Expr::NewDynamic special-case.
+    module.declare_function("js_assert_assert_ctor", DOUBLE, &[DOUBLE]);
     // Issue #462: thrown by PropertyGet codegen on undefined/null receiver.
     // Helper diverges (`-> !`); declared as void-return for LLVM purposes.
     module.declare_function(

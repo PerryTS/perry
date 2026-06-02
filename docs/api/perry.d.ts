@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1738 entries across 102 modules
+// Coverage: 1743 entries across 102 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -75,6 +75,8 @@ declare module "argon2" {
 
 declare module "assert" {
   /** stdlib */
+  export class Assert { [key: string]: any; }
+  /** stdlib */
   export class AssertionError { [key: string]: any; }
   /** stdlib */
   export const strict: any;
@@ -121,6 +123,8 @@ declare module "assert" {
 }
 
 declare module "assert/strict" {
+  /** stdlib */
+  export class Assert { [key: string]: any; }
   /** stdlib */
   export class AssertionError { [key: string]: any; }
   /** stdlib */
@@ -289,6 +293,9 @@ declare module "cluster" {
   export const SCHED_NONE: any;
   /** stdlib */
   export const SCHED_RR: any;
+  /** stdlib */
+  const _default: any;
+  export default _default;
   /** stdlib */
   export const isMaster: any;
   /** stdlib */
@@ -901,6 +908,8 @@ declare module "crypto" {
   /** stdlib */
   export function generateKeySync(...args: any[]): any;
   /** stdlib */
+  export function getCipherInfo(...args: any[]): any;
+  /** stdlib */
   export function getCiphers(...args: any[]): any;
   /** stdlib */
   export function getCurves(...args: any[]): any;
@@ -985,6 +994,9 @@ declare module "dayjs" {
 declare module "dgram" {
   /** stdlib */
   export class Socket { [key: string]: any; }
+  /** stdlib */
+  const _default: any;
+  export default _default;
   /** stdlib */
   export function Socket(...args: any[]): any;
   /** stdlib */
@@ -2445,7 +2457,7 @@ declare module "perry/thread" {
   /** stdlib */
   export function parallelMap(p0: any, p1: any): any;
   /** stdlib */
-  export function spawn(p0: any): any;
+  export function spawn(p0: any): Promise<any>;
 }
 
 declare module "perry/tui" {

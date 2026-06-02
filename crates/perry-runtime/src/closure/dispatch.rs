@@ -1213,6 +1213,19 @@ pub unsafe extern "C" fn js_native_call_value(
         }
     };
 
+    if func_ptr == crate::object::global_this_array_thunk as *const u8 {
+        if args_len == 1 {
+            let arr = crate::array::js_array_constructor_single(arg_at(0));
+            return crate::value::js_nanbox_pointer(arr as i64);
+        }
+        let arr = crate::array::js_array_alloc(args_len as u32);
+        (*arr).length = args_len as u32;
+        for i in 0..args_len {
+            crate::array::js_array_set_f64(arr, i as u32, arg_at(i));
+        }
+        return crate::value::js_nanbox_pointer(arr as i64);
+    }
+
     // Call with the appropriate arity
     match dispatch_args_len {
         0 => js_closure_call0(closure),

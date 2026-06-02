@@ -700,6 +700,7 @@ pub(crate) fn alloc_dir_state(entries: Vec<f64>) -> usize {
                 entries,
                 index: 0,
                 closed: false,
+                operation_pending: false,
             },
         );
     });
@@ -718,10 +719,20 @@ fn dir_closed_error_value() -> f64 {
     crate::value::js_nanbox_pointer(err as i64)
 }
 
+fn dir_concurrent_operation_error_value() -> f64 {
+    let message =
+        "Cannot do synchronous work on directory handle with concurrent asynchronous operations";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, "ERR_DIR_CONCURRENT_OPERATION");
+    let err = crate::error::js_error_new_with_message(msg);
+    crate::value::js_nanbox_pointer(err as i64)
+}
+
 pub(crate) fn dir_mark_closed(id: usize) {
     DIR_REGISTRY.with(|r| {
         if let Some(state) = r.borrow_mut().get_mut(&id) {
             state.closed = true;
+            state.operation_pending = false;
         }
     });
 }
@@ -734,6 +745,23 @@ pub(crate) fn dir_close_result(id: usize) -> Result<(), f64> {
         };
         if state.closed {
             return Err(dir_closed_error_value());
+        }
+        state.closed = true;
+        Ok(())
+    })
+}
+
+fn dir_close_sync_result(id: usize) -> Result<(), f64> {
+    DIR_REGISTRY.with(|r| {
+        let mut reg = r.borrow_mut();
+        let Some(state) = reg.get_mut(&id) else {
+            return Err(dir_closed_error_value());
+        };
+        if state.closed {
+            return Err(dir_closed_error_value());
+        }
+        if state.operation_pending {
+            return Err(dir_concurrent_operation_error_value());
         }
         state.closed = true;
         Ok(())
@@ -758,9 +786,30 @@ pub(crate) fn dir_read_next_result(id: usize) -> Result<Option<f64>, f64> {
     })
 }
 
+fn dir_read_next_sync_result(id: usize) -> Result<Option<f64>, f64> {
+    DIR_REGISTRY.with(|r| {
+        let mut reg = r.borrow_mut();
+        let Some(state) = reg.get_mut(&id) else {
+            return Err(dir_closed_error_value());
+        };
+        if state.closed {
+            return Err(dir_closed_error_value());
+        }
+        if state.operation_pending {
+            return Err(dir_concurrent_operation_error_value());
+        }
+        if state.index >= state.entries.len() {
+            return Ok(None);
+        }
+        let value = state.entries[state.index];
+        state.index += 1;
+        Ok(Some(value))
+    })
+}
+
 pub(crate) fn dir_read_next(id: usize) -> f64 {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
-    match dir_read_next_result(id) {
+    match dir_read_next_sync_result(id) {
         Ok(Some(value)) => value,
         Ok(None) => f64::from_bits(TAG_NULL),
         Err(err) => crate::exception::js_throw(err),
@@ -779,33 +828,144 @@ pub(crate) extern "C" fn dir_read_sync_impl(closure: *const ClosureHeader) -> f6
 
 pub(crate) extern "C" fn dir_close_sync_impl(closure: *const ClosureHeader) -> f64 {
     let id = dir_id_of(closure);
-    match dir_close_result(id) {
+    match dir_close_sync_result(id) {
         Ok(()) => f64::from_bits(crate::value::TAG_UNDEFINED),
         Err(err) => crate::exception::js_throw(err),
     }
 }
 
+fn dir_begin_async_operation(id: usize) -> Result<(), f64> {
+    DIR_REGISTRY.with(|r| {
+        let mut reg = r.borrow_mut();
+        let Some(state) = reg.get_mut(&id) else {
+            return Err(dir_closed_error_value());
+        };
+        if state.closed {
+            return Err(dir_closed_error_value());
+        }
+        state.operation_pending = true;
+        Ok(())
+    })
+}
+
+fn dir_clear_operation_pending(id: usize) {
+    DIR_REGISTRY.with(|r| {
+        if let Some(state) = r.borrow_mut().get_mut(&id) {
+            state.operation_pending = false;
+        }
+    });
+}
+
+extern "C" fn dir_finish_read_promise_impl(closure: *const ClosureHeader) -> f64 {
+    let id = dir_id_of(closure);
+    let promise =
+        crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut crate::promise::Promise;
+    let value = crate::closure::js_closure_get_capture_f64(closure, 2);
+    let is_error = crate::closure::js_closure_get_capture_f64(closure, 3) != 0.0;
+    dir_clear_operation_pending(id);
+    if is_error {
+        crate::promise::js_promise_reject(promise, value);
+    } else {
+        crate::promise::js_promise_resolve(promise, value);
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn dir_pending_read_promise(id: usize, result: Result<Option<f64>, f64>) -> f64 {
+    const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+    let promise = crate::promise::js_promise_new();
+    let (value, is_error) = match result {
+        Ok(Some(value)) => (value, false),
+        Ok(None) => (f64::from_bits(TAG_NULL), false),
+        Err(err) => (err, true),
+    };
+    let closure = crate::closure::js_closure_alloc(dir_finish_read_promise_impl as *const u8, 4);
+    crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::js_closure_set_capture_ptr(closure, 1, promise as i64);
+    crate::closure::js_closure_set_capture_f64(closure, 2, value);
+    crate::closure::js_closure_set_capture_f64(closure, 3, if is_error { 1.0 } else { 0.0 });
+    crate::builtins::js_queue_microtask(closure as i64);
+    f64::from_bits(crate::value::JSValue::pointer(promise as *const u8).bits())
+}
+
+extern "C" fn dir_finish_read_callback_impl(closure: *const ClosureHeader) -> f64 {
+    const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+    let id = dir_id_of(closure);
+    let callback = crate::closure::js_closure_get_capture_ptr(closure, 1) as *const ClosureHeader;
+    let value = crate::closure::js_closure_get_capture_f64(closure, 2);
+    let kind = crate::closure::js_closure_get_capture_f64(closure, 3) as i32;
+    match kind {
+        0 => {
+            crate::closure::js_closure_call2(callback, f64::from_bits(TAG_NULL), value);
+        }
+        1 => {
+            crate::closure::js_closure_call2(
+                callback,
+                f64::from_bits(TAG_NULL),
+                f64::from_bits(TAG_NULL),
+            );
+        }
+        _ => {
+            crate::closure::js_closure_call2(callback, value, f64::from_bits(TAG_NULL));
+        }
+    }
+    dir_clear_operation_pending(id);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn dir_schedule_read_callback(
+    id: usize,
+    callback: *const ClosureHeader,
+    result: Result<Option<f64>, f64>,
+) {
+    const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+    let (value, kind) = match result {
+        Ok(Some(value)) => (value, 0.0),
+        Ok(None) => (f64::from_bits(TAG_NULL), 1.0),
+        Err(err) => (err, 2.0),
+    };
+    let closure = crate::closure::js_closure_alloc(dir_finish_read_callback_impl as *const u8, 4);
+    crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::js_closure_set_capture_ptr(closure, 1, callback as i64);
+    crate::closure::js_closure_set_capture_f64(closure, 2, value);
+    crate::closure::js_closure_set_capture_f64(closure, 3, kind);
+    crate::builtins::js_queue_microtask(closure as i64);
+}
+
 pub(crate) extern "C" fn dir_read_impl(closure: *const ClosureHeader, callback: f64) -> f64 {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
-    let entry = dir_read_next_result(dir_id_of(closure));
+    let id = dir_id_of(closure);
+    let begin = dir_begin_async_operation(id);
+    let pending = begin.is_ok();
+    let entry = match begin {
+        Ok(()) => dir_read_next_result(id),
+        Err(err) => Err(err),
+    };
     let cb = extract_closure_ptr(callback);
     if !cb.is_null() {
-        match entry {
-            Ok(Some(value)) => {
-                crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), value);
-            }
-            Ok(None) => {
-                crate::closure::js_closure_call2(
-                    cb,
-                    f64::from_bits(TAG_NULL),
-                    f64::from_bits(TAG_NULL),
-                );
-            }
-            Err(err) => {
-                crate::closure::js_closure_call2(cb, err, f64::from_bits(TAG_NULL));
+        if pending {
+            dir_schedule_read_callback(id, cb, entry);
+        } else {
+            match entry {
+                Ok(Some(value)) => {
+                    crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), value);
+                }
+                Ok(None) => {
+                    crate::closure::js_closure_call2(
+                        cb,
+                        f64::from_bits(TAG_NULL),
+                        f64::from_bits(TAG_NULL),
+                    );
+                }
+                Err(err) => {
+                    crate::closure::js_closure_call2(cb, err, f64::from_bits(TAG_NULL));
+                }
             }
         }
         return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    if pending {
+        return dir_pending_read_promise(id, entry);
     }
     match entry {
         Ok(Some(value)) => promise_value_fs(value),
@@ -981,6 +1141,8 @@ pub(crate) unsafe fn build_dir_object(id: usize, path: &str) -> f64 {
     crate::closure::js_register_closure_arity(dir_entries_impl as *const u8, 0);
     crate::closure::js_register_closure_arity(dir_dispose_impl as *const u8, 0);
     crate::closure::js_register_closure_arity(dir_async_dispose_impl as *const u8, 0);
+    crate::closure::js_register_closure_arity(dir_finish_read_promise_impl as *const u8, 0);
+    crate::closure::js_register_closure_arity(dir_finish_read_callback_impl as *const u8, 0);
     crate::closure::js_register_closure_arity(dir_read_sync_impl as *const u8, 0);
     crate::closure::js_register_closure_arity(dir_close_sync_impl as *const u8, 0);
     crate::closure::js_register_closure_arity(dir_iterator_next_impl as *const u8, 0);

@@ -534,6 +534,15 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "dgram",
         has_receiver: true,
+        method: "eventNames",
+        class_filter: Some("Socket"),
+        runtime: "js_dgram_socket_event_names",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "dgram",
+        has_receiver: true,
         method: "addMembership",
         class_filter: Some("Socket"),
         runtime: "js_dgram_socket_add_membership",

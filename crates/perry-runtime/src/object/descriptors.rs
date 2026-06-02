@@ -240,6 +240,17 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         attrs.configurable(),
                     );
                 }
+                if name == "constructor" {
+                    let ctor = js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
+                    let ctor_value = crate::value::JSValue::from_bits(ctor.to_bits());
+                    if ctor_value.is_pointer() {
+                        let ctor_ptr = ctor_value.as_pointer::<u8>() as usize;
+                        let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+                        if crate::value::js_nanbox_get_pointer(proto) as usize == obj as usize {
+                            return build_data_descriptor(ctor, true, false, true);
+                        }
+                    }
+                }
                 return f64::from_bits(crate::value::TAG_UNDEFINED);
             }
         }

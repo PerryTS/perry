@@ -100,7 +100,15 @@ Selected highlights (full list in `runtime-parity.md`):
 
 ### node:cluster
 
-**Total APIs: 35** · Perry covers: primary lifecycle subset · Gap: worker handle distribution and remaining events
+**Total APIs: 35** · Perry covers: primary lifecycle subset + default-import EventEmitter surface · Gap: worker handle distribution and remaining lifecycle events
+
+The default import (`import cluster from "node:cluster"`) is an EventEmitter:
+`on`/`addListener`/`once`/`off`/`removeListener`/`removeAllListeners`/`emit`/
+`eventNames`/`listenerCount` register and fire module-level listeners (a
+synchronous `fork` event is emitted when a worker object is created). The
+`import * as cluster` namespace keeps the shape-only surface and reads those
+EventEmitter names as `undefined`, matching Node. Real worker `online`/`exit`/
+`listening`/`disconnect` events remain deferred (#3605).
 
 Selected highlights (full list in `runtime-parity.md`):
 

@@ -57,6 +57,50 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
         .and_then(|map| map.get(&obj_ptr).copied())
 }
 
+pub(crate) fn default_object_prototype_bits() -> Option<u64> {
+    let object_ctor = super::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
+    let ctor_bits = object_ctor.to_bits();
+    if (ctor_bits >> 48) != 0x7FFD {
+        return None;
+    }
+    let ctor_ptr = (ctor_bits & crate::value::POINTER_MASK) as usize;
+    if ctor_ptr == 0 {
+        return None;
+    }
+    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto_bits = proto.to_bits();
+    if (proto_bits >> 48) == 0x7FFD {
+        Some(proto_bits)
+    } else {
+        None
+    }
+}
+
+pub(crate) unsafe fn default_object_prototype_for_owner(obj_ptr: usize) -> Option<u64> {
+    if obj_ptr == 0 {
+        return None;
+    }
+    let obj = obj_ptr as *const crate::ObjectHeader;
+    if !super::is_valid_obj_ptr(obj as *const u8) {
+        return None;
+    }
+    let gc = super::gc_header_for(obj);
+    if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+        return None;
+    }
+    if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT
+        || ((*obj).class_id != 0 && !super::is_anon_shape_class_id((*obj).class_id))
+    {
+        return None;
+    }
+    let proto_bits = default_object_prototype_bits()?;
+    let proto_ptr = (proto_bits & crate::value::POINTER_MASK) as usize;
+    if proto_ptr == 0 || proto_ptr == obj_ptr {
+        return None;
+    }
+    Some(proto_bits)
+}
+
 /// Migrate the side-table entry when the owner object is evacuated by a moving
 /// GC. Mirrors `closure_dynamic_props_owner_moved`.
 pub(crate) fn object_static_prototype_owner_moved(old_owner: usize, new_owner: usize) {
@@ -101,9 +145,7 @@ pub(crate) fn resolve_inherited_field(
     obj_ptr: usize,
     key: *const crate::StringHeader,
 ) -> Option<crate::value::JSValue> {
-    let Some(proto_bits) = object_static_prototype(obj_ptr) else {
-        return None;
-    };
+    let proto_bits = object_static_prototype(obj_ptr)?;
     if proto_bits == TAG_NULL {
         return None;
     }

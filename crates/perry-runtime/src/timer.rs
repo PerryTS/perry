@@ -332,6 +332,27 @@ static TIMER_REF_STATES: Mutex<Option<HashMap<i64, bool>>> = Mutex::new(None);
 static WARNED_NEGATIVE_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
 static WARNED_NAN_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
 
+thread_local! {
+    static TIMER_CALLBACK_DISPATCH_DEPTH: std::cell::Cell<u32> =
+        const { std::cell::Cell::new(0) };
+}
+
+fn in_timer_callback_dispatch() -> bool {
+    TIMER_CALLBACK_DISPATCH_DEPTH.with(|depth| depth.get() > 0)
+}
+
+fn enter_timer_callback_dispatch() {
+    TIMER_CALLBACK_DISPATCH_DEPTH.with(|depth| {
+        depth.set(depth.get().saturating_add(1));
+    });
+}
+
+fn leave_timer_callback_dispatch() {
+    TIMER_CALLBACK_DISPATCH_DEPTH.with(|depth| {
+        depth.set(depth.get().saturating_sub(1));
+    });
+}
+
 fn timer_handle_value(id: i64) -> f64 {
     f64::from_bits(crate::value::JSValue::pointer(id as *mut u8).bits())
 }
@@ -1001,6 +1022,10 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
         js_closure_call5, js_closure_call6, js_closure_call7, js_closure_call8, js_closure_call9,
     };
 
+    if in_timer_callback_dispatch() {
+        return 0;
+    }
+
     let now = Instant::now();
     let allow_unref = should_run_unref_callback_interval_timers();
 
@@ -1038,6 +1063,7 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
             let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
             let cb = cb_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
             let prev_this = crate::object::js_implicit_this_set(timer_handle_value(timer.id));
+            enter_timer_callback_dispatch();
             with_timer_uncaught_trap(|| {
                 match a.len() {
                     0 => {
@@ -1075,18 +1101,19 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
                     }
                 }
             });
-            crate::object::js_implicit_this_set(prev_this);
-            crate::async_hooks::after(timer.async_id);
-            crate::async_hooks::destroy(timer.async_id);
-            crate::async_context::refresh_snapshot_from_roots(&mut previous, &previous_roots);
-            crate::async_context::restore_context(previous);
             // #3870: Node runs a microtask checkpoint after *each* timer
             // callback (every callback is its own macrotask). Drain here —
             // rather than only once after the whole expired batch in the outer
             // pump — so a microtask queued inside a timer callback (e.g.
             // `queueMicrotask`/`Promise.then`) runs before the next timer fires,
             // matching Node's `setTimeout1 → micro → setTimeout2` ordering.
-            crate::promise::microtasks::js_promise_run_microtasks();
+            crate::promise::microtasks::js_promise_run_microtasks_checkpoint();
+            leave_timer_callback_dispatch();
+            crate::object::js_implicit_this_set(prev_this);
+            crate::async_hooks::after(timer.async_id);
+            crate::async_hooks::destroy(timer.async_id);
+            crate::async_context::refresh_snapshot_from_roots(&mut previous, &previous_roots);
+            crate::async_context::restore_context(previous);
             fired += 1;
         }
     }
@@ -1357,6 +1384,10 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
         js_closure_call5, js_closure_call6, js_closure_call7, js_closure_call8, js_closure_call9,
     };
 
+    if in_timer_callback_dispatch() {
+        return 0;
+    }
+
     let now = Instant::now();
     let allow_unref = should_run_unref_callback_interval_timers();
 
@@ -1403,6 +1434,7 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
         let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
         let cb = callback_handle.get_raw_const_ptr();
         let prev_this = crate::object::js_implicit_this_set(timer_handle_value(id));
+        enter_timer_callback_dispatch();
         with_timer_uncaught_trap(|| {
             match a.len() {
                 0 => js_closure_call0(cb),
@@ -1417,6 +1449,7 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
                 _ => js_closure_call9(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]),
             };
         });
+        leave_timer_callback_dispatch();
         crate::object::js_implicit_this_set(prev_this);
         crate::async_context::refresh_snapshot_from_roots(&mut previous, &previous_roots);
         crate::async_context::restore_context(previous);

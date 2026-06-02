@@ -347,7 +347,11 @@ pub unsafe fn try_weak_method_dispatch(
 /// (`js_nanbox_get_pointer` yields 0) safely resolves to `None`.
 pub fn weak_class_id_from_receiver(receiver: f64) -> Option<u32> {
     let addr = js_nanbox_get_pointer(receiver) as usize;
-    if addr < 0x1000 + crate::gc::GC_HEADER_SIZE {
+    // #4004: reject the `< 0x100000` small-handle band (Web Fetch / node:http /
+    // timer ids are NaN-boxed POINTER_TAG values, not heap addresses) before
+    // dereferencing the GC header. WeakMap/WeakSet are ObjectHeader-backed
+    // allocations above the cutoff. See map::is_registered_map.
+    if addr < 0x100000 {
         return None;
     }
     unsafe {
