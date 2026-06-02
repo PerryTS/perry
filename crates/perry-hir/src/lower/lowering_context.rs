@@ -160,6 +160,9 @@ pub struct LoweringContext {
     pub(crate) ui_widget_type_aliases: HashMap<String, String>,
     /// Current class being lowered (for arrow function `this` capture)
     pub(crate) current_class: Option<String>,
+    /// Home-object local for object-literal methods while their bodies are
+    /// lowered. Used to preserve `super` in object methods.
+    pub(crate) object_super_home_stack: Vec<LocalId>,
     /// Extern function types: name -> (param_types, return_type)
     /// Stores type information for declare function statements (FFI)
     pub(crate) extern_func_types: Vec<(String, Vec<Type>, Type)>,

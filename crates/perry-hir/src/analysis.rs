@@ -413,6 +413,28 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
                 collect_assigned_locals_expr(arg, assigned);
             }
         }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            collect_assigned_locals_expr(home, assigned);
+            collect_assigned_locals_expr(key, assigned);
+            collect_assigned_locals_expr(receiver, assigned);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            collect_assigned_locals_expr(home, assigned);
+            collect_assigned_locals_expr(key, assigned);
+            collect_assigned_locals_expr(receiver, assigned);
+            for arg in args {
+                collect_assigned_locals_expr(arg, assigned);
+            }
+        }
         Expr::Update { id, .. } => {
             // Update is an assignment
             assigned.push(*id);
@@ -1919,6 +1941,28 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
             }
         }
         Expr::SuperMethodCall { args, .. } => {
+            for a in args {
+                replace_this_in_expr(a, this_id);
+            }
+        }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            replace_this_in_expr(home, this_id);
+            replace_this_in_expr(key, this_id);
+            replace_this_in_expr(receiver, this_id);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            replace_this_in_expr(home, this_id);
+            replace_this_in_expr(key, this_id);
+            replace_this_in_expr(receiver, this_id);
             for a in args {
                 replace_this_in_expr(a, this_id);
             }

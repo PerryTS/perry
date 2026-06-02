@@ -133,6 +133,22 @@ pub(super) fn has_own_symbol_accessor(obj_key: usize, sym_key: usize) -> bool {
         .is_some_and(|m| m.contains_key(&(obj_key, sym_key)))
 }
 
+/// Symbol keys (raw `SymbolHeader` pointers) of every accessor-only property
+/// installed on `obj_key`. Used by `getOwnPropertySymbols`, which must report
+/// symbol-keyed accessors even though they live outside `SYMBOL_PROPERTIES`.
+pub(super) fn owner_symbol_accessor_keys(obj_key: usize) -> Vec<usize> {
+    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
+    guard
+        .as_ref()
+        .map(|m| {
+            m.keys()
+                .filter(|(owner, _)| *owner == obj_key)
+                .map(|(_, sym_key)| *sym_key)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 pub(super) fn test_clear_symbol_accessor_roots() {
     *crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES) = None;

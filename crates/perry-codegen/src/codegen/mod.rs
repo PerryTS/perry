@@ -351,6 +351,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             setters: Vec::new(),
             static_fields: Vec::new(),
             static_methods: Vec::new(),
+            computed_members: Vec::new(),
             decorators: Vec::new(),
             is_exported: false,
             aliases: Vec::new(),
@@ -1262,6 +1263,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         for sm in &c.static_methods {
             scan_body(&sm.params, &sm.body, &mut referenced_from_fn);
         }
+        for member in &c.computed_members {
+            scan_body(
+                &member.function.params,
+                &member.function.body,
+                &mut referenced_from_fn,
+            );
+        }
         for (_, getter_fn) in &c.getters {
             scan_body(&getter_fn.params, &getter_fn.body, &mut referenced_from_fn);
         }
@@ -1316,6 +1324,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
             for sm in &c.static_methods {
                 collect_closures_in_stmts(&sm.body, &mut seen, &mut closures);
+            }
+            for member in &c.computed_members {
+                collect_closures_in_stmts(&member.function.body, &mut seen, &mut closures);
             }
             if let Some(ctor) = &c.constructor {
                 collect_closures_in_stmts(&ctor.body, &mut seen, &mut closures);
@@ -1587,6 +1598,27 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     .or_insert_with(|| llvm_name.clone());
             }
         }
+        for member in &c.computed_members {
+            let llvm_name = if member.is_static {
+                format!(
+                    "perry_static_{}__{}__{}",
+                    class_prefix,
+                    sanitize(mangle_class_name),
+                    sanitize(&member.function.name),
+                )
+            } else {
+                scoped_method_name(class_prefix, mangle_class_name, &member.function.name)
+            };
+            method_names.insert(
+                (c.name.clone(), member.function.name.clone()),
+                llvm_name.clone(),
+            );
+            for alias in &c.aliases {
+                method_names
+                    .entry((alias.clone(), member.function.name.clone()))
+                    .or_insert_with(|| llvm_name.clone());
+            }
+        }
         // Constructor: register as a method so compile_method can find it.
         // Emitted for ALL classes (even without explicit constructors)
         // so cross-module `new` can call the constructor.
@@ -1807,6 +1839,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         for sm in &c.static_methods {
             module_boxed_vars.extend(collect_boxed_vars(&sm.body));
         }
+        for member in &c.computed_members {
+            module_boxed_vars.extend(collect_boxed_vars(&member.function.body));
+        }
         if let Some(ctor) = &c.constructor {
             module_boxed_vars.extend(collect_boxed_vars(&ctor.body));
         }
@@ -1856,6 +1891,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
             collect_let_types_in_stmts(&sm.body, &mut module_local_types);
         }
+        for member in &c.computed_members {
+            for p in &member.function.params {
+                module_local_types.insert(p.id, p.ty.clone());
+            }
+            collect_let_types_in_stmts(&member.function.body, &mut module_local_types);
+        }
     }
 
     // Cross-module function declares are emitted lazily by `lower_call`
@@ -1898,6 +1939,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
             for sm in &c.static_methods {
                 collect_closures_in_stmts(&sm.body, &mut seen, &mut closures);
+            }
+            for member in &c.computed_members {
+                collect_closures_in_stmts(&member.function.body, &mut seen, &mut closures);
             }
             if let Some(ctor) = &c.constructor {
                 collect_closures_in_stmts(&ctor.body, &mut seen, &mut closures);

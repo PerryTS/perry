@@ -35,9 +35,9 @@ pub(crate) use body_stmt::{find_native_return_in_stmts, lower_body_stmt};
 pub(crate) use class_captures::synthesize_class_captures;
 pub(crate) use class_decl::{lower_class_decl, lower_class_from_ast};
 pub(crate) use class_members::{
-    collect_method_captures, lower_class_method, lower_class_prop,
-    lower_computed_key_method_as_field, lower_constructor, lower_getter_method,
-    lower_setter_method,
+    lower_class_method, lower_class_method_with_name, lower_class_prop, lower_constructor,
+    lower_getter_method, lower_getter_method_with_name, lower_setter_method,
+    lower_setter_method_with_name,
 };
 pub(crate) use class_validation::validate_legacy_decorator_surface;
 pub(crate) use enum_decl::lower_enum_decl;

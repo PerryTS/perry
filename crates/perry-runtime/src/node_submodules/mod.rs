@@ -133,6 +133,7 @@ use consumers::{
 // `perry_runtime::node_submodules::js_register_stream_consumer_callbacks`
 // call site keeps resolving after the consumers split.
 pub use consumers::js_register_stream_consumer_callbacks;
+pub(crate) use fs_promises::js_readline_promises_readline_new;
 use fs_promises::{
     thunk_fs_promises_access, thunk_fs_promises_appendFile, thunk_fs_promises_chmod,
     thunk_fs_promises_chown, thunk_fs_promises_constants, thunk_fs_promises_copyFile,
@@ -403,7 +404,7 @@ const SUBMODULES: &[SubmoduleSpec] = &[
             },
             ExportSpec {
                 name: "Readline",
-                thunk: ExportThunk::Fn1(thunk_readline_Readline),
+                thunk: ExportThunk::Fn2(thunk_readline_Readline),
             },
         ],
     },

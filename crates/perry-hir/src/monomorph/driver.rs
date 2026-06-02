@@ -369,6 +369,28 @@ fn collect_instantiations_in_expr(
                 collect_instantiations_in_expr(arg, ctx, module, idx);
             }
         }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            collect_instantiations_in_expr(home, ctx, module, idx);
+            collect_instantiations_in_expr(key, ctx, module, idx);
+            collect_instantiations_in_expr(receiver, ctx, module, idx);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            collect_instantiations_in_expr(home, ctx, module, idx);
+            collect_instantiations_in_expr(key, ctx, module, idx);
+            collect_instantiations_in_expr(receiver, ctx, module, idx);
+            for arg in args {
+                collect_instantiations_in_expr(arg, ctx, module, idx);
+            }
+        }
         Expr::NativeArenaAlloc(size) | Expr::NativeArenaDispose(size) => {
             collect_instantiations_in_expr(size, ctx, module, idx);
         }

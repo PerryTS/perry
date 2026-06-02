@@ -191,7 +191,7 @@ fn data_ptr(ta: *const TypedArrayHeader) -> *const u8 {
 }
 
 #[inline]
-fn data_ptr_mut(ta: *mut TypedArrayHeader) -> *mut u8 {
+pub(crate) fn data_ptr_mut(ta: *mut TypedArrayHeader) -> *mut u8 {
     unsafe {
         if crate::native_arena::is_native_typed_view(ta as *const TypedArrayHeader) {
             crate::native_arena::native_view_data_ptr_mut(ta)
@@ -287,7 +287,7 @@ fn throw_type_error(message: &[u8]) -> ! {
 }
 
 #[cold]
-fn throw_range_error(message: &[u8]) -> ! {
+pub(crate) fn throw_range_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = crate::error::js_rangeerror_new(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))

@@ -1489,6 +1489,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::StaticMethodCall { .. } => static_method::lower(ctx, expr),
         Expr::SuperMethodCall { .. }
         | Expr::SuperPropertyGet { .. }
+        | Expr::ObjectSuperPropertyGet { .. }
+        | Expr::ObjectSuperMethodCall { .. }
         | Expr::FsReadFileBinary(..) => super_method::lower(ctx, expr),
         Expr::InstanceOf { .. }
         | Expr::Delete(..)
@@ -1833,6 +1835,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::StaticFieldSet { .. }
         | Expr::RegisterClassParentDynamic { .. }
         | Expr::RegisterClassStaticSymbol { .. }
+        | Expr::RegisterClassComputedMethod { .. }
+        | Expr::RegisterClassComputedAccessor { .. }
         | Expr::ClassExprFresh { .. }
         | Expr::SetFunctionPrototype { .. }
         | Expr::RegisterPrototypeMethod { .. }

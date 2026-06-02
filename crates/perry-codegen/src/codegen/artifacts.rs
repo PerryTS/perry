@@ -207,6 +207,38 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             )
             .with_context(|| format!("lowering method '{}::{}'", class.name, method.name))?;
         }
+        for member in class
+            .computed_members
+            .iter()
+            .filter(|member| !member.is_static)
+        {
+            compile_method(
+                llmod,
+                class,
+                &member.function,
+                func_names,
+                strings,
+                class_table,
+                method_names,
+                module_globals,
+                module_global_types,
+                opts.import_function_prefixes,
+                enum_table,
+                static_field_globals,
+                class_ids,
+                func_signatures,
+                func_synthetic_arguments,
+                module_boxed_vars,
+                closure_rest_params,
+                cross_module,
+            )
+            .with_context(|| {
+                format!(
+                    "lowering computed method '{}::{}'",
+                    class.name, member.function.name
+                )
+            })?;
+        }
         // Getters and setters are also methods, just registered under
         // a __get_/__set_ prefix in the registry. Emit their bodies
         // with the same prefix as the LLVM function name.
@@ -408,6 +440,38 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 cross_module,
             )
             .with_context(|| format!("lowering static method '{}::{}'", class.name, sm.name))?;
+        }
+        for member in class
+            .computed_members
+            .iter()
+            .filter(|member| member.is_static)
+        {
+            compile_static_method(
+                llmod,
+                &class.name,
+                &member.function,
+                func_names,
+                strings,
+                class_table,
+                method_names,
+                module_globals,
+                opts.import_function_prefixes,
+                enum_table,
+                static_field_globals,
+                class_ids,
+                func_signatures,
+                func_synthetic_arguments,
+                module_prefix,
+                module_boxed_vars,
+                closure_rest_params,
+                cross_module,
+            )
+            .with_context(|| {
+                format!(
+                    "lowering static computed method '{}::{}'",
+                    class.name, member.function.name
+                )
+            })?;
         }
     }
 

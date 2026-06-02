@@ -153,18 +153,25 @@ unsafe fn call_method_for_primitive(
     }
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let key_handle = scope.root_string_ptr(key);
-    let method = crate::object::js_object_get_field_by_name(
-        obj_ptr,
-        key_handle.get_raw_const_ptr::<crate::string::StringHeader>(),
-    );
+    let key_ptr = key_handle.get_raw_const_ptr::<crate::string::StringHeader>();
+    let has_own_method_key = crate::object::own_key_present(obj_ptr as *mut _, key_ptr);
+    let method = crate::object::js_object_get_field_by_name(obj_ptr, key_ptr);
     // Must be a callable closure value (POINTER_TAG + CLOSURE_MAGIC).
     let method_bits = method.bits();
     if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
-        return MethodOutcome::Absent;
+        return if has_own_method_key || (!method.is_undefined() && !method.is_null()) {
+            MethodOutcome::NonPrimitive
+        } else {
+            MethodOutcome::Absent
+        };
     }
     let method_ptr = (method_bits & POINTER_MASK) as usize;
     if !crate::closure::is_closure_ptr(method_ptr) {
-        return MethodOutcome::Absent;
+        return if has_own_method_key {
+            MethodOutcome::NonPrimitive
+        } else {
+            MethodOutcome::Absent
+        };
     }
     // Rebind `this` to the receiver: an INHERITED object-literal method
     // (`Object.create(proto)`) bakes its reserved `this` slot to the

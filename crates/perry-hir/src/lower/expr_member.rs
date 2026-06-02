@@ -67,12 +67,32 @@ pub(crate) fn lower_process_named_property(prop: &str) -> Option<Expr> {
         "stdin" => Expr::ProcessStdin,
         "stdout" => Expr::ProcessStdout,
         "stderr" => Expr::ProcessStderr,
-        "execArgv" | "moduleLoadList" => Expr::Array(Vec::new()),
-        "title" => Expr::ProcessTitle,
-        "argv0" | "execPath" => Expr::IndexGet {
-            object: Box::new(Expr::ProcessArgv),
-            index: Box::new(Expr::Number(0.0)),
-        },
+        _ => return process_metadata_native_property(prop),
+    })
+}
+
+fn process_native_property(prop: &str) -> Expr {
+    Expr::PropertyGet {
+        object: Box::new(Expr::NativeModuleRef("process".to_string())),
+        property: prop.to_string(),
+    }
+}
+
+fn process_metadata_native_property(prop: &str) -> Option<Expr> {
+    Some(match prop {
+        "allowedNodeEnvironmentFlags"
+        | "argv0"
+        | "config"
+        | "debugPort"
+        | "execArgv"
+        | "execPath"
+        | "features"
+        | "finalization"
+        | "moduleLoadList"
+        | "release"
+        | "report"
+        | "sourceMapsEnabled"
+        | "title" => process_native_property(prop),
         _ => return None,
     })
 }
@@ -186,7 +206,11 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             );
         if is_process_obj {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
-                match prop_ident.sym.as_ref() {
+                let prop = prop_ident.sym.as_ref();
+                if let Some(expr) = process_metadata_native_property(prop) {
+                    return Ok(expr);
+                }
+                match prop {
                     "argv" => return Ok(Expr::ProcessArgv),
                     "platform" => return Ok(Expr::OsPlatform),
                     "arch" => return Ok(Expr::OsArch),
@@ -424,7 +448,11 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         );
         if inner_is_global_process {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
-                match prop_ident.sym.as_ref() {
+                let prop = prop_ident.sym.as_ref();
+                if let Some(expr) = process_metadata_native_property(prop) {
+                    return Ok(expr);
+                }
+                match prop {
                     "argv" => return Ok(Expr::ProcessArgv),
                     "platform" => return Ok(Expr::OsPlatform),
                     "arch" => return Ok(Expr::OsArch),
@@ -1157,6 +1185,18 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // object whose methods are callable fields. A bare method
                     // read (`typeof s.close`) should observe that closure
                     // instead of invoking the receiver stub as a getter.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if matches!(module_name.as_str(), "inspector" | "inspector/promises")
+                    && class_name == "Session"
+                    && matches!(
+                        property_name.as_str(),
+                        "connect" | "connectToMainThread" | "disconnect" | "post" | "on" | "once"
+                    )
+                {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         object: Box::new(object_expr),

@@ -66,6 +66,32 @@ fn is_headers_method_name(name: &str) -> bool {
     )
 }
 
+fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &str) -> bool {
+    ctx.classes
+        .get(class_name)
+        .is_some_and(|class| !class.computed_members.is_empty())
+}
+
+fn lower_runtime_property_get_by_name(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+) -> Result<String> {
+    let recv_box = lower_expr(ctx, object)?;
+    let key_idx = ctx.strings.intern(property);
+    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let blk = ctx.block();
+    let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+    let key_box = blk.load(DOUBLE, &key_handle_global);
+    let key_bits = blk.bitcast_double_to_i64(&key_box);
+    let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
+    Ok(blk.call(
+        DOUBLE,
+        "js_object_get_field_by_name_f64",
+        &[(I64, &obj_bits), (I64, &key_handle)],
+    ))
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::PropertyGet { object, property }
@@ -1113,6 +1139,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_headers_method_value",
                         &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
                     ));
+                }
+                if class_has_computed_runtime_members(ctx, &class_name) {
+                    return lower_runtime_property_get_by_name(ctx, object, property);
                 }
                 let getter_key = (class_name.clone(), format!("__get_{}", property));
                 if let Some(fn_name) = ctx.methods.get(&getter_key).cloned() {

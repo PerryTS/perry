@@ -125,7 +125,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            // `map` uses a receiver-aware validator (TypedArray.map renders its
+            // non-callable message differently than Array.prototype.map).
+            let cb_handle = blk.call(
+                I64,
+                "js_validate_array_map_callback",
+                &[(I64, &arr_handle), (DOUBLE, &cb_box)],
+            );
             let result = blk.call(
                 I64,
                 "js_array_map",
