@@ -1,12 +1,17 @@
 //! `node:vm` direct-call FFI wrappers.
 //!
-//! The actual scaffold behavior lives in `perry_runtime::node_vm` so
+//! The actual behavior lives in `perry_runtime::node_vm` so
 //! namespace property reads and bound callables behave the same way even when
 //! `node:vm` is reached through `process.getBuiltinModule("vm")`.
 
 // `js_vm_create_context` is provided by perry-runtime (#4050) as a working
 // 1-arg contextification helper; do not redefine it here or the `#[no_mangle]`
 // symbol collides at link time.
+
+#[no_mangle]
+pub extern "C" fn js_vm_script_call(code: f64, options: f64) -> f64 {
+    perry_runtime::node_vm::js_vm_script_call(code, options)
+}
 
 #[no_mangle]
 pub extern "C" fn js_vm_create_script(code: f64, options: f64) -> f64 {

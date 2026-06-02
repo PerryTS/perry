@@ -68,7 +68,7 @@ pub mod node_submodules;
 pub mod node_test;
 // #3137/#3138/#3142: public `node:v8` serialize/deserialize + heap stats + GCProfiler.
 pub mod node_v8;
-// #3127/#3128/#3130: public `node:vm` import/require scaffold.
+// #3127/#3128/#3130/#3283: public `node:vm` import/require and narrowed execution.
 pub mod node_vm;
 // #2935: surface the zlib option-level resolver at the crate root so
 // perry-stdlib's bundled codecs (and the `perry-ext-zlib` extern) can reach it.
