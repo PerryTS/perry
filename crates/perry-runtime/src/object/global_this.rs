@@ -2273,6 +2273,49 @@ extern "C" fn array_of_thunk(_closure: *const crate::closure::ClosureHeader, res
     crate::value::js_nanbox_pointer(arr as i64)
 }
 
+extern "C" fn number_is_nan_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::builtins::js_number_is_nan(value)
+}
+
+extern "C" fn number_is_finite_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::builtins::js_number_is_finite(value)
+}
+
+extern "C" fn number_is_integer_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::builtins::js_number_is_integer(value)
+}
+
+extern "C" fn number_is_safe_integer_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::builtins::js_number_is_safe_integer(value)
+}
+
+extern "C" fn number_parse_float_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    global_this_parse_float_thunk(closure, value)
+}
+
+extern "C" fn number_parse_int_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+    radix: f64,
+) -> f64 {
+    global_this_parse_int_thunk(closure, value, radix)
+}
+
 extern "C" fn typed_array_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
     source: f64,
@@ -2467,6 +2510,44 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
             );
             install_constructor_static(ctor, "from", array_from_thunk as *const u8, 1, false);
             install_constructor_static(ctor, "of", array_of_thunk as *const u8, 0, true);
+        }
+        "Number" => {
+            install_constructor_static(ctor, "isNaN", number_is_nan_thunk as *const u8, 1, false);
+            install_constructor_static(
+                ctor,
+                "isFinite",
+                number_is_finite_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "isInteger",
+                number_is_integer_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "isSafeInteger",
+                number_is_safe_integer_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "parseFloat",
+                number_parse_float_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "parseInt",
+                number_parse_int_thunk as *const u8,
+                2,
+                false,
+            );
         }
         "ArrayBuffer" => {
             install_constructor_static(
