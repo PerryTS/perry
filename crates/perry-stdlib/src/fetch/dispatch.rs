@@ -597,9 +597,19 @@ pub fn dispatch_headers_method(headers_id: usize, method: &str, args: &[f64]) ->
     };
     unsafe {
         match method {
-            "get" => Some(f64::from_bits(
-                JSValue::string_ptr(js_headers_get(h_f64, str_arg(0))).bits(),
-            )),
+            // WHATWG `Headers.get` returns `null` for an absent header, not the
+            // empty string. `js_headers_get` signals absence with a null
+            // `StringHeader` pointer; wrapping that in `string_ptr` would render
+            // as `""` and break `headers.get(x) === null` checks (the Hono
+            // adapter path behind #4004).
+            "get" => {
+                let p = js_headers_get(h_f64, str_arg(0));
+                if p.is_null() {
+                    Some(f64::from_bits(TAG_NULL))
+                } else {
+                    Some(f64::from_bits(JSValue::string_ptr(p).bits()))
+                }
+            }
             "set" => Some(js_headers_set(h_f64, str_arg(0), str_arg(1))),
             "append" => Some(js_headers_append(h_f64, str_arg(0), str_arg(1))),
             "has" => Some(js_headers_has(h_f64, str_arg(0))),

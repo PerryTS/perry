@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2454 entries across 105 modules.
+Total: 2465 entries across 105 modules.
 
 ## Modules
 
@@ -147,6 +147,7 @@ Total: 2454 entries across 105 modules.
 
 ### Classes
 
+- `Assert`
 - `AssertionError`
 
 ### Methods
@@ -180,6 +181,7 @@ Total: 2454 entries across 105 modules.
 
 ### Classes
 
+- `Assert`
 - `AssertionError`
 
 ### Methods
@@ -363,6 +365,7 @@ Total: 2454 entries across 105 modules.
 
 - `SCHED_NONE`
 - `SCHED_RR`
+- `default`
 - `isMaster`
 - `isPrimary`
 - `isWorker`
@@ -701,6 +704,7 @@ Total: 2454 entries across 105 modules.
 - `generateKeyPairSync` — module
 - `generateKeyPairSync` — module
 - `generateKeySync` — module
+- `getCipherInfo` — module
 - `getCiphers` — module
 - `getCurves` — module
 - `getDiffieHellman` — module
@@ -830,6 +834,7 @@ Total: 2454 entries across 105 modules.
 - `dropMembership` — instance *(class: `Socket`)*
 - `dropSourceSpecificMembership` — instance *(class: `Socket`)*
 - `emit` — instance *(class: `Socket`)*
+- `eventNames` — instance *(class: `Socket`)*
 - `getRecvBufferSize` — instance *(class: `Socket`)*
 - `getSendBufferSize` — instance *(class: `Socket`)*
 - `getSendQueueCount` — instance *(class: `Socket`)*
@@ -850,6 +855,10 @@ Total: 2454 entries across 105 modules.
 - `setSendBufferSize` — instance *(class: `Socket`)*
 - `setTTL` — instance *(class: `Socket`)*
 - `unref` — instance *(class: `Socket`)*
+
+### Properties
+
+- `default`
 
 ## `diagnostics_channel`
 
@@ -3230,7 +3239,10 @@ Total: 2454 entries across 105 modules.
 
 - `BroadcastChannel` — module
 - `MessageChannel` — module
+- `cpuUsage` — instance *(class: `Worker`)*
 - `getEnvironmentData` — module
+- `getHeapSnapshot` — instance *(class: `Worker`)*
+- `getHeapStatistics` — instance *(class: `Worker`)*
 - `isMarkedAsUntransferable` — module
 - `markAsUncloneable` — module
 - `markAsUntransferable` — module
@@ -3242,6 +3254,8 @@ Total: 2454 entries across 105 modules.
 - `receiveMessageOnPort` — module
 - `ref` — instance *(class: `Worker`)*
 - `setEnvironmentData` — module
+- `startCpuProfile` — instance *(class: `Worker`)*
+- `startHeapProfile` — instance *(class: `Worker`)*
 - `terminate` — instance *(class: `Worker`)*
 - `unref` — instance *(class: `Worker`)*
 

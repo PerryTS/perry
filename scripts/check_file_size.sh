@@ -179,6 +179,13 @@ crates/perry-codegen/src/lower_call/native_table/node_core.rs
 # globalThis constructor/prototype registry is over the limit on current main;
 # splitting constructor tables from property dispatch is tracked under #1435.
 crates/perry-runtime/src/object/global_this.rs
+# Trunk of the #1103 object.rs split (shape/transition/overflow caches, GC root
+# scanners, implicit-this, descriptor tables). The companion behavior lives in
+# the 30+ `object/` siblings already peeled off; the trunk crossed 2000 LOC on
+# current main after the binary-data / Date inspect alignment batch
+# (#4039/#4040/#4041). Peeling the cache + root-scanner groups into siblings is
+# tracked under #1435.
+crates/perry-runtime/src/object/mod.rs
 EOF
 )
 

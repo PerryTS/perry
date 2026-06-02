@@ -2,6 +2,69 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1100 — fix(check): reconcile stale Node builtin table with modern builtins (#3744)
+
+`perry check --check-deps` reported a clean build for unsupported modern `node:*` imports that `perry compile` rejects. The cause: the hand-maintained `is_node_builtin` table in `crates/perry/src/commands/deps.rs` predated Node's newer builtins, so names like `node:sea` and `node:inspector` were not recognized as builtins at all — and the U-006 dependency diagnostic only fires for recognized-but-unsupported builtins, so they fell through to a clean result.
+
+Reconciled the table against Node v25's builtin set: added `async_hooks`, `diagnostics_channel`, `http2`, `inspector`, `sea`, `sqlite`, `test`, `trace_events`, and `wasi` to `is_node_builtin`. Each was classified by the real gate (`perry compile` of `import * as m from "node:<name>"`): the compile-accepted ones (`async_hooks`, `diagnostics_channel`, `http2`, `sqlite`, `test`/`test/reporters`, `trace_events`, `wasi`) were also added to `is_supported_node_builtin` so check does not false-positive on them, while the compile-rejected ones (`inspector`, `inspector/promises`, `sea`) are intentionally left out of the allowlist so `check --check-deps` now surfaces the `U006` diagnostic instead of a false clean bill. Added three regression tests asserting the contract (unsupported→flagged, supported→recognized+allowed, supported⊆recognized). CLI-only change; no runtime/manifest/docs impact.
+
+## v0.5.1099 — fix(crypto): unblock crypto.getCipherInfo (manifest gate)
+
+`crypto.getCipherInfo(name[, options])` threw the #463 "not implemented in Perry" error, even though its runtime (`js_crypto_get_cipher_info`) and native-module dispatch (`object/native_module.rs`) were already complete — the manifest just lacked the method row, so the U-006 import/dispatch gate rejected the call. Added `method("crypto", "getCipherInfo", false, None)` to the API manifest (`entries.rs`), beside `getCiphers`. `crypto.getCipherInfo("aes-128-cbc")` now returns `{ name, nid, blockSize, ivLength, keyLength, mode }` matching Node across the standard AES cbc/gcm/ecb/wrap ciphers (by name and by NID). Advances the crypto argument/surface parity work (#3955). Same shape as the v0.5.1063 `generateKeySync` fix.
+
+## v0.5.1098 — fix(hir): typeof queueMicrotask/structuredClone/btoa/atob is "function"
+
+`typeof queueMicrotask`, `typeof structuredClone`, `typeof btoa`, and `typeof atob` reported `"object"` instead of `"function"`, even though all four globals are fully callable with correct results. A bare read of these identifiers resolves to `GlobalGet(0)` (globalThis itself) in HIR, so a value `typeof` folded to `"object"`. The HIR-level `typeof`-of-bare-global fold (`lower/lower_expr.rs`) constant-folds known global functions (`setTimeout`, `fetch`, …) to `"function"` but was missing these four; added them (guarded by `lookup_local(n).is_none()` so a local shadow still wins). `typeof setTimeout` etc. and the call paths are unaffected. Advances the global/builtin conformance surface (#3986).
+
+## v0.5.1097 — fix(runtime): Object.prototype.toString brands for typed arrays, Symbol, BigInt (+ unify the callable thunk)
+
+`Object.prototype.toString.call(x)` returned the wrong brand for typed arrays (`new Int32Array()` → `"[object Number]"`), `Symbol` and `BigInt` (`"[object Object]"`) instead of Node's `"[object Int32Array]"`, `"[object Symbol]"`, `"[object BigInt]"`. Two parts: (1) added typed-array (`lookup_typed_array_kind` + the existing `name_for_kind`, all 12 kinds), `Symbol` (`is_registered_symbol`), and `BigInt` (`is_bigint`) brand arms to `js_object_to_string`. (2) **Root cause for these specific types**: the callable `Object.prototype.toString` (`object_prototype_to_string_thunk` in `global_this.rs`) had its **own** coarse brand logic — separate from `js_object_to_string` — that mis-tagged raw-i64 typed arrays as `[object Number]` (a small pointer bit pattern reads as a finite f64) and everything past Array/Error/Date as `[object Object]`. Replaced the thunk body with a delegation to `js_object_to_string`, so the callable form shares the full, correct brand table. Continues the brand-coverage work from v0.5.1095. Advances #4033 / #3989.
+
+## v0.5.1096 — fix(runtime): #4004 — small-handle fetch ids must not be dereferenced as heap pointers
+
+**Root cause.** #4018 disambiguated the Web Fetch and node:http handle id-spaces by
+moving fetch `Request`/`Headers`/`Response` handles into a high band (`0x40000+`),
+disjoint from node:http/perry-ffi handles (`< 0x40000`). That fixed the dispatch-site
+collision in #4004 — but surfaced a latent crash. The runtime's type-identity probes
+(`date::is_date_cell_addr` → `is_date_value`, `map::is_registered_map`,
+`set::is_registered_set`, `weakref::weak_class_id_from_receiver`) read a `GcHeader` at
+`addr - GC_HEADER_SIZE` after only rejecting addresses below `0x1000 + GC_HEADER_SIZE`.
+Small-handle registry ids are NaN-boxed as `POINTER_TAG` values but are not heap
+addresses; while fetch handles started at `1` they fell below that floor and were
+skipped, but at `0x40000+` they sailed past it. Any **untyped** method/property dispatch
+on a fetch handle — exactly the shape a Hono `node:http` adapter takes, where
+`request.headers.get(...)` has an `any`-typed receiver — then dereferenced `id - 8`,
+reading unmapped memory and segfaulting (`EXC_BAD_ACCESS` at `0x3fff8` for handle
+`0x40000`).
+
+**Fix.** Raise the floor in those four probes to the canonical `< 0x100000` small-handle
+cutoff used throughout the runtime. Real `Date`/`Map`/`Set`/`WeakMap`/`WeakSet` cells are
+arena-allocated above the cutoff, so each remains an exact heap-pointer identity check
+with no behavior change for genuine heap objects; the whole small-handle band (Web Fetch,
+node:http/perry-ffi, timers, …) is now rejected before any GC-header deref.
+
+Also: `Headers.get` on the untyped dispatch path (`fetch/dispatch.rs`) now returns `null`
+for an absent header instead of the empty string, matching WHATWG/Node — `js_headers_get`
+signals absence with a null `StringHeader` pointer that was previously wrapped as `""`,
+which would have broken `headers.get(x) === null` checks in the same Hono path.
+
+Adds `test-parity/node-suite/http/server/request-handle-no-collision.ts`, a deterministic
+regression test that allocates a live node:http server handle (low band) alongside a fetch
+`Request` (high band) and drives the untyped `request.headers.get`/`.has` access that
+crashed. Output is byte-identical to Node. Validated: perry-runtime 962/962 and
+perry-stdlib 87/87 unit tests pass.
+## v0.5.1095 — fix(runtime): Object.prototype.toString brands for Map/Set/WeakMap/WeakSet/Promise/RegExp
+
+`Object.prototype.toString.call(x)` returned `"[object Object]"` for `Map`, `Set`, `WeakMap`, `WeakSet`, `Promise`, and `RegExp` instead of Node's `"[object Map]"`, `"[object Set]"`, `"[object WeakMap]"`, `"[object WeakSet]"`, `"[object Promise]"`, and `"[object RegExp]"`. `js_object_to_string` (`object/mod.rs`) discriminated only Array/Error/Date/buffer brands and let these fall through to the generic object tag. Added per-type detection before the GC-header object discrimination: Map/Set via their registries (`is_registered_map`/`is_registered_set` — they're raw-alloc'd with no GcHeader), RegExp via `is_regex_pointer`, WeakMap/WeakSet via `weak_class_id_from_receiver`, and Promise via `js_value_is_promise`. (The RegExp *brand* is distinct from `RegExp.prototype.toString` → `/source/flags`, fixed separately in v0.5.1094.) Advances the collections / object-model / RegExp conformance issues (#3989, #3986, #4035).
+
+## v0.5.1094 — fix(regexp): RegExp.prototype.toString returns /source/flags
+
+`/a/gi.toString()`, `String(/a/gi)`, and `` `${/a/gi}` `` all returned `"[object Object]"` instead of `"/a/gi"` — a RegExp fell through to `Object.prototype.toString` for both the explicit method call and ToString coercion. Added a shared `js_regexp_to_string(re)` helper (`/{source}/{flags}`, reusing the existing `source`/`flags` accessors) and wired it through three paths: the `regex.toString()` method dispatch (`dispatch_regex_receiver_method` + the `native_call_method` receiver gate, now `test|exec|toString`) and the ToString coercion in `js_jsvalue_to_string` (covers `String()` / template literals). Advances the RegExp conformance issue (#4035).
+
+## v0.5.1093 — fix(json): JSON.parse rejects trailing tokens
+
+`JSON.parse("{}x")`, `JSON.parse("1 2")`, `JSON.parse('"a"b')`, etc. silently accepted the leading value and ignored trailing non-whitespace input; Node rejects these with a `SyntaxError`. `js_json_parse` parsed a value via `DirectParser` but never checked that the input was fully consumed. Added `DirectParser::has_trailing_content` (skips trailing whitespace, reports any remaining input) and, after a successful non-null parse, throws a `SyntaxError` when trailing tokens remain. Trailing whitespace (`"{}\n"`, `"{} "`) is still allowed; valid single-value JSON is unaffected (verified across 18 valid shapes incl. nested/scalars/whitespace-surrounded). Covers object/array/string/number/boolean/`null` leading values. Completes the parser-leniency half of #4030 (the SyntaxError-identity half shipped in v0.5.1090). Note: the large-array tape fast-path (top-level arrays ≥1 KB) is left untouched — a rarer edge case.
+
 ## v0.5.1092 — fix(error): Error.prototype.toString honors instance name/message overrides
 
 `err.toString()` ignored instance-assigned `name`/`message` overrides and used the baked `ErrorHeader` values: `const e = new Error("orig"); e.name = "Custom"; e.message = "new"; e.toString()` returned `"Error: orig"` where Node returns `"Custom: new"`. The override was already stored (reading `e.name`/`e.message` returned the new values via the per-error side table), but `js_error_to_string` read only the baked `js_error_get_name`/`js_error_get_message`. It now consults `error_user_prop(error, "name"/"message")` first (ToString-coercing the override via `js_jsvalue_to_string`), falling back to the baked getters — matching `Error.prototype.toString` reading the overridable `name`/`message` own properties. Constructor-set names (subclasses), `String(err)`, and template-literal coercion are unaffected. Advances the Error conformance issue (#4032).

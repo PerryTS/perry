@@ -142,13 +142,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
                         if mod_name == "assert" || mod_name == "assert/strict" {
                             let opts = if args.is_empty() {
-                                "double 0x7FFC000000000001".to_string()
+                                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                             } else {
                                 lower_expr(ctx, &args[0])?
                             };
                             return Ok(ctx.block().call(
                                 DOUBLE,
                                 "js_assert_assertion_error_ctor",
+                                &[(DOUBLE, &opts)],
+                            ));
+                        }
+                    }
+                }
+                if property == "Assert" {
+                    if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
+                        if mod_name == "assert" || mod_name == "assert/strict" {
+                            let opts = if args.is_empty() {
+                                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                            } else {
+                                lower_expr(ctx, &args[0])?
+                            };
+                            return Ok(ctx.block().call(
+                                DOUBLE,
+                                "js_assert_assert_ctor",
                                 &[(DOUBLE, &opts)],
                             ));
                         }

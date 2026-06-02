@@ -21,11 +21,39 @@ thread_local! {
         = const { std::cell::Cell::new(0.0) };
     pub(super) static CURRENT_MICROTASK_NEXT: std::cell::Cell<*mut Promise>
         = const { std::cell::Cell::new(std::ptr::null_mut()) };
+
+    /// Nesting depth for `js_promise_run_microtasks` on this thread.
+    ///
+    /// Await lowering can re-enter the microtask runner from inside a
+    /// microtask or timer callback. Re-entrant drains may run promise jobs,
+    /// but they must not recursively enter the timer queues: timers are
+    /// macrotasks, and running them from a nested microtask checkpoint can
+    /// build an unbounded stack of exception traps.
+    static MICROTASK_RUN_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 #[no_mangle]
 pub extern "C" fn js_promise_run_microtasks() -> i32 {
+    run_microtasks(MicrotaskDrainMode::AllowTimers)
+}
+
+pub(crate) fn js_promise_run_microtasks_checkpoint() -> i32 {
+    run_microtasks(MicrotaskDrainMode::MicrotasksOnly)
+}
+
+#[derive(Copy, Clone)]
+enum MicrotaskDrainMode {
+    AllowTimers,
+    MicrotasksOnly,
+}
+
+fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     mt_profile_register();
+    let reentrant = MICROTASK_RUN_DEPTH.with(|depth| {
+        let current = depth.get();
+        depth.set(current.saturating_add(1));
+        current > 0
+    });
     let mut ran = 0;
 
     ran += crate::async_hooks::drain_gc_destroy_queue();
@@ -635,14 +663,20 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
     // Node's turn ordering (`Promise.resolve().then(...)` before
     // `setTimeout(..., 0)`). Timer callbacks may enqueue more microtasks;
     // those drain on the next pump iteration before newly due timers.
-    ran += crate::timer::js_timer_tick();
-    ran += crate::timer::js_callback_timer_tick();
-    ran += crate::builtins::drain_queued_microtasks_count();
-    ran += crate::timer::js_interval_timer_tick();
+    if matches!(mode, MicrotaskDrainMode::AllowTimers) && !reentrant {
+        ran += crate::timer::js_timer_tick();
+        ran += crate::timer::js_callback_timer_tick();
+        ran += crate::builtins::drain_queued_microtasks_count();
+        ran += crate::timer::js_interval_timer_tick();
+    }
 
     crate::exception::js_try_end();
 
     let _ = crate::gc::gc_runtime_safepoint();
+
+    MICROTASK_RUN_DEPTH.with(|depth| {
+        depth.set(depth.get().saturating_sub(1));
+    });
 
     ran
 }

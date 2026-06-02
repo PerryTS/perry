@@ -93,8 +93,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Some(msg_expr) = opt_msg {
                 let msg = lower_expr(ctx, msg_expr)?;
                 let blk = ctx.block();
-                let msg_handle = unbox_to_i64(blk, &msg);
-                let err_handle = blk.call(I64, "js_error_new_with_message", &[(I64, &msg_handle)]);
+                let err_handle = blk.call(I64, "js_error_new_from_value", &[(DOUBLE, &msg)]);
                 Ok(nanbox_pointer_inline(blk, &err_handle))
             } else {
                 let err_handle = ctx.block().call(I64, "js_error_new", &[]);

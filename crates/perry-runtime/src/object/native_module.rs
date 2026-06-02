@@ -9,6 +9,7 @@
 
 use super::*;
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
@@ -26,6 +27,9 @@ thread_local! {
     static UTIL_INSPECT_COLORS: Cell<u64> = const { Cell::new(0) };
     static TIMERS_PROMISES_PARENT_NAMESPACE: Cell<u64> = const { Cell::new(0) };
     static ZLIB_CODES_OBJECT: Cell<u64> = const { Cell::new(0) };
+    static WORKER_THREADS_LOCKS_VALUE: Cell<u64> = const { Cell::new(0) };
+    static WORKER_THREADS_WEB_LOCKS: RefCell<WebLocksState> =
+        RefCell::new(WebLocksState::default());
     static NATIVE_MODULE_NAMESPACES: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
 }
@@ -99,6 +103,24 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
             slot.set(value_bits);
         }
     });
+    WORKER_THREADS_LOCKS_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    WORKER_THREADS_WEB_LOCKS.with(|state| {
+        let mut state = state.borrow_mut();
+        for held in &mut state.held {
+            visitor.visit_raw_mut_ptr_slot(&mut held.source_promise);
+            visitor.visit_raw_mut_ptr_slot(&mut held.output_promise);
+        }
+        for pending in &mut state.pending {
+            visitor.visit_nanbox_u64_slot(&mut pending.callback_bits);
+            visitor.visit_raw_mut_ptr_slot(&mut pending.output_promise);
+        }
+    });
     NATIVE_MODULE_NAMESPACES.with(|cache| {
         let mut cache = cache.borrow_mut();
         for value_bits in cache.values_mut() {
@@ -113,6 +135,7 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
 /// This is used to identify objects that represent native module namespaces
 pub const NATIVE_MODULE_CLASS_ID: u32 = 0xFFFFFFFE;
 const WORKER_THREADS_LOCK_MANAGER_CLASS_ID: u32 = 0xFFFF_00B1;
+const WORKER_THREADS_LOCK_CLASS_ID: u32 = 0xFFFF_00B2;
 
 static BUFFER_POOL_SIZE_BITS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(8192f64.to_bits());
@@ -122,16 +145,22 @@ type WorkerThreadsValueGetter = extern "C" fn() -> f64;
 static WORKER_THREADS_WORKER_DATA_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
 static WORKER_THREADS_IS_MAIN_THREAD_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
 static WORKER_THREADS_PARENT_PORT_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static WORKER_THREADS_THREAD_NAME_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static WORKER_THREADS_RESOURCE_LIMITS_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
 
 #[no_mangle]
 pub extern "C" fn js_register_worker_threads_namespace_getters(
     worker_data: WorkerThreadsValueGetter,
     is_main_thread: WorkerThreadsValueGetter,
     parent_port: WorkerThreadsValueGetter,
+    thread_name: WorkerThreadsValueGetter,
+    resource_limits: WorkerThreadsValueGetter,
 ) {
     WORKER_THREADS_WORKER_DATA_GETTER.store(worker_data as *mut (), Ordering::Release);
     WORKER_THREADS_IS_MAIN_THREAD_GETTER.store(is_main_thread as *mut (), Ordering::Release);
     WORKER_THREADS_PARENT_PORT_GETTER.store(parent_port as *mut (), Ordering::Release);
+    WORKER_THREADS_THREAD_NAME_GETTER.store(thread_name as *mut (), Ordering::Release);
+    WORKER_THREADS_RESOURCE_LIMITS_GETTER.store(resource_limits as *mut (), Ordering::Release);
 }
 
 fn call_worker_threads_getter(slot: &AtomicPtr<()>, fallback: impl FnOnce() -> f64) -> f64 {
@@ -151,7 +180,265 @@ pub(crate) fn set_buffer_pool_size(value: f64) {
     BUFFER_POOL_SIZE_BITS.store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WebLockMode {
+    Exclusive,
+    Shared,
+}
+
+impl WebLockMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            WebLockMode::Exclusive => "exclusive",
+            WebLockMode::Shared => "shared",
+        }
+    }
+}
+
+struct WebLockHeld {
+    id: u64,
+    name: String,
+    mode: WebLockMode,
+    client_id: String,
+    source_promise: *mut crate::promise::Promise,
+    output_promise: *mut crate::promise::Promise,
+}
+
+struct WebLockPending {
+    id: u64,
+    name: String,
+    mode: WebLockMode,
+    client_id: String,
+    if_available: bool,
+    steal: bool,
+    callback_bits: u64,
+    output_promise: *mut crate::promise::Promise,
+}
+
+#[derive(Default)]
+struct WebLocksState {
+    next_id: u64,
+    held: Vec<WebLockHeld>,
+    pending: VecDeque<WebLockPending>,
+}
+
+enum WebLocksProcessItem {
+    Grant(WebLockPending),
+    Unavailable(WebLockPending),
+}
+
+fn worker_threads_web_locks_client_id() -> String {
+    "node-perry-0".to_string()
+}
+
+fn web_locks_string_value(value: &str) -> f64 {
+    let ptr = crate::string::js_string_from_bytes(value.as_ptr(), value.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+fn web_locks_object_value<T>(ptr: *mut T) -> f64 {
+    crate::value::js_nanbox_pointer(ptr as i64)
+}
+
+fn web_locks_named_key(name: &str) -> *mut crate::string::StringHeader {
+    crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
+}
+
+fn web_locks_set_field(obj: *mut ObjectHeader, name: &str, value: f64) {
+    let key = web_locks_named_key(name);
+    crate::object::js_object_set_field_by_name(obj, key, value);
+}
+
+fn web_locks_get_field(value: f64, name: &str) -> f64 {
+    let ptr = crate::value::js_nanbox_get_pointer(value) as *const ObjectHeader;
+    if ptr.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let key = web_locks_named_key(name);
+    crate::object::js_object_get_field_by_name_f64(ptr, key)
+}
+
+fn web_locks_value_to_string(value: f64) -> String {
+    let ptr = crate::value::js_jsvalue_to_string(value);
+    if ptr.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    }
+}
+
+fn web_locks_is_object_like(value: f64) -> bool {
+    unsafe { crate::object::object_ops::value_is_object_like(value) }
+}
+
+fn web_locks_is_callable(value: f64) -> bool {
+    let ptr = crate::value::js_nanbox_get_pointer(value) as usize;
+    ptr >= 0x1000 && crate::closure::is_closure_ptr(ptr)
+}
+
+fn web_locks_undefined() -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn web_locks_null() -> f64 {
+    f64::from_bits(crate::value::TAG_NULL)
+}
+
+fn web_locks_is_undefined(value: f64) -> bool {
+    value.to_bits() == crate::value::TAG_UNDEFINED
+}
+
+fn web_locks_is_nullish(value: f64) -> bool {
+    let bits = value.to_bits();
+    bits == crate::value::TAG_UNDEFINED || bits == crate::value::TAG_NULL
+}
+
+fn web_locks_type_error_value(message: &str, code: &'static str) -> f64 {
+    crate::fs::validate::build_type_error_with_code_value(message, code)
+}
+
+fn web_locks_dom_not_supported_value(message: &str) -> f64 {
+    let msg = web_locks_string_value(message);
+    let name = web_locks_string_value("NotSupportedError");
+    let err = crate::event_target::js_dom_exception_new(msg, name);
+    crate::value::js_nanbox_pointer(err as i64)
+}
+
+fn web_locks_callback_type_error(callback: f64) -> f64 {
+    let received = if web_locks_is_undefined(callback) {
+        "undefined".to_string()
+    } else {
+        format!("type {}", web_locks_value_to_string(callback))
+    };
+    let message =
+        format!("The \"callback\" argument must be of type function. Received {received}");
+    web_locks_type_error_value(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn web_locks_parse_mode(options: f64) -> Result<WebLockMode, f64> {
+    if web_locks_is_nullish(options) {
+        return Ok(WebLockMode::Exclusive);
+    }
+    if !web_locks_is_object_like(options) {
+        return Err(web_locks_type_error_value(
+            "Value cannot be converted to a dictionary",
+            "ERR_INVALID_ARG_TYPE",
+        ));
+    }
+    let mode_value = web_locks_get_field(options, "mode");
+    if web_locks_is_undefined(mode_value) {
+        return Ok(WebLockMode::Exclusive);
+    }
+    let mode = web_locks_value_to_string(mode_value);
+    match mode.as_str() {
+        "exclusive" => Ok(WebLockMode::Exclusive),
+        "shared" => Ok(WebLockMode::Shared),
+        _ => {
+            let message =
+                format!("mode value '{mode}' is not a valid enum value of type LockMode.");
+            Err(web_locks_type_error_value(
+                &message,
+                "ERR_INVALID_ARG_VALUE",
+            ))
+        }
+    }
+}
+
+fn web_locks_parse_bool_option(options: f64, name: &str) -> bool {
+    if web_locks_is_nullish(options) || !web_locks_is_object_like(options) {
+        return false;
+    }
+    let value = web_locks_get_field(options, name);
+    if web_locks_is_undefined(value) {
+        return false;
+    }
+    crate::value::js_is_truthy(value) != 0
+}
+
+fn web_locks_signal_rejection(options: f64) -> Result<Option<f64>, f64> {
+    if web_locks_is_nullish(options) || !web_locks_is_object_like(options) {
+        return Ok(None);
+    }
+    let signal = web_locks_get_field(options, "signal");
+    if web_locks_is_nullish(signal) {
+        return Ok(None);
+    }
+    if !web_locks_is_object_like(signal) {
+        return Err(web_locks_type_error_value(
+            "Value is not an object",
+            "ERR_INVALID_ARG_TYPE",
+        ));
+    }
+    let aborted = web_locks_get_field(signal, "aborted");
+    if web_locks_is_undefined(aborted) {
+        return Err(web_locks_type_error_value(
+            "The \"options.signal\" property must be an instance of AbortSignal. Received an instance of Object",
+            "ERR_INVALID_ARG_TYPE",
+        ));
+    }
+    if crate::value::js_is_truthy(aborted) != 0 {
+        let reason = web_locks_get_field(signal, "reason");
+        if web_locks_is_undefined(reason) {
+            Ok(Some(crate::event_target::abort_dom_exception_value()))
+        } else {
+            Ok(Some(reason))
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+fn web_locks_make_function(
+    name: &str,
+    func_ptr: *const u8,
+    call_arity: u32,
+    exposed_length: u32,
+) -> f64 {
+    crate::closure::js_register_closure_arity(func_ptr, call_arity);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    set_bound_native_closure_name(closure, name);
+    set_builtin_closure_length(closure as usize, exposed_length);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+extern "C" fn worker_threads_lock_manager_to_string_tag(_this: f64) -> f64 {
+    web_locks_string_value("LockManager")
+}
+
+extern "C" fn worker_threads_lock_to_string_tag(_this: f64) -> f64 {
+    web_locks_string_value("Lock")
+}
+
+fn worker_threads_locks_proto_value() -> f64 {
+    let proto = crate::object::js_object_alloc(0, 0);
+    let request =
+        web_locks_make_function("request", worker_threads_locks_request as *const u8, 3, 2);
+    crate::object::class_prototype_method_root_store(
+        WORKER_THREADS_LOCK_MANAGER_CLASS_ID,
+        "request".to_string(),
+        request.to_bits(),
+    );
+    web_locks_set_field(proto, "request", request);
+    let query = web_locks_make_function("query", worker_threads_locks_query as *const u8, 0, 0);
+    crate::object::class_prototype_method_root_store(
+        WORKER_THREADS_LOCK_MANAGER_CLASS_ID,
+        "query".to_string(),
+        query.to_bits(),
+    );
+    web_locks_set_field(proto, "query", query);
+    web_locks_object_value(proto)
+}
+
 fn worker_threads_locks_value() -> f64 {
+    if let Some(bits) = WORKER_THREADS_LOCKS_VALUE.with(|slot| {
+        let bits = slot.get();
+        (bits != 0).then_some(bits)
+    }) {
+        return f64::from_bits(bits);
+    }
     let name = "LockManager";
     unsafe {
         js_register_class_id(WORKER_THREADS_LOCK_MANAGER_CLASS_ID);
@@ -160,9 +447,408 @@ fn worker_threads_locks_value() -> f64 {
             name.as_ptr(),
             name.len() as u32,
         );
+        crate::object::js_register_class_to_string_tag(
+            WORKER_THREADS_LOCK_MANAGER_CLASS_ID,
+            worker_threads_lock_manager_to_string_tag as *const u8 as i64,
+        );
+    }
+    let lock_name = "Lock";
+    unsafe {
+        js_register_class_id(WORKER_THREADS_LOCK_CLASS_ID);
+        js_register_class_name(
+            WORKER_THREADS_LOCK_CLASS_ID,
+            lock_name.as_ptr(),
+            lock_name.len() as u32,
+        );
+        crate::object::js_register_class_to_string_tag(
+            WORKER_THREADS_LOCK_CLASS_ID,
+            worker_threads_lock_to_string_tag as *const u8 as i64,
+        );
     }
     let obj = js_object_alloc(WORKER_THREADS_LOCK_MANAGER_CLASS_ID, 0);
-    crate::value::js_nanbox_pointer(obj as i64)
+    let obj_value = crate::value::js_nanbox_pointer(obj as i64);
+    crate::object::js_object_set_prototype_of(obj_value, worker_threads_locks_proto_value());
+    WORKER_THREADS_LOCKS_VALUE.with(|slot| slot.set(obj_value.to_bits()));
+    obj_value
+}
+
+fn web_locks_new_id(state: &mut WebLocksState) -> u64 {
+    state.next_id = state.next_id.saturating_add(1);
+    state.next_id
+}
+
+fn web_locks_is_grantable(state: &WebLocksState, name: &str, mode: WebLockMode) -> bool {
+    let mut has_same_name = false;
+    for held in &state.held {
+        if held.name != name {
+            continue;
+        }
+        has_same_name = true;
+        if mode == WebLockMode::Exclusive || held.mode == WebLockMode::Exclusive {
+            return false;
+        }
+    }
+    !has_same_name || mode == WebLockMode::Shared
+}
+
+fn web_locks_has_pending_same_name(state: &WebLocksState, name: &str) -> bool {
+    state.pending.iter().any(|pending| pending.name == name)
+}
+
+fn web_locks_lock_info_object(name: &str, mode: WebLockMode, client_id: &str) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 0);
+    web_locks_set_field(obj, "name", web_locks_string_value(name));
+    web_locks_set_field(obj, "mode", web_locks_string_value(mode.as_str()));
+    web_locks_set_field(obj, "clientId", web_locks_string_value(client_id));
+    web_locks_object_value(obj)
+}
+
+fn web_locks_lock_object(name: &str, mode: WebLockMode) -> f64 {
+    let obj = crate::object::js_object_alloc(WORKER_THREADS_LOCK_CLASS_ID, 0);
+    web_locks_set_field(obj, "name", web_locks_string_value(name));
+    web_locks_set_field(obj, "mode", web_locks_string_value(mode.as_str()));
+    web_locks_object_value(obj)
+}
+
+fn web_locks_snapshot_array<'a>(
+    items: impl Iterator<Item = (&'a String, WebLockMode, &'a String)>,
+) -> *mut crate::array::ArrayHeader {
+    let mut array = crate::array::js_array_alloc(0);
+    for (name, mode, client_id) in items {
+        array = crate::array::js_array_push_f64(
+            array,
+            web_locks_lock_info_object(name, mode, client_id),
+        );
+    }
+    array
+}
+
+fn web_locks_query_snapshot() -> f64 {
+    let (held, pending) = WORKER_THREADS_WEB_LOCKS.with(|state| {
+        let state = state.borrow();
+        let held = web_locks_snapshot_array(
+            state
+                .held
+                .iter()
+                .map(|item| (&item.name, item.mode, &item.client_id)),
+        );
+        let pending = web_locks_snapshot_array(
+            state
+                .pending
+                .iter()
+                .map(|item| (&item.name, item.mode, &item.client_id)),
+        );
+        (held, pending)
+    });
+    let snapshot = crate::object::js_object_alloc(0, 0);
+    web_locks_set_field(snapshot, "held", web_locks_object_value(held));
+    web_locks_set_field(snapshot, "pending", web_locks_object_value(pending));
+    web_locks_object_value(snapshot)
+}
+
+fn web_locks_reject_promise(reason: f64) -> *mut crate::promise::Promise {
+    let promise = crate::promise::js_promise_new();
+    crate::promise::js_promise_reject(promise, reason);
+    promise
+}
+
+fn web_locks_rejected_error(error: f64) -> f64 {
+    web_locks_object_value(web_locks_reject_promise(error))
+}
+
+fn web_locks_request_args(callback: f64, arg: f64) -> *mut crate::array::ArrayHeader {
+    let _ = callback;
+    let mut args = crate::array::js_array_alloc(1);
+    args = crate::array::js_array_push_f64(args, arg);
+    args
+}
+
+fn web_locks_release_callback_value(
+    id: u64,
+    output_promise: *mut crate::promise::Promise,
+    reject: bool,
+) -> *const crate::closure::ClosureHeader {
+    let func_ptr = if reject {
+        worker_threads_locks_release_reject as *const u8
+    } else {
+        worker_threads_locks_release_fulfill as *const u8
+    };
+    crate::closure::js_register_closure_arity(func_ptr, 1);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 2);
+    crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::js_closure_set_capture_ptr(closure, 1, output_promise as i64);
+    closure
+}
+
+fn web_locks_call_callback(
+    id: u64,
+    callback_bits: u64,
+    arg: f64,
+    output_promise: *mut crate::promise::Promise,
+) -> *mut crate::promise::Promise {
+    let callback = f64::from_bits(callback_bits);
+    let args = web_locks_request_args(callback, arg);
+    let source = crate::promise::js_promise_try(callback, args as *const crate::array::ArrayHeader);
+    let on_fulfilled = web_locks_release_callback_value(id, output_promise, false);
+    let on_rejected = web_locks_release_callback_value(id, output_promise, true);
+    crate::promise::js_promise_then(source, on_fulfilled, on_rejected);
+    source
+}
+
+fn web_locks_grant_request(request: WebLockPending) {
+    let lock_arg = web_locks_lock_object(&request.name, request.mode);
+    WORKER_THREADS_WEB_LOCKS.with(|state| {
+        let mut state = state.borrow_mut();
+        state.held.push(WebLockHeld {
+            id: request.id,
+            name: request.name.clone(),
+            mode: request.mode,
+            client_id: request.client_id.clone(),
+            source_promise: null_mut(),
+            output_promise: request.output_promise,
+        });
+    });
+    let source = web_locks_call_callback(
+        request.id,
+        request.callback_bits,
+        lock_arg,
+        request.output_promise,
+    );
+    WORKER_THREADS_WEB_LOCKS.with(|state| {
+        let mut state = state.borrow_mut();
+        if let Some(held) = state.held.iter_mut().find(|held| held.id == request.id) {
+            held.source_promise = source;
+        }
+    });
+}
+
+fn web_locks_run_unavailable_request(request: WebLockPending) {
+    web_locks_call_callback(
+        0,
+        request.callback_bits,
+        web_locks_null(),
+        request.output_promise,
+    );
+}
+
+fn web_locks_steal_locked(
+    state: &mut WebLocksState,
+    name: &str,
+) -> Vec<*mut crate::promise::Promise> {
+    let mut rejected = Vec::new();
+    let mut i = 0;
+    while i < state.held.len() {
+        if state.held[i].name == name {
+            let held = state.held.remove(i);
+            rejected.push(held.output_promise);
+        } else {
+            i += 1;
+        }
+    }
+    rejected
+}
+
+fn web_locks_steal_reason() -> f64 {
+    let msg = web_locks_string_value("The lock request was stolen");
+    let name = web_locks_string_value("AbortError");
+    let err = crate::event_target::js_dom_exception_new(msg, name);
+    crate::value::js_nanbox_pointer(err as i64)
+}
+
+fn web_locks_reject_stolen(promises: Vec<*mut crate::promise::Promise>) {
+    if promises.is_empty() {
+        return;
+    }
+    let reason = web_locks_steal_reason();
+    for promise in promises {
+        crate::promise::js_promise_reject(promise, reason);
+    }
+}
+
+fn web_locks_take_next_process_item(
+) -> Option<(WebLocksProcessItem, Vec<*mut crate::promise::Promise>)> {
+    WORKER_THREADS_WEB_LOCKS.with(|state| {
+        let mut state = state.borrow_mut();
+        for index in 0..state.pending.len() {
+            let name = state.pending[index].name.clone();
+            if state
+                .pending
+                .iter()
+                .take(index)
+                .any(|pending| pending.name == name)
+            {
+                continue;
+            }
+            if state.pending[index].steal {
+                let request = state.pending.remove(index)?;
+                let rejected = web_locks_steal_locked(&mut state, &request.name);
+                return Some((WebLocksProcessItem::Grant(request), rejected));
+            }
+            if web_locks_is_grantable(&state, &name, state.pending[index].mode) {
+                let request = state.pending.remove(index)?;
+                return Some((WebLocksProcessItem::Grant(request), Vec::new()));
+            }
+            if state.pending[index].if_available {
+                let request = state.pending.remove(index)?;
+                return Some((WebLocksProcessItem::Unavailable(request), Vec::new()));
+            }
+        }
+        None
+    })
+}
+
+fn web_locks_process_queue() {
+    while let Some((item, stolen)) = web_locks_take_next_process_item() {
+        web_locks_reject_stolen(stolen);
+        match item {
+            WebLocksProcessItem::Grant(request) => web_locks_grant_request(request),
+            WebLocksProcessItem::Unavailable(request) => web_locks_run_unavailable_request(request),
+        }
+    }
+}
+
+fn web_locks_release(id: u64) {
+    if id == 0 {
+        return;
+    }
+    WORKER_THREADS_WEB_LOCKS.with(|state| {
+        let mut state = state.borrow_mut();
+        state.held.retain(|held| held.id != id);
+    });
+    web_locks_process_queue();
+}
+
+extern "C" fn worker_threads_locks_release_fulfill(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let id = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
+    let output =
+        crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut crate::promise::Promise;
+    web_locks_release(id);
+    crate::promise::js_promise_resolve(output, value);
+    web_locks_undefined()
+}
+
+extern "C" fn worker_threads_locks_release_reject(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
+    let id = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
+    let output =
+        crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut crate::promise::Promise;
+    web_locks_release(id);
+    crate::promise::js_promise_reject(output, reason);
+    web_locks_undefined()
+}
+
+extern "C" fn worker_threads_locks_request(
+    _closure: *const crate::closure::ClosureHeader,
+    name_value: f64,
+    options_or_callback: f64,
+    maybe_callback: f64,
+) -> f64 {
+    let has_options = !web_locks_is_undefined(maybe_callback);
+    let callback = if has_options {
+        maybe_callback
+    } else {
+        options_or_callback
+    };
+    if !web_locks_is_callable(callback) {
+        return web_locks_rejected_error(web_locks_callback_type_error(callback));
+    }
+
+    let options = if has_options {
+        options_or_callback
+    } else {
+        web_locks_undefined()
+    };
+    let name = web_locks_value_to_string(name_value);
+    let mode = match web_locks_parse_mode(options) {
+        Ok(mode) => mode,
+        Err(error) => return web_locks_rejected_error(error),
+    };
+    let if_available = web_locks_parse_bool_option(options, "ifAvailable");
+    let steal = web_locks_parse_bool_option(options, "steal");
+    if if_available && steal {
+        return web_locks_rejected_error(web_locks_dom_not_supported_value(
+            "ifAvailable and steal are mutually exclusive",
+        ));
+    }
+
+    match web_locks_signal_rejection(options) {
+        Ok(Some(reason)) => return web_locks_object_value(web_locks_reject_promise(reason)),
+        Ok(None) => {}
+        Err(error) => return web_locks_rejected_error(error),
+    }
+
+    let output_promise = crate::promise::js_promise_new();
+    let client_id = worker_threads_web_locks_client_id();
+    let callback_bits = callback.to_bits();
+
+    let immediate = WORKER_THREADS_WEB_LOCKS.with(|state| {
+        let mut state = state.borrow_mut();
+        let id = web_locks_new_id(&mut state);
+        let request = WebLockPending {
+            id,
+            name,
+            mode,
+            client_id,
+            if_available,
+            steal,
+            callback_bits,
+            output_promise,
+        };
+        if request.steal {
+            let rejected = web_locks_steal_locked(&mut state, &request.name);
+            return (Some(WebLocksProcessItem::Grant(request)), rejected);
+        }
+        if !web_locks_has_pending_same_name(&state, &request.name)
+            && web_locks_is_grantable(&state, &request.name, request.mode)
+        {
+            return (Some(WebLocksProcessItem::Grant(request)), Vec::new());
+        }
+        if request.if_available {
+            return (Some(WebLocksProcessItem::Unavailable(request)), Vec::new());
+        }
+        state.pending.push_back(request);
+        (None, Vec::new())
+    });
+
+    web_locks_reject_stolen(immediate.1);
+    if let Some(item) = immediate.0 {
+        match item {
+            WebLocksProcessItem::Grant(request) => web_locks_grant_request(request),
+            WebLocksProcessItem::Unavailable(request) => web_locks_run_unavailable_request(request),
+        }
+        web_locks_process_queue();
+    }
+
+    web_locks_object_value(output_promise)
+}
+
+#[no_mangle]
+pub extern "C" fn js_worker_threads_locks_request(
+    name_value: f64,
+    options_or_callback: f64,
+    maybe_callback: f64,
+) -> f64 {
+    worker_threads_locks_request(
+        std::ptr::null(),
+        name_value,
+        options_or_callback,
+        maybe_callback,
+    )
+}
+
+extern "C" fn worker_threads_locks_query(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    let snapshot = web_locks_query_snapshot();
+    web_locks_object_value(crate::promise::js_promise_resolved(snapshot))
+}
+
+#[no_mangle]
+pub extern "C" fn js_worker_threads_locks_query() -> f64 {
+    worker_threads_locks_query(std::ptr::null())
 }
 
 /// Create a native module namespace object
@@ -1578,6 +2264,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "async_hooks" => Some(ASYNC_HOOKS_NAMESPACE_KEYS),
         "async_hooks.default" => Some(ASYNC_HOOKS_DEFAULT_KEYS),
         "assert/strict" => Some(&[
+            b"Assert",
             b"AssertionError",
             b"ok",
             b"fail",
@@ -1668,9 +2355,101 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         ]),
         "http2" => Some(crate::node_http2_constants::HTTP2_NAMESPACE_KEYS),
         "http2.constants" => Some(crate::node_http2_constants::HTTP2_CONSTANTS_KEYS),
+        // #3906: native-module default/namespace objects previously enumerated
+        // only the internal `__module__` sentinel. List each module's supported
+        // export surface (the same set the api-manifest / docs / DTS expose and
+        // that `hasOwnProperty` / named imports agree on) so `Object.keys(mod)`
+        // matches Node. tty / perf_hooks / util.types are byte-identical to
+        // Node; v8 lists the 17 exports Perry implements (the 6 V8-internal
+        // stubs — getHeapSnapshot/getCppHeapStatistics/writeHeapSnapshot/
+        // queryObjects/isStringOneByteRepresentation/startCpuProfile — stay out
+        // of the manifest surface, tracked by #3904). Key order follows Node's.
+        "tty" => Some(&[b"isatty", b"ReadStream", b"WriteStream"]),
+        "v8" => Some(&[
+            b"cachedDataVersionTag",
+            b"getHeapStatistics",
+            b"getHeapSpaceStatistics",
+            b"getHeapCodeStatistics",
+            b"setFlagsFromString",
+            b"Serializer",
+            b"Deserializer",
+            b"DefaultSerializer",
+            b"DefaultDeserializer",
+            b"deserialize",
+            b"takeCoverage",
+            b"stopCoverage",
+            b"serialize",
+            b"promiseHooks",
+            b"startupSnapshot",
+            b"setHeapSnapshotNearHeapLimit",
+            b"GCProfiler",
+        ]),
+        "perf_hooks" => Some(&[
+            b"Performance",
+            b"PerformanceEntry",
+            b"PerformanceMark",
+            b"PerformanceMeasure",
+            b"PerformanceObserver",
+            b"PerformanceObserverEntryList",
+            b"PerformanceResourceTiming",
+            b"monitorEventLoopDelay",
+            b"eventLoopUtilization",
+            b"timerify",
+            b"createHistogram",
+            b"performance",
+            b"constants",
+        ]),
+        // The util/types namespace object is tagged `util.types` internally
+        // (see the `callable_module_name` remap below); accept both spellings.
+        "util/types" | "util.types" => Some(&[
+            b"isArgumentsObject",
+            b"isArrayBuffer",
+            b"isAsyncFunction",
+            b"isBigIntObject",
+            b"isBooleanObject",
+            b"isDataView",
+            b"isDate",
+            b"isExternal",
+            b"isGeneratorFunction",
+            b"isGeneratorObject",
+            b"isMap",
+            b"isMapIterator",
+            b"isModuleNamespaceObject",
+            b"isNativeError",
+            b"isNumberObject",
+            b"isPromise",
+            b"isProxy",
+            b"isRegExp",
+            b"isSet",
+            b"isSetIterator",
+            b"isSharedArrayBuffer",
+            b"isStringObject",
+            b"isSymbolObject",
+            b"isWeakMap",
+            b"isWeakSet",
+            b"isAnyArrayBuffer",
+            b"isBoxedPrimitive",
+            b"isArrayBufferView",
+            b"isTypedArray",
+            b"isUint8Array",
+            b"isUint8ClampedArray",
+            b"isUint16Array",
+            b"isUint32Array",
+            b"isInt8Array",
+            b"isInt16Array",
+            b"isInt32Array",
+            b"isFloat16Array",
+            b"isFloat32Array",
+            b"isFloat64Array",
+            b"isBigInt64Array",
+            b"isBigUint64Array",
+            b"isKeyObject",
+            b"isCryptoKey",
+        ]),
         "events" => Some(EVENTS_NAMESPACE_KEYS),
         "worker_threads" => Some(WORKER_THREADS_NAMESPACE_KEYS),
         "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
+        "readline/promises" => Some(&[b"Interface", b"Readline", b"createInterface"]),
         "zlib" => Some(&[b"codes"]),
         _ => None,
     }
@@ -1685,6 +2464,7 @@ fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
     match module_name {
         "async_hooks.default" => Some("async_hooks"),
         "child_process.default" => Some("child_process"),
+        "cluster.default" => Some("cluster"),
         "constants.default" => Some("constants"),
         "dns.default" => Some("dns"),
         "dns/promises.default" => Some("dns/promises"),
@@ -1704,6 +2484,7 @@ fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
     match module_name {
         "async_hooks" => Some("async_hooks.default"),
         "child_process" => Some("child_process.default"),
+        "cluster" => Some("cluster.default"),
         "constants" => Some("constants.default"),
         "dns" => Some("dns.default"),
         "dns/promises" => Some("dns/promises.default"),
@@ -1727,6 +2508,16 @@ fn create_cjs_default_namespace(module_name: &str) -> Option<f64> {
 fn cjs_default_export_value(module_name: &str) -> Option<f64> {
     match module_name {
         "events" => Some(bound_native_callable_export_value("events", "EventEmitter")),
+        // #3687: `node:cluster` default import is a distinct EventEmitter-shaped
+        // `cluster.default` namespace (its `on`/`emit`/… reads diverge from the
+        // bare `import * as` namespace).
+        "cluster" => create_cjs_default_namespace("cluster"),
+        // #3693: `node:dgram` default === the module namespace (CJS
+        // `module.exports`); a cached singleton makes `dgram === ns.default`.
+        "dgram" => Some(js_create_native_module_namespace(
+            b"dgram".as_ptr(),
+            "dgram".len(),
+        )),
         "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "os" | "path"
         | "path.posix" | "path.win32" | "punycode" | "querystring" | "url" | "util" => {
             create_cjs_default_namespace(module_name)
@@ -1752,6 +2543,14 @@ fn canonical_native_callable_property<'a>(module_name: &str, property_name: &'a 
     }
 }
 
+fn assert_instance_base_module(module_name: &str) -> Option<&'static str> {
+    match module_name {
+        "assert.instance" | "assert.instance.skip" => Some("assert"),
+        "assert/strict.instance" | "assert/strict.instance.skip" => Some("assert/strict"),
+        _ => None,
+    }
+}
+
 fn should_cache_native_module_namespace(module_name: &str) -> bool {
     matches!(
         module_name,
@@ -1763,6 +2562,9 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "dns.default"
             | "dns/promises.default"
             | "child_process.default"
+            | "cluster"
+            | "cluster.default"
+            | "dgram"
             | "events"
             | "fs.constants"
             | "os"
@@ -1784,6 +2586,7 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "util.types"
             | "path.posix"
             | "path.win32"
+            | "readline/promises"
             | "timers/promises"
             | "crypto.webcrypto"
             | "crypto.subtle"
@@ -1894,17 +2697,15 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
         }
     }
 
-    // #3679: node:v8 lifecycle namespaces. `v8.startupSnapshot` /
-    // `v8.promiseHooks` are object-valued exports; resolve them to
-    // dedicated native-module namespace objects so `typeof === "object"` and
-    // their methods dispatch through `dispatch_native_module_method`.
-    if module_name == "v8" && matches!(property_name, "startupSnapshot" | "promiseHooks") {
-        let submodule = if property_name == "startupSnapshot" {
-            "v8.startupSnapshot"
-        } else {
-            "v8.promiseHooks"
-        };
-        return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
+    // #3687: `node:cluster` is a singleton EventEmitter. Its EventEmitter
+    // method surface is exposed ONLY on the default import (the distinct
+    // `cluster.default` namespace) — `import * as cluster` reads these as
+    // `undefined` (they live on EventEmitter.prototype, not as named exports).
+    // Resolve them to bound methods here, before the generic
+    // `get_native_module_constant` path (where `cluster_property` would return
+    // `undefined` for `on`/`addListener`).
+    if module_name == "cluster.default" && is_cluster_emitter_method(property_name) {
+        return bound_native_callable_export_value("cluster.default", property_name);
     }
 
     if let Some(val) = get_native_module_constant(module_name, property_name, 0.0) {
@@ -1929,11 +2730,17 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
 
 pub(crate) fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
     let module_name = cjs_default_base_module(module_name).unwrap_or(module_name);
+    let module_name = assert_instance_base_module(module_name).unwrap_or(module_name);
     let property_name = canonical_native_callable_property(module_name, property_name);
-    let callable_module_name = if module_name == "util.types" {
-        "util/types"
+    let export_module_name = if property_name == "Assert" && module_name == "assert/strict" {
+        "assert"
     } else {
         module_name
+    };
+    let callable_module_name = if export_module_name == "util.types" {
+        "util/types"
+    } else {
+        export_module_name
     };
     let key = format!("{callable_module_name}\0{property_name}");
     if let Some(bits) = NATIVE_CALLABLE_EXPORTS.with(|c| c.borrow().get(&key).copied()) {
@@ -1949,11 +2756,11 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     crate::closure::js_closure_set_capture_f64(closure, 0, ns);
     crate::closure::js_closure_set_capture_ptr(closure, 1, method_bytes.as_ptr() as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 2, method_bytes.len() as i64);
-    let exposed_name = if module_name == "fs" {
-        native_callable_export_display_name(module_name, property_name)
-    } else if module_name == "url" && property_name == "resolveObject" {
+    let exposed_name = if export_module_name == "fs" {
+        native_callable_export_display_name(export_module_name, property_name)
+    } else if export_module_name == "url" && property_name == "resolveObject" {
         "urlResolveObject"
-    } else if module_name == "fs" && property_name == "_toUnixTimestamp" {
+    } else if export_module_name == "fs" && property_name == "_toUnixTimestamp" {
         "toUnixTimestamp"
     } else {
         property_name
@@ -1962,19 +2769,19 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     let value = crate::value::js_nanbox_pointer(closure as i64);
     let closure_addr = closure as usize;
 
-    if module_name == "tty" && matches!(property_name, "ReadStream" | "WriteStream") {
+    if export_module_name == "tty" && matches!(property_name, "ReadStream" | "WriteStream") {
         attach_tty_stream_prototype(value, property_name);
     }
-    if module_name == "tls" && property_name == "SecureContext" {
+    if export_module_name == "tls" && property_name == "SecureContext" {
         attach_tls_secure_context_prototype(value);
     }
-    if module_name == "wasi" && property_name == "WASI" {
+    if export_module_name == "wasi" && property_name == "WASI" {
         crate::wasi::attach_wasi_constructor_prototype(value);
     }
-    if module_name == "stream" && property_name == "Stream" {
+    if export_module_name == "stream" && property_name == "Stream" {
         attach_stream_legacy_prototype(value);
     }
-    if module_name == "stream"
+    if export_module_name == "stream"
         && matches!(
             property_name,
             "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
@@ -1982,23 +2789,26 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     {
         attach_stream_constructor_prototype(value, property_name);
     }
-    if module_name == "sqlite" && property_name == "DatabaseSync" {
+    if export_module_name == "sqlite" && property_name == "DatabaseSync" {
         attach_sqlite_database_sync_prototype(value);
     }
-    if module_name == "sqlite" && property_name == "Session" {
+    if export_module_name == "sqlite" && property_name == "Session" {
         attach_sqlite_session_prototype(value);
+    }
+    if export_module_name == "assert" && property_name == "Assert" {
+        attach_assert_prototype(value);
     }
 
     // `PerformanceObserver.supportedEntryTypes` is a static array on the
     // constructor. `PerformanceObserver` is a function value (a bound-method
     // closure), so hang the array off it as a dynamic property — keeps
     // `typeof PerformanceObserver === "function"` while the static read works.
-    if module_name == "perf_hooks" && property_name == "PerformanceObserver" {
+    if export_module_name == "perf_hooks" && property_name == "PerformanceObserver" {
         let arr = crate::perf_hooks::js_perf_supported_entry_types();
         crate::closure::closure_set_dynamic_prop(closure_addr, "supportedEntryTypes", arr);
     }
 
-    if module_name == "events" && property_name == "EventEmitter" {
+    if export_module_name == "events" && property_name == "EventEmitter" {
         let async_resource_ctor =
             bound_native_callable_export_value("events", "EventEmitterAsyncResource");
         for method in [
@@ -2047,14 +2857,14 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
         );
     }
 
-    if module_name == "util" && property_name == "promisify" {
+    if export_module_name == "util" && property_name == "promisify" {
         crate::closure::closure_set_dynamic_prop(
             closure_addr,
             "custom",
             crate::util_promisify::promisify_custom_symbol(),
         );
     }
-    if module_name == "util" && property_name == "inspect" {
+    if export_module_name == "util" && property_name == "inspect" {
         crate::closure::closure_set_dynamic_prop(
             closure_addr,
             "custom",
@@ -2140,8 +2950,42 @@ pub(crate) fn fs_namespace_descriptor_setter_value(property_name: &str) -> f64 {
     value
 }
 
+/// The EventEmitter method names `node:cluster`'s default import exposes
+/// (#3687). Kept narrow so a typo'd `cluster.foo` still reads `undefined`.
+pub(crate) fn is_cluster_emitter_method(prop: &str) -> bool {
+    matches!(
+        prop,
+        "on" | "addListener"
+            | "once"
+            | "prependListener"
+            | "prependOnceListener"
+            | "off"
+            | "removeListener"
+            | "removeAllListeners"
+            | "emit"
+            | "eventNames"
+            | "listenerCount"
+    )
+}
+
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
+        // #3687: node:cluster — module-method `.length` matches Node.
+        ("cluster", "fork" | "disconnect" | "setupPrimary" | "setupMaster" | "Worker") => Some(1),
+        ("cluster", "emit") => Some(1),
+        ("cluster", "eventNames") => Some(0),
+        (
+            "cluster",
+            "on"
+            | "addListener"
+            | "once"
+            | "prependListener"
+            | "prependOnceListener"
+            | "removeListener"
+            | "off"
+            | "listenerCount",
+        ) => Some(2),
+        ("cluster", "removeAllListeners") => Some(1),
         ("events", "EventEmitter") => Some(1),
         ("events", "EventEmitterAsyncResource") => Some(0),
         ("events", "addAbortListener") => Some(2),
@@ -2196,6 +3040,16 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("v8", "getCppHeapStatistics" | "startCpuProfile") => Some(0),
         ("v8", "getHeapSnapshot" | "isStringOneByteRepresentation" | "queryObjects") => Some(1),
         ("v8", "writeHeapSnapshot") => Some(2),
+        // #3906: implemented top-level v8 helpers reachable as bound callables.
+        ("v8", "serialize" | "deserialize") => Some(1),
+        (
+            "v8",
+            "getHeapStatistics"
+            | "getHeapSpaceStatistics"
+            | "getHeapCodeStatistics"
+            | "cachedDataVersionTag"
+            | "GCProfiler",
+        ) => Some(0),
         ("net", "_normalizeArgs") => Some(1),
         ("net", "_createServerHandle") => Some(5),
         ("domain", "Domain" | "createDomain" | "create") => Some(0),
@@ -2393,6 +3247,72 @@ const SQLITE_DATABASE_SYNC_PROTOTYPE_METHODS: &[&str] = &[
 ];
 
 const SQLITE_SESSION_PROTOTYPE_METHODS: &[&str] = &["changeset", "patchset", "close"];
+
+const ASSERT_PROTOTYPE_METHODS: &[&str] = &[
+    "fail",
+    "ok",
+    "equal",
+    "notEqual",
+    "deepEqual",
+    "notDeepEqual",
+    "deepStrictEqual",
+    "notDeepStrictEqual",
+    "strictEqual",
+    "notStrictEqual",
+    "partialDeepStrictEqual",
+    "throws",
+    "rejects",
+    "doesNotThrow",
+    "doesNotReject",
+    "ifError",
+    "match",
+    "doesNotMatch",
+];
+
+fn attach_assert_prototype(constructor_value: f64) {
+    let constructor_js = JSValue::from_bits(constructor_value.to_bits());
+    if !constructor_js.is_pointer() {
+        return;
+    }
+    let closure = constructor_js.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    if closure == 0 {
+        return;
+    }
+
+    let proto = js_object_alloc(0, 0);
+    if proto.is_null() {
+        return;
+    }
+
+    let constructor = "constructor";
+    let constructor_key =
+        crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
+    js_object_set_field_by_name(proto, constructor_key, constructor_value);
+    super::set_builtin_property_attrs(
+        proto as usize,
+        constructor.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+
+    for method in ASSERT_PROTOTYPE_METHODS {
+        let method_value = bound_native_callable_export_value("assert", method);
+        let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
+        js_object_set_field_by_name(proto, key, method_value);
+        super::set_builtin_property_attrs(
+            proto as usize,
+            (*method).to_string(),
+            super::PropertyAttrs::new(true, false, true),
+        );
+    }
+
+    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    crate::closure::closure_set_dynamic_prop(closure, "prototype", proto_value);
+    super::set_builtin_property_attrs(
+        closure,
+        "prototype".to_string(),
+        super::PropertyAttrs::new(true, false, false),
+    );
+}
 
 extern "C" fn sqlite_database_sync_prototype_method_thunk(
     closure: *const crate::closure::ClosureHeader,
@@ -2896,6 +3816,7 @@ pub(crate) fn builtin_closure_length(closure: usize) -> Option<u32> {
 /// `EventEmitterHandle`, so dispatch coherence is preserved.
 pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool {
     let module = cjs_default_base_module(module).unwrap_or(module);
+    let module = assert_instance_base_module(module).unwrap_or(module);
     let prop = canonical_native_callable_property(module, prop);
     if module == "fs" && matches!(prop, "lchmod" | "lchmodSync") {
         return crate::fs::lchmod_is_callable_on_this_platform();
@@ -3127,6 +4048,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("stream", "PassThrough")
             | ("stream", "Stream")
             | ("string_decoder", "StringDecoder")
+            | ("assert", "Assert")
             | ("assert", "ok")
             | ("assert", "fail")
             | ("assert", "equal")
@@ -3145,6 +4067,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("assert", "rejects")
             | ("assert", "doesNotReject")
             | ("assert", "ifError")
+            | ("assert/strict", "Assert")
             | ("assert/strict", "ok")
             | ("assert/strict", "fail")
             | ("assert/strict", "equal")
@@ -3710,6 +4633,20 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("v8", "takeCoverage")
             | ("v8", "stopCoverage")
             | ("v8", "setHeapSnapshotNearHeapLimit")
+            // #3906: the implemented serialize/heap-introspection helpers read
+            // as bound callables too, so `const s = v8.serialize` / `v8[k]`
+            // (and `Object.keys(v8).map(k => v8[k])`) match Node instead of
+            // returning undefined. Invocation routes through
+            // dispatch_native_module_method. `GCProfiler` is a constructor
+            // (construction lowers via new_dynamic.rs); the value read is a
+            // function per Node.
+            | ("v8", "serialize")
+            | ("v8", "deserialize")
+            | ("v8", "getHeapStatistics")
+            | ("v8", "getHeapSpaceStatistics")
+            | ("v8", "getHeapCodeStatistics")
+            | ("v8", "cachedDataVersionTag")
+            | ("v8", "GCProfiler")
             // #3904: modern V8 diagnostics/profiler named exports (function-valued).
             | ("v8", "getCppHeapStatistics")
             | ("v8", "getHeapSnapshot")
@@ -4070,6 +5007,25 @@ pub(crate) unsafe fn get_native_module_constant(
         if let Some(value) = cjs_default_export_value(module_name) {
             return Some(value);
         }
+    }
+
+    // #3906/#3679: node:v8 lifecycle namespaces. `v8.startupSnapshot` /
+    // `v8.promiseHooks` are object-valued exports; resolve them to dedicated
+    // native-module namespace objects so `typeof === "object"` and their
+    // methods dispatch through `dispatch_native_module_method`. Handled here
+    // (rather than only in the codegen `js_native_module_property_by_name`
+    // path) so dynamic reads — `v8["promiseHooks"]`, `const { promiseHooks } =
+    // v8` — resolve to the same object instead of `undefined`.
+    if module_name == "v8" && matches!(property, "startupSnapshot" | "promiseHooks") {
+        let submodule = if property == "startupSnapshot" {
+            "v8.startupSnapshot"
+        } else {
+            "v8.promiseHooks"
+        };
+        return Some(js_create_native_module_namespace(
+            submodule.as_ptr(),
+            submodule.len(),
+        ));
     }
 
     let o_nofollow: f64 = {
@@ -4888,20 +5844,23 @@ pub(crate) unsafe fn get_native_module_constant(
             "default" if !is_cjs_default_object => cjs_default_export_value("querystring"),
             _ => None,
         },
-        "constants" => fs_const(property)
-            .or_else(|| fs_const_tail(property))
-            .or_else(|| os_signal_const(property))
-            .or_else(|| os_errno_const(property))
-            .or_else(|| os_priority_const(property))
-            .or_else(|| os_dlopen_const(property))
-            .or_else(|| crypto_const(property))
-            .or_else(|| {
-                if property == "defaultCoreCipherList" {
-                    Some(str_val(DEFAULT_CORE_CIPHER_LIST))
-                } else {
-                    None
-                }
-            }),
+        "constants" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("constants"),
+            _ => fs_const(property)
+                .or_else(|| fs_const_tail(property))
+                .or_else(|| os_signal_const(property))
+                .or_else(|| os_errno_const(property))
+                .or_else(|| os_priority_const(property))
+                .or_else(|| os_dlopen_const(property))
+                .or_else(|| crypto_const(property))
+                .or_else(|| {
+                    if property == "defaultCoreCipherList" {
+                        Some(str_val(DEFAULT_CORE_CIPHER_LIST))
+                    } else {
+                        None
+                    }
+                }),
+        },
         "sqlite" => match property {
             "constants" => Some(create_sub_namespace("sqlite.constants")),
             "Session" => Some(sqlite_session_constructor_value()),
@@ -5231,11 +6190,17 @@ pub(crate) unsafe fn get_native_module_constant(
                 || f64::from_bits(crate::value::TAG_NULL),
             )),
             "threadId" => Some(0.0),
-            "threadName" => Some(str_val("")),
-            "resourceLimits" => {
-                let obj = crate::object::js_object_alloc(0, 0);
-                Some(crate::value::js_nanbox_pointer(obj as i64))
-            }
+            "threadName" => Some(call_worker_threads_getter(
+                &WORKER_THREADS_THREAD_NAME_GETTER,
+                || str_val(""),
+            )),
+            "resourceLimits" => Some(call_worker_threads_getter(
+                &WORKER_THREADS_RESOURCE_LIMITS_GETTER,
+                || {
+                    let obj = crate::object::js_object_alloc(0, 0);
+                    crate::value::js_nanbox_pointer(obj as i64)
+                },
+            )),
             "locks" => Some(worker_threads_locks_value()),
             "SHARE_ENV" => Some(crate::symbol::js_symbol_for(str_val(
                 "nodejs.worker_threads.SHARE_ENV",

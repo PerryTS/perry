@@ -35,21 +35,14 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     if raw < 0x1000 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let idx_i32 = idx as i32;
-    if idx_i32 < 0 {
-        // Negative numeric keys → string keys on the object path.
-        let s = idx_i32.to_string();
-        let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-        let v = js_object_get_field_by_name(raw as *mut ObjectHeader, key);
-        return f64::from_bits(v.bits());
-    }
-
     if crate::buffer::is_registered_buffer(raw as usize) {
+        let idx_i32 = idx as i32;
         let byte_val =
             crate::buffer::js_buffer_get(raw as *const crate::buffer::BufferHeader, idx_i32);
         return byte_val as f64;
     }
     if crate::typedarray::lookup_typed_array_kind(raw as usize).is_some() {
+        let idx_i32 = idx as i32;
         return crate::typedarray::js_typed_array_get(
             raw as *const crate::typedarray::TypedArrayHeader,
             idx_i32,
@@ -63,6 +56,19 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         }
         *(gc_header_addr as *const u8)
     };
+
+    if gc_type == crate::gc::GC_TYPE_STRING {
+        return crate::string::js_string_index_get(raw as *const crate::StringHeader, idx);
+    }
+
+    let idx_i32 = idx as i32;
+    if idx_i32 < 0 {
+        // Negative numeric keys → string keys on the object path.
+        let s = idx_i32.to_string();
+        let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        let v = js_object_get_field_by_name(raw as *mut ObjectHeader, key);
+        return f64::from_bits(v.bits());
+    }
 
     if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
         return crate::array::js_array_get_f64(

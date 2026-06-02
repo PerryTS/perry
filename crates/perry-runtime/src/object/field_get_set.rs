@@ -77,7 +77,7 @@ pub extern "C" fn js_object_get_field(obj: *const ObjectHeader, field_index: u32
     }
 }
 
-unsafe fn own_data_field_by_name(
+pub(crate) unsafe fn own_data_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {
@@ -115,6 +115,57 @@ unsafe fn own_data_field_by_name(
         }
     }
     None
+}
+
+unsafe fn ordinary_object_prototype_method_value(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Option<JSValue> {
+    if obj.is_null() || key.is_null() {
+        return None;
+    }
+    let gc = gc_header_for(obj);
+    if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+    if ((*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO) != 0 {
+        return None;
+    }
+    if super::prototype_chain::object_static_prototype(obj as usize).is_some() {
+        return None;
+    }
+    let class_id = (*obj).class_id;
+    if class_id != 0 && !is_anon_shape_class_id(class_id) {
+        return None;
+    }
+    let key_bytes = std::slice::from_raw_parts(
+        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+        (*key).byte_len as usize,
+    );
+    if !is_primitive_proto_method(key_bytes) {
+        return None;
+    }
+    let object_ctor = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
+    let ctor_value = JSValue::from_bits(object_ctor.to_bits());
+    if !ctor_value.is_pointer() {
+        return None;
+    }
+    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto_value = JSValue::from_bits(proto.to_bits());
+    if !proto_value.is_pointer() {
+        return None;
+    }
+    let proto_ptr = proto_value.as_pointer::<ObjectHeader>();
+    if proto_ptr.is_null() || proto_ptr == obj {
+        return None;
+    }
+    let method = js_object_get_field_by_name(proto_ptr, key);
+    if method.is_undefined() {
+        None
+    } else {
+        Some(method)
+    }
 }
 
 unsafe fn invoke_accessor_getter(get_bits: u64, receiver: f64) -> JSValue {
@@ -164,8 +215,9 @@ unsafe fn array_prototype_property_value(name: &str, receiver_addr: usize) -> Op
         return None;
     }
     let proto_ptr = proto_value.as_pointer::<u8>() as usize;
-    if proto_ptr == receiver_addr {
-        return None;
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    if let Some(v) = own_data_field_by_name(proto_ptr as *const ObjectHeader, key) {
+        return Some(v);
     }
     if let Some(v) = crate::array::array_named_property_get_by_name(
         proto_ptr as *const crate::array::ArrayHeader,
@@ -173,7 +225,9 @@ unsafe fn array_prototype_property_value(name: &str, receiver_addr: usize) -> Op
     ) {
         return Some(JSValue::from_bits(v.to_bits()));
     }
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    if proto_ptr == receiver_addr {
+        return None;
+    }
     let v = js_object_get_field_by_name(proto_ptr as *const ObjectHeader, key);
     if v.is_undefined() {
         None
@@ -2126,10 +2180,10 @@ pub extern "C" fn js_object_get_field_by_name(
         }
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if !is_valid_obj_ptr(obj as *const u8) {
+        let gc_type = (*gc_header).obj_type;
+        if gc_type != crate::gc::GC_TYPE_ARRAY && !is_valid_obj_ptr(obj as *const u8) {
             return JSValue::undefined();
         }
-        let gc_type = (*gc_header).obj_type;
         // Issue #618: closures have their own GC type (GC_TYPE_CLOSURE=4)
         // distinct from GC_TYPE_OBJECT, but support dynamic-property storage
         // via the `CLOSURE_DYNAMIC_PROPS` side-table. `js_object_set_field_by_name`
@@ -2283,6 +2337,12 @@ pub extern "C" fn js_object_get_field_by_name(
                         let v = crate::error::js_error_get_cause(err_ptr);
                         return JSValue::from_bits(v.to_bits());
                     }
+                    b"toString" => {
+                        let this_f64 =
+                            f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                        let result = js_class_method_bind(this_f64, b"toString".as_ptr(), 8);
+                        return JSValue::from_bits(result.to_bits());
+                    }
                     b"constructor" => {
                         let name = match (*err_ptr).error_kind {
                             crate::error::ERROR_KIND_TYPE_ERROR => b"TypeError".as_slice(),
@@ -2415,6 +2475,9 @@ pub extern "C" fn js_object_get_field_by_name(
                         return JSValue::from_bits(
                             crate::array::js_array_get_f64(arr, index).to_bits(),
                         );
+                    }
+                    if let Some(v) = own_data_field_by_name(obj, key) {
+                        return v;
                     }
                     if let Some(v) = crate::array::array_named_property_get(arr, key) {
                         return JSValue::from_bits(v.to_bits());
@@ -2675,6 +2738,20 @@ pub extern "C" fn js_object_get_field_by_name(
                 if let Some(value) = native_module_own_field_by_key(obj, key) {
                     return value;
                 }
+                // #3687: node:cluster default-import EventEmitter methods on the
+                // distinct `cluster.default` namespace. Mirror the
+                // NativeModuleRef fast path (`js_native_module_property_by_name`)
+                // — this dynamic `obj[key]` read must resolve `on`/`emit`/… to
+                // bound methods *before* `get_native_module_constant` (which
+                // normalizes to `cluster` and returns `undefined` for `on`).
+                if module_name == "cluster.default"
+                    && super::is_cluster_emitter_method(property_name)
+                {
+                    return JSValue::from_bits(
+                        super::bound_native_callable_export_value(module_name, property_name)
+                            .to_bits(),
+                    );
+                }
                 if let Some(val) = get_native_module_constant(module_name, property_name, nb_ptr) {
                     return JSValue::from_bits(val.to_bits());
                 }
@@ -2897,6 +2974,9 @@ pub extern "C" fn js_object_get_field_by_name(
                 {
                     return v;
                 }
+                if let Some(v) = ordinary_object_prototype_method_value(obj, key) {
+                    return v;
+                }
             }
             return JSValue::undefined();
         }
@@ -2912,6 +2992,9 @@ pub extern "C" fn js_object_get_field_by_name(
             if !key.is_null() {
                 if let Some(v) = super::prototype_chain::resolve_inherited_field(obj as usize, key)
                 {
+                    return v;
+                }
+                if let Some(v) = ordinary_object_prototype_method_value(obj, key) {
                     return v;
                 }
             }
@@ -3182,6 +3265,9 @@ pub extern "C" fn js_object_get_field_by_name(
         // (`obj.x` where `x` is an own property of the set prototype) resolve.
         if !key.is_null() {
             if let Some(v) = super::prototype_chain::resolve_inherited_field(obj as usize, key) {
+                return v;
+            }
+            if let Some(v) = ordinary_object_prototype_method_value(obj, key) {
                 return v;
             }
         }

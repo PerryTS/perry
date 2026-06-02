@@ -20,6 +20,7 @@ pub enum StateExit {
 #[derive(Clone)]
 pub struct CatchRoute {
     pub param_id: Option<LocalId>,
+    pub param_name: Option<String>,
     pub body: Vec<Stmt>,
     pub protected_start_state: u32,
     pub post_catch_state: u32,
@@ -628,9 +629,14 @@ pub fn linearize_body(
                 // Stash the catch so transform_generator_function can inline it
                 // into the .throw() closure later.
                 if let Some(catch_clause) = catch {
-                    let param_id = catch_clause.param.as_ref().map(|(id, _)| *id);
+                    let (param_id, param_name) = catch_clause
+                        .param
+                        .as_ref()
+                        .map(|(id, name)| (Some(*id), Some(name.clone())))
+                        .unwrap_or((None, None));
                     catches.push(CatchRoute {
                         param_id,
+                        param_name,
                         body: catch_clause.body.clone(),
                         protected_start_state,
                         post_catch_state,
