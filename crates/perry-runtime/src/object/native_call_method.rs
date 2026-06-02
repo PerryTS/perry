@@ -318,6 +318,19 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
         None => return false,
     };
 
+    if crate::date::is_date_value(target) {
+        let ctor = crate::object::js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
+        let ctor_ptr = crate::value::js_nanbox_get_pointer(ctor) as usize;
+        if ctor_ptr == 0 {
+            return false;
+        }
+        let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+        if let Some(proto_ptr) = object_ptr_from_value(proto) {
+            return std::ptr::addr_eq(proto_ptr, receiver_ptr);
+        }
+        return false;
+    }
+
     let target_jsval = JSValue::from_bits(target.to_bits());
     if !target_jsval.is_pointer() {
         return false;
@@ -928,6 +941,31 @@ pub unsafe extern "C" fn js_native_call_method(
                 }
             }
         }
+    }
+
+    if crate::date::is_date_value(object) && method_name == "toString" {
+        let ctor = crate::object::js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
+        let ctor_ptr = crate::value::js_nanbox_get_pointer(ctor) as usize;
+        if ctor_ptr != 0 {
+            let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+            if let Some(proto_ptr) = object_ptr_from_value(proto) {
+                let key = crate::string::js_string_from_bytes(
+                    method_name_ptr as *const u8,
+                    method_name_len as u32,
+                );
+                let value = crate::object::js_object_get_field_by_name(proto_ptr, key);
+                if !value.is_undefined() {
+                    let value_f64 = f64::from_bits(value.bits());
+                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
+                    let result =
+                        crate::closure::js_native_call_value(value_f64, args_ptr, args_len);
+                    IMPLICIT_THIS.with(|c| c.set(prev_this));
+                    return result;
+                }
+            }
+        }
+        let string = crate::date::js_date_to_string(object);
+        return f64::from_bits(JSValue::string_ptr(string).bits());
     }
 
     // Symbols: Symbol.for() pointers are Box-leaked (no GcHeader), so the

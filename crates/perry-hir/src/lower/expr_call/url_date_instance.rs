@@ -40,7 +40,7 @@ fn new_callee_name(ctx: &LoweringContext, new_expr: &ast::NewExpr) -> Option<Str
 
 pub(super) fn try_url_date_weakref_instance(
     ctx: &mut LoweringContext,
-    call: &ast::CallExpr,
+    _call: &ast::CallExpr,
     expr: &ast::Expr,
     mut args: Vec<Expr>,
 ) -> Result<Result<Expr, Vec<Expr>>> {
@@ -270,17 +270,6 @@ pub(super) fn try_url_date_weakref_instance(
                     "valueOf" => {
                         let date_expr = lower_expr(ctx, &member.obj)?;
                         return Ok(Ok(Expr::DateValueOf(Box::new(date_expr))));
-                    }
-                    // #2089: `date.toString()` — full local date string (or
-                    // "Invalid Date"). `toString` exists on EVERY value, so this
-                    // arm must fire ONLY when the receiver is statically a Date;
-                    // otherwise it would hijack `bigint.toString()` /
-                    // `urlSearchParams.toString()` / etc. An `any`-typed Date
-                    // receiver falls through to generic dispatch, which routes a
-                    // DateCell through `js_jsvalue_to_string` (also #2089-aware).
-                    "toString" if recv_class == Some("Date") => {
-                        let date_expr = lower_expr(ctx, &member.obj)?;
-                        return Ok(Ok(Expr::DateToString(Box::new(date_expr))));
                     }
                     "toDateString" => {
                         let date_expr = lower_expr(ctx, &member.obj)?;

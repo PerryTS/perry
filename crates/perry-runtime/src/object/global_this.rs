@@ -94,6 +94,14 @@ pub(crate) extern "C" fn global_this_builtin_noop_thunk(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+extern "C" fn global_this_date_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    let string = crate::date::js_date_to_string(crate::date::js_date_new());
+    crate::value::js_nanbox_string(string as i64)
+}
+
 extern "C" fn global_this_eval_thunk(
     _closure: *const crate::closure::ClosureHeader,
     source: f64,
@@ -605,7 +613,11 @@ extern "C" fn object_prototype_to_string_thunk(
             unsafe {
                 let gc_header = raw.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
                 let gc_type = (*gc_header).obj_type;
-                if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+                if gc_type == crate::gc::GC_TYPE_DATE_CELL {
+                    b"[object Date]"
+                } else if gc_type == crate::gc::GC_TYPE_ARRAY
+                    || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY
+                {
                     b"[object Array]"
                 } else if gc_type == crate::gc::GC_TYPE_ERROR {
                     b"[object Error]"
@@ -629,6 +641,14 @@ extern "C" fn object_prototype_is_prototype_of_thunk(
     f64::from_bits(
         JSValue::bool(unsafe { super::js_object_is_prototype_of_value(this_value, value) }).bits(),
     )
+}
+
+extern "C" fn date_prototype_to_string_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let string = crate::date::js_date_to_string(this_value);
+    crate::value::js_nanbox_string(string as i64)
 }
 
 extern "C" fn object_prototype_value_of_thunk(
@@ -1084,6 +1104,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             "BroadcastChannel" => {
                 crate::messaging::js_broadcast_channel_constructor_call_error as *const u8
             }
+            "Date" => global_this_date_thunk as *const u8,
             "Storage" => crate::web_storage::storage_constructor_illegal as *const u8,
             "Crypto" | "CryptoKey" | "SubtleCrypto" => {
                 webcrypto_illegal_constructor_thunk as *const u8
@@ -1100,6 +1121,9 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         match name {
             "Array" => {
                 crate::closure::js_register_closure_rest(func_ptr, 0);
+            }
+            "Date" => {
+                crate::closure::js_register_closure_arity(func_ptr, 1);
             }
             "Object" | "String" | "Number" | "Boolean" | "BroadcastChannel" => {
                 crate::closure::js_register_closure_arity(func_ptr, 1);
@@ -2195,13 +2219,24 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                     ("toLocaleDateString", 0),
                     ("toLocaleString", 0),
                     ("toLocaleTimeString", 0),
-                    ("toString", 0),
                     ("toTimeString", 0),
                     ("toUTCString", 0),
                     ("valueOf", 0),
                 ],
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_proto_method(
+                proto_obj,
+                "isPrototypeOf",
+                object_prototype_is_prototype_of_thunk as *const u8,
+                1,
+            );
+            install_proto_method(
+                proto_obj,
+                "toString",
+                date_prototype_to_string_thunk as *const u8,
+                0,
+            );
         }
         "RegExp" => {
             install_noop_proto_methods(

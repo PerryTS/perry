@@ -430,23 +430,14 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                             let inner_obj = unwrap_ts(inner.obj.as_ref());
                             if let ast::Expr::Ident(cls_ident) = inner_obj {
                                 let cls_name = cls_ident.sym.to_string();
-                                // Prefer the LocalGet route whenever `<ident>`
-                                // resolves to a function-valued local — even
-                                // when a sibling FuncRef exists. The inner
-                                // function-decl path in `lower_decl.rs` emits
-                                // a `Stmt::Let { init: Some(Closure{…}) }`
-                                // that the matching `new M(args)` site reads
-                                // via the same LocalGet, so the closure value
-                                // at registration time and construct time
-                                // share NaN-boxed bits (the
-                                // `FUNCTION_CLASS_IDS` key). Routing through
-                                // FuncRef instead would emit a singleton
-                                // wrapper closure at the register site whose
-                                // pointer differs from the function-decl's
-                                // Let closure — registration and construct
-                                // would then key on different bits and
-                                // dispatch would miss.
-                                if ctx.lookup_class(&cls_name).is_some() {
+                                // Built-in Date has a real runtime prototype object;
+                                // Date.prototype writes must remain ordinary property sets.
+                                if cls_name == "Date"
+                                    && ctx.lookup_local(&cls_name).is_none()
+                                    && ctx.lookup_func(&cls_name).is_none()
+                                {
+                                    None
+                                } else if ctx.lookup_class(&cls_name).is_some() {
                                     Some(ProtoOwner::Class(cls_name))
                                 } else if let Some(local_id) = ctx.lookup_local(&cls_name) {
                                     if ctx.function_valued_locals.contains(&local_id) {
