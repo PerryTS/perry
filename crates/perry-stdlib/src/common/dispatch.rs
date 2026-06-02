@@ -376,8 +376,21 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // keep hash before net to avoid changing the priority of in-registry
     // matches relative to the v0.5.98/#88 ordering.
     #[cfg(feature = "crypto")]
-    if matches!(method_name, "update" | "digest" | "copy")
-        && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    if matches!(
+        method_name,
+        "update"
+            | "digest"
+            | "copy"
+            | "write"
+            | "end"
+            | "on"
+            | "once"
+            | "addListener"
+            | "pipe"
+            | "setEncoding"
+            | "destroy"
+            | "close"
+    ) && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_hash(handle, method_name, &args);
     }
@@ -386,8 +399,20 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // the runtime path the codegen falls back to whenever `alg` isn't a
     // literal `"sha256"`. See #1076 for the silent-empty bug this closes.
     #[cfg(feature = "crypto")]
-    if matches!(method_name, "update" | "digest")
-        && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    if matches!(
+        method_name,
+        "update"
+            | "digest"
+            | "write"
+            | "end"
+            | "on"
+            | "once"
+            | "addListener"
+            | "pipe"
+            | "setEncoding"
+            | "destroy"
+            | "close"
+    ) && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_hmac(handle, method_name, &args);
     }
@@ -1825,15 +1850,40 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     }
 
     #[cfg(feature = "crypto")]
-    if matches!(property_name, "update" | "digest" | "copy")
-        && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    if matches!(
+        property_name,
+        "update"
+            | "digest"
+            | "copy"
+            | "write"
+            | "end"
+            | "on"
+            | "once"
+            | "addListener"
+            | "pipe"
+            | "setEncoding"
+            | "destroy"
+            | "close"
+    ) && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_hash_property(handle, property_name);
     }
 
     #[cfg(feature = "crypto")]
-    if matches!(property_name, "update" | "digest")
-        && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    if matches!(
+        property_name,
+        "update"
+            | "digest"
+            | "write"
+            | "end"
+            | "on"
+            | "once"
+            | "addListener"
+            | "pipe"
+            | "setEncoding"
+            | "destroy"
+            | "close"
+    ) && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_hmac_property(handle, property_name);
     }

@@ -440,6 +440,27 @@ pub(super) fn pipe_stream_to_destination(stream: f64, dest: f64, end_dest: bool)
     dest
 }
 
+fn is_small_native_handle_destination(value: f64) -> bool {
+    let bits = value.to_bits();
+    if (bits >> 48) as u16 != 0x7FFD {
+        return false;
+    }
+    let raw = bits & 0x0000_FFFF_FFFF_FFFF;
+    raw > 0 && raw < 0x0010_0000
+}
+
+fn call_small_native_pipe_method(dest: f64, method: &'static [u8], args: &[f64]) -> f64 {
+    unsafe {
+        crate::object::js_native_call_method(
+            dest,
+            method.as_ptr() as *const i8,
+            method.len(),
+            args.as_ptr(),
+            args.len(),
+        )
+    }
+}
+
 pub(super) fn remove_pipe_no_end_destination_once(stream: f64, dest: f64) -> bool {
     let arr_value = pipe_no_end_destinations(stream);
     let arr = raw_ptr_from_value(arr_value) as *const crate::array::ArrayHeader;
@@ -526,6 +547,13 @@ pub(super) fn write_chunk_to_pipe_destinations(stream: f64, chunk: f64) {
         dests.push(crate::array::js_array_get_f64(arr, i));
     }
     for dest in dests {
+        if is_small_native_handle_destination(dest) {
+            let ret = call_small_native_pipe_method(dest, b"write", &[chunk]);
+            if ret.to_bits() == TAG_FALSE {
+                let _ = pause_readable_stream(stream);
+            }
+            continue;
+        }
         let ret = write_writable_chunk(
             dest,
             chunk,
@@ -552,6 +580,10 @@ pub(super) fn end_pipe_destinations(stream: f64) {
         dests.push(crate::array::js_array_get_f64(arr, i));
     }
     for dest in dests {
+        if is_small_native_handle_destination(dest) {
+            let _ = call_small_native_pipe_method(dest, b"end", &[]);
+            continue;
+        }
         if stream_destroyed(dest) || has_truthy_hidden(dest, hidden_finish_emitted_key()) {
             continue;
         }
