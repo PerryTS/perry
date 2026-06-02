@@ -45,6 +45,7 @@ pub fn parse_typescript_with_cache(
     filename: &str,
     cache: &mut SourceCache,
 ) -> Result<ParseResult> {
+    let parse_source = normalize_unicode_identifier_escapes(source);
     // Add the source to the cache
     let file_id = cache.add_file(filename, source.to_string());
 
@@ -52,7 +53,7 @@ pub fn parse_typescript_with_cache(
     let source_map: Lrc<SourceMap> = Default::default();
     let source_file = source_map.new_source_file(
         Lrc::new(FileName::Custom(filename.to_string())),
-        source.to_string(),
+        parse_source.clone(),
     );
 
     // Enable TSX parsing for .tsx files
@@ -109,10 +110,11 @@ pub fn parse_typescript_with_cache(
 /// This is the original parsing function for backward compatibility.
 /// For new code, prefer `parse_typescript_with_cache` for better diagnostics.
 pub fn parse_typescript(source: &str, filename: &str) -> Result<Module> {
+    let parse_source = normalize_unicode_identifier_escapes(source);
     let source_map: Lrc<SourceMap> = Default::default();
     let source_file = source_map.new_source_file(
         Lrc::new(FileName::Custom(filename.to_string())),
-        source.to_string(),
+        parse_source,
     );
 
     let is_tsx = filename.ends_with(".tsx");
@@ -142,6 +144,122 @@ pub fn parse_typescript(source: &str, filename: &str) -> Result<Module> {
     }
 
     Ok(module)
+}
+
+fn normalize_unicode_identifier_escapes(source: &str) -> String {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum State {
+        Code,
+        String(u8),
+        LineComment,
+        BlockComment,
+    }
+
+    fn hex_value(b: u8) -> Option<u32> {
+        match b {
+            b'0'..=b'9' => Some((b - b'0') as u32),
+            b'a'..=b'f' => Some((b - b'a' + 10) as u32),
+            b'A'..=b'F' => Some((b - b'A' + 10) as u32),
+            _ => None,
+        }
+    }
+
+    fn read_escape(bytes: &[u8], i: usize) -> Option<(char, usize)> {
+        if bytes.get(i) != Some(&b'\\') || bytes.get(i + 1) != Some(&b'u') {
+            return None;
+        }
+        if bytes.get(i + 2) == Some(&b'{') {
+            let mut j = i + 3;
+            let mut value = 0u32;
+            let mut saw_digit = false;
+            while let Some(&b) = bytes.get(j) {
+                if b == b'}' {
+                    if saw_digit {
+                        return char::from_u32(value).map(|ch| (ch, j + 1));
+                    }
+                    return None;
+                }
+                value = value.checked_mul(16)?.checked_add(hex_value(b)?)?;
+                saw_digit = true;
+                j += 1;
+            }
+            return None;
+        }
+        let mut value = 0u32;
+        for off in 2..6 {
+            value = value
+                .checked_mul(16)?
+                .checked_add(hex_value(*bytes.get(i + off)?)?)?;
+        }
+        char::from_u32(value).map(|ch| (ch, i + 6))
+    }
+
+    let bytes = source.as_bytes();
+    let mut out = String::with_capacity(source.len());
+    let mut i = 0;
+    let mut state = State::Code;
+    while i < bytes.len() {
+        match state {
+            State::Code => {
+                if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
+                    state = State::String(bytes[i]);
+                    out.push(bytes[i] as char);
+                    i += 1;
+                } else if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'/') {
+                    state = State::LineComment;
+                    out.push('/');
+                    out.push('/');
+                    i += 2;
+                } else if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
+                    state = State::BlockComment;
+                    out.push('/');
+                    out.push('*');
+                    i += 2;
+                } else if let Some((ch, next)) = read_escape(bytes, i) {
+                    out.push(ch);
+                    i = next;
+                } else {
+                    let ch = source[i..].chars().next().unwrap();
+                    out.push(ch);
+                    i += ch.len_utf8();
+                }
+            }
+            State::String(quote) => {
+                out.push(bytes[i] as char);
+                if bytes[i] == b'\\' {
+                    if let Some(&next) = bytes.get(i + 1) {
+                        out.push(next as char);
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                } else {
+                    if bytes[i] == quote {
+                        state = State::Code;
+                    }
+                    i += 1;
+                }
+            }
+            State::LineComment => {
+                out.push(bytes[i] as char);
+                if bytes[i] == b'\n' {
+                    state = State::Code;
+                }
+                i += 1;
+            }
+            State::BlockComment => {
+                out.push(bytes[i] as char);
+                if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                    out.push('/');
+                    i += 2;
+                    state = State::Code;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Utility to convert SWC span to our span type.
