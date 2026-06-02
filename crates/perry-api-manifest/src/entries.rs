@@ -2533,6 +2533,18 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[],
         TypeSpec::Any,
     ),
+    // Internal dispatch hooks for `worker_threads.locks.request/query`
+    // (#3328). These are reached through the value-shaped `locks`
+    // export rather than public top-level worker_threads named exports.
+    internal_method_sig(
+        "worker_threads",
+        "request",
+        false,
+        None,
+        &[p_any("p0"), p_any("p1"), p_any("p2")],
+        TypeSpec::Any,
+    ),
+    internal_method_sig("worker_threads", "query", false, None, &[], TypeSpec::Any),
     internal_method("worker_threads", "postMessage", true, None),
     method("worker_threads", "on", true, Some("Worker")),
     method("worker_threads", "once", true, Some("Worker")),
