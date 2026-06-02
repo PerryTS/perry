@@ -1443,6 +1443,28 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         user_fn_display_names.push((sym, display.clone()));
     }
 
+    // #4101: collect retained function source text, keyed by the same
+    // wrapper/closure symbol the name registration uses. Top-level functions
+    // always have a `__perry_wrap_<name>` global (emitted unconditionally
+    // above); inline closures only have a `perry_closure_*` global when
+    // materialized, so gate those on `materialized_closure_ids` to avoid
+    // referencing an undefined global (the #318/#343 clang-failure class).
+    let mut user_fn_source: Vec<(String, String)> = Vec::new();
+    for f in &hir.functions {
+        if let Some(src) = hir.closure_source_text.get(&f.id) {
+            if let Some(sym) = func_names.get(&f.id) {
+                user_fn_source.push((format!("__perry_wrap_{}", sym), src.clone()));
+            }
+        }
+    }
+    for (func_id, src) in &hir.closure_source_text {
+        if registered_fn_ids.contains(func_id) || !materialized_closure_ids.contains(func_id) {
+            continue;
+        }
+        let sym = format!("perry_closure_{}__{}", module_prefix, func_id);
+        user_fn_source.push((sym, src.clone()));
+    }
+
     emit_string_pool(
         llmod,
         strings,
@@ -1463,6 +1485,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         &user_fn_wrapper_generator,
         &user_fn_wrapper_async_generator,
         &user_fn_display_names,
+        &user_fn_source,
     );
 
     Ok(())

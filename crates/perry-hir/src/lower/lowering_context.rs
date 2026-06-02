@@ -181,6 +181,10 @@ pub struct LoweringContext {
     /// (static property key); flushed into `Module.closure_display_names`
     /// alongside `pending_functions`.
     pub(crate) closure_display_names: HashMap<FuncId, String>,
+    /// #4101: original source text keyed by FuncId, captured by slicing the
+    /// module source against each function's AST span at lowering time.
+    /// Flushed into `Module.closure_source_text` alongside `pending_functions`.
+    pub(crate) closure_source_text: HashMap<FuncId, String>,
     /// Functions that return native module instances: func_name -> (module_name, class_name)
     /// Tracks user-defined functions whose return type annotation is a native module type
     /// (e.g., initializePool(): mysql.Pool -> ("mysql2/promise", "Pool"))

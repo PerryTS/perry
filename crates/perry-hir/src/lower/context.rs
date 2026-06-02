@@ -67,6 +67,7 @@ impl LoweringContext {
             exportable_object_vars: HashSet::new(),
             pending_functions: Vec::new(),
             closure_display_names: HashMap::new(),
+            closure_source_text: HashMap::new(),
             func_return_native_instances: Vec::new(),
             pending_classes: Vec::new(),
             func_return_types: Vec::new(),

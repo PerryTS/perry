@@ -277,6 +277,16 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                     crate::symbol::js_symbol_to_string(value) as *mut crate::string::StringHeader
                 };
             }
+            // #4101: a function/closure stringifies to its source text via
+            // Function.prototype.toString — covers `String(fn)`, `` `${fn}` ``,
+            // and the codegen `fn.toString()` fast-path (which routes through
+            // `js_jsvalue_to_string_method`) rather than "[object Object]".
+            if crate::closure::is_closure_ptr(ptr as usize) {
+                let func_ptr =
+                    unsafe { (*(ptr as *const crate::closure::ClosureHeader)).func_ptr as usize };
+                let s = crate::builtins::function_source_for_func_ptr(func_ptr);
+                return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            }
             // Consult `[Symbol.toPrimitive]("string")` if the object has a
             // custom toPrimitive method registered in the symbol side-table.
             // A changed result means the user-defined method produced a

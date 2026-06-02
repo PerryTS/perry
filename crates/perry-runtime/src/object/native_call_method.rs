@@ -853,6 +853,16 @@ pub unsafe extern "C" fn js_native_call_method(
     }
 
     if method_name == "toString" && jsval.is_pointer() {
+        // #4101: `fn.toString()` — reconstruct the function's source from the
+        // codegen-registered text (or a synthesized native form), rather than
+        // falling through to the generic `"[object Object]"`.
+        let raw_addr = crate::value::js_nanbox_get_pointer(object) as usize;
+        if crate::closure::is_closure_ptr(raw_addr) {
+            let func_ptr = (*(raw_addr as *const crate::closure::ClosureHeader)).func_ptr as usize;
+            let s = crate::builtins::function_source_for_func_ptr(func_ptr);
+            let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
+        }
         let raw = crate::value::js_nanbox_get_pointer(object) as *const u8;
         if !raw.is_null() && crate::object::is_valid_obj_ptr(raw) {
             unsafe {
