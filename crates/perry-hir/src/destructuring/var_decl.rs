@@ -274,6 +274,8 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         obj_inner = match obj_inner {
                                             ast::Expr::TsAs(x) => &x.expr,
                                             ast::Expr::TsNonNull(x) => &x.expr,
+                                            ast::Expr::TsSatisfies(x) => &x.expr,
+                                            ast::Expr::TsTypeAssertion(x) => &x.expr,
                                             ast::Expr::TsConstAssertion(x) => &x.expr,
                                             ast::Expr::Paren(x) => &x.expr,
                                             _ => break,
@@ -447,6 +449,8 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         obj_inner = match obj_inner {
                                             ast::Expr::TsAs(x) => &x.expr,
                                             ast::Expr::TsNonNull(x) => &x.expr,
+                                            ast::Expr::TsSatisfies(x) => &x.expr,
+                                            ast::Expr::TsTypeAssertion(x) => &x.expr,
                                             ast::Expr::TsConstAssertion(x) => &x.expr,
                                             ast::Expr::Paren(x) => &x.expr,
                                             _ => break,

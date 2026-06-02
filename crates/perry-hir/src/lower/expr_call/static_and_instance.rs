@@ -99,6 +99,21 @@ pub(super) fn try_static_method_and_instance(
                 match &member.prop {
                     ast::MemberProp::Ident(method_ident) => {
                         let method_name = method_ident.sym.to_string();
+                        let is_readable_stream_from = method_name == "from"
+                            && (matches!(
+                                ctx.lookup_native_module(&obj_name),
+                                Some(("stream/web", Some("ReadableStream")))
+                                    | Some(("node:stream/web", Some("ReadableStream")))
+                            ) || (obj_name == "ReadableStream" && is_imported_upper));
+                        if is_readable_stream_from {
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "readable_stream".to_string(),
+                                class_name: Some("ReadableStream".to_string()),
+                                object: None,
+                                method: "from".to_string(),
+                                args,
+                            }));
+                        }
                         if ctx.has_static_method(&obj_name, &method_name) || is_imported_upper {
                             return Ok(Ok(Expr::StaticMethodCall {
                                 class_name: obj_name,

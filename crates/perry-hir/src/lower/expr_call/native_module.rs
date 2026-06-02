@@ -70,6 +70,24 @@ pub(super) fn try_native_module_methods(
         if let ast::Expr::Ident(obj_ident) = unwrap_ts_wrappers(member.obj.as_ref()) {
             let obj_name = obj_ident.sym.to_string();
 
+            if matches!(
+                ctx.lookup_native_module(&obj_name),
+                Some(("stream/web", Some("ReadableStream")))
+                    | Some(("node:stream/web", Some("ReadableStream")))
+            ) {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    if method_ident.sym.as_ref() == "from" {
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "readable_stream".to_string(),
+                            class_name: Some("ReadableStream".to_string()),
+                            object: None,
+                            method: "from".to_string(),
+                            args,
+                        }));
+                    }
+                }
+            }
+
             // Check for process module methods
             if obj_name == "process" {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {

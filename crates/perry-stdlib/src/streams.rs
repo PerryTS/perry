@@ -19,10 +19,8 @@
 //! fetch path eagerly buffers the whole response anyway, so the user-
 //! visible contract is identical for the consumers we expose here.
 //!
-//! Stubs: BYOB readers, full custom `QueuingStrategy` size accounting, and
-//! `ReadableStream.from(asyncIterable)` throw via
-//! `js_streams_throw_not_implemented` — see the inline comment on each
-//! site.
+//! Stubs: BYOB readers and full custom `QueuingStrategy` size accounting —
+//! see the inline comment on each site.
 
 use perry_runtime::{
     js_array_alloc, js_array_push, js_closure_call0, js_closure_call1, js_closure_call2,
@@ -31,6 +29,7 @@ use perry_runtime::{
     js_promise_resolve, js_string_from_bytes, ClosureHeader, JSValue, ObjectHeader, Promise,
 };
 use std::collections::{HashMap, VecDeque};
+use std::os::raw::c_int;
 use std::sync::Mutex;
 
 mod pipe;
@@ -77,6 +76,7 @@ struct ReadableStreamData {
     started: bool,
     reader_handle: Option<usize>,
     error_value: u64,
+    pending_error_after_chunks: Option<u64>,
     /// Per-controller cancel reason captured when `cancel()` is called.
     canceled: bool,
 }
@@ -194,6 +194,9 @@ fn scan_stream_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>
             }
             if s.state == ReadableState::Errored {
                 visit_stream_value_slot(visitor, &mut s.error_value);
+            }
+            if let Some(error) = &mut s.pending_error_after_chunks {
+                visit_stream_value_slot(visitor, error);
             }
         }
     }
@@ -403,6 +406,7 @@ fn alloc_readable_with_strategy(
             started: false,
             reader_handle: None,
             error_value: 0,
+            pending_error_after_chunks: None,
             canceled: false,
         },
     );
@@ -719,6 +723,7 @@ pub unsafe extern "C" fn js_readable_stream_get_reader_with_options(
     stream_handle: f64,
     options: f64,
 ) -> f64 {
+    let stream_handle = js_stream_unwrap_handle(stream_handle);
     let byob_requested = option_string_equals(options, b"mode", b"byob");
     let id = stream_handle as usize;
     if byob_requested {
@@ -913,25 +918,200 @@ unsafe fn chunks_from_sync_iterable(value: f64) -> Option<Vec<u64>> {
     Some(chunks_from_array_ptr(arr))
 }
 
+struct ReadableFromSource {
+    chunks: Vec<u64>,
+    error: Option<u64>,
+}
+
+impl ReadableFromSource {
+    fn closed(chunks: Vec<u64>) -> Self {
+        Self {
+            chunks,
+            error: None,
+        }
+    }
+}
+
+enum SettledValue {
+    Fulfilled(f64),
+    Rejected(u64),
+    Pending,
+}
+
+unsafe fn is_callable_value(value: f64) -> bool {
+    let raw = js_nanbox_get_pointer(value);
+    raw >= 0x10000 && perry_runtime::closure::is_closure_ptr(raw as usize)
+}
+
+unsafe fn call_symbol_async_iterator(value: f64) -> Option<f64> {
+    let sym = perry_runtime::symbol::well_known_symbol("asyncIterator");
+    if sym.is_null() {
+        return None;
+    }
+    let sym_value = f64::from_bits(JSValue::pointer(sym as *const u8).bits());
+    let method = perry_runtime::symbol::js_object_get_symbol_property(value, sym_value);
+    if !is_callable_value(method) {
+        return None;
+    }
+    let prev_this = perry_runtime::object::js_implicit_this_set(value);
+    let iterator = perry_runtime::closure::js_native_call_value(method, std::ptr::null(), 0);
+    perry_runtime::object::js_implicit_this_set(prev_this);
+    if iterator.to_bits() == TAG_UNDEFINED {
+        None
+    } else {
+        Some(iterator)
+    }
+}
+
+unsafe fn has_iterator_next(value: f64) -> bool {
+    let ptr = js_nanbox_get_pointer(value);
+    if ptr == 0 {
+        return false;
+    }
+    let obj = ptr as *const ObjectHeader;
+    let next_key = js_string_from_bytes(b"next".as_ptr(), 4);
+    let next = js_object_get_field_by_name(obj, next_key);
+    is_callable_value(f64::from_bits(next.bits()))
+}
+
+unsafe fn await_maybe_promise(value: f64) -> SettledValue {
+    if perry_runtime::promise::js_value_is_promise(value) == 0 {
+        return SettledValue::Fulfilled(value);
+    }
+    let promise = js_nanbox_get_pointer(value) as *mut Promise;
+    if promise.is_null() {
+        return SettledValue::Fulfilled(value);
+    }
+
+    for _ in 0..100_000 {
+        if perry_runtime::promise::js_promise_state(promise) != 0 {
+            break;
+        }
+        if perry_runtime::promise::js_promise_run_microtasks() == 0 {
+            break;
+        }
+    }
+
+    match perry_runtime::promise::js_promise_state(promise) {
+        1 => SettledValue::Fulfilled(perry_runtime::promise::js_promise_value(promise)),
+        2 => SettledValue::Rejected(perry_runtime::promise::js_promise_reason(promise).to_bits()),
+        _ => SettledValue::Pending,
+    }
+}
+
+unsafe fn call_iterator_next(iterator: f64) -> Option<f64> {
+    let iter_ptr = js_nanbox_get_pointer(iterator);
+    if iter_ptr == 0 {
+        return None;
+    }
+    let iter_obj = iter_ptr as *const ObjectHeader;
+    let next_key = js_string_from_bytes(b"next".as_ptr(), 4);
+    let next_val = js_object_get_field_by_name(iter_obj, next_key);
+    let next = f64::from_bits(next_val.bits());
+    if is_callable_value(next) {
+        let prev_this = perry_runtime::object::js_implicit_this_set(iterator);
+        let result = perry_runtime::closure::js_native_call_value(next, std::ptr::null(), 0);
+        perry_runtime::object::js_implicit_this_set(prev_this);
+        Some(result)
+    } else {
+        Some(perry_runtime::object::js_native_call_method(
+            iterator,
+            b"next".as_ptr() as *const i8,
+            4,
+            std::ptr::null(),
+            0,
+        ))
+    }
+}
+
+unsafe fn try_call_iterator_next(iterator: f64) -> Result<Option<f64>, u64> {
+    let trap_buf = perry_runtime::exception::js_try_push();
+    let jumped = perry_runtime::ffi::setjmp::setjmp(trap_buf as *mut c_int);
+    if jumped == 0 {
+        let step = call_iterator_next(iterator);
+        perry_runtime::exception::js_try_end();
+        Ok(step)
+    } else {
+        let err = perry_runtime::exception::js_get_exception();
+        perry_runtime::exception::js_clear_exception();
+        perry_runtime::exception::js_try_end();
+        Err(err.to_bits())
+    }
+}
+
+unsafe fn chunks_from_async_iterable(value: f64) -> Option<ReadableFromSource> {
+    let iterator = if let Some(iterator) = call_symbol_async_iterator(value) {
+        iterator
+    } else if has_iterator_next(value) {
+        value
+    } else {
+        return None;
+    };
+    let done_key = js_string_from_bytes(b"done".as_ptr(), 4);
+    let value_key = js_string_from_bytes(b"value".as_ptr(), 5);
+    let mut chunks = Vec::new();
+
+    for _ in 0..100_000 {
+        let step = match try_call_iterator_next(iterator) {
+            Ok(Some(step)) => step,
+            Ok(None) => break,
+            Err(reason) => {
+                return Some(ReadableFromSource {
+                    chunks,
+                    error: Some(reason),
+                });
+            }
+        };
+        let step_result = match await_maybe_promise(step) {
+            SettledValue::Fulfilled(result) => result,
+            SettledValue::Rejected(reason) => {
+                return Some(ReadableFromSource {
+                    chunks,
+                    error: Some(reason),
+                });
+            }
+            SettledValue::Pending => break,
+        };
+        let result_ptr = js_nanbox_get_pointer(step_result);
+        if result_ptr == 0 {
+            break;
+        }
+        let result_obj = result_ptr as *const ObjectHeader;
+        let done_val = js_object_get_field_by_name(result_obj, done_key);
+        let done = f64::from_bits(done_val.bits());
+        if perry_runtime::value::js_is_truthy(done) != 0 {
+            break;
+        }
+        let item = js_object_get_field_by_name(result_obj, value_key);
+        chunks.push(item.bits());
+    }
+
+    Some(ReadableFromSource::closed(chunks))
+}
+
 /// `ReadableStream.from(iterable)` (Node 20+, #1645) — build a Web
-/// ReadableStream pre-loaded with the iterable's items, then closed. Each
-/// element becomes one chunk so `getReader().read()` / `for await` yield them
-/// in order, then `done`.
+/// ReadableStream pre-loaded with the iterable's items, then closed. Async
+/// iterators preserve a terminal rejection after any chunks already yielded.
+/// Each element becomes one chunk so `getReader().read()` / `for await` yield
+/// them in order, then `done`.
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
     ensure_gc_registered();
     let ptr_addr = ptr_addr_from_nanbox(value);
 
-    let chunks: Vec<u64> = if perry_runtime::array::js_array_is_array(value).to_bits() == TAG_TRUE {
+    let source = if let Some(source) = chunks_from_async_iterable(value) {
+        source
+    } else if perry_runtime::array::js_array_is_array(value).to_bits() == TAG_TRUE {
         let arr_ptr = ptr_addr.unwrap_or(0) as *const perry_runtime::ArrayHeader;
-        chunks_from_array_ptr(arr_ptr)
+        ReadableFromSource::closed(chunks_from_array_ptr(arr_ptr))
     } else if let Some(addr) = ptr_addr {
         if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
             let ta = addr as *const perry_runtime::typedarray::TypedArrayHeader;
             let len = perry_runtime::typedarray::js_typed_array_length(ta).max(0);
-            (0..len)
+            let chunks = (0..len)
                 .map(|i| perry_runtime::typedarray::js_typed_array_get(ta, i).to_bits())
-                .collect()
+                .collect();
+            ReadableFromSource::closed(chunks)
         } else if perry_runtime::buffer::is_registered_buffer(addr)
             && !perry_runtime::buffer::is_any_array_buffer(addr)
             && !perry_runtime::buffer::is_data_view(addr)
@@ -939,9 +1119,10 @@ pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
             let buf = addr as *const perry_runtime::buffer::BufferHeader;
             let len = (*buf).length as usize;
             let data = perry_runtime::buffer::buffer_data(buf);
-            (0..len).map(|i| (*data.add(i) as f64).to_bits()).collect()
+            let chunks = (0..len).map(|i| (*data.add(i) as f64).to_bits()).collect();
+            ReadableFromSource::closed(chunks)
         } else if let Some(chunks) = chunks_from_sync_iterable(value) {
-            chunks
+            ReadableFromSource::closed(chunks)
         } else {
             throw_type_error("ReadableStream.from requires an iterable");
         }
@@ -953,9 +1134,19 @@ pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
     {
         let mut g = READABLE_STREAMS.lock().unwrap();
         if let Some(s) = g.get_mut(&id) {
-            s.chunks.extend(chunks);
+            s.chunks.extend(source.chunks);
             s.started = true;
-            s.state = ReadableState::Closed;
+            if let Some(error) = source.error {
+                if s.chunks.is_empty() {
+                    s.state = ReadableState::Errored;
+                    s.error_value = error;
+                } else {
+                    s.state = ReadableState::Readable;
+                    s.pending_error_after_chunks = Some(error);
+                }
+            } else {
+                s.state = ReadableState::Closed;
+            }
         }
     }
     id as f64
@@ -1000,6 +1191,7 @@ unsafe fn error_readable_stream(stream_id: usize, reason_bits: u64) {
             Some(s) => {
                 s.state = ReadableState::Errored;
                 s.error_value = reason_bits;
+                s.pending_error_after_chunks = None;
                 s.chunks.clear();
                 s.reader_handle
             }
@@ -1086,6 +1278,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_close(stream_handle: f64)
         if let Some(s) = g.get_mut(&id) {
             if s.state == ReadableState::Readable {
                 s.state = ReadableState::Closed;
+                s.pending_error_after_chunks = None;
             }
         }
     }
@@ -1136,9 +1329,71 @@ pub unsafe extern "C" fn js_readable_stream_controller_desired_size(stream_handl
 // ReadableStreamDefaultReader FFI
 // ─────────────────────────────────────────────────────────────────────
 
+extern "C" fn readable_from_chunk_fulfilled(closure: *const ClosureHeader, value: f64) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let promise = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    unsafe {
+        let result = build_iter_result(value.to_bits(), false);
+        js_promise_resolve(promise, f64::from_bits(result));
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn readable_from_chunk_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let promise = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    js_promise_reject(promise, reason);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+unsafe fn resolve_reader_read_value(promise: *mut Promise, value_bits: u64) {
+    let value = f64::from_bits(value_bits);
+    if perry_runtime::promise::js_value_is_promise(value) == 0 {
+        let result = build_iter_result(value_bits, false);
+        js_promise_resolve(promise, f64::from_bits(result));
+        return;
+    }
+
+    let inner = js_nanbox_get_pointer(value) as *mut Promise;
+    if inner.is_null() {
+        let result = build_iter_result(value_bits, false);
+        js_promise_resolve(promise, f64::from_bits(result));
+        return;
+    }
+
+    match perry_runtime::promise::js_promise_state(inner) {
+        1 => {
+            let value = perry_runtime::promise::js_promise_value(inner);
+            let result = build_iter_result(value.to_bits(), false);
+            js_promise_resolve(promise, f64::from_bits(result));
+        }
+        2 => {
+            js_promise_reject(promise, perry_runtime::promise::js_promise_reason(inner));
+        }
+        _ => {
+            let fulfill = perry_runtime::closure::js_closure_alloc(
+                readable_from_chunk_fulfilled as *const u8,
+                1,
+            );
+            let reject = perry_runtime::closure::js_closure_alloc(
+                readable_from_chunk_rejected as *const u8,
+                1,
+            );
+            perry_runtime::closure::js_closure_set_capture_ptr(fulfill, 0, promise as i64);
+            perry_runtime::closure::js_closure_set_capture_ptr(reject, 0, promise as i64);
+            let _ = perry_runtime::promise::js_promise_then(inner, fulfill, reject);
+        }
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
     let promise = js_promise_new();
+    let reader_handle = js_stream_unwrap_handle(reader_handle);
     let reader_id = reader_handle as usize;
     let stream_id = match READERS.lock().unwrap().get(&reader_id) {
         Some(r) if r.locked => r.stream_handle,
@@ -1153,11 +1408,21 @@ pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
             return promise;
         }
     };
+    let mut closed_rejection: Option<(usize, u64)> = None;
     let outcome: Option<(u64, bool, bool)> = {
         let mut g = READABLE_STREAMS.lock().unwrap();
         match g.get_mut(&stream_id) {
             Some(s) => {
                 if let Some(c) = s.chunks.pop_front() {
+                    if s.chunks.is_empty() {
+                        if let Some(error) = s.pending_error_after_chunks.take() {
+                            s.state = ReadableState::Errored;
+                            s.error_value = error;
+                            if let Some(reader_id) = s.reader_handle {
+                                closed_rejection = Some((reader_id, error));
+                            }
+                        }
+                    }
                     Some((c, false, false))
                 } else if s.state == ReadableState::Closed {
                     Some((TAG_UNDEFINED, true, false))
@@ -1171,13 +1436,27 @@ pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
             None => Some((TAG_UNDEFINED, true, false)),
         }
     };
+    if let Some((reader_id, reason)) = closed_rejection {
+        let p = READERS
+            .lock()
+            .unwrap()
+            .get(&reader_id)
+            .map(|r| r.closed_promise);
+        if let Some(p) = p {
+            js_promise_reject(p, f64::from_bits(reason));
+        }
+    }
     match outcome {
         Some((value, _, true)) => {
             js_promise_reject(promise, f64::from_bits(value));
         }
         Some((value, done, false)) => {
-            let result = build_iter_result(value, done);
-            js_promise_resolve(promise, f64::from_bits(result));
+            if done {
+                let result = build_iter_result(value, true);
+                js_promise_resolve(promise, f64::from_bits(result));
+            } else {
+                resolve_reader_read_value(promise, value);
+            }
         }
         None => {}
     }
@@ -1379,6 +1658,7 @@ pub unsafe extern "C" fn js_readable_stream_tee(stream_handle: f64) -> f64 {
                     started: true,
                     reader_handle: None,
                     error_value: 0,
+                    pending_error_after_chunks: None,
                     canceled: false,
                 },
             );
@@ -2508,6 +2788,7 @@ mod tests {
                     started: false,
                     reader_handle: None,
                     error_value: 0x7FFF_0000_0000_4567,
+                    pending_error_after_chunks: None,
                     canceled: false,
                 },
             );
