@@ -1125,8 +1125,24 @@ pub(super) unsafe fn ensure_key_in_keys_array(
     let _owned_keys = owned_keys_handle.get_raw_mut_ptr::<ArrayHeader>();
     refresh_define_property_roots!();
     set_object_keys_array(obj, new_keys);
+    // `field_count` is the inline/overflow boundary consulted by the read path
+    // (`js_object_get_field`: index < field_count ⇒ read inline slot, else the
+    // overflow map). It must never exceed the object's physically-allocated
+    // inline capacity, which is `max(field_count, 8)` (see `js_object_alloc`).
+    // Only bump it when this key genuinely lands in an in-bounds inline slot.
+    //
+    // A keys-only entry — a built-in accessor like `Map.prototype.size`, or a
+    // key whose data spilled to the overflow map — must NOT push field_count
+    // past the inline region. Doing so reclassifies already-overflowed (or
+    // out-of-bounds) slots as inline, so later reads dereference past the
+    // allocation into adjacent-heap garbage. That is what made
+    // `Map.prototype.set` / `.values` read back as raw non-pointer values and
+    // crash the reflective `.call` dispatch (#4099): installing the `size`
+    // getter here bumped field_count from 8 (the proto's physical capacity) to
+    // 11, exposing the overflowed `values` slot and corrupting the boundary.
     let new_index = key_count as u32;
-    if new_index >= (*obj).field_count {
+    let inline_capacity = std::cmp::max((*obj).field_count, 8);
+    if new_index < inline_capacity && new_index >= (*obj).field_count {
         (*obj).field_count = new_index + 1;
     }
 }
