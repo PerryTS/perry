@@ -342,6 +342,458 @@ fn module_set_field(obj: *mut crate::object::ObjectHeader, name: &str, value: f6
     crate::object::js_object_set_field_by_name(obj, key, value);
 }
 
+extern "C" fn module_source_map_noop(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn module_noop_function(name: &str) -> f64 {
+    let func_ptr = module_source_map_noop as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    crate::object::set_bound_native_closure_name(closure, name);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+fn module_array_value(items: &[&str]) -> f64 {
+    let arr = crate::array::js_array_alloc_with_length(items.len() as u32);
+    for (i, item) in items.iter().enumerate() {
+        crate::array::js_array_set_f64(arr, i as u32, module_string_value(item));
+    }
+    f64::from_bits(JSValue::array_ptr(arr).bits())
+}
+
+fn module_set_value(items: &[&str]) -> f64 {
+    let mut set = crate::set::js_set_alloc(items.len() as u32);
+    for item in items {
+        set = crate::set::js_set_add(set, module_string_value(item));
+    }
+    crate::value::js_nanbox_pointer(set as i64)
+}
+
+fn process_argv0_string() -> String {
+    std::env::args().next().unwrap_or_default()
+}
+
+fn node_arch_name() -> &'static str {
+    match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        "arm" => "arm",
+        "x86" | "i386" | "i686" => "ia32",
+        "powerpc64" => "ppc64",
+        "riscv64" => "riscv64",
+        "s390x" => "s390x",
+        _ => std::env::consts::ARCH,
+    }
+}
+
+fn process_release_value() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 3);
+    module_set_field(obj, "name", module_string_value("node"));
+    module_set_field(obj, "sourceUrl", module_string_value(""));
+    module_set_field(obj, "headersUrl", module_string_value(""));
+    module_object_value(obj)
+}
+
+fn process_features_value() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 13);
+    module_set_field(obj, "inspector", bool_value(false));
+    module_set_field(obj, "debug", bool_value(false));
+    module_set_field(obj, "uv", bool_value(true));
+    module_set_field(obj, "ipv6", bool_value(true));
+    module_set_field(obj, "tls_alpn", bool_value(true));
+    module_set_field(obj, "tls_sni", bool_value(true));
+    module_set_field(obj, "tls_ocsp", bool_value(true));
+    module_set_field(obj, "tls", bool_value(true));
+    module_set_field(obj, "openssl_is_boringssl", bool_value(false));
+    module_set_field(obj, "cached_builtins", bool_value(false));
+    module_set_field(obj, "require_module", bool_value(false));
+    module_set_field(obj, "quic", bool_value(false));
+    module_set_field(obj, "typescript", module_string_value("transform"));
+    module_object_value(obj)
+}
+
+fn process_finalization_value() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 3);
+    module_set_field(obj, "register", module_noop_function("register"));
+    module_set_field(
+        obj,
+        "registerBeforeExit",
+        module_noop_function("registerBeforeExit"),
+    );
+    module_set_field(obj, "unregister", module_noop_function("unregister"));
+    module_object_value(obj)
+}
+
+fn process_report_value() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 11);
+    module_set_field(obj, "compact", bool_value(false));
+    module_set_field(obj, "directory", module_string_value(""));
+    module_set_field(obj, "excludeEnv", bool_value(false));
+    module_set_field(obj, "excludeNetwork", bool_value(false));
+    module_set_field(obj, "filename", module_string_value(""));
+    module_set_field(obj, "getReport", module_noop_function("getReport"));
+    module_set_field(obj, "reportOnFatalError", bool_value(false));
+    module_set_field(obj, "reportOnSignal", bool_value(false));
+    module_set_field(obj, "reportOnUncaughtException", bool_value(false));
+    module_set_field(obj, "signal", module_string_value("SIGUSR2"));
+    module_set_field(obj, "writeReport", module_noop_function("writeReport"));
+    module_object_value(obj)
+}
+
+fn process_config_value() -> f64 {
+    let config = crate::object::js_object_alloc(0, 2);
+    let variables = crate::object::js_object_alloc(0, 10);
+    let target_defaults = crate::object::js_object_alloc(0, 7);
+    let configurations = crate::object::js_object_alloc(0, 1);
+
+    module_set_field(
+        variables,
+        "target_arch",
+        module_string_value(node_arch_name()),
+    );
+    module_set_field(
+        variables,
+        "host_arch",
+        module_string_value(node_arch_name()),
+    );
+    module_set_field(variables, "node_module_version", 141.0);
+    module_set_field(variables, "node_shared_openssl", bool_value(false));
+    module_set_field(variables, "node_use_openssl", bool_value(true));
+    module_set_field(variables, "node_use_node_code_cache", bool_value(false));
+    module_set_field(variables, "node_use_node_snapshot", bool_value(false));
+    module_set_field(variables, "v8_enable_i18n_support", 1.0);
+    module_set_field(variables, "v8_enable_pointer_compression", 0.0);
+    module_set_field(variables, "uv_parent_path", module_string_value(""));
+
+    module_set_field(target_defaults, "cflags", module_array_value(&[]));
+    module_set_field(target_defaults, "conditions", module_array_value(&[]));
+    module_set_field(target_defaults, "defines", module_array_value(&[]));
+    module_set_field(target_defaults, "include_dirs", module_array_value(&[]));
+    module_set_field(target_defaults, "libraries", module_array_value(&[]));
+    module_set_field(
+        target_defaults,
+        "default_configuration",
+        module_string_value("Release"),
+    );
+    module_set_field(
+        configurations,
+        "Release",
+        module_object_value(crate::object::js_object_alloc(0, 0)),
+    );
+    module_set_field(
+        target_defaults,
+        "configurations",
+        module_object_value(configurations),
+    );
+
+    module_set_field(config, "variables", module_object_value(variables));
+    module_set_field(
+        config,
+        "target_defaults",
+        module_object_value(target_defaults),
+    );
+    module_object_value(config)
+}
+
+fn process_allowed_flags_value() -> f64 {
+    const FLAGS: &[&str] = &[
+        "--abort-on-uncaught-exception",
+        "--addons",
+        "--allow-addons",
+        "--allow-child-process",
+        "--allow-fs-read",
+        "--allow-fs-write",
+        "--allow-inspector",
+        "--allow-net",
+        "--allow-wasi",
+        "--allow-worker",
+        "--async-context-frame",
+        "--conditions",
+        "--cpu-prof",
+        "--cpu-prof-dir",
+        "--cpu-prof-interval",
+        "--cpu-prof-name",
+        "--debug-arraybuffer-allocations",
+        "--debug-port",
+        "--deprecation",
+        "--diagnostic-dir",
+        "--disable-proto",
+        "--disable-sigusr1",
+        "--disable-warning",
+        "--disable-wasm-trap-handler",
+        "--disallow-code-generation-from-strings",
+        "--dns-result-order",
+        "--enable-etw-stack-walking",
+        "--enable-fips",
+        "--enable-network-family-autoselection",
+        "--enable-source-maps",
+        "--entry-url",
+        "--es-module-specifier-resolution",
+        "--experimental-abortcontroller",
+        "--experimental-addon-modules",
+        "--experimental-detect-module",
+        "--experimental-eventsource",
+        "--experimental-fetch",
+        "--experimental-global-customevent",
+        "--experimental-global-navigator",
+        "--experimental-global-webcrypto",
+        "--experimental-import-meta-resolve",
+        "--experimental-json-modules",
+        "--experimental-loader",
+        "--experimental-modules",
+        "--experimental-print-required-tla",
+        "--experimental-quic",
+        "--experimental-repl-await",
+        "--experimental-report",
+        "--experimental-require-module",
+        "--experimental-shadow-realm",
+        "--experimental-specifier-resolution",
+        "--experimental-sqlite",
+        "--experimental-strip-types",
+        "--experimental-test-isolation",
+        "--experimental-top-level-await",
+        "--experimental-transform-types",
+        "--experimental-vm-modules",
+        "--experimental-wasi-unstable-preview1",
+        "--experimental-wasm-modules",
+        "--experimental-websocket",
+        "--experimental-webstorage",
+        "--experimental-worker",
+        "--expose-gc",
+        "--extra-info-on-fatal-exception",
+        "--force-async-hooks-checks",
+        "--force-context-aware",
+        "--force-fips",
+        "--force-node-api-uncaught-exceptions-policy",
+        "--frozen-intrinsics",
+        "--global-search-paths",
+        "--heap-prof",
+        "--heap-prof-dir",
+        "--heap-prof-interval",
+        "--heap-prof-name",
+        "--heapsnapshot-near-heap-limit",
+        "--heapsnapshot-signal",
+        "--http-parser",
+        "--icu-data-dir",
+        "--import",
+        "--input-type",
+        "--insecure-http-parser",
+        "--inspect",
+        "--inspect-brk",
+        "--inspect-port",
+        "--inspect-publish-uid",
+        "--inspect-wait",
+        "--interpreted-frames-native-stack",
+        "--jitless",
+        "--loader",
+        "--localstorage-file",
+        "--max-http-header-size",
+        "--max-old-space-size",
+        "--max-old-space-size-percentage",
+        "--max-semi-space-size",
+        "--napi-modules",
+        "--network-family-autoselection",
+        "--network-family-autoselection-attempt-timeout",
+        "--no-addons",
+        "--no-allow-addons",
+        "--no-allow-child-process",
+        "--no-allow-inspector",
+        "--no-allow-net",
+        "--no-allow-wasi",
+        "--no-allow-worker",
+        "--no-async-context-frame",
+        "--no-cpu-prof",
+        "--no-debug-arraybuffer-allocations",
+        "--no-deprecation",
+        "--no-disable-sigusr1",
+        "--no-disable-wasm-trap-handler",
+        "--no-enable-fips",
+        "--no-enable-source-maps",
+        "--no-entry-url",
+        "--no-experimental-addon-modules",
+        "--no-experimental-detect-module",
+        "--no-experimental-eventsource",
+        "--no-experimental-global-navigator",
+        "--no-experimental-import-meta-resolve",
+        "--no-experimental-print-required-tla",
+        "--no-experimental-repl-await",
+        "--no-experimental-require-module",
+        "--no-experimental-shadow-realm",
+        "--no-experimental-sqlite",
+        "--no-experimental-transform-types",
+        "--no-experimental-vm-modules",
+        "--no-experimental-websocket",
+        "--no-experimental-webstorage",
+        "--no-extra-info-on-fatal-exception",
+        "--no-force-async-hooks-checks",
+        "--no-force-context-aware",
+        "--no-force-fips",
+        "--no-force-node-api-uncaught-exceptions-policy",
+        "--no-frozen-intrinsics",
+        "--no-global-search-paths",
+        "--no-heap-prof",
+        "--no-insecure-http-parser",
+        "--no-inspect",
+        "--no-inspect-brk",
+        "--no-inspect-wait",
+        "--no-network-family-autoselection",
+        "--no-node-snapshot",
+        "--no-openssl-legacy-provider",
+        "--no-openssl-shared-config",
+        "--no-pending-deprecation",
+        "--no-permission",
+        "--no-permission-audit",
+        "--no-preserve-symlinks",
+        "--no-preserve-symlinks-main",
+        "--no-report-compact",
+        "--no-report-exclude-env",
+        "--no-report-exclude-network",
+        "--no-report-on-fatalerror",
+        "--no-report-on-signal",
+        "--no-report-uncaught-exception",
+        "--no-require-module",
+        "--no-strip-types",
+        "--no-test-only",
+        "--no-throw-deprecation",
+        "--no-tls-max-v1.2",
+        "--no-tls-max-v1.3",
+        "--no-tls-min-v1.0",
+        "--no-tls-min-v1.1",
+        "--no-tls-min-v1.2",
+        "--no-tls-min-v1.3",
+        "--no-trace-deprecation",
+        "--no-trace-env",
+        "--no-trace-env-js-stack",
+        "--no-trace-env-native-stack",
+        "--no-trace-exit",
+        "--no-trace-promises",
+        "--no-trace-sigint",
+        "--no-trace-sync-io",
+        "--no-trace-tls",
+        "--no-trace-uncaught",
+        "--no-trace-warnings",
+        "--no-track-heap-objects",
+        "--no-use-bundled-ca",
+        "--no-use-env-proxy",
+        "--no-use-openssl-ca",
+        "--no-use-system-ca",
+        "--no-verify-base-objects",
+        "--no-warnings",
+        "--no-watch",
+        "--no-watch-preserve-output",
+        "--no-zero-fill-buffers",
+        "--node-memory-debug",
+        "--node-snapshot",
+        "--openssl-config",
+        "--openssl-legacy-provider",
+        "--openssl-shared-config",
+        "--pending-deprecation",
+        "--perf-basic-prof",
+        "--perf-basic-prof-only-functions",
+        "--perf-prof",
+        "--perf-prof-unwinding-info",
+        "--permission",
+        "--permission-audit",
+        "--preserve-symlinks",
+        "--preserve-symlinks-main",
+        "--prof-process",
+        "--redirect-warnings",
+        "--report-compact",
+        "--report-dir",
+        "--report-directory",
+        "--report-exclude-env",
+        "--report-exclude-network",
+        "--report-filename",
+        "--report-on-fatalerror",
+        "--report-on-signal",
+        "--report-signal",
+        "--report-uncaught-exception",
+        "--require",
+        "--require-module",
+        "--secure-heap",
+        "--secure-heap-min",
+        "--snapshot-blob",
+        "--stack-trace-limit",
+        "--strip-types",
+        "--test-coverage-branches",
+        "--test-coverage-exclude",
+        "--test-coverage-functions",
+        "--test-coverage-include",
+        "--test-coverage-lines",
+        "--test-global-setup",
+        "--test-isolation",
+        "--test-name-pattern",
+        "--test-only",
+        "--test-reporter",
+        "--test-reporter-destination",
+        "--test-rerun-failures",
+        "--test-shard",
+        "--test-skip-pattern",
+        "--throw-deprecation",
+        "--title",
+        "--tls-cipher-list",
+        "--tls-keylog",
+        "--tls-max-v1.2",
+        "--tls-max-v1.3",
+        "--tls-min-v1.0",
+        "--tls-min-v1.1",
+        "--tls-min-v1.2",
+        "--tls-min-v1.3",
+        "--trace-deprecation",
+        "--trace-env",
+        "--trace-env-js-stack",
+        "--trace-env-native-stack",
+        "--trace-event-categories",
+        "--trace-event-file-pattern",
+        "--trace-events-enabled",
+        "--trace-exit",
+        "--trace-promises",
+        "--trace-require-module",
+        "--trace-sigint",
+        "--trace-sync-io",
+        "--trace-tls",
+        "--trace-uncaught",
+        "--trace-warnings",
+        "--track-heap-objects",
+        "--unhandled-rejections",
+        "--use-bundled-ca",
+        "--use-env-proxy",
+        "--use-largepages",
+        "--use-openssl-ca",
+        "--use-system-ca",
+        "--v8-pool-size",
+        "--verify-base-objects",
+        "--warnings",
+        "--watch",
+        "--watch-kill-signal",
+        "--watch-path",
+        "--watch-preserve-output",
+        "--webstorage",
+        "--zero-fill-buffers",
+        "-C",
+        "-r",
+    ];
+    module_set_value(FLAGS)
+}
+
+pub fn process_metadata_property(property: &str) -> Option<f64> {
+    Some(match property {
+        "allowedNodeEnvironmentFlags" => process_allowed_flags_value(),
+        "argv0" | "execPath" => module_string_value(&process_argv0_string()),
+        "config" => process_config_value(),
+        "debugPort" => 9229.0,
+        "execArgv" | "moduleLoadList" => module_array_value(&[]),
+        "features" => process_features_value(),
+        "finalization" => process_finalization_value(),
+        "release" => process_release_value(),
+        "report" => process_report_value(),
+        "sourceMapsEnabled" => js_process_source_maps_enabled(),
+        "title" => js_process_title(),
+        _ => return None,
+    })
+}
+
 /// `module.builtinModules` — Node exposes this as an Array of builtin module
 /// specifiers. Perry's supported subset is smaller, but the public inventory
 /// shape should still match Node's module API.

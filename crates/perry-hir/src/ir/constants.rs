@@ -367,6 +367,7 @@ pub const NODE_BUILTIN_MODULES: &[&str] = &[
     "http2",
     "https",
     "inspector",
+    "inspector/promises",
     "module",
     "net",
     "os",

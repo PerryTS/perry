@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1760 entries across 105 modules
+// Coverage: 1774 entries across 105 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1692,6 +1692,8 @@ declare module "http" {
   /** stdlib */
   export class ServerResponse { [key: string]: any; }
   /** stdlib */
+  export class WebSocket { [key: string]: any; }
+  /** stdlib */
   export const METHODS: any;
   /** stdlib */
   export const STATUS_CODES: any;
@@ -1703,6 +1705,8 @@ declare module "http" {
   export function Agent(...args: any[]): any;
   /** stdlib */
   export function Server(...args: any[]): any;
+  /** stdlib */
+  export function _connectionListener(...args: any[]): any;
   /** stdlib */
   export function createServer(...args: any[]): any;
   /** stdlib */
@@ -2877,11 +2881,29 @@ declare module "pg" {
 
 declare module "process" {
   /** stdlib */
+  export const allowedNodeEnvironmentFlags: any;
+  /** stdlib */
   export const arch: any;
   /** stdlib */
   export const argv: any;
   /** stdlib */
+  export const argv0: any;
+  /** stdlib */
+  export const config: any;
+  /** stdlib */
+  export const debugPort: any;
+  /** stdlib */
   export const env: any;
+  /** stdlib */
+  export const execArgv: any;
+  /** stdlib */
+  export const execPath: any;
+  /** stdlib */
+  export const features: any;
+  /** stdlib */
+  export const finalization: any;
+  /** stdlib */
+  export const moduleLoadList: any;
   /** stdlib */
   export const pid: any;
   /** stdlib */
@@ -2889,11 +2911,17 @@ declare module "process" {
   /** stdlib */
   export const ppid: any;
   /** stdlib */
+  export const release: any;
+  /** stdlib */
+  export const report: any;
+  /** stdlib */
   export const stderr: any;
   /** stdlib */
   export const stdin: any;
   /** stdlib */
   export const stdout: any;
+  /** stdlib */
+  export const title: any;
   /** stdlib */
   export const version: any;
   /** stdlib */
