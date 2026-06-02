@@ -1206,6 +1206,221 @@ pub(crate) fn typed_array_intrinsic_proto_ptr() -> *mut ObjectHeader {
     crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire) as *mut ObjectHeader
 }
 
+// ---------------------------------------------------------------------------
+// #3664: generator / async-generator intrinsic prototype towers.
+// ---------------------------------------------------------------------------
+
+/// Distinguishes plain vs async generator closures for the intrinsic-tower
+/// lookups.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GeneratorKind {
+    Sync,
+    Async,
+}
+
+/// Classify a `GC_TYPE_CLOSURE` pointer as a (plain | async) generator
+/// function, or `None` for any other closure. Async generators register in
+/// BOTH the generator and async registries (the lowering carries `is_async &&
+/// is_generator`), so async-registry membership disambiguates the two.
+fn closure_generator_kind(closure_ptr: usize) -> Option<GeneratorKind> {
+    let closure = closure_ptr as *const crate::closure::ClosureHeader;
+    let func_ptr = crate::closure::get_valid_func_ptr(closure);
+    if func_ptr.is_null() || !crate::closure::is_registered_generator_function(func_ptr) {
+        return None;
+    }
+    if crate::closure::is_registered_async_function(func_ptr) {
+        Some(GeneratorKind::Async)
+    } else {
+        Some(GeneratorKind::Sync)
+    }
+}
+
+fn intrinsic_pointer_value(slot: i64) -> Option<f64> {
+    if slot != 0 {
+        Some(crate::value::js_nanbox_pointer(slot))
+    } else {
+        None
+    }
+}
+
+/// `Object.getPrototypeOf(g)` for a generator-function closure `g` →
+/// `%Generator%` / `%AsyncGenerator%` (a.k.a. `<Ctor>.prototype`). Returns
+/// `None` for non-generator closures so the caller keeps its existing
+/// `closure_static_prototype` / null resolution. (#3664)
+pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
+    let slot = match closure_generator_kind(closure_ptr)? {
+        GeneratorKind::Sync => crate::object::GENERATOR_INTRINSIC_PROTO_PTR.load(Ordering::Acquire),
+        GeneratorKind::Async => {
+            crate::object::ASYNC_GENERATOR_INTRINSIC_PROTO_PTR.load(Ordering::Acquire)
+        }
+    };
+    intrinsic_pointer_value(slot)
+}
+
+/// `g.constructor` for a generator-function closure `g` → `%GeneratorFunction%`
+/// / `%AsyncGeneratorFunction%`. `None` for non-generator closures. (#3664)
+pub(crate) fn generator_function_constructor_of(closure_ptr: usize) -> Option<f64> {
+    let slot = match closure_generator_kind(closure_ptr)? {
+        GeneratorKind::Sync => {
+            crate::object::GENERATOR_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire)
+        }
+        GeneratorKind::Async => {
+            crate::object::ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire)
+        }
+    };
+    intrinsic_pointer_value(slot)
+}
+
+/// `%Generator.prototype%` / `%AsyncGenerator.prototype%` pointer (the object
+/// carrying `next`/`return`/`throw`). Used by Phase 2/3 to wire `g.prototype`'s
+/// `[[Prototype]]` and the live generator-object chain. Null until
+/// `populate_global_this_builtins` has run. (#3664)
+pub(crate) fn generator_prototype_ptr(is_async: bool) -> *mut ObjectHeader {
+    let slot = if is_async {
+        crate::object::ASYNC_GENERATOR_PROTOTYPE_PTR.load(Ordering::Acquire)
+    } else {
+        crate::object::GENERATOR_PROTOTYPE_PTR.load(Ordering::Acquire)
+    };
+    slot as *mut ObjectHeader
+}
+
+/// Set a data property on an intrinsic object and record its descriptor attrs
+/// for `Object.getOwnPropertyDescriptor` reflection. (#3664)
+fn set_intrinsic_data_prop(
+    obj: *mut ObjectHeader,
+    name: &str,
+    value: f64,
+    attrs: super::PropertyAttrs,
+) {
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_object_set_field_by_name(obj, key, value);
+    super::set_builtin_property_attrs(obj as usize, name.to_string(), attrs);
+}
+
+/// Set `obj[Symbol.toStringTag] = tag` (the descriptor is the spec default
+/// `{ writable:false, enumerable:false, configurable:true }`). (#3664)
+fn set_intrinsic_to_string_tag(obj: *mut ObjectHeader, tag: &str) {
+    let sym = crate::symbol::well_known_symbol("toStringTag");
+    if sym.is_null() {
+        return;
+    }
+    let tag_str = crate::string::js_string_from_bytes(tag.as_ptr(), tag.len() as u32);
+    unsafe {
+        crate::symbol::js_object_set_symbol_property(
+            crate::value::js_nanbox_pointer(obj as i64),
+            f64::from_bits(crate::value::JSValue::pointer(sym as *const u8).bits()),
+            f64::from_bits(crate::js_nanbox_string(tag_str as i64).to_bits()),
+        );
+    }
+}
+
+/// Build one generator-intrinsic tower (sync or async) and store its three
+/// objects in the GC-rooted atomics declared in `object/mod.rs`.
+///
+/// Spec chain (sync names; async mirrors with the `Async` prefix):
+/// ```text
+/// %GeneratorFunction%             ctor closure, name "GeneratorFunction", length 1
+///   .prototype = %Generator%      (non-writable, non-enumerable, non-configurable)
+/// %Generator%  (= %GeneratorFunction.prototype%)
+///   .constructor = %GeneratorFunction%      (non-writable, non-enum, configurable)
+///   .prototype   = %Generator.prototype%    (non-writable, non-enum, configurable)
+///   [Symbol.toStringTag] = "GeneratorFunction"
+/// %Generator.prototype%  (= %GeneratorFunction.prototype.prototype%)
+///   .constructor = %Generator%              (non-writable, non-enum, configurable)
+///   .next / .return / .throw                (Phase 1: noop-backed for descriptor tests)
+///   [Symbol.toStringTag] = "Generator"
+/// ```
+fn build_generator_tower(
+    is_async: bool,
+    ctor_slot: &std::sync::atomic::AtomicI64,
+    proto_slot: &std::sync::atomic::AtomicI64,
+    gen_proto_slot: &std::sync::atomic::AtomicI64,
+) {
+    let (ctor_name, ctor_tag, inst_tag) = if is_async {
+        (
+            "AsyncGeneratorFunction",
+            "AsyncGeneratorFunction",
+            "AsyncGenerator",
+        )
+    } else {
+        ("GeneratorFunction", "GeneratorFunction", "Generator")
+    };
+    let noop = global_this_builtin_noop_thunk as *const u8;
+    let ctor = crate::closure::js_closure_alloc(noop, 0);
+    let proto = js_object_alloc(0, 0); // %Generator% / %AsyncGenerator%
+    let gen_proto = js_object_alloc(0, 0); // %Generator.prototype%
+    if ctor.is_null() || proto.is_null() || gen_proto.is_null() {
+        return;
+    }
+    let non_writable = super::PropertyAttrs::new(false, false, false);
+    let configurable = super::PropertyAttrs::new(false, false, true);
+
+    // --- %GeneratorFunction% constructor ---
+    crate::closure::js_register_closure_arity(noop, 1);
+    super::native_module::set_bound_native_closure_name(ctor, ctor_name);
+    super::native_module::set_builtin_closure_length(ctor as usize, 1);
+    super::set_builtin_property_attrs(ctor as usize, "name".to_string(), configurable);
+    super::set_builtin_property_attrs(ctor as usize, "length".to_string(), configurable);
+    set_intrinsic_data_prop(
+        ctor as *mut ObjectHeader,
+        "prototype",
+        crate::value::js_nanbox_pointer(proto as i64),
+        non_writable,
+    );
+
+    // --- %Generator% (= %GeneratorFunction.prototype%) ---
+    set_intrinsic_data_prop(
+        proto,
+        "constructor",
+        crate::value::js_nanbox_pointer(ctor as i64),
+        configurable,
+    );
+    set_intrinsic_data_prop(
+        proto,
+        "prototype",
+        crate::value::js_nanbox_pointer(gen_proto as i64),
+        configurable,
+    );
+    set_intrinsic_to_string_tag(proto, ctor_tag);
+
+    // --- %Generator.prototype% ---
+    set_intrinsic_data_prop(
+        gen_proto,
+        "constructor",
+        crate::value::js_nanbox_pointer(proto as i64),
+        configurable,
+    );
+    install_proto_method(gen_proto, "next", noop, 1);
+    install_proto_method(gen_proto, "return", noop, 1);
+    install_proto_method(gen_proto, "throw", noop, 1);
+    set_intrinsic_to_string_tag(gen_proto, inst_tag);
+
+    ctor_slot.store(ctor as i64, Ordering::Release);
+    proto_slot.store(proto as i64, Ordering::Release);
+    gen_proto_slot.store(gen_proto as i64, Ordering::Release);
+}
+
+/// Build both generator intrinsic towers. Idempotent; called once from
+/// `populate_global_this_builtins` under the globalThis singleton CAS. (#3664)
+fn ensure_generator_intrinsics() {
+    if crate::object::GENERATOR_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire) == 0 {
+        build_generator_tower(
+            false,
+            &crate::object::GENERATOR_FUNCTION_INTRINSIC_PTR,
+            &crate::object::GENERATOR_INTRINSIC_PROTO_PTR,
+            &crate::object::GENERATOR_PROTOTYPE_PTR,
+        );
+    }
+    if crate::object::ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire) == 0 {
+        build_generator_tower(
+            true,
+            &crate::object::ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR,
+            &crate::object::ASYNC_GENERATOR_INTRINSIC_PROTO_PTR,
+            &crate::object::ASYNC_GENERATOR_PROTOTYPE_PTR,
+        );
+    }
+}
+
 /// Populate the freshly-allocated globalThis singleton with built-in
 /// constructor / namespace properties. Called exactly once from the CAS
 /// winner in `js_get_global_this`. Constructors get a ClosureHeader-
@@ -1234,6 +1449,10 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     // built below, and the per-kind `.prototype` objects can be flagged with
     // `OBJ_FLAG_TYPED_ARRAY_PROTO` for `Object.getPrototypeOf` resolution.
     let (typed_array_intrinsic_ctor, _) = ensure_typed_array_intrinsic();
+    // #3664: build the generator / async-generator intrinsic prototype towers
+    // so `Object.getPrototypeOf(function*(){})`, `g.constructor`, and the
+    // `%Generator(.prototype)%` chains resolve to real objects.
+    ensure_generator_intrinsics();
     // Constructors: ClosureHeader-backed so typeof is "function".
     for name in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
         if name == "Buffer" {

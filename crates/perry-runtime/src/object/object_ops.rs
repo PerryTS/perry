@@ -1503,6 +1503,13 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                     {
                         return f64::from_bits(proto_bits);
                     }
+                    // #3664: a generator/async-generator function's
+                    // [[Prototype]] is `%Generator%` / `%AsyncGenerator%`.
+                    if let Some(proto) =
+                        crate::object::generator_function_proto_of(raw_addr as usize)
+                    {
+                        return proto;
+                    }
                     return f64::from_bits(TAG_NULL);
                 }
                 if let Some(proto) = constructor_dynamic_prototype(obj) {
@@ -1566,6 +1573,10 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                         crate::closure::closure_static_prototype(bits as usize)
                     {
                         return f64::from_bits(proto_bits);
+                    }
+                    // #3664: generator/async-generator [[Prototype]] resolution.
+                    if let Some(proto) = crate::object::generator_function_proto_of(bits as usize) {
+                        return proto;
                     }
                     return f64::from_bits(TAG_NULL);
                 }
