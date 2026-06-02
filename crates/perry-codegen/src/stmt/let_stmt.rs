@@ -119,6 +119,8 @@ pub(crate) fn lower_let(
                         | "TextDecoder"
                         | "TextEncoderStream"
                         | "TextDecoderStream"
+                        | "CompressionStream"
+                        | "DecompressionStream"
                         | "File"
                         | "WebSocket"
                 )

@@ -887,6 +887,20 @@ fn special_export_value(submod_key: &str, name: &str) -> Option<f64> {
     let value = match submod_key {
         "fs_promises" if name == "constants" => Some(fs_constants_namespace_value()),
         "timers_promises" if name == "scheduler" => Some(timers_promises_scheduler_value()),
+        "stream_web"
+            if matches!(
+                name,
+                "TextEncoderStream"
+                    | "TextDecoderStream"
+                    | "CompressionStream"
+                    | "DecompressionStream"
+            ) =>
+        {
+            Some(crate::object::js_get_global_this_builtin_value(
+                name.as_ptr(),
+                name.len(),
+            ))
+        }
         "test" => test::test_special_export_value(name),
         _ => None,
     };

@@ -93,7 +93,7 @@ http-client = ["dep:reqwest", "async-runtime", "bundled-streams"]
 # well-known flip routes `import 'streams'` to perry-ext-streams
 # by stripping this feature. Default-on through `default = ["full"]`
 # and through the `http-client` umbrella for legacy callers.
-bundled-streams = []
+bundled-streams = ["dep:flate2", "dep:brotli"]
 
 # WebSocket — `websocket` umbrella retained for backwards-compat;
 # v0.5.571's well-known flip toggles `bundled-ws` instead so

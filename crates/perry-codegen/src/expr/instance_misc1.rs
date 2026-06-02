@@ -351,6 +351,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "ReadableStream" => 0xFFFF0060u32,
                 "WritableStream" => 0xFFFF0061u32,
                 "TransformStream" => 0xFFFF0062u32,
+                // node:stream/web codec stream constructors are heap
+                // ObjectHeader instances with runtime-owned class IDs.
+                "TextEncoderStream" => 0x7FFFFF30u32,
+                "TextDecoderStream" => 0x7FFFFF31u32,
+                "CompressionStream" => 0x7FFFFF32u32,
+                "DecompressionStream" => 0x7FFFFF33u32,
                 // node:perf_hooks entry classes. Runtime classifies the
                 // shaped entry objects returned by performance.mark/measure.
                 // #3871: Performance / PerformanceObserverEntryList /

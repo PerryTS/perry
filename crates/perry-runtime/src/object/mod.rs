@@ -1904,6 +1904,11 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         let obj_ptr = (bits & POINTER_MASK) as *const ObjectHeader;
         if !obj_ptr.is_null() && (obj_ptr as usize) >= 0x1000 {
             let class_id = (*obj_ptr).class_id;
+            if class_id == crate::object::CLASS_ID_COMPRESSION_STREAM {
+                tag_str = Some("CompressionStream".to_string());
+            } else if class_id == crate::object::CLASS_ID_DECOMPRESSION_STREAM {
+                tag_str = Some("DecompressionStream".to_string());
+            }
             if let Some(func_ptr) = lookup_to_string_tag_hook(class_id) {
                 let getter: extern "C" fn(f64) -> f64 = std::mem::transmute(func_ptr as *const u8);
                 let result_f64 = getter(value);

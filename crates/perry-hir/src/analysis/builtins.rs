@@ -75,6 +75,8 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "TextDecoder"
             | "TextEncoderStream"
             | "TextDecoderStream"
+            | "CompressionStream"
+            | "DecompressionStream"
             | "Navigator"
             | "URL"
             | "URLSearchParams"
@@ -165,6 +167,7 @@ pub(crate) fn builtin_constructor_length(name: &str) -> Option<u32> {
         }
         "Symbol" | "Map" | "Set" | "WeakMap" | "WeakSet" | "MessageChannel" | "MessagePort"
         | "Navigator" | "TextEncoderStream" | "TextDecoderStream" | "DOMException" | "Storage" => 0,
+        "CompressionStream" | "DecompressionStream" => 1,
         "RegExp" | "Proxy" | "File" => 2,
         "BroadcastChannel" => 1,
         "Date" => 7,

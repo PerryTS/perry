@@ -1038,6 +1038,14 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_text_encoding_stream_new", DOUBLE, &[]);
     module.declare_function("js_text_encoder_stream_new", DOUBLE, &[]);
     module.declare_function("js_text_decoder_stream_new", DOUBLE, &[]);
+    module.declare_function("js_stream_web_text_encoder_stream_new", DOUBLE, &[]);
+    module.declare_function(
+        "js_stream_web_text_decoder_stream_new",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_stream_web_compression_stream_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_stream_web_decompression_stream_new", DOUBLE, &[DOUBLE]);
     // #1545: node:stream/web QueuingStrategy constructors — take the options
     // object, return a `{ highWaterMark, size }` object.
     module.declare_function("js_streams_strategy_high_water_mark", DOUBLE, &[DOUBLE]);

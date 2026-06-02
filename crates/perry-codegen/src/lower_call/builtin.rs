@@ -1367,16 +1367,53 @@ pub(super) fn lower_builtin_new(
             Ok(Some(h))
         }
 
-        "TextEncoderStream" | "TextDecoderStream" => {
+        "TextEncoderStream" => {
             for a in args {
                 let _ = lower_expr(ctx, a)?;
             }
-            let runtime = if class_name == "TextEncoderStream" {
-                "js_text_encoder_stream_new"
+            let h = ctx
+                .block()
+                .call(DOUBLE, "js_stream_web_text_encoder_stream_new", &[]);
+            Ok(Some(h))
+        }
+
+        "TextDecoderStream" => {
+            let label = if !args.is_empty() {
+                lower_expr(ctx, &args[0])?
             } else {
-                "js_text_decoder_stream_new"
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
-            let h = ctx.block().call(DOUBLE, runtime, &[]);
+            let options = if args.len() >= 2 {
+                lower_expr(ctx, &args[1])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(2) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let h = ctx.block().call(
+                DOUBLE,
+                "js_stream_web_text_decoder_stream_new",
+                &[(DOUBLE, &label), (DOUBLE, &options)],
+            );
+            Ok(Some(h))
+        }
+
+        "CompressionStream" | "DecompressionStream" => {
+            let format = if !args.is_empty() {
+                lower_expr(ctx, &args[0])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let runtime = if class_name == "CompressionStream" {
+                "js_stream_web_compression_stream_new"
+            } else {
+                "js_stream_web_decompression_stream_new"
+            };
+            let h = ctx.block().call(DOUBLE, runtime, &[(DOUBLE, &format)]);
             Ok(Some(h))
         }
 

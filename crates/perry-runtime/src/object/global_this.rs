@@ -2095,7 +2095,14 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                     super::PropertyAttrs::new(true, false, true),
                 );
             }
-            if name == "Navigator" || name == "TextEncoderStream" || name == "TextDecoderStream" {
+            if matches!(
+                name,
+                "Navigator"
+                    | "TextEncoderStream"
+                    | "TextDecoderStream"
+                    | "CompressionStream"
+                    | "DecompressionStream"
+            ) {
                 let constructor_key =
                     crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
                 js_object_set_field_by_name(proto_obj, constructor_key, ctor_value);

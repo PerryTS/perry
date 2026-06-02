@@ -775,8 +775,29 @@ fn text_decoder_bool_option(options: f64, name: &str) -> f64 {
     f64::from_bits(crate::value::JSValue::bool(crate::value::js_is_truthy(value_f64) != 0).bits())
 }
 
+unsafe fn validate_web_compression_stream_format(format: f64) {
+    let ptr = crate::builtins::js_string_coerce(format) as *const crate::StringHeader;
+    if ptr.is_null() {
+        crate::fs::validate::throw_type_error_with_code(
+            "The argument 'format' is invalid.",
+            "ERR_INVALID_ARG_VALUE",
+        );
+    }
+    let len = (*ptr).byte_len as usize;
+    let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let bytes = std::slice::from_raw_parts(data, len);
+    if matches!(bytes, b"gzip" | b"deflate" | b"deflate-raw" | b"brotli") {
+        return;
+    }
+    let received = String::from_utf8_lossy(bytes);
+    let message = format!("The argument 'format' is invalid. Received '{received}'");
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
+}
+
 pub(crate) const CLASS_ID_TEXT_ENCODER_STREAM: u32 = 0x7FFF_FF30;
 pub(crate) const CLASS_ID_TEXT_DECODER_STREAM: u32 = 0x7FFF_FF31;
+pub(crate) const CLASS_ID_COMPRESSION_STREAM: u32 = 0x7FFF_FF32;
+pub(crate) const CLASS_ID_DECOMPRESSION_STREAM: u32 = 0x7FFF_FF33;
 
 unsafe fn text_encoding_stream_new_with_constructor(constructor: f64, class_id: u32) -> f64 {
     let stream = js_object_alloc(class_id, 0);
@@ -822,6 +843,16 @@ pub unsafe extern "C" fn js_text_encoder_stream_new() -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_text_decoder_stream_new() -> f64 {
     text_encoding_stream_new(b"TextDecoderStream", CLASS_ID_TEXT_DECODER_STREAM)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_compression_stream_new() -> f64 {
+    text_encoding_stream_new(b"CompressionStream", CLASS_ID_COMPRESSION_STREAM)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_decompression_stream_new() -> f64 {
+    text_encoding_stream_new(b"DecompressionStream", CLASS_ID_DECOMPRESSION_STREAM)
 }
 
 #[no_mangle]
@@ -1512,6 +1543,28 @@ pub unsafe extern "C" fn js_new_function_construct(
                 return text_encoding_stream_new_with_constructor(
                     func_value,
                     CLASS_ID_TEXT_DECODER_STREAM,
+                );
+            }
+            "CompressionStream" => {
+                let format = args
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                validate_web_compression_stream_format(format);
+                return text_encoding_stream_new_with_constructor(
+                    func_value,
+                    CLASS_ID_COMPRESSION_STREAM,
+                );
+            }
+            "DecompressionStream" => {
+                let format = args
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                validate_web_compression_stream_format(format);
+                return text_encoding_stream_new_with_constructor(
+                    func_value,
+                    CLASS_ID_DECOMPRESSION_STREAM,
                 );
             }
             "MessageChannel" => {

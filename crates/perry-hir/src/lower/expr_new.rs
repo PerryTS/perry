@@ -165,6 +165,14 @@ fn module_constructor_name(module_name: &str, method_name: Option<&str>) -> Opti
         ("url", Some("URLPattern")) => Some("URLPattern"),
         ("util", Some("TextEncoder")) => Some("TextEncoder"),
         ("util", Some("TextDecoder")) => Some("TextDecoder"),
+        ("stream/web", Some("TextEncoderStream"))
+        | ("node:stream/web", Some("TextEncoderStream")) => Some("TextEncoderStream"),
+        ("stream/web", Some("TextDecoderStream"))
+        | ("node:stream/web", Some("TextDecoderStream")) => Some("TextDecoderStream"),
+        ("stream/web", Some("CompressionStream"))
+        | ("node:stream/web", Some("CompressionStream")) => Some("CompressionStream"),
+        ("stream/web", Some("DecompressionStream"))
+        | ("node:stream/web", Some("DecompressionStream")) => Some("DecompressionStream"),
         _ => None,
     }
 }
@@ -183,6 +191,10 @@ fn global_member_constructor_name(
             "TextDecoder" => Some("TextDecoder"),
             "MessageChannel" => Some("MessageChannel"),
             "BroadcastChannel" => Some("BroadcastChannel"),
+            "TextEncoderStream" => Some("TextEncoderStream"),
+            "TextDecoderStream" => Some("TextDecoderStream"),
+            "CompressionStream" => Some("CompressionStream"),
+            "DecompressionStream" => Some("DecompressionStream"),
             _ => None,
         };
     }

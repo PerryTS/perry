@@ -253,6 +253,8 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             "Navigator" => crate::navigator::NAVIGATOR_CLASS_ID,
             "TextEncoderStream" => crate::object::CLASS_ID_TEXT_ENCODER_STREAM,
             "TextDecoderStream" => crate::object::CLASS_ID_TEXT_DECODER_STREAM,
+            "CompressionStream" => crate::object::CLASS_ID_COMPRESSION_STREAM,
+            "DecompressionStream" => crate::object::CLASS_ID_DECOMPRESSION_STREAM,
             "Event" => crate::event_target::CLASS_ID_EVENT,
             "CustomEvent" => crate::event_target::CLASS_ID_CUSTOM_EVENT,
             "DOMException" => crate::event_target::CLASS_ID_DOM_EXCEPTION,
