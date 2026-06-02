@@ -160,14 +160,27 @@ pub(super) fn try_local_array_methods(
                                 // exactly what the last ArrayPush returns.
                                 let any_spread = call.args.iter().any(|a| a.spread.is_some());
                                 if any_spread {
-                                    if args.len() == 1 {
+                                    if args.len() == 1 && call.args[0].spread.is_some() {
                                         return Ok(Ok(Expr::ArrayPushSpread {
                                             array_id,
                                             source: Box::new(args.into_iter().next().unwrap()),
                                         }));
                                     }
-                                    // Mixed regular + spread: bail to generic
-                                    // dispatch (no current single-IR-shape).
+                                    let mut stmts: Vec<Expr> = Vec::with_capacity(args.len());
+                                    for (ast_arg, arg) in call.args.iter().zip(args.into_iter()) {
+                                        if ast_arg.spread.is_some() {
+                                            stmts.push(Expr::ArrayPushSpread {
+                                                array_id,
+                                                source: Box::new(arg),
+                                            });
+                                        } else {
+                                            stmts.push(Expr::ArrayPush {
+                                                array_id,
+                                                value: Box::new(arg),
+                                            });
+                                        }
+                                    }
+                                    return Ok(Ok(Expr::Sequence(stmts)));
                                 } else {
                                     if args.len() == 1 {
                                         return Ok(Ok(Expr::ArrayPush {
