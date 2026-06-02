@@ -131,10 +131,11 @@ Selected highlights (full list in `runtime-parity.md`):
 **Total APIs: 32** · Perry covers: import/require namespace shape, callable
 export metadata, `vm.constants`, `process.getBuiltinModule("vm")`, and
 `vm.isContext({})`, cached-data/source-map metadata shape,
-`SourceTextModule.createCachedData()`, and gated
-`SourceTextModule`/`SyntheticModule` lifecycle behavior · Gap: runtime VM
-execution, contextification, context-loader constant behavior, and heap
-measurement
+`SourceTextModule.createCachedData()`, gated
+`SourceTextModule`/`SyntheticModule` lifecycle behavior, and
+`vm.measureMemory()` result shape and option validation · Gap: runtime VM
+execution, contextification, context-loader constant behavior, and exact V8
+heap accounting
 
 Shape coverage is fixture-backed in `test-parity/node-suite/vm`; the generated
 `test_parity_vm` inventory now skip-lists only the still-open behavior leaves.

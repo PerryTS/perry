@@ -242,6 +242,10 @@ fn throw_invalid_arg(message: &str) -> ! {
     crate::fs::validate::throw_type_error_with_code(message, "ERR_INVALID_ARG_TYPE")
 }
 
+fn throw_invalid_arg_value(message: &str) -> ! {
+    crate::fs::validate::throw_type_error_with_code(message, "ERR_INVALID_ARG_VALUE")
+}
+
 fn throw_vm_status(message: &str) -> f64 {
     crate::fs::validate::throw_error_with_code(message, "ERR_VM_MODULE_STATUS")
 }
@@ -280,6 +284,20 @@ fn option_field(options: f64, name: &str) -> f64 {
     object_ptr_from_value(options)
         .map(|obj| get_field(obj, name))
         .unwrap_or_else(undefined_value)
+}
+
+fn options_object_or_default(options: f64) -> Option<*mut ObjectHeader> {
+    let jv = JSValue::from_bits(options.to_bits());
+    if jv.is_undefined() {
+        return None;
+    }
+    object_ptr_from_value(options).or_else(|| {
+        let message = format!(
+            "The \"options\" argument must be of type object. Received {}",
+            crate::fs::validate::describe_received(options)
+        );
+        throw_invalid_arg(&message);
+    })
 }
 
 fn validate_produce_cached_data(options: f64) -> bool {
@@ -325,6 +343,33 @@ fn validate_cached_data_option(options: f64) -> Option<Vec<u8>> {
         crate::fs::validate::describe_received(value)
     );
     throw_invalid_arg(&message);
+}
+
+fn validate_one_of_string(
+    value: f64,
+    property: &str,
+    allowed: &[&str],
+    default_value: &str,
+) -> String {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() {
+        return default_value.to_string();
+    }
+    if let Some(value) = string_from_value(value) {
+        if allowed.iter().any(|allowed| value == *allowed) {
+            return value;
+        }
+    }
+    let expected = allowed
+        .iter()
+        .map(|value| format!("'{value}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let message = format!(
+        "The property '{property}' must be one of: {expected}. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    throw_invalid_arg_value(&message);
 }
 
 fn source_hash(kind: u8, source: &str, params: &[String]) -> u64 {
@@ -1528,8 +1573,71 @@ pub extern "C" fn js_vm_compile_function(code: f64, params: f64, options: f64) -
     value
 }
 
-pub extern "C" fn js_vm_measure_memory(_options: f64) -> f64 {
-    throw_vm_unimplemented("measureMemory", "3284")
+fn memory_range_value(estimate: f64) -> f64 {
+    let mut range = crate::array::js_array_alloc(2);
+    range = crate::array::js_array_push_f64(range, estimate);
+    range = crate::array::js_array_push_f64(range, estimate);
+    array_value(range)
+}
+
+fn memory_entry_value(estimate: f64) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 2);
+    set_field(obj, "jsMemoryEstimate", estimate);
+    set_field(obj, "jsMemoryRange", memory_range_value(estimate));
+    object_value(obj)
+}
+
+fn webassembly_memory_value() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 2);
+    set_field(obj, "code", 0.0);
+    set_field(obj, "metadata", 0.0);
+    object_value(obj)
+}
+
+fn measure_memory_result(detailed: bool) -> f64 {
+    let mut heap_used = 0_u64;
+    let mut heap_total = 0_u64;
+    crate::arena::js_arena_stats(&mut heap_used, &mut heap_total);
+    let estimate = heap_used.max(heap_total) as f64;
+    let obj = crate::object::js_object_alloc(0, if detailed { 4 } else { 2 });
+    set_field(obj, "total", memory_entry_value(estimate));
+    set_field(obj, "WebAssembly", webassembly_memory_value());
+    if detailed {
+        set_field(obj, "current", memory_entry_value(estimate));
+        set_field(obj, "other", array_value(crate::array::js_array_alloc(0)));
+    }
+    object_value(obj)
+}
+
+fn validate_measure_memory_options(options: f64) -> bool {
+    let options = options_object_or_default(options);
+    let mode_value = options
+        .map(|options| get_field(options, "mode"))
+        .unwrap_or_else(undefined_value);
+    let execution_value = options
+        .map(|options| get_field(options, "execution"))
+        .unwrap_or_else(undefined_value);
+    let mode = validate_one_of_string(
+        mode_value,
+        "options.mode",
+        &["summary", "detailed"],
+        "summary",
+    );
+    let _execution = validate_one_of_string(
+        execution_value,
+        "options.execution",
+        &["default", "eager"],
+        "default",
+    );
+    mode == "detailed"
+}
+
+pub extern "C" fn js_vm_measure_memory(options: f64) -> f64 {
+    let detailed = validate_measure_memory_options(options);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result = scope.root_nanbox_f64(measure_memory_result(detailed));
+    let promise = crate::promise::js_promise_resolved(result.get_nanbox_f64());
+    crate::value::js_nanbox_pointer(promise as i64)
 }
 
 pub extern "C" fn js_vm_script_new(code: f64, options: f64) -> f64 {
