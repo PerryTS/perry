@@ -34,6 +34,16 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
+#[no_mangle]
+pub extern "C" fn js_vm_create_context(sandbox: f64) -> f64 {
+    let value = JSValue::from_bits(sandbox.to_bits());
+    if value.is_undefined() || value.is_null() {
+        let obj = js_object_alloc(0, 0);
+        return crate::value::js_nanbox_pointer(obj as i64);
+    }
+    sandbox
+}
+
 pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     NATIVE_CALLABLE_EXPORTS.with(|cache| {
         let mut cache = cache.borrow_mut();
@@ -1981,6 +1991,8 @@ const EVENTS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"setMaxListeners",
 ];
 
+const VM_NAMESPACE_KEYS: &[&[u8]] = &[b"createContext"];
+
 const WORKER_THREADS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"BroadcastChannel",
     b"MessageChannel",
@@ -2447,6 +2459,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"isCryptoKey",
         ]),
         "events" => Some(EVENTS_NAMESPACE_KEYS),
+        "vm" => Some(VM_NAMESPACE_KEYS),
         "worker_threads" => Some(WORKER_THREADS_NAMESPACE_KEYS),
         "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
         "readline/promises" => Some(&[b"Interface", b"Readline", b"createInterface"]),
@@ -4050,6 +4063,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("process", "resourceUsage")
             | ("process", "getActiveResourcesInfo")
             | ("process", "hrtime")
+            | ("vm", "createContext")
             | ("worker_threads", "getEnvironmentData")
             | ("worker_threads", "setEnvironmentData")
             | ("worker_threads", "markAsUntransferable")
