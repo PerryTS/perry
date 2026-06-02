@@ -105,6 +105,7 @@ fn module_with_classes_and_params(
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
     }
 }
 

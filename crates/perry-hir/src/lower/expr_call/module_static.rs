@@ -1505,9 +1505,17 @@ pub(super) fn try_module_static_methods(
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
                         "createServer" => {
-                            let mut args_iter = args.into_iter();
-                            let options = args_iter.next().map(Box::new);
-                            let connection_listener = args_iter.next().map(Box::new);
+                            let (options, connection_listener) = match args.as_slice() {
+                                [Expr::Closure { .. }] => {
+                                    (None, args.into_iter().next().map(Box::new))
+                                }
+                                _ => {
+                                    let mut args_iter = args.into_iter();
+                                    let options = args_iter.next().map(Box::new);
+                                    let connection_listener = args_iter.next().map(Box::new);
+                                    (options, connection_listener)
+                                }
+                            };
                             return Ok(Ok(Expr::NetCreateServer {
                                 options,
                                 connection_listener,

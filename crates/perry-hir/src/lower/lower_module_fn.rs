@@ -460,6 +460,10 @@ pub fn lower_module_full(
                             .unwrap_or(Type::Any);
                         ctx.define_local(name.clone(), ty);
                         ctx.pre_registered_module_vars.insert(name);
+                        if var_decl.kind == ast::VarDeclKind::Var {
+                            ctx.pre_registered_module_var_decls
+                                .insert(ident.id.sym.to_string());
+                        }
                     }
                 }
             }

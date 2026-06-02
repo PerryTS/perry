@@ -100,6 +100,20 @@ static GLOBAL_THIS_READY: AtomicBool = AtomicBool::new(false);
 // array constructors and scanned by `scan_object_cache_roots_mut`.
 pub(crate) static TYPED_ARRAY_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
 pub(crate) static TYPED_ARRAY_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
+// #3664: the generator / async-generator intrinsic prototype towers.
+// `*_FUNCTION_INTRINSIC_PTR` = `%GeneratorFunction%` / `%AsyncGeneratorFunction%`
+// (the constructor closures); `*_INTRINSIC_PROTO_PTR` = `%Generator%` /
+// `%AsyncGenerator%` (a.k.a. `<Ctor>.prototype`), the object
+// `Object.getPrototypeOf(function*(){})` resolves to; `*_PROTOTYPE_PTR` =
+// `%Generator.prototype%` / `%AsyncGenerator.prototype%` (a.k.a.
+// `<Ctor>.prototype.prototype`), carrying `next`/`return`/`throw`. All six are
+// GC roots scanned by `scan_object_cache_roots_mut`.
+pub(crate) static GENERATOR_FUNCTION_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static GENERATOR_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static GENERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static ASYNC_GENERATOR_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static ASYNC_GENERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
 pub(crate) static LOCAL_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
 pub(crate) static SESSION_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
 
@@ -1291,6 +1305,37 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
     );
     visitor.visit_atomic_i64_slot(
         &TYPED_ARRAY_INTRINSIC_PROTO_PTR,
+        Ordering::Acquire,
+        Ordering::Release,
+    );
+    // #3664: generator / async-generator intrinsic tower roots.
+    visitor.visit_atomic_i64_slot(
+        &GENERATOR_FUNCTION_INTRINSIC_PTR,
+        Ordering::Acquire,
+        Ordering::Release,
+    );
+    visitor.visit_atomic_i64_slot(
+        &GENERATOR_INTRINSIC_PROTO_PTR,
+        Ordering::Acquire,
+        Ordering::Release,
+    );
+    visitor.visit_atomic_i64_slot(
+        &GENERATOR_PROTOTYPE_PTR,
+        Ordering::Acquire,
+        Ordering::Release,
+    );
+    visitor.visit_atomic_i64_slot(
+        &ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR,
+        Ordering::Acquire,
+        Ordering::Release,
+    );
+    visitor.visit_atomic_i64_slot(
+        &ASYNC_GENERATOR_INTRINSIC_PROTO_PTR,
+        Ordering::Acquire,
+        Ordering::Release,
+    );
+    visitor.visit_atomic_i64_slot(
+        &ASYNC_GENERATOR_PROTOTYPE_PTR,
         Ordering::Acquire,
         Ordering::Release,
     );

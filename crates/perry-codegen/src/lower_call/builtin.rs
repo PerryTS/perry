@@ -254,6 +254,27 @@ pub(super) fn lower_builtin_new(
             );
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        "BlockList" => {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_net_block_list_new", &[]);
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "SocketAddress" => {
+            let options = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_net_socket_address_new", &[(DOUBLE, &options)]);
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
         "EventTarget" => {
             for a in args {
                 let _ = lower_expr(ctx, a)?;

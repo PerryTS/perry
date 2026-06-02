@@ -1572,6 +1572,47 @@ pub extern "C" fn js_object_get_field_by_name(
             return JSValue::undefined();
         }
     }
+    // Native module registry handles can arrive here either as raw small
+    // integers or as POINTER_TAG-boxed small integers. Route them before any
+    // GC-header probes such as Date/Promise checks.
+    {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        let raw = if top16 == 0 {
+            bits as usize
+        } else if top16 == 0x7FFD {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else {
+            0
+        };
+        if raw > 0 && raw < 0x100000 {
+            if !key.is_null() {
+                unsafe {
+                    let key_ptr =
+                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                    let key_len = (*key).byte_len as usize;
+                    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                    if is_timer_handle_method_key(key_bytes)
+                        && crate::timer::is_known_timer_id(raw as i64)
+                    {
+                        let this_f64 =
+                            f64::from_bits(crate::value::js_nanbox_pointer(raw as i64).to_bits());
+                        let result = super::js_class_method_bind(this_f64, key_ptr, key_len);
+                        return JSValue::from_bits(result.to_bits());
+                    }
+                    if key_bytes == b"constructor" {
+                        let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
+                        return JSValue::from_bits(JSValue::pointer(null_obj_ptr).bits());
+                    }
+                    if let Some(dispatch) = handle_property_dispatch() {
+                        let bits = dispatch(raw as i64, key_ptr, key_len);
+                        return JSValue::from_bits(bits.to_bits());
+                    }
+                }
+            }
+            return JSValue::undefined();
+        }
+    }
     // #2089: a `Date` is a NaN-boxed pointer to an 8-byte `DateCell`. A
     // generic property read on it (`date.constructor`, `date[k]`, a method
     // read as a value) must NOT fall through to the object-deref path below —
@@ -1802,7 +1843,9 @@ pub extern "C" fn js_object_get_field_by_name(
         } else {
             0
         };
-        if raw >= 0x10000 && !key.is_null() {
+        // Native-module registry handles live below 0x100000 and can also be
+        // POINTER_TAG-boxed; do not walk back to a GcHeader for those.
+        if raw >= 0x100000 && !key.is_null() {
             {
                 unsafe {
                     let gc_header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -2321,6 +2364,30 @@ pub extern "C" fn js_object_get_field_by_name(
                     let val = crate::closure::closure_get_dynamic_prop(obj as usize, name_str);
                     if val.to_bits() != crate::value::TAG_UNDEFINED {
                         return JSValue::from_bits(val.to_bits());
+                    }
+                    // #3664: `g.constructor` for a generator/async-generator
+                    // function resolves through its [[Prototype]] (`%Generator%`)
+                    // to `%GeneratorFunction%` / `%AsyncGeneratorFunction%`.
+                    // Other functions have no `constructor` own-prop in Perry's
+                    // model (they fall through to `undefined`, as before).
+                    if name_str == "constructor" {
+                        if let Some(ctor) =
+                            crate::object::generator_function_constructor_of(obj as usize)
+                        {
+                            return JSValue::from_bits(ctor.to_bits());
+                        }
+                    }
+                    // #3664: `g.prototype` for a generator/async-generator
+                    // function is a lazily-created object whose [[Prototype]] is
+                    // `%Generator.prototype%`. Non-generator functions fall
+                    // through (unchanged). The dynamic-prop check above already
+                    // returned any cached/user-assigned `prototype`.
+                    if name_str == "prototype" {
+                        if let Some(proto) =
+                            crate::object::generator_function_prototype_of(obj as usize)
+                        {
+                            return JSValue::from_bits(proto.to_bits());
+                        }
                     }
                     // #2059: `fn.name` — every function carries a built-in own
                     // `name` data property. Resolve the codegen-registered name

@@ -159,11 +159,15 @@ mod tests {
 
     impl GcTestGuard {
         fn new() -> Self {
+            Self::new_with_slots(0)
+        }
+
+        fn new_with_slots(slot_count: u32) -> Self {
             let lock = GC_TEST_LOCK
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             perry_runtime::gc::js_gc_write_barriers_emitted(1);
-            let frame = perry_runtime::gc::js_shadow_frame_push(0);
+            let frame = perry_runtime::gc::js_shadow_frame_push(slot_count);
             Self { frame, _lock: lock }
         }
     }
@@ -202,6 +206,7 @@ mod tests {
         let s = HttpServer::with_handler(0);
         assert_eq!(s.headers_timeout, 60_000.0);
         assert_eq!(s.keep_alive_timeout, 5_000.0);
+        assert_eq!(s.keep_alive_timeout_buffer, 1_000.0);
         assert_eq!(s.request_timeout, 300_000.0);
         assert_eq!(s.idle_timeout, 0.0);
         assert_eq!(s.max_headers_count, 2000.0);
@@ -222,13 +227,22 @@ mod tests {
             crate::server::js_node_http_server_headers_timeout(handle),
             60_000.0
         );
+        assert_eq!(
+            crate::server::js_node_http_server_keep_alive_timeout_buffer(handle),
+            1_000.0
+        );
         // Set then read back.
         crate::server::js_node_http_server_set_headers_timeout(handle, 0.0);
+        crate::server::js_node_http_server_set_keep_alive_timeout_buffer(handle, 250.0);
         crate::server::js_node_http_server_set_idle_timeout(handle, 45_000.0);
         crate::server::js_node_http_server_set_max_requests_per_socket(handle, 100.0);
         assert_eq!(
             crate::server::js_node_http_server_headers_timeout(handle),
             0.0
+        );
+        assert_eq!(
+            crate::server::js_node_http_server_keep_alive_timeout_buffer(handle),
+            250.0
         );
         assert_eq!(
             crate::server::js_node_http_server_idle_timeout(handle),
@@ -252,6 +266,25 @@ mod tests {
             .unwrap_or(0);
         assert_eq!(listener_count, 1);
         drop_handle(handle);
+    }
+
+    #[test]
+    fn http_server_options_store_keep_alive_timeout_buffer() {
+        let _guard = GcTestGuard::new_with_slots(1);
+        let options_json = perry_ffi::alloc_string(
+            r#"{"headersTimeout":111,"keepAliveTimeout":222,"keepAliveTimeoutBuffer":321,"requestTimeout":444}"#,
+        );
+        let options_ptr = options_json.as_raw() as *const perry_runtime::StringHeader;
+        let options = unsafe { perry_runtime::json::js_json_parse(options_ptr) };
+        perry_runtime::gc::js_shadow_slot_set(0, options.bits());
+
+        let mut server = HttpServer::with_handler(0);
+        crate::server::apply_server_options(&mut server, f64::from_bits(options.bits()));
+
+        assert_eq!(server.headers_timeout, 111.0);
+        assert_eq!(server.keep_alive_timeout, 222.0);
+        assert_eq!(server.keep_alive_timeout_buffer, 321.0);
+        assert_eq!(server.request_timeout, 444.0);
     }
 
     #[test]

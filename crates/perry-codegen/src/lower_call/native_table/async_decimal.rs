@@ -3,7 +3,7 @@ use super::*;
 pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
     // ========== async_hooks.AsyncLocalStorage ==========
     // `new AsyncLocalStorage()` is dispatched by `lower_builtin_new`; the rows
-    // below cover the instance methods. `run(store, cb, ...args)` and
+    // below cover the static and instance methods. `run(store, cb, ...args)` and
     // `exit(cb, ...args)` pass the callback as a full NaN-boxed value (NA_F64)
     // so the runtime can reject a non-callable callback with a `TypeError`
     // (#3092) before mutating the async context, plus a trailing `NA_VARARGS`
@@ -12,11 +12,38 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
     // no-op'd through the unknown-method sentinel.
     NativeModSig {
         module: "async_hooks",
+        has_receiver: false,
+        method: "bind",
+        class_filter: Some("AsyncLocalStorage"),
+        runtime: "js_async_local_storage_static_bind_direct",
+        args: &[NA_F64, NA_VARARGS],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "async_hooks",
+        has_receiver: false,
+        method: "snapshot",
+        class_filter: Some("AsyncLocalStorage"),
+        runtime: "js_async_local_storage_static_snapshot_direct",
+        args: &[NA_VARARGS],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "async_hooks",
         has_receiver: true,
         method: "run",
         class_filter: None,
         runtime: "js_async_local_storage_run",
         args: &[NA_F64, NA_F64, NA_VARARGS],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "async_hooks",
+        has_receiver: false,
+        method: "bind",
+        class_filter: Some("AsyncResource"),
+        runtime: "js_async_resource_static_bind_direct",
+        args: &[NA_F64, NA_F64, NA_F64, NA_VARARGS],
         ret: NR_F64,
     },
     NativeModSig {
@@ -79,6 +106,15 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         method: "triggerAsyncId",
         class_filter: None,
         runtime: "js_async_hooks_trigger_async_id",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "async_hooks",
+        has_receiver: false,
+        method: "executionAsyncResource",
+        class_filter: None,
+        runtime: "js_async_hooks_execution_async_resource",
         args: &[],
         ret: NR_F64,
     },

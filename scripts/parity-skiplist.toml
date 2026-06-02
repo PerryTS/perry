@@ -26,6 +26,17 @@
 #    values that legitimately differ between runs (process.pid,
 #    Date.now standalone, fs.watch event timing) so byte-for-byte
 #    parity comparison is not the right test shape.
+#
+# NOTE on skiplist vs API manifest (#3700): a skiplisted module/API can
+# still appear in `--print-api-manifest`, and that is NOT a conflict.
+# The two sources measure different axes: the manifest records whether an
+# API *exists and is callable* in Perry; this skiplist records whether the
+# API is a *byte-for-byte parity target*. A module is correctly skiplisted
+# (one of the three categories above) even while the manifest claims it —
+# e.g. `v8` is implemented and callable, but its surface is not
+# byte-matchable against Node (see its reason below). Triage rule: a
+# failure on a skiplisted-but-manifest-claimed API is bucketed as `Skip`,
+# not as a manifest/runtime gap.
 
 [skip-modules]
 # Architectural — require a JS interpreter at runtime.
@@ -36,7 +47,12 @@
 "inspector" = "V8 inspector protocol; Perry is not V8."
 "inspector/promises" = "V8 inspector protocol; Perry is not V8."
 "trace_events" = "V8 trace events; not applicable to native binaries."
-"v8" = "V8-specific introspection (heap snapshots, cached data, serialization). Inapplicable."
+# Implemented and manifest-claimed, but not byte-parity-testable: serialize/
+# deserialize use the JSC wire format (Perry isn't V8, so the bytes differ from
+# Node's V8 format), and getHeapStatistics/getHeapSpaceStatistics/
+# getHeapCodeStatistics/cachedDataVersionTag return runtime-specific values
+# (categories 2 + 3). Roundtrips and shapes work; byte-for-byte diffing does not.
+"v8" = "V8-specific introspection + JSC-format serialization; callable but not byte-parity-testable (see #3700)."
 "domain" = "Deprecated since Node 4; not implementing legacy error-routing system."
 
 # Out-of-scope test surface.
