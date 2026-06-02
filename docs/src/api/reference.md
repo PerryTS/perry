@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2501 entries across 105 modules.
+Total: 2526 entries across 105 modules.
 
 ## Modules
 
@@ -1853,17 +1853,24 @@ Total: 2501 entries across 105 modules.
 - `end` — instance *(class: `Socket`)*
 - `eventNames` — instance *(class: `Socket`)*
 - `eventNames` — instance *(class: `Server`)*
+- `exportKeyingMaterial` — instance *(class: `Socket`)*
 - `family` — instance *(class: `SocketAddress`)*
 - `flowlabel` — instance *(class: `SocketAddress`)*
 - `fromJSON` — instance *(class: `BlockList`)*
+- `getCertificate` — instance *(class: `Socket`)*
+- `getCipher` — instance *(class: `Socket`)*
 - `getConnections` — instance *(class: `Server`)*
 - `getDefaultAutoSelectFamily` — module
 - `getDefaultAutoSelectFamilyAttemptTimeout` — module
+- `getPeerCertificate` — instance *(class: `Socket`)*
+- `getProtocol` — instance *(class: `Socket`)*
+- `getSession` — instance *(class: `Socket`)*
 - `getTypeOfService` — instance *(class: `Socket`)*
 - `isBlockList` — module *(class: `BlockList`)*
 - `isIP` — module
 - `isIPv4` — module
 - `isIPv6` — module
+- `isSessionReused` — instance *(class: `Socket`)*
 - `listen` — instance *(class: `Server`)*
 - `listenerCount` — instance *(class: `Socket`)*
 - `listenerCount` — instance *(class: `Server`)*
@@ -1902,6 +1909,7 @@ Total: 2501 entries across 105 modules.
 - `setDefaultEncoding` — instance *(class: `Socket`)*
 - `setEncoding` — instance *(class: `Socket`)*
 - `setKeepAlive` — instance *(class: `Socket`)*
+- `setMaxSendFragment` — instance *(class: `Socket`)*
 - `setNoDelay` — instance *(class: `Socket`)*
 - `setTimeout` — instance *(class: `Socket`)*
 - `setTypeOfService` — instance *(class: `Socket`)*
@@ -2987,12 +2995,29 @@ Total: 2501 entries across 105 modules.
 ### Methods
 
 - `SecureContext` — module
+- `Server` — module
+- `TLSSocket` — module
+- `addListener` — instance *(class: `Server`)*
+- `address` — instance *(class: `Server`)*
 - `checkServerIdentity` — module
+- `close` — instance *(class: `Server`)*
 - `connect` — module
 - `createSecureContext` — module
+- `createServer` — module
+- `eventNames` — instance *(class: `Server`)*
 - `getCACertificates` — module
 - `getCiphers` — module
+- `getTicketKeys` — instance *(class: `Server`)*
+- `listen` — instance *(class: `Server`)*
+- `listenerCount` — instance *(class: `Server`)*
+- `off` — instance *(class: `Server`)*
+- `on` — instance *(class: `Server`)*
+- `once` — instance *(class: `Server`)*
+- `removeAllListeners` — instance *(class: `Server`)*
+- `removeListener` — instance *(class: `Server`)*
 - `setDefaultCACertificates` — module
+- `setSecureContext` — instance *(class: `Server`)*
+- `setTicketKeys` — instance *(class: `Server`)*
 
 ### Properties
 

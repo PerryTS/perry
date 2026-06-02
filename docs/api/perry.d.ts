@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1745 entries across 102 modules
+// Coverage: 1748 entries across 102 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3360,19 +3360,25 @@ declare module "tls" {
   /** stdlib */
   export const rootCertificates: any;
   /** stdlib */
-  export function SecureContext(...args: any[]): any;
+  export function SecureContext(options: any): any;
   /** stdlib */
-  export function checkServerIdentity(...args: any[]): any;
+  export function Server(options: any, secureConnectionListener: any): any;
+  /** stdlib */
+  export function TLSSocket(socket: any, options: any): any;
+  /** stdlib */
+  export function checkServerIdentity(hostname: any, cert: any): any;
   /** stdlib */
   export function connect(p0: string, p1: any, p2: string, p3: any): any;
   /** stdlib */
-  export function createSecureContext(...args: any[]): any;
+  export function createSecureContext(options: any): any;
   /** stdlib */
-  export function getCACertificates(...args: any[]): any;
+  export function createServer(options: any, secureConnectionListener: any): any;
+  /** stdlib */
+  export function getCACertificates(type: any): any;
   /** stdlib */
   export function getCiphers(...args: any[]): any;
   /** stdlib */
-  export function setDefaultCACertificates(...args: any[]): any;
+  export function setDefaultCACertificates(certs: any): any;
 }
 
 declare module "tty" {
