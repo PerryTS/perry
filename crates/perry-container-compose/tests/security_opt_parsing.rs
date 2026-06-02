@@ -92,7 +92,9 @@ fn docker_security_args_emit_no_new_privileges_when_set() {
     let args = proto.security_args(&profile);
     let pairs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     assert!(
-        pairs.windows(2).any(|w| w[0] == "--security-opt" && w[1].starts_with("no-new-privileges")),
+        pairs
+            .windows(2)
+            .any(|w| w[0] == "--security-opt" && w[1].starts_with("no-new-privileges")),
         "DockerProtocol must emit `--security-opt no-new-privileges:...` when set; got {:?}",
         args
     );
@@ -108,8 +110,9 @@ fn docker_security_args_emit_seccomp_when_set() {
     let args = proto.security_args(&profile);
     let pairs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     assert!(
-        pairs.windows(2).any(|w| w[0] == "--security-opt"
-            && w[1] == "seccomp=/etc/strict.json"),
+        pairs
+            .windows(2)
+            .any(|w| w[0] == "--security-opt" && w[1] == "seccomp=/etc/strict.json"),
         "DockerProtocol must emit `--security-opt seccomp=/etc/strict.json`; got {:?}",
         args
     );

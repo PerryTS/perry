@@ -1,11 +1,11 @@
 //! Type definitions for the perry/container module.
 
+use dashmap::DashMap;
 use perry_runtime::StringHeader;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
-use dashmap::DashMap;
 
 use perry_container_compose::ComposeEngine;
 
@@ -17,7 +17,8 @@ pub static WORKLOAD_HANDLES: OnceLock<
     DashMap<u64, std::sync::Arc<perry_container_compose::WorkloadGraphEngine>>,
 > = OnceLock::new();
 
-pub static CONTAINER_INFO_LIST_REGISTRY: OnceLock<DashMap<u64, Vec<ContainerInfo>>> = OnceLock::new();
+pub static CONTAINER_INFO_LIST_REGISTRY: OnceLock<DashMap<u64, Vec<ContainerInfo>>> =
+    OnceLock::new();
 pub static CONTAINER_INFO_REGISTRY: OnceLock<DashMap<u64, ContainerInfo>> = OnceLock::new();
 pub static CONTAINER_LOGS_REGISTRY: OnceLock<DashMap<u64, ContainerLogs>> = OnceLock::new();
 pub static IMAGE_INFO_LIST_REGISTRY: OnceLock<DashMap<u64, Vec<ImageInfo>>> = OnceLock::new();
@@ -29,12 +30,16 @@ pub struct ArcComposeEngine(pub std::sync::Arc<ComposeEngine>);
 pub type ContainerError = perry_container_compose::error::ComposeError;
 pub use perry_container_compose::types::{ComposeSpec, ListOrDict};
 
-pub unsafe fn parse_container_spec(ptr: *const perry_runtime::StringHeader) -> Result<ContainerSpec, String> {
+pub unsafe fn parse_container_spec(
+    ptr: *const perry_runtime::StringHeader,
+) -> Result<ContainerSpec, String> {
     let json = string_from_header(ptr).ok_or("Invalid JSON")?;
     serde_json::from_str(&json).map_err(|e| e.to_string())
 }
 
-pub unsafe fn parse_compose_spec(ptr: *const perry_runtime::StringHeader) -> Result<perry_container_compose::types::ComposeSpec, String> {
+pub unsafe fn parse_compose_spec(
+    ptr: *const perry_runtime::StringHeader,
+) -> Result<perry_container_compose::types::ComposeSpec, String> {
     let json = string_from_header(ptr).ok_or("Invalid JSON")?;
     // Apply env-var interpolation (`${VAR}` / `${VAR:-default}`) BEFORE
     // JSON parsing — the spec from TS object literals carries placeholder
@@ -89,7 +94,9 @@ pub fn register_image_info_list(list: Vec<ImageInfo>) -> u64 {
 
 pub fn register_container_handle(handle: ContainerHandle) -> u64 {
     let id = NEXT_HANDLE_ID.fetch_add(1, Ordering::SeqCst);
-    CONTAINER_HANDLES.get_or_init(DashMap::new).insert(id, handle);
+    CONTAINER_HANDLES
+        .get_or_init(DashMap::new)
+        .insert(id, handle);
     id
 }
 
@@ -105,7 +112,9 @@ pub fn register_workload_handle(
     engine: std::sync::Arc<perry_container_compose::WorkloadGraphEngine>,
 ) -> u64 {
     let id = NEXT_HANDLE_ID.fetch_add(1, Ordering::SeqCst);
-    WORKLOAD_HANDLES.get_or_init(DashMap::new).insert(id, engine);
+    WORKLOAD_HANDLES
+        .get_or_init(DashMap::new)
+        .insert(id, engine);
     id
 }
 

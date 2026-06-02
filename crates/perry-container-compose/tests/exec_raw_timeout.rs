@@ -15,8 +15,7 @@ use perry_container_compose::backend::{
 };
 use perry_container_compose::error::Result;
 use perry_container_compose::types::{
-    ComposeNetwork, ComposeServiceBuild, ComposeVolume, ContainerInfo,
-    ContainerSpec, ImageInfo,
+    ComposeNetwork, ComposeServiceBuild, ComposeVolume, ContainerInfo, ContainerSpec, ImageInfo,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -30,40 +29,94 @@ struct PassthroughProtocol {
 }
 
 impl CliProtocol for PassthroughProtocol {
-    fn run_args(&self, _: &ContainerSpec) -> Vec<String> { self.args.clone() }
-    fn create_args(&self, _: &ContainerSpec) -> Vec<String> { self.args.clone() }
-    fn start_args(&self, _: &str) -> Vec<String> { self.args.clone() }
-    fn stop_args(&self, _: &str, _: Option<u32>) -> Vec<String> { self.args.clone() }
-    fn remove_args(&self, _: &str, _: bool) -> Vec<String> { self.args.clone() }
-    fn list_args(&self, _: bool) -> Vec<String> { self.args.clone() }
-    fn inspect_args(&self, _: &str) -> Vec<String> { self.args.clone() }
-    fn logs_args(&self, _: &str, _: Option<u32>) -> Vec<String> { self.args.clone() }
+    fn run_args(&self, _: &ContainerSpec) -> Vec<String> {
+        self.args.clone()
+    }
+    fn create_args(&self, _: &ContainerSpec) -> Vec<String> {
+        self.args.clone()
+    }
+    fn start_args(&self, _: &str) -> Vec<String> {
+        self.args.clone()
+    }
+    fn stop_args(&self, _: &str, _: Option<u32>) -> Vec<String> {
+        self.args.clone()
+    }
+    fn remove_args(&self, _: &str, _: bool) -> Vec<String> {
+        self.args.clone()
+    }
+    fn list_args(&self, _: bool) -> Vec<String> {
+        self.args.clone()
+    }
+    fn inspect_args(&self, _: &str) -> Vec<String> {
+        self.args.clone()
+    }
+    fn logs_args(&self, _: &str, _: Option<u32>) -> Vec<String> {
+        self.args.clone()
+    }
     fn exec_args(
-        &self, _: &str, _: &[String],
-        _: Option<&HashMap<String, String>>, _: Option<&str>,
-    ) -> Vec<String> { self.args.clone() }
-    fn pull_image_args(&self, _: &str) -> Vec<String> { self.args.clone() }
-    fn list_images_args(&self) -> Vec<String> { self.args.clone() }
-    fn remove_image_args(&self, _: &str, _: bool) -> Vec<String> { self.args.clone() }
-    fn create_network_args(&self, _: &str, _: &ComposeNetwork) -> Vec<String> { self.args.clone() }
-    fn remove_network_args(&self, _: &str) -> Vec<String> { self.args.clone() }
-    fn create_volume_args(&self, _: &str, _: &ComposeVolume) -> Vec<String> { self.args.clone() }
-    fn remove_volume_args(&self, _: &str) -> Vec<String> { self.args.clone() }
-    fn inspect_network_args(&self, _: &str) -> Vec<String> { self.args.clone() }
-    fn inspect_volume_args(&self, _: &str) -> Vec<String> { self.args.clone() }
-    fn inspect_image_args(&self, _: &str) -> Vec<String> { self.args.clone() }
-    fn build_args(&self, _: &ComposeServiceBuild, _: &str) -> Vec<String> { self.args.clone() }
-    fn security_args(&self, _: &SecurityProfile) -> Vec<String> { Vec::new() }
+        &self,
+        _: &str,
+        _: &[String],
+        _: Option<&HashMap<String, String>>,
+        _: Option<&str>,
+    ) -> Vec<String> {
+        self.args.clone()
+    }
+    fn pull_image_args(&self, _: &str) -> Vec<String> {
+        self.args.clone()
+    }
+    fn list_images_args(&self) -> Vec<String> {
+        self.args.clone()
+    }
+    fn remove_image_args(&self, _: &str, _: bool) -> Vec<String> {
+        self.args.clone()
+    }
+    fn create_network_args(&self, _: &str, _: &ComposeNetwork) -> Vec<String> {
+        self.args.clone()
+    }
+    fn remove_network_args(&self, _: &str) -> Vec<String> {
+        self.args.clone()
+    }
+    fn create_volume_args(&self, _: &str, _: &ComposeVolume) -> Vec<String> {
+        self.args.clone()
+    }
+    fn remove_volume_args(&self, _: &str) -> Vec<String> {
+        self.args.clone()
+    }
+    fn inspect_network_args(&self, _: &str) -> Vec<String> {
+        self.args.clone()
+    }
+    fn inspect_volume_args(&self, _: &str) -> Vec<String> {
+        self.args.clone()
+    }
+    fn inspect_image_args(&self, _: &str) -> Vec<String> {
+        self.args.clone()
+    }
+    fn build_args(&self, _: &ComposeServiceBuild, _: &str) -> Vec<String> {
+        self.args.clone()
+    }
+    fn security_args(&self, _: &SecurityProfile) -> Vec<String> {
+        Vec::new()
+    }
 
-    fn parse_list_output(&self, _: &str) -> Result<Vec<ContainerInfo>> { Ok(vec![]) }
+    fn parse_list_output(&self, _: &str) -> Result<Vec<ContainerInfo>> {
+        Ok(vec![])
+    }
     fn parse_inspect_output(&self, _: &str) -> Result<ContainerInfo> {
         Ok(ContainerInfo {
-            id: String::new(), name: String::new(), image: String::new(),
-            status: String::new(), ports: Vec::new(),
-            labels: HashMap::new(), created: String::new(), ip_address: String::new(),
+            id: String::new(),
+            name: String::new(),
+            image: String::new(),
+            status: String::new(),
+            ports: Vec::new(),
+            labels: HashMap::new(),
+            created: String::new(),
+            ip_address: String::new(),
         })
     }
-    fn parse_list_images_output(&self, _: &str) -> Result<Vec<ImageInfo>> { Ok(vec![]) }
+    fn parse_list_images_output(&self, _: &str) -> Result<Vec<ImageInfo>> {
+        Ok(vec![])
+    }
     fn parse_container_id(&self, stdout: &str) -> Result<String> {
         Ok(stdout.trim().to_string())
     }
@@ -85,7 +138,9 @@ async fn exec_raw_timeout_behavior() {
 
     // Phase 1: timeout fires when command hangs.
     std::env::set_var("PERRY_CONTAINER_OP_TIMEOUT_SECS", "1");
-    let proto = PassthroughProtocol { args: vec!["30".into()] };
+    let proto = PassthroughProtocol {
+        args: vec!["30".into()],
+    };
     let backend = CliBackend::new(bin.clone(), Box::new(proto));
     let started = std::time::Instant::now();
     let result = backend.pull_image("ignored").await;
@@ -107,7 +162,9 @@ async fn exec_raw_timeout_behavior() {
 
     // Phase 2: timeout does NOT fire for fast commands.
     std::env::set_var("PERRY_CONTAINER_OP_TIMEOUT_SECS", "10");
-    let proto = PassthroughProtocol { args: vec!["0".into()] };
+    let proto = PassthroughProtocol {
+        args: vec!["0".into()],
+    };
     let backend = CliBackend::new(bin, Box::new(proto));
     let result = backend.pull_image("ignored").await;
     assert!(
@@ -134,10 +191,7 @@ async fn exec_raw_truncates_long_stderr_in_error_message() {
         return;
     }
     let proto = PassthroughProtocol {
-        args: vec![
-            "-c".into(),
-            "yes Y | head -c 100000 1>&2; exit 1".into(),
-        ],
+        args: vec!["-c".into(), "yes Y | head -c 100000 1>&2; exit 1".into()],
     };
     let backend = CliBackend::new(bin, Box::new(proto));
     let result = backend.pull_image("ignored").await;

@@ -1,13 +1,12 @@
 //! Image verification and security modules.
 
+use crate::container::mod_private::get_global_backend_instance;
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
-use crate::container::mod_private::get_global_backend_instance;
 
 pub const CHAINGUARD_IDENTITY: &str =
     "https://github.com/chainguard-images/images/.github/workflows/sign.yaml@refs/heads/main";
-pub const CHAINGUARD_ISSUER: &str =
-    "https://token.actions.githubusercontent.com";
+pub const CHAINGUARD_ISSUER: &str = "https://token.actions.githubusercontent.com";
 
 #[derive(Debug, Clone)]
 pub enum VerificationResult {
@@ -19,7 +18,10 @@ static VERIFICATION_CACHE: OnceLock<RwLock<HashMap<String, VerificationResult>>>
 
 pub async fn fetch_image_digest(reference: &str) -> Result<String, String> {
     let backend = get_global_backend_instance().await?;
-    let info = backend.inspect_image(reference).await.map_err(|e| e.to_string())?;
+    let info = backend
+        .inspect_image(reference)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(info.id)
 }
 
@@ -27,8 +29,10 @@ pub async fn run_cosign_verify(reference: &str, digest: &str) -> VerificationRes
     let output = tokio::process::Command::new("cosign")
         .args([
             "verify",
-            "--certificate-identity", CHAINGUARD_IDENTITY,
-            "--certificate-oidc-issuer", CHAINGUARD_ISSUER,
+            "--certificate-identity",
+            CHAINGUARD_IDENTITY,
+            "--certificate-oidc-issuer",
+            CHAINGUARD_ISSUER,
             &format!("{}@{}", reference, digest),
         ])
         .output()
@@ -52,7 +56,9 @@ pub async fn verify_image(reference: &str) -> Result<String, String> {
         if let Some(result) = cache_read.get(&digest) {
             return match result {
                 VerificationResult::Verified => Ok(digest),
-                VerificationResult::Failed(reason) => Err(format!("Verification failed: {}", reason)),
+                VerificationResult::Failed(reason) => {
+                    Err(format!("Verification failed: {}", reason))
+                }
             };
         }
     }
@@ -110,8 +116,14 @@ mod tests {
 
     #[test]
     fn test_chainguard_image_lookup() {
-        assert_eq!(get_chainguard_image("git"), Some("cgr.dev/chainguard/git".to_string()));
-        assert_eq!(get_chainguard_image("rust"), Some("cgr.dev/chainguard/rust".to_string()));
+        assert_eq!(
+            get_chainguard_image("git"),
+            Some("cgr.dev/chainguard/git".to_string())
+        );
+        assert_eq!(
+            get_chainguard_image("rust"),
+            Some("cgr.dev/chainguard/rust".to_string())
+        );
         assert_eq!(get_chainguard_image("unknown-tool"), None);
     }
 

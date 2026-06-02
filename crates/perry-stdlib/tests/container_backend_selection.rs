@@ -15,7 +15,7 @@
 //!    message naming the valid options — the user must learn what's
 //!    available without grepping source.
 
-use perry_runtime::{js_promise_state, js_promise_run_microtasks, Promise, StringHeader};
+use perry_runtime::{js_promise_run_microtasks, js_promise_state, Promise, StringHeader};
 use perry_stdlib::container::*;
 use std::ptr;
 
@@ -45,7 +45,9 @@ fn make_string_header(s: &str) -> Vec<u8> {
         (*header).byte_len = len;
         (*header).capacity = len;
         (*header).refcount = 0;
-        let data_ptr = header_bytes.as_mut_ptr().add(std::mem::size_of::<StringHeader>());
+        let data_ptr = header_bytes
+            .as_mut_ptr()
+            .add(std::mem::size_of::<StringHeader>());
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), data_ptr, bytes.len());
     }
     header_bytes
@@ -117,7 +119,10 @@ fn get_backend_priority_linux_lists_podman_first() {
         let parsed: Vec<String> = serde_json::from_str(&json).unwrap();
         // OCI-compatible / rootless / daemonless beats daemon-based
         // (podman) → containerd-native (nerdctl) → daemon-based fallback (docker).
-        assert_eq!(parsed[0], "podman", "Linux priority list must start with podman");
+        assert_eq!(
+            parsed[0], "podman",
+            "Linux priority list must start with podman"
+        );
         assert_eq!(parsed.last().map(|s| s.as_str()), Some("docker"));
     }
 }
@@ -193,8 +198,8 @@ fn select_backend_for_privileged_spec_skips_apple() {
         // The result MUST NOT be apple/container — that's the point
         // of capability-aware selection. The exact runner-up depends
         // on platform, but it's guaranteed not to be apple.
-        let parsed: String = serde_json::from_str(&json)
-            .expect("selectBackendFor must return a JSON string");
+        let parsed: String =
+            serde_json::from_str(&json).expect("selectBackendFor must return a JSON string");
         assert_ne!(
             parsed, "apple/container",
             "privileged: true must rule out apple/container; got {}",
@@ -274,10 +279,8 @@ fn select_backend_for_null_spec_returns_null() {
     // Defensive: null pointer → "null".
     unsafe {
         let mode_h = make_string_header("accept-emulated");
-        let result_ptr = js_container_selectBackendFor(
-            ptr::null(),
-            mode_h.as_ptr() as *const StringHeader,
-        );
+        let result_ptr =
+            js_container_selectBackendFor(ptr::null(), mode_h.as_ptr() as *const StringHeader);
         let json = read_string_header(result_ptr).expect("non-null result");
         assert_eq!(json, "null");
     }
@@ -342,7 +345,10 @@ fn get_available_backends_ffi_returns_non_null_promise() {
     // in a #[test] context.
     unsafe {
         let promise_ptr = js_container_getAvailableBackends();
-        assert!(!promise_ptr.is_null(), "getAvailableBackends must return a non-null Promise");
+        assert!(
+            !promise_ptr.is_null(),
+            "getAvailableBackends must return a non-null Promise"
+        );
         // We don't drive the promise here — that requires a live
         // tokio runtime + Perry's stdlib_process_pending wiring,
         // which is exercised by the integration / e2e tests. The

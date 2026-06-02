@@ -27,8 +27,8 @@ pub use types::{
     ContainerSpec, ImageInfo, ListOrDict,
 };
 
-use perry_runtime::{js_promise_new, Promise, StringHeader};
 pub use backend::{detect_backend, ContainerBackend};
+use perry_runtime::{js_promise_new, Promise, StringHeader};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -222,9 +222,10 @@ pub unsafe extern "C" fn js_container_run(spec_ptr: *const StringHeader) -> *mut
     let spec = match types::parse_container_spec(spec_ptr) {
         Ok(s) => s,
         Err(e) => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
-                Err::<u64, String>(e)
-            });
+            crate::common::spawn_for_promise(
+                promise as *mut u8,
+                async move { Err::<u64, String>(e) },
+            );
             return promise;
         }
     };
@@ -403,9 +404,10 @@ pub unsafe extern "C" fn js_container_create(spec_ptr: *const StringHeader) -> *
     let spec = match types::parse_container_spec(spec_ptr) {
         Ok(s) => s,
         Err(e) => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
-                Err::<u64, String>(e)
-            });
+            crate::common::spawn_for_promise(
+                promise as *mut u8,
+                async move { Err::<u64, String>(e) },
+            );
             return promise;
         }
     };
@@ -480,7 +482,11 @@ pub unsafe extern "C" fn js_container_stop(
     };
 
     crate::common::spawn_for_promise(promise as *mut u8, async move {
-        let timeout_opt = if timeout < 0 { None } else { Some(timeout as u32) };
+        let timeout_opt = if timeout < 0 {
+            None
+        } else {
+            Some(timeout as u32)
+        };
         let backend = match get_global_backend().await {
             Ok(b) => Arc::clone(b),
             Err(e) => return Err::<u64, String>(e.to_string()),
@@ -589,9 +595,7 @@ pub unsafe extern "C" fn js_container_downByProject(
 ///
 /// FFI: `js_container_downAll(opts_json: *const StringHeader) -> *mut Promise`
 #[no_mangle]
-pub unsafe extern "C" fn js_container_downAll(
-    opts_ptr: *const StringHeader,
-) -> *mut Promise {
+pub unsafe extern "C" fn js_container_downAll(opts_ptr: *const StringHeader) -> *mut Promise {
     let promise = js_promise_new();
     let opts_json = string_from_header(opts_ptr);
 
@@ -642,7 +646,11 @@ pub unsafe extern "C" fn js_container_removeIfExists(
             let removed = remove_if_exists(backend.as_ref(), &id, force != 0)
                 .await
                 .map_err(|e| e.to_string())?;
-            Ok(if removed { "true".to_string() } else { "false".to_string() })
+            Ok(if removed {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            })
         },
         |s| {
             let str_ptr = perry_runtime::js_string_from_bytes(s.as_ptr(), s.len() as u32);
@@ -668,14 +676,8 @@ fn parse_cleanup_options(
         Err(_) => return CleanupOptions::default_for_project(),
     };
     CleanupOptions {
-        volumes: v
-            .get("volumes")
-            .and_then(|x| x.as_bool())
-            .unwrap_or(false),
-        networks: v
-            .get("networks")
-            .and_then(|x| x.as_bool())
-            .unwrap_or(true),
+        volumes: v.get("volumes").and_then(|x| x.as_bool()).unwrap_or(false),
+        networks: v.get("networks").and_then(|x| x.as_bool()).unwrap_or(true),
     }
 }
 
@@ -881,11 +883,10 @@ pub unsafe extern "C" fn js_container_selectBackendFor(
         _ => perry_container_compose::SelectMode::AcceptEmulated,
     };
 
-    let spec: perry_container_compose::ComposeSpec =
-        match serde_json::from_str(&spec_json) {
-            Ok(s) => s,
-            Err(_) => return string_to_js("null"),
-        };
+    let spec: perry_container_compose::ComposeSpec = match serde_json::from_str(&spec_json) {
+        Ok(s) => s,
+        Err(_) => return string_to_js("null"),
+    };
 
     match perry_container_compose::select_backend_for(&spec, mode) {
         Some(name) => {
@@ -975,9 +976,7 @@ pub unsafe extern "C" fn js_container_getBackendPriority() -> *const StringHeade
 /// - `"unknown backend: '<name>'. Valid: [...]"`
 /// - `"backend probe failed: <reason>"`
 #[no_mangle]
-pub unsafe extern "C" fn js_container_setBackend(
-    name_ptr: *const StringHeader,
-) -> *mut Promise {
+pub unsafe extern "C" fn js_container_setBackend(name_ptr: *const StringHeader) -> *mut Promise {
     let promise = js_promise_new();
     let name = match string_from_header(name_ptr) {
         Some(s) => s,
@@ -996,10 +995,9 @@ pub unsafe extern "C" fn js_container_setBackend(
             // reset, so mid-process switching would just be deceptive
             // (env var would update but cached singleton wouldn't).
             if BACKEND.get().is_some() {
-                return Err(
-                    "backend already initialised; setBackend must be called \
-                     before any other container op".to_string(),
-                );
+                return Err("backend already initialised; setBackend must be called \
+                     before any other container op"
+                    .to_string());
             }
 
             // Reject if name isn't in the canonical probe list. We use
@@ -1075,10 +1073,9 @@ pub unsafe extern "C" fn js_container_setBackends(
             // Reject if BACKEND already initialised — same OnceLock
             // contract as setBackend.
             if BACKEND.get().is_some() {
-                return Err(
-                    "backend already initialised; setBackends must be called \
-                     before any other container op".to_string(),
-                );
+                return Err("backend already initialised; setBackends must be called \
+                     before any other container op"
+                    .to_string());
             }
 
             // Parse the JSON-encoded array. Caller is expected to do
@@ -1103,10 +1100,7 @@ pub unsafe extern "C" fn js_container_setBackends(
             let candidates = perry_container_compose::platform_candidates();
             for n in &names {
                 if !candidates.iter().any(|c| **c == *n) {
-                    return Err(format!(
-                        "unknown backend: '{}'. Valid: {:?}",
-                        n, candidates
-                    ));
+                    return Err(format!("unknown backend: '{}'. Valid: {:?}", n, candidates));
                 }
             }
 
@@ -1228,7 +1222,9 @@ pub unsafe extern "C" fn js_container_exec(
 /// Pull a container image
 /// FFI: js_container_pullImage(reference: *const StringHeader) -> *mut Promise
 #[no_mangle]
-pub unsafe extern "C" fn js_container_pullImage(reference_ptr: *const StringHeader) -> *mut Promise {
+pub unsafe extern "C" fn js_container_pullImage(
+    reference_ptr: *const StringHeader,
+) -> *mut Promise {
     let promise = js_promise_new();
 
     let reference = match string_from_header(reference_ptr) {
@@ -1357,9 +1353,10 @@ pub unsafe extern "C" fn js_container_composeUp(
     let spec = match types::parse_compose_spec(spec_ptr) {
         Ok(s) => s,
         Err(e) => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
-                Err::<u64, String>(e)
-            });
+            crate::common::spawn_for_promise(
+                promise as *mut u8,
+                async move { Err::<u64, String>(e) },
+            );
             return promise;
         }
     };
@@ -1371,10 +1368,10 @@ pub unsafe extern "C" fn js_container_composeUp(
         };
         let wrapper = compose::ComposeWrapper::new(spec, backend);
         match wrapper.up().await {
-        Ok(_handle) => {
-            let handle_id = types::register_compose_handle(wrapper.engine().clone());
-            Ok(handle_to_promise_bits(handle_id))
-        }
+            Ok(_handle) => {
+                let handle_id = types::register_compose_handle(wrapper.engine().clone());
+                Ok(handle_to_promise_bits(handle_id))
+            }
             Err(e) => Err::<u64, String>(e.to_string()),
         }
     });
@@ -1476,8 +1473,7 @@ pub unsafe extern "C" fn js_container_compose_down(
     let opts_json = unsafe { string_from_header(opts_ptr) };
     let (remove_volumes, _remove_orphans) = match opts_json.as_deref() {
         Some(s) if !s.is_empty() && s != "undefined" && s != "null" => {
-            let v: serde_json::Value =
-                serde_json::from_str(s).unwrap_or(serde_json::Value::Null);
+            let v: serde_json::Value = serde_json::from_str(s).unwrap_or(serde_json::Value::Null);
             (
                 v.get("volumes").and_then(|x| x.as_bool()).unwrap_or(false),
                 v.get("removeOrphans")
@@ -1688,8 +1684,8 @@ pub unsafe extern "C" fn js_workload_node(
     let name = string_from_header(name_ptr).unwrap_or_default();
     let spec_json = string_from_header(spec_json_ptr).unwrap_or_else(|| "{}".to_string());
 
-    let mut node: perry_container_compose::WorkloadNode =
-        serde_json::from_str(&spec_json).unwrap_or_else(|_| perry_container_compose::WorkloadNode {
+    let mut node: perry_container_compose::WorkloadNode = serde_json::from_str(&spec_json)
+        .unwrap_or_else(|_| perry_container_compose::WorkloadNode {
             id: name.clone(),
             name: name.clone(),
             image: None,
@@ -1720,10 +1716,10 @@ pub unsafe extern "C" fn js_workload_runGraph(
     let opts_json = string_from_header(opts_json_ptr).unwrap_or_else(|| "{}".to_string());
 
     crate::common::spawn_for_promise(promise as *mut u8, async move {
-        let graph: perry_container_compose::WorkloadGraph =
-            serde_json::from_str(&graph_json).map_err(|e| format!("Failed to parse graph: {}", e))?;
-        let opts: perry_container_compose::RunGraphOptions =
-            serde_json::from_str(&opts_json).map_err(|e| format!("Failed to parse options: {}", e))?;
+        let graph: perry_container_compose::WorkloadGraph = serde_json::from_str(&graph_json)
+            .map_err(|e| format!("Failed to parse graph: {}", e))?;
+        let opts: perry_container_compose::RunGraphOptions = serde_json::from_str(&opts_json)
+            .map_err(|e| format!("Failed to parse options: {}", e))?;
 
         let backend = match get_global_backend().await {
             Ok(b) => Arc::clone(b),

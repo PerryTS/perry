@@ -4,8 +4,14 @@ use tokio;
 // Feature: perry-container | Layer: unit | Req: 15.4 | Property: 10
 #[tokio::test]
 async fn test_get_chainguard_image() {
-    assert_eq!(get_chainguard_image("git").unwrap(), "cgr.dev/chainguard/git");
-    assert_eq!(get_chainguard_image("python").unwrap(), "cgr.dev/chainguard/python");
+    assert_eq!(
+        get_chainguard_image("git").unwrap(),
+        "cgr.dev/chainguard/git"
+    );
+    assert_eq!(
+        get_chainguard_image("python").unwrap(),
+        "cgr.dev/chainguard/python"
+    );
     assert!(get_chainguard_image("unknown-tool").is_none());
 }
 

@@ -102,9 +102,7 @@ impl ComposeEngine {
     /// Drain the collected normalization warnings. Returns the warnings
     /// captured during the most recent `up()` call (if any) and resets
     /// the buffer for the next invocation.
-    pub fn take_normalization_warnings(
-        &self,
-    ) -> Vec<crate::capabilities::NormalizationWarning> {
+    pub fn take_normalization_warnings(&self) -> Vec<crate::capabilities::NormalizationWarning> {
         std::mem::take(&mut *self.normalization_warnings.lock().unwrap())
     }
 
@@ -610,11 +608,8 @@ impl ComposeEngine {
             // services succeed and leaving the stack inconsistent.
             let mut container_spec = container_spec;
             let caps = self.backend.capabilities();
-            let mut svc_warnings = crate::capabilities::normalise_spec_for(
-                caps,
-                svc_name,
-                &mut container_spec,
-            );
+            let mut svc_warnings =
+                crate::capabilities::normalise_spec_for(caps, svc_name, &mut container_spec);
             svc_warnings.extend(crate::capabilities::normalise_security_profile(
                 caps,
                 svc_name,
@@ -655,9 +650,7 @@ impl ComposeEngine {
                         // doesn't leave detritus on the host.
                         let summary = svc_warnings
                             .iter()
-                            .map(|w| {
-                                format!("{}: {} ({})", w.service, w.field, w.reason)
-                            })
+                            .map(|w| format!("{}: {} ({})", w.service, w.field, w.reason))
                             .collect::<Vec<_>>()
                             .join("; ");
                         self.rollback().await;
@@ -786,12 +779,8 @@ impl ComposeEngine {
         // opted to PRESERVE volumes so the unconditional drain inside
         // rollback doesn't strip them.
         if !remove_volumes {
-            let saved_volumes: Vec<String> = self
-                .session_volumes
-                .lock()
-                .unwrap()
-                .drain(..)
-                .collect();
+            let saved_volumes: Vec<String> =
+                self.session_volumes.lock().unwrap().drain(..).collect();
             self.rollback().await;
             *self.session_volumes.lock().unwrap() = saved_volumes;
         } else {
@@ -1127,10 +1116,7 @@ pub async fn down_by_project(
 /// **Use sparingly** — this kills every stack on the host that was
 /// brought up via `perry/compose`, including ones the user might be
 /// actively developing against in another terminal.
-pub async fn down_all(
-    backend: &dyn ContainerBackend,
-    _opts: &CleanupOptions,
-) -> CleanupReport {
+pub async fn down_all(backend: &dyn ContainerBackend, _opts: &CleanupOptions) -> CleanupReport {
     let mut report = CleanupReport::default();
 
     let all_containers = match backend.list(true).await {

@@ -1,10 +1,12 @@
 //! Property-based tests for the perry-stdlib container module.
 
+use perry_container_compose::backend::{CliProtocol, DockerProtocol};
+use perry_container_compose::indexmap::IndexMap;
+use perry_container_compose::types::{
+    ComposeDependsOn, ComposeNetwork, ComposeService, ComposeSpec, ContainerSpec, DependsOnSpec,
+};
 use proptest::prelude::*;
 use serde_json::{json, Value};
-use perry_container_compose::indexmap::IndexMap;
-use perry_container_compose::types::{ContainerSpec, ComposeSpec, ComposeService, ComposeNetwork, DependsOnSpec, ComposeDependsOn};
-use perry_container_compose::backend::{CliProtocol, DockerProtocol};
 use std::collections::HashMap;
 
 // ============ Property 2: ContainerSpec CLI argument round-trip ============
@@ -17,23 +19,28 @@ fn arb_container_spec() -> impl Strategy<Value = ContainerSpec> {
         proptest::option::of("[a-z][a-z0-9_-]{1,30}"),
         proptest::option::of(proptest::collection::vec("[0-9]{1,5}:[0-9]{1,5}", 0..=3)),
         proptest::option::of(proptest::collection::vec("/[a-z0-9/]+:/[a-z0-9/]+", 0..=3)),
-        proptest::option::of(proptest::collection::hash_map("[A-Z][A-Z0-9_]{1,10}", "[a-z0-9]{1,10}", 0..=3)),
+        proptest::option::of(proptest::collection::hash_map(
+            "[A-Z][A-Z0-9_]{1,10}",
+            "[a-z0-9]{1,10}",
+            0..=3,
+        )),
         proptest::option::of(proptest::collection::vec("[a-z0-9]+", 0..=3)),
         proptest::option::of(proptest::bool::ANY),
         proptest::option::of(proptest::bool::ANY),
-    ).prop_map(|(image, name, ports, volumes, env, cmd, rm, read_only)| {
-        ContainerSpec {
-            image,
-            name,
-            ports,
-            volumes,
-            env,
-            cmd,
-            rm,
-            read_only,
-            ..Default::default()
-        }
-    })
+    )
+        .prop_map(
+            |(image, name, ports, volumes, env, cmd, rm, read_only)| ContainerSpec {
+                image,
+                name,
+                ports,
+                volumes,
+                env,
+                cmd,
+                rm,
+                read_only,
+                ..Default::default()
+            },
+        )
 }
 
 proptest! {

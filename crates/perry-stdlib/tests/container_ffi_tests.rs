@@ -22,7 +22,7 @@ fn make_string_header(s: &str) -> Vec<u8> {
         std::ptr::copy_nonoverlapping(
             &header as *const StringHeader as *const u8,
             buf.as_mut_ptr(),
-            header_size
+            header_size,
         );
     }
     buf[header_size..].copy_from_slice(bytes);
@@ -31,7 +31,10 @@ fn make_string_header(s: &str) -> Vec<u8> {
 
 /// Safe helper to call an FFI function and drive the promise to completion
 unsafe fn await_promise_sync(promise: *mut Promise) -> Result<u64, String> {
-    assert!(!promise.is_null(), "FFI function must return a non-null promise");
+    assert!(
+        !promise.is_null(),
+        "FFI function must return a non-null promise"
+    );
 
     let mut count = 0;
     loop {
@@ -39,9 +42,11 @@ unsafe fn await_promise_sync(promise: *mut Promise) -> Result<u64, String> {
         perry_stdlib::common::js_stdlib_process_pending();
 
         let state = perry_runtime::js_promise_state(promise);
-        if state == 1 { // Resolved
+        if state == 1 {
+            // Resolved
             return Ok(perry_runtime::js_promise_value(promise) as u64);
-        } else if state == 2 { // Rejected
+        } else if state == 2 {
+            // Rejected
             return Err("Promise rejected".to_string());
         }
 

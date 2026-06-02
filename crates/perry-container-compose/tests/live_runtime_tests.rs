@@ -23,12 +23,12 @@
 
 #![cfg(feature = "integration-tests")]
 
+use indexmap::IndexMap;
 use perry_container_compose::backend::{detect_backend, ContainerBackend};
-use perry_container_compose::compose::{down_by_project, ComposeEngine, CleanupOptions};
+use perry_container_compose::compose::{down_by_project, CleanupOptions, ComposeEngine};
 use perry_container_compose::types::{
     ComposeNetwork, ComposeService, ComposeSpec, ComposeVolume, ServiceNetworks,
 };
-use indexmap::IndexMap;
 use std::sync::Arc;
 
 /// RAII-style test cleanup — drops at end of test scope and tears down
@@ -86,8 +86,10 @@ fn live_tests_enabled() -> bool {
 async fn make_backend() -> Arc<dyn ContainerBackend> {
     detect_backend()
         .await
-        .expect("PERRY_INTEGRATION_TESTS=1 set but no live backend available — \
-                 install docker/podman/apple-container")
+        .expect(
+            "PERRY_INTEGRATION_TESTS=1 set but no live backend available — \
+                 install docker/podman/apple-container",
+        )
         .into()
 }
 
@@ -241,12 +243,12 @@ async fn live_down_preserves_volumes_by_default() {
         volumes: Some(volumes),
         ..Default::default()
     };
-    let eng = Arc::new(ComposeEngine::new(spec.clone(), project.clone(), backend.clone()));
-    let _ = eng
-        .clone()
-        .up(&[], false, false, false)
-        .await
-        .expect("up");
+    let eng = Arc::new(ComposeEngine::new(
+        spec.clone(),
+        project.clone(),
+        backend.clone(),
+    ));
+    let _ = eng.clone().up(&[], false, false, false).await.expect("up");
 
     // The volume's runtime name is project-namespaced.
     let expected_vol = format!("{}_data", project);
@@ -323,11 +325,7 @@ async fn live_external_network_survives_down() {
         ..Default::default()
     };
     let eng = Arc::new(ComposeEngine::new(spec, project, backend.clone()));
-    let _ = eng
-        .clone()
-        .up(&[], false, false, false)
-        .await
-        .expect("up");
+    let _ = eng.clone().up(&[], false, false, false).await.expect("up");
     eng.down(&[], false, false).await.expect("down");
 
     // The external network MUST still exist after down.
@@ -390,11 +388,7 @@ async fn live_cross_service_dns_resolves_service_key() {
         ..Default::default()
     };
     let eng = Arc::new(ComposeEngine::new(spec, project, backend.clone()));
-    let _ = eng
-        .clone()
-        .up(&[], false, false, false)
-        .await
-        .expect("up");
+    let _ = eng.clone().up(&[], false, false, false).await.expect("up");
 
     // Give docker DNS a moment to register aliases.
     tokio::time::sleep(std::time::Duration::from_millis(800)).await;
@@ -404,11 +398,7 @@ async fn live_cross_service_dns_resolves_service_key() {
     let result = eng
         .exec(
             "ping_caller",
-            &[
-                "sh".into(),
-                "-c".into(),
-                "getent hosts ping_target".into(),
-            ],
+            &["sh".into(), "-c".into(), "getent hosts ping_target".into()],
             None,
             None,
         )
@@ -450,13 +440,11 @@ async fn live_two_stacks_dont_collide_on_volume_keys() {
             ComposeService {
                 image: Some("alpine:3.19".to_string()),
                 command: Some(serde_yaml::Value::Sequence(vec![
-                serde_yaml::Value::String("sh".into()),
-                serde_yaml::Value::String("-c".into()),
-                serde_yaml::Value::String("true".into()),
-            ])),
-                volumes: Some(vec![serde_yaml::Value::String(
-                    "shared-key:/data".into(),
-                )]),
+                    serde_yaml::Value::String("sh".into()),
+                    serde_yaml::Value::String("-c".into()),
+                    serde_yaml::Value::String("true".into()),
+                ])),
+                volumes: Some(vec![serde_yaml::Value::String("shared-key:/data".into())]),
                 ..Default::default()
             },
         );
@@ -480,8 +468,14 @@ async fn live_two_stacks_dont_collide_on_volume_keys() {
         backend.clone(),
     ));
 
-    eng1.clone().up(&[], false, false, false).await.expect("p1 up");
-    eng2.clone().up(&[], false, false, false).await.expect("p2 up");
+    eng1.clone()
+        .up(&[], false, false, false)
+        .await
+        .expect("p1 up");
+    eng2.clone()
+        .up(&[], false, false, false)
+        .await
+        .expect("p2 up");
 
     // Volume names must be project-namespaced and distinct.
     let v1 = format!("{}_shared-key", project1);

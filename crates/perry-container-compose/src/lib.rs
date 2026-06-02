@@ -38,10 +38,9 @@ pub use backend::{
     BackendProbeResult, CliBackend, CliProtocol, ContainerBackend, DockerProtocol, LimaProtocol,
 };
 pub use capabilities::{
-    capabilities_for_backend, normalise_security_profile, normalise_spec_for,
-    required_features, select_backend_for, unsupported_feature_names,
-    BackendCapabilities, EnforcementMode, FeatureSupport, NormalizationAction,
-    NormalizationWarning, SelectMode,
+    capabilities_for_backend, normalise_security_profile, normalise_spec_for, required_features,
+    select_backend_for, unsupported_feature_names, BackendCapabilities, EnforcementMode,
+    FeatureSupport, NormalizationAction, NormalizationWarning, SelectMode,
 };
 pub use compose::{resolve_startup_order, ComposeEngine};
 pub use error::{ComposeError, Result};

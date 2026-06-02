@@ -58,7 +58,11 @@ fn cyclic_deps_are_rejected() {
 fn external_network_parses_with_external_flag() {
     let spec = ComposeSpec::parse_str(&fixture("external-network")).expect("parse");
     let nets = spec.networks.expect("networks");
-    let shared = nets.get("shared").expect("shared net").clone().expect("non-null");
+    let shared = nets
+        .get("shared")
+        .expect("shared net")
+        .clone()
+        .expect("non-null");
     assert_eq!(shared.external, Some(true));
     assert_eq!(shared.name.as_deref(), Some("production_shared_v1"));
 }

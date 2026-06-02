@@ -136,6 +136,7 @@ default-members = [
     "crates/perry-codegen-wear-tiles",
     "crates/perry-codegen-wasm",
     "crates/perry-updater",
+    "crates/perry-container-compose",
 ]
 
 # Aggressive release optimizations for small, fast binaries

@@ -1,11 +1,9 @@
 //! ComposeWrapper — thin orchestration adapter over `perry_container_compose::ComposeEngine`.
 
+use super::types::{ComposeHandle, ComposeSpec, ContainerError, ContainerInfo, ContainerLogs};
 use perry_container_compose::backend::ContainerBackend;
-use super::types::{
-    ComposeHandle, ComposeSpec, ContainerError, ContainerInfo, ContainerLogs,
-};
-use std::sync::Arc;
 use perry_container_compose::ComposeEngine;
+use std::sync::Arc;
 
 pub struct ComposeWrapper {
     engine: Arc<ComposeEngine>,
@@ -13,7 +11,10 @@ pub struct ComposeWrapper {
 
 impl ComposeWrapper {
     pub fn new(spec: ComposeSpec, backend: Arc<dyn ContainerBackend>) -> Self {
-        let project_name = spec.name.clone().unwrap_or_else(|| "perry-stack".to_string());
+        let project_name = spec
+            .name
+            .clone()
+            .unwrap_or_else(|| "perry-stack".to_string());
 
         Self {
             engine: Arc::new(ComposeEngine::new(spec, project_name, backend)),

@@ -1024,18 +1024,14 @@ impl CliProtocol for AppleContainerProtocol {
     fn parse_inspect_output(&self, stdout: &str) -> Result<ContainerInfo> {
         let trimmed = stdout.trim();
         if trimmed.is_empty() {
-            return Err(ComposeError::NotFound(
-                "Inspect output empty".into(),
-            ));
+            return Err(ComposeError::NotFound("Inspect output empty".into()));
         }
         if let Ok(entries) = serde_json::from_str::<Vec<AppleInspectEntry>>(trimmed) {
             if let Some(e) = entries.into_iter().next() {
                 // Same defensive check as parse_list_output: a docker-
                 // shaped JSON parses cleanly through serde-default and
                 // produces empty fields. Reject if id+image are empty.
-                if !e.configuration.id.is_empty()
-                    || !e.configuration.image.reference.is_empty()
-                {
+                if !e.configuration.id.is_empty() || !e.configuration.image.reference.is_empty() {
                     return Ok(e.into_info());
                 }
             }
@@ -1057,7 +1053,10 @@ impl CliProtocol for AppleContainerProtocol {
                 .iter()
                 .any(|e| !e.reference.is_empty() || !e.id.is_empty() || !e.name.is_empty())
             {
-                return Ok(entries.into_iter().map(AppleImageEntry::into_info).collect());
+                return Ok(entries
+                    .into_iter()
+                    .map(AppleImageEntry::into_info)
+                    .collect());
             }
         }
         DockerProtocol.parse_list_images_output(stdout)
@@ -1183,7 +1182,14 @@ impl AppleImageEntry {
         let (repository, tag) = if !self.reference.is_empty() {
             split_image_reference(&self.reference)
         } else if !self.name.is_empty() {
-            (self.name.clone(), if self.tag.is_empty() { "latest".to_string() } else { self.tag.clone() })
+            (
+                self.name.clone(),
+                if self.tag.is_empty() {
+                    "latest".to_string()
+                } else {
+                    self.tag.clone()
+                },
+            )
         } else {
             (String::new(), String::new())
         };
@@ -1588,11 +1594,8 @@ impl ContainerBackend for CliBackend {
         let svc_name = spec.name.as_deref().unwrap_or("<unnamed>");
         let mut normalised_spec = spec.clone();
         let mut normalised_profile = profile.clone();
-        let mut warnings = crate::capabilities::normalise_spec_for(
-            caps,
-            svc_name,
-            &mut normalised_spec,
-        );
+        let mut warnings =
+            crate::capabilities::normalise_spec_for(caps, svc_name, &mut normalised_spec);
         warnings.extend(crate::capabilities::normalise_security_profile(
             caps,
             svc_name,
@@ -1664,11 +1667,7 @@ pub async fn detect_backend() -> Result<Box<dyn ContainerBackend>> {
         } else {
             let mut results = Vec::new();
             for candidate in &user_priority {
-                match tokio::time::timeout(
-                    Duration::from_secs(2),
-                    probe_candidate(candidate),
-                )
-                .await
+                match tokio::time::timeout(Duration::from_secs(2), probe_candidate(candidate)).await
                 {
                     Ok(Ok(backend)) => return Ok(backend),
                     Ok(Err(reason)) => results.push(BackendProbeResult {
@@ -1821,10 +1820,7 @@ async fn probe_candidate(name: &str) -> std::result::Result<Box<dyn ContainerBac
             // succeeding?" can confirm what was found. Stored in
             // PERRY_CONTAINER_BACKEND_VERSION for diagnostic consumers.
             if let Ok(s) = std::str::from_utf8(&out.stdout) {
-                std::env::set_var(
-                    "PERRY_CONTAINER_BACKEND_VERSION",
-                    s.trim(),
-                );
+                std::env::set_var("PERRY_CONTAINER_BACKEND_VERSION", s.trim());
             }
             Ok(Box::new(CliBackend::new(
                 bin,
@@ -1947,12 +1943,14 @@ mod tests {
         };
         let args = proto.run_args(&spec);
         assert!(
-            args.windows(2).any(|w| w[0] == "--network-alias" && w[1] == "db"),
+            args.windows(2)
+                .any(|w| w[0] == "--network-alias" && w[1] == "db"),
             "expected --network-alias db; got {:?}",
             args
         );
         assert!(
-            args.windows(2).any(|w| w[0] == "--network-alias" && w[1] == "primary-db"),
+            args.windows(2)
+                .any(|w| w[0] == "--network-alias" && w[1] == "primary-db"),
             "expected --network-alias primary-db; got {:?}",
             args
         );
@@ -2081,7 +2079,8 @@ mod tests {
         };
         let args = proto.run_args(&spec);
         assert!(
-            args.windows(2).any(|w| w[0] == "--network-alias" && w[1] == "worker"),
+            args.windows(2)
+                .any(|w| w[0] == "--network-alias" && w[1] == "worker"),
             "apple/container should emit --network-alias too; got {:?}",
             args
         );
@@ -2239,10 +2238,7 @@ mod tests {
         assert!(remove.iter().any(|s| s == "--force"));
 
         let inspect = proto.inspect_image_args("alpine:3.20");
-        assert_eq!(
-            &inspect[..2],
-            &["image".to_string(), "inspect".to_string()]
-        );
+        assert_eq!(&inspect[..2], &["image".to_string(), "inspect".to_string()]);
         // Inspect must NOT pass --format (apple outputs JSON natively)
         assert!(!inspect.iter().any(|s| s == "--format"));
     }
@@ -2446,8 +2442,7 @@ mod tests {
 
     #[test]
     fn test_split_image_reference_handles_digest() {
-        let (repo, tag) =
-            split_image_reference("alpine@sha256:abc123def456");
+        let (repo, tag) = split_image_reference("alpine@sha256:abc123def456");
         assert_eq!(repo, "alpine");
         assert_eq!(tag, "sha256:abc123def456");
     }
@@ -2553,10 +2548,7 @@ mod tests {
         // Each name in the list gets probed in order. All-invalid case:
         // returns NoBackendFound with one BackendProbeResult per
         // attempted name, order preserved.
-        std::env::set_var(
-            "PERRY_CONTAINER_BACKEND",
-            "bogus-one,bogus-two,bogus-three",
-        );
+        std::env::set_var("PERRY_CONTAINER_BACKEND", "bogus-one,bogus-two,bogus-three");
         let res = detect_backend().await;
         std::env::remove_var("PERRY_CONTAINER_BACKEND");
 

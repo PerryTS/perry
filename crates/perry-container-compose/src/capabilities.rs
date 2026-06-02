@@ -499,7 +499,9 @@ pub fn capabilities_for_backend(name: &str) -> &'static BackendCapabilities {
 /// use?" enumeration. Adding a new capability axis means: add the
 /// constant in `BackendCapabilities`, then add the matching detection
 /// here. The conformance test pin makes the gap loud.
-pub fn required_features(spec: &crate::types::ComposeSpec) -> std::collections::BTreeSet<&'static str> {
+pub fn required_features(
+    spec: &crate::types::ComposeSpec,
+) -> std::collections::BTreeSet<&'static str> {
     use std::collections::BTreeSet;
     let mut needed: BTreeSet<&'static str> = BTreeSet::new();
 
@@ -527,7 +529,11 @@ pub fn required_features(spec: &crate::types::ComposeSpec) -> std::collections::
 
         // cap_add / cap_drop → linux_capabilities
         if svc.cap_add.as_ref().map(|v| !v.is_empty()).unwrap_or(false)
-            || svc.cap_drop.as_ref().map(|v| !v.is_empty()).unwrap_or(false)
+            || svc
+                .cap_drop
+                .as_ref()
+                .map(|v| !v.is_empty())
+                .unwrap_or(false)
         {
             needed.insert("linux_capabilities");
         }
@@ -670,11 +676,7 @@ pub fn select_backend_for(
 /// Helper: given a feature axis name, look up its `FeatureSupport` on
 /// the backend's capability table and decide whether the chosen
 /// `SelectMode` accepts it.
-fn feature_satisfies(
-    caps: &BackendCapabilities,
-    feature: &str,
-    mode: SelectMode,
-) -> bool {
+fn feature_satisfies(caps: &BackendCapabilities, feature: &str, mode: SelectMode) -> bool {
     let support = match feature {
         "privileged" => caps.privileged,
         "seccomp_profile" => caps.seccomp_profile,
@@ -772,16 +774,12 @@ mod tests {
             privileged: Some(true),
             ..Default::default()
         };
-        let warnings =
-            normalise_spec_for(&BackendCapabilities::APPLE, "svc", &mut spec);
+        let warnings = normalise_spec_for(&BackendCapabilities::APPLE, "svc", &mut spec);
         assert_eq!(spec.privileged, None);
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].field, "privileged");
         assert_eq!(warnings[0].backend, "apple");
-        assert!(matches!(
-            warnings[0].action,
-            NormalizationAction::Dropped
-        ));
+        assert!(matches!(warnings[0].action, NormalizationAction::Dropped));
     }
 
     #[test]
@@ -791,8 +789,7 @@ mod tests {
             privileged: Some(true),
             ..Default::default()
         };
-        let warnings =
-            normalise_spec_for(&BackendCapabilities::DOCKER, "svc", &mut spec);
+        let warnings = normalise_spec_for(&BackendCapabilities::DOCKER, "svc", &mut spec);
         assert_eq!(spec.privileged, Some(true));
         assert!(warnings.is_empty());
     }
@@ -804,11 +801,7 @@ mod tests {
             seccomp: Some("/etc/seccomp.json".into()),
             ..Default::default()
         };
-        let warnings = normalise_security_profile(
-            &BackendCapabilities::APPLE,
-            "svc",
-            &mut profile,
-        );
+        let warnings = normalise_security_profile(&BackendCapabilities::APPLE, "svc", &mut profile);
         assert_eq!(profile.seccomp, None);
         // read_only is preserved
         assert!(profile.read_only_root);
@@ -823,11 +816,8 @@ mod tests {
             seccomp: Some("/etc/seccomp.json".into()),
             ..Default::default()
         };
-        let warnings = normalise_security_profile(
-            &BackendCapabilities::DOCKER,
-            "svc",
-            &mut profile,
-        );
+        let warnings =
+            normalise_security_profile(&BackendCapabilities::DOCKER, "svc", &mut profile);
         assert_eq!(profile.seccomp, Some("/etc/seccomp.json".into()));
         assert!(warnings.is_empty());
     }
@@ -840,8 +830,7 @@ mod tests {
             ..Default::default()
         };
         let _ = normalise_spec_for(&BackendCapabilities::APPLE, "svc", &mut spec);
-        let warnings_pass2 =
-            normalise_spec_for(&BackendCapabilities::APPLE, "svc", &mut spec);
+        let warnings_pass2 = normalise_spec_for(&BackendCapabilities::APPLE, "svc", &mut spec);
         // Second call has no remaining work — spec is already clean.
         assert!(warnings_pass2.is_empty());
     }

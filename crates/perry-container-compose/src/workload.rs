@@ -308,9 +308,7 @@ impl WorkloadGraphEngine {
             // when the backend supports it we'll route there; until then,
             // returning `BackendNotAvailable` makes the missing capability
             // visible instead of silently dropping the isolation guarantee.
-            if policy.requires_microvm()
-                && !matches!(node.runtime, RuntimeSpec::Microvm { .. })
-            {
+            if policy.requires_microvm() && !matches!(node.runtime, RuntimeSpec::Microvm { .. }) {
                 if std::env::var("PERRY_ALLOW_UNTRUSTED_SHARED_KERNEL").is_err() {
                     return Err(ComposeError::BackendNotAvailable {
                         name: self.backend.backend_name().to_string(),
@@ -593,7 +591,10 @@ mod policy_tests {
             ..PolicySpec::default()
         };
         let eff = p.effective();
-        assert!(eff.no_network, "Isolated must disable cross-node networking");
+        assert!(
+            eff.no_network,
+            "Isolated must disable cross-node networking"
+        );
         assert!(!eff.requires_microvm());
     }
 

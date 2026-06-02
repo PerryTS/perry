@@ -24,9 +24,7 @@ fn workspace_cargo_toml() -> String {
         let candidate = p.join("Cargo.toml");
         if candidate.exists() {
             let s = std::fs::read_to_string(&candidate).expect("read Cargo.toml");
-            if s.lines()
-                .any(|line| line.trim_start() == "[workspace]")
-                && s.contains("members = [")
+            if s.lines().any(|line| line.trim_start() == "[workspace]") && s.contains("members = [")
             {
                 return s;
             }

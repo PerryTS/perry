@@ -88,7 +88,9 @@ mod tests {
             "running service must not call run"
         );
         assert!(
-            !calls.iter().any(|c| matches!(c, RecordedCall::Start { .. })),
+            !calls
+                .iter()
+                .any(|c| matches!(c, RecordedCall::Start { .. })),
             "running service must not call start"
         );
     }
@@ -105,7 +107,9 @@ mod tests {
         );
         let calls = mock.calls().await;
         assert!(
-            calls.iter().any(|c| matches!(c, RecordedCall::Start { .. })),
+            calls
+                .iter()
+                .any(|c| matches!(c, RecordedCall::Start { .. })),
             "expected backend.start to be called"
         );
         assert!(
@@ -144,7 +148,9 @@ mod tests {
         let _ = orchestrate_service(&svc, "cache", &mock).await.unwrap();
         let calls = mock.calls().await;
         assert!(
-            !calls.iter().any(|c| matches!(c, RecordedCall::Build { .. })),
+            !calls
+                .iter()
+                .any(|c| matches!(c, RecordedCall::Build { .. })),
             "service without build field must not call build"
         );
         assert!(

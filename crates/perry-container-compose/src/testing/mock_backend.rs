@@ -139,8 +139,7 @@ impl MockBackend {
     /// spec-drift tests' "drift" path — engine sees the mismatch and
     /// triggers recreate.
     pub async fn set_existing_spec_hash_old(&self) {
-        *self.inspect_spec_hash.lock().unwrap() =
-            Some("stale-spec-hash".to_string());
+        *self.inspect_spec_hash.lock().unwrap() = Some("stale-spec-hash".to_string());
     }
 }
 
@@ -152,36 +151,64 @@ impl Default for MockBackend {
 
 #[async_trait]
 impl ContainerBackend for MockBackend {
-    fn backend_name(&self) -> &str { &self.name }
-    async fn check_available(&self) -> Result<()> { Ok(()) }
+    fn backend_name(&self) -> &str {
+        &self.name
+    }
+    async fn check_available(&self) -> Result<()> {
+        Ok(())
+    }
 
     async fn build(&self, _spec: &ComposeServiceBuild, image_name: &str) -> Result<()> {
-        self.calls.lock().unwrap().push(RecordedCall::Build(image_name.to_string()));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(RecordedCall::Build(image_name.to_string()));
         Ok(())
     }
 
     async fn run(&self, spec: &ContainerSpec) -> Result<ContainerHandle> {
-        self.calls.lock().unwrap().push(RecordedCall::Run(spec.clone()));
-        Ok(ContainerHandle { id: format!("mock-{}", spec.name.as_deref().unwrap_or("id")), name: spec.name.clone() })
+        self.calls
+            .lock()
+            .unwrap()
+            .push(RecordedCall::Run(spec.clone()));
+        Ok(ContainerHandle {
+            id: format!("mock-{}", spec.name.as_deref().unwrap_or("id")),
+            name: spec.name.clone(),
+        })
     }
 
     async fn create(&self, spec: &ContainerSpec) -> Result<ContainerHandle> {
-        self.calls.lock().unwrap().push(RecordedCall::Create(spec.clone()));
-        Ok(ContainerHandle { id: format!("mock-{}", spec.name.as_deref().unwrap_or("id")), name: spec.name.clone() })
+        self.calls
+            .lock()
+            .unwrap()
+            .push(RecordedCall::Create(spec.clone()));
+        Ok(ContainerHandle {
+            id: format!("mock-{}", spec.name.as_deref().unwrap_or("id")),
+            name: spec.name.clone(),
+        })
     }
 
     async fn start(&self, id: &str) -> Result<()> {
-        self.calls.lock().unwrap().push(RecordedCall::Start(id.to_string()));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(RecordedCall::Start(id.to_string()));
         Ok(())
     }
 
     async fn stop(&self, id: &str, timeout: Option<u32>) -> Result<()> {
-        self.calls.lock().unwrap().push(RecordedCall::Stop(id.to_string(), timeout));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(RecordedCall::Stop(id.to_string(), timeout));
         Ok(())
     }
 
     async fn remove(&self, id: &str, force: bool) -> Result<()> {
-        self.calls.lock().unwrap().push(RecordedCall::Remove(id.to_string(), force));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(RecordedCall::Remove(id.to_string(), force));
         Ok(())
     }
 
@@ -235,41 +262,80 @@ impl ContainerBackend for MockBackend {
     }
 
     async fn logs(&self, id: &str, tail: Option<u32>) -> Result<ContainerLogs> {
-        self.calls.lock().unwrap().push(RecordedCall::Logs(id.to_string(), tail));
-        Ok(ContainerLogs { stdout: String::new(), stderr: String::new() })
+        self.calls
+            .lock()
+            .unwrap()
+            .push(RecordedCall::Logs(id.to_string(), tail));
+        Ok(ContainerLogs {
+            stdout: String::new(),
+            stderr: String::new(),
+        })
     }
 
     async fn wait(&self, id: &str) -> Result<i32> {
-        self.calls.lock().unwrap().push(RecordedCall::Wait(id.to_string()));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(RecordedCall::Wait(id.to_string()));
         Ok(0)
     }
 
-    async fn exec(&self, id: &str, cmd: &[String], _env: Option<&HashMap<String, String>>, _workdir: Option<&str>) -> Result<ContainerLogs> {
-        self.calls.lock().unwrap().push(RecordedCall::Exec(id.to_string(), cmd.to_vec()));
-        Ok(ContainerLogs { stdout: String::new(), stderr: String::new() })
+    async fn exec(
+        &self,
+        id: &str,
+        cmd: &[String],
+        _env: Option<&HashMap<String, String>>,
+        _workdir: Option<&str>,
+    ) -> Result<ContainerLogs> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(RecordedCall::Exec(id.to_string(), cmd.to_vec()));
+        Ok(ContainerLogs {
+            stdout: String::new(),
+            stderr: String::new(),
+        })
     }
 
-    async fn pull_image(&self, _reference: &str) -> Result<()> { Ok(()) }
-    async fn list_images(&self) -> Result<Vec<ImageInfo>> { Ok(Vec::new()) }
-    async fn remove_image(&self, _reference: &str, _force: bool) -> Result<()> { Ok(()) }
+    async fn pull_image(&self, _reference: &str) -> Result<()> {
+        Ok(())
+    }
+    async fn list_images(&self) -> Result<Vec<ImageInfo>> {
+        Ok(Vec::new())
+    }
+    async fn remove_image(&self, _reference: &str, _force: bool) -> Result<()> {
+        Ok(())
+    }
 
     async fn create_network(&self, name: &str, _config: &ComposeNetwork) -> Result<()> {
-        self.calls.lock().unwrap().push(RecordedCall::CreateNetwork(name.to_string()));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(RecordedCall::CreateNetwork(name.to_string()));
         Ok(())
     }
 
     async fn remove_network(&self, name: &str) -> Result<()> {
-        self.calls.lock().unwrap().push(RecordedCall::RemoveNetwork(name.to_string()));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(RecordedCall::RemoveNetwork(name.to_string()));
         Ok(())
     }
 
     async fn create_volume(&self, name: &str, _config: &ComposeVolume) -> Result<()> {
-        self.calls.lock().unwrap().push(RecordedCall::CreateVolume(name.to_string()));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(RecordedCall::CreateVolume(name.to_string()));
         Ok(())
     }
 
     async fn remove_volume(&self, name: &str) -> Result<()> {
-        self.calls.lock().unwrap().push(RecordedCall::RemoveVolume(name.to_string()));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(RecordedCall::RemoveVolume(name.to_string()));
         Ok(())
     }
 

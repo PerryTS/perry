@@ -109,7 +109,8 @@ fn universal_run_emits_volumes() {
         let spec = baseline_spec();
         let args = proto.run_args(&spec);
         assert!(
-            args.windows(2).any(|w| w[0] == "-v" && w[1] == "data:/var/www"),
+            args.windows(2)
+                .any(|w| w[0] == "-v" && w[1] == "data:/var/www"),
             "{name}: run_args must emit -v data:/var/www; got {:?}",
             args
         );
@@ -175,7 +176,8 @@ fn universal_run_emits_network_alias() {
         };
         let args = proto.run_args(&spec);
         assert!(
-            args.windows(2).any(|w| w[0] == "--network-alias" && w[1] == "db"),
+            args.windows(2)
+                .any(|w| w[0] == "--network-alias" && w[1] == "db"),
             "{name}: run_args must emit --network-alias db; got {:?}",
             args
         );
@@ -246,8 +248,7 @@ fn capability_apple_drops_privileged_via_normalization() {
         privileged: Some(true),
         ..Default::default()
     };
-    let warnings =
-        normalise_spec_for(&BackendCapabilities::APPLE, "svc", &mut spec);
+    let warnings = normalise_spec_for(&BackendCapabilities::APPLE, "svc", &mut spec);
     assert_eq!(spec.privileged, None);
     assert_eq!(warnings.len(), 1);
 }
@@ -259,8 +260,7 @@ fn capability_docker_keeps_privileged() {
         privileged: Some(true),
         ..Default::default()
     };
-    let warnings =
-        normalise_spec_for(&BackendCapabilities::DOCKER, "svc", &mut spec);
+    let warnings = normalise_spec_for(&BackendCapabilities::DOCKER, "svc", &mut spec);
     assert_eq!(spec.privileged, Some(true));
     assert!(warnings.is_empty());
 }
@@ -291,10 +291,19 @@ fn apple_unsupported_set_documented() {
     let caps = &BackendCapabilities::APPLE;
     assert!(matches!(caps.privileged, FeatureSupport::Unsupported));
     assert!(matches!(caps.seccomp_profile, FeatureSupport::Unsupported));
-    assert!(matches!(caps.no_new_privileges, FeatureSupport::Unsupported));
+    assert!(matches!(
+        caps.no_new_privileges,
+        FeatureSupport::Unsupported
+    ));
     assert!(matches!(caps.internal_network, FeatureSupport::Unsupported));
-    assert!(matches!(caps.ipc_namespace_share, FeatureSupport::Unsupported));
-    assert!(matches!(caps.pid_namespace_share, FeatureSupport::Unsupported));
+    assert!(matches!(
+        caps.ipc_namespace_share,
+        FeatureSupport::Unsupported
+    ));
+    assert!(matches!(
+        caps.pid_namespace_share,
+        FeatureSupport::Unsupported
+    ));
 }
 
 #[test]
@@ -302,7 +311,10 @@ fn apple_emulated_features_documented() {
     let caps = &BackendCapabilities::APPLE;
     assert!(matches!(caps.restart_policy, FeatureSupport::Emulated));
     assert!(matches!(caps.healthcheck_native, FeatureSupport::Emulated));
-    assert!(matches!(caps.image_signature_verify, FeatureSupport::Emulated));
+    assert!(matches!(
+        caps.image_signature_verify,
+        FeatureSupport::Emulated
+    ));
 }
 
 // ---------- Output normalization ----------
@@ -323,7 +335,9 @@ fn parse_list_output_returns_unified_container_info_shape() {
 
     // Apple shape (JSON array)
     let apple_stdout = r#"[{"configuration":{"id":"abc","image":{"reference":"nginx"},"hostname":"web","labels":{}},"status":"running","networks":[]}]"#;
-    let apple_infos = AppleContainerProtocol.parse_list_output(apple_stdout).unwrap();
+    let apple_infos = AppleContainerProtocol
+        .parse_list_output(apple_stdout)
+        .unwrap();
     assert_eq!(apple_infos.len(), 1);
     assert_eq!(apple_infos[0].id, "abc");
     assert_eq!(apple_infos[0].image, "nginx");
@@ -356,7 +370,10 @@ fn parse_container_id_strips_whitespace_uniformly() {
     // backend. Parsers must normalise.
     for (name, proto) in all_protocols() {
         let id = proto.parse_container_id("abc123\n").unwrap();
-        assert_eq!(id, "abc123", "{name}: parse_container_id must strip newline");
+        assert_eq!(
+            id, "abc123",
+            "{name}: parse_container_id must strip newline"
+        );
         let id2 = proto.parse_container_id("  abc123  \n").unwrap();
         assert_eq!(id2, "abc123", "{name}: parse_container_id must trim");
     }

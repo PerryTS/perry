@@ -13,13 +13,13 @@
 
 #![cfg(feature = "test-utils")]
 
+use indexmap::IndexMap;
 use perry_container_compose::backend::ContainerBackend;
 use perry_container_compose::compose::ComposeEngine;
 use perry_container_compose::testing::mock_backend::{InspectMode, MockBackend, RecordedCall};
 use perry_container_compose::types::{
     ComposeNetwork, ComposeService, ComposeSpec, ComposeVolume, ServiceNetworks,
 };
-use indexmap::IndexMap;
 use std::sync::Arc;
 
 // ──────────────────────────────────────────────────────────────────────
@@ -232,7 +232,10 @@ async fn two_stacks_with_same_volume_key_dont_collide() {
         &[("web", svc_with_vol("alpine", "data:/data"))],
         &[("data", Some(ComposeVolume::default()))],
     );
-    let _ = engine(s1, "stack1", mock1.clone()).clone().up(&[], false, false, false).await;
+    let _ = engine(s1, "stack1", mock1.clone())
+        .clone()
+        .up(&[], false, false, false)
+        .await;
     let v1: Vec<String> = mock1
         .calls()
         .await
@@ -249,7 +252,10 @@ async fn two_stacks_with_same_volume_key_dont_collide() {
         &[("web", svc_with_vol("alpine", "data:/data"))],
         &[("data", Some(ComposeVolume::default()))],
     );
-    let _ = engine(s2, "stack2", mock2.clone()).clone().up(&[], false, false, false).await;
+    let _ = engine(s2, "stack2", mock2.clone())
+        .clone()
+        .up(&[], false, false, false)
+        .await;
     let v2: Vec<String> = mock2
         .calls()
         .await
@@ -284,7 +290,10 @@ async fn external_volumes_skipped_on_create() {
         &[("web", svc_with_vol("alpine", "shared-cache:/cache"))],
         &[("shared-cache", Some(ext_vol))],
     );
-    let _ = engine(spec, "myapp", mock.clone()).clone().up(&[], false, false, false).await;
+    let _ = engine(spec, "myapp", mock.clone())
+        .clone()
+        .up(&[], false, false, false)
+        .await;
 
     let calls = mock.calls().await;
     assert!(
@@ -414,7 +423,9 @@ async fn down_preserves_volumes_by_default() {
 
     let calls = mock.calls().await;
     assert!(
-        !calls.iter().any(|c| matches!(c, RecordedCall::RemoveVolume(_))),
+        !calls
+            .iter()
+            .any(|c| matches!(c, RecordedCall::RemoveVolume(_))),
         "down(remove_volumes=false) must NOT remove volumes; got: {:?}",
         calls
     );
@@ -458,7 +469,10 @@ async fn up_recreates_container_when_spec_hash_drifts() {
     // Phase 1: fresh up with image=postgres:15
     mock.set_inspect_not_found().await;
     let s1 = spec(&[("db", svc("postgres:15"))]);
-    let _ = engine(s1, "myapp", mock.clone()).clone().up(&[], false, false, false).await;
+    let _ = engine(s1, "myapp", mock.clone())
+        .clone()
+        .up(&[], false, false, false)
+        .await;
 
     // Snapshot how many Run calls we've seen so far.
     let runs_before: usize = mock
@@ -475,7 +489,10 @@ async fn up_recreates_container_when_spec_hash_drifts() {
     mock.set_inspect_running(true).await;
     mock.set_existing_spec_hash_old().await; // mock returns the wrong hash
     let s2 = spec(&[("db", svc("postgres:16-alpine"))]); // <- changed
-    let _ = engine(s2, "myapp", mock.clone()).clone().up(&[], false, false, false).await;
+    let _ = engine(s2, "myapp", mock.clone())
+        .clone()
+        .up(&[], false, false, false)
+        .await;
 
     // After phase 2 we expect a Stop + Remove (of the old container) +
     // a fresh Run (of the new image).
@@ -500,14 +517,21 @@ async fn up_recreates_container_when_spec_hash_drifts() {
             _ => None,
         })
         .collect();
-    let stop_idx = positions.iter().find(|(t, _)| *t == "stop").map(|(_, i)| *i);
+    let stop_idx = positions
+        .iter()
+        .find(|(t, _)| *t == "stop")
+        .map(|(_, i)| *i);
     let last_run_idx = positions
         .iter()
         .rev()
         .find(|(t, _)| *t == "run")
         .map(|(_, i)| *i);
     if let (Some(s), Some(r)) = (stop_idx, last_run_idx) {
-        assert!(s < r, "Stop must precede the recreate-Run; got positions {:?}", positions);
+        assert!(
+            s < r,
+            "Stop must precede the recreate-Run; got positions {:?}",
+            positions
+        );
     }
 }
 
@@ -518,13 +542,19 @@ async fn up_skips_when_spec_hash_matches() {
     // Phase 1: fresh up
     mock.set_inspect_not_found().await;
     let s1 = spec(&[("db", svc("postgres:16-alpine"))]);
-    let _ = engine(s1.clone(), "myapp", mock.clone()).clone().up(&[], false, false, false).await;
+    let _ = engine(s1.clone(), "myapp", mock.clone())
+        .clone()
+        .up(&[], false, false, false)
+        .await;
 
     // Phase 2: same project + same spec → inspect returns running with
     // matching spec_hash → skip path fires, no new Run.
     mock.set_inspect_running(true).await;
     mock.set_existing_spec_hash_match(&s1.services["db"]).await;
-    let _ = engine(s1, "myapp", mock.clone()).clone().up(&[], false, false, false).await;
+    let _ = engine(s1, "myapp", mock.clone())
+        .clone()
+        .up(&[], false, false, false)
+        .await;
 
     let runs: usize = mock
         .calls()
@@ -554,7 +584,10 @@ async fn run_spec_carries_service_key_as_network_alias() {
         ],
         &[("appnet", Some(ComposeNetwork::default()))],
     );
-    let _ = engine(spec, "myapp", mock.clone()).clone().up(&[], false, false, false).await;
+    let _ = engine(spec, "myapp", mock.clone())
+        .clone()
+        .up(&[], false, false, false)
+        .await;
 
     let calls = mock.calls().await;
     let run_specs: Vec<_> = calls
@@ -564,19 +597,22 @@ async fn run_spec_carries_service_key_as_network_alias() {
             _ => None,
         })
         .collect();
-    assert_eq!(run_specs.len(), 2, "expected 2 Run calls; got {}", run_specs.len());
+    assert_eq!(
+        run_specs.len(),
+        2,
+        "expected 2 Run calls; got {}",
+        run_specs.len()
+    );
 
-    let (db_aliases, api_aliases) = run_specs
-        .iter()
-        .fold((vec![], vec![]), |mut acc, s| {
-            let aliases = s.network_aliases.clone().unwrap_or_default();
-            if s.image.contains("postgres") {
-                acc.0 = aliases;
-            } else if s.image.contains("myapi") {
-                acc.1 = aliases;
-            }
-            acc
-        });
+    let (db_aliases, api_aliases) = run_specs.iter().fold((vec![], vec![]), |mut acc, s| {
+        let aliases = s.network_aliases.clone().unwrap_or_default();
+        if s.image.contains("postgres") {
+            acc.0 = aliases;
+        } else if s.image.contains("myapi") {
+            acc.1 = aliases;
+        }
+        acc
+    });
     assert!(
         db_aliases.contains(&"db".to_string()),
         "service `db`'s spec must carry `db` as a network alias; got {:?}",
@@ -604,7 +640,10 @@ async fn services_run_in_topological_order() {
     api.depends_on = Some(DependsOnSpec::List(vec!["db".to_string()]));
 
     let s = spec(&[("api", api), ("db", db)]);
-    let _ = engine(s, "myapp", mock.clone()).clone().up(&[], false, false, false).await;
+    let _ = engine(s, "myapp", mock.clone())
+        .clone()
+        .up(&[], false, false, false)
+        .await;
 
     // Capture run-order: db must come before api regardless of
     // declaration order in the spec.

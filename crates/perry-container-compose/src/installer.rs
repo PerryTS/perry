@@ -24,19 +24,27 @@ impl BackendInstaller {
 
     pub async fn run(&self) -> Result<Box<dyn ContainerBackend>> {
         if self.no_prompt {
-            return Err(ComposeError::validation("No container backend found and PERRY_NO_INSTALL_PROMPT is set."));
+            return Err(ComposeError::validation(
+                "No container backend found and PERRY_NO_INSTALL_PROMPT is set.",
+            ));
         }
 
         if !Term::stderr().is_term() {
-            return Err(ComposeError::validation("No container backend found and stderr is not a TTY."));
+            return Err(ComposeError::validation(
+                "No container backend found and stderr is not a TTY.",
+            ));
         }
 
-        println!("{}", style("Perry needs a container runtime to continue.").bold());
+        println!(
+            "{}",
+            style("Perry needs a container runtime to continue.").bold()
+        );
         println!("No container runtime was found on this system.");
         println!();
 
         let options = self.platform_options();
-        let items: Vec<String> = options.iter()
+        let items: Vec<String> = options
+            .iter()
             .map(|o| format!("{} - {}", style(o.name).bold(), o.description))
             .collect();
 
@@ -88,19 +96,18 @@ impl BackendInstaller {
                 InstallOption {
                     name: "podman",
                     description: "Daemonless, rootless OCI runtime",
-                    install_command: "brew install podman && podman machine init && podman machine start",
+                    install_command:
+                        "brew install podman && podman machine init && podman machine start",
                     docs_url: "https://podman.io",
                 },
             ]
         } else {
-            vec![
-                InstallOption {
-                    name: "podman",
-                    description: "Daemonless, rootless OCI runtime (recommended)",
-                    install_command: "sudo apt-get install -y podman",
-                    docs_url: "https://podman.io/getting-started/installation",
-                },
-            ]
+            vec![InstallOption {
+                name: "podman",
+                description: "Daemonless, rootless OCI runtime (recommended)",
+                install_command: "sudo apt-get install -y podman",
+                docs_url: "https://podman.io/getting-started/installation",
+            }]
         }
     }
 
@@ -115,7 +122,10 @@ impl BackendInstaller {
         if status.success() {
             Ok(())
         } else {
-            Err(ComposeError::validation(format!("Install command failed with status: {}", status)))
+            Err(ComposeError::validation(format!(
+                "Install command failed with status: {}",
+                status
+            )))
         }
     }
 }

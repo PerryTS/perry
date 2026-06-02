@@ -1,5 +1,5 @@
 pub use perry_container_compose::backend::{
-    CliBackend, CliProtocol, DockerProtocol, AppleContainerProtocol, LimaProtocol, detect_backend,
-    BackendProbeResult, ContainerBackend,
+    detect_backend, AppleContainerProtocol, BackendProbeResult, CliBackend, CliProtocol,
+    ContainerBackend, DockerProtocol, LimaProtocol,
 };
 pub use perry_container_compose::types::ContainerLogs;

@@ -1,6 +1,6 @@
-use perry_runtime::{js_promise_state, js_promise_run_microtasks, Promise, StringHeader};
-use perry_stdlib::container::*;
 use perry_container_compose::types::ComposeSpec;
+use perry_runtime::{js_promise_run_microtasks, js_promise_state, Promise, StringHeader};
+use perry_stdlib::container::*;
 use std::ptr;
 
 const PROMISE_STATE_PENDING: i32 = 0;
@@ -17,7 +17,9 @@ fn make_string_header(s: &str) -> Vec<u8> {
         (*header).byte_len = len;
         (*header).capacity = len;
         (*header).refcount = 0;
-        let data_ptr = header_bytes.as_mut_ptr().add(std::mem::size_of::<StringHeader>());
+        let data_ptr = header_bytes
+            .as_mut_ptr()
+            .add(std::mem::size_of::<StringHeader>());
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), data_ptr, bytes.len());
     }
     header_bytes
@@ -65,14 +67,18 @@ fn test_project_name_resolution() {
         name: Some("spec-project".to_string()),
         ..Default::default()
     };
-    let name = spec_with_name.name.clone()
+    let name = spec_with_name
+        .name
+        .clone()
         .or_else(|| std::env::var("COMPOSE_PROJECT_NAME").ok())
         .unwrap_or_else(|| "default".to_string());
     assert_eq!(name, "spec-project");
 
     // Case 2: From env
     let spec_no_name = ComposeSpec::default();
-    let name = spec_no_name.name.clone()
+    let name = spec_no_name
+        .name
+        .clone()
         .or_else(|| std::env::var("COMPOSE_PROJECT_NAME").ok())
         .unwrap_or_else(|| "default".to_string());
     assert_eq!(name, "env-project");
