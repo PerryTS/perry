@@ -186,6 +186,10 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http_im_http_version", I64, &[I64]);
     module.declare_function("js_node_http_im_headers_json", I64, &[I64]);
     module.declare_function("js_node_http_im_raw_headers_json", I64, &[I64]);
+    module.declare_function("js_node_http_im_headers_distinct_json", I64, &[I64]);
+    module.declare_function("js_node_http_im_trailers_json", I64, &[I64]);
+    module.declare_function("js_node_http_im_raw_trailers_json", I64, &[I64]);
+    module.declare_function("js_node_http_im_trailers_distinct_json", I64, &[I64]);
     module.declare_function("js_node_http_im_complete", I32, &[I64]);
     module.declare_function("js_node_http_im_aborted", I32, &[I64]);
     module.declare_function("js_node_http_im_destroyed", I32, &[I64]);
@@ -196,19 +200,35 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http_im_destroy", VOID, &[I64]);
     module.declare_function("js_node_http_im_on", DOUBLE, &[I64, I64, I64]);
     module.declare_function("js_node_http_im_read", DOUBLE, &[I64]);
+    module.declare_function("js_node_http_im_set_timeout", I64, &[I64, DOUBLE, I64]);
     // ServerResponse:
     module.declare_function("js_node_http_res_set_status", VOID, &[I64, DOUBLE]);
     module.declare_function("js_node_http_res_get_status", DOUBLE, &[I64]);
     module.declare_function("js_node_http_res_set_status_message", VOID, &[I64, I64]);
     module.declare_function("js_node_http_res_set_header", VOID, &[I64, I64, I64]);
+    module.declare_function("js_node_http_res_set_header_self", I64, &[I64, I64, I64]);
     module.declare_function("js_node_http_res_get_header", DOUBLE, &[I64, I64]);
     module.declare_function("js_node_http_res_remove_header", VOID, &[I64, I64]);
     module.declare_function("js_node_http_res_has_header", I32, &[I64, I64]);
+    module.declare_function("js_node_http_res_has_header_value", DOUBLE, &[I64, I64]);
     module.declare_function("js_node_http_res_get_headers_json", I64, &[I64]);
     module.declare_function("js_node_http_res_get_header_names_json", I64, &[I64]);
+    module.declare_function("js_node_http_res_append_header", I64, &[I64, I64, I64]);
+    module.declare_function("js_node_http_res_set_headers", I64, &[I64, DOUBLE]);
+    module.declare_function("js_node_http_res_get_status_message", DOUBLE, &[I64]);
     module.declare_function("js_node_http_res_headers_sent", I32, &[I64]);
     module.declare_function("js_node_http_res_writable_ended", I32, &[I64]);
     module.declare_function("js_node_http_res_writable_finished", I32, &[I64]);
+    module.declare_function("js_node_http_res_finished", I32, &[I64]);
+    module.declare_function("js_node_http_res_send_date", I32, &[I64]);
+    module.declare_function("js_node_http_res_set_send_date", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_node_http_res_strict_content_length", I32, &[I64]);
+    module.declare_function(
+        "js_node_http_res_set_strict_content_length",
+        VOID,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_http_res_req_handle", I64, &[I64]);
     module.declare_function(
         "js_node_http_res_write_head",
         VOID,
@@ -218,6 +238,14 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http_res_add_trailers", VOID, &[I64, DOUBLE]);
     module.declare_function("js_node_http_res_end", VOID, &[I64, DOUBLE]);
     module.declare_function("js_node_http_res_flush_headers", VOID, &[I64]);
+    module.declare_function("js_node_http_res_cork", VOID, &[I64]);
+    module.declare_function("js_node_http_res_uncork", VOID, &[I64]);
+    module.declare_function("js_node_http_res_set_timeout", I64, &[I64, DOUBLE, I64]);
+    module.declare_function(
+        "js_node_http_res_write_early_hints",
+        VOID,
+        &[I64, DOUBLE, I64],
+    );
     module.declare_function("js_node_http_res_write_continue", VOID, &[I64]);
     module.declare_function("js_node_http_res_write_processing", VOID, &[I64]);
     module.declare_function("js_node_http_res_on", DOUBLE, &[I64, I64, I64]);

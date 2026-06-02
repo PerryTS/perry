@@ -22,14 +22,14 @@
 //!
 //! Issue #2153.
 
-use perry_ffi::{alloc_string, get_handle, JsValue, StringHeader};
+use perry_ffi::{alloc_string, get_handle, js_object_alloc_with_shape, JsValue, StringHeader};
 
 use crate::http2_server::Http2SecureServer;
 use crate::https_server::HttpsServer;
 use crate::request::IncomingMessage;
 use crate::response::ServerResponse;
 use crate::server::HttpServer;
-use crate::types::{POINTER_TAG, PTR_MASK, TAG_UNDEFINED};
+use crate::types::{read_string_header, POINTER_TAG, PTR_MASK, TAG_UNDEFINED};
 
 #[repr(C)]
 struct ErrorHeader {
@@ -91,14 +91,21 @@ extern "C" {
     fn js_node_http_im_http_version(handle: i64) -> *mut StringHeader;
     fn js_node_http_im_headers_json(handle: i64) -> *mut StringHeader;
     fn js_node_http_im_raw_headers_json(handle: i64) -> *mut StringHeader;
+    fn js_node_http_im_headers_distinct_json(handle: i64) -> *mut StringHeader;
+    fn js_node_http_im_trailers_json(handle: i64) -> *mut StringHeader;
+    fn js_node_http_im_raw_trailers_json(handle: i64) -> *mut StringHeader;
+    fn js_node_http_im_trailers_distinct_json(handle: i64) -> *mut StringHeader;
     fn js_node_http_im_complete(handle: i64) -> i32;
     fn js_node_http_im_aborted(handle: i64) -> i32;
     fn js_node_http_im_destroyed(handle: i64) -> i32;
+    fn js_node_http_im_remote_address(handle: i64) -> *mut StringHeader;
+    fn js_node_http_im_remote_port(handle: i64) -> f64;
     fn js_node_http_im_pause(handle: i64);
     fn js_node_http_im_resume(handle: i64);
     fn js_node_http_im_destroy(handle: i64);
     fn js_node_http_im_on(handle: i64, event_name_ptr: *const StringHeader, callback: i64) -> f64;
     fn js_node_http_im_set_encoding(handle: i64, encoding_ptr: *const StringHeader) -> i64;
+    fn js_node_http_im_set_timeout(handle: i64, msecs: f64, callback: i64) -> i64;
     fn js_node_http_im_read(handle: i64) -> f64;
 
     fn js_node_http_res_set_status(handle: i64, code: f64);
@@ -112,14 +119,33 @@ extern "C" {
     fn js_node_http_res_get_header(handle: i64, name_ptr: *const StringHeader) -> f64;
     fn js_node_http_res_remove_header(handle: i64, name_ptr: *const StringHeader);
     fn js_node_http_res_has_header(handle: i64, name_ptr: *const StringHeader) -> i32;
+    fn js_node_http_res_get_headers_json(handle: i64) -> *mut StringHeader;
+    fn js_node_http_res_get_header_names_json(handle: i64) -> *mut StringHeader;
+    fn js_node_http_res_append_header(
+        handle: i64,
+        name_ptr: *const StringHeader,
+        value_ptr: *const StringHeader,
+    ) -> i64;
+    fn js_node_http_res_set_headers(handle: i64, headers_value: f64) -> i64;
+    fn js_node_http_res_get_status_message(handle: i64) -> f64;
     fn js_node_http_res_headers_sent(handle: i64) -> i32;
     fn js_node_http_res_writable_ended(handle: i64) -> i32;
     fn js_node_http_res_writable_finished(handle: i64) -> i32;
+    fn js_node_http_res_finished(handle: i64) -> i32;
+    fn js_node_http_res_send_date(handle: i64) -> i32;
+    fn js_node_http_res_set_send_date(handle: i64, value: f64);
+    fn js_node_http_res_strict_content_length(handle: i64) -> i32;
+    fn js_node_http_res_set_strict_content_length(handle: i64, value: f64);
+    fn js_node_http_res_req_handle(handle: i64) -> i64;
     fn js_node_http_res_write_head(handle: i64, status: f64, arg2: i64, arg3: i64);
     fn js_node_http_res_write(handle: i64, chunk: f64) -> i32;
     fn js_node_http_res_add_trailers(handle: i64, headers_value: f64);
     fn js_node_http_res_end(handle: i64, chunk: f64);
     fn js_node_http_res_flush_headers(handle: i64);
+    fn js_node_http_res_cork(handle: i64);
+    fn js_node_http_res_uncork(handle: i64);
+    fn js_node_http_res_set_timeout(handle: i64, msecs: f64, callback: i64) -> i64;
+    fn js_node_http_res_write_early_hints(handle: i64, headers: f64, callback: i64);
     fn js_node_http_res_write_continue(handle: i64);
     fn js_node_http_res_write_processing(handle: i64);
     fn js_node_http_res_on(handle: i64, event_name_ptr: *const StringHeader, callback: i64) -> f64;
@@ -411,6 +437,14 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
             }
             self_ref
         }
+        "setTimeout" => {
+            js_node_http_im_set_timeout(
+                handle,
+                number_arg(args.first().copied(), 0.0),
+                closure_arg(args.get(1).copied()),
+            );
+            self_ref
+        }
         "pause" => {
             js_node_http_im_pause(handle);
             self_ref
@@ -436,6 +470,24 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
         "__get_rawHeaders" | "rawHeaders" => {
             json_string_value(js_node_http_im_raw_headers_json(handle))
         }
+        "__get_headersDistinct" | "headersDistinct" => {
+            json_string_value(js_node_http_im_headers_distinct_json(handle))
+        }
+        "__get_trailers" | "trailers" => {
+            json_string_value_empty_object(js_node_http_im_trailers_json(handle))
+        }
+        "__get_rawTrailers" | "rawTrailers" => {
+            json_string_value(js_node_http_im_raw_trailers_json(handle))
+        }
+        "__get_trailersDistinct" | "trailersDistinct" => {
+            json_string_value_empty_object(js_node_http_im_trailers_distinct_json(handle))
+        }
+        "__get_socket" | "socket" | "__get_connection" | "connection" => self_ref,
+        "__get_signal" | "signal" => undef,
+        "__get_remoteAddress" | "remoteAddress" => {
+            string_ptr_value(js_node_http_im_remote_address(handle))
+        }
+        "__get_remotePort" | "remotePort" => js_node_http_im_remote_port(handle),
         _ => undef,
     }
 }
@@ -466,7 +518,7 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
             if !name.is_null() {
                 js_node_http_res_set_header(handle, name, string_value_arg(args[1]));
             }
-            undef
+            self_ref
         }
         "getHeader" if !args.is_empty() => {
             let name = string_value_arg(args[0]);
@@ -486,6 +538,19 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
         "hasHeader" if !args.is_empty() => {
             let name = string_value_arg(args[0]);
             bool_value(!name.is_null() && js_node_http_res_has_header(handle, name) != 0)
+        }
+        "getHeaders" => json_string_value(js_node_http_res_get_headers_json(handle)),
+        "getHeaderNames" => json_string_value(js_node_http_res_get_header_names_json(handle)),
+        "appendHeader" if args.len() >= 2 => {
+            let name = string_value_arg(args[0]);
+            if !name.is_null() {
+                js_node_http_res_append_header(handle, name, string_value_arg(args[1]));
+            }
+            self_ref
+        }
+        "setHeaders" if !args.is_empty() => {
+            js_node_http_res_set_headers(handle, args[0]);
+            self_ref
         }
         "writeHead" if !args.is_empty() => {
             js_node_http_res_write_head(
@@ -509,6 +574,30 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
             js_node_http_res_flush_headers(handle);
             undef
         }
+        "cork" => {
+            js_node_http_res_cork(handle);
+            undef
+        }
+        "uncork" => {
+            js_node_http_res_uncork(handle);
+            undef
+        }
+        "setTimeout" => {
+            js_node_http_res_set_timeout(
+                handle,
+                number_arg(args.first().copied(), 0.0),
+                closure_arg(args.get(1).copied()),
+            );
+            self_ref
+        }
+        "writeEarlyHints" => {
+            js_node_http_res_write_early_hints(
+                handle,
+                args.first().copied().unwrap_or(undef),
+                closure_arg(args.get(1).copied()),
+            );
+            undef
+        }
         "writeContinue" => {
             js_node_http_res_write_continue(handle);
             undef
@@ -530,6 +619,7 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
             undef
         }
         "getStatus" | "__get_statusCode" => js_node_http_res_get_status(handle),
+        "__get_statusMessage" | "statusMessage" => js_node_http_res_get_status_message(handle),
         "__set_statusMessage" if !args.is_empty() => {
             let msg = string_value_arg(args[0]);
             if !msg.is_null() {
@@ -540,6 +630,23 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
         "__get_headersSent" => bool_value(js_node_http_res_headers_sent(handle) != 0),
         "__get_writableEnded" => bool_value(js_node_http_res_writable_ended(handle) != 0),
         "__get_writableFinished" => bool_value(js_node_http_res_writable_finished(handle) != 0),
+        "__get_finished" | "finished" => bool_value(js_node_http_res_finished(handle) != 0),
+        "__get_sendDate" | "sendDate" => bool_value(js_node_http_res_send_date(handle) != 0),
+        "__set_sendDate" if !args.is_empty() => {
+            js_node_http_res_set_send_date(handle, args[0]);
+            undef
+        }
+        "__get_strictContentLength" | "strictContentLength" => {
+            bool_value(js_node_http_res_strict_content_length(handle) != 0)
+        }
+        "__set_strictContentLength" if !args.is_empty() => {
+            js_node_http_res_set_strict_content_length(handle, args[0]);
+            undef
+        }
+        "__get_req" | "req" => handle_value_or_undefined(js_node_http_res_req_handle(handle)),
+        "__get_socket" | "socket" | "__get_connection" | "connection" => {
+            response_socket_value(handle)
+        }
         _ => undef,
     }
 }
@@ -570,9 +677,19 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_property(
         "httpVersion" => string_ptr_value(js_node_http_im_http_version(handle)),
         "headers" => json_string_value(js_node_http_im_headers_json(handle)),
         "rawHeaders" => json_string_value(js_node_http_im_raw_headers_json(handle)),
+        "headersDistinct" => json_string_value(js_node_http_im_headers_distinct_json(handle)),
+        "trailers" => json_string_value_empty_object(js_node_http_im_trailers_json(handle)),
+        "rawTrailers" => json_string_value(js_node_http_im_raw_trailers_json(handle)),
+        "trailersDistinct" => {
+            json_string_value_empty_object(js_node_http_im_trailers_distinct_json(handle))
+        }
         "complete" => bool_value(js_node_http_im_complete(handle) != 0),
         "aborted" => bool_value(js_node_http_im_aborted(handle) != 0),
         "destroyed" => bool_value(js_node_http_im_destroyed(handle) != 0),
+        "socket" | "connection" => handle_to_pointer_f64(handle),
+        "signal" => undef,
+        "remoteAddress" => string_ptr_value(js_node_http_im_remote_address(handle)),
+        "remotePort" => js_node_http_im_remote_port(handle),
         _ => undef,
     }
 }
@@ -599,9 +716,15 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
 
     match property.as_str() {
         "statusCode" => js_node_http_res_get_status(handle),
+        "statusMessage" => js_node_http_res_get_status_message(handle),
         "headersSent" => bool_value(js_node_http_res_headers_sent(handle) != 0),
         "writableEnded" => bool_value(js_node_http_res_writable_ended(handle) != 0),
         "writableFinished" => bool_value(js_node_http_res_writable_finished(handle) != 0),
+        "finished" => bool_value(js_node_http_res_finished(handle) != 0),
+        "sendDate" => bool_value(js_node_http_res_send_date(handle) != 0),
+        "strictContentLength" => bool_value(js_node_http_res_strict_content_length(handle) != 0),
+        "req" => handle_value_or_undefined(js_node_http_res_req_handle(handle)),
+        "socket" | "connection" => response_socket_value(handle),
         _ => undef,
     }
 }
@@ -632,6 +755,14 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property_set(
             }
             1
         }
+        "sendDate" => {
+            js_node_http_res_set_send_date(handle, value);
+            1
+        }
+        "strictContentLength" => {
+            js_node_http_res_set_strict_content_length(handle, value);
+            1
+        }
         _ => 0,
     }
 }
@@ -660,6 +791,25 @@ fn handle_to_pointer_f64(handle: i64) -> f64 {
 }
 
 #[inline]
+fn handle_value_or_undefined(handle: i64) -> f64 {
+    if handle == 0 {
+        f64::from_bits(TAG_UNDEFINED)
+    } else {
+        handle_to_pointer_f64(handle)
+    }
+}
+
+#[inline]
+fn response_socket_value(handle: i64) -> f64 {
+    let req_handle = unsafe { js_node_http_res_req_handle(handle) };
+    if req_handle == 0 {
+        handle_to_pointer_f64(handle)
+    } else {
+        handle_to_pointer_f64(req_handle)
+    }
+}
+
+#[inline]
 fn string_ptr_value(ptr: *mut StringHeader) -> f64 {
     if ptr.is_null() {
         f64::from_bits(TAG_UNDEFINED)
@@ -675,6 +825,18 @@ fn json_string_value(ptr: *mut StringHeader) -> f64 {
     } else {
         unsafe { f64::from_bits(js_json_parse(ptr)) }
     }
+}
+
+#[inline]
+fn json_string_value_empty_object(ptr: *mut StringHeader) -> f64 {
+    if ptr.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    if matches!(read_string_header(ptr), Some(text) if text == "{}") {
+        let obj = unsafe { js_object_alloc_with_shape(0, 0, std::ptr::null(), 0) };
+        return f64::from_bits(JsValue::from_object_ptr(obj).bits());
+    }
+    unsafe { f64::from_bits(js_json_parse(ptr)) }
 }
 
 #[inline]
@@ -722,6 +884,7 @@ fn incoming_method_bytes(name: &str) -> Option<&'static [u8]> {
         "on" => Some(b"on"),
         "addListener" => Some(b"addListener"),
         "setEncoding" => Some(b"setEncoding"),
+        "setTimeout" => Some(b"setTimeout"),
         "pause" => Some(b"pause"),
         "resume" => Some(b"resume"),
         "destroy" => Some(b"destroy"),
@@ -736,11 +899,19 @@ fn server_response_method_bytes(name: &str) -> Option<&'static [u8]> {
         "getHeader" => Some(b"getHeader"),
         "removeHeader" => Some(b"removeHeader"),
         "hasHeader" => Some(b"hasHeader"),
+        "getHeaders" => Some(b"getHeaders"),
+        "getHeaderNames" => Some(b"getHeaderNames"),
+        "appendHeader" => Some(b"appendHeader"),
+        "setHeaders" => Some(b"setHeaders"),
         "writeHead" => Some(b"writeHead"),
         "write" => Some(b"write"),
         "addTrailers" => Some(b"addTrailers"),
         "end" => Some(b"end"),
         "flushHeaders" => Some(b"flushHeaders"),
+        "cork" => Some(b"cork"),
+        "uncork" => Some(b"uncork"),
+        "setTimeout" => Some(b"setTimeout"),
+        "writeEarlyHints" => Some(b"writeEarlyHints"),
         "writeContinue" => Some(b"writeContinue"),
         "writeProcessing" => Some(b"writeProcessing"),
         "on" => Some(b"on"),

@@ -5077,6 +5077,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "destroy", true, Some("IncomingMessage")),
     method("http", "read", true, Some("IncomingMessage")),
     method("http", "setEncoding", true, Some("IncomingMessage")),
+    method("http", "setTimeout", true, Some("IncomingMessage")),
     // Issue #769 — `ClientRequest.setTimeout(ms)` for `http.request` /
     // `http.get` returns. Class filter differs from any existing http
     // method, so the manifest-consistency drift guard requires a row
@@ -5119,11 +5120,19 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "getHeader", true, Some("ServerResponse")),
     method("http", "removeHeader", true, Some("ServerResponse")),
     method("http", "hasHeader", true, Some("ServerResponse")),
+    method("http", "getHeaders", true, Some("ServerResponse")),
+    method("http", "getHeaderNames", true, Some("ServerResponse")),
+    method("http", "appendHeader", true, Some("ServerResponse")),
+    method("http", "setHeaders", true, Some("ServerResponse")),
     method("http", "writeHead", true, Some("ServerResponse")),
     method("http", "write", true, Some("ServerResponse")),
     method("http", "addTrailers", true, Some("ServerResponse")),
     method("http", "end", true, Some("ServerResponse")),
     method("http", "flushHeaders", true, Some("ServerResponse")),
+    method("http", "cork", true, Some("ServerResponse")),
+    method("http", "uncork", true, Some("ServerResponse")),
+    method("http", "setTimeout", true, Some("ServerResponse")),
+    method("http", "writeEarlyHints", true, Some("ServerResponse")),
     method("http", "writeContinue", true, Some("ServerResponse")),
     method("http", "writeProcessing", true, Some("ServerResponse")),
     method("http", "on", true, Some("ServerResponse")),
@@ -5150,6 +5159,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "__get_statusCode", true, Some("ServerResponse")),
     method("http", "__set_statusCode", true, Some("ServerResponse")),
     method("http", "__set_statusMessage", true, Some("ServerResponse")),
+    method("http", "__set_sendDate", true, Some("ServerResponse")),
+    method(
+        "http",
+        "__set_strictContentLength",
+        true,
+        Some("ServerResponse"),
+    ),
     method("http", "__get_headersSent", true, Some("ServerResponse")),
     method("http", "__get_writableEnded", true, Some("ServerResponse")),
     method(

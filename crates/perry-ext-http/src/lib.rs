@@ -1480,6 +1480,11 @@ pub extern "C" fn js_http_response_trailers(handle: Handle) -> f64 {
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
         out = map_to_js_object(&res.trailers);
     });
+    if out.to_bits() == TAG_UNDEFINED {
+        if let Some(server_out) = server_incoming_property(handle, "trailers") {
+            return server_out;
+        }
+    }
     out
 }
 

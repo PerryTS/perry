@@ -40,7 +40,7 @@ use crate::request::{
     alloc_incoming_message, emit_no_arg_to_listeners, handle_to_pointer_f64, with_implicit_this,
     IncomingMessage,
 };
-use crate::response::{alloc_server_response, HyperResponseShape, ResponseBody};
+use crate::response::{alloc_server_response_for_request, HyperResponseShape, ResponseBody};
 use crate::server::{synthesize_default_response_if_needed, HttpPendingRequest, HttpServer};
 use crate::tls::{
     build_server_config, has_pem_material, json_value_to_pem_bytes, parse_cert_chain,
@@ -599,9 +599,17 @@ async fn handle_h2_request(
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect::<Vec<_>>();
-        (alloc_server_response(dummy_tx), stream_handle, headers_vec)
+        (
+            alloc_server_response_for_request(dummy_tx, im_handle),
+            stream_handle,
+            headers_vec,
+        )
     } else {
-        (alloc_server_response(response_tx), 0, Vec::new())
+        (
+            alloc_server_response_for_request(response_tx, im_handle),
+            0,
+            Vec::new(),
+        )
     };
     let pending = HttpPendingRequest {
         server_handle,

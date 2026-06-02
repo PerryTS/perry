@@ -27,7 +27,9 @@ use crate::request::{
     alloc_incoming_message, emit_no_arg_to_listeners, handle_to_pointer_f64, with_implicit_this,
     IncomingMessage,
 };
-use crate::response::{alloc_server_response, HyperResponseShape, ResponseBody, ServerResponse};
+use crate::response::{
+    alloc_server_response_for_request, HyperResponseShape, ResponseBody, ServerResponse,
+};
 use crate::types::{
     extract_host, extract_port, js_promise_run_microtasks, js_promise_state, js_value_is_closure,
     jsvalue_to_owned_string, read_string_header, Promise, POINTER_TAG, PTR_MASK, TAG_NULL,
@@ -653,7 +655,7 @@ async fn handle_request(
     let im_handle = alloc_incoming_message(im);
 
     let (response_tx, response_rx) = oneshot::channel::<HyperResponseShape>();
-    let sr_handle = alloc_server_response(response_tx);
+    let sr_handle = alloc_server_response_for_request(response_tx, im_handle);
 
     let (request_listeners, handler, keep_alive_timeout) =
         match get_handle::<HttpServer>(server_handle) {

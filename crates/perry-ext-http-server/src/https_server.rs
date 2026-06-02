@@ -27,7 +27,7 @@ use crate::request::{
     alloc_incoming_message, emit_no_arg_to_listeners, handle_to_pointer_f64, with_implicit_this,
     IncomingMessage,
 };
-use crate::response::{alloc_server_response, HyperResponseShape, ResponseBody};
+use crate::response::{alloc_server_response_for_request, HyperResponseShape, ResponseBody};
 use crate::server::{HttpPendingRequest, HttpServer};
 use crate::tls::{
     build_server_config, has_pem_material, json_value_to_pem_bytes, parse_cert_chain,
@@ -309,7 +309,7 @@ async fn handle_https_request(
         peer.port(),
     ));
     let (response_tx, response_rx) = oneshot::channel::<HyperResponseShape>();
-    let sr_handle = alloc_server_response(response_tx);
+    let sr_handle = alloc_server_response_for_request(response_tx, im_handle);
     let (request_listeners, handler, keep_alive_timeout) =
         match get_handle::<HttpsServer>(server_handle) {
             Some(s) => (

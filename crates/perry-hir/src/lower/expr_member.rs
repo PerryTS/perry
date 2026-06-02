@@ -1434,9 +1434,27 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
-                } else if module_name == "http"
+                } else if matches!(module_name.as_str(), "http" | "https")
                     && class_name == "IncomingMessage"
                     && is_http_incoming_message_runtime_property_name(&property_name)
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if matches!(module_name.as_str(), "http" | "https")
+                    && class_name == "ServerResponse"
+                    && is_http_server_response_method_name(&property_name)
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if matches!(module_name.as_str(), "http" | "https")
+                    && class_name == "ServerResponse"
+                    && is_http_server_response_runtime_property_name(&property_name)
                 {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
@@ -2427,7 +2445,16 @@ fn is_classic_stream_method_name(prop: &str) -> bool {
 }
 
 fn is_http_incoming_message_method_name(prop: &str) -> bool {
-    matches!(prop, "setEncoding")
+    matches!(
+        prop,
+        "on" | "addListener"
+            | "setEncoding"
+            | "setTimeout"
+            | "pause"
+            | "resume"
+            | "destroy"
+            | "read"
+    )
 }
 
 fn is_http_client_request_method_name(prop: &str) -> bool {
@@ -2455,7 +2482,70 @@ fn is_http_client_request_method_name(prop: &str) -> bool {
 }
 
 fn is_http_incoming_message_runtime_property_name(prop: &str) -> bool {
-    matches!(prop, "rawHeaders")
+    matches!(
+        prop,
+        "method"
+            | "url"
+            | "httpVersion"
+            | "headers"
+            | "rawHeaders"
+            | "headersDistinct"
+            | "trailers"
+            | "rawTrailers"
+            | "trailersDistinct"
+            | "complete"
+            | "aborted"
+            | "destroyed"
+            | "socket"
+            | "connection"
+            | "signal"
+            | "remoteAddress"
+            | "remotePort"
+    )
+}
+
+fn is_http_server_response_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "setHeader"
+            | "getHeader"
+            | "removeHeader"
+            | "hasHeader"
+            | "getHeaders"
+            | "getHeaderNames"
+            | "appendHeader"
+            | "setHeaders"
+            | "writeHead"
+            | "write"
+            | "addTrailers"
+            | "end"
+            | "flushHeaders"
+            | "cork"
+            | "uncork"
+            | "setTimeout"
+            | "writeEarlyHints"
+            | "writeContinue"
+            | "writeProcessing"
+            | "on"
+            | "addListener"
+    )
+}
+
+fn is_http_server_response_runtime_property_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "statusCode"
+            | "statusMessage"
+            | "headersSent"
+            | "writableEnded"
+            | "writableFinished"
+            | "finished"
+            | "sendDate"
+            | "strictContentLength"
+            | "req"
+            | "socket"
+            | "connection"
+    )
 }
 
 fn is_dns_resolver_method_name(prop: &str) -> bool {

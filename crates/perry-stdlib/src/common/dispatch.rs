@@ -741,16 +741,50 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
 
         let is_incoming_message_method = matches!(
             method_name,
-            "on" | "addListener" | "setEncoding" | "pause" | "resume" | "destroy" | "read"
+            "on" | "addListener"
+                | "setEncoding"
+                | "setTimeout"
+                | "pause"
+                | "resume"
+                | "destroy"
+                | "read"
         ) || matches!(
             method_name,
-            "method" | "url" | "httpVersion" | "headers" | "rawHeaders"
+            "method"
+                | "url"
+                | "httpVersion"
+                | "headers"
+                | "rawHeaders"
+                | "headersDistinct"
+                | "trailers"
+                | "rawTrailers"
+                | "trailersDistinct"
+                | "socket"
+                | "connection"
+                | "signal"
+                | "remoteAddress"
+                | "remotePort"
         ) || matches!(
             method_name,
-            "__get_method" | "__get_url" | "__get_httpVersion" | "__get_headers"
+            "__get_method"
+                | "__get_url"
+                | "__get_httpVersion"
+                | "__get_headers"
+                | "__get_headersDistinct"
+                | "__get_trailers"
         ) || matches!(
             method_name,
-            "__get_rawHeaders" | "__get_complete" | "__get_aborted" | "__get_destroyed"
+            "__get_rawHeaders"
+                | "__get_rawTrailers"
+                | "__get_trailersDistinct"
+                | "__get_complete"
+                | "__get_aborted"
+                | "__get_destroyed"
+                | "__get_socket"
+                | "__get_connection"
+                | "__get_signal"
+                | "__get_remoteAddress"
+                | "__get_remotePort"
         );
         if is_incoming_message_method
             && unsafe { js_ext_http_incoming_message_is_handle(handle) } != 0
@@ -768,19 +802,46 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
 
         let is_server_response_method = matches!(
             method_name,
-            "setHeader" | "getHeader" | "removeHeader" | "hasHeader" | "writeHead" | "write"
+            "setHeader"
+                | "getHeader"
+                | "removeHeader"
+                | "hasHeader"
+                | "getHeaders"
+                | "getHeaderNames"
+                | "appendHeader"
+                | "setHeaders"
+                | "writeHead"
+                | "write"
         ) || matches!(
             method_name,
-            "addTrailers" | "end" | "flushHeaders" | "writeContinue" | "writeProcessing"
+            "addTrailers"
+                | "end"
+                | "flushHeaders"
+                | "cork"
+                | "uncork"
+                | "setTimeout"
+                | "writeEarlyHints"
+                | "writeContinue"
+                | "writeProcessing"
         ) || matches!(
             method_name,
             "on" | "addListener" | "setStatus" | "getStatus"
         ) || matches!(
             method_name,
-            "__get_statusCode" | "__set_statusCode" | "__set_statusMessage"
+            "__get_statusCode" | "__get_statusMessage" | "__set_statusCode" | "__set_statusMessage"
         ) || matches!(
             method_name,
-            "__get_headersSent" | "__get_writableEnded" | "__get_writableFinished"
+            "__get_headersSent"
+                | "__get_writableEnded"
+                | "__get_writableFinished"
+                | "__get_finished"
+                | "__get_sendDate"
+                | "__set_sendDate"
+                | "__get_strictContentLength"
+                | "__set_strictContentLength"
+                | "__get_req"
+                | "__get_socket"
+                | "__get_connection"
         );
         if is_server_response_method
             && unsafe { js_ext_http_server_response_is_handle(handle) } != 0
@@ -1730,12 +1791,22 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "httpVersion"
                 | "headers"
                 | "rawHeaders"
+                | "headersDistinct"
+                | "trailers"
+                | "rawTrailers"
+                | "trailersDistinct"
                 | "complete"
                 | "aborted"
                 | "destroyed"
+                | "socket"
+                | "connection"
+                | "signal"
+                | "remoteAddress"
+                | "remotePort"
                 | "on"
                 | "addListener"
                 | "setEncoding"
+                | "setTimeout"
                 | "pause"
                 | "resume"
                 | "destroy"
@@ -1754,18 +1825,33 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         if matches!(
             property_name,
             "statusCode"
+                | "statusMessage"
                 | "headersSent"
                 | "writableEnded"
                 | "writableFinished"
+                | "finished"
+                | "sendDate"
+                | "strictContentLength"
+                | "req"
+                | "socket"
+                | "connection"
                 | "setHeader"
                 | "getHeader"
                 | "removeHeader"
                 | "hasHeader"
+                | "getHeaders"
+                | "getHeaderNames"
+                | "appendHeader"
+                | "setHeaders"
                 | "writeHead"
                 | "write"
                 | "addTrailers"
                 | "end"
                 | "flushHeaders"
+                | "cork"
+                | "uncork"
+                | "setTimeout"
+                | "writeEarlyHints"
                 | "writeContinue"
                 | "writeProcessing"
                 | "on"
@@ -2359,7 +2445,10 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
     }
 
     #[cfg(feature = "external-http-server-pump")]
-    if matches!(property_name, "statusCode" | "statusMessage") {
+    if matches!(
+        property_name,
+        "statusCode" | "statusMessage" | "sendDate" | "strictContentLength"
+    ) {
         extern "C" {
             fn js_ext_http_server_response_is_handle(handle: i64) -> i32;
             fn js_ext_http_server_response_dispatch_property_set(

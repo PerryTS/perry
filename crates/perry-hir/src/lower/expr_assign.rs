@@ -656,6 +656,10 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                             let setter_method = match (class_name.as_str(), prop.as_str()) {
                                 ("ServerResponse", "statusCode") => Some("__set_statusCode"),
                                 ("ServerResponse", "statusMessage") => Some("__set_statusMessage"),
+                                ("ServerResponse", "sendDate") => Some("__set_sendDate"),
+                                ("ServerResponse", "strictContentLength") => {
+                                    Some("__set_strictContentLength")
+                                }
                                 // Issue #2210 — `server.headersTimeout = N` etc.
                                 // route to the `__set_<name>` FFI variants. Phase
                                 // 1 just stores; Phase 2 wires hyper deadlines.
