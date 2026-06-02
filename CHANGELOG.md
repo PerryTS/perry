@@ -2,6 +2,10 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1089 — fix(runtime): Object.prototype.toString.call(date) is [object Date]
+
+`Object.prototype.toString.call(new Date())` returned `"[object Object]"` instead of `"[object Date]"`. A Perry `Date` is a NaN-boxed pointer to a `DateCell` (#2089), and `js_object_to_string` (`object/mod.rs`) discriminated heap pointers into `Array`/`Error`/`Object` by GC-header type but had no `Date` arm, so dates fell through to the generic `Object` tag. Added a `crate::date::is_date_value` check (the same brand predicate `instanceof Date` uses) before the heap discrimination, covering valid dates and Invalid Date alike. Advances the Date conformance issue (#4031).
+
 ## v0.5.1088 — fix(diagnostics_channel): drop non-Node withStoreScope; null bindStore transform throws
 
 Two `node:diagnostics_channel` store-subsystem parity fixes (epic #3839):
