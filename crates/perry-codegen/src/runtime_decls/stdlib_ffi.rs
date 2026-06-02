@@ -1727,15 +1727,13 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_map_group_by", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_array_from_async", DOUBLE, &[DOUBLE]);
 
-    // ========== JSX runtime stubs (issue #277) ==========
-    // `js_jsx(type, props)` and `js_jsxs(type, props)` are no-op stubs that
-    // let TSX/JSX files compile and link without a real JSX runtime package.
-    // The codegen intercepts ExternFuncRef { name: "jsx" } / "jsxs" in
-    // `lower_call.rs` and routes them here with both args as DOUBLE
-    // (NaN-boxed), bypassing the string→PTR conversion the generic path
-    // would apply to string literals.  When a real JSX runtime is imported
-    // via `perry.compilePackages` the imported symbol takes precedence and
-    // these stubs are never called.
+    // ========== JSX runtime adapter (issue #277, #1653) ==========
+    // `js_jsx(type, props)` and `js_jsxs(type, props)` are Perry's built-in
+    // TSX/JSX runtime entry points. Codegen intercepts
+    // ExternFuncRef { name: "jsx" } / "jsxs" in `lower_call.rs` and routes
+    // them here with both args as DOUBLE (NaN-boxed), bypassing the string→PTR
+    // conversion the generic path would apply to string literals. The runtime
+    // handles HTML-style intrinsics, fragments, and function components.
     module.declare_function("js_jsx", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_jsxs", DOUBLE, &[DOUBLE, DOUBLE]);
 }

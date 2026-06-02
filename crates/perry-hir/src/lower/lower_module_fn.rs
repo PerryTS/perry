@@ -323,33 +323,10 @@ pub fn lower_module_full(
     // synthesize a real concrete class extending `SomeClass`.
     pre_scan_mixin_functions(ast_module, &mut ctx);
 
-    // For .tsx files, pre-register JSX runtime symbols so JSX expressions can be lowered.
-    // This injects an automatic import of { jsx, jsxs } from "react/jsx-runtime"
-    // (remapped to perry-react via the user's packageAliases).
-    // Fragment is NOT imported — it's inlined as the string "__Fragment" directly in JSX lowering.
-    if source_file_path.ends_with(".tsx") {
-        ctx.register_imported_func("__jsx".to_string(), "jsx".to_string());
-        ctx.register_imported_func("__jsxs".to_string(), "jsxs".to_string());
-        module.imports.push(Import {
-            source: "react/jsx-runtime".to_string(),
-            specifiers: vec![
-                ImportSpecifier::Named {
-                    local: "__jsx".to_string(),
-                    imported: "jsx".to_string(),
-                },
-                ImportSpecifier::Named {
-                    local: "__jsxs".to_string(),
-                    imported: "jsxs".to_string(),
-                },
-            ],
-            is_native: false,
-            module_kind: ModuleKind::NativeCompiled,
-            resolved_path: None,
-            type_only: false,
-            is_dynamic: false,
-            is_dynamic_target: false,
-        });
-    }
+    // JSX expressions lower directly to the built-in `jsx`/`jsxs` externs in
+    // `jsx.rs`. Do not synthesize a `react/jsx-runtime` import here: codegen
+    // routes those extern names to Perry's runtime adapter, and making the
+    // module graph resolve a fake package only produces a misleading warning.
 
     // Pre-scan: Find all function names that have implementations (bodies)
     // This is needed to properly handle TypeScript function overloads where

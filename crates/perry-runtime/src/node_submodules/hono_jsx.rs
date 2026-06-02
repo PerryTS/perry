@@ -1,8 +1,8 @@
 //! #1671 — `hono/jsx/server` and `hono/jsx/streaming` import surfaces.
 //!
 //! Perry renders JSX with the built-in `js_jsx` runtime (codegen routes every
-//! `jsx`/`jsxs` call there unconditionally; the injected `react/jsx-runtime`
-//! import is vestigial — see #1653). These two hono submodules exist for code
+//! `jsx`/`jsxs` call there unconditionally; `.tsx` does not need a package
+//! import for that built-in path). These two hono submodules exist for code
 //! that imports the runtime / streaming helpers *directly* rather than relying
 //! on the JSX transform:
 //!
