@@ -2,6 +2,10 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1090 — fix(json): JSON.parse throws a real SyntaxError
+
+`JSON.parse` on invalid input threw a **bare string** instead of a `SyntaxError` object, so `err instanceof SyntaxError` was `false` and `err.constructor.name` was `undefined` — breaking the standard `try { JSON.parse(x) } catch (e) { if (e instanceof SyntaxError) … }` idiom and test262 error-identity assertions. All four throw sites in `js_json_parse`/`json/parse_api.rs` (null input, empty input, and the two invalid-token paths) built the thrown value with `JSValue::string_ptr(msg_ptr)` rather than the `syntax_error_value` helper that already wraps `js_syntaxerror_new`. Routed them through `syntax_error_value` so `JSON.parse("")`, `JSON.parse("x")`, etc. now throw real `SyntaxError` instances (with `name`/`constructor`/`instanceof` all correct), matching Node. The separate parser-leniency gap (accepting trailing/multiple-token input) remains tracked by #4030.
+
 ## v0.5.1089 — fix(runtime): Object.prototype.toString.call(date) is [object Date]
 
 `Object.prototype.toString.call(new Date())` returned `"[object Object]"` instead of `"[object Date]"`. A Perry `Date` is a NaN-boxed pointer to a `DateCell` (#2089), and `js_object_to_string` (`object/mod.rs`) discriminated heap pointers into `Array`/`Error`/`Object` by GC-header type but had no `Date` arm, so dates fell through to the generic `Object` tag. Added a `crate::date::is_date_value` check (the same brand predicate `instanceof Date` uses) before the heap discrimination, covering valid dates and Invalid Date alike. Advances the Date conformance issue (#4031).
