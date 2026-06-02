@@ -1601,6 +1601,81 @@ pub unsafe extern "C" fn js_new_function_construct(
     nan_boxed
 }
 
+fn constructor_prototype_bits(new_target: f64) -> Option<u64> {
+    let bits = new_target.to_bits();
+    if (bits >> 48) != 0x7FFD {
+        return global_object_prototype_bits();
+    }
+    let raw = (bits & crate::value::POINTER_MASK) as usize;
+    if raw == 0 {
+        return global_object_prototype_bits();
+    }
+    let key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), b"prototype".len() as u32);
+    let proto = js_object_get_field_by_name_f64(raw as *const ObjectHeader, key);
+    if unsafe { super::value_is_object_like(proto) } || super::class_ref_id(proto).is_some() {
+        Some(proto.to_bits())
+    } else {
+        global_object_prototype_bits()
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_new_function_construct_with_new_target(
+    func_value: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+    new_target: f64,
+) -> f64 {
+    let nt = if new_target.to_bits() == crate::value::TAG_UNDEFINED {
+        func_value
+    } else {
+        new_target
+    };
+    if nt.to_bits() == func_value.to_bits() {
+        return js_new_function_construct(func_value, args_ptr, args_len);
+    }
+    if crate::proxy::js_proxy_is_proxy(func_value) == 1 {
+        let arr = crate::array::js_array_alloc(0);
+        let mut a = arr;
+        if !args_ptr.is_null() {
+            for i in 0..args_len {
+                a = crate::array::js_array_push_f64(a, *args_ptr.add(i));
+            }
+        }
+        let arr_box = f64::from_bits(0x7FFD_0000_0000_0000 | (a as u64 & 0x0000_FFFF_FFFF_FFFF));
+        return crate::proxy::js_proxy_construct(func_value, arr_box, nt);
+    }
+    if !is_callable_function_value(func_value) {
+        return js_new_function_construct(func_value, args_ptr, args_len);
+    }
+    if is_arrow_function_value(func_value) {
+        crate::fs::validate::throw_type_error_with_code(
+            "Arrow function is not a constructor",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
+
+    let obj_ptr = js_object_alloc(0, 0);
+    let nan_boxed = crate::value::js_nanbox_pointer(obj_ptr as i64);
+    if let Some(proto_bits) = constructor_prototype_bits(nt) {
+        super::prototype_chain::object_set_static_prototype(obj_ptr as usize, proto_bits);
+    }
+
+    let prev_this = crate::object::js_implicit_this_get();
+    let prev_new_target = crate::object::js_new_target_get();
+    crate::object::js_implicit_this_set(nan_boxed);
+    crate::object::js_new_target_set(nt);
+    let prev_current_new_target = CURRENT_NEW_TARGET.with(|value| value.replace(nt.to_bits()));
+    let result = crate::closure::js_native_call_value(func_value, args_ptr, args_len);
+    CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target));
+    crate::object::js_new_target_set(prev_new_target);
+    crate::object::js_implicit_this_set(prev_this);
+    if constructor_return_overrides_this(result) {
+        return result;
+    }
+    nan_boxed
+}
+
 fn constructor_return_overrides_this(value: f64) -> bool {
     use crate::value::JSValue;
     let jv = JSValue::from_bits(value.to_bits());

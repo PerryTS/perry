@@ -887,26 +887,16 @@ fn forward_construct(target: f64, args_array: f64, new_target: f64) -> f64 {
     if lookup(target).is_some() {
         return js_proxy_construct(target, args_array, new_target);
     }
-    // Plain function/class target: build the positional arg buffer and
-    // construct via the function-as-constructor path.
-    let args_bits = args_array.to_bits();
-    let arr_ptr = (args_bits & POINTER_MASK) as *const crate::ArrayHeader;
-    let len = if arr_ptr.is_null() {
-        0
-    } else {
-        crate::array::js_array_length(arr_ptr) as usize
-    };
-    let mut buf: Vec<f64> = Vec::with_capacity(len);
-    for i in 0..len {
-        let v = crate::array::js_array_get(arr_ptr, i as u32);
-        buf.push(f64::from_bits(v.bits()));
+    if !is_callable_function(target) {
+        return throw_type_error("target is not a constructor");
     }
+    let buf = create_list_from_array_like(args_array);
     let (ptr, n) = if buf.is_empty() {
         (std::ptr::null::<f64>(), 0usize)
     } else {
         (buf.as_ptr(), buf.len())
     };
-    unsafe { crate::object::js_new_function_construct(target, ptr, n) }
+    unsafe { crate::object::js_new_function_construct_with_new_target(target, ptr, n, new_target) }
 }
 
 /// `new Proxy(...)` / `Reflect.construct(p, args, newTarget)`.
@@ -971,6 +961,41 @@ pub extern "C" fn js_proxy_construct(proxy_boxed: f64, args_array: f64, new_targ
         return throw_type_error("proxy [[Construct]] trap returned a non-object value");
     }
     result
+}
+
+fn array_from_args(args: &[f64]) -> f64 {
+    let arr = crate::array::js_array_alloc(0);
+    let mut a = arr;
+    for &arg in args {
+        a = crate::array::js_array_push_f64(a, arg);
+    }
+    f64::from_bits(POINTER_TAG | ((a as u64) & POINTER_MASK))
+}
+
+#[no_mangle]
+pub extern "C" fn js_reflect_construct(target: f64, args_like: f64, new_target: f64) -> f64 {
+    if !is_callable_function(target) {
+        return throw_type_error("target is not a constructor");
+    }
+    let nt = if new_target.to_bits() == TAG_UNDEFINED {
+        target
+    } else {
+        new_target
+    };
+    if !is_callable_function(nt) {
+        return throw_type_error("newTarget is not a constructor");
+    }
+    let args = create_list_from_array_like(args_like);
+    if lookup(target).is_some() {
+        let args_array = array_from_args(&args);
+        return js_proxy_construct(target, args_array, nt);
+    }
+    let (ptr, n) = if args.is_empty() {
+        (std::ptr::null::<f64>(), 0usize)
+    } else {
+        (args.as_ptr(), args.len())
+    };
+    unsafe { crate::object::js_new_function_construct_with_new_target(target, ptr, n, nt) }
 }
 
 // ---- Reflect.* helpers (direct wrappers, not proxy-specific) -----

@@ -348,7 +348,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let nt = lower_expr(ctx, new_target)?;
             Ok(ctx.block().call(
                 DOUBLE,
-                "js_proxy_construct",
+                "js_reflect_construct",
                 &[(DOUBLE, &t), (DOUBLE, &a), (DOUBLE, &nt)],
             ))
         }
