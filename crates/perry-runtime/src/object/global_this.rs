@@ -2830,17 +2830,86 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                 &[
                     ("toExponential", 1),
                     ("toFixed", 1),
-                    ("toLocaleString", 0),
                     ("toPrecision", 1),
                     ("toString", 1),
-                    ("valueOf", 0),
                 ],
             );
+            // OBJECT_PROTO_METHODS installs noop `valueOf`/`toLocaleString`, so
+            // it must run BEFORE the brand thunks below — otherwise it clobbers
+            // them back to no-ops.
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            // #4100: `valueOf`/`toLocaleString` brand-check `this` and throw a
+            // `TypeError` on an incompatible reflective receiver instead of
+            // falling back to `Object.prototype` (`"[object Object]"`).
+            install_proto_method(
+                proto_obj,
+                "valueOf",
+                primitive_proto_thunks::number_proto_value_of_thunk as *const u8,
+                0,
+            );
+            install_proto_method(
+                proto_obj,
+                "toLocaleString",
+                primitive_proto_thunks::number_proto_to_locale_string_thunk as *const u8,
+                0,
+            );
         }
         "Boolean" => {
-            install_noop_proto_methods(proto_obj, &[("toString", 0), ("valueOf", 0)]);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            // #4100: brand-checking `toString`/`valueOf` (mirror `Number`).
+            // Installed after OBJECT_PROTO_METHODS so the brand `valueOf` wins.
+            install_proto_method(
+                proto_obj,
+                "toString",
+                primitive_proto_thunks::boolean_proto_to_string_thunk as *const u8,
+                0,
+            );
+            install_proto_method(
+                proto_obj,
+                "valueOf",
+                primitive_proto_thunks::boolean_proto_value_of_thunk as *const u8,
+                0,
+            );
+        }
+        "Symbol" => {
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            // #4100: Symbol.prototype previously had no own methods, so
+            // reflective `Symbol.prototype.toString.call(sym)` resolved to
+            // `Object.prototype.toString` (`"[object Symbol]"`) and an
+            // incompatible receiver returned `"[object Object]"` instead of
+            // throwing. Install brand-checking thunks that re-dispatch to the
+            // canonical symbol logic (`"Symbol(x)"`). After OBJECT_PROTO_METHODS
+            // so the brand `valueOf` wins.
+            install_proto_method(
+                proto_obj,
+                "toString",
+                primitive_proto_thunks::symbol_proto_to_string_thunk as *const u8,
+                0,
+            );
+            install_proto_method(
+                proto_obj,
+                "valueOf",
+                primitive_proto_thunks::symbol_proto_value_of_thunk as *const u8,
+                0,
+            );
+        }
+        "BigInt" => {
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            // #4100: mirror `Symbol` — brand-checking `toString`(radix)/`valueOf`
+            // re-dispatched to the canonical BigInt logic (`(5n).toString(2)`
+            // → `"101"`). After OBJECT_PROTO_METHODS so the brand `valueOf` wins.
+            install_proto_method(
+                proto_obj,
+                "toString",
+                primitive_proto_thunks::bigint_proto_to_string_thunk as *const u8,
+                1,
+            );
+            install_proto_method(
+                proto_obj,
+                "valueOf",
+                primitive_proto_thunks::bigint_proto_value_of_thunk as *const u8,
+                0,
+            );
         }
         "Date" => {
             install_noop_proto_methods(
