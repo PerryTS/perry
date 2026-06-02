@@ -90,6 +90,7 @@ struct DirState {
     entries: Vec<f64>,
     index: usize,
     closed: bool,
+    operation_pending: bool,
 }
 
 fn object_class_id(value: f64) -> Option<u32> {

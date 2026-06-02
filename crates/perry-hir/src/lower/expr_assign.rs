@@ -547,6 +547,9 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                                 ("HttpServer", "keepAliveTimeout") => {
                                     Some("__set_keepAliveTimeout")
                                 }
+                                ("HttpServer", "keepAliveTimeoutBuffer") => {
+                                    Some("__set_keepAliveTimeoutBuffer")
+                                }
                                 ("HttpServer", "requestTimeout") => Some("__set_requestTimeout"),
                                 ("HttpServer", "timeout") => Some("__set_timeout"),
                                 ("HttpServer", "maxHeadersCount") => Some("__set_maxHeadersCount"),
@@ -556,6 +559,9 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                                 ("HttpsServer", "headersTimeout") => Some("__set_headersTimeout"),
                                 ("HttpsServer", "keepAliveTimeout") => {
                                     Some("__set_keepAliveTimeout")
+                                }
+                                ("HttpsServer", "keepAliveTimeoutBuffer") => {
+                                    Some("__set_keepAliveTimeoutBuffer")
                                 }
                                 ("HttpsServer", "requestTimeout") => Some("__set_requestTimeout"),
                                 ("HttpsServer", "timeout") => Some("__set_timeout"),

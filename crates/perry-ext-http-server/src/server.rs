@@ -29,8 +29,9 @@ use crate::request::{
 };
 use crate::response::{alloc_server_response, HyperResponseShape, ResponseBody, ServerResponse};
 use crate::types::{
-    extract_host, extract_port, js_promise_run_microtasks, js_promise_state,
+    extract_host, extract_port, js_promise_run_microtasks, js_promise_state, js_value_is_closure,
     jsvalue_to_owned_string, read_string_header, Promise, POINTER_TAG, PTR_MASK, TAG_NULL,
+    TAG_UNDEFINED,
 };
 
 /// Backing struct for an `http.Server` JS-side handle.
@@ -66,6 +67,7 @@ pub struct HttpServer {
     /// Defaults mirror Node's `lib/_http_server.js`:
     ///   - `headersTimeout`: 60_000 ms
     ///   - `keepAliveTimeout`: 5_000 ms
+    ///   - `keepAliveTimeoutBuffer`: 1_000 ms
     ///   - `requestTimeout`: 300_000 ms
     ///   - `timeout` (idle): 0 (disabled)
     ///   - `maxHeadersCount`: 2000
@@ -75,6 +77,7 @@ pub struct HttpServer {
     ///   - `keepAliveInitialDelay`: 0 ms
     pub headers_timeout: f64,
     pub keep_alive_timeout: f64,
+    pub keep_alive_timeout_buffer: f64,
     pub request_timeout: f64,
     pub idle_timeout: f64,
     pub max_headers_count: f64,
@@ -101,6 +104,7 @@ impl HttpServer {
             upgrade_rx: None,
             headers_timeout: 60_000.0,
             keep_alive_timeout: 5_000.0,
+            keep_alive_timeout_buffer: 1_000.0,
             request_timeout: 300_000.0,
             idle_timeout: 0.0,
             max_headers_count: 2000.0,
@@ -144,20 +148,37 @@ pub extern "C" fn js_node_http_create_server(handler: i64) -> i64 {
     register_handle(HttpServer::with_handler(handler))
 }
 
-/// Issue #2210 — `http.createServer(handler, options)` (Node 18.4+).
-/// `options_f64` is the NaN-boxed options object (`undefined` /
-/// `TAG_UNDEFINED` for the no-arg overload). Reads the timeout knobs
-/// off the object and stores them on the new `HttpServer`. The
-/// argument-order overload `createServer(options, handler)` is
-/// resolved at the dispatch shim — see `lower_http_create_server` in
-/// perry-codegen which normalizes both shapes to `(handler, options)`
-/// before the FFI call.
+/// Issue #2210 — `http.createServer([options][, handler])` (Node 18.4+).
+/// The native-table row passes both user arguments as full NaN-boxed
+/// values so this entry can normalize Node's overloads:
+/// `createServer(handler, options)`, `createServer(options, handler)`,
+/// `createServer(options)`, and `createServer(handler)`.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_create_server_with_options(
-    handler: i64,
-    options_f64: f64,
+    first_arg: f64,
+    second_arg: f64,
 ) -> i64 {
     ensure_gc_scanner_registered();
+    let first_bits = first_arg.to_bits();
+    let second_bits = second_arg.to_bits();
+    let first_is_closure = js_value_is_closure(first_bits as i64) != 0;
+    let second_is_closure = js_value_is_closure(second_bits as i64) != 0;
+    let first_is_options = (first_bits & !PTR_MASK) == POINTER_TAG && !first_is_closure;
+    let second_is_options = (second_bits & !PTR_MASK) == POINTER_TAG && !second_is_closure;
+    let handler = if first_is_closure {
+        (first_bits & PTR_MASK) as i64
+    } else if second_is_closure {
+        (second_bits & PTR_MASK) as i64
+    } else {
+        0
+    };
+    let options_f64 = if first_is_options {
+        first_arg
+    } else if second_is_options {
+        second_arg
+    } else {
+        f64::from_bits(TAG_UNDEFINED)
+    };
     let mut server = HttpServer::with_handler(handler);
     apply_server_options(&mut server, options_f64);
     register_handle(server)
@@ -198,6 +219,9 @@ pub(crate) fn apply_server_options(server: &mut HttpServer, options_f64: f64) {
     if let Some(v) = as_num("keepAliveTimeout") {
         server.keep_alive_timeout = v;
     }
+    if let Some(v) = as_num("keepAliveTimeoutBuffer") {
+        server.keep_alive_timeout_buffer = v;
+    }
     if let Some(v) = as_num("requestTimeout") {
         server.request_timeout = v;
     }
@@ -225,8 +249,9 @@ pub(crate) fn apply_server_options(server: &mut HttpServer, options_f64: f64) {
 // Issue #2210 — server.<timeout> property accessors
 // ============================================================================
 //
-// Six numeric knobs (`headersTimeout`, `keepAliveTimeout`,
-// `requestTimeout`, `timeout`, `maxHeadersCount`, `maxRequestsPerSocket`)
+// Seven numeric knobs (`headersTimeout`, `keepAliveTimeout`,
+// `keepAliveTimeoutBuffer`, `requestTimeout`, `timeout`,
+// `maxHeadersCount`, `maxRequestsPerSocket`)
 // plus the `setTimeout(ms, cb?)` instance method. Phase 1 stores +
 // reads back; Phase 2 (hyper connection-builder + per-request deadline)
 // is the follow-up tracked in #2210. The getter/setter naming follows
@@ -262,6 +287,14 @@ server_getter!(js_node_http_server_keep_alive_timeout, keep_alive_timeout);
 server_setter!(
     js_node_http_server_set_keep_alive_timeout,
     keep_alive_timeout
+);
+server_getter!(
+    js_node_http_server_keep_alive_timeout_buffer,
+    keep_alive_timeout_buffer
+);
+server_setter!(
+    js_node_http_server_set_keep_alive_timeout_buffer,
+    keep_alive_timeout_buffer
 );
 server_getter!(js_node_http_server_request_timeout, request_timeout);
 server_setter!(js_node_http_server_set_request_timeout, request_timeout);

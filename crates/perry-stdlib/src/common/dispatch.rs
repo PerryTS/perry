@@ -2153,7 +2153,7 @@ unsafe extern "C" fn js_node_http_native_dispatch(
 ) -> f64 {
     use perry_runtime::JSValue;
     extern "C" {
-        fn js_node_http_create_server_with_options(handler: i64, options_f64: f64) -> i64;
+        fn js_node_http_create_server_with_options(first_arg: f64, second_arg: f64) -> i64;
         fn js_node_https_create_server(opts_f64: f64, handler: i64) -> i64;
         fn js_node_http2_create_secure_server(opts_f64: f64, handler: i64) -> i64;
         fn js_value_is_closure(value_bits: i64) -> i32;
@@ -2183,8 +2183,13 @@ unsafe extern "C" fn js_node_http_native_dispatch(
             options_f64 = a;
         }
     }
+    let handler_f64 = if handler_ptr == 0 {
+        undefined
+    } else {
+        perry_runtime::js_nanbox_pointer(handler_ptr)
+    };
     let handle = match module {
-        "http" => js_node_http_create_server_with_options(handler_ptr, options_f64),
+        "http" => js_node_http_create_server_with_options(options_f64, handler_f64),
         "https" => js_node_https_create_server(options_f64, handler_ptr),
         "http2" => js_node_http2_create_secure_server(options_f64, handler_ptr),
         _ => return undefined,
