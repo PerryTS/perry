@@ -238,24 +238,28 @@ pub(crate) unsafe fn dispatch_native_module_method(
     } else {
         ""
     };
-    let module_name = match module_name {
-        "path/posix" => "path.posix",
-        "path/win32" => "path.win32",
-        "async_hooks.default" => "async_hooks",
-        "os.default" => "os",
-        "path.default" => "path",
-        "path.posix.default" => "path.posix",
-        "path.win32.default" => "path.win32",
-        "querystring.default" => "querystring",
-        "url.default" => "url",
-        "util.default" => "util",
+    let (module_name, assert_skip_prototype) = match module_name {
+        "assert.instance" => ("assert", false),
+        "assert.instance.skip" => ("assert", true),
+        "assert/strict.instance" => ("assert/strict", false),
+        "assert/strict.instance.skip" => ("assert/strict", true),
+        "path/posix" => ("path.posix", false),
+        "path/win32" => ("path.win32", false),
+        "async_hooks.default" => ("async_hooks", false),
+        "os.default" => ("os", false),
+        "path.default" => ("path", false),
+        "path.posix.default" => ("path.posix", false),
+        "path.win32.default" => ("path.win32", false),
+        "querystring.default" => ("querystring", false),
+        "url.default" => ("url", false),
+        "util.default" => ("util", false),
         // #3987-adjacent: `process.getBuiltinModule("punycode")` returns the
         // CJS-default namespace (`punycode.default`); without this alias its
         // method calls dispatched as `("punycode.default", "decode")` — which
         // has no arm — and returned `undefined`. The base `("punycode", …)`
         // arms below already implement decode/encode/toASCII/toUnicode.
-        "punycode.default" => "punycode",
-        _ => module_name,
+        "punycode.default" => ("punycode", false),
+        _ => (module_name, false),
     };
     // Helper: get arg N as f64
     let arg = |n: usize| -> f64 {
@@ -913,6 +917,26 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("assert", "notStrictEqual")
         | ("assert/strict", "notStrictEqual")
         | ("assert/strict", "notEqual") => js_assert_not_strict_equal(arg(0), arg(1), arg(2)),
+        ("assert", "deepEqual") if assert_skip_prototype => {
+            js_assert_deep_equal_skip_prototype(arg(0), arg(1), arg(2))
+        }
+        ("assert", "notDeepEqual") if assert_skip_prototype => {
+            js_assert_not_deep_equal_skip_prototype(arg(0), arg(1), arg(2))
+        }
+        ("assert", "deepStrictEqual")
+        | ("assert/strict", "deepStrictEqual")
+        | ("assert/strict", "deepEqual")
+            if assert_skip_prototype =>
+        {
+            js_assert_deep_strict_equal_skip_prototype(arg(0), arg(1), arg(2))
+        }
+        ("assert", "notDeepStrictEqual")
+        | ("assert/strict", "notDeepStrictEqual")
+        | ("assert/strict", "notDeepEqual")
+            if assert_skip_prototype =>
+        {
+            js_assert_not_deep_strict_equal_skip_prototype(arg(0), arg(1), arg(2))
+        }
         ("assert", "deepEqual") => js_assert_deep_equal(arg(0), arg(1), arg(2)),
         ("assert", "notDeepEqual") => js_assert_not_deep_equal(arg(0), arg(1), arg(2)),
         ("assert", "deepStrictEqual")
@@ -943,6 +967,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
             js_assert_does_not_reject(arg(0), arg(1), arg(2))
         }
         ("assert", "ifError") | ("assert/strict", "ifError") => js_assert_if_error(arg(0)),
+        ("assert", "Assert") | ("assert/strict", "Assert") => {
+            crate::fs::validate::throw_type_error_with_code(
+                "Class constructor Assert cannot be invoked without 'new'",
+                "ERR_CONSTRUCT_CALL_REQUIRED",
+            )
+        }
 
         // ── fs module (args are NaN-boxed f64, booleans return as i32→f64) ──
         ("fs", "_toUnixTimestamp") => crate::fs::js_fs_to_unix_timestamp(arg(0)),

@@ -461,6 +461,8 @@ thread_local! {
     static INSPECT_GETTERS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static INSPECT_SORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static INSPECT_COMPACT: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    static DEEP_EQUAL_SKIP_PROTOTYPE_FORMAT: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 }
 
 fn inspect_getters_enabled() -> bool {
@@ -473,6 +475,25 @@ fn inspect_sorted_enabled() -> bool {
 
 fn inspect_compact_enabled() -> bool {
     INSPECT_COMPACT.with(|c| c.get())
+}
+
+fn deep_equal_skip_prototype_format_enabled() -> bool {
+    DEEP_EQUAL_SKIP_PROTOTYPE_FORMAT.with(|c| c.get())
+}
+
+struct DeepEqualSkipPrototypeFormatGuard(bool);
+
+impl DeepEqualSkipPrototypeFormatGuard {
+    fn new(enabled: bool) -> Self {
+        let prev = DEEP_EQUAL_SKIP_PROTOTYPE_FORMAT.with(|c| c.replace(enabled));
+        Self(prev)
+    }
+}
+
+impl Drop for DeepEqualSkipPrototypeFormatGuard {
+    fn drop(&mut self) {
+        DEEP_EQUAL_SKIP_PROTOTYPE_FORMAT.with(|c| c.set(self.0));
+    }
 }
 
 pub(crate) struct InspectGettersGuard(bool);
@@ -1176,7 +1197,12 @@ unsafe fn format_object_as_json(
             crate::object::class_name_for_id(class_id).filter(|name| !name.is_empty())
         }
     };
-    let class_name_ref = class_name.as_deref();
+    let has_class_name = class_name.is_some();
+    let class_name_ref = if deep_equal_skip_prototype_format_enabled() {
+        None
+    } else {
+        class_name.as_deref()
+    };
     let empty_object = || {
         if let Some(base) = boxed_base.as_deref() {
             return base.to_string();
@@ -1226,7 +1252,7 @@ unsafe fn format_object_as_json(
 
         // Perry stores private class fields in the regular key table, but
         // Node's util.inspect never exposes them, even with showHidden.
-        if class_name_ref.is_some() && key_str.starts_with('#') {
+        if has_class_name && key_str.starts_with('#') {
             continue;
         }
 
@@ -2012,9 +2038,19 @@ fn looks_like_raw_heap_pointer(value: f64) -> bool {
     (0x1000..0x8000_0000_0000usize).contains(&addr) && addr >= crate::gc::GC_HEADER_SIZE + 0x1000
 }
 
-fn js_util_deep_strict_equal_bool(left: f64, right: f64, depth: usize) -> bool {
+fn formatted_deep_equal(left: f64, right: f64, skip_prototype: bool) -> bool {
+    let _guard = DeepEqualSkipPrototypeFormatGuard::new(skip_prototype);
+    format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0)
+}
+
+fn js_util_deep_strict_equal_bool(
+    left: f64,
+    right: f64,
+    depth: usize,
+    skip_prototype: bool,
+) -> bool {
     if depth > 64 {
-        return format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0);
+        return formatted_deep_equal(left, right, skip_prototype);
     }
     let left_value = crate::value::JSValue::from_bits(left.to_bits());
     let right_value = crate::value::JSValue::from_bits(right.to_bits());
@@ -2025,12 +2061,19 @@ fn js_util_deep_strict_equal_bool(left: f64, right: f64, depth: usize) -> bool {
             (Some((left_class, left_payload)), Some((right_class, right_payload)))
                 if left_class == right_class =>
             {
-                js_util_deep_strict_equal_bool(left_payload, right_payload, depth + 1)
+                js_util_deep_strict_equal_bool(
+                    left_payload,
+                    right_payload,
+                    depth + 1,
+                    skip_prototype,
+                )
             }
             _ => false,
         };
     }
-    if let Some(equal) = collection_equality::deep_strict_collection_equal(left, right, depth) {
+    if let Some(equal) =
+        collection_equality::deep_strict_collection_equal(left, right, depth, skip_prototype)
+    {
         return equal;
     }
     if let Some(equal) = typed_array_equality::deep_strict_typed_array_equal(left, right) {
@@ -2050,19 +2093,24 @@ fn js_util_deep_strict_equal_bool(left: f64, right: f64, depth: usize) -> bool {
         // #2934: Node's default deepStrictEqual is prototype-sensitive — two
         // objects with the same own properties but different `[[Prototype]]`
         // are not equal. Gate before comparing the formatted body.
-        if prototype_equality::prototypes_differ(left, right) {
+        if !skip_prototype && prototype_equality::prototypes_differ(left, right) {
             return false;
         }
-        format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0)
+        formatted_deep_equal(left, right, skip_prototype)
     } else {
         crate::value::js_jsvalue_equals(left, right) != 0
-            || format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0)
+            || formatted_deep_equal(left, right, skip_prototype)
     }
 }
 
 #[no_mangle]
 pub extern "C" fn js_util_is_deep_strict_equal(left: f64, right: f64) -> f64 {
-    let equal = js_util_deep_strict_equal_bool(left, right, 0);
+    let equal = js_util_deep_strict_equal_bool(left, right, 0, false);
+    f64::from_bits(crate::value::JSValue::bool(equal).bits())
+}
+
+pub fn js_util_is_deep_strict_equal_skip_prototype(left: f64, right: f64) -> f64 {
+    let equal = js_util_deep_strict_equal_bool(left, right, 0, true);
     f64::from_bits(crate::value::JSValue::bool(equal).bits())
 }
 

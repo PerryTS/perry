@@ -1578,6 +1578,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "async_hooks" => Some(ASYNC_HOOKS_NAMESPACE_KEYS),
         "async_hooks.default" => Some(ASYNC_HOOKS_DEFAULT_KEYS),
         "assert/strict" => Some(&[
+            b"Assert",
             b"AssertionError",
             b"ok",
             b"fail",
@@ -1747,6 +1748,14 @@ fn canonical_native_callable_property<'a>(module_name: &str, property_name: &'a 
         ("querystring", "decode") => "parse",
         ("querystring", "encode") => "stringify",
         _ => property_name,
+    }
+}
+
+fn assert_instance_base_module(module_name: &str) -> Option<&'static str> {
+    match module_name {
+        "assert.instance" | "assert.instance.skip" => Some("assert"),
+        "assert/strict.instance" | "assert/strict.instance.skip" => Some("assert/strict"),
+        _ => None,
     }
 }
 
@@ -1927,11 +1936,17 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
 
 pub(crate) fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
     let module_name = cjs_default_base_module(module_name).unwrap_or(module_name);
+    let module_name = assert_instance_base_module(module_name).unwrap_or(module_name);
     let property_name = canonical_native_callable_property(module_name, property_name);
-    let callable_module_name = if module_name == "util.types" {
-        "util/types"
+    let export_module_name = if property_name == "Assert" && module_name == "assert/strict" {
+        "assert"
     } else {
         module_name
+    };
+    let callable_module_name = if export_module_name == "util.types" {
+        "util/types"
+    } else {
+        export_module_name
     };
     let key = format!("{callable_module_name}\0{property_name}");
     if let Some(bits) = NATIVE_CALLABLE_EXPORTS.with(|c| c.borrow().get(&key).copied()) {
@@ -1947,11 +1962,11 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     crate::closure::js_closure_set_capture_f64(closure, 0, ns);
     crate::closure::js_closure_set_capture_ptr(closure, 1, method_bytes.as_ptr() as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 2, method_bytes.len() as i64);
-    let exposed_name = if module_name == "fs" {
-        native_callable_export_display_name(module_name, property_name)
-    } else if module_name == "url" && property_name == "resolveObject" {
+    let exposed_name = if export_module_name == "fs" {
+        native_callable_export_display_name(export_module_name, property_name)
+    } else if export_module_name == "url" && property_name == "resolveObject" {
         "urlResolveObject"
-    } else if module_name == "fs" && property_name == "_toUnixTimestamp" {
+    } else if export_module_name == "fs" && property_name == "_toUnixTimestamp" {
         "toUnixTimestamp"
     } else {
         property_name
@@ -1960,19 +1975,19 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     let value = crate::value::js_nanbox_pointer(closure as i64);
     let closure_addr = closure as usize;
 
-    if module_name == "tty" && matches!(property_name, "ReadStream" | "WriteStream") {
+    if export_module_name == "tty" && matches!(property_name, "ReadStream" | "WriteStream") {
         attach_tty_stream_prototype(value, property_name);
     }
-    if module_name == "tls" && property_name == "SecureContext" {
+    if export_module_name == "tls" && property_name == "SecureContext" {
         attach_tls_secure_context_prototype(value);
     }
-    if module_name == "wasi" && property_name == "WASI" {
+    if export_module_name == "wasi" && property_name == "WASI" {
         crate::wasi::attach_wasi_constructor_prototype(value);
     }
-    if module_name == "stream" && property_name == "Stream" {
+    if export_module_name == "stream" && property_name == "Stream" {
         attach_stream_legacy_prototype(value);
     }
-    if module_name == "stream"
+    if export_module_name == "stream"
         && matches!(
             property_name,
             "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
@@ -1980,23 +1995,26 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     {
         attach_stream_constructor_prototype(value, property_name);
     }
-    if module_name == "sqlite" && property_name == "DatabaseSync" {
+    if export_module_name == "sqlite" && property_name == "DatabaseSync" {
         attach_sqlite_database_sync_prototype(value);
     }
-    if module_name == "sqlite" && property_name == "Session" {
+    if export_module_name == "sqlite" && property_name == "Session" {
         attach_sqlite_session_prototype(value);
+    }
+    if export_module_name == "assert" && property_name == "Assert" {
+        attach_assert_prototype(value);
     }
 
     // `PerformanceObserver.supportedEntryTypes` is a static array on the
     // constructor. `PerformanceObserver` is a function value (a bound-method
     // closure), so hang the array off it as a dynamic property — keeps
     // `typeof PerformanceObserver === "function"` while the static read works.
-    if module_name == "perf_hooks" && property_name == "PerformanceObserver" {
+    if export_module_name == "perf_hooks" && property_name == "PerformanceObserver" {
         let arr = crate::perf_hooks::js_perf_supported_entry_types();
         crate::closure::closure_set_dynamic_prop(closure_addr, "supportedEntryTypes", arr);
     }
 
-    if module_name == "events" && property_name == "EventEmitter" {
+    if export_module_name == "events" && property_name == "EventEmitter" {
         let async_resource_ctor =
             bound_native_callable_export_value("events", "EventEmitterAsyncResource");
         for method in [
@@ -2045,14 +2063,14 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
         );
     }
 
-    if module_name == "util" && property_name == "promisify" {
+    if export_module_name == "util" && property_name == "promisify" {
         crate::closure::closure_set_dynamic_prop(
             closure_addr,
             "custom",
             crate::util_promisify::promisify_custom_symbol(),
         );
     }
-    if module_name == "util" && property_name == "inspect" {
+    if export_module_name == "util" && property_name == "inspect" {
         crate::closure::closure_set_dynamic_prop(
             closure_addr,
             "custom",
@@ -2390,6 +2408,72 @@ const SQLITE_DATABASE_SYNC_PROTOTYPE_METHODS: &[&str] = &[
 ];
 
 const SQLITE_SESSION_PROTOTYPE_METHODS: &[&str] = &["changeset", "patchset", "close"];
+
+const ASSERT_PROTOTYPE_METHODS: &[&str] = &[
+    "fail",
+    "ok",
+    "equal",
+    "notEqual",
+    "deepEqual",
+    "notDeepEqual",
+    "deepStrictEqual",
+    "notDeepStrictEqual",
+    "strictEqual",
+    "notStrictEqual",
+    "partialDeepStrictEqual",
+    "throws",
+    "rejects",
+    "doesNotThrow",
+    "doesNotReject",
+    "ifError",
+    "match",
+    "doesNotMatch",
+];
+
+fn attach_assert_prototype(constructor_value: f64) {
+    let constructor_js = JSValue::from_bits(constructor_value.to_bits());
+    if !constructor_js.is_pointer() {
+        return;
+    }
+    let closure = constructor_js.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    if closure == 0 {
+        return;
+    }
+
+    let proto = js_object_alloc(0, 0);
+    if proto.is_null() {
+        return;
+    }
+
+    let constructor = "constructor";
+    let constructor_key =
+        crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
+    js_object_set_field_by_name(proto, constructor_key, constructor_value);
+    super::set_builtin_property_attrs(
+        proto as usize,
+        constructor.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+
+    for method in ASSERT_PROTOTYPE_METHODS {
+        let method_value = bound_native_callable_export_value("assert", method);
+        let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
+        js_object_set_field_by_name(proto, key, method_value);
+        super::set_builtin_property_attrs(
+            proto as usize,
+            (*method).to_string(),
+            super::PropertyAttrs::new(true, false, true),
+        );
+    }
+
+    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    crate::closure::closure_set_dynamic_prop(closure, "prototype", proto_value);
+    super::set_builtin_property_attrs(
+        closure,
+        "prototype".to_string(),
+        super::PropertyAttrs::new(true, false, false),
+    );
+}
 
 extern "C" fn sqlite_database_sync_prototype_method_thunk(
     closure: *const crate::closure::ClosureHeader,
@@ -2893,6 +2977,7 @@ pub(crate) fn builtin_closure_length(closure: usize) -> Option<u32> {
 /// `EventEmitterHandle`, so dispatch coherence is preserved.
 pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool {
     let module = cjs_default_base_module(module).unwrap_or(module);
+    let module = assert_instance_base_module(module).unwrap_or(module);
     let prop = canonical_native_callable_property(module, prop);
     if module == "fs" && matches!(prop, "lchmod" | "lchmodSync") {
         return crate::fs::lchmod_is_callable_on_this_platform();
@@ -3122,6 +3207,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("stream", "PassThrough")
             | ("stream", "Stream")
             | ("string_decoder", "StringDecoder")
+            | ("assert", "Assert")
             | ("assert", "ok")
             | ("assert", "fail")
             | ("assert", "equal")
@@ -3140,6 +3226,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("assert", "rejects")
             | ("assert", "doesNotReject")
             | ("assert", "ifError")
+            | ("assert/strict", "Assert")
             | ("assert/strict", "ok")
             | ("assert/strict", "fail")
             | ("assert/strict", "equal")

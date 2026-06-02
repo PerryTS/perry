@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1734 entries across 102 modules
+// Coverage: 1736 entries across 102 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -75,6 +75,8 @@ declare module "argon2" {
 
 declare module "assert" {
   /** stdlib */
+  export class Assert { [key: string]: any; }
+  /** stdlib */
   export class AssertionError { [key: string]: any; }
   /** stdlib */
   export const strict: any;
@@ -121,6 +123,8 @@ declare module "assert" {
 }
 
 declare module "assert/strict" {
+  /** stdlib */
+  export class Assert { [key: string]: any; }
   /** stdlib */
   export class AssertionError { [key: string]: any; }
   /** stdlib */
