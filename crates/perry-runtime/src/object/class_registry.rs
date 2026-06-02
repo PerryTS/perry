@@ -1134,6 +1134,19 @@ pub unsafe extern "C" fn js_new_function_construct(
             };
             return crate::wasi::js_wasi_new(options);
         }
+        if module == "readline/promises" && method == "Readline" {
+            let output = if !args_ptr.is_null() && args_len > 0 {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            let options = if !args_ptr.is_null() && args_len > 1 {
+                *args_ptr.add(1)
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return crate::node_submodules::js_readline_promises_readline_new(output, options);
+        }
         // #3663: `new Readable(opts)` (and Writable/Duplex/Transform/PassThrough)
         // where the constructor binding came through any aliasing path the
         // compiler can't resolve to a bare `Expr::New` — `const { Readable } =

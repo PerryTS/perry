@@ -2,15 +2,12 @@
 //! `Object.fromEntries`/`groupBy`/`is`/`hasOwn`/`create`/`freeze`/`seal`/
 //! `defineProperty`/`getOwnPropertyDescriptor`/`getPrototypeOf`/... plus
 //! the `js_object_*` helpers backing them.
-
 use super::*;
-
 fn throw_from_entries_type_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = crate::error::js_typeerror_new(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
-
 /// Throw a `TypeError` with the given UTF-8 message bytes. Used by the
 /// `Object.defineProperty` / `Object.create` descriptor + invariant validation
 /// paths (#2817 / #2843 / #2816).
@@ -19,7 +16,6 @@ pub(crate) fn throw_object_type_error(message: &[u8]) -> ! {
     let err = crate::error::js_typeerror_new(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
-
 /// Throw `TypeError: <prefix><suffix>` where `suffix` is a runtime-built
 /// string (e.g. the offending descriptor value rendered with the same
 /// formatting Node uses in its messages). #2817.
