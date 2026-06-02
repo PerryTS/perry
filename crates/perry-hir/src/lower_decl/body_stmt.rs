@@ -216,6 +216,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             result.push(Stmt::Return(value));
         }
         ast::Stmt::If(if_stmt) => {
+            result.extend(predeclare_implicit_assignment_targets(ctx, &if_stmt.test));
             // #2277: `typeof x === "string"` narrowing — see typeof_narrow.rs.
             let stmt = typeof_narrow::lower_if_with_narrowing(ctx, if_stmt, lower_body_stmt)?;
             result.push(stmt);

@@ -189,6 +189,50 @@ fn sloppy_assignment_expression_creates_storage_before_following_getvalue() {
 }
 
 #[test]
+fn sloppy_assignment_in_if_test_creates_storage_before_following_getvalue() {
+    let module = lower_src("if ((y = 1) + y !== 2) { throw new Error('bad'); }");
+    let y_id = module
+        .init
+        .iter()
+        .find_map(|stmt| match stmt {
+            Stmt::Let {
+                id,
+                name,
+                init: Some(Expr::Undefined),
+                ..
+            } if name == "y" => Some(*id),
+            _ => None,
+        })
+        .expect("sloppy assignment target in if test should be predeclared");
+
+    let Some(Stmt::If { condition, .. }) = module
+        .init
+        .iter()
+        .find(|stmt| matches!(stmt, Stmt::If { .. }))
+    else {
+        panic!("expected lowered if statement, got {:?}", module.init);
+    };
+
+    let Expr::Compare { left, .. } = condition else {
+        panic!("if test should lower as comparison, got {condition:?}");
+    };
+    let Expr::Binary {
+        op: BinaryOp::Add,
+        left,
+        right,
+    } = left.as_ref()
+    else {
+        panic!("comparison lhs should lower as addition, got {left:?}");
+    };
+
+    assert!(
+        matches!(left.as_ref(), Expr::LocalSet(id, value) if *id == y_id && is_number_literal(value, 1.0)),
+        "{left:?}"
+    );
+    assert!(matches!(right.as_ref(), Expr::LocalGet(id) if *id == y_id));
+}
+
+#[test]
 fn sloppy_js_yield_identifier_arrow_parameters_lower() {
     let module = lower_js_src(
         r#"

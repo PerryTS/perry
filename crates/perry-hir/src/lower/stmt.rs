@@ -1034,6 +1034,9 @@ pub(crate) fn lower_stmt(
             module.init.push(Stmt::Expr(expr));
         }
         ast::Stmt::If(if_stmt) => {
+            module
+                .init
+                .extend(predeclare_implicit_assignment_targets(ctx, &if_stmt.test));
             let condition = lower_expr(ctx, &if_stmt.test)?;
             // Each branch introduces its own lexical scope. Skip extra push if
             // branch is a BlockStmt (handled there) or an If (else-if chain).
