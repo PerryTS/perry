@@ -2217,6 +2217,7 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             | "keyUsage"
             | "ca"
             | "raw"
+            | "publicKey"
             | "toString"
             | "toJSON"
     ) && with_handle::<crate::crypto::X509Handle, bool, _>(handle, |_| true).unwrap_or(false)

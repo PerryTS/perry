@@ -211,6 +211,32 @@ fn x509_der_to_pem(der: &[u8]) -> String {
     pem
 }
 
+fn x509_public_key_pem(spki_der: &[u8]) -> String {
+    let b64 = base64::engine::general_purpose::STANDARD.encode(spki_der);
+    let mut pem = String::from("-----BEGIN PUBLIC KEY-----\n");
+    for chunk in b64.as_bytes().chunks(64) {
+        pem.push_str(std::str::from_utf8(chunk).unwrap_or(""));
+        pem.push('\n');
+    }
+    pem.push_str("-----END PUBLIC KEY-----\n");
+    pem
+}
+
+unsafe fn x509_public_key_value(handle: &X509Handle) -> f64 {
+    use x509_cert::der::Encode;
+
+    let spki_der = match handle.cert.tbs_certificate.subject_public_key_info.to_der() {
+        Ok(der) => der,
+        Err(_) => return nanbox_undefined(),
+    };
+    let pem = x509_public_key_pem(&spki_der);
+    let ptr = js_string_from_bytes(pem.as_ptr(), pem.len() as u32);
+    if let Some(asym_type) = classify_public_key_surrogate(&pem) {
+        mark_keyobject_string(ptr, KeyKind::Public, asym_type);
+    }
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
 fn throw_x509_parse_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = perry_runtime::error::js_error_new_with_message(msg);
@@ -364,6 +390,7 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
             let buf = alloc_buffer_from_slice(&h.der);
             f64::from_bits(0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF))
         }
+        "publicKey" => x509_public_key_value(h),
         _ => nanbox_undefined(),
     }
 }
