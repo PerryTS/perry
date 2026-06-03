@@ -74,6 +74,32 @@ run_with_timeout() {
     fi
 }
 
+wait_for_tcp_port() {
+    local host=$1
+    local port=$2
+    local attempts=$3
+    local delay=${4:-0.1}
+    python3 - "$host" "$port" "$attempts" "$delay" <<'PY'
+import socket
+import sys
+import time
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+attempts = int(sys.argv[3])
+delay = float(sys.argv[4])
+
+for _ in range(attempts):
+    try:
+        with socket.create_connection((host, port), timeout=0.2):
+            sys.exit(0)
+    except OSError:
+        time.sleep(delay)
+
+sys.exit(1)
+PY
+}
+
 # ── TLS-upgrade companion server (issue #275) ──────────────────────────────
 # Spawned once per test_net_upgrade_tls* test; killed immediately after.
 # Uses a self-signed cert; test calls upgradeToTLS(host, verify=0) so cert
@@ -82,14 +108,19 @@ run_with_timeout() {
 TLS_UPGRADE_SERVER_PID=""
 
 start_tls_upgrade_server() {
-    python3 "$SCRIPT_DIR/test-files/test_net_upgrade_tls_server.py" --port 17892 &
+    local server_script="$SCRIPT_DIR/test-files/test_net_upgrade_tls_server.py"
+    if ! command -v python3 &>/dev/null; then
+        echo -e "${YELLOW}WARN${NC}  python3 not found — test_net_upgrade_tls will fail parity" >&2
+        return 1
+    fi
+    if [[ ! -f "$server_script" ]]; then
+        echo -e "${YELLOW}WARN${NC}  $server_script not found — test_net_upgrade_tls will fail parity" >&2
+        return 1
+    fi
+    python3 "$server_script" --port 17892 &
     TLS_UPGRADE_SERVER_PID=$!
     # Wait up to 3 s for the port to open.
-    local i
-    for i in $(seq 1 30); do
-        nc -z 127.0.0.1 17892 2>/dev/null && return 0
-        sleep 0.1
-    done
+    wait_for_tcp_port 127.0.0.1 17892 30 0.1 && return 0
     echo -e "${YELLOW}WARN${NC}  TLS-upgrade server did not come up in time (pid $TLS_UPGRADE_SERVER_PID)" >&2
     return 1
 }
@@ -355,13 +386,9 @@ start_echo_server() {
     ECHO_SERVER_PID=$!
     # Poll up to 5 s (50 × 100 ms) for the server to accept connections.
     local ready=0
-    for _i in $(seq 1 50); do
-        if nc -z 127.0.0.1 17891 2>/dev/null; then
-            ready=1
-            break
-        fi
-        sleep 0.1
-    done
+    if wait_for_tcp_port 127.0.0.1 17891 50 0.1; then
+        ready=1
+    fi
     if [[ $ready -eq 1 ]]; then
         echo "Echo server started on 127.0.0.1:17891 (PID $ECHO_SERVER_PID)"
     else

@@ -8,30 +8,6 @@
       "reason": "Free-text explanation. Keep the most-actionable signal first \u2014 what changes the verdict (a fixture, a Perry fix, a Node spec change)."
     }
   },
-  "test_issue_422_socket_connect": {
-    "issue": "1634",
-    "added": "2026-05-15",
-    "category": "ci-env",
-    "reason": "Tracked in #1634 (parity CI environment fixtures). #422 closed (net.Socket connect/error events + factory). The test passes locally with an echo server running but fails on Linux CI because no echo fixture server runs. Environmental \u2014 needs a CI-side fixture, not a Perry fix."
-  },
-  "test_net_min": {
-    "issue": "1634",
-    "added": "2026-05-15",
-    "category": "ci-env",
-    "reason": "Tracked in #1634 (parity CI environment fixtures). Net test passes locally with an echo server running, fails on Linux CI (no echo fixture server). Environmental \u2014 needs a CI-side fixture, not a Perry fix."
-  },
-  "test_net_socket": {
-    "issue": "1634",
-    "added": "2026-05-15",
-    "category": "ci-env",
-    "reason": "Tracked in #1634 (parity CI environment fixtures). Net test passes locally with an echo server running, fails on Linux CI (no echo fixture server). Environmental \u2014 needs a CI-side fixture, not a Perry fix."
-  },
-  "test_net_upgrade_tls": {
-    "issue": "1634",
-    "added": "2026-05-15",
-    "category": "ci-env",
-    "reason": "Tracked in #1634 (parity CI environment fixtures). Net test needs a TLS-capable echo server fixture; not available on CI. Environmental \u2014 needs a CI-side fixture."
-  },
   "test_parity_dns": {
     "issue": "793",
     "added": "2026-05-15",
@@ -97,18 +73,6 @@
     "added": "2026-05-15",
     "category": "module-inventory",
     "reason": "Node.js module inventory \u2014 `node:zlib` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
-  "test_sock_write_map": {
-    "issue": "1634",
-    "added": "2026-05-15",
-    "category": "ci-env",
-    "reason": "Tracked in #1634 (parity CI environment fixtures). Net test passes locally with an echo server running, fails on Linux CI (no echo fixture server). Environmental \u2014 issue #91 dispatch fix landed in v0.5.581 and is no longer the cause; needs a CI-side fixture."
-  },
-  "test_ramda_sum": {
-    "issue": "1634",
-    "added": "2026-05-18",
-    "category": "ci-env",
-    "reason": "Tracked in #1634 (parity CI environment fixtures). Ramda npm-package fixture failure on Linux CI; observed on #1038's CI run pre-merge. Companion to the existing test_ramda_user_import skip in the compile-smoke list \u2014 the parity harness can't npm-install ramda. File a CI-side fixture issue if/when this matters for sweep coverage."
   },
   "node-suite/stream/web/abort-during-pipeto": {
     "issue": "1545",
