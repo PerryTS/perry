@@ -305,6 +305,22 @@ pub extern "C" fn js_value_is_closure(value_bits: i64) -> i32 {
 /// Get a dynamic property stored on a closure.
 /// Returns TAG_UNDEFINED if not found.
 pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
+    if let Some(acc) = crate::object::get_accessor_descriptor(ptr, prop) {
+        if acc.get == 0 {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+        let closure =
+            (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+        if closure.is_null() {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+        let receiver = crate::value::js_nanbox_pointer(ptr as i64);
+        let prev = crate::object::js_implicit_this_set(receiver);
+        let result = crate::closure::js_closure_call0(closure);
+        crate::object::js_implicit_this_set(prev);
+        return result;
+    }
+
     if let Ok(props) = get_closure_props().lock() {
         if let Some(closure_props) = props.get(&ptr) {
             if let Some(&val) = closure_props.get(prop) {

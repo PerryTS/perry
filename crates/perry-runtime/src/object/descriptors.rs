@@ -219,6 +219,26 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     let registered = super::get_property_attrs(ptr, name);
                     let writable_default = registered.map(|a| a.writable());
                     let configurable_default = registered.map(|a| a.configurable()).unwrap_or(true);
+                    if let Some(acc) = super::get_accessor_descriptor(ptr, name) {
+                        let attrs =
+                            registered.unwrap_or(super::PropertyAttrs::new(false, false, false));
+                        let get = if acc.get == 0 {
+                            f64::from_bits(crate::value::TAG_UNDEFINED)
+                        } else {
+                            f64::from_bits(acc.get)
+                        };
+                        let set = if acc.set == 0 {
+                            f64::from_bits(crate::value::TAG_UNDEFINED)
+                        } else {
+                            f64::from_bits(acc.set)
+                        };
+                        return build_accessor_descriptor(
+                            get,
+                            set,
+                            attrs.enumerable(),
+                            attrs.configurable(),
+                        );
+                    }
                     let resolved: Option<(f64, bool, bool, bool)> = match name {
                         "length" => {
                             let closure_value = crate::value::js_nanbox_pointer(ptr as i64);
@@ -780,6 +800,15 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                         continue;
                     }
                     names.push(name);
+                }
+                for name in super::accessor_descriptor_keys_for_obj(ptr) {
+                    if matches!(name.as_str(), "length" | "name" | "prototype") {
+                        continue;
+                    }
+                    if crate::closure::closure_is_key_deleted(ptr, &name) {
+                        continue;
+                    }
+                    push_unique_name(&mut names, name);
                 }
                 if has_prototype {
                     names.push("prototype".to_string());

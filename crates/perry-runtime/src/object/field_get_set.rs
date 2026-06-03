@@ -985,14 +985,30 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
 }
 
 fn closure_dynamic_enumerable_props(ptr: usize) -> Vec<(String, f64)> {
-    crate::closure::closure_dynamic_props_snapshot(ptr)
+    let mut props = crate::closure::closure_dynamic_props_snapshot(ptr)
         .into_iter()
         .filter(|(name, _)| {
             get_property_attrs(ptr, name)
                 .map(|attrs| attrs.enumerable())
                 .unwrap_or(true)
         })
-        .collect()
+        .collect::<Vec<_>>();
+    for name in super::accessor_descriptor_keys_for_obj(ptr) {
+        if props.iter().any(|(existing, _)| existing == &name) {
+            continue;
+        }
+        if crate::closure::closure_is_key_deleted(ptr, &name) {
+            continue;
+        }
+        if get_property_attrs(ptr, &name)
+            .map(|attrs| attrs.enumerable())
+            .unwrap_or(false)
+        {
+            let value = crate::closure::closure_get_dynamic_prop(ptr, &name);
+            props.push((name, value));
+        }
+    }
+    props
 }
 
 fn js_closure_dynamic_keys(ptr: usize) -> *mut ArrayHeader {

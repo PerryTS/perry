@@ -15,6 +15,9 @@ pub(crate) fn closure_own_key_present(ptr: usize, key: &str) -> bool {
     if crate::closure::closure_is_key_deleted(ptr, key) {
         return false;
     }
+    if super::get_accessor_descriptor(ptr, key).is_some() {
+        return true;
+    }
     match key {
         // Always-present built-in function slots.
         "name" | "length" => true,

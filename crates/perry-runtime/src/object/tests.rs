@@ -147,6 +147,63 @@ fn closure_name_can_be_redefined_with_define_property() {
     }
 }
 
+extern "C" fn closure_accessor_getter(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    4.0
+}
+
+#[test]
+fn closure_accessor_define_property_is_own_and_invoked() {
+    crate::closure::test_clear_closure_side_tables();
+    let closure = crate::closure::js_closure_alloc(
+        crate::object::global_this_builtin_noop_thunk as *const u8,
+        0,
+    );
+    assert!(!closure.is_null());
+    let getter = crate::closure::js_closure_alloc(closure_accessor_getter as *const u8, 0);
+    assert!(!getter.is_null());
+
+    let caller_key = crate::string::js_string_from_bytes(b"caller".as_ptr(), 6);
+    let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
+    let configurable_key = crate::string::js_string_from_bytes(b"configurable".as_ptr(), 12);
+    let descriptor = js_object_alloc(0, 0);
+    assert!(!descriptor.is_null());
+    js_object_set_field_by_name(
+        descriptor,
+        get_key,
+        crate::value::js_nanbox_pointer(getter as i64),
+    );
+    js_object_set_field_by_name(
+        descriptor,
+        configurable_key,
+        f64::from_bits(crate::value::TAG_TRUE),
+    );
+
+    let closure_value = crate::value::js_nanbox_pointer(closure as i64);
+    let key_value = f64::from_bits(JSValue::string_ptr(caller_key).bits());
+    let descriptor_value = crate::value::js_nanbox_pointer(descriptor as i64);
+    js_object_define_property(closure_value, key_value, descriptor_value);
+
+    assert!(super::has_own_helpers::closure_own_key_present(
+        closure as usize,
+        "caller"
+    ));
+    let value = js_object_get_field_by_name(closure as *const ObjectHeader, caller_key);
+    assert!(value.is_number());
+    assert_eq!(value.as_number(), 4.0);
+
+    let own_descriptor = js_object_get_own_property_descriptor(closure_value, key_value);
+    let own_descriptor_obj =
+        crate::value::js_nanbox_get_pointer(own_descriptor) as *const crate::object::ObjectHeader;
+    assert_eq!(
+        js_object_get_field_by_name(own_descriptor_obj, get_key).bits(),
+        crate::value::js_nanbox_pointer(getter as i64).to_bits()
+    );
+    assert_eq!(
+        js_object_get_field_by_name(own_descriptor_obj, configurable_key).bits(),
+        crate::value::TAG_TRUE
+    );
+}
+
 #[test]
 fn test_object_alloc_and_fields() {
     let obj = js_object_alloc(1, 3);

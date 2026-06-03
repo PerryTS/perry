@@ -597,6 +597,18 @@ pub(crate) fn get_accessor_descriptor(obj: usize, key: &str) -> Option<AccessorD
     ACCESSOR_DESCRIPTORS.with(|m| m.borrow().get(&(obj, key.to_string())).copied())
 }
 
+pub(crate) fn accessor_descriptor_keys_for_obj(obj: usize) -> Vec<String> {
+    ACCESSOR_DESCRIPTORS.with(|m| {
+        let mut keys = m
+            .borrow()
+            .keys()
+            .filter_map(|(owner, key)| (*owner == obj).then(|| key.clone()))
+            .collect::<Vec<_>>();
+        keys.sort();
+        keys
+    })
+}
+
 /// #2766: resolve an accessor *getter* closure for `(value, key)` if one is
 /// installed (e.g. an object-literal `get x() {…}` or
 /// `Object.defineProperty(obj, k, { get })`). Returns the NaN-boxed getter
