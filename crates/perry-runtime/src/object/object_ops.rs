@@ -1006,13 +1006,16 @@ pub extern "C" fn js_object_define_property(
                         js_object_get_field_by_name(desc_ptr as *const ObjectHeader, get_key);
                     let set_field =
                         js_object_get_field_by_name(desc_ptr as *const ObjectHeader, set_key);
-                    if !get_field.is_undefined() || !set_field.is_undefined() {
-                        let get_bits = if get_field.is_undefined() {
+                    let has_get = own_key_present(desc_ptr, get_key);
+                    let has_set = own_key_present(desc_ptr, set_key);
+                    let has_accessor = has_get || has_set;
+                    if has_accessor {
+                        let get_bits = if !has_get || get_field.is_undefined() {
                             0
                         } else {
                             crate::closure::clone_closure_rebind_this(get_field.bits(), obj_value)
                         };
-                        let set_bits = if set_field.is_undefined() {
+                        let set_bits = if !has_set || set_field.is_undefined() {
                             0
                         } else {
                             crate::closure::clone_closure_rebind_this(set_field.bits(), obj_value)
@@ -1020,17 +1023,38 @@ pub extern "C" fn js_object_define_property(
                         crate::symbol::set_symbol_accessor_property(
                             obj_value, key_value, get_bits, set_bits,
                         );
+                    } else {
+                        let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+                        if own_key_present(desc_ptr, value_key) {
+                            let value_field = js_object_get_field_by_name(
+                                desc_ptr as *const ObjectHeader,
+                                value_key,
+                            );
+                            crate::symbol::js_object_set_symbol_property(
+                                obj_value,
+                                key_value,
+                                f64::from_bits(value_field.bits()),
+                            );
+                        }
                     }
-                    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-                    let value_field =
-                        js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);
-                    if !value_field.is_undefined() {
-                        crate::symbol::js_object_set_symbol_property(
-                            obj_value,
-                            key_value,
-                            f64::from_bits(value_field.bits()),
-                        );
-                    }
+                    let read_bool = |name: &[u8]| -> Option<bool> {
+                        let k =
+                            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                        let v = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, k);
+                        if v.is_undefined() {
+                            None
+                        } else {
+                            Some(crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0)
+                        }
+                    };
+                    let writable = read_bool(b"writable").unwrap_or(has_accessor);
+                    let enumerable = read_bool(b"enumerable").unwrap_or(false);
+                    let configurable = read_bool(b"configurable").unwrap_or(false);
+                    crate::symbol::set_symbol_property_attrs(
+                        obj as usize,
+                        raw_ptr as usize,
+                        PropertyAttrs::new(writable, enumerable, configurable),
+                    );
                 }
                 return obj_value;
             }

@@ -203,6 +203,12 @@ pub(crate) fn is_global_registered_symbol(ptr: usize) -> bool {
 // Storage stays intentionally linear because per-object symbol keys are rare.
 static SYMBOL_PROPERTIES: Mutex<Option<HashMap<usize, Vec<(usize, u64)>>>> = Mutex::new(None);
 
+// Descriptor attributes for symbol-keyed properties installed through
+// Object.defineProperty. Direct symbol assignment uses the normal data-property
+// defaults, so absence here means writable/enumerable/configurable are all true.
+static SYMBOL_PROPERTY_ATTRS: Mutex<Option<HashMap<(usize, usize), crate::object::PropertyAttrs>>> =
+    Mutex::new(None);
+
 // Monotonic id counter for fresh symbols. Not thread-safe per-thread but
 // Symbol semantics are compatible with coarse locking.
 static NEXT_SYMBOL_ID: Mutex<u64> = Mutex::new(1);
@@ -481,6 +487,50 @@ pub(crate) fn clone_symbol_entries_for_obj_ptr(src_obj_ptr: usize) -> Vec<(usize
         .and_then(|m| m.get(&src_obj_ptr))
         .cloned()
         .unwrap_or_default()
+}
+
+pub(crate) fn symbol_property_root_bits(owner: usize, sym_key: usize) -> Option<u64> {
+    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
+    guard.as_ref().and_then(|map| {
+        map.get(&owner)
+            .and_then(|entries| entries.iter().find(|(key, _)| *key == sym_key))
+            .map(|(_, value_bits)| *value_bits)
+    })
+}
+
+pub(crate) fn get_symbol_property_attrs(
+    owner: usize,
+    sym_key: usize,
+) -> Option<crate::object::PropertyAttrs> {
+    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTY_ATTRS);
+    guard
+        .as_ref()
+        .and_then(|map| map.get(&(owner, sym_key)).copied())
+}
+
+pub(crate) fn set_symbol_property_attrs(
+    owner: usize,
+    sym_key: usize,
+    attrs: crate::object::PropertyAttrs,
+) {
+    if owner == 0 || sym_key == 0 {
+        return;
+    }
+    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTY_ATTRS);
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    guard.as_mut().unwrap().insert((owner, sym_key), attrs);
+}
+
+pub(crate) fn symbol_property_is_enumerable(owner: usize, sym_key: usize) -> bool {
+    get_symbol_property_attrs(owner, sym_key)
+        .map(|attrs| attrs.enumerable())
+        .unwrap_or(true)
+}
+
+pub(crate) fn symbol_accessor_descriptor_bits(owner: usize, sym_key: usize) -> Option<(u64, u64)> {
+    accessors::symbol_accessor_property_by_key(owner, sym_key).map(|acc| (acc.get, acc.set))
 }
 
 /// Extract the raw object pointer from a NaN-boxed JSValue. Returns 0 if the
@@ -764,6 +814,7 @@ pub fn scan_symbol_side_table_roots(mark: &mut dyn FnMut(f64)) {
 
 pub fn scan_symbol_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     scan_symbol_property_roots_mut(visitor);
+    scan_symbol_property_attrs_mut(visitor);
     accessors::scan_symbol_accessor_roots_mut(visitor);
     scan_class_static_symbol_roots_mut(visitor);
     scan_symbol_pointer_metadata_roots_mut(visitor);
@@ -798,6 +849,31 @@ fn scan_symbol_property_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_
             std::collections::hash_map::Entry::Vacant(entry) => {
                 entry.insert(entries);
             }
+        }
+    }
+}
+
+fn scan_symbol_property_attrs_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let mut rewrites = Vec::new();
+    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTY_ATTRS);
+    let Some(map) = guard.as_mut() else {
+        return;
+    };
+
+    for (old_owner, old_sym_key) in map.keys().copied().collect::<Vec<_>>() {
+        let mut new_owner = old_owner;
+        let mut new_sym_key = old_sym_key;
+        let owner_changed =
+            visitor.visit_metadata_usize_slot(&mut new_owner) && new_owner != old_owner;
+        let sym_changed = visitor.visit_usize_slot(&mut new_sym_key) && new_sym_key != old_sym_key;
+        if owner_changed || sym_changed {
+            rewrites.push(((old_owner, old_sym_key), (new_owner, new_sym_key)));
+        }
+    }
+
+    for (old_key, new_key) in rewrites {
+        if let Some(attrs) = map.remove(&old_key) {
+            map.insert(new_key, attrs);
         }
     }
 }
@@ -851,6 +927,7 @@ fn scan_symbol_pointer_metadata_roots_mut(visitor: &mut crate::gc::RuntimeRootVi
 enum SymbolSideTableRootSlot {
     SymbolPropertyOwner { owner: usize },
     SymbolPropertyEntry { owner: usize, sym_key: usize },
+    SymbolPropertyAttrs { owner: usize, sym_key: usize },
     ClassStaticSymbol { class_id: u32, sym_key: usize },
     SymbolPointer { ptr: usize },
 }
@@ -899,6 +976,15 @@ fn symbol_side_table_root_snapshot() -> Vec<SymbolSideTableRootSlot> {
     }
 
     {
+        let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTY_ATTRS);
+        if let Some(map) = guard.as_ref() {
+            for &(owner, sym_key) in map.keys() {
+                slots.push(SymbolSideTableRootSlot::SymbolPropertyAttrs { owner, sym_key });
+            }
+        }
+    }
+
+    {
         let guard = crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS);
         if let Some(map) = guard.as_ref() {
             for &(class_id, sym_key) in map.keys() {
@@ -939,6 +1025,9 @@ fn scan_symbol_side_table_root_slot(
             visitor.visit_usize_slot(entry_sym);
             visitor.visit_nanbox_u64_slot(value_bits);
         }
+        SymbolSideTableRootSlot::SymbolPropertyAttrs { owner, sym_key } => {
+            rewrite_symbol_property_attrs_if_forwarded(visitor, owner, sym_key);
+        }
         SymbolSideTableRootSlot::ClassStaticSymbol { class_id, sym_key } => {
             rewrite_class_static_symbol_entry_if_forwarded(visitor, class_id, sym_key);
         }
@@ -967,6 +1056,29 @@ fn rewrite_symbol_property_owner_if_forwarded(
                     entry.insert(entries);
                 }
             }
+        }
+    }
+}
+
+fn rewrite_symbol_property_attrs_if_forwarded(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    owner: usize,
+    sym_key: usize,
+) {
+    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTY_ATTRS);
+    let Some(map) = guard.as_mut() else {
+        return;
+    };
+    if !map.contains_key(&(owner, sym_key)) {
+        return;
+    }
+    let mut new_owner = owner;
+    let mut new_sym_key = sym_key;
+    let owner_moved = visitor.visit_metadata_usize_slot(&mut new_owner);
+    let sym_moved = visitor.visit_usize_slot(&mut new_sym_key);
+    if (owner_moved && new_owner != owner) || (sym_moved && new_sym_key != sym_key) {
+        if let Some(attrs) = map.remove(&(owner, sym_key)) {
+            map.insert((new_owner, new_sym_key), attrs);
         }
     }
 }
@@ -1013,6 +1125,7 @@ fn rewrite_symbol_pointer_metadata_if_forwarded(
 #[cfg(test)]
 pub(crate) fn test_clear_symbol_side_table_roots() {
     *crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES) = None;
+    *crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTY_ATTRS) = None;
     *crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS) = None;
     accessors::test_clear_symbol_accessor_roots();
 

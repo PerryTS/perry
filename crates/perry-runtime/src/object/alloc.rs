@@ -805,6 +805,9 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     //    Mutex; holding the lock across the iteration would deadlock.
     let entries = crate::symbol::clone_symbol_entries_for_obj_ptr(src_raw);
     for (sym_ptr, value_bits) in entries {
+        if !crate::symbol::symbol_property_is_enumerable(src_raw, sym_ptr) {
+            continue;
+        }
         let sym_f64 = f64::from_bits(JSValue::pointer(sym_ptr as *const u8).bits());
         let value_f64 = f64::from_bits(value_bits);
         crate::symbol::js_object_set_symbol_property(target_f64, sym_f64, value_f64);

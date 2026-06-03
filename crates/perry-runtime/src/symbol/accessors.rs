@@ -78,6 +78,16 @@ pub(super) unsafe fn symbol_accessor_property(
         .and_then(|m| m.get(&(obj_key, sym_key)).copied())
 }
 
+pub(super) fn symbol_accessor_property_by_key(
+    obj_key: usize,
+    sym_key: usize,
+) -> Option<SymbolAccessorDescriptor> {
+    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
+    guard
+        .as_ref()
+        .and_then(|m| m.get(&(obj_key, sym_key)).copied())
+}
+
 pub(super) unsafe fn invoke_symbol_accessor_getter(get_bits: u64, receiver: f64) -> f64 {
     if get_bits == 0 {
         return f64::from_bits(TAG_UNDEFINED);

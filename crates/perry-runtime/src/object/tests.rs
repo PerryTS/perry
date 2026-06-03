@@ -148,6 +148,93 @@ fn closure_name_can_be_redefined_with_define_property() {
 }
 
 #[test]
+fn symbol_define_property_attrs_round_trip_descriptor() {
+    crate::symbol::test_clear_symbol_side_table_roots();
+    unsafe {
+        let obj = js_object_alloc(0, 0);
+        assert!(!obj.is_null());
+        let obj_value = crate::value::js_nanbox_pointer(obj as i64);
+        let symbol_key = crate::symbol::js_symbol_new_empty();
+        let symbol_ptr = crate::symbol::sym_key_from_f64(symbol_key);
+        assert_ne!(symbol_ptr, 0);
+
+        let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+        let writable_key = crate::string::js_string_from_bytes(b"writable".as_ptr(), 8);
+        let enumerable_key = crate::string::js_string_from_bytes(b"enumerable".as_ptr(), 10);
+        let configurable_key = crate::string::js_string_from_bytes(b"configurable".as_ptr(), 12);
+
+        let descriptor = js_object_alloc(0, 0);
+        assert!(!descriptor.is_null());
+        js_object_set_field_by_name(descriptor, value_key, 42.0);
+        js_object_set_field_by_name(
+            descriptor,
+            writable_key,
+            f64::from_bits(crate::value::TAG_FALSE),
+        );
+        js_object_set_field_by_name(
+            descriptor,
+            enumerable_key,
+            f64::from_bits(crate::value::TAG_FALSE),
+        );
+        js_object_set_field_by_name(
+            descriptor,
+            configurable_key,
+            f64::from_bits(crate::value::TAG_TRUE),
+        );
+
+        let descriptor_value = crate::value::js_nanbox_pointer(descriptor as i64);
+        js_object_define_property(obj_value, symbol_key, descriptor_value);
+
+        assert_eq!(
+            crate::symbol::symbol_property_root_bits(obj as usize, symbol_ptr),
+            Some(42.0f64.to_bits())
+        );
+        assert!(!crate::symbol::symbol_property_is_enumerable(
+            obj as usize,
+            symbol_ptr
+        ));
+
+        let own_descriptor = js_object_get_own_property_descriptor(obj_value, symbol_key);
+        let own_descriptor_obj =
+            crate::value::js_nanbox_get_pointer(own_descriptor) as *const ObjectHeader;
+        assert!(!own_descriptor_obj.is_null());
+        let value = js_object_get_field_by_name(own_descriptor_obj, value_key);
+        assert!(value.is_number());
+        assert_eq!(value.as_number(), 42.0);
+        assert_eq!(
+            js_object_get_field_by_name(own_descriptor_obj, writable_key).bits(),
+            crate::value::TAG_FALSE
+        );
+        assert_eq!(
+            js_object_get_field_by_name(own_descriptor_obj, enumerable_key).bits(),
+            crate::value::TAG_FALSE
+        );
+        assert_eq!(
+            js_object_get_field_by_name(own_descriptor_obj, configurable_key).bits(),
+            crate::value::TAG_TRUE
+        );
+
+        let attr_descriptor = js_object_alloc(0, 0);
+        assert!(!attr_descriptor.is_null());
+        js_object_set_field_by_name(
+            attr_descriptor,
+            enumerable_key,
+            f64::from_bits(crate::value::TAG_TRUE),
+        );
+        let attr_descriptor_value = crate::value::js_nanbox_pointer(attr_descriptor as i64);
+        js_object_define_property(obj_value, symbol_key, attr_descriptor_value);
+        assert_eq!(
+            crate::symbol::symbol_property_root_bits(obj as usize, symbol_ptr),
+            Some(42.0f64.to_bits())
+        );
+        assert!(crate::symbol::symbol_property_is_enumerable(
+            obj as usize,
+            symbol_ptr
+        ));
+    }
+}
+
+#[test]
 fn test_object_alloc_and_fields() {
     let obj = js_object_alloc(1, 3);
 

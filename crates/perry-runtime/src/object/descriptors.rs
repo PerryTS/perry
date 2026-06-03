@@ -127,6 +127,34 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             }
         }
 
+        if crate::symbol::js_is_symbol(key_value) != 0 {
+            let owner = crate::symbol::obj_key_from_f64(obj_value);
+            let sym_key = crate::symbol::sym_key_from_f64(key_value);
+            if owner == 0 || sym_key == 0 {
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
+            let attrs = crate::symbol::get_symbol_property_attrs(owner, sym_key)
+                .unwrap_or(PropertyAttrs::new(true, true, true));
+            if let Some((get, set)) = crate::symbol::symbol_accessor_descriptor_bits(owner, sym_key)
+            {
+                return build_accessor_descriptor(
+                    f64::from_bits(get),
+                    f64::from_bits(set),
+                    attrs.enumerable(),
+                    attrs.configurable(),
+                );
+            }
+            if let Some(value_bits) = crate::symbol::symbol_property_root_bits(owner, sym_key) {
+                return build_data_descriptor(
+                    f64::from_bits(value_bits),
+                    attrs.writable(),
+                    attrs.enumerable(),
+                    attrs.configurable(),
+                );
+            }
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+
         if let Some(class_id) = class_ref_id(obj_value) {
             let method_name = metadata_key_to_string(key_value);
             if let Some(method_name) = method_name {
