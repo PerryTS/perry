@@ -817,11 +817,15 @@ pub extern "C" fn js_typed_array_new_from_array(
     }
     unsafe {
         let len = (*arr).length;
+        // Snapshot source values via the canonical accessor BEFORE allocating:
+        // `typed_array_alloc` may GC and free/move an unrooted cloned source
+        // (`.of/.from` path), and the raw inline read mis-read it (#871).
+        let vals: Vec<f64> = (0..len)
+            .map(|i| jsvalue_to_f64(crate::array::js_array_get_f64(arr, i)))
+            .collect();
         let ta = typed_array_alloc(kind, len);
-        let arr_data = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-        for i in 0..len as usize {
-            let raw = *arr_data.add(i);
-            store_at(ta, i, jsvalue_to_f64(raw));
+        for (i, v) in vals.iter().enumerate() {
+            store_at(ta, i, *v);
         }
         ta
     }

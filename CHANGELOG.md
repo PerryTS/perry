@@ -2,6 +2,31 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1115 — fix(typedarray): Uint8Array.of/from build the buffer-backed representation
+
+`Uint8Array.of(...)` / `Uint8Array.from(...)` produced garbage bytes
+(`Uint8Array.of(1,2,3)[0]` read back as a denormal like `1.27e-321`, issue
+#871 part-2 regression). Perry represents `Uint8Array` as a **buffer**
+(`BufferHeader`, via `js_uint8array_new` / `js_uint8array_from_array` in
+`buffer/from.rs`); `new Uint8Array([...])` already builds that form. But the
+`Uint8ArrayFrom` codegen lowered `.of/.from` to
+`js_typed_array_new_from_array(kind=1, …)`, which builds the *generic*
+`TypedArrayHeader` representation instead. Element reads (`u[i]`) then routed
+through the buffer path and mis-read the `TypedArrayHeader` as a plain array,
+yielding uninitialized memory.
+
+Fixes:
+- `perry-codegen/src/expr/instance_misc1.rs`: `Uint8ArrayFrom` now calls
+  `js_uint8array_from_array(arr)` (buffer-backed, matching `new Uint8Array`)
+  instead of `js_typed_array_new_from_array(1, arr)`, keeping the
+  representation consistent so `u[i]` reads correctly.
+- `perry-runtime/src/typedarray.rs`: `js_typed_array_new_from_array` (still
+  used by non-`Uint8Array` `.of/.from`, e.g. `Int8Array.of`) now reads source
+  elements through the canonical `js_array_get_f64` accessor rather than a raw
+  inline-`f64` read, so it correctly materializes cloned/lazy source arrays
+  (verified `Int8Array.of(5,6,7)` matches Node).
+
+
 ## v0.5.1114 — test(parity): specify expected exit code for three intentional-throw expected-output tests
 
 `run_parity_tests.sh` compares an expected-output test's process exit code
