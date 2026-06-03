@@ -280,11 +280,32 @@ bundled-nanoid = ["dep:nanoid"]
 # Async runtime (tokio) - internal feature
 async-runtime = ["dep:tokio"]
 
+# OCI container subsystem (perry/container, perry/compose, perry/workloads).
+# Pulls in perry-container-compose and exposes the `js_container_*` and
+# `js_compose_*` FFI exports that the codegen dispatch table targets.
+container = ["dep:perry-container-compose", "async-runtime"]
+
 [dependencies]
 perry-runtime = { workspace = true, features = ["stdlib"] }
 # Re-bundle updater symbols into libperry_stdlib.a so user binaries that
 # call `perry/updater` resolve at link time without extra wiring.
 perry-updater = { workspace = true }
+# Container subsystem (gated behind the `container` feature). The stdlib
+# container/ module re-exports `perry_container_compose::*` types and
+# delegates orchestration to `ComposeEngine` / `ContainerBackend`.
+#
+# NOTE 1: this is a DIRECT path dep (not `workspace = true`) so the
+# build doesn't break if the `[workspace.dependencies]
+# perry-container-compose` line gets stripped. The `[workspace] members`
+# entry is still required for `cargo build -p perry-container-compose`
+# to succeed — that's enforced by the `crate_in_workspace_members` test
+# in this crate's tests/.
+#
+# NOTE 2: do NOT enable the crate's own `ffi` feature here — it exports
+# a *different* legacy `js_compose_*` shape (YAML-file-path-based) that
+# would collide with stdlib's canonical SPEC §9.1 stack-handle
+# signatures at link.
+perry-container-compose = { path = "../perry-container-compose", optional = true }
 
 thiserror.workspace = true
 anyhow.workspace = true
@@ -423,3 +444,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     "Win32_Foundation",
 ] }
+
+[dev-dependencies]
+# Property tests for the container FFI bridge (gated behind `container` feature
+# at the test-file level via `#[cfg(feature = "container")]`).
+proptest = "1"
+serde_yaml = "0.9"

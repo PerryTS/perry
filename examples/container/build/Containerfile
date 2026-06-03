@@ -1,0 +1,13 @@
+# Minimal example image for the perry/compose `build:` smoke test.
+# Inherits from a public alpine image; baked-in startup just prints the
+# build-time arg + a marker line so the test can verify the build
+# pipeline ran end-to-end.
+FROM alpine:3.20
+
+ARG BUILD_ENV=development
+
+ENV BUILD_ENV=${BUILD_ENV}
+
+# Print the env at start so the example's logs() call has something
+# meaningful to dump.
+CMD ["sh", "-c", "echo \"perry-build-example BUILD_ENV=$BUILD_ENV ready\"; sleep 30"]

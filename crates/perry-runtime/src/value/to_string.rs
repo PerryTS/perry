@@ -137,6 +137,20 @@ pub(crate) unsafe fn ordinary_to_primitive_number_for_add(
     }
 }
 
+/// Coerce a NaN-boxed value to a `*const StringHeader` suitable for FFI calls
+/// that expect string/JSON input.
+#[no_mangle]
+pub extern "C" fn js_value_to_str_ptr_for_ffi(value: f64) -> i64 {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_string() {
+        return jsval.as_string_ptr() as i64;
+    }
+    if jsval.is_short_string() {
+        return crate::string::js_string_materialize_to_heap(value) as i64;
+    }
+    unsafe { crate::json::js_json_stringify(value, 0) as i64 }
+}
+
 /// Resolve `obj[method_name]` (own + prototype chain) and, if it is a
 /// callable closure, invoke it with `this = obj` (no args). Returns whether
 /// the result was a primitive, a non-primitive, or whether the method was

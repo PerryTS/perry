@@ -48,6 +48,7 @@ members = [
     "crates/perry-ext-pdf",
     "crates/perry-ext-ads",
     "crates/perry-wasm-host",
+    "crates/perry-container-compose",
     "crates/perry-stdlib",
     "crates/perry-diagnostics",
     "crates/perry-ui",
@@ -135,6 +136,7 @@ default-members = [
     "crates/perry-codegen-wear-tiles",
     "crates/perry-codegen-wasm",
     "crates/perry-updater",
+    "crates/perry-container-compose",
 ]
 
 # Aggressive release optimizations for small, fast binaries

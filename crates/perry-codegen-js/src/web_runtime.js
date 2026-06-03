@@ -784,7 +784,7 @@ function perry_system_audio_set_output_filename(filename) {
 function perry_system_audio_start_recording() {
     if (_perry_audio_recording) return;
     if (!_perry_audio_stream) return;
-    
+
     try {
         _perry_audio_recorded_chunks = [];
         _perry_audio_media_recorder = new MediaRecorder(_perry_audio_stream);

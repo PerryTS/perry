@@ -34358,4 +34358,3 @@ msgstr ""
 #: src/contributing/building.md:89
 msgid "See `CLAUDE.md` for detailed implementation notes and pitfalls"
 msgstr ""
-

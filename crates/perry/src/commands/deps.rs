@@ -272,7 +272,7 @@ fn is_node_builtin(name: &str) -> bool {
     builtins.contains(&base)
 }
 
-/// Check if an import is a Perry built-in module (perry/ui, perry/thread, perry/i18n, perry/system)
+/// Check if an import is a Perry built-in module
 fn is_perry_builtin(name: &str) -> bool {
     name.starts_with("perry/")
 }

@@ -63,6 +63,8 @@ works unchanged.
 - **worker_threads** — Background workers
 - **exponential-backoff** — Retry logic
 - **async_hooks** — AsyncLocalStorage
+- **perry/container** — OCI container management
+- **perry/compose** — Multi-container orchestration
 
 ### Node.js Built-ins
 - **fs** — File system
@@ -131,5 +133,6 @@ import { jsEval } from "perry/jsruntime"; // illustrative — not yet a public e
 - [HTTP & Networking](http.md)
 - [Databases](database.md)
 - [Cryptography](crypto.md)
+- [Containers](container.md)
 - [Utilities](utilities.md)
 - [Other Modules](other.md)

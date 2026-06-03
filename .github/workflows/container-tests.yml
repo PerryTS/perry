@@ -1,0 +1,349 @@
+name: Container Tests
+
+# Comprehensive automated test suite for the perry/container subsystem.
+#
+# Test layers (ordered fastest → slowest, by run trigger):
+#
+#   Layer A — Unit + Property tests          every PR     no runtime needed
+#   Layer A.1 — Functional (MockBackend)     every PR     hermetic, all v0.5.372 invariants
+#   Layer A.2 — Protocol arg snapshots       every PR     CLI flag emission
+#   Layer A.3 — Workspace invariants         every PR     fail-fast on missing workspace.member
+#   Layer B  — FFI bug regressions           every PR     each surfaced-and-fixed bug pinned
+#   Layer C  — Live-runtime integration      PR + main    real Docker/podman/apple-container
+#   Layer D  — End-to-end (Perry compile + run) main + tags   full TS → … → docker chain
+#   Layer E  — Fuzz                          nightly      libfuzzer; surfaces parser DoS/panics
+#
+# CI matrix: macOS-14 (apple/container) + ubuntu-24.04 (podman) for layers
+# requiring a runtime; ubuntu-only for hermetic tests + fuzz.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - 'crates/perry-container-compose/**'
+      - 'crates/perry-container-e2e/**'
+      - 'crates/perry-stdlib/src/container/**'
+      - 'crates/perry-stdlib/tests/container_*'
+      - 'crates/perry-hir/src/lower.rs'
+      - 'crates/perry-hir/src/ir.rs'
+      - 'crates/perry-codegen/src/lower_call.rs'
+      - 'tests/e2e/**'
+      - 'types/perry/{container,compose,workloads}/**'
+      - '.github/workflows/container-tests.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/perry-container-compose/**'
+      - 'crates/perry-container-e2e/**'
+      - 'crates/perry-stdlib/src/container/**'
+      - 'crates/perry-stdlib/tests/container_*'
+      - 'crates/perry-hir/src/lower.rs'
+      - 'crates/perry-hir/src/ir.rs'
+      - 'crates/perry-codegen/src/lower_call.rs'
+      - 'tests/e2e/**'
+      - 'types/perry/{container,compose,workloads}/**'
+      - '.github/workflows/container-tests.yml'
+  schedule:
+    # Nightly fuzz at 03:30 UTC
+    - cron: '30 3 * * *'
+  workflow_dispatch:
+    inputs:
+      run_e2e:
+        description: "Run e2e tests (Layer D)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["true", "false"]
+      run_fuzz:
+        description: "Run fuzz tests (Layer E)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["true", "false"]
+
+concurrency:
+  group: container-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  PERRY_NO_INSTALL_PROMPT: "1"
+  PERRY_NO_DEFAULT_SIGINT_CLEANUP: "1"   # tests own their teardown via ProjectCleanup RAII
+
+jobs:
+
+  # ===========================================================================
+  # Layer A + B: hermetic tests (no runtime). Every PR.
+  # ===========================================================================
+  hermetic:
+    name: Hermetic Tests (Layer A + B)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free up disk space (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes/*Simulator* || true
+          sudo rm -rf ~/Library/Developer/CoreSimulator/Caches/* || true
+          df -h / | tail -1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-container-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-container-
+
+      # ── Layer A.0: lib unit + protocol arg tests ──────────────────────
+      - name: A.0 — perry-container-compose lib + protocol args
+        run: |
+          cargo test -p perry-container-compose --lib
+
+      # ── Layer A.1: functional tests with MockBackend ──────────────────
+      - name: A.1 — Functional tests (MockBackend, hermetic)
+        run: |
+          cargo test -p perry-container-compose \
+            --features test-utils \
+            --test functional_orchestration \
+            -- --test-threads=2
+
+      # ── Layer A.2: fixture + property tests ───────────────────────────
+      - name: A.2 — Fixture + property tests
+        run: |
+          cargo test -p perry-container-compose \
+            --test fixtures_tests \
+            --test round_trip \
+            -- --test-threads=2
+
+      # ── Layer A.3: workspace invariants ───────────────────────────────
+      - name: A.3 — Workspace invariants
+        run: |
+          cargo test -p perry-stdlib \
+            --features container \
+            --test container_workspace_invariants
+
+      # ── Layer B: FFI bug regressions ──────────────────────────────────
+      - name: B — FFI bug regressions
+        run: |
+          cargo test -p perry-stdlib \
+            --features container \
+            --test container_capability_tests \
+            --test container_extra_tests \
+            --test container_ffi_tests \
+            --test container_props \
+            --test container_verification_tests
+
+      # ── Smoke tests on perry-stdlib's container module ────────────────
+      - name: stdlib container::smoke_tests
+        run: |
+          cargo test -p perry-stdlib \
+            --features container \
+            --lib container::smoke_tests
+
+  # ===========================================================================
+  # Layer C: Live-runtime integration tests. PR + main.
+  # ===========================================================================
+  integration-macos-apple:
+    name: Layer C — Integration (macOS / apple/container)
+    runs-on: macos-14
+    if: github.event_name != 'pull_request' || github.base_ref == 'main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free up disk space (macOS)
+        run: |
+          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes/*Simulator* || true
+          df -h / | tail -1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: macos-cargo-container-integration-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-cargo-container-integration-
+
+      - name: Probe apple/container availability
+        id: backend
+        run: |
+          if command -v container &>/dev/null && container --version; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::apple/container not available — Layer C skipped"
+          fi
+
+      - name: C — live_runtime_tests against apple/container
+        if: steps.backend.outputs.available == 'true'
+        run: |
+          cargo test -p perry-container-compose \
+            --features integration-tests \
+            --test live_runtime_tests \
+            -- --test-threads=1
+        env:
+          PERRY_INTEGRATION_TESTS: "1"
+          PERRY_CONTAINER_BACKEND: "apple/container"
+        timeout-minutes: 15
+
+  integration-linux-podman:
+    name: Layer C — Integration (Linux / podman)
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'pull_request' || github.base_ref == 'main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: linux-cargo-container-integration-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: linux-cargo-container-integration-
+
+      - name: Install podman
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y podman
+          podman --version
+
+      - name: C — live_runtime_tests against podman
+        run: |
+          cargo test -p perry-container-compose \
+            --features integration-tests \
+            --test live_runtime_tests \
+            -- --test-threads=1
+        env:
+          PERRY_INTEGRATION_TESTS: "1"
+          PERRY_CONTAINER_BACKEND: "podman"
+        timeout-minutes: 15
+
+  # ===========================================================================
+  # Layer D: E2E (Perry compile + run). main + tags + manual.
+  # ===========================================================================
+  e2e-linux:
+    name: Layer D — E2E (Linux / docker)
+    runs-on: ubuntu-24.04
+    if: |
+      github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/tags/v') ||
+      github.event.inputs.run_e2e == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: linux-cargo-container-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: linux-cargo-container-e2e-
+
+      - name: Probe docker
+        run: docker info --format '{{.ServerVersion}}'
+
+      - name: Build Perry CLI (release)
+        run: |
+          cargo build --release \
+            -p perry -p perry-runtime -p perry-stdlib
+
+      - name: D — redis smoke
+        run: |
+          cargo test -p perry-container-e2e --test e2e_container -- e2e_redis_smoke --test-threads=1
+        env:
+          PERRY_E2E_TESTS: "1"
+          PERRY_CONTAINER_BACKEND: "docker"
+        timeout-minutes: 10
+
+      - name: D — Forgejo full stack [advisory]
+        # Forgejo pulls ~250 MB; mark advisory so a slow registry
+        # doesn't block the PR gate.
+        continue-on-error: true
+        run: |
+          cargo test -p perry-container-e2e --test e2e_container -- e2e_forgejo_stack --test-threads=1
+        env:
+          PERRY_E2E_TESTS: "1"
+          PERRY_E2E_FORGEJO: "1"
+          PERRY_CONTAINER_BACKEND: "docker"
+        timeout-minutes: 25
+
+      - name: Upload e2e binaries (debugging)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-bins-linux
+          path: target/e2e-bin/
+          if-no-files-found: ignore
+
+  # ===========================================================================
+  # Layer E: Fuzz. Nightly + manual.
+  # ===========================================================================
+  fuzz:
+    name: Layer E — Fuzz (libfuzzer)
+    runs-on: ubuntu-24.04
+    if: |
+      github.event_name == 'schedule' ||
+      github.event.inputs.run_fuzz == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [compose_yaml_parse, env_interpolation, compose_spec_json_round_trip]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly Rust + cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal --component rust-src
+          cargo install cargo-fuzz --locked
+
+      - name: Run fuzz target ${{ matrix.target }} for 5 minutes
+        working-directory: crates/perry-container-compose/fuzz
+        run: |
+          cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=300
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes-${{ matrix.target }}
+          path: crates/perry-container-compose/fuzz/artifacts/${{ matrix.target }}/
+
+  # ===========================================================================
+  # Required-check gate. Hermetic tier MUST pass; live + e2e + fuzz are
+  # informational so a slow registry / runtime hiccup doesn't block PRs.
+  # ===========================================================================
+  container-tests-gate:
+    name: Container Tests Gate
+    runs-on: ubuntu-24.04
+    needs: [hermetic]
+    if: always()
+    steps:
+      - name: Check required jobs
+        run: |
+          if [[ "${{ needs.hermetic.result }}" != "success" ]]; then
+            echo "::error::hermetic tier failed: ${{ needs.hermetic.result }}"
+            exit 1
+          fi
+          echo "✅ Hermetic test tier passed."

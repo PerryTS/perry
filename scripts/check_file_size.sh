@@ -224,6 +224,17 @@ crates/perry-codegen/src/lower_call/native_table/http.rs
 # the 2000-line gate after the stdio `'ignore'` handling additions. Splitting the
 # spawn/exec/fork families into sibling modules is tracked under #1435.
 crates/perry-runtime/src/child_process/mod.rs
+# OCI container backend (docker/podman/apple-container process orchestration +
+# OCI lifecycle: create/start/stop/exec/logs/inspect/image ops). Lands oversized
+# from the container-compose subsystem (replacement for external PR #159); the
+# backend is gated behind the `container` feature. Splitting per backend driver
+# / lifecycle family is tracked under #1435.
+crates/perry-container-compose/src/backend.rs
+# perry-stdlib container module root — re-exports `perry_container_compose::*`
+# and the `js_container_*` / `js_compose_*` FFI dispatch surface (gated behind
+# the `container` feature). Splitting the FFI surface per command family is
+# tracked under #1435.
+crates/perry-stdlib/src/container/mod.rs
 EOF
 )
 

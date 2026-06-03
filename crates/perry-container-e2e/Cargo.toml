@@ -1,0 +1,14 @@
+[package]
+name = "perry-container-e2e"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "End-to-end test harness for perry/container — compiles `.e2e.ts` via the perry CLI and runs the resulting binary against a live OCI runtime"
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+anyhow = { workspace = true }

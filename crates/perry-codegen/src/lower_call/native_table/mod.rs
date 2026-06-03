@@ -45,7 +45,7 @@ mod utils_crypto;
 pub(super) enum NativeArgKind {
     /// NaN-boxed f64 — pass as-is (objects, generic JSValues).
     F64,
-    /// NaN-boxed string → extract raw i64 pointer via js_get_string_pointer_unified.
+    /// NaN-boxed value → extract/stringify to a raw i64 StringHeader pointer.
     /// Use for Rust signatures like `*const StringHeader`.
     StrPtr,
     /// NaN-boxed closure/pointer → unbox to i64 via the standard mask.

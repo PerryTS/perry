@@ -968,6 +968,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // RegExp.escape(str) — #2899. Takes/returns NaN-boxed f64 (string).
     module.declare_function("js_regexp_escape", DOUBLE, &[DOUBLE]);
     module.declare_function("js_get_string_pointer_unified", I64, &[DOUBLE]);
+    module.declare_function("js_value_to_str_ptr_for_ffi", I64, &[DOUBLE]);
     // Closes #580: alias-on-copy refcount bump for string locals. The
     // call site at `crates/perry-codegen/src/stmt.rs:725` was added by
     // v0.5.667 (#536) to mark the source string as shared (refcount=0)

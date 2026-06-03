@@ -124,6 +124,10 @@ pub const NATIVE_MODULES: &[&str] = &[
     "worker_threads",
     "perry/thread",
     "perry/updater",
+    "perry/container",
+    "perry/container-compose",
+    "perry/compose",
+    "perry/workloads",
     "perry/media",
     "perry/audio",
     "perry/background",
@@ -4974,6 +4978,70 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perry/audio", "getPosition", false, None),
     method("perry/audio", "onEnded", false, None),
     method("perry/audio", "onLoaded", false, None),
+    // --- perry/container — OCI single-container + image lifecycle.
+    //     Backed by the perry-container-compose crate's FFI exports
+    //     (js_container_*). Auto-namespace module: signatures stay loose
+    //     ((...args): any) — codegen NaN-boxes whatever is passed.
+    //     Surface mirrors types/perry/container/index.d.ts. The entries
+    //     flip strict mode (#463) on for the module so the
+    //     unimplemented-API gate fires (#513). ---
+    method("perry/container", "run", false, None),
+    method("perry/container", "create", false, None),
+    method("perry/container", "start", false, None),
+    method("perry/container", "stop", false, None),
+    method("perry/container", "remove", false, None),
+    method("perry/container", "list", false, None),
+    method("perry/container", "inspect", false, None),
+    method("perry/container", "logs", false, None),
+    method("perry/container", "exec", false, None),
+    method("perry/container", "pullImage", false, None),
+    method("perry/container", "listImages", false, None),
+    method("perry/container", "removeImage", false, None),
+    method("perry/container", "composeUp", false, None),
+    method("perry/container", "downByProject", false, None),
+    method("perry/container", "downAll", false, None),
+    method("perry/container", "removeIfExists", false, None),
+    method("perry/container", "getBackend", false, None),
+    method("perry/container", "detectBackend", false, None),
+    method("perry/container", "getAvailableBackends", false, None),
+    method("perry/container", "setBackend", false, None),
+    method("perry/container", "setBackends", false, None),
+    method("perry/container", "getBackendPriority", false, None),
+    method("perry/container", "selectBackendFor", false, None),
+    // --- perry/compose — multi-service Compose orchestration. Same
+    //     backend crate; surface mirrors types/perry/compose/index.d.ts. ---
+    method("perry/compose", "up", false, None),
+    method("perry/compose", "down", false, None),
+    method("perry/compose", "ps", false, None),
+    method("perry/compose", "logs", false, None),
+    method("perry/compose", "exec", false, None),
+    method("perry/compose", "config", false, None),
+    method("perry/compose", "start", false, None),
+    method("perry/compose", "stop", false, None),
+    method("perry/compose", "restart", false, None),
+    // --- perry/container-compose — internal specifier for the unified
+    //     compose subsystem (crate perry-container-compose). Feature-mapped
+    //     in stdlib_features.rs alongside the public perry/compose surface;
+    //     entries mirror perry/compose so the unimplemented-API gate (#463)
+    //     flips strict mode on for the module too. ---
+    method("perry/container-compose", "up", false, None),
+    method("perry/container-compose", "down", false, None),
+    method("perry/container-compose", "ps", false, None),
+    method("perry/container-compose", "logs", false, None),
+    method("perry/container-compose", "exec", false, None),
+    method("perry/container-compose", "config", false, None),
+    method("perry/container-compose", "start", false, None),
+    method("perry/container-compose", "stop", false, None),
+    method("perry/container-compose", "restart", false, None),
+    // --- perry/workloads — workload-graph orchestration. Surface mirrors
+    //     types/perry/workloads/index.d.ts; `runtime` and `policy` are
+    //     const helper-constructor objects (Property rows). ---
+    method("perry/workloads", "graph", false, None),
+    method("perry/workloads", "node", false, None),
+    method("perry/workloads", "runGraph", false, None),
+    method("perry/workloads", "inspectGraph", false, None),
+    property("perry/workloads", "runtime"),
+    property("perry/workloads", "policy"),
     // --- perry/plugin — host-side functions (PERRY_PLUGIN_TABLE in
     //     lower_call.rs). Instance methods on PluginApi are tracked on
     //     class_filter rows — see perry/plugin's PluginApi class. ---

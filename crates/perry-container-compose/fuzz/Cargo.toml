@@ -1,0 +1,39 @@
+[package]
+name = "perry-container-compose-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+perry-container-compose = { path = ".." }
+
+[[bin]]
+name = "compose_yaml_parse"
+path = "fuzz_targets/compose_yaml_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "env_interpolation"
+path = "fuzz_targets/env_interpolation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "compose_spec_json_round_trip"
+path = "fuzz_targets/compose_spec_json_round_trip.rs"
+test = false
+doc = false
+bench = false
+
+# Workspace exclusion — fuzz targets need a special toolchain
+# (cargo-fuzz / cargo-afl); they shouldn't be picked up by the
+# default `cargo build --workspace`. Run via:
+#   cargo +nightly fuzz run compose_yaml_parse
+[workspace]

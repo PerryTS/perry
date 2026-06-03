@@ -169,6 +169,11 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         "uuid" => &["bundled-uuid"],
         "nanoid" => &["bundled-nanoid"],
 
+        // ── Container ─────────────────────────────────────────────────
+        "perry/container" | "perry/container-compose" | "perry/compose" | "perry/workloads" => {
+            &["container"]
+        }
+
         // Slugify gained the `bundled-slugify` feature in v0.5.536 so
         // the well-known flip can swap it out for perry-ext-slugify.
         // Default-on via `default = ["full"]` keeps existing

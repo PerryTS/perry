@@ -386,3 +386,9 @@ pub use uuid::*;
 pub mod nanoid;
 #[cfg(feature = "bundled-nanoid")]
 pub use nanoid::*;
+
+// === Container Module ===
+#[cfg(feature = "container")]
+pub mod container;
+#[cfg(feature = "container")]
+pub use container::*;

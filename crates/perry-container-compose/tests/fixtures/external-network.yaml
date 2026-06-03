@@ -1,0 +1,12 @@
+version: '3.8'
+services:
+  web:
+    image: nginx:alpine
+    networks:
+      - shared
+    ports:
+      - "8080:80"
+networks:
+  shared:
+    external: true
+    name: production_shared_v1

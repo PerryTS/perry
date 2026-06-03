@@ -111,7 +111,7 @@ pub fn lower_native_module_dispatch(
             }
             NativeArgKind::StrPtr => {
                 let blk = ctx.block();
-                let ptr = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &lowered)]);
+                let ptr = blk.call(I64, "js_value_to_str_ptr_for_ffi", &[(DOUBLE, &lowered)]);
                 llvm_args.push((I64, ptr));
                 arg_types.push(I64);
             }

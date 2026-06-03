@@ -197,4 +197,3 @@ console.log("globalThis.process.off typeof:", typeof gproc?.off);
 // Coverage: 50 byte-comparable probes, 62 PERRY-SKIP (per-run/host-dependent or
 // would crash Perry's currently-incomplete node:process namespace), 14 SKIP
 // (would terminate the process or interfere with the parity harness itself).
-

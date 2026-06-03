@@ -498,6 +498,43 @@ These packages are natively implemented in Rust — no Node.js required:
 | **Database** | mysql2, pg, ioredis |
 | **Security** | bcrypt, argon2, jsonwebtoken |
 | **Utilities** | dotenv, uuid, nodemailer, zlib, node-cron |
+| **Container** | perry/container (OCI container management) |
+
+---
+
+## Container Module
+
+Perry includes a native container management module `perry/container` for creating, running, and managing OCI containers:
+
+```typescript
+import { run, list, composeUp } from 'perry/container';
+
+// Run a container
+const container = await run({
+  image: 'nginx:alpine',
+  name: 'my-nginx',
+  ports: ['8080:80'],
+});
+
+// List containers
+const containers = await list();
+console.log(containers);
+
+// Multi-container orchestration
+const compose = await composeUp({
+  services: {
+    web: { image: 'nginx:alpine' },
+    db: { image: 'postgres:15-alpine' },
+  },
+});
+```
+
+**Platform support:**
+- macOS/iOS: Podman (apple/container support coming soon)
+- Linux: Podman (native)
+- Windows: Podman Desktop (experimental)
+
+See `example-code/container-demo/` for a complete example.
 
 ---
 

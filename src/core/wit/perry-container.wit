@@ -1,0 +1,41 @@
+interface container {
+    use types.{container-spec, container-handle, container-info, container-logs, image-info, backend-info};
+
+    run: func(spec: container-spec) -> result<container-handle, string>;
+    create: func(spec: container-spec) -> result<container-handle, string>;
+    start: func(id: string) -> result<_, string>;
+    stop: func(id: string, timeout: option<u32>) -> result<_, string>;
+    remove: func(id: string, force: bool) -> result<_, string>;
+    list: func(all: bool) -> result<list<container-info>, string>;
+    inspect: func(id: string) -> result<container-info, string>;
+    logs: func(id: string, tail: option<u32>) -> result<container-logs, string>;
+    exec: func(id: string, cmd: list<string>, env: option<list<tuple<string, string>>>, workdir: option<string>) -> result<container-logs, string>;
+    pull-image: func(reference: string) -> result<_, string>;
+    list-images: func() -> result<list<image-info>, string>;
+    remove-image: func(reference: string, force: bool) -> result<_, string>;
+    get-backend: func() -> string;
+    detect-backend: func() -> result<list<backend-info>, string>;
+    compose-up: func(spec: string) -> result<u64, string>;
+}
+
+interface compose {
+    use types.{container-info, container-logs};
+
+    down: func(handle-id: u64, volumes: bool) -> result<_, string>;
+    ps: func(handle-id: u64) -> result<list<container-info>, string>;
+    logs: func(handle-id: u64, service: option<string>, tail: option<u32>) -> result<container-logs, string>;
+    exec: func(handle-id: u64, service: string, cmd: list<string>) -> result<container-logs, string>;
+}
+
+interface workloads {
+    use types.{workload-graph, workload-node, run-graph-options, graph-status, node-info, container-logs};
+
+    run-graph: func(graph: workload-graph, opts: option<run-graph-options>) -> result<u64, string>;
+    inspect-graph: func(graph: workload-graph) -> result<graph-status, string>;
+    handle-down: func(handle-id: u64, opts: string) -> result<_, string>;
+    handle-status: func(handle-id: u64) -> result<graph-status, string>;
+    handle-graph: func(handle-id: u64) -> workload-graph;
+    handle-logs: func(handle-id: u64, node: option<string>, tail: option<u32>) -> result<container-logs, string>;
+    handle-exec: func(handle-id: u64, node: string, cmd: list<string>) -> result<container-logs, string>;
+    handle-ps: func(handle-id: u64) -> result<list<node-info>, string>;
+}

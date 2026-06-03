@@ -83,9 +83,20 @@
 - [HTTP & Networking](stdlib/http.md)
 - [Databases](stdlib/database.md)
 - [Cryptography](stdlib/crypto.md)
+- [Containers](stdlib/container.md)
 - [Utilities](stdlib/utilities.md)
 - [Other Modules](stdlib/other.md)
 - [API Reference (auto-generated)](api/reference.md)
+
+# Containers
+
+- [Overview](container/overview.md)
+- [Single-Container Lifecycle](container/containers.md)
+- [Compose Orchestration](container/compose.md)
+- [Networking](container/networking.md)
+- [Volumes](container/volumes.md)
+- [Security](container/security.md)
+- [Production Patterns](container/production-patterns.md)
 
 # Internationalization
 

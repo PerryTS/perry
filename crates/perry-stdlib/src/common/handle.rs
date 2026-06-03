@@ -44,6 +44,12 @@ pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
     handle
 }
 
+/// Register an object with a specific ID
+pub fn register_handle_with_id<T: 'static + Send + Sync>(value: T, handle: Handle) -> Handle {
+    HANDLES.insert(handle, Box::new(value));
+    handle
+}
+
 /// Get a reference to a registered object and execute a closure with it.
 /// This is the safe way to access handle data without lifetime issues.
 pub fn with_handle<T: 'static + Send + Sync, R, F: FnOnce(&T) -> R>(
