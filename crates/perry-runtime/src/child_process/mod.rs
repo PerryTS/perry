@@ -1325,14 +1325,14 @@ fn cp_args_from_value(value: f64) -> Vec<String> {
 }
 
 // ============================================================================
-// Spawn / exec options: `cwd`, `env`, `shell`, `argv0`, sync buffered I/O —
-// #1780/#2555
+// Spawn / exec options: `cwd`, `env`, `uid`, `gid`, `shell`, `argv0`, sync
+// buffered I/O — #1780/#2555
 // ============================================================================
 //
-// These helpers read the common, host-portable options off a NaN-boxed options
-// value and apply them to a `std::process::Command`. The sync buffered forms
-// also parse `{ input, timeout, maxBuffer }`; broader stdio routing remains
-// outside the current runtime surface.
+// These helpers read common options off a NaN-boxed options value and apply them
+// to a `std::process::Command`. The sync buffered forms also parse `{ input,
+// timeout, maxBuffer }`; broader stdio routing remains outside the current
+// runtime surface.
 
 /// Coerce any JS value to an owned Rust string — string fast-path, else
 /// `js_jsvalue_to_string`. Used for `env` values, which Node stringifies.
@@ -1347,8 +1347,45 @@ fn cp_coerce_string(value: f64) -> String {
     unsafe { cp_read_string_header(p as i64) }
 }
 
-/// Apply the host-portable `{ cwd, env }` options to `command`. `opts_val` is a
-/// NaN-boxed options object (or undefined/null/non-object — then a no-op). Node
+fn cp_read_uid_gid_option(opts_val: f64, key: &[u8]) -> Option<u32> {
+    let value = cp_get_field(opts_val, key);
+    let js_value = JSValue::from_bits(value.to_bits());
+    if js_value.is_undefined() || js_value.is_null() {
+        return None;
+    }
+    if !js_value.is_number() && !js_value.is_int32() {
+        return None;
+    }
+    let id = js_value.to_number();
+    if id.is_finite() && id >= 0.0 && id.fract() == 0.0 && id <= u32::MAX as f64 {
+        Some(id as u32)
+    } else {
+        None
+    }
+}
+
+fn cp_apply_uid_gid(command: &mut Command, opts_val: f64) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        if let Some(gid) = cp_read_uid_gid_option(opts_val, b"gid") {
+            command.gid(gid);
+        }
+        if let Some(uid) = cp_read_uid_gid_option(opts_val, b"uid") {
+            command.uid(uid);
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (command, opts_val);
+    }
+}
+
+/// Apply shared command options to `command`. `cwd` and `env` are portable;
+/// `uid` and `gid` are applied on Unix targets. `opts_val` is a NaN-boxed
+/// options object (or undefined/null/non-object — then a no-op). Node
 /// semantics: `env` *replaces* the child's environment wholesale, so when an
 /// `env` object is provided we `env_clear()` first and skip keys whose value is
 /// `undefined`. #1780.
@@ -1382,6 +1419,8 @@ fn cp_apply_options(command: &mut Command, opts_val: f64) {
             }
         }
     }
+
+    cp_apply_uid_gid(command, opts_val);
 }
 
 pub(super) fn cp_read_argv0(opts_val: f64) -> Option<String> {
