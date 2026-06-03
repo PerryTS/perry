@@ -612,10 +612,10 @@ fn dispatch_request(
         let try_h = tokio::runtime::Handle::try_current();
         std::hint::black_box(&try_h);
         if try_h.is_err() {
-            eprintln!(
-                "[perry-ext-http] BUG: dispatch_request Handle::try_current returned Err — \
-                 LTO has likely dead-stripped tokio's CONTEXT statics."
-            );
+            push_event(PendingHttpEvent::Error {
+                request_handle,
+                error_message: "http client runtime unavailable".to_string(),
+            });
             return;
         }
         let handle = tokio::runtime::Handle::current();
@@ -786,10 +786,10 @@ fn dispatch_request_over_socket(
         let try_h = tokio::runtime::Handle::try_current();
         std::hint::black_box(&try_h);
         if try_h.is_err() {
-            eprintln!(
-                "[perry-ext-http] BUG: dispatch_request_over_socket Handle::try_current returned \
-                 Err — LTO has likely dead-stripped tokio's CONTEXT statics."
-            );
+            push_event(PendingHttpEvent::Error {
+                request_handle,
+                error_message: "http client runtime unavailable".to_string(),
+            });
             return;
         }
         let handle = tokio::runtime::Handle::current();
@@ -1137,6 +1137,10 @@ pub unsafe extern "C" fn js_https_get_overload(args_array: i64) -> Handle {
 /// `req.write(chunk)` — append data to the request body.
 #[no_mangle]
 pub unsafe extern "C" fn js_http_client_request_write(handle: Handle, body_f64: f64) -> Handle {
+    client_request_write_impl(handle, body_f64)
+}
+
+unsafe fn client_request_write_impl(handle: Handle, body_f64: f64) -> Handle {
     if let Some(body) = extract_string_value(body_f64) {
         with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
             req.body.extend_from_slice(body.as_bytes());
@@ -1150,6 +1154,10 @@ pub unsafe extern "C" fn js_http_client_request_write(handle: Handle, body_f64: 
 /// second call after `ended=true` is a no-op.
 #[no_mangle]
 pub unsafe extern "C" fn js_http_client_request_end(handle: Handle, body_f64: f64) -> Handle {
+    client_request_end_impl(handle, body_f64)
+}
+
+unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> Handle {
     if let Some(body) = extract_string_value(body_f64) {
         with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
             req.body.extend_from_slice(body.as_bytes());
@@ -1242,6 +1250,10 @@ pub unsafe extern "C" fn js_http_on(
     event_ptr: *const StringHeader,
     callback: i64,
 ) -> Handle {
+    http_on_impl(handle, event_ptr, callback)
+}
+
+unsafe fn http_on_impl(handle: Handle, event_ptr: *const StringHeader, callback: i64) -> Handle {
     ensure_gc_scanner_registered();
     let event = match read_str(event_ptr) {
         Some(e) => e,
@@ -1290,6 +1302,10 @@ pub unsafe extern "C" fn js_http_set_header(
 /// `req.setTimeout(ms)`.
 #[no_mangle]
 pub unsafe extern "C" fn js_http_set_timeout(handle: Handle, ms: f64) -> Handle {
+    client_request_set_timeout_impl(handle, ms)
+}
+
+unsafe fn client_request_set_timeout_impl(handle: Handle, ms: f64) -> Handle {
     with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
         req.timeout_ms = Some(ms.max(0.0) as u64);
     });
@@ -1534,6 +1550,15 @@ fn body_chunk_value(body: &[u8], encoding: Option<&str>) -> f64 {
 /// Number of pending events the main loop should drain.
 #[no_mangle]
 pub extern "C" fn js_http_has_pending() -> i32 {
+    let has_events = HTTP_PENDING_EVENTS
+        .lock()
+        .map(|q| !q.is_empty())
+        .unwrap_or(false);
+    if has_events {
+        unsafe {
+            js_http_process_pending();
+        }
+    }
     HTTP_PENDING_EVENTS
         .lock()
         .map(|q| if q.is_empty() { 0 } else { 1 })

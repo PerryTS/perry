@@ -1323,6 +1323,7 @@ pub fn detect_native_instance_creation_with_context(
             // factory call lived in (mirrors lower.rs:5517).
             let owning_module = match (module.as_str(), method.as_str()) {
                 ("tls", "connect") => "net".to_string(),
+                ("https", "request" | "get") => "http".to_string(),
                 _ => module.clone(),
             };
             Some((owning_module, class_name.to_string()))

@@ -9,7 +9,11 @@ pub(super) unsafe fn dispatch_client_request_method(
 ) -> Option<f64> {
     if !matches!(
         method_name,
-        "setHeader"
+        "end"
+            | "write"
+            | "setHeader"
+            | "setTimeout"
+            | "listenerCount"
             | "getHeader"
             | "hasHeader"
             | "removeHeader"
@@ -65,6 +69,10 @@ pub(super) unsafe fn dispatch_client_request_property(
             | "setHeader"
             | "setTimeout"
             | "listenerCount"
+            | "method"
+            | "protocol"
+            | "host"
+            | "path"
             | "getHeader"
             | "hasHeader"
             | "removeHeader"

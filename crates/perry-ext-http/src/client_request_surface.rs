@@ -341,6 +341,41 @@ fn dispatch_property(handle: Handle, property: &str) -> Option<f64> {
         });
     }
     Some(match property {
+        "method" => {
+            with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| string_value(&req.method))
+                .unwrap_or_else(undefined_value)
+        }
+        "protocol" => with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+            reqwest::Url::parse(&req.url)
+                .map(|u| string_value(&format!("{}:", u.scheme())))
+                .unwrap_or_else(|_| string_value(""))
+        })
+        .unwrap_or_else(undefined_value),
+        "host" => with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+            let host = reqwest::Url::parse(&req.url)
+                .ok()
+                .and_then(|u| u.host_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+            string_value(&host)
+        })
+        .unwrap_or_else(undefined_value),
+        "path" => with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+            let path = reqwest::Url::parse(&req.url)
+                .map(|u| {
+                    let mut path = u.path().to_string();
+                    if path.is_empty() {
+                        path.push('/');
+                    }
+                    if let Some(q) = u.query() {
+                        path.push('?');
+                        path.push_str(q);
+                    }
+                    path
+                })
+                .unwrap_or_default();
+            string_value(&path)
+        })
+        .unwrap_or_else(undefined_value),
         "aborted" => js_http_client_request_aborted(handle),
         "destroyed" => js_http_client_request_destroyed(handle),
         "finished" => js_http_client_request_finished(handle),
@@ -358,6 +393,24 @@ fn dispatch_method(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
         return None;
     }
     Some(match method {
+        "end" => {
+            unsafe {
+                client_request_end_impl(
+                    handle,
+                    args.first().copied().unwrap_or_else(undefined_value),
+                );
+            }
+            handle_value(handle)
+        }
+        "write" => {
+            unsafe {
+                client_request_write_impl(
+                    handle,
+                    args.first().copied().unwrap_or_else(undefined_value),
+                );
+            }
+            handle_value(handle)
+        }
         "setHeader" => {
             let name = string_arg(args, 0).unwrap_or_default();
             let value = string_arg(args, 1).unwrap_or_default();
@@ -382,6 +435,26 @@ fn dispatch_method(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
         "getHeaderNames" => headers_array(handle, false),
         "getHeaders" => headers_object(handle),
         "getRawHeaderNames" => headers_array(handle, true),
+        "setTimeout" => {
+            unsafe {
+                client_request_set_timeout_impl(handle, args.first().copied().unwrap_or(0.0));
+            }
+            handle_value(handle)
+        }
+        "listenerCount" => {
+            let event = string_arg(args, 0).unwrap_or_default();
+            get_handle_mut::<ClientRequestHandle>(handle)
+                .map(|req| {
+                    let explicit = req.listeners.get(&event).map(|v| v.len()).unwrap_or(0);
+                    let implicit_response = if event == "response" && req.response_callback != 0 {
+                        1
+                    } else {
+                        0
+                    };
+                    (explicit + implicit_response) as f64
+                })
+                .unwrap_or(0.0)
+        }
         "abort" => js_http_client_request_abort(handle),
         "destroy" => handle_value(js_http_client_request_destroy(handle, undefined_value())),
         "flushHeaders" | "cork" | "uncork" | "setNoDelay" | "setSocketKeepAlive" => {

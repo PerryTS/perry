@@ -229,6 +229,11 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     }
 
     #[cfg(feature = "http-client")]
+    if let Some(value) = unsafe { crate::http::dispatch_agent_method(handle, method_name, &args) } {
+        return value;
+    }
+
+    #[cfg(feature = "http-client")]
     if let Some(value) = crate::http::dispatch_client_request_method(handle, method_name, &args) {
         return value;
     }
@@ -1596,6 +1601,11 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
 
     #[cfg(feature = "bundled-events")]
     if let Some(value) = dispatch_event_emitter_property(handle, property_name) {
+        return value;
+    }
+
+    #[cfg(feature = "http-client")]
+    if let Some(value) = crate::http::dispatch_agent_property(handle, property_name) {
         return value;
     }
 

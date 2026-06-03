@@ -319,6 +319,14 @@ pub(crate) fn dispatch_client_request_property(handle: Handle, property: &str) -
         });
     }
     Some(match property {
+        "method" => {
+            f64::from_bits(JSValue::string_ptr(js_http_client_request_method(handle)).bits())
+        }
+        "protocol" => {
+            f64::from_bits(JSValue::string_ptr(js_http_client_request_protocol(handle)).bits())
+        }
+        "host" => f64::from_bits(JSValue::string_ptr(js_http_client_request_host(handle)).bits()),
+        "path" => f64::from_bits(JSValue::string_ptr(js_http_client_request_path(handle)).bits()),
         "aborted" => js_http_client_request_aborted(handle),
         "destroyed" => js_http_client_request_destroyed(handle),
         "finished" => js_http_client_request_finished(handle),
@@ -364,6 +372,20 @@ pub(crate) fn dispatch_client_request_method(
         "getHeaderNames" => headers_array(handle, false),
         "getHeaders" => headers_object(handle),
         "getRawHeaderNames" => headers_array(handle, true),
+        "listenerCount" => {
+            let event = string_arg(args, 0).unwrap_or_default();
+            get_handle_mut::<ClientRequestHandle>(handle)
+                .map(|req| {
+                    let explicit = req.listeners.get(&event).map(|v| v.len()).unwrap_or(0);
+                    let implicit_response = if event == "response" && req.response_callback != 0 {
+                        1
+                    } else {
+                        0
+                    };
+                    (explicit + implicit_response) as f64
+                })
+                .unwrap_or(0.0)
+        }
         "abort" => js_http_client_request_abort(handle),
         "destroy" => handle_value(js_http_client_request_destroy(handle, undefined_value())),
         "flushHeaders" | "cork" | "uncork" | "setNoDelay" | "setSocketKeepAlive" => {

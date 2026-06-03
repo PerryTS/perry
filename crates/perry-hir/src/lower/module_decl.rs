@@ -739,9 +739,15 @@ pub(crate) fn lower_module_decl(
                                                         _ => None,
                                                     };
                                                     if let Some(class_name) = class_name {
+                                                        let class_module =
+                                                            if class_name == "ClientRequest" {
+                                                                "http".to_string()
+                                                            } else {
+                                                                module_name_owned.clone()
+                                                            };
                                                         ctx.register_native_instance(
                                                             name.clone(),
-                                                            module_name_owned.clone(),
+                                                            class_module.clone(),
                                                             class_name.to_string(),
                                                         );
                                                         // Also register as module-level native instance so it survives scope exits.
@@ -750,7 +756,7 @@ pub(crate) fn lower_module_decl(
                                                         // causing pool.query() inside functions to miss the Pool dispatch.
                                                         ctx.module_native_instances.push((
                                                             name.clone(),
-                                                            module_name_owned,
+                                                            class_module,
                                                             class_name.to_string(),
                                                         ));
                                                     }
@@ -884,9 +890,15 @@ pub(crate) fn lower_module_decl(
                                                             _ => None,
                                                         };
                                                         if let Some(class_name) = class_name {
+                                                            let class_module =
+                                                                if class_name == "ClientRequest" {
+                                                                    "http"
+                                                                } else {
+                                                                    module_name
+                                                                };
                                                             ctx.register_native_instance(
                                                                 name.clone(),
-                                                                module_name.to_string(),
+                                                                class_module.to_string(),
                                                                 class_name.to_string(),
                                                             );
                                                         }

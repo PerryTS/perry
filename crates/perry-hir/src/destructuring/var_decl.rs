@@ -626,9 +626,14 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                             _ => None,
                                         };
                                         if let Some(class_name) = class_name {
+                                            let class_module = if class_name == "ClientRequest" {
+                                                "http"
+                                            } else {
+                                                module_name
+                                            };
                                             ctx.register_native_instance(
                                                 name.clone(),
-                                                module_name.to_string(),
+                                                class_module.to_string(),
                                                 class_name.to_string(),
                                             );
                                         }
