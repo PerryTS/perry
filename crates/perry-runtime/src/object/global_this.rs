@@ -2844,6 +2844,50 @@ extern "C" fn number_is_integer_thunk(
     crate::builtins::js_number_is_integer(value)
 }
 
+/// Shared helper for `BigInt.asIntN`/`asUintN` thunks: coerce `bits` via
+/// ToIndex (throws RangeError on negative / non-integer) and extract the
+/// BigInt pointer from `value` (throws TypeError if not a BigInt). Diverges
+/// (`!`) on bad input, matching Node's throw semantics.
+fn bigint_as_n_args(bits_arg: f64, value_arg: f64) -> (u32, *const crate::bigint::BigIntHeader) {
+    // ToIndex(bits): non-negative integer; Node throws RangeError otherwise.
+    if !bits_arg.is_finite() || bits_arg < 0.0 || bits_arg.fract() != 0.0 {
+        crate::fs::validate::throw_range_error_with_code(
+            "The number of bits is invalid (must be a non-negative integer)",
+        );
+    }
+    let jv = JSValue::from_bits(value_arg.to_bits());
+    if !jv.is_bigint() {
+        crate::fs::validate::throw_type_error_with_code(
+            "Cannot convert value to a BigInt",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
+    (
+        bits_arg as u32,
+        jv.as_bigint_ptr() as *const crate::bigint::BigIntHeader,
+    )
+}
+
+extern "C" fn bigint_as_int_n_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    bits: f64,
+    value: f64,
+) -> f64 {
+    let (bits, ptr) = bigint_as_n_args(bits, value);
+    let r = crate::bigint::js_bigint_as_int_n(bits, ptr);
+    f64::from_bits(crate::value::js_nanbox_bigint(r as i64).to_bits())
+}
+
+extern "C" fn bigint_as_uint_n_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    bits: f64,
+    value: f64,
+) -> f64 {
+    let (bits, ptr) = bigint_as_n_args(bits, value);
+    let r = crate::bigint::js_bigint_as_uint_n(bits, ptr);
+    f64::from_bits(crate::value::js_nanbox_bigint(r as i64).to_bits())
+}
+
 extern "C" fn number_is_safe_integer_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
@@ -3143,6 +3187,17 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
                 ctor,
                 "parseInt",
                 number_parse_int_thunk as *const u8,
+                2,
+                false,
+            );
+        }
+        "BigInt" => {
+            // BigInt.asIntN(bits, bigint) / asUintN(bits, bigint) — spec length 2.
+            install_constructor_static(ctor, "asIntN", bigint_as_int_n_thunk as *const u8, 2, false);
+            install_constructor_static(
+                ctor,
+                "asUintN",
+                bigint_as_uint_n_thunk as *const u8,
                 2,
                 false,
             );
