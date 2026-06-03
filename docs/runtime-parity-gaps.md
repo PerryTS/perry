@@ -60,7 +60,7 @@ Selected highlights (full list in `runtime-parity.md`):
 
 ### node:v8
 
-**Total APIs: 58** · Perry covers: 2 · Gap: 56
+**Total APIs: 58** · Perry covers: 3 · Gap: 55
 
 Selected highlights (full list in `runtime-parity.md`):
 
@@ -74,7 +74,7 @@ Selected highlights (full list in `runtime-parity.md`):
 - `v8.stopCoverage()`
 - `v8.takeCoverage()`
 - `v8.setHeapSnapshotNearHeapLimit(limit)`
-- … and 46 more
+- … and 45 more
 
 ### node:dns
 

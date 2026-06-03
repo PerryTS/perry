@@ -309,6 +309,24 @@ pub(crate) fn lower_native_method_call(
             }
             return Ok(ctx.block().call(DOUBLE, fname, &[(DOUBLE, &arg)]));
         }
+
+        // #3142: named-import GCProfiler instances lower their method calls to
+        // NativeMethodCall with `class_name == "GCProfiler"`. Route those to
+        // the same small runtime state machine as namespace-member calls.
+        if class_name == Some("GCProfiler") && matches!(method, "start" | "stop") {
+            if let Some(object) = object {
+                let recv = lower_expr(ctx, object)?;
+                for extra in args {
+                    let _ = lower_expr(ctx, extra)?;
+                }
+                let fname = if method == "start" {
+                    "js_v8_gc_profiler_start"
+                } else {
+                    "js_v8_gc_profiler_stop"
+                };
+                return Ok(ctx.block().call(DOUBLE, fname, &[(DOUBLE, &recv)]));
+            }
+        }
     }
 
     if module == "crypto"

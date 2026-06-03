@@ -758,6 +758,20 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
 
+            if matches!(
+                ctx.lookup_native_module(&class_name),
+                Some(("v8", Some("GCProfiler")))
+            ) {
+                let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                return Ok(Expr::NewDynamic {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::NativeModuleRef("v8".to_string())),
+                        property: "GCProfiler".to_string(),
+                    }),
+                    args,
+                });
+            }
+
             if matches!(class_name.as_str(), "MIMEType" | "MIMEParams") {
                 if let Some((module_name, Some(method_name))) =
                     ctx.lookup_native_module(&class_name)
