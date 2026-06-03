@@ -251,6 +251,37 @@ fn x509_extended_key_usage(cert: &x509_cert::Certificate) -> Option<Vec<String>>
     }
 }
 
+fn x509_info_access_method_name(oid: &str) -> String {
+    match oid {
+        "1.3.6.1.5.5.7.48.1" => "OCSP".to_string(),
+        "1.3.6.1.5.5.7.48.2" => "CA Issuers".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn x509_info_access(cert: &x509_cert::Certificate) -> Option<String> {
+    use x509_cert::der::Decode;
+
+    let ext = x509_find_extension(cert, "1.3.6.1.5.5.7.1.1")?;
+    let info_access =
+        x509_cert::ext::pkix::AuthorityInfoAccessSyntax::from_der(ext.extn_value.as_bytes())
+            .ok()?;
+    let lines: Vec<String> = info_access
+        .0
+        .iter()
+        .filter_map(|desc| {
+            let method = x509_info_access_method_name(&desc.access_method.to_string());
+            let location = x509_format_general_name(&desc.access_location)?;
+            Some(format!("{} - {}", method, location))
+        })
+        .collect();
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
+}
+
 fn x509_string_f64(s: &str) -> f64 {
     let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
     f64::from_bits(JSValue::string_ptr(ptr).bits())
@@ -462,6 +493,10 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
         },
         "keyUsage" => match x509_extended_key_usage(&h.cert) {
             Some(values) => x509_string_array_f64(&values),
+            None => nanbox_undefined(),
+        },
+        "infoAccess" => match x509_info_access(&h.cert) {
+            Some(value) => x509_string_f64(&value),
             None => nanbox_undefined(),
         },
         "ca" => {

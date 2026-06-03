@@ -2217,6 +2217,7 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             | "fingerprint512"
             | "subjectAltName"
             | "keyUsage"
+            | "infoAccess"
             | "ca"
             | "raw"
             | "publicKey"
