@@ -261,7 +261,7 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
         }
     };
     if !mat.extractable {
-        return reject_with_dom_exception("InvalidAccessException", "key is not extractable");
+        return reject_with_dom_exception("InvalidAccessError", "key is not extractable");
     }
     if format_lower == "raw" && mat.kind == KeyKind::Private {
         return reject_with_dom_exception("OperationError", "The operation failed");

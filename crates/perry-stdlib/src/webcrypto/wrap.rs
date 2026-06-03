@@ -155,7 +155,7 @@ pub unsafe extern "C" fn js_webcrypto_wrap_key(
         }
     };
     if !key_mat.extractable {
-        return reject_with_dom_exception("InvalidAccessException", "key is not extractable");
+        return reject_with_dom_exception("InvalidAccessError", "key is not extractable");
     }
     let raw_key_bytes = bytes_from_jsvalue(key_bits.to_bits());
     let key_bytes = if format_lower == "jwk" {
