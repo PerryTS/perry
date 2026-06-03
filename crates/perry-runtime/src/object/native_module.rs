@@ -1731,12 +1731,15 @@ const PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"argv0",
     b"arch",
     b"binding",
+    b"channel",
     b"chdir",
     b"config",
+    b"connected",
     b"cpuUsage",
     b"cwd",
     b"debugPort",
     b"default",
+    b"disconnect",
     b"dlopen",
     b"domain",
     b"env",
@@ -1775,6 +1778,7 @@ const PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"reallyExit",
     b"setMaxListeners",
     b"setSourceMapsEnabled",
+    b"send",
     b"sourceMapsEnabled",
     b"title",
     b"unref",
@@ -1808,11 +1812,14 @@ const PROCESS_DEFAULT_KEYS: &[&[u8]] = &[
     b"argv0",
     b"arch",
     b"binding",
+    b"channel",
     b"chdir",
     b"config",
+    b"connected",
     b"cpuUsage",
     b"cwd",
     b"debugPort",
+    b"disconnect",
     b"dlopen",
     b"domain",
     b"env",
@@ -1852,6 +1859,7 @@ const PROCESS_DEFAULT_KEYS: &[&[u8]] = &[
     b"reallyExit",
     b"setMaxListeners",
     b"setSourceMapsEnabled",
+    b"send",
     b"sourceMapsEnabled",
     b"title",
     b"uptime",
@@ -3088,6 +3096,11 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     } else {
         module_name
     };
+    if matches!(module_name, "process" | "process.default") {
+        if let Some(value) = crate::process::process_ipc_property(property_name) {
+            return value;
+        }
+    }
     // node:perf_hooks — `performance` and `constants` are object-valued
     // exports. Resolve them to a `perf_hooks`-tagged namespace object so
     // `typeof performance === "object"`, `performance.timeOrigin` (a

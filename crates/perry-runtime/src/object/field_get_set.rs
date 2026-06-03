@@ -3303,6 +3303,14 @@ pub extern "C" fn js_object_get_field_by_name(
             if !module_name.is_empty() {
                 let property_name =
                     std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
+                if matches!(
+                    module_name,
+                    "process" | "process.namespace" | "process.default"
+                ) {
+                    if let Some(value) = crate::process::process_ipc_property(property_name) {
+                        return JSValue::from_bits(value.to_bits());
+                    }
+                }
                 if let Some(value) = native_module_own_field_by_key(obj, key) {
                     return value;
                 }

@@ -82,8 +82,11 @@ fn process_metadata_native_property(prop: &str) -> Option<Expr> {
     Some(match prop {
         "allowedNodeEnvironmentFlags"
         | "argv0"
+        | "channel"
         | "config"
+        | "connected"
         | "debugPort"
+        | "disconnect"
         | "execArgv"
         | "execPath"
         | "features"
@@ -92,6 +95,7 @@ fn process_metadata_native_property(prop: &str) -> Option<Expr> {
         | "permission"
         | "release"
         | "report"
+        | "send"
         | "sourceMapsEnabled"
         | "title" => process_native_property(prop),
         _ => return None,
@@ -273,15 +277,6 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "stdout" => return Ok(Expr::ProcessStdout),
                     "stderr" => return Ok(Expr::ProcessStderr),
                     "env" => return Ok(Expr::ProcessEnv),
-                    // #1407 / #1397: IPC-only members. When the process
-                    // wasn't spawned with an IPC channel (the default),
-                    // Node leaves these as `undefined` rather than
-                    // exposing a dummy method/boolean. Reads here must
-                    // short-circuit to Undefined so
-                    // `typeof process.send === "undefined"` matches Node
-                    // and downstream `if (process.send)` /
-                    // `if (process.connected)` guards do the right thing.
-                    "send" | "disconnect" | "connected" => return Ok(Expr::Undefined),
                     // #1349: process.execArgv is the array of runtime CLI
                     // flags the interpreter was started with (`["--inspect",
                     // ...]` for Node). Perry binaries are AOT — there's no
@@ -496,7 +491,6 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "version" => return Ok(Expr::ProcessVersion),
                     "versions" => return Ok(Expr::ProcessVersions),
                     "env" => return Ok(Expr::ProcessEnv),
-                    "send" | "disconnect" | "connected" => return Ok(Expr::Undefined),
                     "execArgv" => return Ok(Expr::Array(Vec::new())),
                     "release" => {
                         return Ok(Expr::Object(vec![

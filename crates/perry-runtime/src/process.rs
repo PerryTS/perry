@@ -9,11 +9,13 @@ use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 mod credentials;
+mod ipc;
 pub use credentials::{
     js_process_getegid, js_process_geteuid, js_process_getgid, js_process_getgroups,
     js_process_getuid, js_process_initgroups, js_process_setegid, js_process_seteuid,
     js_process_setgid, js_process_setgroups, js_process_setuid,
 };
+pub use ipc::*;
 
 static PROCESS_UNCAUGHT_CAPTURE_CALLBACK_SET: AtomicBool = AtomicBool::new(false);
 
@@ -3611,6 +3613,7 @@ pub(crate) fn get_rss_bytes() -> u64 {
 #[no_mangle]
 pub extern "C" fn js_process_env() -> f64 {
     use std::cell::Cell;
+    ipc::process_ipc_ensure_initialized();
     thread_local! {
         static CACHED_ENV: Cell<f64> = const { Cell::new(0.0) };
     }

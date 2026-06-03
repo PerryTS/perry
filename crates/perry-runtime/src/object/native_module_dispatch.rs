@@ -150,6 +150,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         "path.default" => ("path", false),
         "path.posix.default" => ("path.posix", false),
         "path.win32.default" => ("path.win32", false),
+        "process.default" => ("process", false),
         "querystring.default" => ("querystring", false),
         "url.default" => ("url", false),
         "util.default" => ("util", false),
@@ -509,6 +510,10 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "eventNames") => ptr_to_f64(crate::os::js_process_event_names() as *const u8),
         ("process", "setMaxListeners") => crate::os::js_process_set_max_listeners(arg(0)),
         ("process", "getMaxListeners") => crate::os::js_process_get_max_listeners(),
+        ("process", "send") => {
+            crate::process::process_ipc_send_call(arg(0), arg(1), arg(2), arg(3))
+        }
+        ("process", "disconnect") => crate::process::process_ipc_disconnect_call(),
         ("process", "emitWarning") => {
             crate::process::js_process_emit_warning(arg(0), arg(1), arg(2));
             f64::from_bits(crate::value::TAG_UNDEFINED)

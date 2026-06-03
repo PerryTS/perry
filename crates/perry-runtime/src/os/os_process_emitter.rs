@@ -232,6 +232,7 @@ fn register_process_listener(
         }
     });
     sync_process_signal_listener(&event);
+    crate::process::process_ipc_note_listener(&event);
     process_namespace_value()
 }
 
