@@ -1969,7 +1969,7 @@ pub enum Expr {
         string: Box<Expr>,
         regex: Box<Expr>,
     },
-    /// string.matchAll(regex) -> Array<Array<string>>
+    /// string.matchAll(pattern) -> RegExp String Iterator
     StringMatchAll {
         string: Box<Expr>,
         regex: Box<Expr>,

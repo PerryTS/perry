@@ -1,0 +1,13 @@
+iter next type: function
+iter tag: [object RegExp String Iterator]
+iter self: true
+manual first done: false
+manual first value: 1|1|1|a1b2|true
+manual rest: [["2","2",3]]
+non-global: TypeError:String.prototype.matchAll called with a non-global RegExp argument
+string pattern: [["a",0],[".",1],["a",2]]
+undefined pattern: [["",0],["",1],["",2]]
+lastIndex seen: 2
+lastIndex after: 2
+named groups: x|x|0|xy
+dynamic dispatch: 9|9|1

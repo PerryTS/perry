@@ -323,6 +323,7 @@ pub(crate) fn is_builtin_iterator_class_id(raw_ptr: usize) -> bool {
                 | crate::collection_iter_object::MAP_ITERATOR_CLASS_ID
                 | crate::collection_iter_object::SET_ITERATOR_CLASS_ID
                 | crate::buffer::BUFFER_ITERATOR_CLASS_ID
+                | crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID
                 | crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID
         ) || class_id == crate::string::STRING_ITERATOR_CLASS_ID
     }

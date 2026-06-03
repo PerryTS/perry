@@ -344,7 +344,8 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
                     // dispatch `.next()` via class id too — without this `[...buf.keys()]`
                     // / `Array.from(buf.values())` produced an empty array even though
                     // `.next()` and `for...of` already worked.
-                    || (*obj).class_id == crate::buffer::BUFFER_ITERATOR_CLASS_ID;
+                    || (*obj).class_id == crate::buffer::BUFFER_ITERATOR_CLASS_ID
+                    || (*obj).class_id == crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID;
                 let is_iterable = is_array_iterator || {
                     let iter_sym = crate::symbol::well_known_symbol("iterator");
                     if iter_sym.is_null() {

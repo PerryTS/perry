@@ -1517,21 +1517,25 @@ pub unsafe extern "C" fn js_native_call_method(
                 // function`) because no runtime arm handled `match`.
                 "match" | "matchAll" => {
                     if args_len >= 1 && !args_ptr.is_null() {
-                        let regex_val = unsafe { *args_ptr };
+                        let pattern_val = unsafe { *args_ptr };
+                        if method_name == "matchAll" {
+                            let result_ptr =
+                                crate::regex::js_string_match_all_value(s_ptr, pattern_val);
+                            if result_ptr.is_null() {
+                                return f64::from_bits(JSValue::null().bits());
+                            }
+                            return f64::from_bits(JSValue::pointer(result_ptr as *mut u8).bits());
+                        }
                         // Extract regex handle from the arg value. RegExp
                         // values are NaN-boxed pointers; pass through the
                         // pointer extraction the same way the HIR-level
                         // StringMatch path does.
-                        let regex_jsval = JSValue::from_bits(regex_val.to_bits());
+                        let regex_jsval = JSValue::from_bits(pattern_val.to_bits());
                         if !regex_jsval.is_pointer() {
                             return f64::from_bits(JSValue::null().bits());
                         }
                         let regex_ptr = regex_jsval.as_pointer::<crate::regex::RegExpHeader>();
-                        let result_ptr = if method_name == "match" {
-                            crate::regex::js_string_match(s_ptr, regex_ptr)
-                        } else {
-                            crate::regex::js_string_match_all(s_ptr, regex_ptr)
-                        };
+                        let result_ptr = crate::regex::js_string_match(s_ptr, regex_ptr);
                         if result_ptr.is_null() {
                             return f64::from_bits(JSValue::null().bits());
                         }
@@ -2491,6 +2495,12 @@ pub unsafe extern "C" fn js_native_call_method(
                     method_name,
                 );
             }
+            if (*obj).class_id == crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID {
+                return crate::regex::dispatch_regexp_string_iterator_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                );
+            }
             // #2874: lazy iterator-helper objects (`Iterator.from(x)` and the
             // chain it produces: `.map`/`.filter`/`.take`/`.drop`/`.flatMap`/
             // `.toArray`/`.forEach`/`.reduce`/`.some`/`.every`/`.find`/`.next`).
@@ -2983,6 +2993,12 @@ pub unsafe extern "C" fn js_native_call_method(
             }
             if (*obj).class_id == crate::string::STRING_ITERATOR_CLASS_ID {
                 return crate::string::dispatch_string_iterator_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                );
+            }
+            if (*obj).class_id == crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID {
+                return crate::regex::dispatch_regexp_string_iterator_method(
                     obj as *mut ObjectHeader,
                     method_name,
                 );

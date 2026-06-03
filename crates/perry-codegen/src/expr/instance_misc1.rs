@@ -1123,21 +1123,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &result))
         }
 
-        // -------- string.matchAll(regex) --------
-        // Returns Array<Array<string>>, never null. Each inner array is
-        // [fullMatch, ...captureGroups], matching the shape Node produces
-        // when iterating `for (const m of s.matchAll(re))`. SSO-safe receiver
-        // unbox via `unbox_str_handle` for the same reason as `StringMatch`.
+        // -------- string.matchAll(pattern) --------
+        // Returns a RegExp String Iterator object. SSO-safe receiver unbox via
+        // `unbox_str_handle` for the same reason as `StringMatch`; pass the raw
+        // pattern value so runtime can validate RegExp globals or create a
+        // global RegExp for string/non-RegExp patterns.
         Expr::StringMatchAll { string, regex } => {
             let s_box = lower_expr(ctx, string)?;
             let r_box = lower_expr(ctx, regex)?;
             let blk = ctx.block();
             let s_handle = unbox_str_handle(blk, &s_box);
-            let r_handle = unbox_to_i64(blk, &r_box);
             let result = blk.call(
                 I64,
-                "js_string_match_all",
-                &[(I64, &s_handle), (I64, &r_handle)],
+                "js_string_match_all_value",
+                &[(I64, &s_handle), (DOUBLE, &r_box)],
             );
             Ok(nanbox_pointer_inline(blk, &result))
         }

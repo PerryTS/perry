@@ -43,6 +43,7 @@ pub(crate) static ARRAY_ITERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
 pub(crate) static MAP_ITERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
 pub(crate) static SET_ITERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
 pub(crate) static STRING_ITERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static REGEXP_STRING_ITERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
 
 /// Dispatch `method` on the implicit-`this` iterator instance, routing by class
 /// id to the matching existing iterator dispatcher. Shared by the per-family
@@ -74,6 +75,9 @@ unsafe fn dispatch_on_implicit_this(method: &str) -> f64 {
         crate::string::STRING_ITERATOR_CLASS_ID => {
             crate::string::dispatch_string_iterator_method(obj, method)
         }
+        crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID => {
+            crate::regex::dispatch_regexp_string_iterator_method(obj, method)
+        }
         _ => brand_type_error(method),
     }
 }
@@ -104,6 +108,12 @@ extern "C" fn set_iterator_next_thunk(_c: *const crate::closure::ClosureHeader, 
     unsafe { dispatch_on_implicit_this("next") }
 }
 extern "C" fn string_iterator_next_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    unsafe { dispatch_on_implicit_this("next") }
+}
+extern "C" fn regexp_string_iterator_next_thunk(
     _c: *const crate::closure::ClosureHeader,
     _arg: f64,
 ) -> f64 {
@@ -156,12 +166,18 @@ fn build_iterator_prototypes() {
     let map_proto = build_family_proto(map_iterator_next_thunk, "Map Iterator", shared);
     let set_proto = build_family_proto(set_iterator_next_thunk, "Set Iterator", shared);
     let string_proto = build_family_proto(string_iterator_next_thunk, "String Iterator", shared);
+    let regexp_string_proto = build_family_proto(
+        regexp_string_iterator_next_thunk,
+        "RegExp String Iterator",
+        shared,
+    );
 
     ITERATOR_PROTOTYPE_PTR.store(shared as i64, Ordering::Release);
     ARRAY_ITERATOR_PROTOTYPE_PTR.store(array_proto as i64, Ordering::Release);
     MAP_ITERATOR_PROTOTYPE_PTR.store(map_proto as i64, Ordering::Release);
     SET_ITERATOR_PROTOTYPE_PTR.store(set_proto as i64, Ordering::Release);
     STRING_ITERATOR_PROTOTYPE_PTR.store(string_proto as i64, Ordering::Release);
+    REGEXP_STRING_ITERATOR_PROTOTYPE_PTR.store(regexp_string_proto as i64, Ordering::Release);
 }
 
 /// Install `[Symbol.iterator]` on the shared parent as a real method whose
@@ -235,6 +251,7 @@ pub(crate) fn iterator_prototype_for_class_id(class_id: u32) -> Option<f64> {
         crate::collection_iter_object::MAP_ITERATOR_CLASS_ID => &MAP_ITERATOR_PROTOTYPE_PTR,
         crate::collection_iter_object::SET_ITERATOR_CLASS_ID => &SET_ITERATOR_PROTOTYPE_PTR,
         crate::string::STRING_ITERATOR_CLASS_ID => &STRING_ITERATOR_PROTOTYPE_PTR,
+        crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID => &REGEXP_STRING_ITERATOR_PROTOTYPE_PTR,
         _ => return None,
     };
     let ptr = slot.load(Ordering::Acquire);
@@ -259,6 +276,7 @@ pub(crate) fn attach_iterator_prototype(obj_ptr: *mut ObjectHeader, class_id: u3
         crate::collection_iter_object::MAP_ITERATOR_CLASS_ID => &MAP_ITERATOR_PROTOTYPE_PTR,
         crate::collection_iter_object::SET_ITERATOR_CLASS_ID => &SET_ITERATOR_PROTOTYPE_PTR,
         crate::string::STRING_ITERATOR_CLASS_ID => &STRING_ITERATOR_PROTOTYPE_PTR,
+        crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID => &REGEXP_STRING_ITERATOR_PROTOTYPE_PTR,
         _ => return,
     };
     let proto_ptr = slot.load(Ordering::Acquire);

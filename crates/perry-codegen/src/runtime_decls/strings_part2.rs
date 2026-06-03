@@ -301,6 +301,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_string_is_well_formed", DOUBLE, &[I64]);
     module.declare_function("js_string_to_well_formed", I64, &[I64]);
     module.declare_function("js_string_match_all", I64, &[I64, I64]);
+    module.declare_function("js_string_match_all_value", I64, &[I64, DOUBLE]);
     module.declare_function("js_string_search_regex", I32, &[I64, I64]);
     // Regex extras (runtime has them; codegen was stubbing).
     module.declare_function("js_regexp_exec_get_index", DOUBLE, &[]);

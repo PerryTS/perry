@@ -95,8 +95,8 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         | Expr::ArrayEntries { .. }
         | Expr::ArrayKeys { .. }
         | Expr::ArrayValues { .. }
-        | Expr::StringMatch { .. }
-        | Expr::StringMatchAll { .. } => Some(HirType::Array(Box::new(HirType::Any))),
+        | Expr::StringMatch { .. } => Some(HirType::Array(Box::new(HirType::Any))),
+        Expr::StringMatchAll { .. } => Some(HirType::Any),
         // TextEncoder.encode(str) — runtime returns a BufferHeader with
         // packed u8 bytes (same shape as `new Uint8Array([...])`). Refining
         // the local type to Uint8Array lets `encoded[i]` route through the
@@ -1886,12 +1886,13 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         // Call form that bypasses the `Expr::StringSplit` variant — e.g.
         // `"a,b,c".split(",")` in an expression position where we need
         // `.length` / `[i]` to follow the array fast path.
-        // Also: `str.match(regex)` / `str.matchAll(regex)` produce arrays.
+        // Also: `str.match(regex)` produces an array. `matchAll` deliberately
+        // stays dynamic because it returns a RegExp String Iterator object.
         Expr::Call { callee, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { property, object } if matches!(
-                    property.as_str(), "split" | "match" | "matchAll"
+                    property.as_str(), "split" | "match"
                 ) && is_string_expr(ctx, object)
             ) =>
         {

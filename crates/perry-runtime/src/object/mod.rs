@@ -1405,6 +1405,7 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         &iterator_prototypes::MAP_ITERATOR_PROTOTYPE_PTR,
         &iterator_prototypes::SET_ITERATOR_PROTOTYPE_PTR,
         &iterator_prototypes::STRING_ITERATOR_PROTOTYPE_PTR,
+        &iterator_prototypes::REGEXP_STRING_ITERATOR_PROTOTYPE_PTR,
     ] {
         visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);
     }
@@ -1948,6 +1949,8 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
                 tag_str = Some("CompressionStream".to_string());
             } else if class_id == crate::object::CLASS_ID_DECOMPRESSION_STREAM {
                 tag_str = Some("DecompressionStream".to_string());
+            } else if class_id == crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID {
+                tag_str = Some("RegExp String Iterator".to_string());
             }
             if let Some(func_ptr) = lookup_to_string_tag_hook(class_id) {
                 let getter: extern "C" fn(f64) -> f64 = std::mem::transmute(func_ptr as *const u8);

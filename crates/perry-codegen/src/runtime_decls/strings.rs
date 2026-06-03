@@ -1189,6 +1189,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_object_from_entries", DOUBLE, &[DOUBLE]);
     module.declare_function("js_string_match", I64, &[I64, I64]);
     module.declare_function("js_string_match_all", I64, &[I64, I64]);
+    module.declare_function("js_string_match_all_value", I64, &[I64, DOUBLE]);
     module.declare_function("llvm.log.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("llvm.log2.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("llvm.log10.f64", DOUBLE, &[DOUBLE]);

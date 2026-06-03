@@ -1409,8 +1409,8 @@ fn refine_type_from_init_simple(init: &perry_hir::Expr) -> Option<perry_types::T
         | Expr::ArrayEntries { .. }
         | Expr::ArrayKeys { .. }
         | Expr::ArrayValues { .. }
-        | Expr::StringMatch { .. }
-        | Expr::StringMatchAll { .. } => Some(Type::Array(Box::new(Type::Any))),
+        | Expr::StringMatch { .. } => Some(Type::Array(Box::new(Type::Any))),
+        Expr::StringMatchAll { .. } => Some(Type::Any),
         Expr::String(_) | Expr::ArrayJoin { .. } | Expr::StringCoerce(_) => Some(Type::String),
         Expr::Bool(_) => Some(Type::Boolean),
         Expr::BigInt(_) | Expr::BigIntCoerce(_) => Some(Type::BigInt),

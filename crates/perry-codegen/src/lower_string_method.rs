@@ -640,22 +640,25 @@ pub(crate) fn lower_string_method(
             Ok(ctx.block().bitcast_i64_to_double(&selected))
         }
         "matchAll" => {
-            if args.len() != 1 {
+            if args.len() > 1 {
                 bail!(
-                    "perry-codegen: String.matchAll expects 1 arg, got {}",
+                    "perry-codegen: String.matchAll expects 0 or 1 arg, got {}",
                     args.len()
                 );
             }
-            let re_box = lower_expr(ctx, &args[0])?;
+            let pattern_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let re_handle = unbox_str_handle(blk, &re_box);
             let result = blk.call(
                 I64,
-                "js_string_match_all",
-                &[(I64, &recv_handle), (I64, &re_handle)],
+                "js_string_match_all_value",
+                &[(I64, &recv_handle), (DOUBLE, &pattern_box)],
             );
-            // matchAll always returns an array (possibly empty), never null.
+            // matchAll returns a RegExp String Iterator object.
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "isWellFormed" => {

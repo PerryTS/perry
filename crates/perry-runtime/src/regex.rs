@@ -16,8 +16,13 @@ use crate::value::js_nanbox_string;
 use crate::object::ObjectHeader;
 
 mod grammar;
+mod match_all;
 mod replace_fn;
 use grammar::{has_invalid_repeated_quantifier, js_regex_to_rust};
+pub use match_all::{
+    dispatch_regexp_string_iterator_method, js_string_match_all, js_string_match_all_value,
+    REGEXP_STRING_ITERATOR_CLASS_ID,
+};
 use replace_fn::call_replace_callback;
 pub use replace_fn::{js_string_replace_all_string_fn, js_string_replace_string_fn};
 
@@ -198,6 +203,13 @@ fn throw_replace_all_non_global_regex() -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+fn throw_match_all_non_global_regex() -> ! {
+    let message = b"String.prototype.matchAll called with a non-global RegExp argument";
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 fn set_exec_array_metadata(arr: *mut ArrayHeader, input: &str, index: f64) {
     if arr.is_null() {
         return;
@@ -209,6 +221,22 @@ fn set_exec_array_metadata(arr: *mut ArrayHeader, input: &str, index: f64) {
     let input_str = js_string_from_str(input);
     let input_value = js_nanbox_string(input_str as i64);
     crate::array::js_array_set_string_key(arr, input_key, input_value);
+}
+
+fn char_index_to_byte(s: &str, char_index: usize) -> usize {
+    if char_index == 0 {
+        return 0;
+    }
+    for (idx, (byte, _)) in s.char_indices().enumerate() {
+        if idx == char_index {
+            return byte;
+        }
+    }
+    s.len()
+}
+
+fn byte_index_to_char_index(s: &str, byte_index: usize) -> f64 {
+    s[..byte_index.min(s.len())].chars().count() as f64
 }
 
 #[inline]
@@ -610,75 +638,6 @@ pub extern "C" fn js_string_match(
                 }
             }
         }
-    }
-}
-
-/// Find all matches in a string, each with capture groups
-/// string.matchAll(regex) -> Array<Array<string>> (array of match arrays)
-#[no_mangle]
-pub extern "C" fn js_string_match_all(
-    s: *const StringHeader,
-    re: *const RegExpHeader,
-) -> *mut ArrayHeader {
-    if !is_valid_ptr(s) || !is_valid_regex_ptr(re) {
-        // Return empty array, not null (matchAll never returns null)
-        return crate::array::js_array_alloc(0);
-    }
-
-    let str_data = string_as_str(s);
-
-    unsafe {
-        let regex = &*(*re).regex_ptr;
-
-        // Collect all captures
-        let all_caps: Vec<regex::Captures> = regex.captures_iter(str_data).collect();
-
-        if all_caps.is_empty() {
-            return crate::array::js_array_alloc(0);
-        }
-
-        // Create outer array (one entry per match)
-        let outer = crate::array::js_array_alloc(all_caps.len() as u32);
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let outer_handle = scope.root_raw_mut_ptr(outer);
-        (*outer_handle.get_raw_mut_ptr::<ArrayHeader>()).length = all_caps.len() as u32;
-
-        for (i, caps) in all_caps.iter().enumerate() {
-            // Create inner array for this match (full match + capture groups)
-            let inner = crate::array::js_array_alloc(caps.len() as u32);
-            let inner_scope = crate::gc::RuntimeHandleScope::new();
-            let inner_handle = inner_scope.root_raw_mut_ptr(inner);
-            (*inner_handle.get_raw_mut_ptr::<ArrayHeader>()).length = caps.len() as u32;
-
-            for (j, cap) in caps.iter().enumerate() {
-                if let Some(m) = cap {
-                    let str_ptr = js_string_from_str(m.as_str());
-                    let nanboxed = js_nanbox_string(str_ptr as i64);
-                    let inner = inner_handle.get_raw_mut_ptr::<ArrayHeader>();
-                    // GC_STORE_AUDIT(BARRIERED): regex nested capture slot uses the shared array slot-store helper.
-                    crate::array::store_array_slot(inner, j, nanboxed.to_bits());
-                } else {
-                    // Undefined capture group
-                    let undefined = f64::from_bits(0x7FFC_0000_0000_0001);
-                    let inner = inner_handle.get_raw_mut_ptr::<ArrayHeader>();
-                    // GC_STORE_AUDIT(BARRIERED): regex unmatched nested capture slot uses the shared array slot-store helper.
-                    crate::array::store_array_slot(inner, j, undefined.to_bits());
-                }
-            }
-
-            // Store inner array as NaN-boxed POINTER_TAG in outer array slot —
-            // raw `inner as i64 -> f64::from_bits` would write a non-NaN-boxed
-            // double whose bits happen to alias the heap pointer; the codegen
-            // IndexGet path then reads `arr[i]` as a plain number and crashes
-            // when iterating with `for (const m of arr) m[1]`.
-            let inner = inner_handle.get_raw_mut_ptr::<ArrayHeader>();
-            let inner_boxed = crate::value::js_nanbox_pointer(inner as i64);
-            let outer = outer_handle.get_raw_mut_ptr::<ArrayHeader>();
-            // GC_STORE_AUDIT(BARRIERED): regex nested result slot uses the shared array slot-store helper.
-            crate::array::store_array_slot(outer, i, inner_boxed.to_bits());
-        }
-
-        outer_handle.get_raw_mut_ptr::<ArrayHeader>()
     }
 }
 
