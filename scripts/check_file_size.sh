@@ -211,6 +211,11 @@ crates/perry-runtime/src/symbol.rs
 # the gate. Kept here as a backstop in case the merged dispatch tower creeps
 # back over; further descriptor/ops splits are tracked under #1435.
 crates/perry-runtime/src/object/object_ops.rs
+# node:http/https native-lowering table (one dispatch arm per ClientRequest /
+# IncomingMessage / ServerResponse member). Crossed the 2000-line gate after the
+# http live-message + ClientRequest header-state surface additions (#4152/#4159).
+# Splitting per message-kind family is tracked under #1435.
+crates/perry-codegen/src/lower_call/native_table/http.rs
 EOF
 )
 
