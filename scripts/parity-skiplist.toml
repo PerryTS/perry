@@ -44,6 +44,23 @@
 "inspector" = "V8 inspector protocol; Perry is not V8."
 "inspector/promises" = "V8 inspector protocol; Perry is not V8."
 "trace_events" = "V8 trace events; not applicable to native binaries."
+
+# Out-of-scope — Node implementation internals, not public userland modules.
+"_http_agent" = "Internal Node implementation module; not public userland API."
+"_http_client" = "Internal Node implementation module; not public userland API."
+"_http_common" = "Internal Node implementation module; not public userland API."
+"_http_incoming" = "Internal Node implementation module; not public userland API."
+"_http_outgoing" = "Internal Node implementation module; not public userland API."
+"_http_server" = "Internal Node implementation module; not public userland API."
+"_stream_duplex" = "Internal Node implementation module; not public userland API."
+"_stream_passthrough" = "Internal Node implementation module; not public userland API."
+"_stream_readable" = "Internal Node implementation module; not public userland API."
+"_stream_transform" = "Internal Node implementation module; not public userland API."
+"_stream_wrap" = "Internal Node implementation module; not public userland API."
+"_stream_writable" = "Internal Node implementation module; not public userland API."
+"_tls_common" = "Internal Node implementation module; not public userland API."
+"_tls_wrap" = "Internal Node implementation module; not public userland API."
+
 # Implemented and manifest-claimed, but not byte-parity-testable: serialize/
 # deserialize use the JSC wire format (Perry isn't V8, so the bytes differ from
 # Node's V8 format), and getHeapStatistics/getHeapSpaceStatistics/
