@@ -35,7 +35,10 @@ use std::sync::{
     Mutex,
 };
 
-use sync_run::{cp_read_run_options, cp_run_to_completion, CpRun, CpRunOptions};
+use sync_run::{
+    cp_read_async_run_options, cp_read_run_options, cp_run_to_completion, CpRun, CpRunError,
+    CpRunOptions,
+};
 
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, js_native_call_value,
@@ -591,21 +594,22 @@ pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64,
         c
     };
     cp_apply_options(&mut command, arg1);
-    let run_options = CpRunOptions::default();
+    let run_options = cp_read_async_run_options(arg1);
     let run = cp_run_to_completion(command, &run_options);
 
-    let stdout_box = cp_box_output(&run.stdout, &mode);
+    let (stdout_bytes, stderr_bytes) = cp_exec_callback_output_bytes(&run, &run_options);
+    let stdout_box = cp_box_output(stdout_bytes, &mode);
     if cb.is_null() {
         // Legacy no-callback shape — return stdout (Buffer or string per
         // `encoding`).
         return stdout_box;
     }
 
-    let stderr_box = cp_box_output(&run.stderr, &mode);
+    let stderr_box = cp_box_output(stderr_bytes, &mode);
     let err_val = if run.success() {
         TAG_NULL_F64
     } else {
-        cp_exec_callback_error(&run, &cmd_str)
+        cp_exec_callback_error(&run, &run_options, &cmd_str)
     };
     crate::closure::js_closure_call3(cb, err_val, stdout_box, stderr_box);
     f64::from_bits(TAG_UNDEFINED_BITS)
@@ -1617,18 +1621,19 @@ fn cp_errno_number(code: &str) -> f64 {
 /// writes, so for the rich shape Node attaches we use a regular object whose
 /// class extends `Error` (so `instanceof Error` / `typeof` still report
 /// error-ish) and set the props by name. Returns a NaN-boxed pointer.
-fn cp_make_error(message: &str, extra: &[(&str, f64)]) -> f64 {
-    static REGISTER_ERROR: std::sync::Once = std::sync::Once::new();
-    REGISTER_ERROR.call_once(|| {
-        crate::object::js_register_class_extends_error(crate::error::CLASS_ID_ERROR);
-    });
-    let obj =
-        crate::object::js_object_alloc(crate::error::CLASS_ID_ERROR, (extra.len() + 2) as u32);
+fn cp_make_error_with_class(
+    class_id: u32,
+    name: &str,
+    message: &str,
+    extra: &[(&str, f64)],
+) -> f64 {
+    crate::object::js_register_class_extends_error(class_id);
+    let obj = crate::object::js_object_alloc(class_id, (extra.len() + 2) as u32);
     let set = |key: &str, value: f64| {
         let kp = js_string_from_bytes(key.as_ptr(), key.len() as u32);
         js_object_set_field_by_name(obj, kp, value);
     };
-    set("name", cp_box_string("Error"));
+    set("name", cp_box_string(name));
     set("message", cp_box_string(message));
     // `name`/`message` are non-enumerable on a Node Error (only the diagnostic
     // props are enumerable), so keep them out of `Object.keys(err)`.
@@ -1639,6 +1644,19 @@ fn cp_make_error(message: &str, extra: &[(&str, f64)]) -> f64 {
         set(k, *v);
     }
     cp_box_ptr(obj as *const u8)
+}
+
+fn cp_make_error(message: &str, extra: &[(&str, f64)]) -> f64 {
+    cp_make_error_with_class(crate::error::CLASS_ID_ERROR, "Error", message, extra)
+}
+
+fn cp_make_range_error(message: &str, extra: &[(&str, f64)]) -> f64 {
+    cp_make_error_with_class(
+        crate::error::CLASS_ID_RANGE_ERROR,
+        "RangeError",
+        message,
+        extra,
+    )
 }
 
 /// `[null, stdout, stderr]` — the Node `output` array shared by spawnSync and
@@ -1672,7 +1690,7 @@ fn cp_error_code_signal(run: &CpRun) -> (f64, f64, f64) {
 /// Build the `(err, stdout, stderr)` callback error for a failed exec/execFile
 /// run — Node attaches `code`/`signal`/`killed`/`cmd` (plus `errno`/`syscall`/
 /// `path` on spawn failure). `cmd` is the human-readable command string. #1935.
-fn cp_exec_callback_error(run: &CpRun, cmd: &str) -> f64 {
+fn cp_exec_callback_error(run: &CpRun, options: &CpRunOptions, cmd: &str) -> f64 {
     if let Some((errno_code, _)) = run.spawn_error {
         let syscall = format!("spawn {cmd}");
         let message = format!("{syscall} {errno_code}");
@@ -1689,6 +1707,41 @@ fn cp_exec_callback_error(run: &CpRun, cmd: &str) -> f64 {
             ],
         );
     }
+    if let Some(run_error) = run.run_error {
+        match run_error {
+            CpRunError::MaxBuffer => {
+                let stream = if run.stdout.len() > options.max_buffer {
+                    "stdout"
+                } else {
+                    "stderr"
+                };
+                let message = format!("{stream} maxBuffer length exceeded");
+                return cp_make_range_error(
+                    &message,
+                    &[
+                        ("code", cp_box_string("ERR_CHILD_PROCESS_STDIO_MAXBUFFER")),
+                        ("cmd", cp_box_string(cmd)),
+                    ],
+                );
+            }
+            CpRunError::Timeout => {
+                let signal = run.signal.map(cp_signal_name).unwrap_or("SIGTERM");
+                let message = format!(
+                    "Command failed: {cmd}\n{}",
+                    String::from_utf8_lossy(&run.stderr)
+                );
+                return cp_make_error(
+                    &message,
+                    &[
+                        ("code", TAG_NULL_F64),
+                        ("killed", TAG_TRUE_F64),
+                        ("signal", cp_box_string(signal)),
+                        ("cmd", cp_box_string(cmd)),
+                    ],
+                );
+            }
+        }
+    }
     let (code, signal, killed) = cp_error_code_signal(run);
     // Node's message is `Command failed: <cmd>\n<stderr>`.
     let message = format!(
@@ -1704,6 +1757,24 @@ fn cp_exec_callback_error(run: &CpRun, cmd: &str) -> f64 {
             ("cmd", cp_box_string(cmd)),
         ],
     )
+}
+
+fn cp_exec_callback_output_bytes<'a>(
+    run: &'a CpRun,
+    options: &CpRunOptions,
+) -> (&'a [u8], &'a [u8]) {
+    if run.run_error != Some(CpRunError::MaxBuffer) {
+        return (&run.stdout, &run.stderr);
+    }
+    if run.stdout.len() > options.max_buffer {
+        let limit = options.max_buffer.min(run.stdout.len());
+        return (&run.stdout[..limit], &run.stderr);
+    }
+    if run.stderr.len() > options.max_buffer {
+        let limit = options.max_buffer.min(run.stderr.len());
+        return (&run.stdout, &run.stderr[..limit]);
+    }
+    (&run.stdout, &run.stderr)
 }
 
 /// Throw the error Node raises from a failed execSync/execFileSync — carries
@@ -1809,18 +1880,23 @@ pub extern "C" fn js_child_process_exec_file(
     let mut command = Command::new(&file_str);
     command.args(&arg_strs);
     cp_apply_options(&mut command, opts_val);
-    let run_options = CpRunOptions::default();
+    let run_options = cp_read_async_run_options(opts_val);
     let run = cp_run_to_completion(command, &run_options);
 
-    let stdout_box = cp_box_output(&run.stdout, &mode);
+    let (stdout_bytes, stderr_bytes) = cp_exec_callback_output_bytes(&run, &run_options);
+    let stdout_box = cp_box_output(stdout_bytes, &mode);
     if cb.is_null() {
         return stdout_box;
     }
-    let stderr_box = cp_box_output(&run.stderr, &mode);
+    let stderr_box = cp_box_output(stderr_bytes, &mode);
     let err_val = if run.success() {
         TAG_NULL_F64
     } else {
-        cp_exec_callback_error(&run, &cp_file_cmd_display(&file_str, &arg_strs))
+        cp_exec_callback_error(
+            &run,
+            &run_options,
+            &cp_file_cmd_display(&file_str, &arg_strs),
+        )
     };
     crate::closure::js_closure_call3(cb, err_val, stdout_box, stderr_box);
     f64::from_bits(TAG_UNDEFINED_BITS)

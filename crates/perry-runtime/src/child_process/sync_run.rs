@@ -15,7 +15,7 @@ const CP_SIGTERM: i32 = 15;
 pub(super) struct CpRunOptions {
     input: Option<Vec<u8>>,
     timeout: Option<Duration>,
-    max_buffer: usize,
+    pub(super) max_buffer: usize,
 }
 
 impl Default for CpRunOptions {
@@ -93,6 +93,23 @@ pub(super) fn cp_read_run_options(opts_val: f64) -> CpRunOptions {
         options.input = Some(input);
     }
 
+    cp_read_timing_and_buffer_options(opts_val, &mut options);
+    options
+}
+
+/// Read async buffered limits. Unlike the sync helpers, async `exec` and
+/// `execFile` do not have a documented `input` option, so only timing and
+/// buffer limits are consumed here.
+pub(super) fn cp_read_async_run_options(opts_val: f64) -> CpRunOptions {
+    let mut options = CpRunOptions::default();
+    if cp_object_ptr(opts_val).is_none() {
+        return options;
+    }
+    cp_read_timing_and_buffer_options(opts_val, &mut options);
+    options
+}
+
+fn cp_read_timing_and_buffer_options(opts_val: f64, options: &mut CpRunOptions) {
     if let Some(timeout) = cp_read_option_number(opts_val, b"timeout") {
         if timeout > 0.0 {
             options.timeout = Some(Duration::from_millis(timeout as u64));
@@ -104,11 +121,9 @@ pub(super) fn cp_read_run_options(opts_val: f64) -> CpRunOptions {
             options.max_buffer = max_buffer.min(usize::MAX as f64) as usize;
         }
     }
-
-    options
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum CpRunError {
     MaxBuffer,
     Timeout,
