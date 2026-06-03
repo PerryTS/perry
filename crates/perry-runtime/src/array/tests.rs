@@ -829,8 +829,12 @@ fn test_numeric_array_layout_length_and_delete_transitions() {
     assert_eq!(
         js_array_is_numeric_f64_layout(arr),
         0,
-        "extension pads with undefined and must downgrade numeric layout"
+        "extension creates holes and must downgrade numeric layout"
     );
+    unsafe {
+        assert_eq!(raw_slot_bits(arr, 2), crate::value::TAG_HOLE);
+        assert_eq!(raw_slot_bits(arr, 3), crate::value::TAG_HOLE);
+    }
     assert_eq!(
         crate::gc::test_layout_pointer_slot_count(arr as usize, 4),
         Some(0)
@@ -845,8 +849,11 @@ fn test_numeric_array_layout_length_and_delete_transitions() {
     assert_eq!(
         js_array_is_numeric_f64_layout(dense),
         0,
-        "delete creates an undefined slot and downgrades dense numeric layout"
+        "delete creates a hole and downgrades dense numeric layout"
     );
+    unsafe {
+        assert_eq!(raw_slot_bits(dense, 0), crate::value::TAG_HOLE);
+    }
 }
 
 #[test]

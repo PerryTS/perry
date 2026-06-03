@@ -238,8 +238,8 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
 
 /// Set the length of an array, JS-spec style.
 ///
-/// Closes #304: `arr.length = N` must truncate when N < length and pad with
-/// `undefined` when N > length. Pre-fix Perry routed this through the generic
+/// Closes #304: `arr.length = N` must truncate when N < length and create holes
+/// when N > length. Pre-fix Perry routed this through the generic
 /// `js_object_set_field_by_name(obj, "length", N)` path which silently set a
 /// new "length" property on the array's hidden object dispatch but never
 /// touched the `ArrayHeader.length` field — so `arr.length` still read back
@@ -261,39 +261,30 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
     unsafe {
         let cur = (*arr).length;
         if n < cur {
-            // Truncate: clear elements at indices [n..cur) to TAG_UNDEFINED so
+            // Truncate: clear elements at indices [n..cur) to TAG_HOLE so
             // any code that resurrects the slot via `arr[i]` reads `undefined`,
             // not stale data. The capacity stays unchanged — JS doesn't
             // require Perry to release the underlying buffer here, and growing
             // back via `push` would just re-overwrite these slots anyway.
-            const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
-            let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             for i in n..cur {
-                // GC_STORE_AUDIT(BARRIERED): length truncation sentinel is immediately recorded via note_array_slot.
-                std::ptr::write(elements_ptr.add(i as usize), TAG_UNDEFINED_F64);
-                note_array_slot(arr, i as usize, TAG_UNDEFINED_F64.to_bits());
+                note_array_slot(arr, i as usize, crate::value::TAG_HOLE);
             }
             (*arr).length = n;
             refresh_array_numeric_layout(arr);
         } else if n > cur {
-            // Extend: pad with TAG_UNDEFINED. Past-capacity extensions go
+            // Extend: pad with TAG_HOLE. Past-capacity extensions go
             // through `js_array_grow` which installs a forwarding pointer at
             // the OLD location (issue #233 mechanism), so the caller's stale
             // pointer transparently follows the chain to the resized buffer
             // on the next access — no callsite-side writeback needed.
-            const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
             let target = if n > (*arr).capacity {
                 js_array_grow(arr, n)
             } else {
                 arr
             };
             if !target.is_null() {
-                let elements_ptr =
-                    (target as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
                 for i in cur..n {
-                    // GC_STORE_AUDIT(BARRIERED): length extension sentinel is immediately recorded via note_array_slot.
-                    std::ptr::write(elements_ptr.add(i as usize), TAG_UNDEFINED_F64);
-                    note_array_slot(target, i as usize, TAG_UNDEFINED_F64.to_bits());
+                    note_array_slot(target, i as usize, crate::value::TAG_HOLE);
                 }
                 (*target).length = n;
             }
@@ -303,7 +294,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
 }
 
 /// Delete an element from an array by index, creating a "hole".
-/// Sets the element to undefined without changing the array length.
+/// Clears the element without changing the array length.
 /// Matches JavaScript `delete arr[index]` semantics.
 /// Returns 1 (true) on success, 0 (false) on failure.
 #[no_mangle]
@@ -323,11 +314,7 @@ pub extern "C" fn js_array_delete(arr: *mut ArrayHeader, index: u32) -> i32 {
         if index >= length {
             return 1; // delete on out-of-bounds always returns true in JS
         }
-        const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
-        let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-        // GC_STORE_AUDIT(BARRIERED): delete sentinel is immediately recorded via note_array_slot.
-        std::ptr::write(elements_ptr.add(index as usize), TAG_UNDEFINED_F64);
-        note_array_slot(arr, index as usize, TAG_UNDEFINED_F64.to_bits());
+        note_array_slot(arr, index as usize, crate::value::TAG_HOLE);
         1
     }
 }

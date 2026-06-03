@@ -1,6 +1,32 @@
 //! indexOf / includes — both f64 and JSValue variants.
 use super::*;
 
+#[inline(always)]
+unsafe fn array_elements_ptr(arr: *const ArrayHeader) -> *const f64 {
+    (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64
+}
+
+#[inline(always)]
+fn undefined_value() -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[inline(always)]
+unsafe fn present_array_element(elements_ptr: *const f64, index: usize) -> Option<f64> {
+    let element = *elements_ptr.add(index);
+    (element.to_bits() != crate::value::TAG_HOLE).then_some(element)
+}
+
+#[inline(always)]
+unsafe fn array_element_get_value(elements_ptr: *const f64, index: usize) -> f64 {
+    let element = *elements_ptr.add(index);
+    if element.to_bits() == crate::value::TAG_HOLE {
+        undefined_value()
+    } else {
+        element
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_indexOf_f64(arr: *const ArrayHeader, value: f64) -> i32 {
     let arr = clean_arr_ptr(arr);
@@ -9,10 +35,13 @@ pub extern "C" fn js_array_indexOf_f64(arr: *const ArrayHeader, value: f64) -> i
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
 
         for i in 0..length as usize {
-            if *elements_ptr.add(i) == value {
+            let Some(element) = present_array_element(elements_ptr, i) else {
+                continue;
+            };
+            if element == value {
                 return i as i32;
             }
         }
@@ -97,9 +126,11 @@ pub extern "C" fn js_array_indexOf_jsvalue(
             Some(s) => s,
             None => return -1,
         };
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
         for i in start..length {
-            let element = *elements_ptr.add(i as usize);
+            let Some(element) = present_array_element(elements_ptr, i as usize) else {
+                continue;
+            };
             if crate::value::js_jsvalue_equals(element, value) == 1 {
                 return i as i32;
             }
@@ -164,7 +195,7 @@ pub extern "C" fn js_array_last_index_of_jsvalue(
         if length == 0 {
             return -1;
         }
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
 
         // Determine the start index. Without an explicit fromIndex, start at
         // the last element. With one, apply ToIntegerOrInfinity + clamping
@@ -190,7 +221,10 @@ pub extern "C" fn js_array_last_index_of_jsvalue(
 
         let mut i = start;
         while i >= 0 {
-            let element = *elements_ptr.add(i as usize);
+            let Some(element) = present_array_element(elements_ptr, i as usize) else {
+                i -= 1;
+                continue;
+            };
             if crate::value::js_jsvalue_equals(element, value) == 1 {
                 return i as i32;
             }
@@ -248,14 +282,14 @@ pub extern "C" fn js_array_includes_jsvalue(
             Some(s) => s,
             None => return 0,
         };
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
 
         // `Array.prototype.includes` uses SameValueZero (ECMA-262 §23.1.3.16),
         // which differs from === in one place: NaN equals NaN. Routing
         // through `js_jsvalue_same_value_zero` preserves the `indexOf(NaN) ===
         // -1` / `includes(NaN) === true` split.
         for i in start..length {
-            let element = *elements_ptr.add(i as usize);
+            let element = array_element_get_value(elements_ptr, i as usize);
             if crate::value::js_jsvalue_same_value_zero(element, value) == 1 {
                 return 1;
             }

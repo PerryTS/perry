@@ -12,6 +12,32 @@ fn array_receiver_value(arr: *const ArrayHeader) -> f64 {
     f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits())
 }
 
+#[inline(always)]
+unsafe fn array_elements_ptr(arr: *const ArrayHeader) -> *const f64 {
+    (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64
+}
+
+#[inline(always)]
+fn undefined_value() -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[inline(always)]
+unsafe fn present_array_element(elements_ptr: *const f64, index: usize) -> Option<f64> {
+    let element = *elements_ptr.add(index);
+    (element.to_bits() != crate::value::TAG_HOLE).then_some(element)
+}
+
+#[inline(always)]
+unsafe fn array_element_get_value(elements_ptr: *const f64, index: usize) -> f64 {
+    let element = *elements_ptr.add(index);
+    if element.to_bits() == crate::value::TAG_HOLE {
+        undefined_value()
+    } else {
+        element
+    }
+}
+
 /// forEach - call callback(element, index) for each element
 /// Returns nothing (void)
 #[no_mangle]
@@ -29,11 +55,13 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
 
         let arr_value = array_receiver_value(arr);
         for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+            let Some(element) = present_array_element(elements_ptr, i) else {
+                continue;
+            };
             // JS forEach passes (element, index, array). The callback
             // dispatch path supports call3 safely, so bound native
             // methods like `array.forEach(console.log)` can observe the
@@ -64,16 +92,18 @@ pub extern "C" fn js_array_map(
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
 
-        // Allocate result array with same capacity
-        let result = js_array_alloc(length);
+        // Allocate at the source length so skipped sparse slots remain holes.
+        let result = js_array_alloc_with_length(length);
         let result_elements =
             (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         let arr_value = array_receiver_value(arr);
 
         for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+            let Some(element) = present_array_element(elements_ptr, i) else {
+                continue;
+            };
             // JS .map() callback receives (element, index, array).
             let mapped = js_closure_call3(callback, element, i as f64, arr_value);
             // GC_STORE_AUDIT(INIT): map result is unpublished; slot layout is noted immediately below.
@@ -95,9 +125,7 @@ pub extern "C" fn js_array_map(
             } else {
                 note_array_slot(result, i, mapped_bits);
             }
-            (*result).length = (i + 1) as u32;
         }
-        (*result).length = length;
 
         result
     }
@@ -113,11 +141,13 @@ pub extern "C" fn js_array_map_discard(arr: *const ArrayHeader, callback: *const
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
 
         for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+            let Some(element) = present_array_element(elements_ptr, i) else {
+                continue;
+            };
             let _ = js_closure_call3(callback, element, i as f64, arr_value);
         }
     }
@@ -142,7 +172,7 @@ pub extern "C" fn js_array_filter(
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
 
         // Allocate result array with same capacity (might be smaller)
         let mut result = js_array_alloc(length);
@@ -151,7 +181,9 @@ pub extern "C" fn js_array_filter(
         // separate `result_len` counter that used to live here was dead.
 
         for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+            let Some(element) = present_array_element(elements_ptr, i) else {
+                continue;
+            };
             let keep = js_closure_call3(callback, element, i as f64, arr_value);
             // Proper truthy check: handles NaN-boxed booleans (TAG_FALSE != 0.0 but is falsy)
             if crate::value::js_is_truthy(keep) != 0 {
@@ -164,7 +196,7 @@ pub extern "C" fn js_array_filter(
 }
 
 /// find - find first element that matches callback(element) => true
-/// Returns the element as f64, or f64::NAN (undefined) if not found
+/// Returns the element as f64, or undefined if not found.
 #[no_mangle]
 pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const ClosureHeader) -> f64 {
     let arr = clean_arr_ptr(arr);
@@ -179,11 +211,11 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
 
         for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+            let element = array_element_get_value(elements_ptr, i);
             let result = js_closure_call3(callback, element, i as f64, arr_value);
             // Proper truthy check: handles NaN-boxed booleans
             if crate::value::js_is_truthy(result) != 0 {
@@ -191,8 +223,8 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
             }
         }
 
-        // Not found - return undefined (NaN)
-        f64::NAN
+        // Not found
+        undefined_value()
     }
 }
 
@@ -215,11 +247,11 @@ pub extern "C" fn js_array_findIndex(
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
 
         for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+            let element = array_element_get_value(elements_ptr, i);
             let result = js_closure_call3(callback, element, i as f64, arr_value);
             // Proper truthy check: handles NaN-boxed booleans
             if crate::value::js_is_truthy(result) != 0 {
@@ -250,10 +282,10 @@ pub extern "C" fn js_array_find_last(
     }
     unsafe {
         let length = (*arr).length as usize;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
         for i in (0..length).rev() {
-            let element = *elements_ptr.add(i);
+            let element = array_element_get_value(elements_ptr, i);
             let result = js_closure_call3(callback, element, i as f64, arr_value);
             if crate::value::js_is_truthy(result) != 0 {
                 return element;
@@ -282,10 +314,10 @@ pub extern "C" fn js_array_find_last_index(
     }
     unsafe {
         let length = (*arr).length as usize;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
         for i in (0..length).rev() {
-            let element = *elements_ptr.add(i);
+            let element = array_element_get_value(elements_ptr, i);
             let result = js_closure_call3(callback, element, i as f64, arr_value);
             if crate::value::js_is_truthy(result) != 0 {
                 return i as i32;
@@ -336,8 +368,8 @@ pub extern "C" fn js_array_at(arr: *const ArrayHeader, index: f64) -> f64 {
         if idx < 0 || idx >= length {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-        *elements_ptr.add(idx as usize)
+        let elements_ptr = array_elements_ptr(arr);
+        array_element_get_value(elements_ptr, idx as usize)
     }
 }
 
@@ -359,11 +391,13 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
 
         for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+            let Some(element) = present_array_element(elements_ptr, i) else {
+                continue;
+            };
             let result = js_closure_call3(callback, element, i as f64, arr_value);
             if crate::value::js_is_truthy(result) != 0 {
                 return f64::from_bits(TAG_TRUE);
@@ -392,11 +426,13 @@ pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const Closu
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
 
         for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+            let Some(element) = present_array_element(elements_ptr, i) else {
+                continue;
+            };
             let result = js_closure_call3(callback, element, i as f64, arr_value);
             if crate::value::js_is_truthy(result) == 0 {
                 return f64::from_bits(TAG_FALSE);
@@ -420,13 +456,15 @@ pub extern "C" fn js_array_flatMap(
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
 
         let mut result = js_array_alloc(length);
         let arr_value = array_receiver_value(arr);
 
         for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+            let Some(element) = present_array_element(elements_ptr, i) else {
+                continue;
+            };
             let mapped = js_closure_call3(callback, element, i as f64, arr_value);
             // Check if the mapped value is an array (pointer-tagged)
             let bits = mapped.to_bits();
@@ -440,7 +478,9 @@ pub extern "C" fn js_array_flatMap(
                         .add(std::mem::size_of::<ArrayHeader>())
                         as *const f64;
                     for j in 0..sub_len as usize {
-                        let sub_element = *sub_elements.add(j);
+                        let Some(sub_element) = present_array_element(sub_elements, j) else {
+                            continue;
+                        };
                         result = js_array_push_f64(result, sub_element);
                     }
                 }
@@ -483,8 +523,8 @@ pub extern "C" fn js_array_reduce(
         );
     }
     unsafe {
-        let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let length = (*arr).length as usize;
+        let elements_ptr = array_elements_ptr(arr);
 
         if length == 0 {
             if has_initial != 0 {
@@ -498,13 +538,24 @@ pub extern "C" fn js_array_reduce(
         let (mut accumulator, start_idx) = if has_initial != 0 {
             (initial, 0)
         } else {
-            // Use first element as initial
-            (*elements_ptr, 1)
+            let mut seed = None;
+            for i in 0..length {
+                if let Some(element) = present_array_element(elements_ptr, i) {
+                    seed = Some((element, i + 1));
+                    break;
+                }
+            }
+            match seed {
+                Some(seed) => seed,
+                None => throw_reduce_of_empty(),
+            }
         };
 
         let arr_value = array_receiver_value(arr);
-        for i in start_idx..length as usize {
-            let element = *elements_ptr.add(i);
+        for i in start_idx..length {
+            let Some(element) = present_array_element(elements_ptr, i) else {
+                continue;
+            };
             // Spec callback is `(accumulator, currentValue, currentIndex, array)`.
             accumulator = js_closure_call4(callback, accumulator, element, i as f64, arr_value);
         }

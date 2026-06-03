@@ -201,7 +201,6 @@ pub extern "C" fn js_object_delete_field(
 }
 
 /// Delete a field from an object using a dynamic key (could be string or number index)
-/// For arrays, this sets the element to undefined
 /// Returns 1 if successful, 0 otherwise
 #[no_mangle]
 pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> i32 {
@@ -218,17 +217,11 @@ pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> 
         return js_object_delete_field(obj, key_str);
     }
 
-    // If the key is a number, treat as array index
-    if key_val.is_number() {
-        let index = key_val.as_number() as usize;
-        // Try to treat it as an array and set the element to undefined
-        // This is a simplified implementation - real JS delete on arrays
-        // creates a hole (sparse array), but we just set to undefined
-        let arr = obj as *mut crate::array::ArrayHeader;
-        let len = crate::array::js_array_length(arr) as usize;
-        if index < len {
-            crate::array::js_array_set(arr, index as u32, JSValue::undefined());
-            return 1;
+    let property_key = unsafe { js_to_property_key(key) };
+    if unsafe { crate::symbol::js_is_symbol(property_key) } == 0 {
+        let key_str = crate::value::js_jsvalue_to_string(property_key);
+        if !key_str.is_null() {
+            return js_object_delete_field(obj, key_str as *const crate::StringHeader);
         }
     }
 
