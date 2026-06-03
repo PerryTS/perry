@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1852 entries across 106 modules
+// Coverage: 1858 entries across 107 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3186,6 +3186,22 @@ declare module "repl" {
   export function Recoverable(...args: any[]): any;
   /** stdlib */
   export function start(...args: any[]): any;
+}
+
+declare module "sea" {
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function getAsset(...args: any[]): any;
+  /** stdlib */
+  export function getAssetAsBlob(...args: any[]): any;
+  /** stdlib */
+  export function getAssetKeys(...args: any[]): any;
+  /** stdlib */
+  export function getRawAsset(...args: any[]): any;
+  /** stdlib */
+  export function isSea(...args: any[]): any;
 }
 
 declare module "sharp" {

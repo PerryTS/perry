@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2704 entries across 109 modules.
+Total: 2710 entries across 110 modules.
 
 ## Modules
 
@@ -87,6 +87,7 @@ Total: 2704 entries across 109 modules.
 - [`readline/promises`](#readline-promises)
 - [`redis`](#redis)
 - [`repl`](#repl)
+- [`sea`](#sea)
 - [`sharp`](#sharp)
 - [`slugify`](#slugify)
 - [`sqlite`](#sqlite)
@@ -2789,6 +2790,20 @@ Total: 2704 entries across 109 modules.
 - `REPL_MODE_SLOPPY`
 - `REPL_MODE_STRICT`
 - `builtinModules`
+- `default`
+
+## `sea`
+
+### Methods
+
+- `getAsset` — module
+- `getAssetAsBlob` — module
+- `getAssetKeys` — module
+- `getRawAsset` — module
+- `isSea` — module
+
+### Properties
+
 - `default`
 
 ## `sharp`
