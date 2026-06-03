@@ -477,8 +477,10 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     }
 
     #[cfg(feature = "crypto")]
-    if matches!(method_name, "toString" | "toJSON")
-        && with_handle::<crate::crypto::X509Handle, bool, _>(handle, |_| true).unwrap_or(false)
+    if matches!(
+        method_name,
+        "toString" | "toJSON" | "checkHost" | "checkEmail" | "checkIP"
+    ) && with_handle::<crate::crypto::X509Handle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_x509_method(handle, method_name, &args);
     }
@@ -2220,6 +2222,9 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             | "publicKey"
             | "toString"
             | "toJSON"
+            | "checkHost"
+            | "checkEmail"
+            | "checkIP"
     ) && with_handle::<crate::crypto::X509Handle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_x509_property(handle, property_name);

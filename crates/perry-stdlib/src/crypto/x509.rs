@@ -29,41 +29,45 @@ pub(super) fn x509_attr_short_name(oid: &str) -> String {
 /// Format an X.500 `Name` the way Node's `cert.subject` / `cert.issuer`
 /// do: one `TYPE=value` per line, newline-joined, in encoding order.
 pub(super) fn x509_format_name(name: &x509_cert::name::Name) -> String {
-    use x509_cert::der::Encode;
     let mut lines: Vec<String> = Vec::new();
     for rdn in name.0.iter() {
         for atv in rdn.0.iter() {
             let oid = atv.oid.to_string();
-            // The value is an AttributeValue (ASN.1 Any); decode common
-            // string forms. Fall back to its UTF-8 lossy DER tail.
-            let value = atv
-                .value
-                .decode_as::<x509_cert::der::asn1::Utf8StringRef>()
-                .map(|s| s.as_str().to_string())
-                .or_else(|_| {
-                    atv.value
-                        .decode_as::<x509_cert::der::asn1::PrintableStringRef>()
-                        .map(|s| s.as_str().to_string())
-                })
-                .or_else(|_| {
-                    atv.value
-                        .decode_as::<x509_cert::der::asn1::Ia5StringRef>()
-                        .map(|s| s.as_str().to_string())
-                })
-                .unwrap_or_else(|_| {
-                    let bytes = atv.value.to_der().unwrap_or_default();
-                    // Skip the 2-byte tag+len header when present.
-                    let tail = if bytes.len() > 2 {
-                        &bytes[2..]
-                    } else {
-                        &bytes[..]
-                    };
-                    String::from_utf8_lossy(tail).to_string()
-                });
+            let value = x509_attr_value(atv);
             lines.push(format!("{}={}", x509_attr_short_name(&oid), value));
         }
     }
     lines.join("\n")
+}
+
+fn x509_attr_value(atv: &x509_cert::attr::AttributeTypeAndValue) -> String {
+    use x509_cert::der::Encode;
+
+    // The value is an AttributeValue (ASN.1 Any); decode common string forms.
+    // Fall back to its UTF-8 lossy DER tail.
+    atv.value
+        .decode_as::<x509_cert::der::asn1::Utf8StringRef>()
+        .map(|s| s.as_str().to_string())
+        .or_else(|_| {
+            atv.value
+                .decode_as::<x509_cert::der::asn1::PrintableStringRef>()
+                .map(|s| s.as_str().to_string())
+        })
+        .or_else(|_| {
+            atv.value
+                .decode_as::<x509_cert::der::asn1::Ia5StringRef>()
+                .map(|s| s.as_str().to_string())
+        })
+        .unwrap_or_else(|_| {
+            let bytes = atv.value.to_der().unwrap_or_default();
+            // Skip the 2-byte tag+len header when present.
+            let tail = if bytes.len() > 2 {
+                &bytes[2..]
+            } else {
+                &bytes[..]
+            };
+            String::from_utf8_lossy(tail).to_string()
+        })
 }
 
 /// Format an X.509 validity `Time` as Node does — `MMM D HH:MM:SS YYYY GMT`
@@ -141,16 +145,96 @@ fn x509_format_general_name(name: &x509_cert::ext::pkix::name::GeneralName) -> O
 }
 
 fn x509_subject_alt_name(cert: &x509_cert::Certificate) -> Option<String> {
-    use x509_cert::der::Decode;
-
-    let ext = x509_find_extension(cert, "2.5.29.17")?;
-    let san = x509_cert::ext::pkix::SubjectAltName::from_der(ext.extn_value.as_bytes()).ok()?;
+    let san = x509_decoded_subject_alt_name(cert)?;
     let names: Vec<String> = san.0.iter().filter_map(x509_format_general_name).collect();
     if names.is_empty() {
         None
     } else {
         Some(names.join(", "))
     }
+}
+
+fn x509_decoded_subject_alt_name(
+    cert: &x509_cert::Certificate,
+) -> Option<x509_cert::ext::pkix::SubjectAltName> {
+    use x509_cert::der::Decode;
+
+    let ext = x509_find_extension(cert, "2.5.29.17")?;
+    x509_cert::ext::pkix::SubjectAltName::from_der(ext.extn_value.as_bytes()).ok()
+}
+
+fn x509_subject_common_names(cert: &x509_cert::Certificate) -> Vec<String> {
+    let mut names = Vec::new();
+    for rdn in cert.tbs_certificate.subject.0.iter() {
+        for atv in rdn.0.iter() {
+            if atv.oid.to_string() == "2.5.4.3" {
+                names.push(x509_attr_value(atv));
+            }
+        }
+    }
+    names
+}
+
+fn x509_check_host_value(cert: &x509_cert::Certificate, name: &str) -> Option<String> {
+    use x509_cert::ext::pkix::name::GeneralName;
+
+    let mut saw_dns_san = false;
+    if let Some(san) = x509_decoded_subject_alt_name(cert) {
+        for general_name in san.0.iter() {
+            let GeneralName::DnsName(value) = general_name else {
+                continue;
+            };
+            saw_dns_san = true;
+            let candidate = value.as_str();
+            if candidate.eq_ignore_ascii_case(name) {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+
+    if saw_dns_san {
+        return None;
+    }
+
+    x509_subject_common_names(cert)
+        .into_iter()
+        .find(|candidate| candidate.eq_ignore_ascii_case(name))
+}
+
+fn x509_check_email_value(cert: &x509_cert::Certificate, email: &str) -> Option<String> {
+    use x509_cert::ext::pkix::name::GeneralName;
+
+    let san = x509_decoded_subject_alt_name(cert)?;
+    san.0.iter().find_map(|general_name| {
+        let GeneralName::Rfc822Name(value) = general_name else {
+            return None;
+        };
+        let candidate = value.as_str();
+        if candidate == email {
+            Some(candidate.to_string())
+        } else {
+            None
+        }
+    })
+}
+
+fn x509_check_ip_value(cert: &x509_cert::Certificate, ip: &str) -> Option<String> {
+    use std::net::IpAddr;
+    use x509_cert::ext::pkix::name::GeneralName;
+
+    let parsed = ip.parse::<IpAddr>().ok()?;
+    let san = x509_decoded_subject_alt_name(cert)?;
+    san.0.iter().find_map(|general_name| {
+        let GeneralName::IpAddress(value) = general_name else {
+            return None;
+        };
+        let bytes = value.as_bytes();
+        match parsed {
+            IpAddr::V4(addr) if bytes == addr.octets().as_slice() => Some(addr.to_string()),
+            IpAddr::V6(addr) if bytes == addr.octets().as_slice() => Some(addr.to_string()),
+            _ => None,
+        }
+    })
 }
 
 fn x509_extended_key_usage(cert: &x509_cert::Certificate) -> Option<Vec<String>> {
@@ -329,7 +413,10 @@ pub unsafe extern "C" fn js_crypto_x509_new(input_ptr: i64) -> f64 {
 pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
     use sha1::Sha1;
     use sha2::{Digest, Sha256, Sha512};
-    if matches!(property, "toString" | "toJSON") {
+    if matches!(
+        property,
+        "toString" | "toJSON" | "checkHost" | "checkEmail" | "checkIP"
+    ) {
         return dispatch_x509_method_property(handle, property);
     }
     let h = match get_handle_mut::<X509Handle>(handle) {
@@ -395,21 +482,56 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
     }
 }
 
-pub unsafe fn dispatch_x509_method(handle: i64, method: &str, _args: &[f64]) -> f64 {
+pub unsafe fn dispatch_x509_method(handle: i64, method: &str, args: &[f64]) -> f64 {
     let h = match get_handle_mut::<X509Handle>(handle) {
         Some(h) => h,
         None => return nanbox_undefined(),
     };
     match method {
         "toString" | "toJSON" => x509_string_f64(&x509_der_to_pem(&h.der)),
+        "checkHost" => {
+            match x509_check_host_value(&h.cert, &x509_required_string_arg(args, "name")) {
+                Some(value) => x509_string_f64(&value),
+                None => nanbox_undefined(),
+            }
+        }
+        "checkEmail" => {
+            match x509_check_email_value(&h.cert, &x509_required_string_arg(args, "email")) {
+                Some(value) => x509_string_f64(&value),
+                None => nanbox_undefined(),
+            }
+        }
+        "checkIP" => match x509_check_ip_value(&h.cert, &x509_required_string_arg(args, "ip")) {
+            Some(value) => x509_string_f64(&value),
+            None => nanbox_undefined(),
+        },
         _ => nanbox_undefined(),
     }
+}
+
+unsafe fn x509_required_string_arg(args: &[f64], arg_name: &str) -> String {
+    let value = args
+        .first()
+        .copied()
+        .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
+    if !JSValue::from_bits(value.to_bits()).is_any_string() {
+        let message = format!(
+            "The \"{}\" argument must be of type string. Received {}",
+            arg_name,
+            perry_runtime::fs::validate::describe_received(value)
+        );
+        perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    string_from_jsvalue(value.to_bits()).unwrap_or_default()
 }
 
 pub unsafe fn dispatch_x509_method_property(handle: i64, property: &str) -> f64 {
     let name_bytes: &'static [u8] = match property {
         "toString" => b"toString",
         "toJSON" => b"toJSON",
+        "checkHost" => b"checkHost",
+        "checkEmail" => b"checkEmail",
+        "checkIP" => b"checkIP",
         _ => return nanbox_undefined(),
     };
     let this_f64 =
