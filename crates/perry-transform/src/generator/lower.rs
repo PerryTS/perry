@@ -16,6 +16,7 @@ pub fn transform_generator_function(
         &[],
         &[],
         false,
+        false,
         None,
     );
 }
@@ -38,6 +39,7 @@ pub fn transform_generator_function_with_extra_captures(
     extra_captures: &[LocalId],
     extra_mutable_captures: &[LocalId],
     captures_this: bool,
+    captures_new_target: bool,
     enclosing_class: Option<String>,
 ) {
     // Generator bodies run later inside synthesized step closures, so direct
@@ -467,6 +469,7 @@ pub fn transform_generator_function_with_extra_captures(
             next_local_id,
             next_func_id,
             captures_this,
+            captures_new_target,
             enclosing_class.clone(),
             func.is_strict,
         );
@@ -878,6 +881,7 @@ pub fn build_async_step_driver_direct(
     next_local_id: &mut u32,
     next_func_id: &mut u32,
     captures_this: bool,
+    captures_new_target: bool,
     enclosing_class: Option<String>,
     is_strict: bool,
 ) -> Vec<Stmt> {
@@ -1128,7 +1132,7 @@ pub fn build_async_step_driver_direct(
         captures: step_captures,
         mutable_captures: step_mut_captures,
         captures_this,
-        captures_new_target: false,
+        captures_new_target,
         enclosing_class: enclosing_class.clone(),
         is_arrow: false,
         is_strict,

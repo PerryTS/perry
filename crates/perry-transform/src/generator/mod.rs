@@ -133,6 +133,7 @@ pub fn transform_generators(module: &mut Module) {
                     &[],
                     &[],
                     true,
+                    false,
                     Some(class.name.clone()),
                 );
             }
@@ -161,6 +162,7 @@ pub fn transform_generators(module: &mut Module) {
                     &[],
                     &[],
                     true,
+                    false,
                     Some(class.name.clone()),
                 );
             }
@@ -357,6 +359,7 @@ fn transform_generator_closures_in_stmts(
                             captures,
                             mutable_captures,
                             *captures_this,
+                            false,
                             enclosing_class.clone(),
                         );
                         *body = synth.body;
@@ -394,6 +397,7 @@ pub fn transform_plain_async_closure_body(
     outer_captures: &[LocalId],
     outer_mutable_captures: &[LocalId],
     outer_captures_this: bool,
+    outer_captures_new_target: bool,
     outer_enclosing_class: Option<String>,
     is_strict: bool,
     next_local_id: &mut LocalId,
@@ -430,6 +434,7 @@ pub fn transform_plain_async_closure_body(
         outer_captures,
         outer_mutable_captures,
         outer_captures_this,
+        outer_captures_new_target,
         outer_enclosing_class,
     );
     synth.body

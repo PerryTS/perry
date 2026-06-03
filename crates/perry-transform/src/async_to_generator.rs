@@ -440,6 +440,7 @@ fn rewrite_async_closures_in_expr(
             captures,
             mutable_captures,
             captures_this,
+            captures_new_target,
             enclosing_class,
             is_strict,
             is_async,
@@ -470,6 +471,7 @@ fn rewrite_async_closures_in_expr(
                 // AND `await` silently halts (the step closure has
                 // captures_this=false and Expr::This doesn't lower).
                 let owned_captures_this = *captures_this;
+                let owned_captures_new_target = *captures_new_target;
                 let owned_enclosing_class = enclosing_class.clone();
                 let new_body = crate::generator::transform_plain_async_closure_body(
                     owned_body,
@@ -477,6 +479,7 @@ fn rewrite_async_closures_in_expr(
                     &owned_captures,
                     &owned_mutable_captures,
                     owned_captures_this,
+                    owned_captures_new_target,
                     owned_enclosing_class,
                     *is_strict,
                     next_local_id,
