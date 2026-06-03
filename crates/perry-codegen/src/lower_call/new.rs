@@ -132,6 +132,41 @@ fn pack_lowered_args_array(ctx: &mut FnCtx<'_>, args: &[String]) -> String {
     nanbox_pointer_inline(ctx.block(), &current)
 }
 
+fn call_local_constructor_symbol(
+    ctx: &mut FnCtx<'_>,
+    class: &perry_hir::Class,
+    obj_box: &str,
+    lowered_args: &[String],
+) {
+    let ctor_method_name = format!("{}_constructor", class.name);
+    let Some(ctor_name) = ctx
+        .methods
+        .get(&(class.name.clone(), ctor_method_name))
+        .cloned()
+    else {
+        return;
+    };
+    let param_count = class
+        .constructor
+        .as_ref()
+        .map(|ctor| ctor.params.len())
+        .unwrap_or(0);
+    let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let mut ctor_values = lowered_args.to_vec();
+    ctor_values.truncate(param_count);
+    while ctor_values.len() < param_count {
+        ctor_values.push(undef_lit.clone());
+    }
+
+    let mut ctor_args: Vec<(crate::types::LlvmType, &str)> =
+        Vec::with_capacity(1 + ctor_values.len());
+    ctor_args.push((DOUBLE, obj_box));
+    for arg in &ctor_values {
+        ctor_args.push((DOUBLE, arg.as_str()));
+    }
+    let _ = ctx.block().call(DOUBLE, &ctor_name, &ctor_args);
+}
+
 /// Lower `new ClassName(args…)` — Phase C.1.
 ///
 /// Strategy: allocate an anonymous object via `js_object_alloc(0, N)`
@@ -563,6 +598,17 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         )
     };
     let obj_box = nanbox_pointer_inline(ctx.block(), &obj_handle);
+
+    // Constructor bodies may contain terminating recursive construction
+    // shapes such as `if (typeof opts === "function") return new C(...)`.
+    // Structurally inlining `C` while `C` is already active expands the
+    // same constructor body forever at compile time. Use the standalone
+    // constructor symbol for the nested construction instead; it preserves
+    // the ordinary initializer path without recursively cloning HIR.
+    if ctx.class_stack.iter().any(|active| active == class_name) {
+        call_local_constructor_symbol(ctx, class, &obj_box, &lowered_args);
+        return Ok(obj_box);
+    }
 
     // Allocate a `this` slot and store the new object there. The
     // slot lives on this_stack for the duration of the inlined ctor
