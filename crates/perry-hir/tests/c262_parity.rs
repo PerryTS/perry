@@ -67,6 +67,18 @@ fn is_number_literal(expr: &Expr, expected: f64) -> bool {
     }
 }
 
+fn expr_is_reference_error_throw_helper(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Call { callee, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::ExternFuncRef { name, .. }
+                    if name.starts_with("js_throw_reference_error_")
+            )
+    )
+}
+
 #[test]
 fn assignment_named_evaluation_names_bare_identifier_rhs_functions() {
     let module = lower_src(
@@ -194,9 +206,73 @@ fn arrow_default_parameter_self_reference_throws_reference_error() {
             callee.as_ref(),
             Expr::ExternFuncRef { name, .. } if name.starts_with("js_throw_")
         ),
+        [Stmt::Expr(Expr::LocalSet(_, value))] => expr_is_reference_error_throw_helper(value),
         _ => false,
     };
     assert!(throws_reference_error, "{then_branch:?}");
+}
+
+#[test]
+fn default_parameter_later_binding_throws_reference_error() {
+    let module = lower_src("var f = (x = y, y = 1) => { return x; };");
+    let Expr::Closure { body, .. } = top_level_init(&module, "f") else {
+        panic!("expected arrow closure");
+    };
+    let Some(Stmt::If { then_branch, .. }) = body.first() else {
+        panic!("expected default-parameter guard, got {body:?}");
+    };
+
+    assert!(
+        matches!(
+            then_branch.as_slice(),
+            [Stmt::Expr(Expr::LocalSet(_, value))]
+                if expr_is_reference_error_throw_helper(value)
+        ),
+        "{then_branch:?}"
+    );
+}
+
+#[test]
+fn function_default_parameter_later_binding_shadows_outer_binding() {
+    let module = lower_src(
+        r#"
+        var y = 2;
+        function f(x = y, y = 1) { return x; }
+        "#,
+    );
+    let f = function(&module, "f");
+    let Some(Stmt::If { then_branch, .. }) = f.body.first() else {
+        panic!("expected default-parameter guard, got {:?}", f.body);
+    };
+
+    assert!(
+        matches!(
+            then_branch.as_slice(),
+            [Stmt::Expr(Expr::LocalSet(_, value))]
+                if expr_is_reference_error_throw_helper(value)
+        ),
+        "{then_branch:?}"
+    );
+}
+
+#[test]
+fn default_parameter_nested_closure_can_capture_later_binding() {
+    let module = lower_src("var f = (x = () => y, y = 1) => { return x; };");
+    let Expr::Closure { body, .. } = top_level_init(&module, "f") else {
+        panic!("expected arrow closure");
+    };
+    let Some(Stmt::If { then_branch, .. }) = body.first() else {
+        panic!("expected default-parameter guard, got {body:?}");
+    };
+
+    assert!(
+        matches!(
+            then_branch.as_slice(),
+            [Stmt::Expr(Expr::LocalSet(_, value))]
+                if matches!(value.as_ref(), Expr::Closure { .. })
+        ),
+        "{then_branch:?}"
+    );
 }
 
 #[test]

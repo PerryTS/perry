@@ -42,21 +42,22 @@ pub fn lower_private_method(
     // Issue #572 — private methods follow the same destructure-extraction shape
     // as public methods.
     let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
+    let mut default_param_pats: Vec<ast::Pat> = Vec::new();
     for param in &method.function.params {
         let param_name = get_pat_name(&param.pat)?;
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
-        let param_default = get_param_default(ctx, &param.pat)?;
         let is_rest = is_rest_param(&param.pat);
         let param_id = ctx.define_local(param_name.clone(), param_type.clone());
         params.push(Param {
             id: param_id,
             name: param_name,
             ty: param_type,
-            default: param_default,
+            default: None,
             decorators: Vec::new(),
             is_rest,
             arguments_object: None,
         });
+        default_param_pats.push(param.pat.clone());
         let inner_pat = if let ast::Pat::Assign(assign) = &param.pat {
             assign.left.as_ref()
         } else {
@@ -65,6 +66,9 @@ pub fn lower_private_method(
         if is_destructuring_pattern(inner_pat) {
             destructuring_params.push((param_id, inner_pat.clone()));
         }
+    }
+    for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
+        param.default = get_param_default(ctx, pat)?;
     }
 
     // #677: synthesize `arguments` if the private method body references it.

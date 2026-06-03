@@ -12,10 +12,12 @@ use crate::analysis::*;
 use crate::destructuring::*;
 use crate::ir::*;
 use crate::lower::{
-    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, lower_expr, LoweringContext,
+    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, lower_expr,
+    throw_reference_error_expr, LoweringContext,
 };
 use crate::lower_patterns::*;
 use crate::lower_types::*;
+use crate::walker::walk_expr_children_mut;
 
 fn strip_for_await_expr_wrappers(mut expr: &ast::Expr) -> &ast::Expr {
     loop {
@@ -163,21 +165,18 @@ pub fn init_is_webassembly_instantiate(expr: &ast::Expr) -> bool {
 
 pub fn build_default_param_stmts(params: &[Param]) -> Vec<Stmt> {
     let mut out: Vec<Stmt> = Vec::new();
-    for param in params {
+    for (idx, param) in params.iter().enumerate() {
         if param.is_rest {
             continue;
         }
         let Some(default_expr) = param.default.as_ref() else {
             continue;
         };
-        let mut default_refs = Vec::new();
-        let mut visited_closures = std::collections::HashSet::new();
-        crate::analysis::collect_local_refs_expr(
-            default_expr,
-            &mut default_refs,
-            &mut visited_closures,
-        );
-        let default_reads_own_param = default_refs.contains(&param.id);
+        let tdz_param_ids: std::collections::HashSet<LocalId> = params[idx..]
+            .iter()
+            .filter(|p| p.arguments_object.is_none())
+            .map(|p| p.id)
+            .collect();
         let default_is_throw_helper = matches!(
             default_expr,
             Expr::Call { callee, .. }
@@ -201,22 +200,67 @@ pub fn build_default_param_stmts(params: &[Param]) -> Vec<Stmt> {
                 left: Box::new(Expr::LocalGet(param.id)),
                 right: Box::new(Expr::Undefined),
             },
-            then_branch: if default_reads_own_param {
-                vec![Stmt::Throw(Expr::ReferenceErrorNew(Box::new(
-                    Expr::String("Cannot access parameter in its own initializer".to_string()),
-                )))]
-            } else if default_is_throw_helper || default_is_eval_syntax_error {
+            then_branch: if default_is_throw_helper || default_is_eval_syntax_error {
                 vec![Stmt::Throw(default_expr.clone())]
             } else {
+                let mut default_value = default_expr.clone();
+                rewrite_default_param_tdz_refs(&mut default_value, &tdz_param_ids);
                 vec![Stmt::Expr(Expr::LocalSet(
                     param.id,
-                    Box::new(default_expr.clone()),
+                    Box::new(default_value),
                 ))]
             },
             else_branch: None,
         });
     }
     out
+}
+
+fn rewrite_default_param_tdz_refs(
+    expr: &mut Expr,
+    tdz_param_ids: &std::collections::HashSet<LocalId>,
+) {
+    match expr {
+        Expr::LocalGet(id) if tdz_param_ids.contains(id) => {
+            *expr = throw_reference_error_expr("js_throw_reference_error_unresolved_get");
+            return;
+        }
+        Expr::LocalSet(id, value) if tdz_param_ids.contains(id) => {
+            rewrite_default_param_tdz_refs(value, tdz_param_ids);
+            let value = std::mem::replace(value.as_mut(), Expr::Undefined);
+            *expr = Expr::Sequence(vec![
+                value,
+                throw_reference_error_expr("js_throw_reference_error_unresolved_assignment"),
+            ]);
+            return;
+        }
+        Expr::Update { id, .. } | Expr::ArrayPop(id) | Expr::ArrayShift(id)
+            if tdz_param_ids.contains(id) =>
+        {
+            *expr = throw_reference_error_expr("js_throw_reference_error_unresolved_get");
+            return;
+        }
+        Expr::ArrayPush { array_id, .. }
+        | Expr::ArrayPushSpread { array_id, .. }
+        | Expr::ArrayUnshift { array_id, .. }
+        | Expr::ArraySplice { array_id, .. }
+        | Expr::ArrayCopyWithin { array_id, .. }
+            if tdz_param_ids.contains(array_id) =>
+        {
+            *expr = throw_reference_error_expr("js_throw_reference_error_unresolved_get");
+            return;
+        }
+        Expr::SetAdd { set_id, .. } if tdz_param_ids.contains(set_id) => {
+            *expr = throw_reference_error_expr("js_throw_reference_error_unresolved_get");
+            return;
+        }
+        Expr::Closure { .. } => return,
+        _ => {}
+    }
+
+    walk_expr_children_mut(expr, &mut |child| {
+        rewrite_default_param_tdz_refs(child, tdz_param_ids)
+    });
 }
 
 /// Detect the computed key `[Symbol.iterator]` in a class method / object

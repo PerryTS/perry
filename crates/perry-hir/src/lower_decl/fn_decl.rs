@@ -108,6 +108,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
     // prefix=undefined` — which breaks `Function.prototype.{call,apply}` on
     // FnDecls that use TS `this:` annotations.
     let mut params = Vec::new();
+    let mut default_param_pats: Vec<ast::Pat> = Vec::new();
     let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
     for param in fn_decl.function.params.iter() {
         let param_name = get_pat_name(&param.pat)?;
@@ -115,18 +116,18 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
             continue;
         }
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
-        let param_default = get_param_default(ctx, &param.pat)?;
         let param_id = ctx.define_local(param_name.clone(), param_type.clone());
         let is_rest = is_rest_param(&param.pat);
         params.push(Param {
             id: param_id,
             name: param_name,
             ty: param_type,
-            default: param_default,
+            default: None,
             decorators: lower_decorators(ctx, &param.decorators),
             is_rest,
             arguments_object: None,
         });
+        default_param_pats.push(param.pat.clone());
         // Track destructuring patterns (or an Assign wrapping one) for extraction stmts
         let inner_pat = if let ast::Pat::Assign(assign) = &param.pat {
             assign.left.as_ref()
@@ -136,6 +137,9 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
         if is_destructuring_pattern(inner_pat) {
             destructuring_params.push((param_id, inner_pat.clone()));
         }
+    }
+    for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
+        param.default = get_param_default(ctx, pat)?;
     }
 
     // If the body references `arguments`, append the hidden raw-arguments input.

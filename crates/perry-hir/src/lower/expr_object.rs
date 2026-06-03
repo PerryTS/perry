@@ -173,6 +173,7 @@ fn lower_method_prop(
     let scope_mark = ctx.enter_scope();
     ctx.enter_strict_mode(true);
     let mut params = Vec::new();
+    let mut default_param_pats: Vec<ast::Pat> = Vec::new();
     for param in method.function.params.iter() {
         let param_name = get_pat_name(&param.pat)?;
         // TypeScript's `this: T` is a TYPE-only marker (SWC emits it as a
@@ -188,17 +189,20 @@ fn lower_method_prop(
             continue;
         }
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
-        let param_default = get_param_default(ctx, &param.pat)?;
         let param_id = ctx.define_local(param_name.clone(), param_type.clone());
         params.push(Param {
             id: param_id,
             name: param_name,
             ty: param_type,
-            default: param_default,
+            default: None,
             decorators: Vec::new(),
             is_rest: is_rest_param(&param.pat),
             arguments_object: None,
         });
+        default_param_pats.push(param.pat.clone());
+    }
+    for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
+        param.default = get_param_default(ctx, pat)?;
     }
     let return_type = method
         .function

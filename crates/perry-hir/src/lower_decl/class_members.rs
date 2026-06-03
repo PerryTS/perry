@@ -479,6 +479,7 @@ pub fn lower_class_method_with_name(
     // rather than reading from a synthetic `__obj_destruct_*` local that the
     // method body can't reach by name.
     let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
+    let mut default_param_pats: Vec<ast::Pat> = Vec::new();
     for param in &method.function.params {
         let param_name = get_pat_name(&param.pat)?;
         // TypeScript's `this: T` is a TYPE-only marker (SWC emits it as a
@@ -492,18 +493,18 @@ pub fn lower_class_method_with_name(
             continue;
         }
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
-        let param_default = get_param_default(ctx, &param.pat)?;
         let is_rest = is_rest_param(&param.pat);
         let param_id = ctx.define_local(param_name.clone(), param_type.clone());
         params.push(Param {
             id: param_id,
             name: param_name,
             ty: param_type,
-            default: param_default,
+            default: None,
             decorators: lower_decorators(ctx, &param.decorators),
             is_rest,
             arguments_object: None,
         });
+        default_param_pats.push(param.pat.clone());
         // Mirror the lower_fn_decl shape: an `Assign` pattern can wrap a
         // destructure (e.g. `({ a } = {}) => ...`). Unwrap before testing.
         let inner_pat = if let ast::Pat::Assign(assign) = &param.pat {
@@ -514,6 +515,9 @@ pub fn lower_class_method_with_name(
         if is_destructuring_pattern(inner_pat) {
             destructuring_params.push((param_id, inner_pat.clone()));
         }
+    }
+    for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
+        param.default = get_param_default(ctx, pat)?;
     }
 
     // #677: synthesize `arguments` if the method body references it.

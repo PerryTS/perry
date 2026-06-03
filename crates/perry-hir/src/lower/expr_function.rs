@@ -487,6 +487,7 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
     // remaining params are the real runtime ones. (`fn_decl` already has its
     // own param-lowering site that needs the same fix — handled below.)
     let mut params = Vec::new();
+    let mut default_param_pats: Vec<ast::Pat> = Vec::new();
     let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
     for param in &fn_expr.function.params {
         let param_name = get_pat_name(&param.pat)?;
@@ -494,22 +495,25 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
             // TS `this:` annotation — skip; it's type-only.
             continue;
         }
-        let param_default = get_param_default(ctx, &param.pat)?;
         let is_rest = is_rest_param(&param.pat);
         let param_id = ctx.define_local(param_name.clone(), Type::Any);
         params.push(Param {
             id: param_id,
             name: param_name,
             ty: Type::Any,
-            default: param_default,
+            default: None,
             decorators: Vec::new(),
             is_rest,
             arguments_object: None,
         });
+        default_param_pats.push(param.pat.clone());
         // Track destructuring patterns to generate extraction statements
         if is_destructuring_pattern(&param.pat) {
             destructuring_params.push((param_id, param.pat.clone()));
         }
+    }
+    for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
+        param.default = get_param_default(ctx, pat)?;
     }
 
     // #677: synthesize `arguments` for non-arrow function expressions when the
