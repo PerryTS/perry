@@ -85,6 +85,35 @@ unsafe fn value_is_callable(value: f64) -> bool {
     (value.to_bits() >> 48) == 0x7FFE
 }
 
+unsafe fn registered_buffer_index_own_property_present(
+    obj_value: f64,
+    key_str: *const crate::StringHeader,
+) -> Option<bool> {
+    let obj_js = crate::JSValue::from_bits(obj_value.to_bits());
+    let raw_buffer_addr = if obj_js.is_pointer() {
+        obj_js.as_pointer::<u8>() as usize
+    } else {
+        let bits = obj_value.to_bits();
+        if bits != 0 && bits <= 0x0000_FFFF_FFFF_FFFF && bits > 0x10000 {
+            bits as usize
+        } else {
+            0
+        }
+    };
+    if raw_buffer_addr == 0 || !crate::buffer::is_registered_buffer(raw_buffer_addr) {
+        return None;
+    }
+
+    Some(
+        super::has_own_helpers::str_from_string_header(key_str)
+            .and_then(super::canonical_array_index)
+            .is_some_and(|idx| {
+                let buf = raw_buffer_addr as *const crate::buffer::BufferHeader;
+                idx < (*buf).length as u32
+            }),
+    )
+}
+
 /// Validate a property descriptor object per ES `ToPropertyDescriptor`
 /// invariants that Node surfaces as `TypeError`s (#2817). Assumes
 /// `descriptor_value` is already known to be an object. Throws on:
@@ -509,6 +538,10 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
 
+        if let Some(present) = registered_buffer_index_own_property_present(obj_value, key_str) {
+            return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+        }
+
         if let Some(class_id) = super::class_ref_id(obj_value) {
             let present = super::has_own_helpers::str_from_string_header(key_str)
                 .map(|key| {
@@ -641,6 +674,10 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
                 .map(|s| s == "length")
                 .unwrap_or(false);
             return f64::from_bits(if is_length { TAG_FALSE } else { TAG_TRUE });
+        }
+
+        if let Some(present) = registered_buffer_index_own_property_present(obj_value, key_str) {
+            return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
 
         // #3655: functions/closures. Built-in `name`/`length`/`prototype` are
