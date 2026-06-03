@@ -1,3 +1,4 @@
+#![cfg(feature = "container")]
 //! Property-based tests for the perry-stdlib container module.
 
 use perry_container_compose::backend::{CliProtocol, DockerProtocol};

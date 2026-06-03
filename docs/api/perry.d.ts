@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1875 entries across 107 modules
+// Coverage: 1922 entries across 111 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2384,6 +2384,97 @@ declare module "perry/background" {
   export function schedule(...args: any[]): any;
 }
 
+declare module "perry/compose" {
+  /** stdlib */
+  export function config(...args: any[]): any;
+  /** stdlib */
+  export function down(...args: any[]): any;
+  /** stdlib */
+  export function exec(...args: any[]): any;
+  /** stdlib */
+  export function logs(...args: any[]): any;
+  /** stdlib */
+  export function ps(...args: any[]): any;
+  /** stdlib */
+  export function restart(...args: any[]): any;
+  /** stdlib */
+  export function start(...args: any[]): any;
+  /** stdlib */
+  export function stop(...args: any[]): any;
+  /** stdlib */
+  export function up(...args: any[]): any;
+}
+
+declare module "perry/container" {
+  /** stdlib */
+  export function composeUp(...args: any[]): any;
+  /** stdlib */
+  export function create(...args: any[]): any;
+  /** stdlib */
+  export function detectBackend(...args: any[]): any;
+  /** stdlib */
+  export function downAll(...args: any[]): any;
+  /** stdlib */
+  export function downByProject(...args: any[]): any;
+  /** stdlib */
+  export function exec(...args: any[]): any;
+  /** stdlib */
+  export function getAvailableBackends(...args: any[]): any;
+  /** stdlib */
+  export function getBackend(...args: any[]): any;
+  /** stdlib */
+  export function getBackendPriority(...args: any[]): any;
+  /** stdlib */
+  export function inspect(...args: any[]): any;
+  /** stdlib */
+  export function list(...args: any[]): any;
+  /** stdlib */
+  export function listImages(...args: any[]): any;
+  /** stdlib */
+  export function logs(...args: any[]): any;
+  /** stdlib */
+  export function pullImage(...args: any[]): any;
+  /** stdlib */
+  export function remove(...args: any[]): any;
+  /** stdlib */
+  export function removeIfExists(...args: any[]): any;
+  /** stdlib */
+  export function removeImage(...args: any[]): any;
+  /** stdlib */
+  export function run(...args: any[]): any;
+  /** stdlib */
+  export function selectBackendFor(...args: any[]): any;
+  /** stdlib */
+  export function setBackend(...args: any[]): any;
+  /** stdlib */
+  export function setBackends(...args: any[]): any;
+  /** stdlib */
+  export function start(...args: any[]): any;
+  /** stdlib */
+  export function stop(...args: any[]): any;
+}
+
+declare module "perry/container-compose" {
+  /** stdlib */
+  export function config(...args: any[]): any;
+  /** stdlib */
+  export function down(...args: any[]): any;
+  /** stdlib */
+  export function exec(...args: any[]): any;
+  /** stdlib */
+  export function logs(...args: any[]): any;
+  /** stdlib */
+  export function ps(...args: any[]): any;
+  /** stdlib */
+  export function restart(...args: any[]): any;
+  /** stdlib */
+  export function start(...args: any[]): any;
+  /** stdlib */
+  export function stop(...args: any[]): any;
+  /** stdlib */
+  export function up(...args: any[]): any;
+}
+
 declare module "perry/i18n" {
   /** stdlib */
   export function Currency(...args: any[]): any;
@@ -2941,6 +3032,21 @@ declare module "perry/updater" {
 declare module "perry/widget" {
   /** stdlib */
   export function Widget(...args: any[]): any;
+}
+
+declare module "perry/workloads" {
+  /** stdlib */
+  export const policy: any;
+  /** stdlib */
+  export const runtime: any;
+  /** stdlib */
+  export function graph(...args: any[]): any;
+  /** stdlib */
+  export function inspectGraph(...args: any[]): any;
+  /** stdlib */
+  export function node(...args: any[]): any;
+  /** stdlib */
+  export function runGraph(...args: any[]): any;
 }
 
 declare module "pg" {

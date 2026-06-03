@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2727 entries across 110 modules.
+Total: 2774 entries across 114 modules.
 
 ## Modules
 
@@ -69,6 +69,9 @@ Total: 2727 entries across 110 modules.
 - [`perry/ads`](#perry-ads)
 - [`perry/audio`](#perry-audio)
 - [`perry/background`](#perry-background)
+- [`perry/compose`](#perry-compose)
+- [`perry/container`](#perry-container)
+- [`perry/container-compose`](#perry-container-compose)
 - [`perry/i18n`](#perry-i18n)
 - [`perry/media`](#perry-media)
 - [`perry/plugin`](#perry-plugin)
@@ -78,6 +81,7 @@ Total: 2727 entries across 110 modules.
 - [`perry/ui`](#perry-ui)
 - [`perry/updater`](#perry-updater)
 - [`perry/widget`](#perry-widget)
+- [`perry/workloads`](#perry-workloads)
 - [`pg`](#pg)
 - [`process`](#process)
 - [`punycode`](#punycode)
@@ -2259,6 +2263,62 @@ Total: 2727 entries across 110 modules.
 - `registerTask` — module
 - `schedule` — module
 
+## `perry/compose`
+
+### Methods
+
+- `config` — module
+- `down` — module
+- `exec` — module
+- `logs` — module
+- `ps` — module
+- `restart` — module
+- `start` — module
+- `stop` — module
+- `up` — module
+
+## `perry/container`
+
+### Methods
+
+- `composeUp` — module
+- `create` — module
+- `detectBackend` — module
+- `downAll` — module
+- `downByProject` — module
+- `exec` — module
+- `getAvailableBackends` — module
+- `getBackend` — module
+- `getBackendPriority` — module
+- `inspect` — module
+- `list` — module
+- `listImages` — module
+- `logs` — module
+- `pullImage` — module
+- `remove` — module
+- `removeIfExists` — module
+- `removeImage` — module
+- `run` — module
+- `selectBackendFor` — module
+- `setBackend` — module
+- `setBackends` — module
+- `start` — module
+- `stop` — module
+
+## `perry/container-compose`
+
+### Methods
+
+- `config` — module
+- `down` — module
+- `exec` — module
+- `logs` — module
+- `ps` — module
+- `restart` — module
+- `start` — module
+- `stop` — module
+- `up` — module
+
 ## `perry/i18n`
 
 ### Methods
@@ -2584,6 +2644,20 @@ Total: 2727 entries across 110 modules.
 ### Methods
 
 - `Widget` — module
+
+## `perry/workloads`
+
+### Methods
+
+- `graph` — module
+- `inspectGraph` — module
+- `node` — module
+- `runGraph` — module
+
+### Properties
+
+- `policy`
+- `runtime`
 
 ## `pg`
 

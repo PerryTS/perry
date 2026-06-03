@@ -1,3 +1,4 @@
+#![cfg(feature = "container")]
 // Feature: perry-container | Layer: ffi-contract | Req: 11.7 | Property: -
 
 use perry_runtime::{Promise, StringHeader};

@@ -1,3 +1,4 @@
+#![cfg(feature = "container")]
 // Workspace-invariant tests for the `perry/container` subsystem.
 //
 // These don't exercise the runtime — they assert structural properties
@@ -8,7 +9,6 @@
 // downstream (e.g. "perry-container-compose: package ID specification
 // did not match any packages"). These tests catch the missing entry
 // upstream with a clear error message instead.
-
 #![cfg(feature = "container")]
 
 use std::path::PathBuf;

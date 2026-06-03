@@ -1,3 +1,4 @@
+#![cfg(feature = "container")]
 use perry_stdlib::container::verification::*;
 use tokio;
 

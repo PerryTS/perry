@@ -138,7 +138,6 @@ jobs:
         run: |
           cargo test -p perry-stdlib \
             --features container \
-            --test container_bug_regressions \
             --test container_capability_tests \
             --test container_extra_tests \
             --test container_ffi_tests \

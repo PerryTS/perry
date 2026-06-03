@@ -1,3 +1,4 @@
+#![cfg(feature = "container")]
 use perry_container_compose::types::ComposeSpec;
 use perry_runtime::{js_promise_run_microtasks, js_promise_state, Promise, StringHeader};
 use perry_stdlib::container::*;

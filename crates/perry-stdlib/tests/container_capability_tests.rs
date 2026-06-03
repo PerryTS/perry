@@ -1,3 +1,4 @@
+#![cfg(feature = "container")]
 use perry_stdlib::container::capability::*;
 use std::collections::HashMap;
 

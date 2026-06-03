@@ -1,3 +1,4 @@
+#![cfg(feature = "container")]
 //! Tests for the programmatic backend-selection API
 //! (`js_container_setBackend` + `js_container_getBackendPriority`).
 //!
