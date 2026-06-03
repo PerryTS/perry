@@ -146,6 +146,109 @@ fn same_side_effect_free_receiver(target: &Expr, receiver: &Expr) -> bool {
     }
 }
 
+fn same_put_value_receiver_expr(target: &Expr, receiver: &Expr) -> bool {
+    match (target, receiver) {
+        (Expr::Undefined, Expr::Undefined)
+        | (Expr::Null, Expr::Null)
+        | (Expr::This, Expr::This) => true,
+        (Expr::Bool(a), Expr::Bool(b)) => a == b,
+        (Expr::Number(a), Expr::Number(b)) => a.to_bits() == b.to_bits(),
+        (Expr::Integer(a), Expr::Integer(b)) => a == b,
+        (Expr::BigInt(a), Expr::BigInt(b))
+        | (Expr::String(a), Expr::String(b))
+        | (Expr::NativeModuleRef(a), Expr::NativeModuleRef(b)) => a == b,
+        (Expr::LocalGet(a), Expr::LocalGet(b)) => a == b,
+        (Expr::GlobalGet(a), Expr::GlobalGet(b)) => a == b,
+        (Expr::FuncRef(a), Expr::FuncRef(b)) => a == b,
+        (
+            Expr::ExternFuncRef {
+                name: a_name,
+                param_types: a_params,
+                return_type: a_return,
+            },
+            Expr::ExternFuncRef {
+                name: b_name,
+                param_types: b_params,
+                return_type: b_return,
+            },
+        ) => a_name == b_name && a_params == b_params && a_return == b_return,
+        (
+            Expr::Call {
+                callee: a_callee,
+                args: a_args,
+                type_args: a_type_args,
+            },
+            Expr::Call {
+                callee: b_callee,
+                args: b_args,
+                type_args: b_type_args,
+            },
+        ) => {
+            a_type_args == b_type_args
+                && same_put_value_receiver_expr(a_callee, b_callee)
+                && a_args.len() == b_args.len()
+                && a_args
+                    .iter()
+                    .zip(b_args.iter())
+                    .all(|(a, b)| same_put_value_receiver_expr(a, b))
+        }
+        (
+            Expr::NativeMethodCall {
+                module: a_module,
+                class_name: a_class,
+                object: a_object,
+                method: a_method,
+                args: a_args,
+            },
+            Expr::NativeMethodCall {
+                module: b_module,
+                class_name: b_class,
+                object: b_object,
+                method: b_method,
+                args: b_args,
+            },
+        ) => {
+            a_module == b_module
+                && a_class == b_class
+                && a_method == b_method
+                && match (a_object, b_object) {
+                    (Some(a), Some(b)) => same_put_value_receiver_expr(a, b),
+                    (None, None) => true,
+                    _ => false,
+                }
+                && a_args.len() == b_args.len()
+                && a_args
+                    .iter()
+                    .zip(b_args.iter())
+                    .all(|(a, b)| same_put_value_receiver_expr(a, b))
+        }
+        (
+            Expr::PropertyGet {
+                object: a_object,
+                property: a_property,
+            },
+            Expr::PropertyGet {
+                object: b_object,
+                property: b_property,
+            },
+        ) => a_property == b_property && same_put_value_receiver_expr(a_object, b_object),
+        (
+            Expr::IndexGet {
+                object: a_object,
+                index: a_index,
+            },
+            Expr::IndexGet {
+                object: b_object,
+                index: b_index,
+            },
+        ) => {
+            same_put_value_receiver_expr(a_object, b_object)
+                && same_put_value_receiver_expr(a_index, b_index)
+        }
+        _ => false,
+    }
+}
+
 fn is_numeric_string_key(key: &str) -> bool {
     !key.is_empty()
         && key.chars().all(|c| c.is_ascii_digit())
@@ -300,7 +403,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let t = lower_expr(ctx, target)?;
             let k = lower_expr(ctx, key)?;
             let v = lower_expr(ctx, value)?;
-            let r = lower_expr(ctx, receiver)?;
+            let r = if same_put_value_receiver_expr(target, receiver) {
+                t.clone()
+            } else {
+                lower_expr(ctx, receiver)?
+            };
             let strict_i32 = if *strict { "1" } else { "0" };
             Ok(ctx.block().call(
                 DOUBLE,

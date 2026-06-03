@@ -830,18 +830,6 @@ pub extern "C" fn js_put_value_set(
     receiver: f64,
     strict: i32,
 ) -> f64 {
-    if lookup(target).is_none() {
-        if set_integer_indexed_exotic(target, key, value) {
-            return value;
-        }
-        if target.to_bits() == receiver.to_bits() && key_is_length(key) {
-            if let Some(arr) = array_ptr_from_value(target) {
-                crate::array::js_array_set_length(arr, value);
-                return value;
-            }
-        }
-    }
-
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_handle = scope.root_nanbox_f64(target);
     let key_handle = scope.root_nanbox_f64(key);
@@ -851,19 +839,35 @@ pub extern "C" fn js_put_value_set(
     let key = key_handle.get_nanbox_f64();
     let value = value_handle.get_nanbox_f64();
     let receiver = receiver_handle.get_nanbox_f64();
+    let property_key_handle =
+        scope.root_nanbox_f64(unsafe { crate::object::js_to_property_key(key) });
+    let property_key = property_key_handle.get_nanbox_f64();
+
+    if lookup(target).is_none() {
+        if set_integer_indexed_exotic(target, property_key, value) {
+            return value;
+        }
+        if target.to_bits() == receiver.to_bits() && key_is_length(property_key) {
+            if let Some(arr) = array_ptr_from_value(target) {
+                crate::array::js_array_set_length(arr, value);
+                return value;
+            }
+        }
+    }
+
     let target_bits = target.to_bits();
     if target_bits == TAG_NULL || target_bits == TAG_UNDEFINED {
-        let key_name = key_to_rust_string(key).unwrap_or_else(|| "property".to_string());
+        let key_name = key_to_rust_string(property_key).unwrap_or_else(|| "property".to_string());
         let msg = format!("Cannot set properties of null or undefined (setting '{key_name}')");
         return throw_type_error(&msg);
     }
     let ok = if lookup(target).is_some() {
-        js_proxy_set(target, key, value).to_bits() == TAG_TRUE
+        js_proxy_set(target, property_key, value).to_bits() == TAG_TRUE
     } else {
-        ordinary_set_with_receiver(target, key, value, receiver)
+        ordinary_set_with_receiver(target, property_key, value, receiver)
     };
     if !ok && strict != 0 {
-        let key_name = key_to_rust_string(key).unwrap_or_else(|| "property".to_string());
+        let key_name = key_to_rust_string(property_key).unwrap_or_else(|| "property".to_string());
         crate::error::throw_immutable_write(0, &key_name);
     }
     value_handle.get_nanbox_f64()

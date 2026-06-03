@@ -426,39 +426,20 @@ fn assign_prepared_target(
 ) -> Result<Vec<Stmt>> {
     match target {
         PreparedTarget::Local(id) => Ok(vec![Stmt::Expr(Expr::LocalSet(id, Box::new(value)))]),
-        PreparedTarget::Property { object, property } => Ok(vec![Stmt::Expr(Expr::PropertySet {
-            object: Box::new(object),
-            property,
+        PreparedTarget::Property { object, property } => Ok(vec![Stmt::Expr(Expr::PutValueSet {
+            target: Box::new(object.clone()),
+            key: Box::new(Expr::String(property)),
             value: Box::new(value),
+            receiver: Box::new(object),
+            strict: ctx.current_strict,
         })]),
-        PreparedTarget::Index { object, index } => {
-            let (value_id, value_name) = fresh_destruct_local(ctx, "destruct_assign", Type::Any);
-            let (key_id, key_name) = fresh_destruct_local(ctx, "destruct_property_key", Type::Any);
-            Ok(vec![
-                Stmt::Let {
-                    id: value_id,
-                    name: value_name,
-                    ty: Type::Any,
-                    mutable: false,
-                    init: Some(value),
-                },
-                Stmt::Let {
-                    id: key_id,
-                    name: key_name,
-                    ty: Type::Any,
-                    mutable: false,
-                    init: Some(extern_call(
-                        "js_object_literal_to_property_key",
-                        vec![index],
-                    )),
-                },
-                Stmt::Expr(Expr::IndexSet {
-                    object: Box::new(object),
-                    index: Box::new(Expr::LocalGet(key_id)),
-                    value: Box::new(Expr::LocalGet(value_id)),
-                }),
-            ])
-        }
+        PreparedTarget::Index { object, index } => Ok(vec![Stmt::Expr(Expr::PutValueSet {
+            target: Box::new(object.clone()),
+            key: Box::new(index),
+            value: Box::new(value),
+            receiver: Box::new(object),
+            strict: ctx.current_strict,
+        })]),
         PreparedTarget::Array(arr) => lower_array_assignment_from_expr(ctx, &arr, value),
         PreparedTarget::Object(obj) => lower_object_assignment_from_expr(ctx, &obj, value),
         PreparedTarget::Skip => Ok(Vec::new()),

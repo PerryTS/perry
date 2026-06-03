@@ -2,7 +2,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PERRY="$SCRIPT_DIR/../target/release/perry"
+PERRY="${PERRY_BIN:-$SCRIPT_DIR/../target/release/perry}"
 [ ! -f "$PERRY" ] && PERRY="$SCRIPT_DIR/../target/debug/perry"
 if [ ! -f "$PERRY" ]; then
   echo "SKIP: perry binary not found (build with cargo build --release)"

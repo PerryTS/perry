@@ -5,7 +5,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PERRY="$SCRIPT_DIR/../target/release/perry"
+PERRY="${PERRY_BIN:-$SCRIPT_DIR/../target/release/perry}"
 [ ! -f "$PERRY" ] && PERRY="$SCRIPT_DIR/../target/debug/perry"
 if [ ! -f "$PERRY" ]; then
   echo "SKIP: perry binary not found (build with cargo build --release)"
@@ -99,6 +99,36 @@ check(objectTargetObject.slot === 7, "object destructuring assignment value");
 check(
   objectOrder === "source,source-key,source-key-tostring,target,target-key,target-key-tostring,",
   "object destructuring assignment order: " + objectOrder
+);
+
+let setterOrder = "";
+const setterProto: any = {};
+Object.defineProperty(setterProto, "slot", {
+  set: function(v: any) {
+    setterOrder += "setter,";
+    this.recorded = v;
+  }
+});
+const setterReceiver: any = Object.create(setterProto);
+const setterKey: any = {
+  toString: function() {
+    setterOrder += "target-key-tostring,";
+    return "slot";
+  }
+};
+function setterTarget(): any {
+  setterOrder += "target,";
+  return setterReceiver;
+}
+function setterTargetKey(): any {
+  setterOrder += "target-key,";
+  return setterKey;
+}
+({ prop: setterTarget()[setterTargetKey()] } = { prop: 11 });
+check(setterReceiver.recorded === 11, "object destructuring member target setter value");
+check(
+  setterOrder === "target,target-key,target-key-tostring,setter,",
+  "object destructuring member target setter order: " + setterOrder
 );
 
 let closeCount = 0;
