@@ -1695,17 +1695,15 @@ pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
 /// `g.constructor` for a generator-function closure `g` → `%GeneratorFunction%`
 /// / `%AsyncGeneratorFunction%`. `None` for non-generator closures. (#3664)
 pub(crate) fn generator_function_constructor_of(closure_ptr: usize) -> Option<f64> {
-    let kind = closure_generator_kind(closure_ptr)?;
-    ensure_generator_intrinsics();
-    let slot = match kind {
-        GeneratorKind::Sync => {
-            crate::object::GENERATOR_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire)
-        }
-        GeneratorKind::Async => {
-            crate::object::ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire)
-        }
-    };
-    intrinsic_pointer_value(slot)
+    let proto = generator_function_proto_of(closure_ptr)?;
+    let proto_ptr = crate::value::js_nanbox_get_pointer(proto) as *const ObjectHeader;
+    if proto_ptr.is_null() {
+        return None;
+    }
+    let key =
+        crate::string::js_string_from_bytes(b"constructor".as_ptr(), "constructor".len() as u32);
+    let value = js_object_get_field_by_name(proto_ptr, key);
+    Some(f64::from_bits(value.bits()))
 }
 
 /// `g.prototype` for a generator-function closure `g`: a lazily-created object

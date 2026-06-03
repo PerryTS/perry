@@ -2474,6 +2474,26 @@ pub extern "C" fn js_object_get_field_by_name(
                 if val.to_bits() != crate::value::TAG_UNDEFINED {
                     return JSValue::from_bits(val.to_bits());
                 }
+                if name_str == "constructor" {
+                    if let Some(ctor) =
+                        crate::object::generator_function_constructor_of(obj as usize)
+                    {
+                        return JSValue::from_bits(ctor.to_bits());
+                    }
+                }
+                if name_str == "prototype" {
+                    if let Some(proto) =
+                        crate::object::generator_function_prototype_of(obj as usize)
+                    {
+                        return JSValue::from_bits(proto.to_bits());
+                    }
+                    let func_value = crate::value::js_nanbox_pointer(obj as i64);
+                    if let Some(proto) =
+                        super::ordinary_function_prototype_value_for_read(func_value)
+                    {
+                        return JSValue::from_bits(proto.to_bits());
+                    }
+                }
                 if name_str == "length" {
                     let closure_value = crate::value::js_nanbox_pointer(obj as i64);
                     if let Some(arity) =
