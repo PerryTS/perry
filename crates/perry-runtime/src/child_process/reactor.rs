@@ -28,7 +28,7 @@ use std::collections::HashMap;
 #[cfg(unix)]
 use std::io::BufRead;
 use std::io::{Read, Write};
-use std::process::{Child, ChildStdin, Stdio};
+use std::process::{Child, ChildStdin};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
@@ -437,6 +437,7 @@ pub extern "C" fn js_child_process_spawn_streams(
     let stdout_obj = cp_build_readable();
     let stderr_obj = cp_build_readable();
     let stdin_obj = cp_build_writable();
+    let stdio_kinds = cp_read_stdio(opts_val, 3);
 
     // spawnargs = [command, ...args]
     let mut spawnargs = crate::array::js_array_alloc((arg_strs.len() + 1) as u32);
@@ -465,14 +466,14 @@ pub extern "C" fn js_child_process_spawn_streams(
     let cp = cp_box_ptr(cp_obj as *const u8);
     cp_install_dispose(cp);
 
-    cp_set_field(cp, b"stdout", stdout_obj);
-    cp_set_field(cp, b"stderr", stderr_obj);
-    cp_set_field(cp, b"stdin", stdin_obj);
+    cp_set_field(cp, b"stdout", cp_stdio_js_value(stdio_kinds[1], stdout_obj));
+    cp_set_field(cp, b"stderr", cp_stdio_js_value(stdio_kinds[2], stderr_obj));
+    cp_set_field(cp, b"stdin", cp_stdio_js_value(stdio_kinds[0], stdin_obj));
 
     let mut stdio = crate::array::js_array_alloc(3);
-    stdio = crate::array::js_array_push_f64(stdio, stdin_obj);
-    stdio = crate::array::js_array_push_f64(stdio, stdout_obj);
-    stdio = crate::array::js_array_push_f64(stdio, stderr_obj);
+    stdio = crate::array::js_array_push_f64(stdio, cp_stdio_js_value(stdio_kinds[0], stdin_obj));
+    stdio = crate::array::js_array_push_f64(stdio, cp_stdio_js_value(stdio_kinds[1], stdout_obj));
+    stdio = crate::array::js_array_push_f64(stdio, cp_stdio_js_value(stdio_kinds[2], stderr_obj));
     cp_set_field(cp, b"stdio", cp_box_ptr(stdio as *const u8));
 
     cp_set_field(cp, b"exitCode", TAG_NULL_F64);
@@ -484,9 +485,7 @@ pub extern "C" fn js_child_process_spawn_streams(
 
     // Build + launch the child (honoring `shell`/`cwd`/`env`), non-blocking.
     let mut command = cp_build_command(&cmd_str, &arg_strs, opts_val);
-    command.stdin(Stdio::piped());
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
+    cp_apply_live_stdio(&mut command, &stdio_kinds);
 
     match command.spawn() {
         Ok(child) => {

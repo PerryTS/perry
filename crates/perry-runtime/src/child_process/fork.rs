@@ -17,7 +17,7 @@
 //! launches the child but reports `connected: false`.
 
 use super::*;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 /// `child_process.fork(modulePath[, args][, options])`. `module_ptr`/`args_ptr`
 /// are raw (unboxed) `StringHeader` / `ArrayHeader` pointers; `opts_ptr` is a
@@ -65,6 +65,7 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     let stdout_obj = cp_build_readable();
     let stderr_obj = cp_build_readable();
     let stdin_obj = cp_build_writable();
+    let stdio_kinds = cp_read_stdio(opts_val, 3);
 
     // spawnargs = [execPath, ...execArgv, module, ...args] (matches Node).
     let mut spawnargs = crate::array::js_array_alloc((arg_strs.len() + exec_argv.len() + 2) as u32);
@@ -100,13 +101,13 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     let cp = cp_box_ptr(cp_obj as *const u8);
     cp_install_dispose(cp);
 
-    cp_set_field(cp, b"stdout", stdout_obj);
-    cp_set_field(cp, b"stderr", stderr_obj);
-    cp_set_field(cp, b"stdin", stdin_obj);
+    cp_set_field(cp, b"stdout", cp_stdio_js_value(stdio_kinds[1], stdout_obj));
+    cp_set_field(cp, b"stderr", cp_stdio_js_value(stdio_kinds[2], stderr_obj));
+    cp_set_field(cp, b"stdin", cp_stdio_js_value(stdio_kinds[0], stdin_obj));
     let mut stdio = crate::array::js_array_alloc(4);
-    stdio = crate::array::js_array_push_f64(stdio, stdin_obj);
-    stdio = crate::array::js_array_push_f64(stdio, stdout_obj);
-    stdio = crate::array::js_array_push_f64(stdio, stderr_obj);
+    stdio = crate::array::js_array_push_f64(stdio, cp_stdio_js_value(stdio_kinds[0], stdin_obj));
+    stdio = crate::array::js_array_push_f64(stdio, cp_stdio_js_value(stdio_kinds[1], stdout_obj));
+    stdio = crate::array::js_array_push_f64(stdio, cp_stdio_js_value(stdio_kinds[2], stderr_obj));
     stdio = crate::array::js_array_push_f64(stdio, TAG_NULL_F64); // fd 3 = ipc
     cp_set_field(cp, b"stdio", cp_box_ptr(stdio as *const u8));
     cp_set_field(cp, b"exitCode", TAG_NULL_F64);
@@ -123,9 +124,7 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     command.arg(&module);
     command.args(&arg_strs);
     cp_apply_options(&mut command, opts_val);
-    command.stdin(Stdio::piped());
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
+    cp_apply_live_stdio(&mut command, &stdio_kinds);
 
     let launched = fork_launch(cp, stdout_obj, stderr_obj, stdin_obj, command, advanced);
     if !launched {

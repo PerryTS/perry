@@ -1379,6 +1379,63 @@ fn cp_apply_options(command: &mut Command, opts_val: f64) {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CpStdio {
+    Pipe,
+    Ignore,
+}
+
+fn cp_stdio_kind(value: f64) -> CpStdio {
+    match cp_value_to_string(value).as_deref() {
+        Some("ignore") => CpStdio::Ignore,
+        _ => CpStdio::Pipe,
+    }
+}
+
+/// Read the deterministic live-stdio subset: `pipe` (default) and `ignore`.
+/// Other Node forms (`inherit`, numeric fds, custom streams) intentionally
+/// remain in #2555.
+pub(super) fn cp_read_stdio(opts_val: f64, fds: usize) -> Vec<CpStdio> {
+    let mut out = vec![CpStdio::Pipe; fds];
+    if cp_object_ptr(opts_val).is_none() {
+        return out;
+    }
+
+    let stdio = cp_get_field(opts_val, b"stdio");
+    if let Some(s) = cp_value_to_string(stdio) {
+        if s == "ignore" {
+            out.fill(CpStdio::Ignore);
+        }
+        return out;
+    }
+
+    let Some(arr) = cp_array_ptr(stdio) else {
+        return out;
+    };
+    let n = crate::array::js_array_length(arr).min(fds as u32);
+    for i in 0..n {
+        out[i as usize] = cp_stdio_kind(crate::array::js_array_get_f64(arr, i));
+    }
+    out
+}
+
+pub(super) fn cp_stdio_js_value(kind: CpStdio, pipe_obj: f64) -> f64 {
+    match kind {
+        CpStdio::Pipe => pipe_obj,
+        CpStdio::Ignore => TAG_NULL_F64,
+    }
+}
+
+pub(super) fn cp_apply_live_stdio(command: &mut Command, stdio: &[CpStdio]) {
+    let to_stdio = |kind: CpStdio| match kind {
+        CpStdio::Pipe => Stdio::piped(),
+        CpStdio::Ignore => Stdio::null(),
+    };
+    command.stdin(to_stdio(stdio.first().copied().unwrap_or(CpStdio::Pipe)));
+    command.stdout(to_stdio(stdio.get(1).copied().unwrap_or(CpStdio::Pipe)));
+    command.stderr(to_stdio(stdio.get(2).copied().unwrap_or(CpStdio::Pipe)));
+}
+
 /// Default shell for `{ shell: true }` (`shell: "<path>"` overrides it).
 fn cp_default_shell() -> String {
     #[cfg(windows)]
