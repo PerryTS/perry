@@ -662,6 +662,8 @@ fn format_js_number_for_error(value: f64) -> String {
     }
 }
 
+const MAX_SAFE_JS_INTEGER: f64 = 9_007_199_254_740_991.0;
+
 fn trigger_async_id_value(value: f64) -> Option<u64> {
     let jv = JSValue::from_bits(value.to_bits());
     let id = if jv.is_int32() {
@@ -672,7 +674,7 @@ fn trigger_async_id_value(value: f64) -> Option<u64> {
         return None;
     };
 
-    if !id.is_finite() || id.fract() != 0.0 || id < -1.0 || id > u64::MAX as f64 {
+    if !id.is_finite() || id.fract() != 0.0 || !(-1.0..=MAX_SAFE_JS_INTEGER).contains(&id) {
         return None;
     }
     if id == -1.0 {
@@ -714,20 +716,42 @@ fn render_invalid_trigger_async_id(value: f64) -> String {
     "undefined".to_string()
 }
 
-fn trigger_id_from_options(options: f64) -> u64 {
-    let trigger_value = object_field(options, b"triggerAsyncId");
-    let jv = JSValue::from_bits(trigger_value.to_bits());
-    if jv.is_undefined() {
-        return execution_async_id_u64();
-    }
-    if let Some(id) = trigger_async_id_value(trigger_value) {
+fn trigger_async_id_or_throw(value: f64) -> u64 {
+    if let Some(id) = trigger_async_id_value(value) {
         return id;
     }
     let message = format!(
         "Invalid triggerAsyncId value: {}",
-        render_invalid_trigger_async_id(trigger_value)
+        render_invalid_trigger_async_id(value)
     );
     crate::fs::validate::throw_range_error_named(&message, "ERR_INVALID_ASYNC_ID")
+}
+
+fn throw_null_trigger_async_id_options() -> ! {
+    let message = b"Cannot read properties of null (reading 'triggerAsyncId')";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn trigger_id_from_options(options: f64) -> u64 {
+    let options_value = JSValue::from_bits(options.to_bits());
+    if options_value.is_undefined() {
+        return execution_async_id_u64();
+    }
+    if options_value.is_int32() || options_value.is_number() {
+        return trigger_async_id_or_throw(options);
+    }
+    if options_value.is_null() {
+        throw_null_trigger_async_id_options();
+    }
+
+    let trigger_value = object_field(options, b"triggerAsyncId");
+    let trigger_value_kind = JSValue::from_bits(trigger_value.to_bits());
+    if trigger_value_kind.is_undefined() {
+        return execution_async_id_u64();
+    }
+    trigger_async_id_or_throw(trigger_value)
 }
 
 fn render_apply_value(value: f64) -> String {
@@ -765,7 +789,7 @@ fn render_apply_value(value: f64) -> String {
 fn describe_apply_type(value: f64) -> &'static str {
     let jv = JSValue::from_bits(value.to_bits());
     if jv.is_undefined() {
-        "a undefined"
+        "undefined"
     } else if jv.is_null() {
         "null"
     } else if jv.is_bool() {

@@ -41,6 +41,33 @@ console.log("trigger undefined ok:", defaultResource.triggerAsyncId() === execut
 const sentinelResource = new AsyncResource("T", { triggerAsyncId: -1 });
 console.log("trigger -1:", sentinelResource.triggerAsyncId());
 
+for (const value of [
+  undefined,
+  null,
+  -1,
+  -2,
+  0,
+  7,
+  Number.MAX_SAFE_INTEGER,
+  Number.MAX_SAFE_INTEGER + 1,
+]) {
+  logResult("options", describeValue(value), () => {
+    const resource = new AsyncResource("T", value);
+    return resource.triggerAsyncId();
+  });
+}
+
+for (const value of [
+  -2,
+  Number.MAX_SAFE_INTEGER,
+  Number.MAX_SAFE_INTEGER + 1,
+]) {
+  logResult("trigger boundary", describeValue(value), () => {
+    const resource = new AsyncResource("T", { triggerAsyncId: value });
+    return resource.triggerAsyncId();
+  });
+}
+
 const resource = new AsyncResource("T");
 for (const value of [undefined, null, 0, true, "x", {}, [], Symbol("s")]) {
   logResult("run", describeValue(value), () => resource.runInAsyncScope(value));
