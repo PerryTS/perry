@@ -14,14 +14,27 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
-fn is_use_strict_directive_stmt(stmt: &ast::Stmt) -> Option<bool> {
+pub(crate) fn string_directive_stmt_lit(stmt: &ast::Stmt) -> Option<&ast::Str> {
     let ast::Stmt::Expr(expr_stmt) = stmt else {
         return None;
     };
     let ast::Expr::Lit(ast::Lit::Str(str_lit)) = expr_stmt.expr.as_ref() else {
         return None;
     };
-    Some(str_lit.value.as_str() == Some("use strict"))
+    Some(str_lit)
+}
+
+pub(crate) fn is_raw_use_strict_directive(str_lit: &ast::Str) -> bool {
+    // Directive recognition is based on the raw token text. The cooked string
+    // value would incorrectly treat escapes like "use\x20strict" as strict.
+    matches!(
+        str_lit.raw.as_ref().map(|raw| raw.as_ref()),
+        Some("\"use strict\"") | Some("'use strict'")
+    )
+}
+
+fn is_use_strict_directive_stmt(stmt: &ast::Stmt) -> Option<bool> {
+    string_directive_stmt_lit(stmt).map(is_raw_use_strict_directive)
 }
 
 pub(crate) fn stmt_list_starts_with_use_strict_directive(stmts: &[ast::Stmt]) -> bool {

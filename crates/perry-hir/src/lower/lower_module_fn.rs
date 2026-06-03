@@ -15,29 +15,15 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
-fn stmt_is_string_directive(stmt: &ast::Stmt) -> Option<&str> {
-    let ast::Stmt::Expr(expr_stmt) = stmt else {
-        return None;
-    };
-    let mut expr = expr_stmt.expr.as_ref();
-    while let ast::Expr::Paren(paren) = expr {
-        expr = paren.expr.as_ref();
-    }
-    let ast::Expr::Lit(ast::Lit::Str(s)) = expr else {
-        return None;
-    };
-    s.value.as_str()
-}
-
 fn module_has_strict_mode(ast_module: &ast::Module) -> bool {
     for item in &ast_module.body {
         match item {
             ast::ModuleItem::ModuleDecl(_) => return true,
             ast::ModuleItem::Stmt(stmt) => {
-                let Some(directive) = stmt_is_string_directive(stmt) else {
+                let Some(directive) = string_directive_stmt_lit(stmt) else {
                     break;
                 };
-                if directive == "use strict" {
+                if is_raw_use_strict_directive(directive) {
                     return true;
                 }
             }

@@ -538,13 +538,10 @@ fn binding_pat_uses_arguments(pat: &ast::Pat) -> bool {
 
 pub fn body_has_use_strict(body: &[ast::Stmt]) -> bool {
     for stmt in body {
-        let ast::Stmt::Expr(expr_stmt) = stmt else {
+        let Some(directive) = crate::lower::string_directive_stmt_lit(stmt) else {
             return false;
         };
-        let ast::Expr::Lit(ast::Lit::Str(s)) = expr_stmt.expr.as_ref() else {
-            return false;
-        };
-        if s.value.as_str() == Some("use strict") {
+        if crate::lower::is_raw_use_strict_directive(directive) {
             return true;
         }
     }

@@ -53,29 +53,15 @@ pub(crate) fn capture_function_source(
     ctx.closure_source_text.insert(func_id, src);
 }
 
-fn stmt_is_string_directive(stmt: &ast::Stmt) -> Option<&str> {
-    let ast::Stmt::Expr(expr_stmt) = stmt else {
-        return None;
-    };
-    let mut expr = expr_stmt.expr.as_ref();
-    while let ast::Expr::Paren(paren) = expr {
-        expr = paren.expr.as_ref();
-    }
-    let ast::Expr::Lit(ast::Lit::Str(s)) = expr else {
-        return None;
-    };
-    s.value.as_str()
-}
-
 fn block_has_use_strict(block: Option<&ast::BlockStmt>) -> bool {
     let Some(block) = block else {
         return false;
     };
     for stmt in &block.stmts {
-        let Some(directive) = stmt_is_string_directive(stmt) else {
+        let Some(directive) = super::string_directive_stmt_lit(stmt) else {
             break;
         };
-        if directive == "use strict" {
+        if super::is_raw_use_strict_directive(directive) {
             return true;
         }
     }

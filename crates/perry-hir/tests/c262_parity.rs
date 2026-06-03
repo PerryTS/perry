@@ -391,6 +391,61 @@ fn sloppy_assignment_in_if_test_creates_storage_before_following_getvalue() {
 }
 
 #[test]
+fn strict_directive_recognition_requires_raw_use_strict_literal() {
+    let module = lower_js_src(
+        r#"
+        function exactDouble() { "use strict"; }
+        function exactSingle() { 'use strict'; }
+        function escapedHex() { "use\x20strict"; }
+        function escapedUnicode() { "use\u0020strict"; }
+        function doubleBackslash() { "use\\x20strict"; }
+        function trailing() { "use strict "; }
+        function parenthesized() { ("use strict"); }
+        function interrupted() { 0; "use strict"; }
+        function laterDirective() { "not strict"; "use strict"; }
+        "#,
+    );
+
+    let is_strict = |name: &str| function(&module, name).is_strict;
+    assert!(is_strict("exactDouble"));
+    assert!(is_strict("exactSingle"));
+    assert!(is_strict("laterDirective"));
+    assert!(!is_strict("escapedHex"));
+    assert!(!is_strict("escapedUnicode"));
+    assert!(!is_strict("doubleBackslash"));
+    assert!(!is_strict("trailing"));
+    assert!(!is_strict("parenthesized"));
+    assert!(!is_strict("interrupted"));
+}
+
+#[test]
+fn module_strictness_uses_raw_directive_tokens() {
+    let exact = lower_js_src(
+        r#"
+        "use strict";
+        function f() {}
+        "#,
+    );
+    assert!(function(&exact, "f").is_strict);
+
+    let escaped = lower_js_src(
+        r#"
+        "use\x20strict";
+        function f() {}
+        "#,
+    );
+    assert!(!function(&escaped, "f").is_strict);
+
+    let parenthesized = lower_js_src(
+        r#"
+        ("use strict");
+        function f() {}
+        "#,
+    );
+    assert!(!function(&parenthesized, "f").is_strict);
+}
+
+#[test]
 fn sloppy_js_yield_identifier_arrow_parameters_lower() {
     let module = lower_js_src(
         r#"
