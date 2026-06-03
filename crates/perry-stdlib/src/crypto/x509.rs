@@ -3,6 +3,7 @@ use super::*;
 pub struct X509Handle {
     der: Vec<u8>,
     cert: x509_cert::Certificate,
+    issuer_certificate: Option<Handle>,
 }
 
 /// Short attribute name for an X.500 DN OID, matching Node's subject /
@@ -851,6 +852,10 @@ unsafe fn x509_check_private_key_value(handle: &X509Handle, args: &[f64]) -> f64
     )
 }
 
+fn x509_handle_value(handle: Handle) -> f64 {
+    f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
+}
+
 fn throw_x509_parse_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = perry_runtime::error::js_error_new_with_message(msg);
@@ -935,8 +940,12 @@ pub unsafe extern "C" fn js_crypto_x509_new(input_ptr: i64) -> f64 {
         Ok(d) => d,
         Err(_) => throw_x509_parse_error("error:0680007B:asn1 encoding routines::header too long"),
     };
-    let handle: Handle = register_handle(X509Handle { der, cert });
-    f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
+    let handle: Handle = register_handle(X509Handle {
+        der,
+        cert,
+        issuer_certificate: None,
+    });
+    x509_handle_value(handle)
 }
 
 /// Read-only property dispatch for an X509Certificate handle.
@@ -1012,6 +1021,10 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
             f64::from_bits(0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF))
         }
         "publicKey" => x509_public_key_value(h),
+        "issuerCertificate" => h
+            .issuer_certificate
+            .map(x509_handle_value)
+            .unwrap_or_else(nanbox_undefined),
         _ => nanbox_undefined(),
     }
 }

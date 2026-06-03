@@ -3280,6 +3280,9 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     if export_module_name == "crypto" && property_name == "KeyObject" {
         attach_crypto_key_object_shape(closure_addr, value);
     }
+    if export_module_name == "crypto" && property_name == "X509Certificate" {
+        attach_crypto_x509_certificate_shape(closure_addr, value);
+    }
 
     // `PerformanceObserver.supportedEntryTypes` is a static array on the
     // constructor. `PerformanceObserver` is a function value (a bound-method
@@ -3549,6 +3552,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         // #3726: `crypto.Cipheriv` / `crypto.Decipheriv` constructor exports —
         // `(cipher, key, iv, options)` arity matches Node's length 4.
         ("crypto", "Cipheriv" | "Decipheriv") => Some(4),
+        ("crypto", "X509Certificate") => Some(1),
         ("crypto", "KeyObject") => Some(2),
         ("crypto.KeyObject", "from") => Some(1),
         // #2706/#2716 and #2694: crypto module-level callable exports.
@@ -4241,6 +4245,49 @@ fn attach_crypto_key_object_shape(closure_addr: usize, constructor_value: f64) {
         constructor.to_string(),
         super::PropertyAttrs::new(true, false, true),
     );
+
+    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    crate::closure::closure_set_dynamic_prop(closure_addr, "prototype", proto_value);
+    super::set_builtin_property_attrs(
+        closure_addr,
+        "prototype".to_string(),
+        super::PropertyAttrs::new(true, false, false),
+    );
+}
+
+extern "C" fn x509_issuer_certificate_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn attach_crypto_x509_certificate_shape(closure_addr: usize, constructor_value: f64) {
+    let proto = js_object_alloc(0, 0);
+    if proto.is_null() {
+        return;
+    }
+    let constructor = "constructor";
+    let constructor_key =
+        crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
+    js_object_set_field_by_name(proto, constructor_key, constructor_value);
+    super::set_builtin_property_attrs(
+        proto as usize,
+        constructor.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+
+    unsafe {
+        crate::closure::js_register_closure_arity(
+            x509_issuer_certificate_getter_thunk as *const u8,
+            0,
+        );
+        let getter =
+            crate::closure::js_closure_alloc(x509_issuer_certificate_getter_thunk as *const u8, 0);
+        if !getter.is_null() {
+            let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
+            super::object_ops::install_builtin_getter(proto, "issuerCertificate", getter_bits);
+        }
+    }
 
     let proto_value = crate::value::js_nanbox_pointer(proto as i64);
     crate::closure::closure_set_dynamic_prop(closure_addr, "prototype", proto_value);
@@ -5451,6 +5498,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             // callable functions so `typeof crypto.Cipheriv === "function"`.
             | ("crypto", "Cipheriv")
             | ("crypto", "Decipheriv")
+            | ("crypto", "X509Certificate")
             // #2565: public KeyObject constructor shape plus the supported
             // secret-key `KeyObject.from(CryptoKey)` static helper.
             | ("crypto", "KeyObject")

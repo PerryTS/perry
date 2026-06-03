@@ -2251,6 +2251,7 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             | "ca"
             | "raw"
             | "publicKey"
+            | "issuerCertificate"
             | "toString"
             | "toJSON"
             | "toLegacyObject"
