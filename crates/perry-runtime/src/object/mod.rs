@@ -1912,6 +1912,21 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }
+    if (raw_addr >= 0x10000 && crate::closure::is_closure_ptr(raw_addr))
+        || crate::object::is_class_object_ptr(raw_addr as *const u8)
+    {
+        let bytes = b"[object Function]";
+        let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
+    if jsv.is_int32() {
+        let class_id = (bits & 0xFFFF_FFFF) as u32;
+        if crate::object::is_class_id_registered(class_id) {
+            let bytes = b"[object Function]";
+            let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+            return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+        }
+    }
     if jsv.is_int32() || jsv.is_number() {
         let bytes = b"[object Number]";
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);

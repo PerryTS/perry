@@ -985,7 +985,7 @@ extern "C" fn global_this_queue_microtask_thunk(
 /// Tag detection uses the same coarse NaN-box / GC-type discrimination
 /// the rest of the runtime relies on: arrays → `"[object Array]"`,
 /// strings → `"[object String]"`, null/undefined → matching tags,
-/// numbers/bools → primitive tags, generic objects/closures →
+/// numbers/bools/functions → primitive/builtin tags, generic objects →
 /// `"[object Object]"`.
 ///
 /// Unblocks ramda's `_isArguments.js` IIFE which evaluates
@@ -1780,6 +1780,11 @@ fn set_intrinsic_to_string_tag(obj: *mut ObjectHeader, tag: &str) {
             f64::from_bits(crate::js_nanbox_string(tag_str as i64).to_bits()),
         );
     }
+    crate::symbol::set_symbol_property_attrs(
+        obj as usize,
+        sym as usize,
+        super::PropertyAttrs::new(false, false, true),
+    );
 }
 
 /// Build a `TypeError` value for a `%Generator.prototype%` method invoked on a
@@ -2545,9 +2550,18 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             // gated on the AST shape and never read these fields. Math uses the
             // richer install that also exposes per-method name/length descriptors.
             match name {
-                "Math" => install_math_namespace(ns_obj),
-                "JSON" => install_json_namespace_members(ns_obj),
-                "Reflect" => install_reflect_namespace_members(ns_obj),
+                "Math" => {
+                    install_math_namespace(ns_obj);
+                    set_intrinsic_to_string_tag(ns_obj, "Math");
+                }
+                "JSON" => {
+                    install_json_namespace_members(ns_obj);
+                    set_intrinsic_to_string_tag(ns_obj, "JSON");
+                }
+                "Reflect" => {
+                    install_reflect_namespace_members(ns_obj);
+                    set_intrinsic_to_string_tag(ns_obj, "Reflect");
+                }
                 "Atomics" => install_atomics_namespace_members(ns_obj),
                 "Intl" => crate::intl::install_intl_namespace(ns_obj),
                 _ => {}
