@@ -336,23 +336,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // .includes(name)) now does the right thing instead
                     // of crashing on the 0.0 sentinel.
                     "moduleLoadList" => return Ok(Expr::Array(vec![])),
-                    // #1482: process.finalization — control surface added
-                    // in Node 22 for FinalizationRegistry-like lifecycle
-                    // hooks (register / registerBeforeExit / unregister).
-                    // Perry doesn't have the runtime support yet, but
-                    // shape-only consumers feature-detect on
-                    // `typeof process.finalization === "object"` first;
-                    // returning an Object with the three documented
-                    // method names (currently undefined) closes that
-                    // gap. Real implementations of register / unregister
-                    // are tracked separately.
-                    "finalization" => {
-                        return Ok(Expr::Object(vec![
-                            ("register".to_string(), Expr::Undefined),
-                            ("registerBeforeExit".to_string(), Expr::Undefined),
-                            ("unregister".to_string(), Expr::Undefined),
-                        ]));
-                    }
+                    "finalization" => return Ok(process_native_property("finalization")),
                     // #1379: process.config — object describing build-time
                     // config (`{ variables, target_defaults }` in Node).
                     // Perry has no `node-gyp`-style build to surface, but
@@ -529,13 +513,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         })
                     }
                     "moduleLoadList" => return Ok(Expr::Array(vec![])),
-                    "finalization" => {
-                        return Ok(Expr::Object(vec![
-                            ("register".to_string(), Expr::Undefined),
-                            ("registerBeforeExit".to_string(), Expr::Undefined),
-                            ("unregister".to_string(), Expr::Undefined),
-                        ]));
-                    }
+                    "finalization" => return Ok(process_native_property("finalization")),
                     "config" => {
                         return Ok(Expr::Object(vec![
                             ("variables".to_string(), Expr::Object(Vec::new())),

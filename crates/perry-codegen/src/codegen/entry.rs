@@ -495,6 +495,8 @@ pub(super) fn compile_module_entry(
                 let _ = ctx.block().call(I32, "js_timer_tick_if_refed", &[]);
                 let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
                 let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
+                ctx.block()
+                    .call_void("js_process_run_finalization_exit", &[]);
                 ctx.block().ret(I32, "0");
             }
         }

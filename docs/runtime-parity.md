@@ -2298,9 +2298,9 @@ Bun status: 🟡 Mostly implemented. `process.binding` partial. `process.title` 
 | `process.permission.has(scope[, reference])` | ✓ | ⚠ |  |
 | `process.umask()` | ✓ | ✓ |  |
 | `process.umask(mask)` | ✓ | ✓ |  |
-| `process.finalization.register(ref, callback)` | ✓ | ⚠ |  |
-| `process.finalization.registerBeforeExit(ref, callback)` | ✓ | ⚠ |  |
-| `process.finalization.unregister(ref)` | ✓ | ⚠ |  |
+| `process.finalization.register(ref, callback)` | ✓ | ✓ |  |
+| `process.finalization.registerBeforeExit(ref, callback)` | ✓ | ✓ |  |
+| `process.finalization.unregister(ref)` | ✓ | ✓ |  |
 | `process.nextTick(callback[, ...args])` | ✓ | ✓ |  |
 | `process.ref(maybeRefable)` | ✓ | ⚠ |  |
 | `process.unref(maybeRefable)` | ✓ | ⚠ |  |

@@ -530,9 +530,6 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `process.hrtime([time])`
 - `process.umask()`
 - `process.umask(mask)`
-- `process.finalization.register(ref, callback)`
-- `process.finalization.registerBeforeExit(ref, callback)`
-- `process.finalization.unregister(ref)`
 - `process.ref(maybeRefable)`
 - `process.unref(maybeRefable)`
 - `process.binding(name)`
