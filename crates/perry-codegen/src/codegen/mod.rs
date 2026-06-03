@@ -1815,12 +1815,35 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // Resolve user function names up-front so body lowering can emit
     // forward/recursive calls without worrying about emission order.
     // Names are scoped by module prefix to avoid cross-module collisions.
+    let func_by_id_for_symbols: HashMap<u32, &perry_hir::Function> =
+        hir.functions.iter().map(|f| (f.id, f)).collect();
+    let mut exported_alias_owners: HashMap<String, u32> = HashMap::new();
+    for (exported_name, func_id) in &hir.exported_functions {
+        let Some(f) = func_by_id_for_symbols.get(func_id) else {
+            continue;
+        };
+        if f.name != *exported_name {
+            exported_alias_owners.insert(sanitize(exported_name), *func_id);
+        }
+    }
+
     let mut func_names: HashMap<u32, String> = HashMap::new();
     let mut func_signatures: HashMap<u32, (usize, bool, bool, bool)> = HashMap::new();
     let mut func_synthetic_arguments: std::collections::HashSet<u32> =
         std::collections::HashSet::new();
     for f in &hir.functions {
-        func_names.insert(f.id, scoped_fn_name(&module_prefix, &f.name));
+        let base_symbol = sanitize(&f.name);
+        let llvm_name = match exported_alias_owners.get(&base_symbol) {
+            Some(alias_owner) if *alias_owner != f.id => {
+                format!(
+                    "{}__local_{}",
+                    scoped_fn_name(&module_prefix, &f.name),
+                    f.id
+                )
+            }
+            _ => scoped_fn_name(&module_prefix, &f.name),
+        };
+        func_names.insert(f.id, llvm_name);
         let has_rest = f.params.iter().any(|p| p.is_rest);
         let synthetic_is_rest = f
             .params

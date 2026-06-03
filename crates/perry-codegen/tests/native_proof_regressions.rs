@@ -1,6 +1,6 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::{
-    monomorphize_module, BinaryOp, Class, ClassField, CompareOp, Expr, Function, Module,
+    monomorphize_module, BinaryOp, Class, ClassField, CompareOp, Export, Expr, Function, Module,
     ModuleInitKind, Param, Stmt, UpdateOp,
 };
 use perry_types::{ObjectType, PropertyInfo, Type, TypeParam};
@@ -128,6 +128,67 @@ fn compile_artifact_json(name: &str, body: Vec<Stmt>) -> serde_json::Value {
 
 fn compile_artifact_json_for_module(module: Module) -> serde_json::Value {
     compile_artifact_json_for_module_with_opts(module, empty_opts())
+}
+
+#[test]
+fn export_alias_can_collide_with_private_local_function_name() {
+    let mut module = module("chunk-JEUUQSE4.js", Vec::new());
+    module.functions = vec![
+        Function {
+            id: 1,
+            name: "a".to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Number,
+            body: vec![Stmt::Return(Some(Expr::Number(1.0)))],
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        },
+        Function {
+            id: 2,
+            name: "l".to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Number,
+            body: vec![Stmt::Return(Some(Expr::Number(2.0)))],
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+            is_exported: true,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        },
+    ];
+    module.exports = vec![Export::Named {
+        local: "l".to_string(),
+        exported: "a".to_string(),
+    }];
+    module.exported_functions = vec![("a".to_string(), 2)];
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+
+    assert_eq!(
+        ir.matches("define double @perry_fn_chunk_JEUUQSE4_js__a(")
+            .count(),
+        1,
+        "the public export alias should own the exported symbol once"
+    );
+    assert!(
+        ir.contains("define double @perry_fn_chunk_JEUUQSE4_js__a__local_1("),
+        "the private helper with the colliding name should be renamed"
+    );
+    assert!(
+        ir.contains("call double @perry_fn_chunk_JEUUQSE4_js__l()"),
+        "the exported alias should forward to the local function it exports"
+    );
 }
 
 fn compile_artifact_json_for_module_with_opts(

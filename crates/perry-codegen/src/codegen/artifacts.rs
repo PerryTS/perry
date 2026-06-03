@@ -593,7 +593,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 let wf = llmod.define_function(&exported_wrap, DOUBLE, wrap_params);
                 let _ = wf.create_block("entry");
                 let blk = wf.block_mut(0).unwrap();
-                let target = scoped_fn_name(module_prefix, &f.name);
+                let target = func_names
+                    .get(&f.id)
+                    .cloned()
+                    .unwrap_or_else(|| scoped_fn_name(module_prefix, &f.name));
                 let call_args: Vec<(LlvmType, String)> =
                     (0..arity).map(|i| (DOUBLE, format!("%a{}", i))).collect();
                 let call_args_ref: Vec<(LlvmType, &str)> =
@@ -824,7 +827,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                         let wf = llmod.define_function(&exported_wrap, DOUBLE, wrap_params);
                         let _ = wf.create_block("entry");
                         let blk = wf.block_mut(0).unwrap();
-                        let target = scoped_fn_name(module_prefix, &f.name);
+                        let target = func_names
+                            .get(&f.id)
+                            .cloned()
+                            .unwrap_or_else(|| scoped_fn_name(module_prefix, &f.name));
                         let call_args: Vec<(LlvmType, String)> =
                             (0..arity).map(|i| (DOUBLE, format!("%a{}", i))).collect();
                         let call_args_ref: Vec<(LlvmType, &str)> =
