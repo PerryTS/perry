@@ -1817,14 +1817,18 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // Names are scoped by module prefix to avoid cross-module collisions.
     let func_by_id_for_symbols: HashMap<u32, &perry_hir::Function> =
         hir.functions.iter().map(|f| (f.id, f)).collect();
-    let mut exported_alias_owners: HashMap<String, u32> = HashMap::new();
+    let mut public_symbol_owners: HashMap<String, u32> = HashMap::new();
     for (exported_name, func_id) in &hir.exported_functions {
-        let Some(f) = func_by_id_for_symbols.get(func_id) else {
+        if !func_by_id_for_symbols.contains_key(func_id) {
             continue;
-        };
-        if f.name != *exported_name {
-            exported_alias_owners.insert(sanitize(exported_name), *func_id);
         }
+        public_symbol_owners
+            .entry(sanitize(exported_name))
+            .or_insert(*func_id);
+    }
+    let mut local_symbol_counts: HashMap<String, usize> = HashMap::new();
+    for f in &hir.functions {
+        *local_symbol_counts.entry(sanitize(&f.name)).or_insert(0) += 1;
     }
 
     let mut func_names: HashMap<u32, String> = HashMap::new();
@@ -1833,15 +1837,20 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         std::collections::HashSet::new();
     for f in &hir.functions {
         let base_symbol = sanitize(&f.name);
-        let llvm_name = match exported_alias_owners.get(&base_symbol) {
-            Some(alias_owner) if *alias_owner != f.id => {
-                format!(
-                    "{}__local_{}",
-                    scoped_fn_name(&module_prefix, &f.name),
-                    f.id
-                )
-            }
-            _ => scoped_fn_name(&module_prefix, &f.name),
+        let owns_public_symbol = public_symbol_owners
+            .get(&base_symbol)
+            .is_some_and(|owner| *owner == f.id);
+        let base_is_colliding_local = local_symbol_counts
+            .get(&base_symbol)
+            .is_some_and(|count| *count > 1);
+        let base_is_public_symbol = public_symbol_owners.contains_key(&base_symbol);
+        let scoped = scoped_fn_name(&module_prefix, &f.name);
+        let llvm_name = if owns_public_symbol {
+            scoped
+        } else if base_is_colliding_local || base_is_public_symbol {
+            format!("{}__local_{}", scoped, f.id)
+        } else {
+            scoped
         };
         func_names.insert(f.id, llvm_name);
         let has_rest = f.params.iter().any(|p| p.is_rest);
