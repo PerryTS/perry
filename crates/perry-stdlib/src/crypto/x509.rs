@@ -510,6 +510,15 @@ fn x509_signature_algorithm_name(cert: &x509_cert::Certificate) -> Option<&'stat
     }
 }
 
+fn x509_rsa_signature_digest(cert: &x509_cert::Certificate) -> Option<RsaDigestKind> {
+    match cert.signature_algorithm.oid.to_string().as_str() {
+        "1.2.840.113549.1.1.11" => Some(RsaDigestKind::Sha256),
+        "1.2.840.113549.1.1.12" => Some(RsaDigestKind::Sha384),
+        "1.2.840.113549.1.1.13" => Some(RsaDigestKind::Sha512),
+        _ => None,
+    }
+}
+
 unsafe fn x509_name_legacy_object(name: &x509_cert::name::Name) -> f64 {
     let attr_count = name.0.iter().map(|rdn| rdn.0.len()).sum::<usize>() as u32;
     let obj = js_object_alloc(0, attr_count);
@@ -635,6 +644,79 @@ unsafe fn x509_to_legacy_object(handle: &X509Handle) -> f64 {
     nanbox_ptr(obj)
 }
 
+unsafe fn x509_asymmetric_key_meta(value: f64) -> Option<(u8, u8)> {
+    let bits = value.to_bits();
+    let js = JSValue::from_bits(bits);
+    if !js.is_any_string() || (bits >> 48) as u16 != 0x7FFF {
+        return None;
+    }
+    let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
+    if ptr.is_null() || (ptr as usize) < 0x1000 {
+        return None;
+    }
+    perry_runtime::buffer::asymmetric_key_meta(ptr as usize)
+}
+
+fn throw_x509_pkey_type_error(value: f64) -> ! {
+    let message = format!(
+        "The \"pkey\" argument must be an instance of KeyObject. Received {}",
+        perry_runtime::fs::validate::describe_received(value)
+    );
+    perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn throw_x509_pkey_value_error(kind: u8) -> ! {
+    let received = if kind == 2 {
+        "PrivateKeyObject {}"
+    } else {
+        "KeyObject {}"
+    };
+    let message = format!("The argument 'pkey' is invalid. Received {received}");
+    perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE")
+}
+
+unsafe fn x509_verify_value(handle: &X509Handle, args: &[f64]) -> f64 {
+    use x509_cert::der::Encode;
+
+    let key_value = args
+        .first()
+        .copied()
+        .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
+    let Some((kind, _asym_type)) = x509_asymmetric_key_meta(key_value) else {
+        throw_x509_pkey_type_error(key_value);
+    };
+    if kind != 1 {
+        throw_x509_pkey_value_error(kind);
+    }
+
+    let alg = match x509_rsa_signature_digest(&handle.cert) {
+        Some(alg) => alg,
+        None => return js_bool(false),
+    };
+    let pem = match crypto_key_input_to_public_pem(key_value.to_bits()) {
+        Some(pem) => pem,
+        None => return js_bool(false),
+    };
+    let public_key = match parse_rsa_public_key_pem(&pem) {
+        Some(key) => key,
+        None => return js_bool(false),
+    };
+    let tbs_der = match handle.cert.tbs_certificate.to_der() {
+        Ok(der) => der,
+        Err(_) => return js_bool(false),
+    };
+    let signature = match handle
+        .cert
+        .signature
+        .as_bytes()
+        .and_then(|bytes| RsaPkcs1v15Signature::try_from(bytes).ok())
+    {
+        Some(signature) => signature,
+        None => return js_bool(false),
+    };
+    js_bool(verify_rsa_data(alg, public_key, &tbs_der, &signature))
+}
+
 fn throw_x509_parse_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = perry_runtime::error::js_error_new_with_message(msg);
@@ -729,7 +811,13 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
     use sha2::{Digest, Sha256, Sha512};
     if matches!(
         property,
-        "toString" | "toJSON" | "toLegacyObject" | "checkHost" | "checkEmail" | "checkIP"
+        "toString"
+            | "toJSON"
+            | "toLegacyObject"
+            | "checkHost"
+            | "checkEmail"
+            | "checkIP"
+            | "verify"
     ) {
         return dispatch_x509_method_property(handle, property);
     }
@@ -818,6 +906,7 @@ pub unsafe fn dispatch_x509_method(handle: i64, method: &str, args: &[f64]) -> f
             Some(value) => x509_string_f64(&value),
             None => nanbox_undefined(),
         },
+        "verify" => x509_verify_value(h, args),
         _ => nanbox_undefined(),
     }
 }
@@ -846,6 +935,7 @@ pub unsafe fn dispatch_x509_method_property(handle: i64, property: &str) -> f64 
         "checkHost" => b"checkHost",
         "checkEmail" => b"checkEmail",
         "checkIP" => b"checkIP",
+        "verify" => b"verify",
         _ => return nanbox_undefined(),
     };
     let this_f64 =
