@@ -220,6 +220,10 @@ crates/perry-runtime/src/object/object_ops.rs
 # http live-message + ClientRequest header-state surface additions (#4152/#4159).
 # Splitting per message-kind family is tracked under #1435.
 crates/perry-codegen/src/lower_call/native_table/http.rs
+# child_process module root (spawn/exec/fork dispatch + reactor wiring). Crossed
+# the 2000-line gate after the stdio `'ignore'` handling additions. Splitting the
+# spawn/exec/fork families into sibling modules is tracked under #1435.
+crates/perry-runtime/src/child_process/mod.rs
 EOF
 )
 
