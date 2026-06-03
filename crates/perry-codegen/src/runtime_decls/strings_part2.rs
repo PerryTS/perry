@@ -525,6 +525,10 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         I64,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function("js_webcrypto_encapsulate_bits_unimplemented", I64, &[I64]);
+    module.declare_function("js_webcrypto_decapsulate_bits_unimplemented", I64, &[I64]);
+    module.declare_function("js_webcrypto_encapsulate_key_unimplemented", I64, &[I64]);
+    module.declare_function("js_webcrypto_decapsulate_key_unimplemented", I64, &[I64]);
     // `zlib.createBrotliDecompress(options?)` — axios feature-check
     // shim. Returns a registered Buffer-shaped handle (NaN-boxed at
     // the call site).

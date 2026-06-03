@@ -2969,6 +2969,45 @@ extern "C" fn subtle_crypto_supports_thunk(
     }
 }
 
+fn subtle_crypto_dispatch_rest(method: &'static str, rest: f64) -> f64 {
+    let args = global_this_rest_array_values(rest);
+    let ptr = crate::value::JS_NATIVE_WEBCRYPTO_DISPATCH.load(Ordering::SeqCst);
+    if ptr.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+        unsafe { std::mem::transmute(ptr) };
+    unsafe { dispatch(method.as_ptr(), method.len(), args.as_ptr(), args.len()) }
+}
+
+extern "C" fn subtle_crypto_encapsulate_bits_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    subtle_crypto_dispatch_rest("encapsulateBits", rest)
+}
+
+extern "C" fn subtle_crypto_decapsulate_bits_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    subtle_crypto_dispatch_rest("decapsulateBits", rest)
+}
+
+extern "C" fn subtle_crypto_encapsulate_key_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    subtle_crypto_dispatch_rest("encapsulateKey", rest)
+}
+
+extern "C" fn subtle_crypto_decapsulate_key_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    subtle_crypto_dispatch_rest("decapsulateKey", rest)
+}
+
 /// Install a single callable static method on a constructor closure as a
 /// `{ writable: true, enumerable: false, configurable: true }` data property
 /// (matching Node's descriptors for built-in statics). `has_rest` registers
@@ -4000,6 +4039,49 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                     proto_obj,
                     name,
                     cryptokey_property_getter_thunk as *const u8,
+                );
+            }
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "SubtleCrypto" => {
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "encapsulateBits",
+                subtle_crypto_encapsulate_bits_thunk as *const u8,
+                2,
+                0,
+            );
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "decapsulateBits",
+                subtle_crypto_decapsulate_bits_thunk as *const u8,
+                3,
+                0,
+            );
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "encapsulateKey",
+                subtle_crypto_encapsulate_key_thunk as *const u8,
+                5,
+                0,
+            );
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "decapsulateKey",
+                subtle_crypto_decapsulate_key_thunk as *const u8,
+                6,
+                0,
+            );
+            for name in [
+                "encapsulateBits",
+                "decapsulateBits",
+                "encapsulateKey",
+                "decapsulateKey",
+            ] {
+                super::set_builtin_property_attrs(
+                    proto_obj as usize,
+                    name.to_string(),
+                    super::PropertyAttrs::new(true, true, true),
                 );
             }
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);

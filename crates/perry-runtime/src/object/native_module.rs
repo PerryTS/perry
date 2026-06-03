@@ -3546,6 +3546,10 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("crypto", "Cipheriv" | "Decipheriv") => Some(4),
         ("crypto", "KeyObject") => Some(2),
         ("crypto.KeyObject", "from") => Some(1),
+        ("crypto.subtle", "encapsulateBits") => Some(2),
+        ("crypto.subtle", "decapsulateBits") => Some(3),
+        ("crypto.subtle", "encapsulateKey") => Some(5),
+        ("crypto.subtle", "decapsulateKey") => Some(6),
         // #2706/#2716 and #2694: crypto module-level callable exports.
         ("crypto", "DiffieHellman") => Some(4),
         ("crypto", "DiffieHellmanGroup") => Some(1),
@@ -5131,7 +5135,11 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
                     | "decrypt"
                     | "generateKey"
                     | "wrapKey"
-                    | "unwrapKey",
+                    | "unwrapKey"
+                    | "encapsulateBits"
+                    | "decapsulateBits"
+                    | "encapsulateKey"
+                    | "decapsulateKey",
             )
             | ("buffer.Buffer", "from")
             | ("buffer.Buffer", "alloc")

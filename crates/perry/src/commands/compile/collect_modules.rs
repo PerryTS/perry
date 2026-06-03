@@ -1769,6 +1769,7 @@ fn collect_module_finish(
             || hir_debug.contains("WebCryptoGenerateKey")
             || hir_debug.contains("WebCryptoWrapKey")
             || hir_debug.contains("WebCryptoUnwrapKey")
+            || hir_debug.contains("module: \"crypto.subtle\"")
             // `globalThis.crypto` / bare `crypto` now materializes the
             // WebCrypto singleton. Its `randomUUID` property dispatches
             // through perry-stdlib's crypto bridge when called via a

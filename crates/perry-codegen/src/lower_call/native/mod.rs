@@ -378,6 +378,28 @@ pub(crate) fn lower_native_method_call(
         return Ok(ctx.block().call(DOUBLE, runtime, &[(DOUBLE, &input)]));
     }
 
+    if module == "crypto.subtle"
+        && object.is_none()
+        && matches!(
+            method,
+            "encapsulateBits" | "decapsulateBits" | "encapsulateKey" | "decapsulateKey"
+        )
+    {
+        for arg in args {
+            let _ = lower_expr(ctx, arg)?;
+        }
+        let runtime = match method {
+            "encapsulateBits" => "js_webcrypto_encapsulate_bits_unimplemented",
+            "decapsulateBits" => "js_webcrypto_decapsulate_bits_unimplemented",
+            "encapsulateKey" => "js_webcrypto_encapsulate_key_unimplemented",
+            "decapsulateKey" => "js_webcrypto_decapsulate_key_unimplemented",
+            _ => unreachable!(),
+        };
+        let present = args.len().to_string();
+        let promise = ctx.block().call(I64, runtime, &[(I64, &present)]);
+        return Ok(nanbox_pointer_inline(ctx.block(), &promise));
+    }
+
     // `perry/ui.App({ title, width, height, body, icon? })` — minimum-viable
     // dispatch so a perry/ui app actually launches an NSApplication and
     // shows a window. Pre-v0.5.10 this fell into the receiver-less early-

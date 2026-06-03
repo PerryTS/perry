@@ -287,7 +287,7 @@ fn required_capability(expr: &Expr) -> Option<(&'static str, &'static str)> {
         // hard-coded above).
         Expr::NativeMethodCall { module, .. } => match module.as_str() {
             "child_process" => ("proc:exec", "child_process.<call>"),
-            "crypto" => ("crypto", "crypto.<call>"),
+            "crypto" | "crypto.subtle" => ("crypto", "crypto.<call>"),
             "fs" => ("fs:read", "fs.<call>"),
             _ => return None,
         },

@@ -254,6 +254,16 @@ pub(super) fn try_web_crypto_subtle(
                                             usages: Box::new(usages),
                                         }));
                                     }
+                                    "encapsulateBits" | "decapsulateBits" | "encapsulateKey"
+                                    | "decapsulateKey" => {
+                                        return Ok(Ok(Expr::NativeMethodCall {
+                                            module: "crypto.subtle".to_string(),
+                                            class_name: None,
+                                            object: None,
+                                            method: method.to_string(),
+                                            args,
+                                        }));
+                                    }
                                     _ => {
                                         // Unsupported subtle method —
                                         // fail loudly. The supported
