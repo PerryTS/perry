@@ -50,3 +50,46 @@ fn user_class_tojson_calls_stay_generic() {
         "ordinary method-name control should stay generic too: {debug}"
     );
 }
+
+#[test]
+fn unknown_tojson_receiver_stays_generic() {
+    let debug = lower_debug(
+        r#"
+        function makeBuilder(): any {
+            return {};
+        }
+
+        const command: any = makeBuilder();
+        const out = command.toJSON();
+        "#,
+    );
+
+    assert!(
+        !debug.contains("DateToJSON"),
+        "unknown toJSON receivers must not lower to DateToJSON: {debug}"
+    );
+    assert!(
+        debug.contains("property: \"toJSON\""),
+        "unknown direct toJSON calls should stay generic: {debug}"
+    );
+}
+
+#[test]
+fn known_date_tojson_stays_date_intrinsic() {
+    let debug = lower_debug(
+        r#"
+        const inferred = new Date(0);
+        const annotated: Date = new Date(0);
+        const out = {
+            inline: new Date(0).toJSON(),
+            inferred: inferred.toJSON(),
+            annotated: annotated.toJSON(),
+        };
+        "#,
+    );
+
+    assert!(
+        debug.contains("DateToJSON"),
+        "known Date toJSON calls should still lower to DateToJSON: {debug}"
+    );
+}
