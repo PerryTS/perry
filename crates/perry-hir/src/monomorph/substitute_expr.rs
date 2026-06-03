@@ -638,6 +638,9 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         Expr::StringFromCharCode(code) => {
             Expr::StringFromCharCode(Box::new(substitute_expr(code, substitutions)))
         }
+        Expr::StringFromCharCodeSpread(code) => {
+            Expr::StringFromCharCodeSpread(Box::new(substitute_expr(code, substitutions)))
+        }
 
         // Map operations
         Expr::MapNew => Expr::MapNew,

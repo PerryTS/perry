@@ -666,7 +666,9 @@ where
                 f(v);
             }
         }
-        Expr::StringFromCharCode(v) | Expr::StringFromCodePoint(v) => {
+        Expr::StringFromCharCode(v)
+        | Expr::StringFromCharCodeSpread(v)
+        | Expr::StringFromCodePoint(v) => {
             f(v);
         }
         Expr::StringRaw {
