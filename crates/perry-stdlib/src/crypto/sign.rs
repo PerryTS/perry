@@ -376,6 +376,259 @@ pub unsafe extern "C" fn js_crypto_create_public_key_value(key_bits: f64) -> *mu
     ptr
 }
 
+const KO_USAGE_ENCRYPT: u32 = 1 << 0;
+const KO_USAGE_DECRYPT: u32 = 1 << 1;
+const KO_USAGE_SIGN: u32 = 1 << 2;
+const KO_USAGE_VERIFY: u32 = 1 << 3;
+const KO_USAGE_DERIVE_KEY: u32 = 1 << 4;
+const KO_USAGE_DERIVE_BITS: u32 = 1 << 5;
+const KO_USAGE_WRAP_KEY: u32 = 1 << 6;
+const KO_USAGE_UNWRAP_KEY: u32 = 1 << 7;
+
+unsafe fn keyobject_string_value(value: &str) -> f64 {
+    let ptr = js_string_from_bytes(value.as_ptr(), value.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+unsafe fn throw_keyobject_dom_exception(name: &str, message: &str) -> ! {
+    let err = perry_runtime::event_target::js_dom_exception_new(
+        keyobject_string_value(message),
+        keyobject_string_value(name),
+    );
+    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+}
+
+unsafe fn throw_keyobject_usage_type_error() -> ! {
+    perry_runtime::fs::validate::throw_type_error_with_code(
+        "Value cannot be converted to sequence.",
+        "ERR_INVALID_ARG_TYPE",
+    )
+}
+
+unsafe fn keyobject_algorithm_name(bits: u64) -> Option<String> {
+    string_from_jsvalue(bits).or_else(|| object_field_string(bits, b"name"))
+}
+
+fn keyobject_hash_id(name: &str) -> Option<u8> {
+    let normalized = name
+        .chars()
+        .filter(|ch| *ch != '-')
+        .flat_map(char::to_uppercase)
+        .collect::<String>();
+    match normalized.as_str() {
+        "SHA1" => Some(1),
+        "SHA256" => Some(2),
+        "SHA384" => Some(3),
+        "SHA512" => Some(4),
+        _ => None,
+    }
+}
+
+unsafe fn keyobject_algorithm_hash(bits: u64) -> Option<u8> {
+    let hash_bits = object_field_bits(bits, b"hash")?;
+    if let Some(hash) = string_from_jsvalue(hash_bits) {
+        return keyobject_hash_id(&hash);
+    }
+    object_field_string(hash_bits, b"name").and_then(|hash| keyobject_hash_id(&hash))
+}
+
+unsafe fn keyobject_named_curve_is_p256(bits: u64) -> bool {
+    let Some(curve) = object_field_string(bits, b"namedCurve") else {
+        return false;
+    };
+    let upper = curve.to_ascii_uppercase();
+    matches!(upper.as_str(), "P-256" | "PRIME256V1" | "SECP256R1")
+}
+
+fn keyobject_usage_bit(name: &str) -> Option<u32> {
+    match name {
+        "encrypt" => Some(KO_USAGE_ENCRYPT),
+        "decrypt" => Some(KO_USAGE_DECRYPT),
+        "sign" => Some(KO_USAGE_SIGN),
+        "verify" => Some(KO_USAGE_VERIFY),
+        "deriveKey" => Some(KO_USAGE_DERIVE_KEY),
+        "deriveBits" => Some(KO_USAGE_DERIVE_BITS),
+        "wrapKey" => Some(KO_USAGE_WRAP_KEY),
+        "unwrapKey" => Some(KO_USAGE_UNWRAP_KEY),
+        _ => None,
+    }
+}
+
+unsafe fn keyobject_usage_bits(bits: u64) -> Option<u32> {
+    if perry_runtime::array::js_array_is_array(f64::from_bits(bits)).to_bits()
+        != JSValue::bool(true).bits()
+    {
+        return None;
+    }
+    let arr_addr = bits & 0x0000_FFFF_FFFF_FFFF;
+    if arr_addr < 0x1000 {
+        return None;
+    }
+    let arr = arr_addr as *const perry_runtime::ArrayHeader;
+    let len = perry_runtime::array::js_array_length(arr);
+    let mut usages = 0u32;
+    for i in 0..len {
+        let item = perry_runtime::array::js_array_get(arr, i);
+        let name = string_from_jsvalue(item.bits())?;
+        usages |= keyobject_usage_bit(&name)?;
+    }
+    Some(usages)
+}
+
+fn keyobject_supported_usages(algo_id: u8, kind_id: u8) -> u32 {
+    match (algo_id, kind_id) {
+        (8 | 12 | 14, 2) => KO_USAGE_SIGN,
+        (8 | 12 | 14, 3) => KO_USAGE_VERIFY,
+        (9, 2) => KO_USAGE_DERIVE_KEY | KO_USAGE_DERIVE_BITS,
+        (9, 3) => 0,
+        (13, 2) => KO_USAGE_DECRYPT | KO_USAGE_UNWRAP_KEY,
+        (13, 3) => KO_USAGE_ENCRYPT | KO_USAGE_WRAP_KEY,
+        _ => 0,
+    }
+}
+
+unsafe fn keyobject_validate_usages(algo_name: &str, algo_id: u8, kind_id: u8, bits: u64) -> u32 {
+    let usages = match keyobject_usage_bits(bits) {
+        Some(usages) => usages,
+        None => throw_keyobject_usage_type_error(),
+    };
+    let supported = keyobject_supported_usages(algo_id, kind_id);
+    if usages & !supported != 0 {
+        let article = if algo_name.starts_with("RSA") || algo_name.starts_with("RSASSA") {
+            "an"
+        } else {
+            "a"
+        };
+        let message = format!("Unsupported key usage for {article} {algo_name} key");
+        throw_keyobject_dom_exception("SyntaxError", &message);
+    }
+    if usages == 0 && kind_id == 2 {
+        throw_keyobject_dom_exception(
+            "SyntaxError",
+            "Usages cannot be empty when importing a private key.",
+        );
+    }
+    usages
+}
+
+fn keyobject_rsa_der(pem: &str, kind_id: u8) -> Option<Vec<u8>> {
+    use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
+
+    if kind_id == 2 {
+        return parse_rsa_private_key_pem(pem)
+            .and_then(|key| key.to_pkcs8_der().ok().map(|der| der.as_bytes().to_vec()));
+    }
+    parse_rsa_public_key_pem(pem).and_then(|key| {
+        key.to_public_key_der()
+            .ok()
+            .map(|der| der.as_bytes().to_vec())
+    })
+}
+
+fn keyobject_p256_bytes(pem: &str, kind_id: u8) -> Option<Vec<u8>> {
+    if kind_id == 2 {
+        return parse_p256_signing_key_pem(pem).map(|key| key.to_bytes().as_slice().to_vec());
+    }
+    parse_p256_verifying_key_pem(pem).map(|key| key.to_encoded_point(false).as_bytes().to_vec())
+}
+
+/// Private runtime hook for asymmetric `KeyObject#toCryptoKey()`.
+///
+/// The runtime owns method dispatch for string-backed KeyObject surrogates,
+/// while stdlib owns key parsing and DER/SEC1 encoding. The receiver arrives
+/// as `key_bits`; the remaining args match Node's
+/// `toCryptoKey(algorithm, extractable, keyUsages)`.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_keyobject_to_crypto_key(
+    key_bits: f64,
+    algorithm_bits: f64,
+    extractable_bits: f64,
+    usages_bits: f64,
+) -> f64 {
+    let key_ptr = perry_runtime::js_get_string_pointer_unified(key_bits) as *const StringHeader;
+    if key_ptr.is_null() || (key_ptr as usize) < 0x1000 {
+        throw_keyobject_dom_exception("InvalidAccessError", "Key is not a valid KeyObject");
+    }
+    let Some((asym_kind_id, asym_type)) =
+        perry_runtime::buffer::asymmetric_key_meta(key_ptr as usize)
+    else {
+        throw_keyobject_dom_exception("InvalidAccessError", "Key is not a valid KeyObject");
+    };
+    let crypto_kind_id = if asym_kind_id == 2 { 2 } else { 3 };
+
+    let Some(algo_name) = keyobject_algorithm_name(algorithm_bits.to_bits()) else {
+        throw_keyobject_dom_exception("NotSupportedError", "Unrecognized algorithm name");
+    };
+    let upper = algo_name.to_ascii_uppercase();
+    let (algo_id, hash_id) = match upper.as_str() {
+        "RSASSA-PKCS1-V1_5" => (12, keyobject_algorithm_hash(algorithm_bits.to_bits())),
+        "RSA-OAEP" => (13, keyobject_algorithm_hash(algorithm_bits.to_bits())),
+        "RSA-PSS" => (14, keyobject_algorithm_hash(algorithm_bits.to_bits())),
+        "ECDSA" if keyobject_named_curve_is_p256(algorithm_bits.to_bits()) => (8, Some(2)),
+        "ECDH" if keyobject_named_curve_is_p256(algorithm_bits.to_bits()) => (9, Some(2)),
+        "ECDSA" | "ECDH" => {
+            throw_keyobject_dom_exception("DataError", "Named curve mismatch");
+        }
+        _ => throw_keyobject_dom_exception("NotSupportedError", "Unrecognized algorithm name"),
+    };
+    let Some(hash_id) = hash_id else {
+        perry_runtime::fs::validate::throw_type_error_with_code(
+            "Failed to normalize algorithm: missing hash",
+            "ERR_MISSING_OPTION",
+        );
+    };
+
+    if (matches!(algo_id, 12 | 13 | 14) && asym_type != 1)
+        || (matches!(algo_id, 8 | 9) && asym_type != 2)
+    {
+        throw_keyobject_dom_exception("DataError", "Key algorithm mismatch");
+    }
+
+    let usages = keyobject_validate_usages(
+        crypto_key_algorithm_name_for_id(algo_id),
+        algo_id,
+        crypto_kind_id,
+        usages_bits.to_bits(),
+    );
+    let pem = match String::from_utf8(bytes_from_ptr(key_ptr as i64)) {
+        Ok(pem) => pem,
+        Err(_) => throw_keyobject_dom_exception("DataError", "Key data is invalid"),
+    };
+    let key_bytes = if asym_type == 1 {
+        keyobject_rsa_der(&pem, crypto_kind_id)
+    } else {
+        keyobject_p256_bytes(&pem, crypto_kind_id)
+    };
+    let Some(key_bytes) = key_bytes else {
+        throw_keyobject_dom_exception("OperationError", "The operation failed");
+    };
+
+    let buf = alloc_buffer_from_slice(&key_bytes);
+    if buf.is_null() {
+        throw_keyobject_dom_exception("OperationError", "The operation failed");
+    }
+    perry_runtime::buffer::js_buffer_mark_as_crypto_key_external(
+        buf as usize,
+        algo_id,
+        hash_id,
+        crypto_kind_id,
+        u8::from(js_truthy(extractable_bits)),
+        usages,
+    );
+    f64::from_bits(JSValue::pointer(buf as *const u8).bits())
+}
+
+fn crypto_key_algorithm_name_for_id(algo_id: u8) -> &'static str {
+    match algo_id {
+        8 => "ECDSA",
+        9 => "ECDH",
+        12 => "RSASSA-PKCS1-v1_5",
+        13 => "RSA-OAEP",
+        14 => "RSA-PSS",
+        _ => "",
+    }
+}
+
 /// crypto.generateKeyPairSync("rsa", options) -> { publicKey, privateKey }.
 ///
 /// This covers the high-value Node/Bun shape where `publicKeyEncoding` and

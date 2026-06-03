@@ -316,6 +316,7 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
         "generateKeySync" => {
             pointer_value(js_crypto_generate_key_sync(str_ptr(0), arg(1)) as *mut u8)
         }
+        "keyObjectToCryptoKey" => js_crypto_keyobject_to_crypto_key(arg(0), arg(1), arg(2), arg(3)),
         "generatePrime" if args_len >= 3 => js_crypto_generate_prime_async(arg(0), arg(1), arg(2)),
         "generatePrime" | "generatePrimeSync" => js_crypto_generate_prime_sync(arg(0), arg(1)),
         "checkPrime" if args_len >= 3 => js_crypto_check_prime_async(arg(0), arg(1), arg(2)),

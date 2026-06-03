@@ -1475,6 +1475,28 @@ pub unsafe extern "C" fn js_native_call_method(
                     let eq = crate::string::js_string_equals(s_ptr, other_ptr) != 0;
                     return f64::from_bits(JSValue::bool(eq).bits());
                 }
+                "toCryptoKey" if crate::buffer::asymmetric_key_meta(s_ptr as usize).is_some() => {
+                    let ptr = crate::value::JS_NATIVE_CRYPTO_DISPATCH
+                        .load(std::sync::atomic::Ordering::SeqCst);
+                    if ptr.is_null() {
+                        return f64::from_bits(JSValue::undefined().bits());
+                    }
+                    let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                        std::mem::transmute(ptr);
+                    let undefined = f64::from_bits(JSValue::undefined().bits());
+                    let mut call_args = Vec::with_capacity(4);
+                    call_args.push(object_handle.get_nanbox_f64());
+                    call_args.push(arg_at(0).unwrap_or(undefined));
+                    call_args.push(arg_at(1).unwrap_or(undefined));
+                    call_args.push(arg_at(2).unwrap_or(undefined));
+                    let method = b"keyObjectToCryptoKey";
+                    return dispatch(
+                        method.as_ptr(),
+                        method.len(),
+                        call_args.as_ptr(),
+                        call_args.len(),
+                    );
+                }
                 "at" => {
                     return crate::string::js_string_at(s_ptr, arg_i32(0));
                 }
