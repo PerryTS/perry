@@ -453,6 +453,61 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // dynamic key. Anything else is a no-op stub returning true.
         Expr::Delete(operand) => {
             match operand.as_ref() {
+                Expr::WithGet {
+                    object,
+                    property,
+                    fallback,
+                } => {
+                    let obj = lower_expr(ctx, object)?;
+                    let (_key_box, key_raw) = emit_with_key(ctx, property);
+                    let has = ctx.block().call(
+                        I32,
+                        "js_with_has_binding",
+                        &[(DOUBLE, &obj), (I64, &key_raw)],
+                    );
+                    let has_bool = ctx.block().icmp_ne(I32, &has, "0");
+
+                    let hit_idx = ctx.new_block("with.delete.hit");
+                    let miss_idx = ctx.new_block("with.delete.miss");
+                    let merge_idx = ctx.new_block("with.delete.merge");
+                    let hit_label = ctx.block_label(hit_idx);
+                    let miss_label = ctx.block_label(miss_idx);
+                    let merge_label = ctx.block_label(merge_idx);
+                    ctx.block().cond_br(&has_bool, &hit_label, &miss_label);
+
+                    ctx.current_block = hit_idx;
+                    let deleted = ctx.block().call(
+                        I32,
+                        "js_with_delete_binding",
+                        &[(DOUBLE, &obj), (I64, &key_raw)],
+                    );
+                    let deleted_bit = ctx.block().icmp_ne(I32, &deleted, "0");
+                    let hit_tagged = ctx.block().select(
+                        crate::types::I1,
+                        &deleted_bit,
+                        I64,
+                        crate::nanbox::TAG_TRUE_I64,
+                        crate::nanbox::TAG_FALSE_I64,
+                    );
+                    let hit = ctx.block().bitcast_i64_to_double(&hit_tagged);
+                    let hit_after = ctx.block().label.clone();
+                    if !ctx.block().is_terminated() {
+                        ctx.block().br(&merge_label);
+                    }
+
+                    ctx.current_block = miss_idx;
+                    let fallback_delete = Expr::Delete(fallback.clone());
+                    let miss = lower_expr(ctx, &fallback_delete)?;
+                    let miss_after = ctx.block().label.clone();
+                    if !ctx.block().is_terminated() {
+                        ctx.block().br(&merge_label);
+                    }
+
+                    ctx.current_block = merge_idx;
+                    Ok(ctx
+                        .block()
+                        .phi(DOUBLE, &[(&hit, &hit_after), (&miss, &miss_after)]))
+                }
                 // #1344: `delete process.env.X` must unset the real OS
                 // environment, not just the cached env dict — reads lower to
                 // `EnvGet` → `js_getenv_value` → `std::env::var`, so a generic

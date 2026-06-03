@@ -35,6 +35,15 @@ function makeWithReader() {
 
 check("arrow captures with object environment", makeWithReader()() === 10);
 
+var deleteResult = false;
+var deleteScope = { deleteTarget: 1 };
+with (deleteScope) {
+  deleteResult = delete deleteTarget;
+}
+
+check("with delete identifier returns true", deleteResult === true);
+check("with delete identifier removes object binding", !("deleteTarget" in deleteScope));
+
 var count = 0;
 var scope = { x: 1 };
 with (scope) {

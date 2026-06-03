@@ -56,6 +56,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_with_has_binding", I32, &[DOUBLE, I64]);
     module.declare_function("js_with_get_binding", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_with_set_binding", DOUBLE, &[DOUBLE, I64, DOUBLE, I32]);
+    module.declare_function("js_with_delete_binding", I32, &[DOUBLE, I64]);
     module.declare_function("js_pod_scalar_write_compatible", I32, &[DOUBLE, I32]);
     module.declare_function(
         "js_typed_feedback_register_site",

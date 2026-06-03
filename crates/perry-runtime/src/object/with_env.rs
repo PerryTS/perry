@@ -87,3 +87,9 @@ pub extern "C" fn js_with_set_binding(
     js_object_set_field_by_name(ptr, key, value);
     value
 }
+
+#[no_mangle]
+pub extern "C" fn js_with_delete_binding(bindings: f64, key: *const StringHeader) -> i32 {
+    let ptr = object_ptr(bindings);
+    js_object_delete_field(ptr, key)
+}
