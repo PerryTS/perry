@@ -114,6 +114,19 @@ pub(super) fn cp_read_spawn_sync_run_options(opts_val: f64) -> CpRunOptions {
     options
 }
 
+/// Read sync exec options, including explicit stdio policies that affect
+/// return and thrown-error output slots.
+pub(super) fn cp_read_sync_stdio_run_options(opts_val: f64) -> CpRunOptions {
+    let mut options = cp_read_run_options(opts_val);
+    let stdio = cp_read_stdio(opts_val, 3);
+    options.stdio = [
+        stdio.first().copied().unwrap_or(CpStdio::Pipe),
+        stdio.get(1).copied().unwrap_or(CpStdio::Pipe),
+        stdio.get(2).copied().unwrap_or(CpStdio::Pipe),
+    ];
+    options
+}
+
 /// Read async buffered limits. Unlike the sync helpers, async `exec` and
 /// `execFile` do not have a documented `input` option, so only timing and
 /// buffer limits are consumed here.

@@ -37,7 +37,7 @@ use std::sync::{
 
 use sync_run::{
     cp_read_async_run_options, cp_read_run_options, cp_read_spawn_sync_run_options,
-    cp_run_to_completion, CpRun, CpRunError, CpRunOptions,
+    cp_read_sync_stdio_run_options, cp_run_to_completion, CpRun, CpRunError, CpRunOptions,
 };
 
 use crate::closure::{
@@ -393,13 +393,13 @@ pub extern "C" fn js_child_process_exec_sync(
     };
     cp_apply_options(&mut command, opts_val);
 
-    let run_options = cp_read_run_options(opts_val);
+    let run_options = cp_read_sync_stdio_run_options(opts_val);
     let run = cp_run_to_completion(command, &run_options);
-    let stdout_box = cp_box_output(&run.stdout, &mode);
+    let stdout_box = cp_box_run_output(&run.stdout, run.stdout_piped, &mode);
     if run.success() {
         return stdout_box;
     }
-    let stderr_box = cp_box_output(&run.stderr, &mode);
+    let stderr_box = cp_box_run_output(&run.stderr, run.stderr_piped, &mode);
     cp_sync_throw_error(&run, &cmd_str, stdout_box, stderr_box);
 }
 
@@ -1846,6 +1846,14 @@ fn cp_box_output(bytes: &[u8], mode: &CpOutput) -> f64 {
     }
 }
 
+fn cp_box_run_output(bytes: &[u8], piped: bool, mode: &CpOutput) -> f64 {
+    if piped {
+        cp_box_output(bytes, mode)
+    } else {
+        TAG_NULL_F64
+    }
+}
+
 /// Decoded exit disposition of a finished child.
 struct CpExit {
     /// Exit code when the child exited normally; `None` when killed by signal.
@@ -2239,14 +2247,14 @@ pub extern "C" fn js_child_process_exec_file_sync(
     command.args(&arg_strs);
     cp_apply_argv0(&mut command, opts_val);
     cp_apply_options(&mut command, opts_val);
-    let run_options = cp_read_run_options(opts_val);
+    let run_options = cp_read_sync_stdio_run_options(opts_val);
     let run = cp_run_to_completion(command, &run_options);
 
-    let stdout_box = cp_box_output(&run.stdout, &mode);
+    let stdout_box = cp_box_run_output(&run.stdout, run.stdout_piped, &mode);
     if run.success() {
         return stdout_box;
     }
-    let stderr_box = cp_box_output(&run.stderr, &mode);
+    let stderr_box = cp_box_run_output(&run.stderr, run.stderr_piped, &mode);
     cp_sync_throw_error(
         &run,
         &cp_file_cmd_display(&file_str, &arg_strs),
