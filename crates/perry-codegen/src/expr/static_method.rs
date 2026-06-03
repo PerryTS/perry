@@ -88,7 +88,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return Ok(nanbox_pointer_inline(blk, &signal_handle));
             }
             let key = (class_name.clone(), method_name.clone());
-            if let Some(fn_name) = ctx.methods.get(&key).cloned() {
+            if let Some(fn_name) = ctx.static_methods.get(&key).cloned() {
                 let mut lowered: Vec<String> = Vec::with_capacity(args.len());
                 for a in args {
                     lowered.push(lower_expr(ctx, a)?);

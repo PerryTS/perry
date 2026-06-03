@@ -204,6 +204,10 @@ pub(crate) struct FnCtx<'a> {
     /// `lower_call` to dispatch `obj.method(args)` to the right
     /// `perry_method_<class>_<name>` function.
     pub methods: &'a std::collections::HashMap<(String, String), String>,
+    /// Static method registry: `(class_name, method_name) → LLVM function name`.
+    /// Kept separate from instance methods so a class can define both
+    /// `static foo()` and `foo()` without either symbol clobbering the other.
+    pub static_methods: &'a std::collections::HashMap<(String, String), String>,
     /// Module-level globals: `LocalId → global symbol name (without @)`.
     /// Built by `compile_module` from top-level `Stmt::Let` declarations
     /// in `hir.init`. Used by `LocalGet`/`LocalSet`/`Update`/`Stmt::Let`

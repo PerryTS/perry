@@ -1590,6 +1590,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // which mangled function name to call for `obj.method(args)`. Method
     // names are also scoped by module prefix.
     let mut method_names: HashMap<(String, String), String> = HashMap::new();
+    let mut static_method_names: HashMap<(String, String), String> = HashMap::new();
     for c in class_table.values() {
         // Use the source module prefix for imported classes so the method
         // symbol name matches where the method was actually compiled.
@@ -1631,12 +1632,17 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             } else {
                 scoped_method_name(class_prefix, mangle_class_name, &member.function.name)
             };
-            method_names.insert(
+            let target_methods = if member.is_static {
+                &mut static_method_names
+            } else {
+                &mut method_names
+            };
+            target_methods.insert(
                 (c.name.clone(), member.function.name.clone()),
                 llvm_name.clone(),
             );
             for alias in &c.aliases {
-                method_names
+                target_methods
                     .entry((alias.clone(), member.function.name.clone()))
                     .or_insert_with(|| llvm_name.clone());
             }
@@ -1675,14 +1681,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 ),
             );
         }
-        // Static methods. Registered under their plain method name
-        // so `Counter.increment()` (StaticMethodCall) can look them
-        // up the same way as instance methods, but emitted as
-        // `perry_static_<modprefix>__<class>__<method>` (no `this`).
-        // The class/method names are sanitized so private methods
-        // (`#helper`) produce a valid LLVM identifier.
+        // Static methods live in their own registry so `static create()` and
+        // instance `create()` can coexist on the same class.
         for sm in &c.static_methods {
-            method_names.insert(
+            static_method_names.insert(
                 (c.name.clone(), sm.name.clone()),
                 format!(
                     "perry_static_{}__{}__{}",
@@ -1793,7 +1795,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
 
         // Cross-module static methods. Source module emits these as
         // `perry_static_<source_prefix>__<class>__<method>` (no `this`
-        // receiver). Register them in `method_names` under the same
+        // receiver). Register them in `static_method_names` under the same
         // (class, method) key the StaticMethodCall lowering looks up.
         for sm in &ic.static_method_names {
             let llvm_fn = format!(
@@ -1802,7 +1804,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 sanitize(&ic.name),
                 sanitize(sm),
             );
-            method_names
+            static_method_names
                 .entry((effective_name.to_string(), sm.clone()))
                 .or_insert_with(|| llvm_fn.clone());
             // Declare conservatively with 6 double params; LLVM's direct-call
@@ -2211,6 +2213,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             &mut strings,
             &class_table,
             &method_names,
+            &static_method_names,
             &module_globals,
             &module_global_types,
             &opts.import_function_prefixes,
@@ -2340,6 +2343,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         module_global_types: &module_global_types,
         static_field_globals: &static_field_globals,
         method_names: &method_names,
+        static_method_names: &static_method_names,
         func_names: &func_names,
         func_signatures: &func_signatures,
         func_synthetic_arguments: &func_synthetic_arguments,

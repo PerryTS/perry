@@ -631,7 +631,7 @@ pub(super) fn init_static_fields_late(
             {
                 continue;
             }
-            if let Some(llvm_name) = ctx.methods.get(&key).cloned() {
+            if let Some(llvm_name) = ctx.static_methods.get(&key).cloned() {
                 ctx.block().call(DOUBLE, &llvm_name, &[]);
             }
         }

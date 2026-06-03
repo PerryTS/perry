@@ -1013,7 +1013,11 @@ pub fn try_lower_property_get_method_call(
                     .iter()
                     .find(|m| m.name == *property);
                 if let Some(sm) = sm {
-                    if let Some(fname) = ctx.methods.get(&(c.clone(), property.clone())).cloned() {
+                    if let Some(fname) = ctx
+                        .static_methods
+                        .get(&(c.clone(), property.clone()))
+                        .cloned()
+                    {
                         let declared = sm.params.len();
                         let has_rest = sm.params.last().map(|p| p.is_rest).unwrap_or(false);
                         let is_synth_args = sm
@@ -1773,7 +1777,7 @@ pub fn try_lower_property_get_method_call(
                 break;
             }
             let key = (cur.clone(), property.clone());
-            if let Some(fname) = ctx.methods.get(&key).cloned() {
+            if let Some(fname) = ctx.static_methods.get(&key).cloned() {
                 static_fn = Some(fname);
                 break;
             }
@@ -1826,7 +1830,7 @@ pub fn try_lower_property_get_method_call(
                         break;
                     }
                     let key = (c.clone(), property.clone());
-                    if let Some(fname) = ctx.methods.get(&key).cloned() {
+                    if let Some(fname) = ctx.static_methods.get(&key).cloned() {
                         sub_fn = Some(fname);
                         break;
                     }

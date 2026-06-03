@@ -1,5 +1,5 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
-use perry_hir::{Function, Module, ModuleInitKind, Stmt};
+use perry_hir::{Class, Function, Module, ModuleInitKind, Stmt};
 use perry_types::Type;
 
 fn empty_opts() -> CompileOptions {
@@ -99,6 +99,36 @@ fn module_with_duplicate_local_function_names() -> Module {
     }
 }
 
+fn class_with_static_and_instance_create() -> Class {
+    Class {
+        id: 1,
+        name: "PackageJson".to_string(),
+        type_params: Vec::new(),
+        extends: None,
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        fields: Vec::new(),
+        constructor: None,
+        methods: vec![function(10, "create")],
+        getters: Vec::new(),
+        setters: Vec::new(),
+        computed_members: Vec::new(),
+        static_fields: Vec::new(),
+        static_methods: vec![function(11, "create")],
+        decorators: Vec::new(),
+        is_exported: false,
+        aliases: Vec::new(),
+    }
+}
+
+fn module_with_static_and_instance_method_name_collision() -> Module {
+    let mut module = module_with_duplicate_local_function_names();
+    module.functions = Vec::new();
+    module.classes = vec![class_with_static_and_instance_create()];
+    module
+}
+
 #[test]
 fn duplicate_local_function_names_get_unique_llvm_symbols() {
     let ir = String::from_utf8(
@@ -123,5 +153,32 @@ fn duplicate_local_function_names_get_unique_llvm_symbols() {
         )
         .count(),
         2
+    );
+}
+
+#[test]
+fn static_method_name_does_not_clobber_instance_method_symbol() {
+    let ir = String::from_utf8(
+        compile_module(
+            &module_with_static_and_instance_method_name_collision(),
+            empty_opts(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        ir.matches(
+            "define double @perry_method_duplicate_function_symbols_ts__PackageJson__create("
+        )
+        .count(),
+        1
+    );
+    assert_eq!(
+        ir.matches(
+            "define double @perry_static_duplicate_function_symbols_ts__PackageJson__create("
+        )
+        .count(),
+        1
     );
 }
