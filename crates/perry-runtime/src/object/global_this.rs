@@ -1037,15 +1037,7 @@ extern "C" fn object_prototype_has_own_property_thunk(
     key: f64,
 ) -> f64 {
     let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
-    unsafe {
-        super::js_native_call_method(
-            this_value,
-            b"hasOwnProperty".as_ptr() as *const i8,
-            "hasOwnProperty".len(),
-            &key as *const f64,
-            1,
-        )
-    }
+    super::object_ops::js_object_has_own(this_value, key)
 }
 
 extern "C" fn object_prototype_property_is_enumerable_thunk(
