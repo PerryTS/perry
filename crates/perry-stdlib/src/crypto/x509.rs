@@ -175,7 +175,141 @@ fn x509_subject_common_names(cert: &x509_cert::Certificate) -> Vec<String> {
     names
 }
 
-fn x509_check_host_value(cert: &x509_cert::Certificate, name: &str) -> Option<String> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum X509HostSubject {
+    Default,
+    Always,
+    Never,
+}
+
+struct X509CheckHostOptions {
+    subject: X509HostSubject,
+    wildcards: bool,
+    partial_wildcards: bool,
+    multi_label_wildcards: bool,
+}
+
+impl Default for X509CheckHostOptions {
+    fn default() -> Self {
+        Self {
+            subject: X509HostSubject::Default,
+            wildcards: true,
+            partial_wildcards: true,
+            multi_label_wildcards: false,
+        }
+    }
+}
+
+unsafe fn x509_object_field(value: f64, name: &[u8]) -> Option<f64> {
+    let js = JSValue::from_bits(value.to_bits());
+    if !js.is_pointer() {
+        return None;
+    }
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    Some(f64::from_bits(
+        js_object_get_field_by_name(js.as_pointer::<ObjectHeader>(), key).bits(),
+    ))
+}
+
+unsafe fn x509_options_bool(opts: f64, name: &[u8], default: bool) -> bool {
+    let Some(value) = x509_object_field(opts, name) else {
+        return default;
+    };
+    let js = JSValue::from_bits(value.to_bits());
+    if js.is_bool() {
+        js.as_bool()
+    } else {
+        default
+    }
+}
+
+unsafe fn x509_check_host_options(args: &[f64]) -> X509CheckHostOptions {
+    let mut options = X509CheckHostOptions::default();
+    let opts = args
+        .get(1)
+        .copied()
+        .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
+
+    if let Some(subject) =
+        x509_object_field(opts, b"subject").and_then(|value| string_from_jsvalue(value.to_bits()))
+    {
+        options.subject = match subject.as_str() {
+            "always" => X509HostSubject::Always,
+            "never" => X509HostSubject::Never,
+            _ => X509HostSubject::Default,
+        };
+    }
+
+    options.wildcards = x509_options_bool(opts, b"wildcards", true);
+    options.partial_wildcards = x509_options_bool(opts, b"partialWildcards", true);
+    options.multi_label_wildcards = x509_options_bool(opts, b"multiLabelWildcards", false);
+    options
+}
+
+fn x509_label_count(value: &str) -> usize {
+    value.split('.').filter(|label| !label.is_empty()).count()
+}
+
+fn x509_host_suffix_matches(host: &str, suffix: &str, options: &X509CheckHostOptions) -> bool {
+    if x509_label_count(suffix) < 2 {
+        return false;
+    }
+    if !host.ends_with(suffix) {
+        return false;
+    }
+    let prefix = &host[..host.len() - suffix.len()];
+    if !prefix.ends_with('.') {
+        return false;
+    }
+    let prefix = &prefix[..prefix.len() - 1];
+    if prefix.is_empty() {
+        return false;
+    }
+    options.multi_label_wildcards || !prefix.contains('.')
+}
+
+fn x509_dns_name_matches(candidate: &str, host: &str, options: &X509CheckHostOptions) -> bool {
+    let candidate = candidate.to_ascii_lowercase();
+    let host = host.to_ascii_lowercase();
+    if candidate == host {
+        return true;
+    }
+    if !options.wildcards {
+        return false;
+    }
+
+    if let Some(suffix) = candidate.strip_prefix("*.") {
+        return x509_host_suffix_matches(&host, suffix, options);
+    }
+
+    if !options.partial_wildcards {
+        return false;
+    }
+    let Some((candidate_label, candidate_suffix)) = candidate.split_once('.') else {
+        return false;
+    };
+    let Some((host_label, host_suffix)) = host.split_once('.') else {
+        return false;
+    };
+    if candidate_suffix != host_suffix || x509_label_count(candidate_suffix) < 2 {
+        return false;
+    }
+    let Some(star_index) = candidate_label.find('*') else {
+        return false;
+    };
+    if candidate_label[star_index + 1..].contains('*') {
+        return false;
+    }
+    let prefix = &candidate_label[..star_index];
+    let suffix = &candidate_label[star_index + 1..];
+    !host_label.is_empty() && host_label.starts_with(prefix) && host_label.ends_with(suffix)
+}
+
+fn x509_check_host_value(
+    cert: &x509_cert::Certificate,
+    name: &str,
+    options: &X509CheckHostOptions,
+) -> Option<String> {
     use x509_cert::ext::pkix::name::GeneralName;
 
     let mut saw_dns_san = false;
@@ -186,19 +320,21 @@ fn x509_check_host_value(cert: &x509_cert::Certificate, name: &str) -> Option<St
             };
             saw_dns_san = true;
             let candidate = value.as_str();
-            if candidate.eq_ignore_ascii_case(name) {
+            if x509_dns_name_matches(candidate, name, options) {
                 return Some(candidate.to_string());
             }
         }
     }
 
-    if saw_dns_san {
+    if options.subject == X509HostSubject::Never
+        || (saw_dns_san && options.subject != X509HostSubject::Always)
+    {
         return None;
     }
 
     x509_subject_common_names(cert)
         .into_iter()
-        .find(|candidate| candidate.eq_ignore_ascii_case(name))
+        .find(|candidate| x509_dns_name_matches(candidate, name, options))
 }
 
 fn x509_check_email_value(cert: &x509_cert::Certificate, email: &str) -> Option<String> {
@@ -490,7 +626,9 @@ pub unsafe fn dispatch_x509_method(handle: i64, method: &str, args: &[f64]) -> f
     match method {
         "toString" | "toJSON" => x509_string_f64(&x509_der_to_pem(&h.der)),
         "checkHost" => {
-            match x509_check_host_value(&h.cert, &x509_required_string_arg(args, "name")) {
+            let options = x509_check_host_options(args);
+            match x509_check_host_value(&h.cert, &x509_required_string_arg(args, "name"), &options)
+            {
                 Some(value) => x509_string_f64(&value),
                 None => nanbox_undefined(),
             }
