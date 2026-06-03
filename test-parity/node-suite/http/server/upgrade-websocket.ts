@@ -26,12 +26,18 @@ function unmaskedTextFrame(text: string) {
   return Buffer.concat([Buffer.from([0x81, payload.length]), payload]);
 }
 
-function readServerTextFrame(buf: Buffer) {
-  const start = buf.indexOf(Buffer.from([0x81]));
-  if (start < 0 || start + 2 > buf.length) return "";
-  const len = buf[start + 1] & 0x7f;
-  if (start + 2 + len > buf.length) return "";
-  return buf.slice(start + 2, start + 2 + len).toString("utf8");
+function readServerFrame(buf: Buffer) {
+  if (buf.length < 2) return null;
+  const opcode = buf[0] & 0x0f;
+  const len = buf[1] & 0x7f;
+  if (len >= 126) return null;
+  const frameLength = 2 + len;
+  if (buf.length < frameLength) return null;
+  return {
+    opcode,
+    text: opcode === 1 ? buf.slice(2, frameLength).toString("utf8") : "",
+    bytes: frameLength,
+  };
 }
 
 function readClientTextFrame(frame: Buffer) {
@@ -107,11 +113,15 @@ client.on("data", (chunk: Buffer) => {
     pending = pending.slice(marker + 4);
     client.write(maskedTextFrame("hello"));
   }
-  const text = readServerTextFrame(pending);
-  if (text) {
-    console.log("client-frame:", text);
-    client.end();
-    server.close();
+  while (pending.length > 0) {
+    const frame = readServerFrame(pending);
+    if (!frame) break;
+    pending = pending.slice(frame.bytes);
+    if (frame.text) {
+      console.log("client-frame:", frame.text);
+      client.end();
+      server.close();
+    }
   }
 });
 
