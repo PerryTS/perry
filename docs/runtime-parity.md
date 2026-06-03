@@ -1174,8 +1174,8 @@ Available via `require('node:dns/promises')` or `dns.promises`.
 #### Functions
 | API | Node.js | Bun | Notes |
 |-----|---------|-----|-------|
-| `crypto.checkPrime(candidate[, options], callback)` | ✓ | ✓ |  |
-| `crypto.checkPrimeSync(candidate[, options])` | ✓ | ✓ |  |
+| `crypto.checkPrime(candidate[, options], callback)` | ✓ | ✓ | Buffer/ArrayBuffer-compatible and BigInt prime parity fixture |
+| `crypto.checkPrimeSync(candidate[, options])` | ✓ | ✓ | Buffer/ArrayBuffer-compatible and BigInt prime parity fixture |
 | `crypto.createCipheriv(algorithm, key, iv[, options])` | ✓ | ✓ |  |
 | `crypto.createDecipheriv(algorithm, key, iv[, options])` | ✓ | ✓ |  |
 | `crypto.createDiffieHellman(prime[, primeEncoding][, generator][, generatorEncoding])` | ✓ | ✓ |  |
@@ -1194,8 +1194,8 @@ Available via `require('node:dns/promises')` or `dns.promises`.
 | `crypto.generateKeySync(type, options)` | ✓ | ✓ |  |
 | `crypto.generateKeyPair(type, options, callback)` | ✓ | ✓ |  |
 | `crypto.generateKeyPairSync(type, options)` | ✓ | ✓ |  |
-| `crypto.generatePrime(size[, options], callback)` | ✓ | ✓ |  |
-| `crypto.generatePrimeSync(size[, options])` | ✓ | ✓ |  |
+| `crypto.generatePrime(size[, options], callback)` | ✓ | ✓ | Buffer/ArrayBuffer-compatible and BigInt prime parity fixture |
+| `crypto.generatePrimeSync(size[, options])` | ✓ | ✓ | Buffer/ArrayBuffer-compatible and BigInt prime parity fixture |
 | `crypto.getCipherInfo(nameOrNid[, options])` | ✓ | ✓ |  |
 | `crypto.getCiphers()` | ✓ | ✓ |  |
 | `crypto.getCurves()` | ✓ | ✓ |  |

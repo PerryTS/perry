@@ -439,7 +439,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // crypto.getHashes() / getCiphers() -> string[]; returns *mut ArrayHeader.
     module.declare_function("js_crypto_get_hashes", I64, &[]);
     module.declare_function("js_crypto_get_ciphers", I64, &[]);
-    module.declare_function("js_crypto_generate_prime_sync", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_crypto_generate_prime_sync", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function(
         "js_crypto_generate_prime_async",
         DOUBLE,

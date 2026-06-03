@@ -1095,12 +1095,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ));
             }
             if is_generate {
-                let buf = blk.call(
-                    I64,
+                Ok(blk.call(
+                    DOUBLE,
                     "js_crypto_generate_prime_sync",
                     &[(DOUBLE, &first_box), (DOUBLE, &options_box)],
-                );
-                Ok(nanbox_pointer_inline(blk, &buf))
+                ))
             } else {
                 Ok(blk.call(
                     DOUBLE,

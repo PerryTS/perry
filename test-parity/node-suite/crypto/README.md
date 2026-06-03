@@ -20,4 +20,4 @@ The cases in this directory are curated from the upstream Node.js `test/parallel
 - Exact DER/PEM encrypted key import/export variants and OpenSSL-specific error codes.
 - WebCrypto P-384/P-521, Ed448/X448, AES-OCB, ChaCha20-Poly1305, PQC/KMAC/Argon2 surfaces.
 - Exact `CryptoKey`/`KeyObject.toCryptoKey()` asymmetric object identity/prototype behavior.
-- Large-prime/BigInt prime generation parity beyond the practical deterministic coverage in this suite.
+- OpenSSL-specific prime generation internals and exhaustive option/error validation.

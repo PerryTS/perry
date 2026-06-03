@@ -387,12 +387,10 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 
 ### node:crypto
 
-**Gap APIs: 128** · Already covered: 10
+**Gap APIs: 124** · Already covered: 14
 
 #### Missing from Perry
 
-- `crypto.checkPrime(candidate[, options], callback)`
-- `crypto.checkPrimeSync(candidate[, options])`
 - `crypto.createCipheriv(algorithm, key, iv[, options])`
 - `crypto.createDecipheriv(algorithm, key, iv[, options])`
 - `crypto.createDiffieHellman(prime[, primeEncoding][, generator][, generatorEncoding])`
@@ -409,8 +407,6 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `crypto.generateKeySync(type, options)`
 - `crypto.generateKeyPair(type, options, callback)`
 - `crypto.generateKeyPairSync(type, options)`
-- `crypto.generatePrime(size[, options], callback)`
-- `crypto.generatePrimeSync(size[, options])`
 - `crypto.getCipherInfo(nameOrNid[, options])`
 - `crypto.getCiphers()`
 - `crypto.getCurves()`
@@ -447,8 +443,12 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 
 | API | Coverage source |
 |-----|-----------------|
+| `crypto.checkPrime(candidate[, options], callback)` | `manifest:crypto.checkPrime`; `ffi:js_crypto_check_prime_async`; `test-parity/node-suite/crypto/prime/generate-check.ts` |
+| `crypto.checkPrimeSync(candidate[, options])` | `manifest:crypto.checkPrimeSync`; `ffi:js_crypto_check_prime_sync`; `test-parity/node-suite/crypto/prime/generate-check.ts` |
 | `crypto.createHash(algorithm[, options])` | `manifest:crypto.createHash` |
 | `crypto.createHmac(algorithm, key[, options])` | `manifest:crypto.createHmac` |
+| `crypto.generatePrime(size[, options], callback)` | `manifest:crypto.generatePrime`; `ffi:js_crypto_generate_prime_async`; `test-parity/node-suite/crypto/prime/generate-check.ts` |
+| `crypto.generatePrimeSync(size[, options])` | `manifest:crypto.generatePrimeSync`; `ffi:js_crypto_generate_prime_sync`; `test-parity/node-suite/crypto/prime/generate-check.ts` |
 | `crypto.getRandomValues(typedArray)` | `manifest:crypto.getRandomValues` |
 | `crypto.pbkdf2(password, salt, iterations, keylen, digest, callback)` | `manifest:crypto.pbkdf2` |
 | `crypto.pbkdf2Sync(password, salt, iterations, keylen, digest)` | `manifest:crypto.pbkdf2Sync` |
