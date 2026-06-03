@@ -505,6 +505,18 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
         ast::Expr::Bin(bin) => {
             // Handle 'in' operator: property in object
             if matches!(bin.op, ast::BinaryOp::In) {
+                if let ast::Expr::PrivateName(private) = bin.left.as_ref() {
+                    let class_name = ctx.current_class.clone().ok_or_else(|| {
+                        anyhow!("Private name brand check is only supported inside a class")
+                    })?;
+                    let field_name = format!("#{}", private.name);
+                    let object = Box::new(lower_expr(ctx, &bin.right)?);
+                    return Ok(Expr::PrivateBrandCheck {
+                        class_name,
+                        field_name,
+                        object,
+                    });
+                }
                 // Proxy fast path: `key in proxy` routes through js_proxy_has.
                 if let ast::Expr::Ident(obj_ident) = bin.right.as_ref() {
                     let obj_name = obj_ident.sym.to_string();
@@ -1813,15 +1825,21 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 .iter()
                 .map(|member| class_computed_member_registration_expr(&synthetic_name, member))
                 .collect();
+            let captured_args: Vec<Expr> = ctx
+                .lookup_class_captures(&synthetic_name)
+                .map(|ids| ids.iter().map(|id| Expr::LocalGet(*id)).collect())
+                .unwrap_or_default();
             ctx.pending_classes.push(class);
             // #1772: a class EXPRESSION that carries per-evaluation static
             // fields and is NOT a mixin (`class extends <expr>`) lowers to a
             // fresh heap class object per evaluation (`ClassExprFresh`), so
             // `make(a) !== make(b)` and each holds its own statics as own
-            // properties. Mixins and static-less class expressions keep the
-            // historical (shared-template) path.
+            // properties. Mixins and class expressions without statics/captures
+            // keep the historical (shared-template) path.
             if parent_expr.is_none()
-                && (!named_statics.is_empty() || !static_symbol_registrations.is_empty())
+                && (!named_statics.is_empty()
+                    || !static_symbol_registrations.is_empty()
+                    || !captured_args.is_empty())
             {
                 // #1787: snapshot the class's captured outer-scope values so a
                 // later `new <classObjectValue>()` can run the instance-field
@@ -1831,10 +1849,6 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 // captured outer id, in `captures_vec` order — read them back in
                 // that same order as `LocalGet(outer_id)`, evaluated here where
                 // the captures are still live.
-                let captured_args: Vec<Expr> = ctx
-                    .lookup_class_captures(&synthetic_name)
-                    .map(|ids| ids.iter().map(|id| Expr::LocalGet(*id)).collect())
-                    .unwrap_or_default();
                 let fresh_expr = Expr::ClassExprFresh {
                     template: synthetic_name,
                     named_statics,

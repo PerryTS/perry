@@ -1480,6 +1480,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ArrayShift(..)
         | Expr::SetNew
         | Expr::In { .. }
+        | Expr::PrivateBrandCheck { .. }
         | Expr::ParseInt { .. }
         | Expr::ParseFloat(..)
         | Expr::RegExp { .. }

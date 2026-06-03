@@ -637,6 +637,9 @@ where
             f(property);
             f(object);
         }
+        Expr::PrivateBrandCheck { object, .. } => {
+            f(object);
+        }
         Expr::FsWriteFileSync(a, b)
         | Expr::FsAppendFileSync(a, b)
         | Expr::PathJoin(a, b)

@@ -4000,6 +4000,52 @@ mod sso_tests_1781 {
     }
 }
 
+#[no_mangle]
+pub extern "C" fn js_private_brand_check(
+    obj: f64,
+    declaring_class_id: u32,
+    field_name_ptr: *const u8,
+    field_name_len: u32,
+) -> f64 {
+    let false_value = f64::from_bits(crate::value::TAG_FALSE);
+    let true_value = f64::from_bits(crate::value::TAG_TRUE);
+    if declaring_class_id == 0 || field_name_ptr.is_null() || field_name_len == 0 {
+        return false_value;
+    }
+
+    let value = JSValue::from_bits(obj.to_bits());
+    if !value.is_pointer() {
+        return false_value;
+    }
+    let obj_ptr = value.as_pointer::<ObjectHeader>();
+    if obj_ptr.is_null() {
+        return false_value;
+    }
+
+    let obj_class_id = js_object_get_class_id(obj_ptr);
+    if obj_class_id == 0 {
+        return false_value;
+    }
+
+    let mut cur = obj_class_id;
+    let mut has_declaring_brand = false;
+    for _ in 0..32 {
+        if cur == declaring_class_id {
+            has_declaring_brand = true;
+            break;
+        }
+        match super::class_registry::get_parent_class_id(cur) {
+            Some(parent) if parent != 0 && parent != cur => cur = parent,
+            _ => break,
+        }
+    }
+    if !has_declaring_brand {
+        return false_value;
+    }
+
+    true_value
+}
+
 #[cfg(test)]
 mod buffer_ic_miss_tests {
     use super::*;

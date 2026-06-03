@@ -241,6 +241,15 @@ pub enum Expr {
         property: Box<Expr>,
         object: Box<Expr>,
     },
+    /// Private-name brand check: `#field in obj`.
+    ///
+    /// This is intentionally separate from `In { property: "#field", ... }`
+    /// so ordinary public string keys cannot satisfy private-field syntax.
+    PrivateBrandCheck {
+        class_name: String,
+        field_name: String,
+        object: Box<Expr>,
+    },
 
     // Await expression (for async functions)
     Await(Box<Expr>),
