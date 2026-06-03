@@ -30,10 +30,10 @@ unsafe fn supports_generate_key(algorithm_bits: u64, algorithm: &str) -> bool {
         "HMAC" | "AES-GCM" | "AES-CBC" | "AES-CTR" | "AES-KW" => object_form,
         "ECDSA" | "ECDH" => {
             object_form
-                && matches!(
-                    algorithm_curve(algorithm_bits).as_deref(),
-                    Some("P-256" | "PRIME256V1" | "SECP256R1")
-                )
+                && algorithm_curve(algorithm_bits)
+                    .as_deref()
+                    .and_then(parse_ec_named_curve)
+                    .is_some()
         }
         _ => false,
     }
@@ -45,10 +45,10 @@ unsafe fn supports_import_key(algorithm_bits: u64, algorithm: &str) -> bool {
             true
         }
         "HMAC" => algorithm_is_object(algorithm_bits),
-        "ECDSA" | "ECDH" => matches!(
-            algorithm_curve(algorithm_bits).as_deref(),
-            Some("P-256" | "PRIME256V1" | "SECP256R1")
-        ),
+        "ECDSA" | "ECDH" => algorithm_curve(algorithm_bits)
+            .as_deref()
+            .and_then(parse_ec_named_curve)
+            .is_some(),
         "RSA-OAEP" | "RSA-PSS" | "RSASSA-PKCS1-V1_5" => algorithm_is_object(algorithm_bits),
         _ => false,
     }

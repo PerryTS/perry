@@ -4875,6 +4875,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "p521"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fc9e2161f1f215afdfce23677034ae137bbd45016a880c2eb3ba8eb95f085b2"
+dependencies = [
+ "base16ct",
+ "ecdsa",
+ "elliptic-curve",
+ "primeorder",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "pango"
 version = "0.20.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5689,6 +5702,8 @@ dependencies = [
  "nanoid",
  "once_cell",
  "p256",
+ "p384",
+ "p521",
  "pbkdf2 0.13.0",
  "perry-container-compose",
  "perry-runtime",
