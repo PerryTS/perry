@@ -2898,6 +2898,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("crypto", "DiffieHellman"),
     class("crypto", "DiffieHellmanGroup"),
     method("crypto", "diffieHellman", false, None),
+    method("crypto", "encapsulate", false, None),
+    method("crypto", "decapsulate", false, None),
     method("crypto", "createPrivateKey", false, None),
     method("crypto", "createPublicKey", false, None),
     method("crypto", "generateKeyPairSync", false, None),

@@ -722,6 +722,71 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &secret))
         }
 
+        // `crypto.encapsulate(publicKey[, callback])` — currently covers the
+        // high-value X25519 KEM path using Perry's KeyObject surrogate.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "encapsulate" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.is_empty() {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let key = lower_expr(ctx, &args[0])?;
+            if let Some(callback) = args.get(1) {
+                let callback = lower_expr(ctx, callback)?;
+                let blk = ctx.block();
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_crypto_encapsulate_async",
+                    &[(DOUBLE, &key), (DOUBLE, &callback)],
+                ))
+            } else {
+                let blk = ctx.block();
+                let result = blk.call(I64, "js_crypto_encapsulate", &[(DOUBLE, &key)]);
+                Ok(nanbox_pointer_inline(blk, &result))
+            }
+        }
+
+        // `crypto.decapsulate(privateKey, ciphertext[, callback])` — X25519
+        // ciphertexts return the recovered shared key Buffer.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "decapsulate" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 2 {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let key = lower_expr(ctx, &args[0])?;
+            let ciphertext = lower_expr(ctx, &args[1])?;
+            if let Some(callback) = args.get(2) {
+                let callback = lower_expr(ctx, callback)?;
+                let blk = ctx.block();
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_crypto_decapsulate_async",
+                    &[(DOUBLE, &key), (DOUBLE, &ciphertext), (DOUBLE, &callback)],
+                ))
+            } else {
+                let blk = ctx.block();
+                let shared = blk.call(
+                    I64,
+                    "js_crypto_decapsulate",
+                    &[(DOUBLE, &key), (DOUBLE, &ciphertext)],
+                );
+                Ok(nanbox_pointer_inline(blk, &shared))
+            }
+        }
+
         // Standalone `crypto.createHmac(alg, key)` / legacy
         // callable `crypto.Hmac(alg, key)` — same shape as
         // `createHash` above. Closes #1076 for the `const h = createHmac(...)`

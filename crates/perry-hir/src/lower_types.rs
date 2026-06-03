@@ -1146,9 +1146,8 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                     // it requires walking nested calls.
                     if obj_name == "crypto" {
                         return match method_name {
-                            "randomBytes" | "scryptSync" | "pbkdf2Sync" | "argon2Sync" => {
-                                Type::Named("Uint8Array".to_string())
-                            }
+                            "randomBytes" | "scryptSync" | "pbkdf2Sync" | "argon2Sync"
+                            | "decapsulate" => Type::Named("Uint8Array".to_string()),
                             "randomUUID" => Type::String,
                             // `crypto.randomInt(...)` is an integer; typing it
                             // as Number lets arithmetic / comparisons take the

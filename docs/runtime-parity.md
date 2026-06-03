@@ -1226,10 +1226,10 @@ Available via `require('node:dns/promises')` or `dns.promises`.
 | `crypto.sign(algorithm, data, key[, callback])` | ✓ | ✓ |  |
 | `crypto.timingSafeEqual(a, b)` | ✓ | ✓ |  |
 | `crypto.verify(algorithm, data, key, signature[, callback])` | ✓ | ✓ |  |
-| `crypto.argon2(algorithm, parameters, callback)` | ✓ | ⚠ | New v22+ |
-| `crypto.argon2Sync(algorithm, parameters)` | ✓ | ⚠ | New v22+ |
-| `crypto.encapsulate(key[, callback])` | ✓ | ⚠ | New PQC API |
-| `crypto.decapsulate(key, ciphertext[, callback])` | ✓ | ⚠ | New PQC API |
+| `crypto.argon2(algorithm, parameters, callback)` | ✓ | ⚠ | Argon2 KDF parity fixture |
+| `crypto.argon2Sync(algorithm, parameters)` | ✓ | ⚠ | Argon2 KDF parity fixture |
+| `crypto.encapsulate(key[, callback])` | ✓ | ⚠ | X25519 KeyObject-surrogate KEM parity fixture |
+| `crypto.decapsulate(key, ciphertext[, callback])` | ✓ | ⚠ | X25519 KeyObject-surrogate KEM parity fixture |
 
 #### Module Properties
 | Property | Node.js | Bun | Notes |

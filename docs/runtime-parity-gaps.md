@@ -394,10 +394,6 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `crypto.sign(algorithm, data, key[, callback])`
 - `crypto.timingSafeEqual(a, b)`
 - `crypto.verify(algorithm, data, key, signature[, callback])`
-- `crypto.argon2(algorithm, parameters, callback)`
-- `crypto.argon2Sync(algorithm, parameters)`
-- `crypto.encapsulate(key[, callback])`
-- `crypto.decapsulate(key, ciphertext[, callback])`
 - `crypto.constants`
 - `crypto.fips`
 - … and 78 more (see `runtime-parity.md` for the full list)
@@ -406,10 +402,14 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 
 | API | Coverage source |
 |-----|-----------------|
+| `crypto.argon2(algorithm, parameters, callback)` | `manifest:crypto.argon2`; `ffi:js_crypto_argon2_async`; `test-parity/node-suite/crypto/argon2/kdf.ts` |
+| `crypto.argon2Sync(algorithm, parameters)` | `manifest:crypto.argon2Sync`; `ffi:js_crypto_argon2_sync`; `test-parity/node-suite/crypto/argon2/kdf.ts` |
 | `crypto.checkPrime(candidate[, options], callback)` | `manifest:crypto.checkPrime`; `ffi:js_crypto_check_prime_async`; `test-parity/node-suite/crypto/prime/generate-check.ts` |
 | `crypto.checkPrimeSync(candidate[, options])` | `manifest:crypto.checkPrimeSync`; `ffi:js_crypto_check_prime_sync`; `test-parity/node-suite/crypto/prime/generate-check.ts` |
 | `crypto.createHash(algorithm[, options])` | `manifest:crypto.createHash` |
 | `crypto.createHmac(algorithm, key[, options])` | `manifest:crypto.createHmac` |
+| `crypto.decapsulate(key, ciphertext[, callback])` | `manifest:crypto.decapsulate`; `ffi:js_crypto_decapsulate`; `test-parity/node-suite/crypto/kem/x25519.ts` |
+| `crypto.encapsulate(key[, callback])` | `manifest:crypto.encapsulate`; `ffi:js_crypto_encapsulate`; `test-parity/node-suite/crypto/kem/x25519.ts` |
 | `crypto.generatePrime(size[, options], callback)` | `manifest:crypto.generatePrime`; `ffi:js_crypto_generate_prime_async`; `test-parity/node-suite/crypto/prime/generate-check.ts` |
 | `crypto.generatePrimeSync(size[, options])` | `manifest:crypto.generatePrimeSync`; `ffi:js_crypto_generate_prime_sync`; `test-parity/node-suite/crypto/prime/generate-check.ts` |
 | `crypto.getRandomValues(typedArray)` | `manifest:crypto.getRandomValues` |

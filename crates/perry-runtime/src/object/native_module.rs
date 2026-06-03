@@ -3537,6 +3537,8 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("crypto", "DiffieHellman") => Some(4),
         ("crypto", "DiffieHellmanGroup") => Some(1),
         ("crypto", "diffieHellman") => Some(2),
+        ("crypto", "encapsulate") => Some(2),
+        ("crypto", "decapsulate") => Some(3),
         ("crypto", "generateKey" | "generateKeyPair" | "generatePrime") => Some(3),
         ("crypto", "generateKeySync" | "generateKeyPairSync") => Some(2),
         ("crypto", "generatePrimeSync" | "checkPrime" | "checkPrimeSync" | "setFips") => Some(1),
@@ -5375,6 +5377,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("crypto", "DiffieHellmanGroup")
             | ("crypto", "getDiffieHellman")
             | ("crypto", "diffieHellman")
+            | ("crypto", "encapsulate")
+            | ("crypto", "decapsulate")
             | ("crypto", "createPrivateKey")
             | ("crypto", "createPublicKey")
             | ("crypto", "generateKeyPairSync")

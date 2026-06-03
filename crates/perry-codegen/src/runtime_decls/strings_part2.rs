@@ -374,6 +374,14 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     );
     module.declare_function("js_crypto_argon2_sync", I64, &[I64, DOUBLE]);
     module.declare_function("js_crypto_argon2_async", DOUBLE, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_crypto_encapsulate", I64, &[DOUBLE]);
+    module.declare_function("js_crypto_encapsulate_async", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_crypto_decapsulate", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_crypto_decapsulate_async",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function(
         "js_crypto_hkdf_bytes_alg",
         I64,

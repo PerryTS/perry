@@ -291,6 +291,10 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
             js_crypto_get_diffie_hellman(arg(0))
         }
         "diffieHellman" => pointer_value(js_crypto_diffie_hellman(arg(0)) as *mut u8),
+        "encapsulate" if args_len >= 2 => js_crypto_encapsulate_async(arg(0), arg(1)),
+        "encapsulate" => pointer_value(js_crypto_encapsulate(arg(0)) as *mut u8),
+        "decapsulate" if args_len >= 3 => js_crypto_decapsulate_async(arg(0), arg(1), arg(2)),
+        "decapsulate" => pointer_value(js_crypto_decapsulate(arg(0), arg(1)) as *mut u8),
         "randomUUID" => f64::from_bits(JSValue::string_ptr(js_crypto_random_uuid(arg(0))).bits()),
         "randomUUIDv7" => f64::from_bits(JSValue::string_ptr(js_crypto_random_uuidv7()).bits()),
         "randomBytes" => {

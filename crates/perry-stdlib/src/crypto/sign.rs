@@ -577,3 +577,101 @@ pub unsafe extern "C" fn js_crypto_diffie_hellman(
     let secret = private.diffie_hellman(&public);
     alloc_buffer_from_slice(secret.as_bytes())
 }
+
+unsafe fn nanbox_buffer_from_slice(bytes: &[u8]) -> f64 {
+    let buf = alloc_buffer_from_slice(bytes);
+    if buf.is_null() {
+        f64::from_bits(JSValue::undefined().bits())
+    } else {
+        f64::from_bits(JSValue::pointer(buf as *const u8).bits())
+    }
+}
+
+/// `crypto.encapsulate(publicKey)` for Perry's X25519 KeyObject surrogate.
+///
+/// Node returns `{ sharedKey, ciphertext }` where the ciphertext is the
+/// ephemeral public key. Decapsulation with the private key recomputes the
+/// same X25519 shared secret.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_encapsulate(key_val: f64) -> *mut ObjectHeader {
+    let public_value = match crypto_key_input_to_public_pem(key_val.to_bits()) {
+        Some(value) => value,
+        None => return js_object_alloc(0, 0),
+    };
+    let public = match parse_x25519_public_surrogate(&public_value) {
+        Some(public) => public,
+        None => return js_object_alloc(0, 0),
+    };
+    let mut seed = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut seed);
+    let private = x25519_dalek::StaticSecret::from(seed);
+    let ephemeral_public = x25519_dalek::PublicKey::from(&private);
+    let peer_public = x25519_dalek::PublicKey::from(public);
+    let shared = private.diffie_hellman(&peer_public);
+
+    let obj = js_object_alloc(0, 2);
+    set_object_value_field(
+        obj,
+        b"sharedKey",
+        nanbox_buffer_from_slice(shared.as_bytes()),
+    );
+    set_object_value_field(
+        obj,
+        b"ciphertext",
+        nanbox_buffer_from_slice(ephemeral_public.as_bytes()),
+    );
+    obj
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_encapsulate_async(key_val: f64, callback_bits: f64) -> f64 {
+    let result = js_crypto_encapsulate(key_val);
+    let value = if result.is_null() {
+        f64::from_bits(JSValue::undefined().bits())
+    } else {
+        f64::from_bits(JSValue::pointer(result as *const u8).bits())
+    };
+    call_node_style_callback2(callback_bits, f64::from_bits(JSValue::null().bits()), value);
+    f64::from_bits(JSValue::undefined().bits())
+}
+
+/// `crypto.decapsulate(privateKey, ciphertext)` for X25519 ciphertexts.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_decapsulate(
+    key_val: f64,
+    ciphertext_val: f64,
+) -> *mut perry_runtime::buffer::BufferHeader {
+    let private_value = match crypto_key_input_to_private_pem(key_val.to_bits()) {
+        Some(value) => value,
+        None => return alloc_buffer_from_slice(&[]),
+    };
+    let private = match parse_x25519_private_surrogate(&private_value) {
+        Some(private) => private,
+        None => return alloc_buffer_from_slice(&[]),
+    };
+    let ciphertext = crypto_value_bytes(ciphertext_val);
+    let ciphertext: [u8; 32] = match ciphertext.as_slice().try_into() {
+        Ok(bytes) => bytes,
+        Err(_) => return alloc_buffer_from_slice(&[]),
+    };
+    let private = x25519_dalek::StaticSecret::from(private);
+    let public = x25519_dalek::PublicKey::from(ciphertext);
+    let secret = private.diffie_hellman(&public);
+    alloc_buffer_from_slice(secret.as_bytes())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_decapsulate_async(
+    key_val: f64,
+    ciphertext_val: f64,
+    callback_bits: f64,
+) -> f64 {
+    let buf = js_crypto_decapsulate(key_val, ciphertext_val);
+    let value = if buf.is_null() {
+        f64::from_bits(JSValue::undefined().bits())
+    } else {
+        f64::from_bits(JSValue::pointer(buf as *const u8).bits())
+    };
+    call_node_style_callback2(callback_bits, f64::from_bits(JSValue::null().bits()), value);
+    f64::from_bits(JSValue::undefined().bits())
+}
