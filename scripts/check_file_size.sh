@@ -239,6 +239,11 @@ crates/perry-stdlib/src/container/mod.rs
 # Crossed the 2000-line gate after the prototype/super assignment parity arms.
 # Splitting per analysis concern is tracked under #1435.
 crates/perry-hir/src/analysis.rs
+# node:stream classic constructor + web-adapter surface (Readable/Writable/
+# Duplex/Transform construction + toWeb/fromWeb/Readable.fromWeb adapters).
+# Crossed the 2000-line gate after the stream/web adapter additions. Splitting
+# classic constructors from the web adapters is tracked under #1435.
+crates/perry-runtime/src/node_stream_constructors.rs
 EOF
 )
 
