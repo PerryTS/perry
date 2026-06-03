@@ -432,7 +432,7 @@ fn update_call_sites_in_expr(
             update_call_sites_in_expr(string, ctx, lookup);
             update_call_sites_in_expr(delimiter, ctx, lookup);
         }
-        Expr::StringFromCharCode(code) => {
+        Expr::StringFromCharCode(code) | Expr::StringFromCharCodeSpread(code) => {
             update_call_sites_in_expr(code, ctx, lookup);
         }
         Expr::MapNew => {}

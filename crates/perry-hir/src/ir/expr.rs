@@ -1486,6 +1486,7 @@ pub enum Expr {
     // String methods
     StringSplit(Box<Expr>, Box<Expr>), // string.split(delimiter) -> string[]
     StringFromCharCode(Box<Expr>),     // String.fromCharCode(code) -> single-char string
+    StringFromCharCodeSpread(Box<Expr>), // String.fromCharCode(...arrayLike) -> string
     StringFromCodePoint(Box<Expr>),    // String.fromCodePoint(code) -> string
     StringRaw {
         // Callable String.raw(callSite, ...substitutions) — the non-tagged

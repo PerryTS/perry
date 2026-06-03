@@ -645,7 +645,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(string, assigned);
             collect_assigned_locals_expr(delimiter, assigned);
         }
-        Expr::StringFromCharCode(code) => {
+        Expr::StringFromCharCode(code) | Expr::StringFromCharCodeSpread(code) => {
             collect_assigned_locals_expr(code, assigned);
         }
         // Map operations

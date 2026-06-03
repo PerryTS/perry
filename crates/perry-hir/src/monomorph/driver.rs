@@ -500,7 +500,7 @@ fn collect_instantiations_in_expr(
             collect_instantiations_in_expr(string, ctx, module, idx);
             collect_instantiations_in_expr(delimiter, ctx, module, idx);
         }
-        Expr::StringFromCharCode(code) => {
+        Expr::StringFromCharCode(code) | Expr::StringFromCharCodeSpread(code) => {
             collect_instantiations_in_expr(code, ctx, module, idx);
         }
         Expr::MapNew => {}

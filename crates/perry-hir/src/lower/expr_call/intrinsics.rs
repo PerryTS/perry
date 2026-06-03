@@ -1355,7 +1355,7 @@ pub(super) fn try_namespace_static_method_apply_call_bind(
             };
             if let Some(is_apply) = mode {
                 if let Some(inner) = match_namespace_static_member(ctx, outer.obj.as_ref()) {
-                    return Ok(Some(rewrite_dropping_this(ctx, call, &inner, is_apply)?));
+                    return rewrite_dropping_this(ctx, call, &inner, is_apply);
                 }
             }
         }
@@ -1432,7 +1432,7 @@ fn rewrite_dropping_this(
     call: &ast::CallExpr,
     inner: &ast::MemberExpr,
     is_apply: bool,
-) -> Result<Expr> {
+) -> Result<Option<Expr>> {
     let mut synth = call.clone();
     synth.callee = ast::Callee::Expr(Box::new(ast::Expr::Member(inner.clone())));
     if is_apply {
@@ -1446,21 +1446,58 @@ fn rewrite_dropping_this(
                         .iter()
                         .all(|e| matches!(e, Some(eos) if eos.spread.is_none()));
                     if !clean {
-                        // Bail to the unrewritten form; the inner `<NS>.<static>`
-                        // value-read will still TypeError, but we don't pretend
-                        // to expand a non-literal apply-args array.
-                        return Ok(super::lower_call(ctx, call)?);
+                        return rewrite_dynamic_apply_spread(ctx, call, inner);
                     }
                     arr.elems.iter().filter_map(|e| e.clone()).collect()
                 }
-                _ => return Ok(super::lower_call(ctx, call)?),
+                _ => return rewrite_dynamic_apply_spread(ctx, call, inner),
             },
         };
     } else {
         // `.call(thisArg, …args)` — drop thisArg, keep the rest.
         synth.args = call.args.iter().skip(1).cloned().collect();
     }
-    Ok(super::lower_call(ctx, &synth)?)
+    Ok(Some(super::lower_call(ctx, &synth)?))
+}
+
+fn rewrite_dynamic_apply_spread(
+    ctx: &mut LoweringContext,
+    call: &ast::CallExpr,
+    inner: &ast::MemberExpr,
+) -> Result<Option<Expr>> {
+    if !namespace_static_supports_dynamic_apply_spread(inner) {
+        return Ok(None);
+    }
+    let Some(arg_array) = call.args.get(1) else {
+        return Ok(Some(super::lower_call(
+            ctx,
+            &ast::CallExpr {
+                callee: ast::Callee::Expr(Box::new(ast::Expr::Member(inner.clone()))),
+                args: Vec::new(),
+                ..call.clone()
+            },
+        )?));
+    };
+    let mut synth = call.clone();
+    synth.callee = ast::Callee::Expr(Box::new(ast::Expr::Member(inner.clone())));
+    synth.args = vec![ast::ExprOrSpread {
+        spread: Some(call.span),
+        expr: arg_array.expr.clone(),
+    }];
+    Ok(Some(super::lower_call(ctx, &synth)?))
+}
+
+fn namespace_static_supports_dynamic_apply_spread(inner: &ast::MemberExpr) -> bool {
+    let ast::Expr::Ident(base) = inner.obj.as_ref() else {
+        return false;
+    };
+    let ast::MemberProp::Ident(prop) = &inner.prop else {
+        return false;
+    };
+    matches!(
+        (base.sym.as_ref(), prop.sym.as_ref()),
+        ("Math", "min" | "max") | ("String", "fromCharCode")
+    )
 }
 
 /// Followup to #957 / PR #959 — `Function('return this')()`.

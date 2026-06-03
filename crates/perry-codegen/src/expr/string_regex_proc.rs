@@ -402,6 +402,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let handle = blk.call(I64, "js_string_from_char_code", &[(DOUBLE, &v)]);
             Ok(nanbox_string_inline(blk, &handle))
         }
+        Expr::StringFromCharCodeSpread(o) => {
+            let v = lower_expr(ctx, o)?;
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_string_from_char_code_array", &[(DOUBLE, &v)]);
+            Ok(nanbox_string_inline(blk, &handle))
+        }
         Expr::RegExpSetLastIndex { regex, value } => {
             let r_box = lower_expr(ctx, regex)?;
             let v = lower_expr(ctx, value)?;

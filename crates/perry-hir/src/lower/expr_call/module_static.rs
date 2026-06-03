@@ -982,6 +982,11 @@ pub(super) fn try_module_static_methods(
                                 // #2788: String.fromCharCode() -> "".
                                 return Ok(Ok(Expr::String(String::new())));
                             }
+                            if has_spread && args.len() == 1 {
+                                return Ok(Ok(Expr::StringFromCharCodeSpread(Box::new(
+                                    args.into_iter().next().unwrap(),
+                                ))));
+                            }
                             if args.len() == 1 {
                                 return Ok(Ok(Expr::StringFromCharCode(Box::new(
                                     args.into_iter().next().unwrap(),
