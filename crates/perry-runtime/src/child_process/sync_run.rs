@@ -6,7 +6,7 @@ use crate::value::JSValue;
 
 use super::{
     cp_decode_status, cp_get_field, cp_io_error_code, cp_object_ptr, cp_read_kill_signal,
-    cp_value_to_bytes, CpExit, CP_SIGTERM,
+    cp_read_stdio, cp_value_to_bytes, CpExit, CpStdio, CP_SIGTERM,
 };
 
 const CP_DEFAULT_MAX_BUFFER: usize = 1024 * 1024;
@@ -17,6 +17,7 @@ pub(super) struct CpRunOptions {
     timeout: Option<Duration>,
     kill_signal: i32,
     pub(super) max_buffer: usize,
+    stdio: [CpStdio; 3],
 }
 
 impl Default for CpRunOptions {
@@ -26,6 +27,7 @@ impl Default for CpRunOptions {
             timeout: None,
             kill_signal: CP_SIGTERM,
             max_buffer: CP_DEFAULT_MAX_BUFFER,
+            stdio: [CpStdio::Pipe; 3],
         }
     }
 }
@@ -99,6 +101,19 @@ pub(super) fn cp_read_run_options(opts_val: f64) -> CpRunOptions {
     options
 }
 
+/// Read spawnSync options, including the stdio capture policy used to shape
+/// `stdout`/`stderr`/`output`.
+pub(super) fn cp_read_spawn_sync_run_options(opts_val: f64) -> CpRunOptions {
+    let mut options = cp_read_run_options(opts_val);
+    let stdio = cp_read_stdio(opts_val, 3);
+    options.stdio = [
+        stdio.first().copied().unwrap_or(CpStdio::Pipe),
+        stdio.get(1).copied().unwrap_or(CpStdio::Pipe),
+        stdio.get(2).copied().unwrap_or(CpStdio::Pipe),
+    ];
+    options
+}
+
 /// Read async buffered limits. Unlike the sync helpers, async `exec` and
 /// `execFile` do not have a documented `input` option, so only timing and
 /// buffer limits are consumed here.
@@ -146,6 +161,8 @@ impl CpRunError {
 pub(super) struct CpRun {
     pub(super) stdout: Vec<u8>,
     pub(super) stderr: Vec<u8>,
+    pub(super) stdout_piped: bool,
+    pub(super) stderr_piped: bool,
     pub(super) code: Option<i32>,
     pub(super) signal: Option<i32>,
     pub(super) pid: Option<u32>,
@@ -161,23 +178,36 @@ impl CpRun {
     }
 }
 
-/// Spawn `command` with piped stdout/stderr (and a closed stdin so children
-/// that read stdin see EOF instead of blocking), run it to completion, and
-/// capture stdout/stderr/exit/pid. Used by the synchronous + buffered-callback
-/// entry points.
+/// Spawn `command`, run it to completion, and capture the configured stdio.
+/// Piped stdin without input is closed so children that read stdin see EOF
+/// instead of blocking. Used by synchronous + buffered-callback entry points.
 pub(super) fn cp_run_to_completion(mut command: Command, options: &CpRunOptions) -> CpRun {
-    if options.input.is_some() {
-        command.stdin(Stdio::piped());
-    } else {
-        command.stdin(Stdio::null());
-    }
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
+    let stdin_piped = matches!(options.stdio[0], CpStdio::Pipe) && options.input.is_some();
+    let stdout_piped = matches!(options.stdio[1], CpStdio::Pipe);
+    let stderr_piped = matches!(options.stdio[2], CpStdio::Pipe);
+    command.stdin(match options.stdio[0] {
+        CpStdio::Pipe if options.input.is_some() => Stdio::piped(),
+        CpStdio::Pipe | CpStdio::Ignore => Stdio::null(),
+        CpStdio::Inherit => Stdio::inherit(),
+        CpStdio::Fd(fd) => super::cp_stdio_from_fd(fd),
+    });
+    command.stdout(match options.stdio[1] {
+        CpStdio::Pipe => Stdio::piped(),
+        CpStdio::Ignore => Stdio::null(),
+        CpStdio::Inherit => Stdio::inherit(),
+        CpStdio::Fd(fd) => super::cp_stdio_from_fd(fd),
+    });
+    command.stderr(match options.stdio[2] {
+        CpStdio::Pipe => Stdio::piped(),
+        CpStdio::Ignore => Stdio::null(),
+        CpStdio::Inherit => Stdio::inherit(),
+        CpStdio::Fd(fd) => super::cp_stdio_from_fd(fd),
+    });
     match command.spawn() {
         Ok(mut child) => {
             let pid = child.id();
-            if let Some(input) = &options.input {
-                if let Some(mut stdin) = child.stdin.take() {
+            if stdin_piped {
+                if let (Some(input), Some(mut stdin)) = (&options.input, child.stdin.take()) {
                     let _ = stdin.write_all(input);
                 }
             }
@@ -187,8 +217,8 @@ pub(super) fn cp_run_to_completion(mut command: Command, options: &CpRunOptions)
                 Ok(o) => {
                     let CpExit { code, signal } = cp_decode_status(&o.status);
                     if run_error.is_none()
-                        && (o.stdout.len() > options.max_buffer
-                            || o.stderr.len() > options.max_buffer)
+                        && ((stdout_piped && o.stdout.len() > options.max_buffer)
+                            || (stderr_piped && o.stderr.len() > options.max_buffer))
                     {
                         run_error = Some(CpRunError::MaxBuffer);
                     }
@@ -199,6 +229,8 @@ pub(super) fn cp_run_to_completion(mut command: Command, options: &CpRunOptions)
                     CpRun {
                         stdout: o.stdout,
                         stderr: o.stderr,
+                        stdout_piped,
+                        stderr_piped,
                         code,
                         signal,
                         pid: Some(pid),
@@ -209,6 +241,8 @@ pub(super) fn cp_run_to_completion(mut command: Command, options: &CpRunOptions)
                 Err(e) => CpRun {
                     stdout: Vec::new(),
                     stderr: Vec::new(),
+                    stdout_piped,
+                    stderr_piped,
                     code: None,
                     signal: None,
                     pid: Some(pid),
@@ -220,6 +254,8 @@ pub(super) fn cp_run_to_completion(mut command: Command, options: &CpRunOptions)
         Err(e) => CpRun {
             stdout: Vec::new(),
             stderr: Vec::new(),
+            stdout_piped,
+            stderr_piped,
             code: None,
             signal: None,
             pid: None,

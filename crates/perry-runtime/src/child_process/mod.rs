@@ -36,8 +36,8 @@ use std::sync::{
 };
 
 use sync_run::{
-    cp_read_async_run_options, cp_read_run_options, cp_run_to_completion, CpRun, CpRunError,
-    CpRunOptions,
+    cp_read_async_run_options, cp_read_run_options, cp_read_spawn_sync_run_options,
+    cp_run_to_completion, CpRun, CpRunError, CpRunOptions,
 };
 
 use crate::closure::{
@@ -435,17 +435,21 @@ pub extern "C" fn js_child_process_spawn_sync(
     // unless `shell` is set).
     let arg_strs = unsafe { cp_read_arg_strings(args_ptr as i64) };
     let command = cp_build_command(&cmd_str, &arg_strs, opts_val);
-    let run_options = cp_read_run_options(opts_val);
+    let run_options = cp_read_spawn_sync_run_options(opts_val);
     let run = cp_run_to_completion(command, &run_options);
 
     let spawn_failed_before_pid = run.spawn_error.is_some() && run.pid.is_none();
     let stdout_box = if spawn_failed_before_pid {
         cp_undefined()
+    } else if !run.stdout_piped {
+        TAG_NULL_F64
     } else {
         cp_box_output(&run.stdout, &mode)
     };
     let stderr_box = if spawn_failed_before_pid {
         cp_undefined()
+    } else if !run.stderr_piped {
+        TAG_NULL_F64
     } else {
         cp_box_output(&run.stderr, &mode)
     };
