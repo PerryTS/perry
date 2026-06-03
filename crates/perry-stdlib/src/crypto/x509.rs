@@ -183,6 +183,25 @@ enum X509HostSubject {
     Never,
 }
 
+fn x509_subject_email_addresses(cert: &x509_cert::Certificate) -> Vec<String> {
+    let mut addresses = Vec::new();
+    for rdn in cert.tbs_certificate.subject.0.iter() {
+        for atv in rdn.0.iter() {
+            if atv.oid.to_string() == "1.2.840.113549.1.9.1" {
+                addresses.push(x509_attr_value(atv));
+            }
+        }
+    }
+    addresses
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum X509CheckSubject {
+    Default,
+    Always,
+    Never,
+}
+
 struct X509CheckHostOptions {
     subject: X509HostSubject,
     wildcards: bool,
@@ -306,6 +325,20 @@ fn x509_dns_name_matches(candidate: &str, host: &str, options: &X509CheckHostOpt
     !host_label.is_empty() && host_label.starts_with(prefix) && host_label.ends_with(suffix)
 }
 
+unsafe fn x509_check_subject_option(args: &[f64]) -> X509CheckSubject {
+    let Some(options) = args.get(1) else {
+        return X509CheckSubject::Default;
+    };
+    let Some(subject) = object_field_string(options.to_bits(), b"subject") else {
+        return X509CheckSubject::Default;
+    };
+    match subject.as_str() {
+        "always" => X509CheckSubject::Always,
+        "never" => X509CheckSubject::Never,
+        _ => X509CheckSubject::Default,
+    }
+}
+
 fn x509_check_host_value(
     cert: &x509_cert::Certificate,
     name: &str,
@@ -338,21 +371,35 @@ fn x509_check_host_value(
         .find(|candidate| x509_dns_name_matches(candidate, name, options))
 }
 
-fn x509_check_email_value(cert: &x509_cert::Certificate, email: &str) -> Option<String> {
+fn x509_check_email_value(
+    cert: &x509_cert::Certificate,
+    email: &str,
+    subject: X509CheckSubject,
+) -> Option<String> {
     use x509_cert::ext::pkix::name::GeneralName;
 
-    let san = x509_decoded_subject_alt_name(cert)?;
-    san.0.iter().find_map(|general_name| {
-        let GeneralName::Rfc822Name(value) = general_name else {
-            return None;
-        };
-        let candidate = value.as_str();
-        if candidate == email {
-            Some(candidate.to_string())
-        } else {
-            None
+    let mut saw_email_san = false;
+    if let Some(san) = x509_decoded_subject_alt_name(cert) {
+        for general_name in san.0.iter() {
+            let GeneralName::Rfc822Name(value) = general_name else {
+                continue;
+            };
+            saw_email_san = true;
+            let candidate = value.as_str();
+            if candidate == email {
+                return Some(candidate.to_string());
+            }
         }
-    })
+    }
+
+    if subject == X509CheckSubject::Never || (saw_email_san && subject != X509CheckSubject::Always)
+    {
+        return None;
+    }
+
+    x509_subject_email_addresses(cert)
+        .into_iter()
+        .find(|candidate| candidate == email)
 }
 
 fn x509_check_ip_value(cert: &x509_cert::Certificate, ip: &str) -> Option<String> {
@@ -1046,7 +1093,9 @@ pub unsafe fn dispatch_x509_method(handle: i64, method: &str, args: &[f64]) -> f
             }
         }
         "checkEmail" => {
-            match x509_check_email_value(&h.cert, &x509_required_string_arg(args, "email")) {
+            let subject = x509_check_subject_option(args);
+            match x509_check_email_value(&h.cert, &x509_required_string_arg(args, "email"), subject)
+            {
                 Some(value) => x509_string_f64(&value),
                 None => nanbox_undefined(),
             }
