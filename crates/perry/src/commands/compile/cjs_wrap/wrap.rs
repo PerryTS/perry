@@ -412,14 +412,18 @@ const _cjs = (function() {{
 {require_cases}
         throw new Error('require() is not supported: ' + specifier);
     }}
-    require.name = 'require';
+    Object.defineProperty(require, 'name', {{
+        value: 'require',
+        writable: false,
+        enumerable: false,
+        configurable: true,
+    }});
     require.resolve = function resolve(specifier, options) {{
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "request" argument must be of type string.');
 {require_resolve_cases}
         if (__perry_cjs_require_is_builtin(specifier)) return specifier;
         throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', 'Cannot find module ' + specifier);
     }};
-    require.resolve.name = 'resolve';
     require.resolve.paths = function paths(specifier) {{
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "request" argument must be of type string.');
         return null;

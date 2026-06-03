@@ -879,6 +879,107 @@ pub extern "C" fn js_object_define_property(
             return obj_value;
         }
 
+        // Closures are object-like but not ObjectHeader-backed, so descriptor
+        // writes have to route through the closure property side tables.
+        let target_closure_ptr = {
+            let value = crate::value::JSValue::from_bits(obj_value.to_bits());
+            let raw = if value.is_pointer() {
+                value.as_pointer::<u8>() as usize
+            } else {
+                let bits = obj_value.to_bits();
+                if bits != 0 && bits <= 0x0000_FFFF_FFFF_FFFF && bits > 0x10000 {
+                    bits as usize
+                } else {
+                    0
+                }
+            };
+            if raw >= 0x10000 && crate::closure::is_closure_ptr(raw) {
+                Some(raw)
+            } else {
+                None
+            }
+        };
+        if let Some(closure_ptr) = target_closure_ptr {
+            let key_str = crate::builtins::js_string_coerce(key_value);
+            if key_str.is_null() {
+                return obj_value;
+            }
+            let key_rust: Option<String> = {
+                let name_ptr =
+                    (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_len = (*key_str).byte_len as usize;
+                let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+                std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
+            };
+            let Some(key_rust) = key_rust else {
+                return obj_value;
+            };
+            let desc_ptr = extract_obj_ptr(descriptor_value);
+            if desc_ptr.is_null() {
+                return obj_value;
+            }
+
+            let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
+            let set_key = crate::string::js_string_from_bytes(b"set".as_ptr(), 3);
+            let get_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, get_key);
+            let set_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, set_key);
+            let has_accessor = !get_field.is_undefined() || !set_field.is_undefined();
+
+            if has_accessor {
+                let get_bits = if get_field.is_undefined() {
+                    0
+                } else {
+                    crate::closure::clone_closure_rebind_this(get_field.bits(), obj_value)
+                };
+                let set_bits = if set_field.is_undefined() {
+                    0
+                } else {
+                    crate::closure::clone_closure_rebind_this(set_field.bits(), obj_value)
+                };
+                set_accessor_descriptor(
+                    closure_ptr,
+                    key_rust.clone(),
+                    AccessorDescriptor {
+                        get: get_bits,
+                        set: set_bits,
+                    },
+                );
+            } else {
+                let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+                let value_field =
+                    js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);
+                ACCESSOR_DESCRIPTORS.with(|m| {
+                    m.borrow_mut().remove(&(closure_ptr, key_rust.clone()));
+                });
+                if !value_field.is_undefined() {
+                    crate::closure::closure_set_dynamic_prop(
+                        closure_ptr,
+                        &key_rust,
+                        f64::from_bits(value_field.bits()),
+                    );
+                }
+            }
+
+            let read_bool = |name: &[u8]| -> Option<bool> {
+                let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                let v = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, k);
+                if v.is_undefined() {
+                    None
+                } else {
+                    Some(crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0)
+                }
+            };
+            let writable = read_bool(b"writable").unwrap_or(has_accessor);
+            let enumerable = read_bool(b"enumerable").unwrap_or(false);
+            let configurable = read_bool(b"configurable").unwrap_or(false);
+            set_property_attrs(
+                closure_ptr,
+                key_rust,
+                PropertyAttrs::new(writable, enumerable, configurable),
+            );
+            return obj_value;
+        }
+
         let obj = extract_obj_ptr(obj_value);
         if obj.is_null() {
             return obj_value;
