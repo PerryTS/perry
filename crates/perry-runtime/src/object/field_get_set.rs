@@ -82,6 +82,8 @@ fn crypto_key_algorithm_name(algo: u8) -> &'static str {
         12 => "RSASSA-PKCS1-v1_5",
         13 => "RSA-OAEP",
         14 => "RSA-PSS",
+        15 | 17 => "ECDSA",
+        16 | 18 => "ECDH",
         _ => "",
     }
 }
@@ -106,6 +108,8 @@ fn crypto_key_algorithm_has_length(algo: u8) -> bool {
 fn crypto_key_named_curve(algo: u8) -> Option<&'static str> {
     match algo {
         8 | 9 => Some("P-256"),
+        15 | 16 => Some("P-384"),
+        17 | 18 => Some("P-521"),
         _ => None,
     }
 }

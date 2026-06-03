@@ -8,7 +8,7 @@ use super::*;
 ///   AES key.
 /// - String shorthand `"AES-GCM"` defaults to 256-bit per the WebCrypto
 ///   convention (jose's `generateSecret('A256GCM')` reaches this).
-/// - `{ name: "ECDSA", namedCurve: "P-256" }` — returns a
+/// - `{ name: "ECDSA", namedCurve: "P-256" | "P-384" | "P-521" }` — returns a
 ///   `{ publicKey, privateKey }` CryptoKeyPair that can be used by
 ///   `subtle.sign` / `subtle.verify`.
 ///
@@ -219,8 +219,15 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
     }
     if algo_upper == "ECDH" {
+        let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve")
+            .and_then(|c| parse_ec_named_curve(&c))
+        {
+            Some(curve) => curve,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        };
+        let key_algo = ecdh_key_algo_for_curve(curve);
         let (private_usages, public_usages) = match validate_key_pair_usages(
-            KeyAlgo::EcdhP256,
+            key_algo,
             usages_bits.to_bits(),
             "Usages cannot be empty when creating a key.",
             "Unsupported key usage for the requested algorithm",
@@ -228,24 +235,10 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
             Ok(u) => u,
             Err((name, message)) => return reject_with_dom_exception(name, message),
         };
-        let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve") {
-            Some(c) => c,
+        let (private_bytes, public_bytes) = match generate_ecdh_key_pair_bytes(curve) {
+            Some(pair) => pair,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
-        let curve_upper = curve.to_ascii_uppercase();
-        if curve_upper != "P-256" && curve_upper != "PRIME256V1" && curve_upper != "SECP256R1" {
-            return reject_with_dom_exception("OperationError", "The operation failed");
-        }
-        let private_key = match generate_p256_secret_key() {
-            Some(k) => k,
-            None => return reject_with_dom_exception("OperationError", "The operation failed"),
-        };
-        let private_bytes = private_key.to_bytes().as_slice().to_vec();
-        let public_bytes = private_key
-            .public_key()
-            .to_encoded_point(false)
-            .as_bytes()
-            .to_vec();
 
         let private_buf = alloc_uint8array_from_slice(&private_bytes);
         let public_buf = alloc_uint8array_from_slice(&public_bytes);
@@ -255,7 +248,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         register_crypto_key(
             private_buf as usize,
             CryptoKeyMaterial::new(
-                KeyAlgo::EcdhP256,
+                key_algo,
                 HashAlgo::Sha256,
                 KeyKind::Private,
                 extractable,
@@ -265,7 +258,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         register_crypto_key(
             public_buf as usize,
             CryptoKeyMaterial::new(
-                KeyAlgo::EcdhP256,
+                key_algo,
                 HashAlgo::Sha256,
                 KeyKind::Public,
                 true,
@@ -292,8 +285,15 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
     }
     if algo_upper == "ECDSA" {
+        let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve")
+            .and_then(|c| parse_ec_named_curve(&c))
+        {
+            Some(curve) => curve,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        };
+        let key_algo = ecdsa_key_algo_for_curve(curve);
         let (private_usages, public_usages) = match validate_key_pair_usages(
-            KeyAlgo::EcdsaP256,
+            key_algo,
             usages_bits.to_bits(),
             "Usages cannot be empty when creating a key.",
             "Unsupported key usage for the requested algorithm",
@@ -301,24 +301,10 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
             Ok(u) => u,
             Err((name, message)) => return reject_with_dom_exception(name, message),
         };
-        let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve") {
-            Some(c) => c,
+        let (private_bytes, public_bytes) = match generate_ecdsa_key_pair_bytes(curve) {
+            Some(pair) => pair,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
-        let curve_upper = curve.to_ascii_uppercase();
-        if curve_upper != "P-256" && curve_upper != "PRIME256V1" && curve_upper != "SECP256R1" {
-            return reject_with_dom_exception("OperationError", "The operation failed");
-        }
-        let signing_key = match generate_p256_signing_key() {
-            Some(k) => k,
-            None => return reject_with_dom_exception("OperationError", "The operation failed"),
-        };
-        let private_bytes = signing_key.to_bytes().as_slice().to_vec();
-        let public_bytes = signing_key
-            .verifying_key()
-            .to_encoded_point(false)
-            .as_bytes()
-            .to_vec();
 
         let private_buf = alloc_uint8array_from_slice(&private_bytes);
         let public_buf = alloc_uint8array_from_slice(&public_bytes);
@@ -328,8 +314,8 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         register_crypto_key(
             private_buf as usize,
             CryptoKeyMaterial::new(
-                KeyAlgo::EcdsaP256,
-                HashAlgo::Sha256,
+                key_algo,
+                ec_curve_hash(curve),
                 KeyKind::Private,
                 extractable,
                 private_usages,
@@ -338,8 +324,8 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         register_crypto_key(
             public_buf as usize,
             CryptoKeyMaterial::new(
-                KeyAlgo::EcdsaP256,
-                HashAlgo::Sha256,
+                key_algo,
+                ec_curve_hash(curve),
                 KeyKind::Public,
                 true,
                 public_usages,

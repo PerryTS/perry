@@ -219,7 +219,7 @@ bundled-mongodb = ["dep:mongodb", "dep:bson", "dep:futures-util", "async-runtime
 # bindings so the well-known flip (#466 Phase 4 step 2) can route them
 # to perry-ext-bcrypt / perry-ext-argon2 without taking the rest of
 # the crypto surface offline.
-crypto = ["dep:sha2", "dep:sha1", "dep:sha3", "dep:rsa-sha1", "dep:md-5", "dep:hex", "dep:hmac", "dep:aes", "dep:cbc", "dep:ecb", "dep:ctr", "dep:scrypt", "dep:pbkdf2", "dep:base64", "dep:x25519-dalek", "dep:ed25519-dalek", "dep:aes-gcm", "dep:ghash", "dep:aes-kw", "dep:hkdf", "dep:p256", "dep:x509-cert", "async-runtime", "ids", "bundled-bcrypt", "bundled-argon2", "bundled-jsonwebtoken", "bundled-ethers"]
+crypto = ["dep:sha2", "dep:sha1", "dep:sha3", "dep:rsa-sha1", "dep:md-5", "dep:hex", "dep:hmac", "dep:aes", "dep:cbc", "dep:ecb", "dep:ctr", "dep:scrypt", "dep:pbkdf2", "dep:base64", "dep:x25519-dalek", "dep:ed25519-dalek", "dep:aes-gcm", "dep:ghash", "dep:aes-kw", "dep:hkdf", "dep:p256", "dep:p384", "dep:p521", "dep:x509-cert", "async-runtime", "ids", "bundled-bcrypt", "bundled-argon2", "bundled-jsonwebtoken", "bundled-ethers"]
 bundled-bcrypt = ["dep:bcrypt", "async-runtime"]
 bundled-argon2 = ["dep:argon2", "async-runtime"]
 bundled-jsonwebtoken = ["dep:jsonwebtoken", "dep:p256", "dep:rsa", "dep:spki"]
@@ -365,6 +365,8 @@ hmac = { version = "0.13", optional = true }
 bcrypt = { version = "0.17", optional = true }
 jsonwebtoken = { workspace = true, optional = true }
 p256 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
+p384 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
+p521 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
 rsa = { version = "0.9", optional = true, default-features = false, features = ["pem", "pkcs5", "sha2"] }
 # #1367 node:crypto X509Certificate — DER/PEM cert parsing (RustCrypto, reuses
 # the der/spki/const-oid already in the lock).

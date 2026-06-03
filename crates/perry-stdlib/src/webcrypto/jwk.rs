@@ -73,37 +73,33 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     } else if algo_upper == "AES-CTR" && (format_lower == "raw" || format_lower == "jwk") {
         (KeyAlgo::AesCtr, HashAlgo::Sha256, KeyKind::Secret)
     } else if algo_upper == "ECDSA" && (format_lower == "raw" || format_lower == "jwk") {
-        let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve") {
-            Some(c) => c,
+        let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve")
+            .and_then(|c| parse_ec_named_curve(&c))
+        {
+            Some(curve) => curve,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
-        let curve_upper = curve.to_ascii_uppercase();
-        if curve_upper != "P-256" && curve_upper != "PRIME256V1" && curve_upper != "SECP256R1" {
-            return reject_with_dom_exception("OperationError", "The operation failed");
-        }
         let kind =
             if format_lower == "jwk" && object_field_string(key_bits.to_bits(), b"d").is_some() {
                 KeyKind::Private
             } else {
                 KeyKind::Public
             };
-        (KeyAlgo::EcdsaP256, HashAlgo::Sha256, kind)
+        (ecdsa_key_algo_for_curve(curve), ec_curve_hash(curve), kind)
     } else if algo_upper == "ECDH" && (format_lower == "raw" || format_lower == "jwk") {
-        let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve") {
-            Some(c) => c,
+        let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve")
+            .and_then(|c| parse_ec_named_curve(&c))
+        {
+            Some(curve) => curve,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
-        let curve_upper = curve.to_ascii_uppercase();
-        if curve_upper != "P-256" && curve_upper != "PRIME256V1" && curve_upper != "SECP256R1" {
-            return reject_with_dom_exception("OperationError", "The operation failed");
-        }
         let kind =
             if format_lower == "jwk" && object_field_string(key_bits.to_bits(), b"d").is_some() {
                 KeyKind::Private
             } else {
                 KeyKind::Public
             };
-        (KeyAlgo::EcdhP256, HashAlgo::Sha256, kind)
+        (ecdh_key_algo_for_curve(curve), HashAlgo::Sha256, kind)
     } else if algo_upper == "ED25519" && (format_lower == "raw" || format_lower == "jwk") {
         let kind =
             if format_lower == "jwk" && object_field_string(key_bits.to_bits(), b"d").is_some() {
@@ -180,11 +176,21 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     if key_bytes.is_empty() && !matches!(key_algo, KeyAlgo::Hkdf | KeyAlgo::Pbkdf2) {
         return reject_with_dom_exception("DataError", "Key data is empty or could not be read");
     }
-    if matches!(key_algo, KeyAlgo::EcdsaP256 | KeyAlgo::EcdhP256) {
-        let ok = if kind == KeyKind::Public {
-            P256PublicKey::from_sec1_bytes(&key_bytes).is_ok()
-        } else {
-            P256SecretKey::from_slice(&key_bytes).is_ok()
+    if is_ec_key_algo(key_algo) {
+        let ok = match (ec_curve_for_key_algo(key_algo), kind) {
+            (Some(EcNamedCurve::P256), KeyKind::Public) => {
+                P256PublicKey::from_sec1_bytes(&key_bytes).is_ok()
+            }
+            (Some(EcNamedCurve::P256), _) => P256SecretKey::from_slice(&key_bytes).is_ok(),
+            (Some(EcNamedCurve::P384), KeyKind::Public) => {
+                P384PublicKey::from_sec1_bytes(&key_bytes).is_ok()
+            }
+            (Some(EcNamedCurve::P384), _) => P384SecretKey::from_slice(&key_bytes).is_ok(),
+            (Some(EcNamedCurve::P521), KeyKind::Public) => {
+                P521PublicKey::from_sec1_bytes(&key_bytes).is_ok()
+            }
+            (Some(EcNamedCurve::P521), _) => P521SecretKey::from_slice(&key_bytes).is_ok(),
+            _ => false,
         };
         if !ok {
             return reject_with_dom_exception("OperationError", "The operation failed");
@@ -275,6 +281,10 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
                 | KeyAlgo::RsaPss
                 | KeyAlgo::EcdsaP256
                 | KeyAlgo::EcdhP256
+                | KeyAlgo::EcdsaP384
+                | KeyAlgo::EcdhP384
+                | KeyAlgo::EcdsaP521
+                | KeyAlgo::EcdhP521
                 | KeyAlgo::Ed25519
                 | KeyAlgo::X25519
         )
@@ -316,8 +326,8 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
             };
             return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
         }
-        if matches!(mat.algo, KeyAlgo::EcdsaP256 | KeyAlgo::EcdhP256) {
-            let obj = match ec_p256_jwk_export_object(&key_bytes, mat) {
+        if is_ec_key_algo(mat.algo) {
+            let obj = match ec_jwk_export_object(&key_bytes, mat) {
                 Some(o) => o,
                 None => return reject_with_dom_exception("OperationError", "The operation failed"),
             };
@@ -369,18 +379,28 @@ pub(super) fn rsa_jwk_alg(algo: KeyAlgo, hash: HashAlgo) -> &'static str {
     }
 }
 
-pub(super) unsafe fn jwk_ec_bytes(obj_bits: u64, kind: KeyKind) -> Option<Vec<u8>> {
+pub(super) unsafe fn jwk_ec_bytes(
+    obj_bits: u64,
+    key_algo: KeyAlgo,
+    kind: KeyKind,
+) -> Option<Vec<u8>> {
+    let curve = ec_curve_for_key_algo(key_algo)?;
     let kty = object_field_string(obj_bits, b"kty")?;
     let crv = object_field_string(obj_bits, b"crv")?;
-    if kty != "EC" || crv != "P-256" {
+    if kty != "EC" || crv != ec_curve_name(curve) {
         return None;
     }
+    let coord_len = ec_curve_private_len(curve);
     if kind == KeyKind::Private {
         let d = object_field_string(obj_bits, b"d")?;
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(d.as_bytes())
             .ok()?;
-        return if bytes.len() == 32 { Some(bytes) } else { None };
+        return if bytes.len() == coord_len {
+            Some(bytes)
+        } else {
+            None
+        };
     }
     let x = object_field_string(obj_bits, b"x")?;
     let y = object_field_string(obj_bits, b"y")?;
@@ -390,10 +410,10 @@ pub(super) unsafe fn jwk_ec_bytes(obj_bits: u64, kind: KeyKind) -> Option<Vec<u8
     let y_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(y.as_bytes())
         .ok()?;
-    if x_bytes.len() != 32 || y_bytes.len() != 32 {
+    if x_bytes.len() != coord_len || y_bytes.len() != coord_len {
         return None;
     }
-    let mut sec1 = Vec::with_capacity(65);
+    let mut sec1 = Vec::with_capacity(ec_curve_public_len(curve));
     sec1.push(0x04);
     sec1.extend_from_slice(&x_bytes);
     sec1.extend_from_slice(&y_bytes);
@@ -433,8 +453,8 @@ pub(super) unsafe fn jwk_import_key_bytes(
     kind: KeyKind,
 ) -> Option<Vec<u8>> {
     let kty = object_field_string(obj_bits, b"kty")?;
-    if matches!(key_algo, KeyAlgo::EcdsaP256 | KeyAlgo::EcdhP256) {
-        return jwk_ec_bytes(obj_bits, kind);
+    if is_ec_key_algo(key_algo) {
+        return jwk_ec_bytes(obj_bits, key_algo, kind);
     }
     if matches!(key_algo, KeyAlgo::Ed25519 | KeyAlgo::X25519) {
         return jwk_okp_bytes(obj_bits, key_algo, kind);
@@ -577,23 +597,54 @@ pub(super) unsafe fn okp_jwk_export_object(
     Some(obj)
 }
 
-pub(super) unsafe fn ec_p256_jwk_export_object(
+pub(super) unsafe fn ec_jwk_export_object(
     key_bytes: &[u8],
     mat: CryptoKeyMaterial,
 ) -> Option<*mut perry_runtime::ObjectHeader> {
-    let (public_bytes, private_d) = if mat.kind == KeyKind::Private {
-        let secret = P256SecretKey::from_slice(key_bytes).ok()?;
-        let public = secret
-            .public_key()
-            .to_encoded_point(false)
-            .as_bytes()
-            .to_vec();
-        (public, Some(key_bytes.to_vec()))
-    } else {
-        let public = P256PublicKey::from_sec1_bytes(key_bytes).ok()?;
-        (public.to_encoded_point(false).as_bytes().to_vec(), None)
+    let curve = ec_curve_for_key_algo(mat.algo)?;
+    let (public_bytes, private_d) = match (curve, mat.kind) {
+        (EcNamedCurve::P256, KeyKind::Private) => {
+            let secret = P256SecretKey::from_slice(key_bytes).ok()?;
+            let public = secret
+                .public_key()
+                .to_encoded_point(false)
+                .as_bytes()
+                .to_vec();
+            (public, Some(key_bytes.to_vec()))
+        }
+        (EcNamedCurve::P256, _) => {
+            let public = P256PublicKey::from_sec1_bytes(key_bytes).ok()?;
+            (public.to_encoded_point(false).as_bytes().to_vec(), None)
+        }
+        (EcNamedCurve::P384, KeyKind::Private) => {
+            let secret = P384SecretKey::from_slice(key_bytes).ok()?;
+            let public = secret
+                .public_key()
+                .to_encoded_point(false)
+                .as_bytes()
+                .to_vec();
+            (public, Some(key_bytes.to_vec()))
+        }
+        (EcNamedCurve::P384, _) => {
+            let public = P384PublicKey::from_sec1_bytes(key_bytes).ok()?;
+            (public.to_encoded_point(false).as_bytes().to_vec(), None)
+        }
+        (EcNamedCurve::P521, KeyKind::Private) => {
+            let secret = P521SecretKey::from_slice(key_bytes).ok()?;
+            let public = secret
+                .public_key()
+                .to_encoded_point(false)
+                .as_bytes()
+                .to_vec();
+            (public, Some(key_bytes.to_vec()))
+        }
+        (EcNamedCurve::P521, _) => {
+            let public = P521PublicKey::from_sec1_bytes(key_bytes).ok()?;
+            (public.to_encoded_point(false).as_bytes().to_vec(), None)
+        }
     };
-    if public_bytes.len() != 65 || public_bytes[0] != 0x04 {
+    let coord_len = ec_curve_private_len(curve);
+    if public_bytes.len() != ec_curve_public_len(curve) || public_bytes[0] != 0x04 {
         return None;
     }
     let obj = js_object_alloc(0, if private_d.is_some() { 5 } else { 4 });
@@ -601,16 +652,17 @@ pub(super) unsafe fn ec_p256_jwk_export_object(
         return None;
     }
     set_object_string_field(obj, b"kty", "EC");
-    set_object_string_field(obj, b"crv", "P-256");
+    set_object_string_field(obj, b"crv", ec_curve_name(curve));
     set_object_string_field(
         obj,
         b"x",
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&public_bytes[1..33]),
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&public_bytes[1..1 + coord_len]),
     );
     set_object_string_field(
         obj,
         b"y",
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&public_bytes[33..65]),
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(&public_bytes[1 + coord_len..1 + 2 * coord_len]),
     );
     if let Some(d) = private_d {
         set_object_string_field(

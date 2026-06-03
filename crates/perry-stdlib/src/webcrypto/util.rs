@@ -13,13 +13,27 @@ pub(super) use cbc::{
 pub(super) use hmac::{Hmac, KeyInit, Mac};
 pub(super) use once_cell::sync::Lazy;
 pub(super) use p256::ecdh::diffie_hellman as p256_diffie_hellman;
-pub(super) use p256::ecdsa::signature::{Signer as EcdsaSigner, Verifier as EcdsaVerifier};
+pub(super) use p256::ecdsa::signature::{
+    RandomizedSigner as SignatureRandomizedSigner, Signer as EcdsaSigner, Verifier as EcdsaVerifier,
+};
 pub(super) use p256::ecdsa::{
     Signature as P256EcdsaSignature, SigningKey as P256EcdsaSigningKey,
     VerifyingKey as P256EcdsaVerifyingKey,
 };
 pub(super) use p256::elliptic_curve::sec1::ToEncodedPoint;
 pub(super) use p256::{PublicKey as P256PublicKey, SecretKey as P256SecretKey};
+pub(super) use p384::ecdh::diffie_hellman as p384_diffie_hellman;
+pub(super) use p384::ecdsa::{
+    Signature as P384EcdsaSignature, SigningKey as P384EcdsaSigningKey,
+    VerifyingKey as P384EcdsaVerifyingKey,
+};
+pub(super) use p384::{PublicKey as P384PublicKey, SecretKey as P384SecretKey};
+pub(super) use p521::ecdh::diffie_hellman as p521_diffie_hellman;
+pub(super) use p521::ecdsa::{
+    Signature as P521EcdsaSignature, SigningKey as P521EcdsaSigningKey,
+    VerifyingKey as P521EcdsaVerifyingKey,
+};
+pub(super) use p521::{PublicKey as P521PublicKey, SecretKey as P521SecretKey};
 pub(super) use rsa::pkcs1v15::{
     Signature as RsaPkcs1v15Signature, SigningKey as RsaPkcs1v15SigningKey,
     VerifyingKey as RsaPkcs1v15VerifyingKey,
@@ -30,9 +44,7 @@ pub(super) use rsa::pss::{
     VerifyingKey as RsaPssVerifyingKey,
 };
 pub(super) use rsa::sha2::{Sha256 as RsaSha256, Sha384 as RsaSha384, Sha512 as RsaSha512};
-pub(super) use rsa::signature::{
-    RandomizedSigner as RsaRandomizedSigner, SignatureEncoding as RsaSignatureEncoding,
-};
+pub(super) use rsa::signature::SignatureEncoding as RsaSignatureEncoding;
 pub(super) use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 pub(super) use rsa::{BigUint as RsaBigUint, Oaep, RsaPrivateKey, RsaPublicKey};
 pub(super) use sha1::Sha1;
@@ -98,11 +110,102 @@ pub(super) enum KeyAlgo {
     AesCtr,
     EcdsaP256,
     EcdhP256,
+    EcdsaP384,
+    EcdhP384,
+    EcdsaP521,
+    EcdhP521,
     Ed25519,
     X25519,
     RsaOaep,
     RsassaPkcs1,
     RsaPss,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(super) enum EcNamedCurve {
+    P256,
+    P384,
+    P521,
+}
+
+pub(super) fn parse_ec_named_curve(name: &str) -> Option<EcNamedCurve> {
+    match name.to_ascii_uppercase().as_str() {
+        "P-256" | "PRIME256V1" | "SECP256R1" => Some(EcNamedCurve::P256),
+        "P-384" | "SECP384R1" => Some(EcNamedCurve::P384),
+        "P-521" | "SECP521R1" => Some(EcNamedCurve::P521),
+        _ => None,
+    }
+}
+
+pub(super) fn ecdsa_key_algo_for_curve(curve: EcNamedCurve) -> KeyAlgo {
+    match curve {
+        EcNamedCurve::P256 => KeyAlgo::EcdsaP256,
+        EcNamedCurve::P384 => KeyAlgo::EcdsaP384,
+        EcNamedCurve::P521 => KeyAlgo::EcdsaP521,
+    }
+}
+
+pub(super) fn ecdh_key_algo_for_curve(curve: EcNamedCurve) -> KeyAlgo {
+    match curve {
+        EcNamedCurve::P256 => KeyAlgo::EcdhP256,
+        EcNamedCurve::P384 => KeyAlgo::EcdhP384,
+        EcNamedCurve::P521 => KeyAlgo::EcdhP521,
+    }
+}
+
+pub(super) fn ec_curve_for_key_algo(algo: KeyAlgo) -> Option<EcNamedCurve> {
+    match algo {
+        KeyAlgo::EcdsaP256 | KeyAlgo::EcdhP256 => Some(EcNamedCurve::P256),
+        KeyAlgo::EcdsaP384 | KeyAlgo::EcdhP384 => Some(EcNamedCurve::P384),
+        KeyAlgo::EcdsaP521 | KeyAlgo::EcdhP521 => Some(EcNamedCurve::P521),
+        _ => None,
+    }
+}
+
+pub(super) fn ec_curve_name(curve: EcNamedCurve) -> &'static str {
+    match curve {
+        EcNamedCurve::P256 => "P-256",
+        EcNamedCurve::P384 => "P-384",
+        EcNamedCurve::P521 => "P-521",
+    }
+}
+
+pub(super) fn ec_curve_private_len(curve: EcNamedCurve) -> usize {
+    match curve {
+        EcNamedCurve::P256 => 32,
+        EcNamedCurve::P384 => 48,
+        EcNamedCurve::P521 => 66,
+    }
+}
+
+pub(super) fn ec_curve_public_len(curve: EcNamedCurve) -> usize {
+    1 + 2 * ec_curve_private_len(curve)
+}
+
+pub(super) fn ec_curve_hash(curve: EcNamedCurve) -> HashAlgo {
+    match curve {
+        EcNamedCurve::P256 => HashAlgo::Sha256,
+        EcNamedCurve::P384 => HashAlgo::Sha384,
+        EcNamedCurve::P521 => HashAlgo::Sha512,
+    }
+}
+
+pub(super) fn is_ecdsa_key_algo(algo: KeyAlgo) -> bool {
+    matches!(
+        algo,
+        KeyAlgo::EcdsaP256 | KeyAlgo::EcdsaP384 | KeyAlgo::EcdsaP521
+    )
+}
+
+pub(super) fn is_ecdh_key_algo(algo: KeyAlgo) -> bool {
+    matches!(
+        algo,
+        KeyAlgo::EcdhP256 | KeyAlgo::EcdhP384 | KeyAlgo::EcdhP521
+    )
+}
+
+pub(super) fn is_ec_key_algo(algo: KeyAlgo) -> bool {
+    is_ecdsa_key_algo(algo) || is_ecdh_key_algo(algo)
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -184,6 +287,10 @@ fn runtime_algo_id(algo: KeyAlgo) -> u8 {
         KeyAlgo::RsassaPkcs1 => 12,
         KeyAlgo::RsaOaep => 13,
         KeyAlgo::RsaPss => 14,
+        KeyAlgo::EcdsaP384 => 15,
+        KeyAlgo::EcdhP384 => 16,
+        KeyAlgo::EcdsaP521 => 17,
+        KeyAlgo::EcdhP521 => 18,
     }
 }
 
@@ -228,6 +335,10 @@ pub(super) fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
                 12 => KeyAlgo::RsassaPkcs1,
                 13 => KeyAlgo::RsaOaep,
                 14 => KeyAlgo::RsaPss,
+                15 => KeyAlgo::EcdsaP384,
+                16 => KeyAlgo::EcdhP384,
+                17 => KeyAlgo::EcdsaP521,
+                18 => KeyAlgo::EcdhP521,
                 _ => return None,
             };
             let hash = match hash {
@@ -432,17 +543,31 @@ pub(super) fn supported_usages(algo: KeyAlgo, kind: KeyKind) -> u32 {
         (KeyAlgo::AesKw, KeyKind::Secret) => USAGE_WRAP_KEY | USAGE_UNWRAP_KEY,
         (KeyAlgo::Hkdf | KeyAlgo::Pbkdf2, KeyKind::Secret) => USAGE_DERIVE_KEY | USAGE_DERIVE_BITS,
         (
-            KeyAlgo::EcdsaP256 | KeyAlgo::Ed25519 | KeyAlgo::RsassaPkcs1 | KeyAlgo::RsaPss,
+            KeyAlgo::EcdsaP256
+            | KeyAlgo::EcdsaP384
+            | KeyAlgo::EcdsaP521
+            | KeyAlgo::Ed25519
+            | KeyAlgo::RsassaPkcs1
+            | KeyAlgo::RsaPss,
             KeyKind::Private,
         ) => USAGE_SIGN,
         (
-            KeyAlgo::EcdsaP256 | KeyAlgo::Ed25519 | KeyAlgo::RsassaPkcs1 | KeyAlgo::RsaPss,
+            KeyAlgo::EcdsaP256
+            | KeyAlgo::EcdsaP384
+            | KeyAlgo::EcdsaP521
+            | KeyAlgo::Ed25519
+            | KeyAlgo::RsassaPkcs1
+            | KeyAlgo::RsaPss,
             KeyKind::Public,
         ) => USAGE_VERIFY,
-        (KeyAlgo::EcdhP256 | KeyAlgo::X25519, KeyKind::Private) => {
-            USAGE_DERIVE_KEY | USAGE_DERIVE_BITS
-        }
-        (KeyAlgo::EcdhP256 | KeyAlgo::X25519, KeyKind::Public) => 0,
+        (
+            KeyAlgo::EcdhP256 | KeyAlgo::EcdhP384 | KeyAlgo::EcdhP521 | KeyAlgo::X25519,
+            KeyKind::Private,
+        ) => USAGE_DERIVE_KEY | USAGE_DERIVE_BITS,
+        (
+            KeyAlgo::EcdhP256 | KeyAlgo::EcdhP384 | KeyAlgo::EcdhP521 | KeyAlgo::X25519,
+            KeyKind::Public,
+        ) => 0,
         (KeyAlgo::RsaOaep, KeyKind::Public) => USAGE_ENCRYPT | USAGE_WRAP_KEY,
         (KeyAlgo::RsaOaep, KeyKind::Private) => USAGE_DECRYPT | USAGE_UNWRAP_KEY,
         _ => 0,
@@ -606,29 +731,92 @@ pub(super) fn compute_hmac(hash: HashAlgo, key: &[u8], data: &[u8]) -> Option<Ve
 }
 
 pub(super) fn generate_p256_signing_key() -> Option<P256EcdsaSigningKey> {
-    use rand::RngCore;
     let mut rng = rand::rngs::OsRng;
-    for _ in 0..128 {
-        let mut bytes = [0u8; 32];
-        rng.fill_bytes(&mut bytes);
-        if let Ok(key) = P256EcdsaSigningKey::from_slice(&bytes) {
-            return Some(key);
-        }
-    }
-    None
+    Some(P256EcdsaSigningKey::random(&mut rng))
+}
+
+pub(super) fn generate_p384_signing_key() -> Option<P384EcdsaSigningKey> {
+    let mut rng = rand::rngs::OsRng;
+    Some(P384EcdsaSigningKey::random(&mut rng))
+}
+
+pub(super) fn generate_p521_signing_key() -> Option<P521EcdsaSigningKey> {
+    let mut rng = rand::rngs::OsRng;
+    Some(P521EcdsaSigningKey::random(&mut rng))
 }
 
 pub(super) fn generate_p256_secret_key() -> Option<P256SecretKey> {
-    use rand::RngCore;
     let mut rng = rand::rngs::OsRng;
-    for _ in 0..128 {
-        let mut bytes = [0u8; 32];
-        rng.fill_bytes(&mut bytes);
-        if let Ok(key) = P256SecretKey::from_slice(&bytes) {
-            return Some(key);
+    Some(P256SecretKey::random(&mut rng))
+}
+
+pub(super) fn generate_p384_secret_key() -> Option<P384SecretKey> {
+    let mut rng = rand::rngs::OsRng;
+    Some(P384SecretKey::random(&mut rng))
+}
+
+pub(super) fn generate_p521_secret_key() -> Option<P521SecretKey> {
+    let mut rng = rand::rngs::OsRng;
+    Some(P521SecretKey::random(&mut rng))
+}
+
+pub(super) fn generate_ecdsa_key_pair_bytes(curve: EcNamedCurve) -> Option<(Vec<u8>, Vec<u8>)> {
+    match curve {
+        EcNamedCurve::P256 => {
+            let key = generate_p256_signing_key()?;
+            Some((
+                key.to_bytes().as_slice().to_vec(),
+                key.verifying_key()
+                    .to_encoded_point(false)
+                    .as_bytes()
+                    .to_vec(),
+            ))
+        }
+        EcNamedCurve::P384 => {
+            let key = generate_p384_signing_key()?;
+            Some((
+                key.to_bytes().as_slice().to_vec(),
+                key.verifying_key()
+                    .to_encoded_point(false)
+                    .as_bytes()
+                    .to_vec(),
+            ))
+        }
+        EcNamedCurve::P521 => {
+            let key = generate_p521_signing_key()?;
+            let verifying_key = P521EcdsaVerifyingKey::from(&key);
+            Some((
+                key.to_bytes().as_slice().to_vec(),
+                verifying_key.to_encoded_point(false).as_bytes().to_vec(),
+            ))
         }
     }
-    None
+}
+
+pub(super) fn generate_ecdh_key_pair_bytes(curve: EcNamedCurve) -> Option<(Vec<u8>, Vec<u8>)> {
+    match curve {
+        EcNamedCurve::P256 => {
+            let key = generate_p256_secret_key()?;
+            Some((
+                key.to_bytes().as_slice().to_vec(),
+                key.public_key().to_encoded_point(false).as_bytes().to_vec(),
+            ))
+        }
+        EcNamedCurve::P384 => {
+            let key = generate_p384_secret_key()?;
+            Some((
+                key.to_bytes().as_slice().to_vec(),
+                key.public_key().to_encoded_point(false).as_bytes().to_vec(),
+            ))
+        }
+        EcNamedCurve::P521 => {
+            let key = generate_p521_secret_key()?;
+            Some((
+                key.to_bytes().as_slice().to_vec(),
+                key.public_key().to_encoded_point(false).as_bytes().to_vec(),
+            ))
+        }
+    }
 }
 
 pub(super) fn rsa_oaep_encrypt(hash: HashAlgo, key: &RsaPublicKey, data: &[u8]) -> Option<Vec<u8>> {

@@ -2,9 +2,9 @@ use super::*;
 
 /// `crypto.subtle.sign(algorithm, key, data)` → Promise<Uint8Array>
 ///
-/// Supports HMAC and ECDSA/P-256. HMAC reads the hash from the
-/// CryptoKey's stored material; ECDSA expects a private P-256 key
-/// produced by `generateKey`.
+/// Supports HMAC and ECDSA NIST curves. HMAC reads the hash from the
+/// CryptoKey's stored material; ECDSA expects a private key produced by
+/// `generateKey` or `importKey`.
 #[no_mangle]
 pub unsafe extern "C" fn js_webcrypto_sign(
     algo_bits: f64,
@@ -44,7 +44,7 @@ pub unsafe extern "C" fn js_webcrypto_sign(
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
     } else if algo_upper == "ECDSA" {
-        if mat.algo != KeyAlgo::EcdsaP256 || mat.kind != KeyKind::Private {
+        if !is_ecdsa_key_algo(mat.algo) || mat.kind != KeyKind::Private {
             return reject_with_dom_exception(
                 "InvalidAccessError",
                 "Unable to use this key to sign",
@@ -55,12 +55,40 @@ pub unsafe extern "C" fn js_webcrypto_sign(
         {
             return reject_with_dom_exception(name, message);
         }
-        let signing_key = match P256EcdsaSigningKey::from_slice(&key_bytes) {
-            Ok(k) => k,
-            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
-        };
-        let sig: P256EcdsaSignature = signing_key.sign(&data_bytes);
-        sig.to_bytes().as_slice().to_vec()
+        match mat.algo {
+            KeyAlgo::EcdsaP256 => {
+                let signing_key = match P256EcdsaSigningKey::from_slice(&key_bytes) {
+                    Ok(k) => k,
+                    Err(_) => {
+                        return reject_with_dom_exception("OperationError", "The operation failed")
+                    }
+                };
+                let sig: P256EcdsaSignature = signing_key.sign(&data_bytes);
+                sig.to_bytes().as_slice().to_vec()
+            }
+            KeyAlgo::EcdsaP384 => {
+                let signing_key = match P384EcdsaSigningKey::from_slice(&key_bytes) {
+                    Ok(k) => k,
+                    Err(_) => {
+                        return reject_with_dom_exception("OperationError", "The operation failed")
+                    }
+                };
+                let sig: P384EcdsaSignature = signing_key.sign(&data_bytes);
+                sig.to_bytes().as_slice().to_vec()
+            }
+            KeyAlgo::EcdsaP521 => {
+                let signing_key = match P521EcdsaSigningKey::from_slice(&key_bytes) {
+                    Ok(k) => k,
+                    Err(_) => {
+                        return reject_with_dom_exception("OperationError", "The operation failed")
+                    }
+                };
+                let mut rng = rand::rngs::OsRng;
+                let sig: P521EcdsaSignature = signing_key.sign_with_rng(&mut rng, &data_bytes);
+                sig.to_bytes().as_slice().to_vec()
+            }
+            _ => return reject_with_dom_exception("OperationError", "The operation failed"),
+        }
     } else if algo_upper == "ED25519" {
         if mat.algo != KeyAlgo::Ed25519 || mat.kind != KeyKind::Private {
             return reject_with_dom_exception(
@@ -172,7 +200,7 @@ pub unsafe extern "C" fn js_webcrypto_verify(
         };
         constant_time_eq(&expected_sig, &provided_sig)
     } else if algo_upper == "ECDSA" {
-        if mat.algo != KeyAlgo::EcdsaP256 || mat.kind != KeyKind::Public {
+        if !is_ecdsa_key_algo(mat.algo) || mat.kind != KeyKind::Public {
             return reject_with_dom_exception(
                 "InvalidAccessError",
                 "Unable to use this key to verify",
@@ -183,15 +211,48 @@ pub unsafe extern "C" fn js_webcrypto_verify(
         {
             return reject_with_dom_exception(name, message);
         }
-        let verifying_key = match P256EcdsaVerifyingKey::from_sec1_bytes(&key_bytes) {
-            Ok(k) => k,
-            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
-        };
-        let sig = match P256EcdsaSignature::from_slice(&provided_sig) {
-            Ok(s) => s,
-            Err(_) => return resolve_with_bool(false),
-        };
-        verifying_key.verify(&data_bytes, &sig).is_ok()
+        match mat.algo {
+            KeyAlgo::EcdsaP256 => {
+                let verifying_key = match P256EcdsaVerifyingKey::from_sec1_bytes(&key_bytes) {
+                    Ok(k) => k,
+                    Err(_) => {
+                        return reject_with_dom_exception("OperationError", "The operation failed")
+                    }
+                };
+                let sig = match P256EcdsaSignature::from_slice(&provided_sig) {
+                    Ok(s) => s,
+                    Err(_) => return resolve_with_bool(false),
+                };
+                verifying_key.verify(&data_bytes, &sig).is_ok()
+            }
+            KeyAlgo::EcdsaP384 => {
+                let verifying_key = match P384EcdsaVerifyingKey::from_sec1_bytes(&key_bytes) {
+                    Ok(k) => k,
+                    Err(_) => {
+                        return reject_with_dom_exception("OperationError", "The operation failed")
+                    }
+                };
+                let sig = match P384EcdsaSignature::from_slice(&provided_sig) {
+                    Ok(s) => s,
+                    Err(_) => return resolve_with_bool(false),
+                };
+                verifying_key.verify(&data_bytes, &sig).is_ok()
+            }
+            KeyAlgo::EcdsaP521 => {
+                let verifying_key = match P521EcdsaVerifyingKey::from_sec1_bytes(&key_bytes) {
+                    Ok(k) => k,
+                    Err(_) => {
+                        return reject_with_dom_exception("OperationError", "The operation failed")
+                    }
+                };
+                let sig = match P521EcdsaSignature::from_slice(&provided_sig) {
+                    Ok(s) => s,
+                    Err(_) => return resolve_with_bool(false),
+                };
+                verifying_key.verify(&data_bytes, &sig).is_ok()
+            }
+            _ => return reject_with_dom_exception("OperationError", "The operation failed"),
+        }
     } else if algo_upper == "ED25519" {
         if mat.algo != KeyAlgo::Ed25519 || mat.kind != KeyKind::Public {
             return reject_with_dom_exception(
@@ -332,13 +393,60 @@ pub(super) unsafe fn ecdh_shared_secret_bytes(
         let public = x25519_dalek::PublicKey::from(public);
         return Some(private.diffie_hellman(&public).as_bytes().to_vec());
     }
-    if public_mat.algo != KeyAlgo::EcdhP256 || base_mat.algo != KeyAlgo::EcdhP256 {
-        return None;
+    match (public_mat.algo, base_mat.algo) {
+        (KeyAlgo::EcdhP256, KeyAlgo::EcdhP256) => {
+            let private_key = P256SecretKey::from_slice(&private_bytes).ok()?;
+            let public_key = P256PublicKey::from_sec1_bytes(&public_bytes).ok()?;
+            let secret =
+                p256_diffie_hellman(private_key.to_nonzero_scalar(), public_key.as_affine());
+            Some(secret.raw_secret_bytes().to_vec())
+        }
+        (KeyAlgo::EcdhP384, KeyAlgo::EcdhP384) => {
+            let private_key = P384SecretKey::from_slice(&private_bytes).ok()?;
+            let public_key = P384PublicKey::from_sec1_bytes(&public_bytes).ok()?;
+            let secret =
+                p384_diffie_hellman(private_key.to_nonzero_scalar(), public_key.as_affine());
+            Some(secret.raw_secret_bytes().to_vec())
+        }
+        (KeyAlgo::EcdhP521, KeyAlgo::EcdhP521) => {
+            let private_key = P521SecretKey::from_slice(&private_bytes).ok()?;
+            let public_key = P521PublicKey::from_sec1_bytes(&public_bytes).ok()?;
+            let secret =
+                p521_diffie_hellman(private_key.to_nonzero_scalar(), public_key.as_affine());
+            Some(secret.raw_secret_bytes().to_vec())
+        }
+        _ => None,
     }
-    let private_key = P256SecretKey::from_slice(&private_bytes).ok()?;
-    let public_key = P256PublicKey::from_sec1_bytes(&public_bytes).ok()?;
-    let secret = p256_diffie_hellman(private_key.to_nonzero_scalar(), public_key.as_affine());
-    Some(secret.raw_secret_bytes().to_vec())
+}
+
+pub(super) unsafe fn ecdh_public_private_curve_mismatch(
+    algo_bits: u64,
+    base_key_bits: u64,
+) -> bool {
+    let algo_name = match extract_algo_name(algo_bits) {
+        Some(name) => name,
+        None => return false,
+    };
+    if algo_name.to_ascii_uppercase() != "ECDH" {
+        return false;
+    }
+    let public_bits = match object_field_bits(algo_bits, b"public") {
+        Some(bits) => bits,
+        None => return false,
+    };
+    let public_mat = match lookup_crypto_key(strip_ptr(public_bits)) {
+        Some(mat) => mat,
+        None => return false,
+    };
+    let base_mat = match lookup_crypto_key(strip_ptr(base_key_bits)) {
+        Some(mat) => mat,
+        None => return false,
+    };
+    public_mat.kind == KeyKind::Public
+        && base_mat.kind == KeyKind::Private
+        && is_ecdh_key_algo(public_mat.algo)
+        && is_ecdh_key_algo(base_mat.algo)
+        && public_mat.algo != base_mat.algo
 }
 
 pub(super) fn hkdf_expand(

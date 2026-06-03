@@ -1,8 +1,8 @@
 use super::*;
 
 /// `crypto.subtle.deriveBits({ name: "ECDH", public }, privateKey, length)`
-/// → Promise<Uint8Array>. Initial asymmetric-derive coverage implements
-/// P-256 ECDH, matching Node/Bun WebCrypto suites.
+/// → Promise<Uint8Array>. Asymmetric derive coverage implements the
+/// NIST ECDH curves supported by Node WebCrypto.
 #[no_mangle]
 pub unsafe extern "C" fn js_webcrypto_derive_bits(
     algo_bits: f64,
@@ -34,13 +34,21 @@ pub unsafe extern "C" fn js_webcrypto_derive_bits(
     if let Some(bytes) = kdf_derive_bytes(algo_bits.to_bits(), base_key_bits.to_bits(), byte_len) {
         return resolve_with_bytes(&bytes);
     }
-    if bit_len > 256 {
-        return reject_with_dom_exception("OperationError", "The operation failed");
-    }
     let shared = match ecdh_shared_secret_bytes(algo_bits.to_bits(), base_key_bits.to_bits()) {
         Some(s) => s,
-        None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        None => {
+            if ecdh_public_private_curve_mismatch(algo_bits.to_bits(), base_key_bits.to_bits()) {
+                return reject_with_dom_exception(
+                    "InvalidAccessError",
+                    "The requested operation is not valid for the provided key",
+                );
+            }
+            return reject_with_dom_exception("OperationError", "The operation failed");
+        }
     };
+    if byte_len > shared.len() {
+        return reject_with_dom_exception("OperationError", "The operation failed");
+    }
     resolve_with_bytes(&shared[..byte_len])
 }
 
@@ -121,7 +129,16 @@ pub unsafe extern "C" fn js_webcrypto_derive_key(
     } else {
         let shared = match ecdh_shared_secret_bytes(algo_bits.to_bits(), base_key_bits.to_bits()) {
             Some(s) => s,
-            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+            None => {
+                if ecdh_public_private_curve_mismatch(algo_bits.to_bits(), base_key_bits.to_bits())
+                {
+                    return reject_with_dom_exception(
+                        "InvalidAccessError",
+                        "The requested operation is not valid for the provided key",
+                    );
+                }
+                return reject_with_dom_exception("OperationError", "The operation failed");
+            }
         };
         if byte_len > shared.len() {
             return reject_with_dom_exception("OperationError", "The operation failed");
