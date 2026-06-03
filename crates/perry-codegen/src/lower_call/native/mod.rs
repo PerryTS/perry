@@ -212,6 +212,33 @@ pub(crate) fn lower_native_method_call(
         }
     }
 
+    // `BigInt.asIntN(bits, x)` / `BigInt.asUintN(bits, x)` (#bigint statics).
+    // Lowered to a receiver-less NativeMethodCall on the "bigint" module; emit
+    // a direct call to the runtime entry (ToIndex + BigInt brand check +
+    // two's-complement wrap).
+    if module == "bigint" && object.is_none() {
+        let runtime = match method {
+            "asIntN" => Some("js_bigint_as_int_n_call"),
+            "asUintN" => Some("js_bigint_as_uint_n_call"),
+            _ => None,
+        };
+        if let Some(runtime) = runtime {
+            let bits = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                crate::nanbox::double_literal(0.0)
+            };
+            let value = if let Some(a) = args.get(1) {
+                lower_expr(ctx, a)?
+            } else {
+                crate::nanbox::double_literal(0.0)
+            };
+            return Ok(ctx
+                .block()
+                .call(DOUBLE, runtime, &[(DOUBLE, &bits), (DOUBLE, &value)]));
+        }
+    }
+
     if module == "jsonwebtoken" && method == "sign" && object.is_none() {
         return lower_jsonwebtoken_sign(ctx, args);
     }

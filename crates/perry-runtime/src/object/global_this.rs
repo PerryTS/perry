@@ -2872,6 +2872,18 @@ pub(crate) fn bigint_as_n_dispatch(bits_arg: f64, value_arg: f64, signed: bool) 
     f64::from_bits(crate::value::js_nanbox_bigint(r as i64).to_bits())
 }
 
+/// FFI entry for the codegen-lowered `BigInt.asIntN(bits, x)` direct call.
+#[no_mangle]
+pub extern "C" fn js_bigint_as_int_n_call(bits: f64, value: f64) -> f64 {
+    bigint_as_n_dispatch(bits, value, true)
+}
+
+/// FFI entry for the codegen-lowered `BigInt.asUintN(bits, x)` direct call.
+#[no_mangle]
+pub extern "C" fn js_bigint_as_uint_n_call(bits: f64, value: f64) -> f64 {
+    bigint_as_n_dispatch(bits, value, false)
+}
+
 extern "C" fn bigint_as_int_n_thunk(
     _closure: *const crate::closure::ClosureHeader,
     bits: f64,
@@ -3193,7 +3205,13 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
         }
         "BigInt" => {
             // BigInt.asIntN(bits, bigint) / asUintN(bits, bigint) — spec length 2.
-            install_constructor_static(ctor, "asIntN", bigint_as_int_n_thunk as *const u8, 2, false);
+            install_constructor_static(
+                ctor,
+                "asIntN",
+                bigint_as_int_n_thunk as *const u8,
+                2,
+                false,
+            );
             install_constructor_static(
                 ctor,
                 "asUintN",
