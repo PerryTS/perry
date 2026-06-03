@@ -105,8 +105,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if paths.len() == 1 {
                 // Evaluate the arg for side effects (most are pure but
                 // a template literal with computed parts can have e.g.
-                // function calls); the result is discarded.
-                let _ = lower_expr(ctx, arg)?;
+                // function calls) and let registered module loader hooks
+                // observe/delegate the import. The statically known target
+                // still determines the namespace in Perry's compile-time graph.
+                let path_val = lower_expr(ctx, arg)?;
+                let _ = ctx.block().call(
+                    DOUBLE,
+                    "js_module_dynamic_import_apply_hooks",
+                    &[(DOUBLE, &path_val)],
+                );
                 let path = &paths[0];
                 let target_prefix = ctx.dynamic_import_path_to_prefix.get(path).cloned();
                 // #1671: a dynamic import of a known node-submodule
@@ -178,7 +185,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // successful compare resolves to its corresponding
             // namespace global. The final fallback emits a rejected
             // promise.
-            let path_val = lower_expr(ctx, arg)?;
+            let raw_path_val = lower_expr(ctx, arg)?;
+            let path_val = ctx.block().call(
+                DOUBLE,
+                "js_module_dynamic_import_apply_hooks",
+                &[(DOUBLE, &raw_path_val)],
+            );
             // Result phi slot: every successful match stores the
             // promise (NaN-boxed POINTER_TAG f64) here, then jumps to
             // a join block which loads and returns. Using an alloca

@@ -1792,6 +1792,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_get_export", DOUBLE, &[I64, I64, I64]);
     module.declare_function("js_get_property", DOUBLE, &[DOUBLE, I64, I64]);
     module.declare_function("js_load_module", I64, &[I64, I64]);
+    module.declare_function("js_module_dynamic_import_apply_hooks", DOUBLE, &[DOUBLE]);
     module.declare_function(
         "js_native_call_method",
         DOUBLE,

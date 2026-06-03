@@ -373,6 +373,14 @@ fn module_set_field(obj: *mut crate::object::ObjectHeader, name: &str, value: f6
 type ModuleFunction1 = extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64;
 type ModuleFunction2 = extern "C" fn(*const crate::closure::ClosureHeader, f64, f64) -> f64;
 
+#[derive(Clone, Copy)]
+struct ModuleLoaderHookEntry {
+    id: u64,
+    resolve: f64,
+    load: f64,
+    active: bool,
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum ProcessFinalizationKind {
     Exit,
@@ -396,18 +404,13 @@ thread_local! {
         const { Cell::new(std::ptr::null()) };
     static PROCESS_FINALIZATION_BEFORE_EXIT_LISTENER_INSTALLED: Cell<bool> =
         const { Cell::new(false) };
-}
-
-extern "C" fn module_source_map_noop(_closure: *const crate::closure::ClosureHeader) -> f64 {
-    f64::from_bits(crate::value::TAG_UNDEFINED)
-}
-
-fn module_noop_function(name: &str) -> f64 {
-    let func_ptr = module_source_map_noop as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 0);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
-    crate::object::set_bound_native_closure_name(closure, name);
-    crate::value::js_nanbox_pointer(closure as i64)
+    static MODULE_LOADER_HOOKS: RefCell<Vec<ModuleLoaderHookEntry>> =
+        const { RefCell::new(Vec::new()) };
+    static MODULE_LOADER_HOOK_NEXT_ID: Cell<u64> = const { Cell::new(1) };
+    static MODULE_LOADER_NEXT_RESOLVE: Cell<*const crate::closure::ClosureHeader> =
+        const { Cell::new(std::ptr::null()) };
+    static MODULE_LOADER_NEXT_LOAD: Cell<*const crate::closure::ClosureHeader> =
+        const { Cell::new(std::ptr::null()) };
 }
 
 fn module_function1(name: &str, thunk: ModuleFunction1, length: u32) -> f64 {
@@ -608,6 +611,27 @@ pub fn scan_process_finalization_roots_mut(visitor: &mut crate::gc::RuntimeRootV
         }
     });
     PROCESS_FINALIZATION_BEFORE_EXIT_LISTENER.with(|cell| {
+        let mut callback = cell.get();
+        if !callback.is_null() && visitor.visit_raw_const_ptr_slot(&mut callback) {
+            cell.set(callback);
+        }
+    });
+}
+
+pub fn scan_process_module_loader_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    MODULE_LOADER_HOOKS.with(|hooks| {
+        for entry in hooks.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_f64_slot(&mut entry.resolve);
+            visitor.visit_nanbox_f64_slot(&mut entry.load);
+        }
+    });
+    MODULE_LOADER_NEXT_RESOLVE.with(|cell| {
+        let mut callback = cell.get();
+        if !callback.is_null() && visitor.visit_raw_const_ptr_slot(&mut callback) {
+            cell.set(callback);
+        }
+    });
+    MODULE_LOADER_NEXT_LOAD.with(|cell| {
         let mut callback = cell.get();
         if !callback.is_null() && visitor.visit_raw_const_ptr_slot(&mut callback) {
             cell.set(callback);
@@ -3471,6 +3495,9 @@ static KEEP_JS_MODULE_REGISTER: extern "C" fn(f64, f64, f64) -> f64 = js_module_
 #[used]
 static KEEP_JS_MODULE_REGISTER_HOOKS: extern "C" fn(f64) -> f64 = js_module_register_hooks;
 #[used]
+static KEEP_JS_MODULE_DYNAMIC_IMPORT_APPLY_HOOKS: extern "C" fn(f64) -> f64 =
+    js_module_dynamic_import_apply_hooks;
+#[used]
 static KEEP_JS_MODULE_MODULE_NEW: extern "C" fn(f64) -> f64 = js_module_module_new;
 #[used]
 static KEEP_JS_MODULE_FIND_PATH: extern "C" fn(f64, f64, f64) -> f64 = js_module_find_path;
@@ -4308,9 +4335,30 @@ fn module_hook_member(value: f64, name: &str) -> f64 {
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
 }
 
-fn module_hooks_deregister_prototype() -> *mut crate::object::ObjectHeader {
+extern "C" fn module_hooks_deregister(closure: *const crate::closure::ClosureHeader) -> f64 {
+    let id = js_closure_get_capture_f64(closure, 0) as u64;
+    MODULE_LOADER_HOOKS.with(|hooks| {
+        if let Some(entry) = hooks.borrow_mut().iter_mut().find(|entry| entry.id == id) {
+            entry.active = false;
+        }
+    });
+    module_undefined()
+}
+
+fn module_hooks_deregister_function(id: u64) -> f64 {
+    let func_ptr = module_hooks_deregister as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 0);
+    crate::closure::js_register_closure_length(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 1);
+    js_closure_set_capture_f64(closure, 0, id as f64);
+    crate::object::set_bound_native_closure_name(closure, "deregister");
+    crate::object::set_builtin_closure_length(closure as usize, 0);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+fn module_hooks_deregister_prototype(id: u64) -> *mut crate::object::ObjectHeader {
     let proto = crate::object::js_object_alloc(0, 1);
-    module_set_field(proto, "deregister", module_noop_function("deregister"));
+    module_set_field(proto, "deregister", module_hooks_deregister_function(id));
     crate::object::set_property_attrs(
         proto as usize,
         "deregister".to_string(),
@@ -4343,17 +4391,177 @@ pub extern "C" fn js_module_register_hooks(hooks: f64) -> f64 {
         load = module_hook_member(module_get_named_field(hooks_obj, "load"), "load");
     }
 
+    let id = MODULE_LOADER_HOOK_NEXT_ID.with(|next| {
+        let id = next.get();
+        next.set(id.saturating_add(1).max(1));
+        id
+    });
+    MODULE_LOADER_HOOKS.with(|hooks| {
+        hooks.borrow_mut().push(ModuleLoaderHookEntry {
+            id,
+            resolve,
+            load,
+            active: true,
+        });
+    });
+    crate::gc::runtime_write_barrier_root_nanbox(resolve.to_bits());
+    crate::gc::runtime_write_barrier_root_nanbox(load.to_bits());
+
     let handle = crate::object::js_object_alloc(0, 2);
     module_set_field(handle, "resolve", resolve);
     module_set_field(handle, "load", load);
 
-    let proto = module_hooks_deregister_prototype();
+    let proto = module_hooks_deregister_prototype(id);
     let proto_value = module_object_value(proto);
     crate::object::prototype_chain::object_set_static_prototype(
         handle as usize,
         proto_value.to_bits(),
     );
     module_object_value(handle)
+}
+
+extern "C" fn module_loader_next_resolve(
+    _closure: *const crate::closure::ClosureHeader,
+    specifier: f64,
+    _context: f64,
+) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 2);
+    module_set_field(obj, "url", specifier);
+    module_set_field(obj, "format", module_string_value("module-typescript"));
+    module_object_value(obj)
+}
+
+extern "C" fn module_loader_next_load(
+    _closure: *const crate::closure::ClosureHeader,
+    _url: f64,
+    _context: f64,
+) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 2);
+    module_set_field(obj, "format", module_string_value("module-typescript"));
+    module_set_field(obj, "source", module_string_value(""));
+    module_object_value(obj)
+}
+
+fn module_loader_callback(
+    slot: &'static std::thread::LocalKey<Cell<*const crate::closure::ClosureHeader>>,
+    name: &str,
+    func: extern "C" fn(*const crate::closure::ClosureHeader, f64, f64) -> f64,
+) -> f64 {
+    let ptr = slot.with(|cell| {
+        let existing = cell.get();
+        if !existing.is_null() {
+            return existing;
+        }
+        let func_ptr = func as *const u8;
+        crate::closure::js_register_closure_arity(func_ptr, 2);
+        crate::closure::js_register_closure_length(func_ptr, 2);
+        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+        crate::object::set_bound_native_closure_name(closure, name);
+        crate::object::set_builtin_closure_length(closure as usize, 2);
+        cell.set(closure);
+        closure
+    });
+    crate::value::js_nanbox_pointer(ptr as i64)
+}
+
+fn module_loader_resolve_context() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 1);
+    module_set_field(obj, "parentURL", module_string_value(""));
+    module_object_value(obj)
+}
+
+fn module_loader_load_context() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 1);
+    module_set_field(obj, "format", module_string_value("module-typescript"));
+    module_object_value(obj)
+}
+
+fn module_loader_result_url(result: f64, fallback: f64) -> f64 {
+    let Some(obj) = module_object_ptr(result) else {
+        return fallback;
+    };
+    let url = module_get_named_field(obj, "url");
+    if module_value_to_string(url).is_some() {
+        url
+    } else {
+        fallback
+    }
+}
+
+/// Apply active synchronous `module.registerHooks()` callbacks to a dynamic
+/// import known to Perry's compile-time graph. This supports observable
+/// resolve/load callback participation and deregistration; arbitrary new
+/// runtime-loaded modules remain outside Perry's static import model.
+#[no_mangle]
+pub extern "C" fn js_module_dynamic_import_apply_hooks(specifier: f64) -> f64 {
+    let entries = MODULE_LOADER_HOOKS.with(|hooks| {
+        hooks
+            .borrow()
+            .iter()
+            .copied()
+            .filter(|entry| entry.active)
+            .collect::<Vec<_>>()
+    });
+    if entries.is_empty() {
+        return specifier;
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let mut current = specifier;
+    for entry in entries {
+        if is_function_value(entry.resolve) {
+            let current_handle = scope.root_nanbox_f64(current);
+            let callback_handle = scope.root_nanbox_f64(entry.resolve);
+            let context_handle = scope.root_nanbox_f64(module_loader_resolve_context());
+            let next_handle = scope.root_nanbox_f64(module_loader_callback(
+                &MODULE_LOADER_NEXT_RESOLVE,
+                "nextResolve",
+                module_loader_next_resolve,
+            ));
+            let args = [
+                current_handle.get_nanbox_f64(),
+                context_handle.get_nanbox_f64(),
+                next_handle.get_nanbox_f64(),
+            ];
+            let result = unsafe {
+                crate::closure::js_native_call_value(
+                    callback_handle.get_nanbox_f64(),
+                    args.as_ptr(),
+                    args.len(),
+                )
+            };
+            let result_handle = scope.root_nanbox_f64(result);
+            current = module_loader_result_url(
+                result_handle.get_nanbox_f64(),
+                current_handle.get_nanbox_f64(),
+            );
+        }
+
+        if is_function_value(entry.load) {
+            let current_handle = scope.root_nanbox_f64(current);
+            let callback_handle = scope.root_nanbox_f64(entry.load);
+            let context_handle = scope.root_nanbox_f64(module_loader_load_context());
+            let next_handle = scope.root_nanbox_f64(module_loader_callback(
+                &MODULE_LOADER_NEXT_LOAD,
+                "nextLoad",
+                module_loader_next_load,
+            ));
+            let args = [
+                current_handle.get_nanbox_f64(),
+                context_handle.get_nanbox_f64(),
+                next_handle.get_nanbox_f64(),
+            ];
+            unsafe {
+                crate::closure::js_native_call_value(
+                    callback_handle.get_nanbox_f64(),
+                    args.as_ptr(),
+                    args.len(),
+                );
+            }
+        }
+    }
+
+    current
 }
 
 fn module_register_invalid_specifier(specifier: &str) -> bool {
