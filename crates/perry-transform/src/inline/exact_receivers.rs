@@ -112,6 +112,11 @@ pub fn invalidate_exact_receivers_for_expr(expr: &Expr, facts: &mut ExactReceive
         | Expr::NewDynamic { .. }
         | Expr::ObjectAssign { .. }
         | Expr::PropertySet { .. }
+        // #4126 lowers property assignments as `PutValueSet`; an
+        // `obj.method = X` write at a use site must invalidate the
+        // exact-receiver facts (same as PropertySet) so a subsequently
+        // overridden method isn't wrongly inlined (#945 unsafe variants).
+        | Expr::PutValueSet { .. }
         | Expr::PropertyUpdate { .. }
         | Expr::IndexSet { .. }
         | Expr::IndexUpdate { .. }

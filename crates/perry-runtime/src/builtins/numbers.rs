@@ -417,13 +417,24 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
             // toPrimitive returned something different — re-coerce.
             return js_number_coerce(primitive);
         }
-        // No custom [Symbol.toPrimitive]: complete OrdinaryToPrimitive by
-        // stringifying the object and re-running ToNumber on the result
-        // (#2378). `js_jsvalue_to_string` handles arrays via join(",") and
-        // objects via their own/inherited toString, so `Number([])` → "" → 0,
-        // `Number([5])` → "5" → 5, and `Number({})` → "[object Object]" → NaN
-        // all match Node. The result is a string, so the recursive call lands
-        // in the string branch — no infinite pointer-branch recursion.
+        // No custom [Symbol.toPrimitive]: OrdinaryToPrimitive(O, "number") =
+        // try `valueOf` THEN `toString` (ES2024 §7.1.1.1). Previously this
+        // jumped straight to stringifying, so `Number({valueOf(){return 42}})`,
+        // `+obj`, `obj * 2` etc. wrongly gave NaN. Reuse the shared
+        // valueOf-first helper (the same one `+`/addition uses): a primitive
+        // result re-coerces; DefaultString/TypeError fall through to the
+        // stringify path (so `Number([5])` → "5" → 5, `Number({})` →
+        // "[object Object]" → NaN, `Number([])` → "" → 0 still match Node).
+        match unsafe { crate::value::ordinary_to_primitive_number_for_add(value) } {
+            crate::value::OrdinaryToPrimitiveOutcome::Primitive(p) => {
+                if p.to_bits() != value.to_bits() {
+                    return js_number_coerce(p);
+                }
+                return f64::NAN;
+            }
+            crate::value::OrdinaryToPrimitiveOutcome::TypeError
+            | crate::value::OrdinaryToPrimitiveOutcome::DefaultString => {}
+        }
         let str_ptr = crate::value::js_jsvalue_to_string(value);
         if str_ptr.is_null() {
             return f64::NAN;

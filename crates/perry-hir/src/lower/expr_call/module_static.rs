@@ -525,6 +525,44 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
+            // node:events module-level static helpers via `import * as events
+            // from "node:events"; events.once(em, name)` (and `on`,
+            // `listenerCount`, `getMaxListeners`, `setMaxListeners`,
+            // `getEventListeners`, `addAbortListener`). These take the emitter
+            // as a positional arg (`has_receiver: false` in the codegen native
+            // table), so they lower to a receiver-less NativeMethodCall on the
+            // `events` module. Without this, `events.<helper>(...)` fell through
+            // to a generic property-call on the resolved `NativeModuleRef` and
+            // returned `undefined` (issue #850: `events.once(...)` never built a
+            // Promise). Gated on the receiver identifier actually resolving to
+            // the node:events namespace import (not a shadowing local).
+            if ctx.lookup_local(obj_name).is_none()
+                && (ctx.lookup_builtin_module_alias(obj_name) == Some("events")
+                    || matches!(ctx.lookup_native_module(obj_name), Some(("events", _))))
+            {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let m = method_ident.sym.as_ref();
+                    if matches!(
+                        m,
+                        "once"
+                            | "on"
+                            | "listenerCount"
+                            | "getMaxListeners"
+                            | "setMaxListeners"
+                            | "getEventListeners"
+                            | "addAbortListener"
+                    ) {
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "events".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: m.to_string(),
+                            args,
+                        }));
+                    }
+                }
+            }
+
             // Check for Response.json(value) / Response.redirect(url, status?) /
             // Response.error() static factories.
             if obj_ident.sym.as_ref() == "Response" {
@@ -905,6 +943,31 @@ pub(super) fn try_module_static_methods(
                             object: None,
                             method: "isArrayBufferView".to_string(),
                             args: vec![arg],
+                        }));
+                    }
+                }
+            }
+
+            // `BigInt.asIntN(bits, x)` / `BigInt.asUintN(bits, x)`. Bare `BigInt`
+            // in member position lowers to `globalThis`, so a direct
+            // `BigInt.asIntN(...)` call would read `globalThis.asIntN`
+            // (undefined → "value is not a function"). Route to the runtime via
+            // a receiver-less NativeMethodCall. (The statics are also installed
+            // on the BigInt ctor closure for the `const B = BigInt; B.asIntN`
+            // value path.)
+            if obj_ident.sym.as_ref() == "BigInt" {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let m = method_ident.sym.as_ref();
+                    if m == "asIntN" || m == "asUintN" {
+                        let mut it = args.into_iter();
+                        let bits = it.next().unwrap_or(Expr::Undefined);
+                        let value = it.next().unwrap_or(Expr::Undefined);
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "bigint".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: m.to_string(),
+                            args: vec![bits, value],
                         }));
                     }
                 }

@@ -671,6 +671,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_versions", DOUBLE, &[]);
     module.declare_function("js_process_memory_usage", DOUBLE, &[]);
     // node:v8 (#3137/#3138/#3142).
+    module.declare_function("js_bigint_as_int_n_call", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_bigint_as_uint_n_call", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_v8_serialize", DOUBLE, &[DOUBLE]);
     module.declare_function("js_v8_deserialize", DOUBLE, &[DOUBLE]);
     module.declare_function("js_v8_get_heap_statistics", DOUBLE, &[]);

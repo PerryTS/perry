@@ -442,6 +442,32 @@ pub fn construction_expr_can_affect_method_lookup(
                     setter_names,
                 )
         }
+        // #4126 changed `this.field = x` ctor assignments to lower as
+        // `PutValueSet` (PutValue descriptor semantics) instead of
+        // `PropertySet`. Mirror the `PropertySet { object: This }` arm so a
+        // plain field store doesn't get treated as a method-lookup shadow —
+        // otherwise every class whose constructor assigns a field disables
+        // method inlining + scalar replacement (regressed #945).
+        Expr::PutValueSet {
+            target, key, value, ..
+        } if matches!(target.as_ref(), Expr::This) => {
+            match key.as_ref() {
+                Expr::String(k) => {
+                    k == method_name
+                        || setter_names.contains(k)
+                        || construction_expr_can_affect_method_lookup(
+                            value,
+                            method_name,
+                            data_fields,
+                            getter_names,
+                            setter_names,
+                        )
+                }
+                // Computed/dynamic key — can't prove which property is
+                // written, so conservatively treat it as lookup-affecting.
+                _ => true,
+            }
+        }
         Expr::LocalSet(_, value) => construction_expr_can_affect_method_lookup(
             value,
             method_name,

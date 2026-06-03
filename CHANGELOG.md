@@ -2,6 +2,101 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1116 — fix(events): node:events module-level static helpers dispatch (events.once/on/listenerCount/...)
+
+`events.once(emitter, name)` and the other `node:events` module-level static
+helpers (`on`, `listenerCount`, `getMaxListeners`, `setMaxListeners`,
+`getEventListeners`, `addAbortListener`) — accessed via
+`import * as events from "node:events"` — returned `undefined` instead of
+dispatching to their runtime implementations (issue #850: `await events.once(...)`
+resolved to `undefined`, so `result.length` threw).
+
+The runtime (`js_events_once` etc.) and the codegen native dispatch table
+(`net_events.rs`, `has_receiver: false` rows) were both present, but the HIR
+lowering in `expr_call/module_static.rs` had no arm for the `events` namespace,
+so `events.<helper>(...)` fell through to a generic property-call on the
+resolved `NativeModuleRef` and produced `undefined`. Added an `events` arm to
+`try_module_static_methods` that lowers these helpers to a receiver-less
+`NativeMethodCall { module: "events" }`, gated on the receiver identifier
+actually resolving to the node:events namespace import (not a shadowing local).
+Verified `events.once(em, "ready")` resolves to `["value-1"]` and
+`test_issue_850_eventemitter` byte-matches `node --experimental-strip-types`.
+
+## v0.5.1115 — fix(typedarray): Uint8Array.of/from build the buffer-backed representation
+
+`Uint8Array.of(...)` / `Uint8Array.from(...)` produced garbage bytes
+(`Uint8Array.of(1,2,3)[0]` read back as a denormal like `1.27e-321`, issue
+#871 part-2 regression). Perry represents `Uint8Array` as a **buffer**
+(`BufferHeader`, via `js_uint8array_new` / `js_uint8array_from_array` in
+`buffer/from.rs`); `new Uint8Array([...])` already builds that form. But the
+`Uint8ArrayFrom` codegen lowered `.of/.from` to
+`js_typed_array_new_from_array(kind=1, …)`, which builds the *generic*
+`TypedArrayHeader` representation instead. Element reads (`u[i]`) then routed
+through the buffer path and mis-read the `TypedArrayHeader` as a plain array,
+yielding uninitialized memory.
+
+Fixes:
+- `perry-codegen/src/expr/instance_misc1.rs`: `Uint8ArrayFrom` now calls
+  `js_uint8array_from_array(arr)` (buffer-backed, matching `new Uint8Array`)
+  instead of `js_typed_array_new_from_array(1, arr)`, keeping the
+  representation consistent so `u[i]` reads correctly.
+- `perry-runtime/src/typedarray.rs`: `js_typed_array_new_from_array` (still
+  used by non-`Uint8Array` `.of/.from`, e.g. `Int8Array.of`) now reads source
+  elements through the canonical `js_array_get_f64` accessor rather than a raw
+  inline-`f64` read, so it correctly materializes cloned/lazy source arrays
+  (verified `Int8Array.of(5,6,7)` matches Node).
+
+
+## v0.5.1114 — test(parity): specify expected exit code for three intentional-throw expected-output tests
+
+`run_parity_tests.sh` compares an expected-output test's process exit code
+against `test-parity/expected-exit/<name>.txt`, defaulting to `0` when that
+file is absent. Three Perry-specific expected-output tests intentionally end by
+throwing a `TypeError` (verifying spec behavior) — their committed
+`test-parity/expected/<name>.txt` snapshots already capture the thrown error —
+but they had no `expected-exit` entry, so the harness expected exit `0` while
+Perry (correctly, matching `node --experimental-strip-types`) exits `1`. That
+made all three report a false parity failure even though Perry's output and
+exit already match Node.
+
+Adds `test-parity/expected-exit/{test_issue_462_nullish_property_access,
+test_issue_510_primitive_method_typeerror,
+test_decorators_replacement_unsupported}.txt` each containing `1`. Verified each
+now passes via `./run_parity_tests.sh --filter <name>`. No runtime/compiler
+change — Perry's behavior was already correct; this only corrects the harness's
+expected exit code for these three throw-on-purpose cases.
+
+## v0.5.1113 — fix(inline): #945 restore scalar method inlining for PutValueSet constructors
+
+#4126 ("assignment PutValue descriptor semantics") changed `this.field = x`
+constructor stores to lower as `Expr::PutValueSet` instead of
+`Expr::PropertySet`. Three scalar-replacement / escape analyses only
+special-cased `PropertySet{object:This}`, so **every class whose constructor
+assigns a field** was treated as method-shadowing / `this`-escaping. That
+broadly disabled both method inlining and scalar replacement: the
+`run_issue_945_scalar_method_ir_guard.sh` compile-smoke guard regressed (a
+trivial `new C(); obj.getValue()` allocated + dispatched instead of folding to
+a scalar field read), and a large batch of parity tests regressed with it.
+
+Fixes, all mirroring the existing `PropertySet{object:This}` handling:
+- `perry-transform/src/inline/analysis.rs`
+  `construction_expr_can_affect_method_lookup`: add a `PutValueSet{target:This}`
+  arm so a plain field store isn't treated as a method-lookup shadow (restores
+  `method_lookup_safe = true`).
+- `perry-codegen/src/collectors/this_as_value.rs` `expr_uses_this_as_value`: add
+  a `PutValueSet` arm (target+receiver = `This`, string key) so a field store
+  isn't counted as materializing `this` as a value (restores non-escaping
+  scalar replacement).
+- `perry-transform/src/inline/exact_receivers.rs`
+  `invalidate_exact_receivers_for_expr`: add `PutValueSet` to the
+  fact-invalidating write set so an `obj.method = X` override at a use site
+  still suppresses inlining of the overridden method (#945 unsafe variants).
+
+`collectors/escape_check.rs` already grew a `PutValueSet` arm in #4126, so no
+change was needed there. Also tags two doc-example fences with `,no-test`
+(`getting-started/project-config.md`, `ui/on-frame.md`) so the repo-wide
+markdown-fence doc lint passes.
+
 ## v0.5.1112 — release: cut v0.5.1112
 
 Distribution release tagging the accumulated work since `v0.5.1028` (1198

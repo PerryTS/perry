@@ -719,11 +719,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let iter_box = lower_expr(ctx, iter)?;
             let blk = ctx.block();
             let arr = blk.call(I64, "js_array_from_value", &[(DOUBLE, &iter_box)]);
-            let ta = blk.call(
-                I64,
-                "js_typed_array_new_from_array",
-                &[(I32, "1"), (I64, &arr)],
-            );
+            // Perry represents `Uint8Array` as a buffer-backed object
+            // (`BufferHeader`, see buffer/from.rs), NOT the generic
+            // `TypedArrayHeader` kind-1 produced by
+            // `js_typed_array_new_from_array`. `new Uint8Array([...])` already
+            // builds the buffer form; routing `Uint8Array.of/from` through the
+            // same `js_uint8array_from_array` keeps the representation
+            // consistent so element reads (`u[i]`) go through the registered
+            // buffer path instead of mis-reading a TypedArrayHeader as a plain
+            // array (issue #871: of/from produced garbage bytes).
+            let ta = blk.call(I64, "js_uint8array_from_array", &[(I64, &arr)]);
             Ok(nanbox_pointer_inline(blk, &ta))
         }
 
