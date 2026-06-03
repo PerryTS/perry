@@ -37,14 +37,13 @@ fn skip_string_control(bytes: &[u8], mut i: usize) -> usize {
     i
 }
 
-fn strip_vt_control_sequences(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let bytes = input.as_bytes();
+fn strip_vt_control_sequences(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == 0x1b {
             if i + 1 >= bytes.len() {
-                out.push('\x1b');
+                out.push(0x1b);
                 i += 1;
                 continue;
             }
@@ -67,7 +66,7 @@ fn strip_vt_control_sequences(input: &str) -> String {
                     continue;
                 }
                 _ => {
-                    out.push('\x1b');
+                    out.push(0x1b);
                     i += 1;
                     continue;
                 }
@@ -87,9 +86,8 @@ fn strip_vt_control_sequences(input: &str) -> String {
             continue;
         }
 
-        let ch = input[i..].chars().next().unwrap_or_default();
-        out.push(ch);
-        i += ch.len_utf8();
+        out.push(bytes[i]);
+        i += 1;
     }
     out
 }
@@ -101,8 +99,16 @@ pub extern "C" fn js_util_strip_vt_control_characters(value: f64) -> f64 {
         throw_invalid_str_arg(value);
     }
 
-    let input = crate::url::get_string_content(value);
-    let out = strip_vt_control_sequences(&input);
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(value, &mut scratch) else {
+        throw_invalid_str_arg(value);
+    };
+    let input = if ptr.is_null() {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(ptr, len as usize) }
+    };
+    let out = strip_vt_control_sequences(input);
     let ptr = crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32);
     f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
 }

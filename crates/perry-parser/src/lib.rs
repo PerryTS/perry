@@ -357,19 +357,21 @@ fn normalize_unicode_identifier_escapes(source: &str) -> String {
                 }
             }
             State::String(quote) => {
-                out.push(bytes[i] as char);
                 if bytes[i] == b'\\' {
-                    if let Some(&next) = bytes.get(i + 1) {
-                        out.push(next as char);
-                        i += 2;
-                    } else {
-                        i += 1;
+                    out.push('\\');
+                    i += 1;
+                    if i < bytes.len() {
+                        let ch = source[i..].chars().next().unwrap();
+                        out.push(ch);
+                        i += ch.len_utf8();
                     }
                 } else {
+                    let ch = source[i..].chars().next().unwrap();
+                    out.push(ch);
                     if bytes[i] == quote {
                         state = State::Code;
                     }
-                    i += 1;
+                    i += ch.len_utf8();
                 }
             }
             State::Regex { in_class } => {
@@ -395,20 +397,23 @@ fn normalize_unicode_identifier_escapes(source: &str) -> String {
                 }
             }
             State::LineComment => {
-                out.push(bytes[i] as char);
+                let ch = source[i..].chars().next().unwrap();
+                out.push(ch);
                 if bytes[i] == b'\n' {
                     state = State::Code;
                 }
-                i += 1;
+                i += ch.len_utf8();
             }
             State::BlockComment => {
-                out.push(bytes[i] as char);
                 if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                    out.push('*');
                     out.push('/');
                     i += 2;
                     state = State::Code;
                 } else {
-                    i += 1;
+                    let ch = source[i..].chars().next().unwrap();
+                    out.push(ch);
+                    i += ch.len_utf8();
                 }
             }
         }
@@ -569,5 +574,20 @@ if (!ASCII_WHITESPACE_REPLACE_REGEX.test(' ')) {
                 .unwrap();
 
         assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn normalize_preserves_non_ascii_in_strings_and_comments() {
+        let source = "const s = \"café\"; // déjà\nconst t = `naïve`; /* año */";
+        assert_eq!(normalize_unicode_identifier_escapes(source), source);
+    }
+
+    #[test]
+    fn normalize_keeps_string_unicode_escapes_literal() {
+        let source = r#"let \u0061 = "\u0062";"#;
+        assert_eq!(
+            normalize_unicode_identifier_escapes(source),
+            r#"let a = "\u0062";"#
+        );
     }
 }
