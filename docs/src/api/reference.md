@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2693 entries across 109 modules.
+Total: 2704 entries across 109 modules.
 
 ## Modules
 
@@ -1489,8 +1489,10 @@ Total: 2693 entries across 109 modules.
 - `__set_maxTotalSockets` — instance *(class: `Agent`)*
 - `__set_protocol` — instance *(class: `Agent`)*
 - `__set_requestTimeout` — instance *(class: `HttpServer`)*
+- `__set_sendDate` — instance *(class: `ServerResponse`)*
 - `__set_statusCode` — instance *(class: `ServerResponse`)*
 - `__set_statusMessage` — instance *(class: `ServerResponse`)*
+- `__set_strictContentLength` — instance *(class: `ServerResponse`)*
 - `__set_timeout` — instance *(class: `HttpServer`)*
 - `_connectionListener` — module
 - `abort` — instance *(class: `ClientRequest`)*
@@ -1499,11 +1501,13 @@ Total: 2693 entries across 109 modules.
 - `addListener` — instance *(class: `ServerResponse`)*
 - `addTrailers` — instance *(class: `ServerResponse`)*
 - `address` — instance *(class: `HttpServer`)*
+- `appendHeader` — instance *(class: `ServerResponse`)*
 - `close` — instance *(class: `Agent`)*
 - `close` — instance *(class: `HttpServer`)*
 - `closeAllConnections` — instance *(class: `HttpServer`)*
 - `closeIdleConnections` — instance *(class: `HttpServer`)*
 - `cork` — instance *(class: `ClientRequest`)*
+- `cork` — instance *(class: `ServerResponse`)*
 - `createServer` — module
 - `createServer` — module
 - `defaultPort` — instance *(class: `Agent`)*
@@ -1519,7 +1523,9 @@ Total: 2693 entries across 109 modules.
 - `getHeader` — instance *(class: `ClientRequest`)*
 - `getHeader` — instance *(class: `ServerResponse`)*
 - `getHeaderNames` — instance *(class: `ClientRequest`)*
+- `getHeaderNames` — instance *(class: `ServerResponse`)*
 - `getHeaders` — instance *(class: `ClientRequest`)*
+- `getHeaders` — instance *(class: `ServerResponse`)*
 - `getName` — instance *(class: `Agent`)*
 - `getRawHeaderNames` — instance *(class: `ClientRequest`)*
 - `getStatus` — instance *(class: `ServerResponse`)*
@@ -1558,23 +1564,28 @@ Total: 2693 entries across 109 modules.
 - `setGlobalProxyFromEnv` — module
 - `setHeader` — instance *(class: `ClientRequest`)*
 - `setHeader` — instance *(class: `ServerResponse`)*
+- `setHeaders` — instance *(class: `ServerResponse`)*
 - `setMaxIdleHTTPParsers` — module
 - `setNoDelay` — instance *(class: `ClientRequest`)*
 - `setSocketKeepAlive` — instance *(class: `ClientRequest`)*
 - `setStatus` — instance *(class: `ServerResponse`)*
 - `setTimeout` — instance *(class: `HttpServer`)*
+- `setTimeout` — instance *(class: `IncomingMessage`)*
 - `setTimeout` — instance *(class: `ClientRequest`)*
+- `setTimeout` — instance *(class: `ServerResponse`)*
 - `sockets` — instance *(class: `Agent`)*
 - `statusCode` — instance *(class: `IncomingMessage`)*
 - `statusMessage` — instance *(class: `IncomingMessage`)*
 - `timeout` — instance *(class: `HttpServer`)*
 - `trailers` — instance *(class: `IncomingMessage`)*
 - `uncork` — instance *(class: `ClientRequest`)*
+- `uncork` — instance *(class: `ServerResponse`)*
 - `url` — instance *(class: `IncomingMessage`)*
 - `validateHeaderName` — module
 - `validateHeaderValue` — module
 - `write` — instance *(class: `ServerResponse`)*
 - `writeContinue` — instance *(class: `ServerResponse`)*
+- `writeEarlyHints` — instance *(class: `ServerResponse`)*
 - `writeHead` — instance *(class: `ServerResponse`)*
 - `writeProcessing` — instance *(class: `ServerResponse`)*
 
