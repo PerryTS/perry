@@ -103,6 +103,63 @@ use super::progress::{ProgressSnapshot, VerboseProgress};
 mod types;
 pub use types::*;
 
+fn canonical_class_source_prefix(
+    class: &perry_hir::Class,
+    class_canonical_path: &HashMap<perry_hir::ClassId, String>,
+    project_root: &Path,
+    fallback_prefix: &str,
+) -> String {
+    class_canonical_path
+        .get(&class.id)
+        .map(|path| compute_module_prefix(path, project_root))
+        .unwrap_or_else(|| fallback_prefix.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_class_source_prefix_prefers_defining_path() {
+        let class = perry_hir::Class {
+            id: 7,
+            name: "Observable".to_string(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: None,
+            native_extends: None,
+            extends_expr: None,
+            fields: Vec::new(),
+            constructor: None,
+            methods: Vec::new(),
+            getters: Vec::new(),
+            setters: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: Vec::new(),
+            computed_members: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: true,
+            aliases: Vec::new(),
+        };
+        let project_root = PathBuf::from("/repo");
+        let mut class_canonical_path = HashMap::new();
+        class_canonical_path.insert(
+            class.id,
+            "/repo/node_modules/rxjs/src/internal/Observable.ts".to_string(),
+        );
+
+        assert_eq!(
+            canonical_class_source_prefix(
+                &class,
+                &class_canonical_path,
+                &project_root,
+                "node_modules_rxjs_src_index_ts",
+            ),
+            "node_modules_rxjs_src_internal_Observable_ts"
+        );
+    }
+}
+
 // `inject_ios_deeplinks`, `inject_google_auth_info_plist`, and
 // `lookup_bundle_id_from_info_plist` moved to `apple_info_plist.rs`.
 // `rust_target_triple` moved to `app_metadata.rs`.
@@ -2194,10 +2251,16 @@ pub fn run_with_parse_cache(
                                     imported_vars.insert(export_name.clone());
                                 }
                                 if let Some(class) = exported_classes.get(&key) {
+                                    let class_prefix = canonical_class_source_prefix(
+                                        class,
+                                        &class_canonical_path,
+                                        &ctx.project_root,
+                                        &origin_prefix,
+                                    );
                                     imported_classes.push(perry_codegen::ImportedClass {
                                         name: class.name.clone(),
                                         local_alias: None,
-                                        source_prefix: origin_prefix.clone(),
+                                        source_prefix: class_prefix,
                                         constructor_param_count: class
                                             .constructor
                                             .as_ref()
@@ -2382,10 +2445,16 @@ pub fn run_with_parse_cache(
                                         imported_vars.insert(export_name.clone());
                                     }
                                     if let Some(class) = exported_classes.get(&key) {
+                                        let class_prefix = canonical_class_source_prefix(
+                                            class,
+                                            &class_canonical_path,
+                                            &ctx.project_root,
+                                            &origin_prefix,
+                                        );
                                         imported_classes.push(perry_codegen::ImportedClass {
                                             name: class.name.clone(),
                                             local_alias: None,
-                                            source_prefix: origin_prefix.clone(),
+                                            source_prefix: class_prefix,
                                             constructor_param_count: class
                                                 .constructor
                                                 .as_ref()
@@ -2599,6 +2668,12 @@ pub fn run_with_parse_cache(
 
                     // Imported classes
                     if let Some(class) = exported_classes.get(&key) {
+                        let class_prefix = canonical_class_source_prefix(
+                            class,
+                            &class_canonical_path,
+                            &ctx.project_root,
+                            &effective_prefix,
+                        );
                         // Issue #665: when the user wrote `import X from "pkg"`
                         // and `pkg`'s default export is a class, the importer
                         // still registers `exported_name="default"` into
@@ -2625,7 +2700,7 @@ pub fn run_with_parse_cache(
                             imported_classes.push(perry_codegen::ImportedClass {
                                 name: class.name.clone(),
                                 local_alias: Some(exported_name.clone()),
-                                source_prefix: effective_prefix.clone(),
+                                source_prefix: class_prefix.clone(),
                                 constructor_param_count: class
                                     .constructor
                                     .as_ref()
@@ -2689,7 +2764,7 @@ pub fn run_with_parse_cache(
                             } else {
                                 None
                             },
-                            source_prefix: effective_prefix.clone(),
+                            source_prefix: class_prefix,
                             constructor_param_count: class
                                 .constructor
                                 .as_ref()
