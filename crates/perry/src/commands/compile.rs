@@ -3037,31 +3037,13 @@ pub fn run_with_parse_cache(
                             }
                         }
                         perry_hir::ImportSpecifier::Default { local } => {
-                            // Some historical submodules model their default
-                            // import as the namespace object. Other submodules
-                            // with CommonJS-style default objects route through
-                            // the explicit "default" export below.
-                            //
-                            if matches!(submod_key.as_str(), "timers" | "trace_events") {
-                                // Default imports of these modules are module
-                                // objects — route to the namespace so they work
-                                // like `import * as ...` (#1213, #2629).
-                                namespace_node_submodules
-                                    .insert(local.clone(), submod_key.clone());
-                                if !namespace_imports.contains(&local) {
-                                    namespace_imports.push(local.clone());
-                                }
-                            } else {
-                                // Default imports route to "default" — these
-                                // submodules either expose a real default
-                                // (`node:sys` aliases `node:util`) or need a
-                                // tracked placeholder to keep the catch-all
-                                // from firing on `import x from "node:..."`.
-                                import_function_node_submodule.insert(
-                                    local.clone(),
-                                    (submod_key.clone(), "default".to_string()),
-                                );
-                            }
+                            // Default imports route to "default" — known Node
+                            // submodules expose an object-valued default export
+                            // that is distinct from the namespace object.
+                            import_function_node_submodule.insert(
+                                local.clone(),
+                                (submod_key.clone(), "default".to_string()),
+                            );
                         }
                         perry_hir::ImportSpecifier::Namespace { local } => {
                             namespace_node_submodules

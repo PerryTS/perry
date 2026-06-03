@@ -212,19 +212,6 @@ Selected highlights (full list in `runtime-parity.md`):
 - `rl.commit()`
 - `rl.rollback()`
 
-### node:stream/consumers
-
-**Total APIs: 6** · Perry covers: 0 · Gap: 6
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `consumers.arrayBuffer(stream)`
-- `consumers.blob(stream)`
-- `consumers.buffer(stream)`
-- `consumers.bytes(stream)`
-- `consumers.json(stream)`
-- `consumers.text(stream)`
-
 ### node:string_decoder
 
 **Total APIs: 6** · Perry covers: 0 · Gap: 6

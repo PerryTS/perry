@@ -51,7 +51,7 @@ pub(crate) fn lower_lit(lit: &ast::Lit) -> Result<Expr> {
         }
         ast::Lit::Str(s) => {
             if let Some(valid_utf8) = s.value.as_str() {
-                Ok(Expr::String(valid_utf8.to_string()))
+                Ok(Expr::String(normalize_swc_string_literal(s, valid_utf8)))
             } else {
                 // Lone surrogates (U+D800..U+DFFF): SWC stores them as WTF-8 bytes.
                 // as_str() returns None because they can't be represented as valid UTF-8.
@@ -66,6 +66,27 @@ pub(crate) fn lower_lit(lit: &ast::Lit) -> Result<Expr> {
             flags: re.flags.to_string(),
         }),
         _ => Err(anyhow!("Unsupported literal type")),
+    }
+}
+
+fn normalize_swc_string_literal(lit: &ast::Str, decoded: &str) -> String {
+    let Some(raw) = lit.raw.as_ref().map(|raw| raw.as_ref()) else {
+        return decoded.to_string();
+    };
+    if raw.is_ascii() || decoded.is_ascii() {
+        return decoded.to_string();
+    }
+    let mut bytes = Vec::with_capacity(decoded.len());
+    for ch in decoded.chars() {
+        let code = ch as u32;
+        if code > 0xFF {
+            return decoded.to_string();
+        }
+        bytes.push(code as u8);
+    }
+    match String::from_utf8(bytes) {
+        Ok(repaired) => repaired,
+        Err(_) => decoded.to_string(),
     }
 }
 

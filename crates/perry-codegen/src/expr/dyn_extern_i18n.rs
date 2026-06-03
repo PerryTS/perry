@@ -327,6 +327,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let bits = crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF);
                 return Ok(double_literal(f64::from_bits(bits)));
             }
+            // Issue #841: named imports from Node submodules Perry recognizes
+            // as runtime-backed values must win over the generic native-module
+            // closure wrapper. Default imports use this map too; returning the
+            // runtime export here keeps `import consumers from
+            // "node:stream/consumers"` equal to the namespace's `.default`
+            // object instead of the namespace object itself.
+            if let Some((submod_key, exported_name)) = ctx.import_function_node_submodule.get(name)
+            {
+                let submod_label = emit_string_literal_global(ctx, submod_key);
+                let name_label = emit_string_literal_global(ctx, exported_name);
+                let submod_len = submod_key.len();
+                let name_len = exported_name.len();
+                let blk = ctx.block();
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_node_submodule_export_as_function",
+                    &[
+                        (PTR, &submod_label),
+                        (I32, &submod_len.to_string()),
+                        (PTR, &name_label),
+                        (I32, &name_len.to_string()),
+                    ],
+                ));
+            }
             if let Some(source_prefix) = ctx.import_function_prefixes.get(name).cloned() {
                 // Issue #678 followup: a V8-fallback import used as a value
                 // (rather than called directly) has no native singleton
@@ -408,34 +432,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let closure_handle =
                     blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
                 return Ok(nanbox_pointer_inline(blk, &closure_handle));
-            }
-            // Issue #841: named imports from the five Node submodules
-            // Perry recognizes but has no perry-stdlib backing for
-            // (`node:timers/promises`, `node:readline/promises`,
-            // `node:stream/promises`, `node:stream/consumers`,
-            // `node:sys`). Pre-fix the catch-all returned TAG_TRUE so
-            // `typeof setTimeout === "boolean"` and the value literally
-            // printed as `true`. Route to the runtime helper
-            // `js_node_submodule_export_as_function` which returns a
-            // NaN-boxed function singleton; the singleton's thunk is a
-            // thrower (a follow-up under #793 wires real impls).
-            if let Some((submod_key, exported_name)) = ctx.import_function_node_submodule.get(name)
-            {
-                let submod_label = emit_string_literal_global(ctx, submod_key);
-                let name_label = emit_string_literal_global(ctx, exported_name);
-                let submod_len = submod_key.len();
-                let name_len = exported_name.len();
-                let blk = ctx.block();
-                return Ok(blk.call(
-                    DOUBLE,
-                    "js_node_submodule_export_as_function",
-                    &[
-                        (PTR, &submod_label),
-                        (I32, &submod_len.to_string()),
-                        (PTR, &name_label),
-                        (I32, &name_len.to_string()),
-                    ],
-                ));
             }
             // Issue #841 companion: namespace imports for the same five
             // submodules. The `collect_modules.rs` rejection skips

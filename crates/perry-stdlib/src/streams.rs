@@ -1493,6 +1493,7 @@ pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
         }
     };
     let mut closed_rejection: Option<(usize, u64)> = None;
+    let mut closed_resolution: Option<usize> = None;
     let outcome: Option<(u64, bool, bool)> = {
         let mut g = READABLE_STREAMS.lock().unwrap();
         match g.get_mut(&stream_id) {
@@ -1504,6 +1505,10 @@ pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
                             s.error_value = error;
                             if let Some(reader_id) = s.reader_handle {
                                 closed_rejection = Some((reader_id, error));
+                            }
+                        } else if s.state == ReadableState::Closed {
+                            if let Some(reader_id) = s.reader_handle {
+                                closed_resolution = Some(reader_id);
                             }
                         }
                     }
@@ -1529,6 +1534,17 @@ pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
         if let Some(p) = p {
             js_promise_reject(p, f64::from_bits(reason));
         }
+    }
+    if let Some(reader_id) = closed_resolution {
+        let p = READERS
+            .lock()
+            .unwrap()
+            .get(&reader_id)
+            .map(|r| r.closed_promise);
+        if let Some(p) = p {
+            js_promise_resolve(p, f64::from_bits(TAG_UNDEFINED));
+        }
+        close_pending(stream_id);
     }
     match outcome {
         Some((value, _, true)) => {
