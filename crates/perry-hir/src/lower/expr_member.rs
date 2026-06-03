@@ -219,9 +219,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     // match the simple `process.X` Ident-then-prop dispatch. (#347 Phase 3.)
     if let ast::Expr::Member(inner_member) = member.obj.as_ref() {
         if let ast::Expr::Ident(root_ident) = inner_member.obj.as_ref() {
-            if root_ident.sym.as_ref() == "process"
-                && !ctx.shadows_unqualified_global("process")
-            {
+            if root_ident.sym.as_ref() == "process" && !ctx.shadows_unqualified_global("process") {
                 if let (ast::MemberProp::Ident(stream_ident), ast::MemberProp::Ident(prop_ident)) =
                     (&inner_member.prop, &member.prop)
                 {
