@@ -1388,15 +1388,12 @@ pub unsafe extern "C" fn js_native_call_method(
         let s_ptr = crate::value::js_get_string_pointer_unified(object_handle.get_nanbox_f64())
             as *const crate::StringHeader;
         if !s_ptr.is_null() {
-            if let Some(result) = call_primitive_builtin_prototype_method(
-                object,
-                b"String",
-                method_name,
-                args_ptr,
-                args_len,
-            ) {
-                return result;
-            }
+            // NOTE: user-defined `String.prototype` methods on primitive string
+            // receivers are routed through the `primitive_kind` fallback below
+            // (after native string-method dispatch). Intercepting here, *before*
+            // native dispatch, re-enters `js_native_call_method` via the #4100
+            // brand-check re-dispatch thunk installed on `String.prototype`
+            // (e.g. `replace`), causing unbounded recursion.
             let s_handle = root_scope.root_string_ptr(s_ptr);
             let receiver_string = || s_handle.get_raw_const_ptr::<crate::StringHeader>();
             let arg_at = |i: usize| -> Option<f64> {
