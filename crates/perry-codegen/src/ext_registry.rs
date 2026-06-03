@@ -189,6 +189,16 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_http_agent_create_connection",             OwnerKind::Stdlib { feature: Some("http-client") }),
     ("js_http_agent_create_socket",                 OwnerKind::Stdlib { feature: Some("http-client") }),
 
+    // ── #3954: external node:http client/server surface ─────────────
+    // These native-table rows are implemented by `perry-ext-http`
+    // rather than `perry-stdlib`. They must flip the `"http"`
+    // well-known binding even when compiled-package lowering emits the
+    // call without a source-level `import "node:http"` in the entry.
+    ("js_http_request_overload",                    OwnerKind::WellKnown("http")),
+    ("js_http_get_overload",                        OwnerKind::WellKnown("http")),
+    ("js_https_request_overload",                   OwnerKind::WellKnown("http")),
+    ("js_https_get_overload",                       OwnerKind::WellKnown("http")),
+
     // ── #846: node:http server ───────────────────────────────────────
     // `perry-ext-http-server` defines `js_node_http_*`. It's pulled in
     // transitively via `perry-ext-http` (rlib dep), and the well-known
@@ -233,6 +243,46 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_node_http_server_max_requests_per_socket", OwnerKind::WellKnown("http")),
     ("js_node_http_server_set_max_requests_per_socket", OwnerKind::WellKnown("http")),
     ("js_node_http_server_set_timeout_method",      OwnerKind::WellKnown("http")),
+    ("js_node_http_im_on",                          OwnerKind::WellKnown("http")),
+    ("js_node_http_im_pause",                       OwnerKind::WellKnown("http")),
+    ("js_node_http_im_resume",                      OwnerKind::WellKnown("http")),
+    ("js_node_http_im_destroy",                     OwnerKind::WellKnown("http")),
+    ("js_node_http_im_read",                        OwnerKind::WellKnown("http")),
+    ("js_node_http_im_set_timeout",                 OwnerKind::WellKnown("http")),
+    ("js_node_http_im_method",                      OwnerKind::WellKnown("http")),
+    ("js_node_http_im_url",                         OwnerKind::WellKnown("http")),
+    ("js_node_http_im_http_version",                OwnerKind::WellKnown("http")),
+    ("js_node_http_im_complete",                    OwnerKind::WellKnown("http")),
+    ("js_node_http_im_aborted",                     OwnerKind::WellKnown("http")),
+    ("js_node_http_im_destroyed",                   OwnerKind::WellKnown("http")),
+    ("js_node_http_res_set_header_self",            OwnerKind::WellKnown("http")),
+    ("js_node_http_res_get_header",                 OwnerKind::WellKnown("http")),
+    ("js_node_http_res_remove_header",              OwnerKind::WellKnown("http")),
+    ("js_node_http_res_has_header_value",           OwnerKind::WellKnown("http")),
+    ("js_node_http_res_get_headers_json",           OwnerKind::WellKnown("http")),
+    ("js_node_http_res_get_header_names_json",      OwnerKind::WellKnown("http")),
+    ("js_node_http_res_append_header",              OwnerKind::WellKnown("http")),
+    ("js_node_http_res_set_headers",                OwnerKind::WellKnown("http")),
+    ("js_node_http_res_write_head",                 OwnerKind::WellKnown("http")),
+    ("js_node_http_res_write",                      OwnerKind::WellKnown("http")),
+    ("js_node_http_res_add_trailers",               OwnerKind::WellKnown("http")),
+    ("js_node_http_res_end",                        OwnerKind::WellKnown("http")),
+    ("js_node_http_res_flush_headers",              OwnerKind::WellKnown("http")),
+    ("js_node_http_res_cork",                       OwnerKind::WellKnown("http")),
+    ("js_node_http_res_uncork",                     OwnerKind::WellKnown("http")),
+    ("js_node_http_res_set_timeout",                OwnerKind::WellKnown("http")),
+    ("js_node_http_res_write_early_hints",          OwnerKind::WellKnown("http")),
+    ("js_node_http_res_write_continue",             OwnerKind::WellKnown("http")),
+    ("js_node_http_res_write_processing",           OwnerKind::WellKnown("http")),
+    ("js_node_http_res_on",                         OwnerKind::WellKnown("http")),
+    ("js_node_http_res_set_status",                 OwnerKind::WellKnown("http")),
+    ("js_node_http_res_get_status",                 OwnerKind::WellKnown("http")),
+    ("js_node_http_res_set_status_message",         OwnerKind::WellKnown("http")),
+    ("js_node_http_res_set_send_date",              OwnerKind::WellKnown("http")),
+    ("js_node_http_res_set_strict_content_length",  OwnerKind::WellKnown("http")),
+    ("js_node_http_res_headers_sent",               OwnerKind::WellKnown("http")),
+    ("js_node_http_res_writable_ended",             OwnerKind::WellKnown("http")),
+    ("js_node_http_res_writable_finished",          OwnerKind::WellKnown("http")),
     ("js_node_https_create_server",                 OwnerKind::WellKnown("http")),
     ("js_node_https_server_listen",                 OwnerKind::WellKnown("http")),
     ("js_node_https_server_close",                  OwnerKind::WellKnown("http")),
@@ -318,6 +368,8 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_net_socket_remove_all_listeners",          OwnerKind::WellKnown("net")),
     ("js_net_socket_listener_count",                OwnerKind::WellKnown("net")),
     ("js_net_socket_event_names",                   OwnerKind::WellKnown("net")),
+    ("js_net_socket_listeners",                     OwnerKind::WellKnown("net")),
+    ("js_net_socket_raw_listeners",                 OwnerKind::WellKnown("net")),
     ("js_net_socket_reset_and_destroy",             OwnerKind::WellKnown("net")),
     ("js_net_server_once",                          OwnerKind::WellKnown("net")),
     ("js_net_server_remove_listener",               OwnerKind::WellKnown("net")),
@@ -388,6 +440,19 @@ mod tests {
 
     static PROVIDER_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+    fn assert_symbol_routes_to(symbol: &str, owner: OwnerKind) {
+        let _ = take_used_providers();
+        record_ffi_call(symbol);
+        let got = take_used_providers();
+        assert!(
+            got.contains(&owner),
+            "{} must route to {:?}, got {:?}",
+            symbol,
+            owner,
+            got
+        );
+    }
+
     // `USED_PROVIDERS` is a process-wide static; other tests in the same
     // process may concurrently insert into it via `LlBlock::call`, and these
     // module tests drain it. Serialize the explicit drain/record assertions so
@@ -456,13 +521,42 @@ mod tests {
         let _guard = PROVIDER_TEST_LOCK
             .lock()
             .expect("provider test lock poisoned");
-        let _ = take_used_providers();
-        record_ffi_call("js_node_http_create_server_with_options");
-        let got = take_used_providers();
-        assert!(
-            got.contains(&OwnerKind::WellKnown("http")),
-            "js_node_http_create_server_with_options must route to WellKnown(http), got {:?}",
-            got
+        assert_symbol_routes_to(
+            "js_node_http_create_server_with_options",
+            OwnerKind::WellKnown("http"),
         );
+    }
+
+    /// #3954 regression: HTTP-suite native-table rows can emit newer
+    /// `perry-ext-http`, `perry-ext-http-server`, or `perry-ext-net`
+    /// symbols without the module-import path being visible to collection.
+    /// Each emitted external symbol must independently flip its well-known
+    /// owner so the wrapper joins the link line.
+    #[test]
+    fn emitted_http_suite_external_symbols_route_to_owners() {
+        let _guard = PROVIDER_TEST_LOCK
+            .lock()
+            .expect("provider test lock poisoned");
+        for symbol in [
+            "js_http_request_overload",
+            "js_https_get_overload",
+            "js_node_http_im_set_timeout",
+            "js_node_http_res_cork",
+            "js_node_http_res_append_header",
+            "js_node_http_res_set_header_self",
+            "js_node_http_res_has_header_value",
+            "js_node_http_res_write_early_hints",
+            "js_node_http_res_set_send_date",
+            "js_node_http_res_set_strict_content_length",
+            "js_net_socket_listeners",
+            "js_net_socket_raw_listeners",
+        ] {
+            let owner = if symbol.starts_with("js_net_") {
+                OwnerKind::WellKnown("net")
+            } else {
+                OwnerKind::WellKnown("http")
+            };
+            assert_symbol_routes_to(symbol, owner);
+        }
     }
 }

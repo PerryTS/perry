@@ -1715,6 +1715,7 @@ mod force_link_http_server {
     extern "C" {
         // http server + IncomingMessage + ServerResponse entry points.
         pub fn js_node_http_create_server();
+        pub fn js_node_http_create_server_with_options();
         pub fn js_node_http_server_listen();
         pub fn js_node_http_server_listening();
         pub fn js_node_http_server_close();
@@ -1743,18 +1744,34 @@ mod force_link_http_server {
         pub fn js_node_http_res_write();
         pub fn js_node_http_res_write_head();
         pub fn js_node_http_res_set_header();
+        pub fn js_node_http_res_set_header_self();
         pub fn js_node_http_res_get_header();
         pub fn js_node_http_res_get_header_names_json();
         pub fn js_node_http_res_get_headers_json();
         pub fn js_node_http_res_has_header();
+        pub fn js_node_http_res_has_header_value();
         pub fn js_node_http_res_remove_header();
+        pub fn js_node_http_res_append_header();
+        pub fn js_node_http_res_set_headers();
         pub fn js_node_http_res_set_status();
         pub fn js_node_http_res_get_status();
         pub fn js_node_http_res_set_status_message();
+        pub fn js_node_http_res_get_status_message();
+        pub fn js_node_http_res_finished();
+        pub fn js_node_http_res_send_date();
+        pub fn js_node_http_res_set_send_date();
+        pub fn js_node_http_res_strict_content_length();
+        pub fn js_node_http_res_set_strict_content_length();
+        pub fn js_node_http_res_req_handle();
         pub fn js_node_http_res_headers_sent();
         pub fn js_node_http_res_writable_ended();
         pub fn js_node_http_res_writable_finished();
         pub fn js_node_http_res_flush_headers();
+        pub fn js_node_http_res_add_trailers();
+        pub fn js_node_http_res_cork();
+        pub fn js_node_http_res_uncork();
+        pub fn js_node_http_res_set_timeout();
+        pub fn js_node_http_res_write_early_hints();
         pub fn js_node_http_res_write_continue();
         pub fn js_node_http_res_write_processing();
         pub fn js_node_http_res_on();
@@ -1763,6 +1780,10 @@ mod force_link_http_server {
         pub fn js_node_http_im_http_version();
         pub fn js_node_http_im_headers_json();
         pub fn js_node_http_im_raw_headers_json();
+        pub fn js_node_http_im_headers_distinct_json();
+        pub fn js_node_http_im_trailers_json();
+        pub fn js_node_http_im_raw_trailers_json();
+        pub fn js_node_http_im_trailers_distinct_json();
         pub fn js_node_http_im_remote_address();
         pub fn js_node_http_im_remote_port();
         pub fn js_node_http_im_on();
@@ -1773,6 +1794,7 @@ mod force_link_http_server {
         pub fn js_node_http_im_complete();
         pub fn js_node_http_im_destroy();
         pub fn js_node_http_im_destroyed();
+        pub fn js_node_http_im_set_timeout();
         // https server.
         pub fn js_node_https_create_server();
         pub fn js_node_https_server_listen();
@@ -1819,6 +1841,7 @@ static FORCE_LINK_HTTP_SERVER: &[unsafe extern "C" fn()] = {
     use force_link_http_server::*;
     &[
         js_node_http_create_server,
+        js_node_http_create_server_with_options,
         js_node_http_server_listen,
         js_node_http_server_listening,
         js_node_http_server_close,
@@ -1847,18 +1870,34 @@ static FORCE_LINK_HTTP_SERVER: &[unsafe extern "C" fn()] = {
         js_node_http_res_write,
         js_node_http_res_write_head,
         js_node_http_res_set_header,
+        js_node_http_res_set_header_self,
         js_node_http_res_get_header,
         js_node_http_res_get_header_names_json,
         js_node_http_res_get_headers_json,
         js_node_http_res_has_header,
+        js_node_http_res_has_header_value,
         js_node_http_res_remove_header,
+        js_node_http_res_append_header,
+        js_node_http_res_set_headers,
         js_node_http_res_set_status,
         js_node_http_res_get_status,
         js_node_http_res_set_status_message,
+        js_node_http_res_get_status_message,
+        js_node_http_res_finished,
+        js_node_http_res_send_date,
+        js_node_http_res_set_send_date,
+        js_node_http_res_strict_content_length,
+        js_node_http_res_set_strict_content_length,
+        js_node_http_res_req_handle,
         js_node_http_res_headers_sent,
         js_node_http_res_writable_ended,
         js_node_http_res_writable_finished,
         js_node_http_res_flush_headers,
+        js_node_http_res_add_trailers,
+        js_node_http_res_cork,
+        js_node_http_res_uncork,
+        js_node_http_res_set_timeout,
+        js_node_http_res_write_early_hints,
         js_node_http_res_write_continue,
         js_node_http_res_write_processing,
         js_node_http_res_on,
@@ -1867,6 +1906,10 @@ static FORCE_LINK_HTTP_SERVER: &[unsafe extern "C" fn()] = {
         js_node_http_im_http_version,
         js_node_http_im_headers_json,
         js_node_http_im_raw_headers_json,
+        js_node_http_im_headers_distinct_json,
+        js_node_http_im_trailers_json,
+        js_node_http_im_raw_trailers_json,
+        js_node_http_im_trailers_distinct_json,
         js_node_http_im_remote_address,
         js_node_http_im_remote_port,
         js_node_http_im_on,
@@ -1877,6 +1920,7 @@ static FORCE_LINK_HTTP_SERVER: &[unsafe extern "C" fn()] = {
         js_node_http_im_complete,
         js_node_http_im_destroy,
         js_node_http_im_destroyed,
+        js_node_http_im_set_timeout,
         js_node_https_create_server,
         js_node_https_server_listen,
         js_node_https_server_close,
