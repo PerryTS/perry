@@ -533,28 +533,6 @@ fn normalize_unicode_identifier_escapes(source: &str) -> String {
                     i += 1;
                 }
             }
-            State::Regex { in_class } => {
-                out.push(bytes[i] as char);
-                if bytes[i] == b'\\' {
-                    if let Some(&next) = bytes.get(i + 1) {
-                        out.push(next as char);
-                        i += 2;
-                    } else {
-                        i += 1;
-                    }
-                } else if bytes[i] == b'[' {
-                    state = State::Regex { in_class: true };
-                    i += 1;
-                } else if bytes[i] == b']' {
-                    state = State::Regex { in_class: false };
-                    i += 1;
-                } else if bytes[i] == b'/' && !in_class {
-                    state = State::Code;
-                    i += 1;
-                } else {
-                    i += 1;
-                }
-            }
             State::LineComment => {
                 let ch = source[i..].chars().next().unwrap();
                 out.push(ch);
