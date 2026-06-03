@@ -1010,6 +1010,15 @@ extern "C" fn object_prototype_is_prototype_of_thunk(
     value: f64,
 ) -> f64 {
     let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    // RequireObjectCoercible(this): `Object.prototype.isPrototypeOf.call(null)`
+    // / `.call(undefined)` must throw a TypeError (spec step 1), matching the
+    // sibling Object.prototype methods. Pre-fix this silently returned false.
+    let this_jsv = JSValue::from_bits(this_value.to_bits());
+    if this_jsv.is_null() || this_jsv.is_undefined() {
+        super::object_ops::throw_object_type_error(
+            b"Object.prototype.isPrototypeOf called on null or undefined",
+        );
+    }
     f64::from_bits(
         JSValue::bool(unsafe { super::js_object_is_prototype_of_value(this_value, value) }).bits(),
     )
