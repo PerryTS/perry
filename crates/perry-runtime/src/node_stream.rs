@@ -189,7 +189,7 @@ extern "C" fn ns_wrap_data(closure: *const ClosureHeader, chunk: f64) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let stream = js_closure_get_capture_f64(closure, 0);
     let _ = push_chunk(stream, chunk);
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -198,7 +198,7 @@ extern "C" fn ns_wrap_end(closure: *const ClosureHeader) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let stream = js_closure_get_capture_f64(closure, 0);
     let _ = push_chunk(stream, f64::from_bits(TAG_NULL));
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -207,7 +207,7 @@ extern "C" fn ns_wrap_error(closure: *const ClosureHeader, err: f64) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let stream = js_closure_get_capture_f64(closure, 0);
     destroy_stream(stream, err);
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -216,7 +216,7 @@ extern "C" fn ns_wrap_close(closure: *const ClosureHeader) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let stream = js_closure_get_capture_f64(closure, 0);
     destroy_stream(stream, f64::from_bits(TAG_UNDEFINED));
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -227,10 +227,10 @@ extern "C" fn ns_wrap1(closure: *const ClosureHeader, old_stream: f64) -> f64 {
     let end = js_closure_alloc(ns_wrap_end as *const u8, 1);
     let error = js_closure_alloc(ns_wrap_error as *const u8, 1);
     let close = js_closure_alloc(ns_wrap_close as *const u8, 1);
-    js_closure_set_capture_ptr(data, 0, stream.to_bits() as i64);
-    js_closure_set_capture_ptr(end, 0, stream.to_bits() as i64);
-    js_closure_set_capture_ptr(error, 0, stream.to_bits() as i64);
-    js_closure_set_capture_ptr(close, 0, stream.to_bits() as i64);
+    js_closure_set_capture_f64(data, 0, stream);
+    js_closure_set_capture_f64(end, 0, stream);
+    js_closure_set_capture_f64(error, 0, stream);
+    js_closure_set_capture_f64(close, 0, stream);
 
     call_old_stream_on(old_stream, b"data", data);
     call_old_stream_on(old_stream, b"end", end);

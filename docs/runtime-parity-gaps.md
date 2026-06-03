@@ -7,10 +7,10 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
 | Whole-module gaps (zero coverage) | 15 | 410 | n/a |
-| Partial-module gaps | 32 | 1470 | 607 |
+| Partial-module gaps | 32 | 1469 | 608 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2162** |  |
+| **Total true gaps** |  | **2161** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
@@ -23,7 +23,7 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 - `node:util` — 92
 - `node:http` — 89
 - `node:zlib` — 70
-- `node:stream` — 76
+- `node:stream` — 75
 - `node:worker_threads` — 60
 
 ### Issue #3598 docs/API closure note
@@ -841,7 +841,7 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 
 ### node:stream
 
-**Gap APIs: 76** · Already covered: 5
+**Gap APIs: 75** · Already covered: 6
 
 #### Missing from Perry
 
@@ -869,7 +869,6 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `readable.setEncoding(encoding)`
 - `readable.isPaused()`
 - `readable.destroy([error])`
-- `readable.wrap(stream)`
 - `readable.compose(stream[, options])`
 - `readable.iterator([options])`
 - `readable.map(fn[, options])`

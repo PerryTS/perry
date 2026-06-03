@@ -438,6 +438,31 @@ fn extract_pointer(bits: u64) -> u64 {
     }
 }
 
+fn small_handle_from_value(value: f64) -> Option<i64> {
+    let bits = value.to_bits();
+    let top = bits >> 48;
+    if top == (POINTER_TAG >> 48) {
+        let raw = (bits & POINTER_MASK) as i64;
+        if raw > 0 && raw < 0x10000 {
+            return Some(raw);
+        }
+    } else if top == 0 && bits > 0 && bits < 0x10000 {
+        return Some(bits as i64);
+    }
+    None
+}
+
+fn set_handle_property(target: f64, key: f64, value: f64) -> Option<bool> {
+    let handle = small_handle_from_value(target)?;
+    let Some(name) = key_to_rust_string(key) else {
+        return Some(false);
+    };
+    if let Some(dispatch) = crate::object::handle_property_set_dispatch() {
+        unsafe { dispatch(handle, name.as_ptr(), name.len(), value) };
+    }
+    Some(true)
+}
+
 fn target_get(target: f64, key: f64) -> f64 {
     let obj_ptr = extract_pointer(target.to_bits()) as *const crate::ObjectHeader;
     let key_ptr = extract_pointer(key.to_bits()) as *const crate::StringHeader;
@@ -537,6 +562,10 @@ fn key_to_rust_string(value: f64) -> Option<String> {
 }
 
 fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
+    if small_handle_from_value(target).is_some() {
+        return None;
+    }
+
     if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
         let value = unsafe { crate::symbol::js_object_get_symbol_property(target, key) };
         return (value.to_bits() != TAG_UNDEFINED)
@@ -650,6 +679,10 @@ fn create_or_update_receiver_property(receiver: f64, key: f64, value: f64) -> bo
 }
 
 fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) -> bool {
+    if let Some(ok) = set_handle_property(target, key, value) {
+        return ok;
+    }
+
     let mut current = target;
     for _ in 0..64 {
         if let Some(desc) = own_set_descriptor(current, key) {
