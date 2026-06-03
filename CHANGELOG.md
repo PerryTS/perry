@@ -2,6 +2,25 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1114 — test(parity): specify expected exit code for three intentional-throw expected-output tests
+
+`run_parity_tests.sh` compares an expected-output test's process exit code
+against `test-parity/expected-exit/<name>.txt`, defaulting to `0` when that
+file is absent. Three Perry-specific expected-output tests intentionally end by
+throwing a `TypeError` (verifying spec behavior) — their committed
+`test-parity/expected/<name>.txt` snapshots already capture the thrown error —
+but they had no `expected-exit` entry, so the harness expected exit `0` while
+Perry (correctly, matching `node --experimental-strip-types`) exits `1`. That
+made all three report a false parity failure even though Perry's output and
+exit already match Node.
+
+Adds `test-parity/expected-exit/{test_issue_462_nullish_property_access,
+test_issue_510_primitive_method_typeerror,
+test_decorators_replacement_unsupported}.txt` each containing `1`. Verified each
+now passes via `./run_parity_tests.sh --filter <name>`. No runtime/compiler
+change — Perry's behavior was already correct; this only corrects the harness's
+expected exit code for these three throw-on-purpose cases.
+
 ## v0.5.1113 — fix(inline): #945 restore scalar method inlining for PutValueSet constructors
 
 #4126 ("assignment PutValue descriptor semantics") changed `this.field = x`
