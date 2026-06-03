@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1873 entries across 107 modules
+// Coverage: 1875 entries across 107 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -928,7 +928,11 @@ declare module "crypto" {
   /** stdlib */
   export function createVerify(...args: any[]): any;
   /** stdlib */
+  export function decapsulate(...args: any[]): any;
+  /** stdlib */
   export function diffieHellman(...args: any[]): any;
+  /** stdlib */
+  export function encapsulate(...args: any[]): any;
   /** stdlib */
   export function generateKey(...args: any[]): any;
   /** stdlib */
