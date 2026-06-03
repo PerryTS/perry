@@ -383,6 +383,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &[(DOUBLE, &obj), (DOUBLE, &key)],
             ))
         }
+        Expr::PrivateBrandCheck {
+            class_name,
+            field_name,
+            object,
+        } => {
+            let obj = lower_expr(ctx, object)?;
+            let class_id = ctx.class_ids.get(class_name).copied().unwrap_or(0);
+            let key_label = emit_string_literal_global(ctx, field_name);
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_private_brand_check",
+                &[
+                    (DOUBLE, &obj),
+                    (I32, &class_id.to_string()),
+                    (PTR, &key_label),
+                    (I32, &field_name.len().to_string()),
+                ],
+            ))
+        }
 
         // -------- fs.writeFileSync(path, content) --------
         // The runtime takes both args as NaN-boxed doubles directly.

@@ -3,8 +3,11 @@
 //! that the runtime can't resolve.
 
 use perry_diagnostics::SourceCache;
-use perry_hir::{clear_current_module_source, fix_local_native_instances, lower_module, Expr};
+use perry_hir::{
+    clear_current_module_source, fix_local_native_instances, lower_module, Expr, Module, Stmt,
+};
 use perry_parser::parse_typescript_with_cache;
+use perry_types::Type;
 
 fn lower(src: &str) -> perry_hir::Module {
     let mut cache = SourceCache::new();
@@ -86,4 +89,71 @@ fn cheerio_call_handle_lowers_to_select() {
     };
     assert_eq!(n_module, "cheerio");
     assert_eq!(n_method, "length");
+}
+
+#[test]
+fn non_native_fluent_chains_are_walked_linearly() {
+    let mut init = Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: "yargs".to_string(),
+            param_types: vec![Type::Any],
+            return_type: Type::Any,
+        }),
+        args: vec![Expr::ExternFuncRef {
+            name: "args".to_string(),
+            param_types: Vec::new(),
+            return_type: Type::Any,
+        }],
+        type_args: Vec::new(),
+    };
+
+    for i in 0..32 {
+        init = Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(init),
+                property: "command".to_string(),
+            }),
+            args: vec![Expr::ExternFuncRef {
+                name: format!("cmd{i}"),
+                param_types: Vec::new(),
+                return_type: Type::Any,
+            }],
+            type_args: Vec::new(),
+        };
+    }
+
+    init = Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(init),
+            property: "strict".to_string(),
+        }),
+        args: Vec::new(),
+        type_args: Vec::new(),
+    };
+
+    let mut module = Module::new("non-native-fluent-chain");
+    module.init.push(Stmt::Let {
+        id: 0,
+        name: "cli".to_string(),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(init),
+    });
+
+    fix_local_native_instances(&mut module);
+
+    let cli_init = module
+        .init
+        .iter()
+        .find_map(|s| match s {
+            Stmt::Let {
+                name,
+                init: Some(e),
+                ..
+            } if name == "cli" => Some(e),
+            _ => None,
+        })
+        .expect("expected a `cli` Let binding");
+
+    assert!(matches!(cli_init, Expr::Call { .. }));
 }

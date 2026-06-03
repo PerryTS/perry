@@ -24,6 +24,13 @@ pub(super) fn try_global_builtins(
     // Check for global built-in function calls (parseInt, parseFloat, Number, String, isNaN, isFinite)
     if let ast::Expr::Ident(ident) = expr {
         let func_name = ident.sym.as_ref();
+        if ctx.lookup_local(func_name).is_some()
+            || ctx.lookup_func(func_name).is_some()
+            || ctx.lookup_imported_func(func_name).is_some()
+            || ctx.lookup_class(func_name).is_some()
+        {
+            return Ok(Err(args));
+        }
         match func_name {
             "parseInt" => {
                 let string_arg = if !args.is_empty() {

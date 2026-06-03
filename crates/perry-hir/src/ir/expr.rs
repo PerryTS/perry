@@ -5,6 +5,18 @@
 use super::*;
 use perry_types::{FuncId, GlobalId, LocalId, Type};
 
+/// Fallback when a dynamic `with` object environment does not bind the
+/// assignment target. The object lookup is performed before the RHS is
+/// evaluated, matching ECMAScript Reference resolution order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WithSetFallback {
+    Local(LocalId),
+    ThrowReferenceError,
+    ThrowConstAssignment,
+    Ignore,
+    SloppyImplicit(LocalId),
+}
+
 /// Expression
 #[derive(Debug, Clone)]
 pub enum Expr {
@@ -44,6 +56,24 @@ pub enum Expr {
     LocalSet(LocalId, Box<Expr>),
     GlobalGet(GlobalId),
     GlobalSet(GlobalId, Box<Expr>),
+    /// Dynamic object-environment read produced by `with (obj) { name }`.
+    /// If `obj` has a non-unscopable property named `property`, read it;
+    /// otherwise evaluate `fallback` (outer lexical/global resolution).
+    WithGet {
+        object: Box<Expr>,
+        property: String,
+        fallback: Box<Expr>,
+    },
+    /// Dynamic object-environment write produced by `with (obj) { name = v }`.
+    /// Codegen probes the object before lowering `value`; strict PutValue then
+    /// re-checks that the property survived RHS side effects.
+    WithSet {
+        object: Box<Expr>,
+        property: String,
+        value: Box<Expr>,
+        fallback: WithSetFallback,
+        strict: bool,
+    },
 
     // Update (++/--)
     Update {
@@ -209,6 +239,15 @@ pub enum Expr {
     /// e.g., "prop" in obj or key in obj
     In {
         property: Box<Expr>,
+        object: Box<Expr>,
+    },
+    /// Private-name brand check: `#field in obj`.
+    ///
+    /// This is intentionally separate from `In { property: "#field", ... }`
+    /// so ordinary public string keys cannot satisfy private-field syntax.
+    PrivateBrandCheck {
+        class_name: String,
+        field_name: String,
         object: Box<Expr>,
     },
 
@@ -843,6 +882,20 @@ pub enum Expr {
         value: Box<Expr>,
         options: Box<Expr>,
     },
+    /// #4141: link a freshly-built generator/async-generator instance object
+    /// to the spec prototype chain. Emitted ONLY by `transform_generators`
+    /// wrapping the `{next,return,throw}` iterator object it returns. At
+    /// runtime, `js_generator_attach_prototype(obj, is_async)` interposes a
+    /// fresh intermediate object as `obj`'s `[[Prototype]]` whose own
+    /// `[[Prototype]]` is `%Generator.prototype%` / `%AsyncGenerator.prototype%`,
+    /// so `Object.getPrototypeOf(Object.getPrototypeOf(gen()))` resolves to the
+    /// brand-checked prototype (mirrors `instance → g.prototype →
+    /// %Generator.prototype%`). Evaluates to `obj` unchanged. `is_async` selects
+    /// the sync vs async generator prototype tower.
+    LinkGeneratorPrototype {
+        obj: Box<Expr>,
+        is_async: bool,
+    },
     /// queueMicrotask(callback) -> void
     QueueMicrotask(Box<Expr>),
 
@@ -1433,6 +1486,7 @@ pub enum Expr {
     // String methods
     StringSplit(Box<Expr>, Box<Expr>), // string.split(delimiter) -> string[]
     StringFromCharCode(Box<Expr>),     // String.fromCharCode(code) -> single-char string
+    StringFromCharCodeSpread(Box<Expr>), // String.fromCharCode(...arrayLike) -> string
     StringFromCodePoint(Box<Expr>),    // String.fromCodePoint(code) -> string
     StringRaw {
         // Callable String.raw(callSite, ...substitutions) — the non-tagged

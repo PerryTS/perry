@@ -92,12 +92,15 @@ pub(super) fn try_native_module_methods(
             // "node:process"` registers as the native `process` object, while
             // `import * as processNamespace` registers as `process.namespace`;
             // both must use the same strict method gate as the global object.
-            let is_process_ref = obj_name == "process"
-                || ctx.lookup_builtin_module_alias(&obj_name) == Some("process")
-                || matches!(
-                    ctx.lookup_native_module(&obj_name),
-                    Some(("process", _)) | Some(("process.namespace", _))
-                );
+            let process_name_is_shadowed =
+                obj_name == "process" && ctx.shadows_unqualified_global("process");
+            let is_process_ref = !process_name_is_shadowed
+                && (obj_name == "process"
+                    || ctx.lookup_builtin_module_alias(&obj_name) == Some("process")
+                    || matches!(
+                        ctx.lookup_native_module(&obj_name),
+                        Some(("process", _)) | Some(("process.namespace", _))
+                    ));
             if is_process_ref {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
@@ -158,13 +161,13 @@ pub(super) fn try_native_module_methods(
                             }
                         }
                         "ref" | "unref" => {
-                            // #1410: process.ref() / process.unref() — no-ops
-                            // in Node (process always keeps the loop alive,
-                            // so there's nothing to ref/unref). Return
-                            // undefined so callers that probe and invoke them
-                            // (e.g. graceful-shutdown helpers) don't crash on
-                            // "value is not a function".
-                            return Ok(Ok(Expr::Undefined));
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name.to_string(),
+                                args,
+                            }));
                         }
                         "setSourceMapsEnabled" => {
                             // #1400 / #3108: process.setSourceMapsEnabled(bool)
@@ -189,6 +192,15 @@ pub(super) fn try_native_module_methods(
                                 class_name: None,
                                 object: None,
                                 method: "getBuiltinModule".to_string(),
+                                args,
+                            }));
+                        }
+                        "execve" => {
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "execve".to_string(),
                                 args,
                             }));
                         }
@@ -473,9 +485,10 @@ pub(super) fn try_native_module_methods(
                 }
             }
 
-            // node:v8 module methods (#3137/#3138). serialize/deserialize and
-            // the heap-stat helpers lower to a receiver-less NativeMethodCall
-            // dispatched in codegen to the `js_v8_*` runtime entry points.
+            // node:v8 module methods (#3137/#3138/#3140).
+            // serialize/deserialize, heap-stat helpers, and heap-snapshot
+            // helpers lower to a receiver-less NativeMethodCall dispatched in
+            // codegen to the `js_v8_*` runtime entry points.
             let is_v8_module =
                 obj_name == "v8" || ctx.lookup_builtin_module_alias(&obj_name) == Some("v8");
             if is_v8_module {
@@ -487,7 +500,9 @@ pub(super) fn try_native_module_methods(
                         | "getHeapStatistics"
                         | "getHeapCodeStatistics"
                         | "getHeapSpaceStatistics"
-                        | "cachedDataVersionTag" => {
+                        | "cachedDataVersionTag"
+                        | "getHeapSnapshot"
+                        | "writeHeapSnapshot" => {
                             return Ok(Ok(Expr::NativeMethodCall {
                                 module: "v8".to_string(),
                                 class_name: None,
@@ -1373,6 +1388,22 @@ pub(super) fn try_native_module_methods(
                         let method_name = method_ident.sym.to_string();
                         if module_name == "worker_threads" && method_name == "workerData" {
                             return Ok(Err(args));
+                        }
+                        if module_name.strip_prefix("node:").unwrap_or(module_name) == "vm"
+                            && imported_method.is_none()
+                            && method_name == "Module"
+                        {
+                            let mut exprs = args;
+                            exprs.push(Expr::Call {
+                                callee: Box::new(Expr::ExternFuncRef {
+                                    name: "js_vm_module_call".to_string(),
+                                    param_types: Vec::new(),
+                                    return_type: Type::Any,
+                                }),
+                                args: Vec::new(),
+                                type_args: Vec::new(),
+                            });
+                            return Ok(Ok(Expr::Sequence(exprs)));
                         }
                         // Unimplemented-API gate (#463 / #525) for the 2-deep
                         // `mod.method()` call form. Without this, perry/* and

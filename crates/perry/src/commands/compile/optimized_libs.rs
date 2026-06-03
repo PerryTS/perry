@@ -72,6 +72,13 @@ pub(super) fn build_optimized_libs(
     format: OutputFormat,
     verbose: u8,
 ) -> OptimizedLibs {
+    let use_well_known = std::env::var_os("PERRY_DISABLE_WELL_KNOWN").is_none();
+    let mut iteration_set: std::collections::BTreeSet<String> =
+        ctx.native_module_imports.iter().cloned().collect();
+    if ctx.uses_fetch && !iteration_set.contains("fetch") && !iteration_set.contains("node-fetch") {
+        iteration_set.insert("fetch".to_string());
+    }
+
     // `PERRY_NO_AUTO_OPTIMIZE=1` — opt out of the per-app feature-set
     // specialization and use the prebuilt `target/release/libperry_*.a`
     // built with the default `full` feature set. Used by CI doc-tests
@@ -81,11 +88,13 @@ pub(super) fn build_optimized_libs(
     // to a different `target/perry-auto-<hash>` cache dir). Trades
     // binary size for ~80% wall-time reduction on doc-tests.
     //
-    // Returning `OptimizedLibs::empty()` makes the link path fall
-    // through to `find_runtime_library` / `find_stdlib_library`,
-    // which probe `target/release/` and `target/<target-triple>/release/`
-    // in that order. The workflow's prebuild step is responsible for
-    // making sure those paths exist.
+    // The runtime/stdlib link path still falls through to
+    // `find_runtime_library` / `find_stdlib_library`, which probe
+    // `target/release/` and `target/<target-triple>/release/`. Keep the
+    // well-known wrapper lookup active, though: native-table rows such
+    // as `http.request(...)` and `http.createServer(...)` emit symbols
+    // owned by `perry-ext-http`, and the full prebuilt stdlib does not
+    // define those wrapper-only entry points.
     if std::env::var_os("PERRY_NO_AUTO_OPTIMIZE").is_some() {
         if matches!(format, OutputFormat::Text) && verbose > 0 {
             eprintln!(
@@ -93,7 +102,15 @@ pub(super) fn build_optimized_libs(
                  using prebuilt target/release/libperry_*.a"
             );
         }
-        return OptimizedLibs::empty();
+        let well_known_libs = if use_well_known {
+            resolve_prebuilt_ext_libs(&iteration_set, target, format, verbose)
+        } else {
+            Vec::new()
+        };
+        return OptimizedLibs {
+            well_known_libs,
+            ..OptimizedLibs::empty()
+        };
     }
     // (compute_required_features + features_to_cargo_arg imported at module top)
     let mut features = compute_required_features(
@@ -133,7 +150,6 @@ pub(super) fn build_optimized_libs(
     // each entry falls back to the perry-stdlib copy individually
     // (logged with `well-known: skipping` when verbose), so a
     // partially-built workspace still produces a working binary.
-    let use_well_known = std::env::var_os("PERRY_DISABLE_WELL_KNOWN").is_none();
     let mut well_known_libs: Vec<PathBuf> = Vec::new();
     // #507 — wrappers whose own crate-level `[dependencies]` pull tokio
     // (TcpStream, hyper, reqwest, mongodb, sqlx, tokio-tungstenite,
@@ -177,11 +193,6 @@ pub(super) fn build_optimized_libs(
     // perry-ext-fetch into the link line. The `'fetch'` binding strips
     // no perry-stdlib feature (see stdlib_features.rs — fetch falls
     // through to `_ => &[]`), so this is a pure-add.
-    let mut iteration_set: std::collections::BTreeSet<String> =
-        ctx.native_module_imports.iter().cloned().collect();
-    if ctx.uses_fetch && !iteration_set.contains("fetch") && !iteration_set.contains("node-fetch") {
-        iteration_set.insert("fetch".to_string());
-    }
     if use_well_known {
         for module in &iteration_set {
             let module_normalized = module.strip_prefix("node:").unwrap_or(module);

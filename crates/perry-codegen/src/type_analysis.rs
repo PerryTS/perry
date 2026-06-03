@@ -18,8 +18,14 @@ pub(crate) fn is_global_constructor_expr(e: &Expr, name: &str) -> bool {
         )
 }
 
+fn is_process_module_ref_name(module: &str) -> bool {
+    let module = module.strip_prefix("node:").unwrap_or(module);
+    matches!(module, "process" | "process.namespace" | "process.default")
+}
+
 fn is_process_namespace_version_property(object: &Expr, property: &str) -> bool {
-    property == "version" && matches!(object, Expr::NativeModuleRef(module) if module == "process")
+    property == "version"
+        && matches!(object, Expr::NativeModuleRef(module) if is_process_module_ref_name(module))
 }
 
 /// Refine an `Any`-typed local's static type based on its initializer
@@ -129,6 +135,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         | Expr::StringCoerce(_)
         | Expr::StringFromCodePoint(_)
         | Expr::StringFromCharCode(_)
+        | Expr::StringFromCharCodeSpread(_)
         | Expr::StringRaw { .. }
         | Expr::StringAt { .. }
         | Expr::RegExpSource(_)
@@ -363,6 +370,8 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
                         | "generateKeySync"
                         | "scryptSync"
                         | "pbkdf2Sync"
+                        | "argon2Sync"
+                        | "decapsulate"
                         | "hkdfSync"
                         | "randomBytes" => {
                             return Some(HirType::Named("Buffer".into()));
@@ -963,6 +972,7 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::JsonStringifyFull(..)
         | Expr::StringFromCodePoint(_)
         | Expr::StringFromCharCode(_)
+        | Expr::StringFromCharCodeSpread(_)
         | Expr::StringRaw { .. }
         | Expr::FsReadFileSync(_)
         | Expr::FsReadFileBinary(_)
@@ -1172,6 +1182,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // / RegExp.source|flags — all produce string handles.
         Expr::StringFromCodePoint(_)
         | Expr::StringFromCharCode(_)
+        | Expr::StringFromCharCodeSpread(_)
         | Expr::StringRaw { .. }
         | Expr::StringAt { .. }
         | Expr::RegExpSource(_)
@@ -1697,6 +1708,7 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
 pub(crate) fn is_array_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match static_type_of(ctx, e) {
         Some(HirType::Array(_)) | Some(HirType::Tuple(_)) => true,
+        Some(HirType::Generic { ref base, .. }) if base == "Array" => true,
         // #3148: %TypedArray% receivers route their not-already-folded methods
         // (fill / reverse / keys / values / entries / set / subarray) through
         // `lower_array_method`; the generic `js_array_*` helpers delegate to the

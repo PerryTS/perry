@@ -5,14 +5,17 @@ use crate::closure::{
 };
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
+use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 mod credentials;
+mod ipc;
 pub use credentials::{
     js_process_getegid, js_process_geteuid, js_process_getgid, js_process_getgroups,
     js_process_getuid, js_process_initgroups, js_process_setegid, js_process_seteuid,
     js_process_setgid, js_process_setgroups, js_process_setuid,
 };
+pub use ipc::*;
 
 static PROCESS_UNCAUGHT_CAPTURE_CALLBACK_SET: AtomicBool = AtomicBool::new(false);
 
@@ -26,6 +29,31 @@ fn bool_value(value: bool) -> f64 {
 
 fn undefined_value() -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn timer_handle_id(value: f64) -> Option<i64> {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if !js_value.is_pointer() {
+        return None;
+    }
+    let id = (value.to_bits() & crate::value::POINTER_MASK) as i64;
+    crate::timer::is_known_timer_id(id).then_some(id)
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_ref(value: f64) -> f64 {
+    if let Some(id) = timer_handle_id(value) {
+        crate::timer::js_timer_ref(id);
+    }
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_unref(value: f64) -> f64 {
+    if let Some(id) = timer_handle_id(value) {
+        crate::timer::js_timer_unref(id);
+    }
+    undefined_value()
 }
 
 fn is_function_value(value: f64) -> bool {
@@ -94,6 +122,7 @@ pub extern "C" fn js_process_exit(code: f64) {
         Some(c) => c,
         None => 0,
     };
+    js_process_run_finalization_exit();
     // Use _exit() instead of std::process::exit() to avoid SIGILL during cleanup.
     // std::process::exit() runs atexit handlers and C++ destructors which can trigger
     // illegal instructions when exception handler state (jmp_buf), GC roots, or
@@ -243,11 +272,11 @@ fn supported_builtin_module_name(name: &str) -> Option<&str> {
     match name {
         "assert" | "assert/strict" | "async_hooks" | "buffer" | "child_process" | "cluster"
         | "console" | "constants" | "crypto" | "dns" | "dns/promises" | "events" | "fs"
-        | "http" | "http2" | "https" | "net" | "os" | "path" | "perf_hooks" | "process"
-        | "punycode" | "querystring" | "readline" | "readline/promises" | "stream"
-        | "stream/promises" | "string_decoder" | "sys" | "test" | "test/reporters" | "timers"
-        | "timers/promises" | "tty" | "url" | "util" | "util/types" | "vm" | "worker_threads"
-        | "zlib" => Some(name),
+        | "http" | "http2" | "https" | "module" | "net" | "os" | "path" | "perf_hooks"
+        | "process" | "punycode" | "querystring" | "readline" | "readline/promises" | "sea"
+        | "stream" | "stream/promises" | "string_decoder" | "sys" | "test" | "test/reporters"
+        | "timers" | "timers/promises" | "tty" | "url" | "util" | "util/types" | "vm"
+        | "worker_threads" | "zlib" => Some(name),
         _ => None,
     }
 }
@@ -341,12 +370,37 @@ fn module_set_field(obj: *mut crate::object::ObjectHeader, name: &str, value: f6
     crate::object::js_object_set_field_by_name(obj, key, value);
 }
 
+type ModuleFunction1 = extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64;
+type ModuleFunction2 = extern "C" fn(*const crate::closure::ClosureHeader, f64, f64) -> f64;
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ProcessFinalizationKind {
+    Exit,
+    BeforeExit,
+}
+
+#[derive(Clone, Copy)]
+struct ProcessFinalizationEntry {
+    obj: f64,
+    callback: f64,
+    kind: ProcessFinalizationKind,
+}
+
+thread_local! {
+    static PROCESS_FINALIZATION_REGISTRY: RefCell<Vec<ProcessFinalizationEntry>> =
+        RefCell::new(Vec::new());
+    static PROCESS_FINALIZATION_BEFORE_EXIT_RAN: Cell<bool> = const { Cell::new(false) };
+    static PROCESS_FINALIZATION_EXIT_RAN: Cell<bool> = const { Cell::new(false) };
+    static PROCESS_FINALIZATION_OBJECT: Cell<f64> = const { Cell::new(0.0) };
+    static PROCESS_FINALIZATION_BEFORE_EXIT_LISTENER: Cell<*const crate::closure::ClosureHeader> =
+        const { Cell::new(std::ptr::null()) };
+    static PROCESS_FINALIZATION_BEFORE_EXIT_LISTENER_INSTALLED: Cell<bool> =
+        const { Cell::new(false) };
+}
+
 extern "C" fn module_source_map_noop(_closure: *const crate::closure::ClosureHeader) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
-
-type ModuleFunction1 = extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64;
-type ModuleFunction2 = extern "C" fn(*const crate::closure::ClosureHeader, f64, f64) -> f64;
 
 fn module_noop_function(name: &str) -> f64 {
     let func_ptr = module_source_map_noop as *const u8;
@@ -374,6 +428,224 @@ fn module_function2(name: &str, thunk: ModuleFunction2, length: u32) -> f64 {
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, length);
     crate::value::js_nanbox_pointer(closure as i64)
+}
+
+extern "C" fn process_finalization_before_exit_listener(
+    _closure: *const crate::closure::ClosureHeader,
+    _code: f64,
+) -> f64 {
+    js_process_run_finalization_before_exit();
+    undefined_value()
+}
+
+fn process_finalization_before_exit_listener_ptr() -> *const crate::closure::ClosureHeader {
+    PROCESS_FINALIZATION_BEFORE_EXIT_LISTENER.with(|cell| {
+        let existing = cell.get();
+        if !existing.is_null() {
+            return existing;
+        }
+        let func_ptr = process_finalization_before_exit_listener as *const u8;
+        crate::closure::js_register_closure_arity(func_ptr, 1);
+        crate::closure::js_register_closure_length(func_ptr, 1);
+        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+        crate::object::set_bound_native_closure_name(closure, "processFinalizationBeforeExit");
+        crate::object::set_builtin_closure_length(closure as usize, 1);
+        cell.set(closure);
+        closure
+    })
+}
+
+fn process_finalization_has_before_exit_entries() -> bool {
+    PROCESS_FINALIZATION_REGISTRY.with(|registry| {
+        registry
+            .borrow()
+            .iter()
+            .any(|entry| entry.kind == ProcessFinalizationKind::BeforeExit)
+    })
+}
+
+fn ensure_process_finalization_before_exit_listener() {
+    let callback = process_finalization_before_exit_listener_ptr();
+    PROCESS_FINALIZATION_BEFORE_EXIT_LISTENER_INSTALLED.with(|installed| {
+        if installed.replace(true) {
+            return;
+        }
+        crate::os::add_internal_process_listener("beforeExit", callback);
+    });
+}
+
+fn sync_process_finalization_before_exit_listener() {
+    if process_finalization_has_before_exit_entries() {
+        ensure_process_finalization_before_exit_listener();
+        return;
+    }
+    let callback = PROCESS_FINALIZATION_BEFORE_EXIT_LISTENER.with(|cell| cell.get());
+    PROCESS_FINALIZATION_BEFORE_EXIT_LISTENER_INSTALLED.with(|installed| {
+        if !installed.replace(false) {
+            return;
+        }
+        crate::os::remove_internal_process_listener("beforeExit", callback);
+    });
+}
+
+fn process_finalization_ref_is_valid(value: f64) -> bool {
+    if is_function_value(value) {
+        return true;
+    }
+    if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
+        return false;
+    }
+    module_object_ptr(value).is_some()
+}
+
+fn validate_process_finalization_ref(value: f64) {
+    if process_finalization_ref_is_valid(value) {
+        return;
+    }
+    let message = format!(
+        "The \"obj\" argument must be of type object. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+fn process_finalization_register(kind: ProcessFinalizationKind, obj: f64, callback: f64) -> f64 {
+    validate_process_finalization_ref(obj);
+    PROCESS_FINALIZATION_REGISTRY.with(|registry| {
+        registry.borrow_mut().push(ProcessFinalizationEntry {
+            obj,
+            callback,
+            kind,
+        });
+    });
+    if kind == ProcessFinalizationKind::BeforeExit {
+        ensure_process_finalization_before_exit_listener();
+    }
+    undefined_value()
+}
+
+fn process_finalization_unregister(obj: f64) -> f64 {
+    let obj_bits = obj.to_bits();
+    PROCESS_FINALIZATION_REGISTRY.with(|registry| {
+        registry
+            .borrow_mut()
+            .retain(|entry| entry.obj.to_bits() != obj_bits);
+    });
+    sync_process_finalization_before_exit_listener();
+    undefined_value()
+}
+
+fn process_finalization_mark_ran(kind: ProcessFinalizationKind) -> bool {
+    match kind {
+        ProcessFinalizationKind::BeforeExit => {
+            PROCESS_FINALIZATION_BEFORE_EXIT_RAN.with(|ran| ran.replace(true))
+        }
+        ProcessFinalizationKind::Exit => {
+            PROCESS_FINALIZATION_EXIT_RAN.with(|ran| ran.replace(true))
+        }
+    }
+}
+
+fn process_finalization_event_name(kind: ProcessFinalizationKind) -> &'static str {
+    match kind {
+        ProcessFinalizationKind::BeforeExit => "beforeExit",
+        ProcessFinalizationKind::Exit => "exit",
+    }
+}
+
+fn run_process_finalization_callbacks(kind: ProcessFinalizationKind) {
+    if process_finalization_mark_ran(kind) {
+        return;
+    }
+    let entries = PROCESS_FINALIZATION_REGISTRY.with(|registry| {
+        registry
+            .borrow()
+            .iter()
+            .filter(|entry| entry.kind == kind)
+            .copied()
+            .collect::<Vec<_>>()
+    });
+    if entries.is_empty() {
+        return;
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let event_handle =
+        scope.root_nanbox_f64(module_string_value(process_finalization_event_name(kind)));
+    let handles = entries
+        .iter()
+        .map(|entry| {
+            (
+                scope.root_nanbox_f64(entry.obj),
+                scope.root_nanbox_f64(entry.callback),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    for (obj_handle, callback_handle) in handles {
+        let callback = callback_handle.get_nanbox_f64();
+        if !is_function_value(callback) {
+            crate::closure::throw_not_callable();
+        }
+        let args = [obj_handle.get_nanbox_f64(), event_handle.get_nanbox_f64()];
+        unsafe {
+            crate::closure::js_native_call_value(callback, args.as_ptr(), args.len());
+        }
+    }
+}
+
+pub fn scan_process_finalization_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    PROCESS_FINALIZATION_OBJECT.with(|cell| {
+        let mut value = cell.get();
+        if value != 0.0 && visitor.visit_nanbox_f64_slot(&mut value) {
+            cell.set(value);
+        }
+    });
+    PROCESS_FINALIZATION_REGISTRY.with(|registry| {
+        for entry in registry.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_f64_slot(&mut entry.obj);
+            visitor.visit_nanbox_f64_slot(&mut entry.callback);
+        }
+    });
+    PROCESS_FINALIZATION_BEFORE_EXIT_LISTENER.with(|cell| {
+        let mut callback = cell.get();
+        if !callback.is_null() && visitor.visit_raw_const_ptr_slot(&mut callback) {
+            cell.set(callback);
+        }
+    });
+}
+
+extern "C" fn process_finalization_register_function(
+    _closure: *const crate::closure::ClosureHeader,
+    obj: f64,
+    callback: f64,
+) -> f64 {
+    process_finalization_register(ProcessFinalizationKind::Exit, obj, callback)
+}
+
+extern "C" fn process_finalization_register_before_exit_function(
+    _closure: *const crate::closure::ClosureHeader,
+    obj: f64,
+    callback: f64,
+) -> f64 {
+    process_finalization_register(ProcessFinalizationKind::BeforeExit, obj, callback)
+}
+
+extern "C" fn process_finalization_unregister_function(
+    _closure: *const crate::closure::ClosureHeader,
+    obj: f64,
+) -> f64 {
+    process_finalization_unregister(obj)
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_run_finalization_before_exit() {
+    run_process_finalization_callbacks(ProcessFinalizationKind::BeforeExit);
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_run_finalization_exit() {
+    run_process_finalization_callbacks(ProcessFinalizationKind::Exit);
 }
 
 fn module_array_value(items: &[&str]) -> f64 {
@@ -436,15 +708,34 @@ fn process_features_value() -> f64 {
 }
 
 fn process_finalization_value() -> f64 {
+    let cached = PROCESS_FINALIZATION_OBJECT.with(|c| c.get());
+    if cached != 0.0 {
+        return cached;
+    }
+
     let obj = crate::object::js_object_alloc(0, 3);
-    module_set_field(obj, "register", module_noop_function("register"));
+    module_set_field(
+        obj,
+        "register",
+        module_function2("register", process_finalization_register_function, 2),
+    );
     module_set_field(
         obj,
         "registerBeforeExit",
-        module_noop_function("registerBeforeExit"),
+        module_function2(
+            "registerBeforeExit",
+            process_finalization_register_before_exit_function,
+            2,
+        ),
     );
-    module_set_field(obj, "unregister", module_noop_function("unregister"));
-    module_object_value(obj)
+    module_set_field(
+        obj,
+        "unregister",
+        module_function1("unregister", process_finalization_unregister_function, 1),
+    );
+    let value = module_object_value(obj);
+    PROCESS_FINALIZATION_OBJECT.with(|c| c.set(value));
+    value
 }
 
 extern "C" fn process_report_function_get_report(
@@ -529,6 +820,160 @@ fn process_report_value() -> f64 {
     let obj = process_report_controller_object();
     CACHED_REPORT.with(|c| c.set(obj));
     obj
+}
+
+pub(crate) fn process_permission_enabled() -> bool {
+    let mut enabled = false;
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--permission" => enabled = true,
+            "--no-permission" => enabled = false,
+            _ => {}
+        }
+    }
+    enabled
+}
+
+fn process_permission_flag_values(flag: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let prefix = format!("{flag}=");
+    let mut args = std::env::args().skip(1).peekable();
+    while let Some(arg) = args.next() {
+        if let Some(value) = arg.strip_prefix(&prefix) {
+            values.extend(
+                value
+                    .split(',')
+                    .filter(|part| !part.is_empty())
+                    .map(|part| part.to_string()),
+            );
+        } else if arg == flag {
+            if let Some(next) = args.peek() {
+                if !next.starts_with("--") {
+                    if let Some(value) = args.next() {
+                        values.extend(
+                            value
+                                .split(',')
+                                .filter(|part| !part.is_empty())
+                                .map(|part| part.to_string()),
+                        );
+                    }
+                } else {
+                    values.push("*".to_string());
+                }
+            } else {
+                values.push("*".to_string());
+            }
+        }
+    }
+    values
+}
+
+fn process_permission_has_flag(flag: &str) -> bool {
+    std::env::args().skip(1).any(|arg| arg == flag)
+}
+
+fn permission_canonical_path(path: &str) -> Option<std::path::PathBuf> {
+    std::fs::canonicalize(path).ok()
+}
+
+fn permission_path_allowed(reference: &str, allowed: &[String]) -> bool {
+    if allowed.iter().any(|entry| entry == "*") {
+        return true;
+    }
+    let reference_path = permission_canonical_path(reference);
+    for entry in allowed {
+        if entry == reference {
+            return true;
+        }
+        if let (Some(reference_path), Some(allowed_path)) =
+            (reference_path.as_ref(), permission_canonical_path(entry))
+        {
+            if reference_path == &allowed_path || reference_path.starts_with(&allowed_path) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn process_permission_scope_allowed(scope: &str, reference: Option<&str>) -> bool {
+    match scope {
+        "fs.read" => {
+            let allowed = process_permission_flag_values("--allow-fs-read");
+            match reference {
+                Some(reference) => permission_path_allowed(reference, &allowed),
+                None => allowed.iter().any(|entry| entry == "*"),
+            }
+        }
+        "fs.write" => {
+            let allowed = process_permission_flag_values("--allow-fs-write");
+            match reference {
+                Some(reference) => permission_path_allowed(reference, &allowed),
+                None => allowed.iter().any(|entry| entry == "*"),
+            }
+        }
+        "child" => process_permission_has_flag("--allow-child-process"),
+        "worker" => process_permission_has_flag("--allow-worker"),
+        "addon" => process_permission_has_flag("--allow-addons"),
+        _ => false,
+    }
+}
+
+fn throw_permission_arg_type(name: &str, value: f64) -> ! {
+    let message = format!(
+        "The \"{}\" argument must be of type string. Received {}",
+        name,
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+extern "C" fn process_permission_has_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    scope_value: f64,
+    reference_value: f64,
+) -> f64 {
+    let Some(scope) = module_value_to_string(scope_value) else {
+        throw_permission_arg_type("scope", scope_value);
+    };
+    let reference_js = JSValue::from_bits(reference_value.to_bits());
+    let reference = if reference_js.is_undefined() || reference_js.is_null() {
+        None
+    } else if let Some(reference) = module_value_to_string_or_buffer(reference_value) {
+        Some(reference)
+    } else {
+        throw_permission_arg_type("reference", reference_value);
+    };
+    bool_value(process_permission_scope_allowed(
+        &scope,
+        reference.as_deref(),
+    ))
+}
+
+fn process_permission_value() -> Option<f64> {
+    if !process_permission_enabled() {
+        return None;
+    }
+    use std::cell::Cell;
+    thread_local! {
+        static CACHED_PERMISSION: Cell<f64> = const { Cell::new(0.0) };
+    }
+
+    let cached = CACHED_PERMISSION.with(|c| c.get());
+    if cached != 0.0 {
+        return Some(cached);
+    }
+
+    let obj = crate::object::js_object_alloc(0, 1);
+    module_set_field(
+        obj,
+        "has",
+        module_function2("has", process_permission_has_thunk, 2),
+    );
+    let value = module_object_value(obj);
+    CACHED_PERMISSION.with(|c| c.set(value));
+    crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    Some(value)
 }
 
 fn process_report_controller_object() -> f64 {
@@ -1185,12 +1630,30 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         "execArgv" | "moduleLoadList" => module_array_value(&[]),
         "features" => process_features_value(),
         "finalization" => process_finalization_value(),
+        "permission" => process_permission_value()?,
         "release" => process_release_value(),
         "report" => process_report_value(),
         "sourceMapsEnabled" => js_process_source_maps_enabled(),
         "title" => js_process_title(),
+        "_eval" => undefined_value(),
+        "_events" => empty_object_value(),
+        "_eventsCount" => 0.0,
+        "_exiting" => bool_value(false),
+        "_maxListeners" => undefined_value(),
+        "_preload_modules" => module_array_value(&[]),
+        "domain" => active_domain_value(),
         _ => return None,
     })
+}
+
+fn active_domain_value() -> f64 {
+    let ptr = crate::value::JS_NATIVE_DOMAIN_DISPATCH.load(Ordering::SeqCst);
+    if ptr.is_null() {
+        return f64::from_bits(crate::value::TAG_NULL);
+    }
+    let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+        unsafe { std::mem::transmute(ptr) };
+    unsafe { dispatch(b"active".as_ptr(), b"active".len(), std::ptr::null(), 0) }
 }
 
 /// `module.builtinModules` — Node exposes this as an Array of builtin module
@@ -1222,6 +1685,312 @@ pub extern "C" fn js_module_constants() -> f64 {
         module_object_value(compile_cache_status),
     );
     module_object_value(constants)
+}
+
+extern "C" fn module_require_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _specifier: f64,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn module_null() -> f64 {
+    f64::from_bits(crate::value::TAG_NULL)
+}
+
+/// `new Module(id)` — CommonJS module record constructor shape. Perry does not
+/// execute CJS modules through this object yet; this mirrors Node's observable
+/// constructor fields and leaves loading to the resolver helpers below.
+#[no_mangle]
+pub extern "C" fn js_module_module_new(id: f64) -> f64 {
+    let id_string = module_value_to_string(id).unwrap_or_default();
+    let keys = b"id\0path\0exports\0filename\0loaded\0children\0parent\0require\0";
+    let obj =
+        crate::object::js_object_alloc_with_shape(0xC0_00_4D, 8, keys.as_ptr(), keys.len() as u32);
+    let exports = crate::object::js_object_alloc(0, 0);
+    let children = crate::array::js_array_alloc_with_length(0);
+    crate::object::js_object_set_field(
+        obj,
+        0,
+        JSValue::from_bits(module_string_value(&id_string).to_bits()),
+    );
+    crate::object::js_object_set_field(
+        obj,
+        1,
+        JSValue::from_bits(module_string_value(&module_cjs_dirname(&id_string)).to_bits()),
+    );
+    crate::object::js_object_set_field(
+        obj,
+        2,
+        JSValue::from_bits(module_object_value(exports).to_bits()),
+    );
+    crate::object::js_object_set_field(obj, 3, JSValue::from_bits(module_null().to_bits()));
+    crate::object::js_object_set_field(
+        obj,
+        4,
+        JSValue::from_bits(module_bool_value(false).to_bits()),
+    );
+    crate::object::js_object_set_field(
+        obj,
+        5,
+        JSValue::from_bits(JSValue::array_ptr(children).bits()),
+    );
+    crate::object::js_object_set_field(obj, 6, JSValue::from_bits(module_null().to_bits()));
+    crate::object::js_object_set_field(
+        obj,
+        7,
+        JSValue::from_bits(module_function1("require", module_require_thunk, 1).to_bits()),
+    );
+    module_object_value(obj)
+}
+
+fn module_cjs_dirname(path: &str) -> String {
+    if path.is_empty() {
+        return ".".to_string();
+    }
+    std::path::Path::new(path)
+        .parent()
+        .map(|p| {
+            let s = p.to_string_lossy();
+            if s.is_empty() {
+                ".".to_string()
+            } else {
+                s.into_owned()
+            }
+        })
+        .unwrap_or_else(|| ".".to_string())
+}
+
+fn module_cjs_string_array(items: Vec<String>) -> f64 {
+    let arr = crate::array::js_array_alloc_with_length(items.len() as u32);
+    for (i, item) in items.iter().enumerate() {
+        crate::array::js_array_set_f64(arr, i as u32, module_string_value(item));
+    }
+    f64::from_bits(JSValue::array_ptr(arr).bits())
+}
+
+fn module_cjs_array_strings(value: f64) -> Option<Vec<String>> {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let ptr = jv.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
+    if gc_header.obj_type != crate::gc::GC_TYPE_ARRAY {
+        return None;
+    }
+    let arr = ptr as *const crate::array::ArrayHeader;
+    let len = crate::array::js_array_length(arr);
+    let mut out = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        if let Some(item) = module_value_to_string(crate::array::js_array_get_f64(arr, i)) {
+            out.push(item);
+        }
+    }
+    Some(out)
+}
+
+fn module_is_builtin_specifier(specifier: &str) -> bool {
+    if let Some(name) = specifier.strip_prefix("node:") {
+        MODULE_BUILTIN_MODULES.contains(&specifier) || MODULE_BUILTIN_MODULES.contains(&name)
+    } else {
+        MODULE_BUILTIN_MODULES.contains(&specifier)
+    }
+}
+
+fn module_parent_base_dir(parent: f64) -> std::path::PathBuf {
+    if let Some(parent_obj) = module_object_ptr(parent) {
+        if let Some(filename) =
+            module_value_to_string(module_get_named_field(parent_obj, "filename"))
+        {
+            return std::path::PathBuf::from(module_cjs_dirname(&filename));
+        }
+        if let Some(path) = module_value_to_string(module_get_named_field(parent_obj, "path")) {
+            return std::path::PathBuf::from(path);
+        }
+    }
+    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+}
+
+fn module_parent_lookup_paths(parent: f64) -> Option<Vec<String>> {
+    let parent_obj = module_object_ptr(parent)?;
+    module_cjs_array_strings(module_get_named_field(parent_obj, "paths"))
+}
+
+fn module_node_module_paths_vec(from: &str) -> Vec<String> {
+    let mut current = std::path::PathBuf::from(from);
+    if !current.is_absolute() {
+        current = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(current);
+    }
+    let mut out = Vec::new();
+    loop {
+        out.push(current.join("node_modules").to_string_lossy().into_owned());
+        if !current.pop() {
+            break;
+        }
+    }
+    out
+}
+
+fn module_resolve_file(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    if path.is_file() {
+        return Some(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+    }
+    for ext in ["js", "json", "node"] {
+        let candidate = path.with_extension(ext);
+        if candidate.is_file() {
+            return Some(std::fs::canonicalize(&candidate).unwrap_or(candidate));
+        }
+    }
+    if path.is_dir() {
+        for ext in ["js", "json", "node"] {
+            let candidate = path.join(format!("index.{ext}"));
+            if candidate.is_file() {
+                return Some(std::fs::canonicalize(&candidate).unwrap_or(candidate));
+            }
+        }
+    }
+    None
+}
+
+fn module_resolve_local_request(
+    request: &str,
+    parent: f64,
+    lookup_paths: Option<Vec<String>>,
+) -> Option<std::path::PathBuf> {
+    if request.starts_with('/') {
+        return module_resolve_file(std::path::Path::new(request));
+    }
+    if request.starts_with("./") || request.starts_with("../") {
+        let base = module_parent_base_dir(parent);
+        return module_resolve_file(&base.join(request));
+    }
+    let paths = lookup_paths
+        .or_else(|| module_parent_lookup_paths(parent))
+        .unwrap_or_else(|| {
+            module_node_module_paths_vec(&module_parent_base_dir(parent).to_string_lossy())
+        });
+    for lookup in paths {
+        if let Some(path) = module_resolve_file(&std::path::PathBuf::from(lookup).join(request)) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn module_throw_not_found(request: &str) -> ! {
+    let message = format!("Cannot find module '{request}'");
+    crate::fs::validate::throw_error_with_code(&message, "MODULE_NOT_FOUND")
+}
+
+/// `Module._nodeModulePaths(from)` — directory ancestry search order.
+#[no_mangle]
+pub extern "C" fn js_module_node_module_paths(from: f64) -> f64 {
+    let from = module_value_to_string(from).unwrap_or_else(|| ".".to_string());
+    module_cjs_string_array(module_node_module_paths_vec(&from))
+}
+
+/// `Module._resolveLookupPaths(request, parent)` — builtin requests return
+/// `null`; local paths return the parent directory; package requests return
+/// the parent's `paths` array (or a generated node_modules ancestry).
+#[no_mangle]
+pub extern "C" fn js_module_resolve_lookup_paths(request: f64, parent: f64) -> f64 {
+    let Some(request) = module_value_to_string(request) else {
+        return module_cjs_string_array(Vec::new());
+    };
+    if module_is_builtin_specifier(&request) {
+        return module_null();
+    }
+    if request.starts_with("./") || request.starts_with("../") || request.starts_with('/') {
+        return module_cjs_string_array(vec![module_parent_base_dir(parent)
+            .to_string_lossy()
+            .into_owned()]);
+    }
+    let mut paths = module_parent_lookup_paths(parent).unwrap_or_else(|| {
+        module_node_module_paths_vec(&module_parent_base_dir(parent).to_string_lossy())
+    });
+    if let Some(global_paths) =
+        module_cjs_array_strings(crate::object::module_cjs_global_paths_value())
+    {
+        paths.extend(global_paths);
+    }
+    module_cjs_string_array(paths)
+}
+
+/// `Module._resolveFilename(request, parent, isMain, options)` — deterministic
+/// builtin and local-file resolver subset.
+#[no_mangle]
+pub extern "C" fn js_module_resolve_filename(
+    request: f64,
+    parent: f64,
+    _is_main: f64,
+    _options: f64,
+) -> f64 {
+    let Some(request) = module_value_to_string(request) else {
+        module_throw_not_found("");
+    };
+    if module_is_builtin_specifier(&request) {
+        return module_string_value(&request);
+    }
+    match module_resolve_local_request(&request, parent, None) {
+        Some(path) => module_string_value(&path.to_string_lossy()),
+        None => module_throw_not_found(&request),
+    }
+}
+
+/// `Module._findPath(request, paths, isMain)` — search explicit lookup
+/// directories for the same deterministic file cases `_resolveFilename`
+/// supports.
+#[no_mangle]
+pub extern "C" fn js_module_find_path(request: f64, paths: f64, _is_main: f64) -> f64 {
+    let Some(request) = module_value_to_string(request) else {
+        return module_bool_value(false);
+    };
+    if module_is_builtin_specifier(&request) {
+        return module_bool_value(false);
+    }
+    let lookup_paths = module_cjs_array_strings(paths).unwrap_or_default();
+    for lookup in lookup_paths {
+        let candidate = if request.starts_with('/') {
+            std::path::PathBuf::from(&request)
+        } else {
+            std::path::PathBuf::from(lookup).join(&request)
+        };
+        if let Some(path) = module_resolve_file(&candidate) {
+            return module_string_value(&path.to_string_lossy());
+        }
+    }
+    module_bool_value(false)
+}
+
+#[no_mangle]
+pub extern "C" fn js_module_init_paths() -> f64 {
+    let _ = crate::object::module_cjs_global_paths_value();
+    module_undefined()
+}
+
+#[no_mangle]
+pub extern "C" fn js_module_preload_modules(_modules: f64) -> f64 {
+    module_undefined()
+}
+
+/// `Module._load(request, parent, isMain)` — currently implements the safe
+/// builtin path used by feature detection. Non-builtin CJS execution remains
+/// outside this compatibility cut.
+#[no_mangle]
+pub extern "C" fn js_module_load(request: f64, _parent: f64, _is_main: f64) -> f64 {
+    let Some(request) = module_value_to_string(request) else {
+        return module_undefined();
+    };
+    if module_is_builtin_specifier(&request) {
+        return js_process_get_builtin_module(module_string_value(&request));
+    }
+    module_undefined()
 }
 
 /// Constructor for `new module.SourceMap(payload)`. Preserves the payload
@@ -1679,6 +2448,9 @@ pub extern "C" fn js_process_get_builtin_module(id: f64) -> f64 {
     let Ok(specifier) = std::str::from_utf8(bytes) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
+    if specifier == "sea" {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
     let name = specifier.strip_prefix("node:").unwrap_or(specifier);
     let Some(module_name) = supported_builtin_module_name(name) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -2019,6 +2791,90 @@ pub extern "C" fn js_process_active_resources_info() -> f64 {
         arr = crate::array::js_array_push(arr, JSValue::string_ptr(s));
     }
     f64::from_bits(JSValue::pointer(arr as *const u8).bits())
+}
+
+fn empty_array_value() -> f64 {
+    let arr = crate::array::js_array_alloc_with_length(0);
+    f64::from_bits(JSValue::array_ptr(arr).bits())
+}
+
+fn empty_object_value() -> f64 {
+    module_object_value(crate::object::js_object_alloc(0, 0))
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_binding(_name: f64) -> f64 {
+    empty_object_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_linked_binding(_name: f64) -> f64 {
+    empty_object_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_dlopen() -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_raw_debug() -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_debug_process() -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_debug_end() -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_start_profiler_idle_notifier() -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_stop_profiler_idle_notifier() -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_really_exit() -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_fatal_exception(_err: f64, _from_promise: f64) -> f64 {
+    bool_value(false)
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_tick_callback() -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_get_active_handles() -> f64 {
+    empty_array_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_get_active_requests() -> f64 {
+    empty_array_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_open_stdin() -> f64 {
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_internal_kill() -> f64 {
+    undefined_value()
 }
 
 /// process.cpuUsage(prior?) -> { user, system } µs.
@@ -2610,6 +3466,28 @@ static KEEP_JS_MODULE_SET_SOURCE_MAPS_SUPPORT: extern "C" fn(f64, f64) -> f64 =
 #[used]
 static KEEP_JS_MODULE_STRIP_TYPESCRIPT_TYPES: extern "C" fn(f64, f64) -> f64 =
     js_module_strip_typescript_types;
+#[used]
+static KEEP_JS_MODULE_REGISTER: extern "C" fn(f64, f64, f64) -> f64 = js_module_register;
+#[used]
+static KEEP_JS_MODULE_REGISTER_HOOKS: extern "C" fn(f64) -> f64 = js_module_register_hooks;
+#[used]
+static KEEP_JS_MODULE_MODULE_NEW: extern "C" fn(f64) -> f64 = js_module_module_new;
+#[used]
+static KEEP_JS_MODULE_FIND_PATH: extern "C" fn(f64, f64, f64) -> f64 = js_module_find_path;
+#[used]
+static KEEP_JS_MODULE_INIT_PATHS: extern "C" fn() -> f64 = js_module_init_paths;
+#[used]
+static KEEP_JS_MODULE_LOAD: extern "C" fn(f64, f64, f64) -> f64 = js_module_load;
+#[used]
+static KEEP_JS_MODULE_NODE_MODULE_PATHS: extern "C" fn(f64) -> f64 = js_module_node_module_paths;
+#[used]
+static KEEP_JS_MODULE_PRELOAD_MODULES: extern "C" fn(f64) -> f64 = js_module_preload_modules;
+#[used]
+static KEEP_JS_MODULE_RESOLVE_FILENAME: extern "C" fn(f64, f64, f64, f64) -> f64 =
+    js_module_resolve_filename;
+#[used]
+static KEEP_JS_MODULE_RESOLVE_LOOKUP_PATHS: extern "C" fn(f64, f64) -> f64 =
+    js_module_resolve_lookup_paths;
 
 /// Unset an environment variable. Backs `delete process.env.X` (#1344).
 #[no_mangle]
@@ -2735,6 +3613,7 @@ pub(crate) fn get_rss_bytes() -> u64 {
 #[no_mangle]
 pub extern "C" fn js_process_env() -> f64 {
     use std::cell::Cell;
+    ipc::process_ipc_ensure_initialized();
     thread_local! {
         static CACHED_ENV: Cell<f64> = const { Cell::new(0.0) };
     }
@@ -2977,6 +3856,171 @@ pub(crate) fn is_array_value(jv: JSValue) -> bool {
     gc_header.obj_type == crate::gc::GC_TYPE_ARRAY
 }
 
+fn execve_throw_invalid_arg_type(name: &str, expected: &str, value: f64) -> ! {
+    let message = format!(
+        "The \"{}\" argument must be {}. Received {}",
+        name,
+        expected,
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn execve_received_value(value: f64) -> String {
+    let jv = JSValue::from_bits(value.to_bits());
+    if crate::fs::validate::is_numeric(jv) {
+        let n = if jv.is_int32() {
+            jv.as_int32() as f64
+        } else {
+            jv.as_number()
+        };
+        return crate::fs::validate::format_received_number(n);
+    }
+    if let Some(value) = module_value_to_string(value) {
+        return format!("'{}'", value);
+    }
+    crate::fs::validate::describe_received(value)
+}
+
+fn execve_env_received(value: f64) -> String {
+    let Some(obj) = module_object_ptr(value) else {
+        return crate::fs::validate::describe_received(value);
+    };
+    let keys = crate::object::js_object_keys(obj);
+    let len = crate::array::js_array_length(keys);
+    let mut parts = Vec::new();
+    for i in 0..len.min(3) {
+        let key_value = crate::array::js_array_get_f64(keys, i);
+        let key = module_value_to_string(key_value).unwrap_or_default();
+        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        let field = crate::object::js_object_get_field_by_name_f64(obj, key_ptr);
+        parts.push(format!("{}: {}", key, execve_received_value(field)));
+    }
+    if len > 3 {
+        parts.push("...".to_string());
+    }
+    format!("{{ {} }}", parts.join(", "))
+}
+
+fn execve_throw_invalid_arg_value(name: &str, received: String) -> ! {
+    let message = format!(
+        "The argument '{}' must be a string without null bytes. Received {}",
+        name, received
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE")
+}
+
+fn execve_throw_invalid_env(value: f64) -> ! {
+    let message = format!(
+        "The argument 'env' must be an object with string keys and values without null bytes. Received {}",
+        execve_env_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE")
+}
+
+fn execve_parse_args(args: f64) -> Vec<String> {
+    let args_value = JSValue::from_bits(args.to_bits());
+    if args_value.is_undefined() {
+        return Vec::new();
+    }
+    if !is_array_value(args_value) {
+        execve_throw_invalid_arg_type("args", "an instance of Array", args);
+    }
+    let arr = args_value.as_pointer::<crate::array::ArrayHeader>();
+    let len = crate::array::js_array_length(arr);
+    let mut out = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        let value = crate::array::js_array_get_f64(arr, i);
+        let Some(item) = module_value_to_string(value) else {
+            execve_throw_invalid_arg_value(&format!("args[{i}]"), execve_received_value(value));
+        };
+        if item.as_bytes().contains(&0) {
+            execve_throw_invalid_arg_value(&format!("args[{i}]"), execve_received_value(value));
+        }
+        out.push(item);
+    }
+    out
+}
+
+fn execve_parse_env(env: f64) -> Vec<(String, String)> {
+    let env_value = JSValue::from_bits(env.to_bits());
+    if env_value.is_undefined() {
+        return std::env::vars().collect();
+    }
+    let Some(obj) = module_object_ptr(env) else {
+        execve_throw_invalid_arg_type("env", "of type object", env);
+    };
+    let keys = crate::object::js_object_keys(obj);
+    let len = crate::array::js_array_length(keys);
+    let mut out = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        let key_value = crate::array::js_array_get_f64(keys, i);
+        let Some(key) = module_value_to_string(key_value) else {
+            execve_throw_invalid_env(env);
+        };
+        if key.as_bytes().contains(&0) {
+            execve_throw_invalid_env(env);
+        }
+        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        let value = crate::object::js_object_get_field_by_name_f64(obj, key_ptr);
+        let Some(value_string) = module_value_to_string(value) else {
+            execve_throw_invalid_env(env);
+        };
+        if value_string.as_bytes().contains(&0) {
+            execve_throw_invalid_env(env);
+        }
+        out.push((key, value_string));
+    }
+    out
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_execve(exec_path: f64, args: f64, env: f64) -> f64 {
+    let Some(path) = module_value_to_string(exec_path) else {
+        execve_throw_invalid_arg_type("execPath", "of type string", exec_path);
+    };
+    if path.as_bytes().contains(&0) {
+        execve_throw_invalid_arg_value("execPath", execve_received_value(exec_path));
+    }
+    let argv = execve_parse_args(args);
+    let env_pairs = execve_parse_env(env);
+
+    #[cfg(unix)]
+    {
+        let path_c = match std::ffi::CString::new(path.as_str()) {
+            Ok(path_c) => path_c,
+            Err(_) => execve_throw_invalid_arg_value("execPath", execve_received_value(exec_path)),
+        };
+        let argv_c: Vec<std::ffi::CString> = argv
+            .iter()
+            .map(|arg| std::ffi::CString::new(arg.as_str()).unwrap())
+            .collect();
+        let env_c: Vec<std::ffi::CString> = env_pairs
+            .iter()
+            .map(|(key, value)| std::ffi::CString::new(format!("{key}={value}")).unwrap())
+            .collect();
+        let mut argv_ptrs: Vec<*const libc::c_char> =
+            argv_c.iter().map(|arg| arg.as_ptr()).collect();
+        let mut env_ptrs: Vec<*const libc::c_char> =
+            env_c.iter().map(|entry| entry.as_ptr()).collect();
+        argv_ptrs.push(std::ptr::null());
+        env_ptrs.push(std::ptr::null());
+        unsafe {
+            libc::execve(path_c.as_ptr(), argv_ptrs.as_ptr(), env_ptrs.as_ptr());
+            libc::abort();
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (path, argv, env_pairs);
+        crate::fs::validate::throw_type_error_with_code(
+            "process.execve() is unavailable on this platform",
+            "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM",
+        )
+    }
+}
+
 // #3108 — `process.sourceMapsEnabled` / `process.setSourceMapsEnabled(bool)`.
 //
 // Node exposes a live boolean toggle: `setSourceMapsEnabled(true|false)`
@@ -3010,6 +4054,23 @@ fn module_value_to_string(value: f64) -> Option<String> {
         return None;
     }
     let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    module_string_header_to_string(ptr)
+}
+
+fn module_value_to_string_or_buffer(value: f64) -> Option<String> {
+    if let Some(value) = module_value_to_string(value) {
+        return Some(value);
+    }
+    if crate::buffer::js_buffer_is_buffer(value.to_bits() as i64) == 1 {
+        let addr =
+            (value.to_bits() & crate::value::POINTER_MASK) as *const crate::buffer::BufferHeader;
+        let ptr = crate::buffer::js_buffer_to_string(addr, 0);
+        return module_string_header_to_string(ptr);
+    }
+    None
+}
+
+fn module_string_header_to_string(ptr: *const StringHeader) -> Option<String> {
     if ptr.is_null() {
         return Some(String::new());
     }
@@ -3059,6 +4120,12 @@ fn module_required_options_object(
 fn module_get_named_field(obj: *const crate::object::ObjectHeader, name: &str) -> f64 {
     let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
     crate::object::js_object_get_field_by_name_f64(obj, key)
+}
+
+fn module_throw_plain_type_error(message: &str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
 fn module_throw_syntax_error_with_code(message: &str, code: &'static str) -> ! {
@@ -3225,6 +4292,100 @@ pub extern "C" fn js_module_enable_compile_cache(cache_dir: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_module_flush_compile_cache() -> f64 {
+    module_undefined()
+}
+
+fn module_hook_member(value: f64, name: &str) -> f64 {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() || jv.is_null() || is_function_value(value) {
+        return value;
+    }
+    let message = format!(
+        "The \"hooks.{}\" property must be of type function. Received {}",
+        name,
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+fn module_hooks_deregister_prototype() -> *mut crate::object::ObjectHeader {
+    let proto = crate::object::js_object_alloc(0, 1);
+    module_set_field(proto, "deregister", module_noop_function("deregister"));
+    crate::object::set_property_attrs(
+        proto as usize,
+        "deregister".to_string(),
+        crate::object::PropertyAttrs::new(true, false, true),
+    );
+    proto
+}
+
+/// `module.registerHooks(options)` — synchronous loader customization entry
+/// surface. Perry records Node-compatible hook handles and validation, while
+/// dynamic import resolution/loading still follows Perry's compile-time graph.
+#[no_mangle]
+pub extern "C" fn js_module_register_hooks(hooks: f64) -> f64 {
+    let hooks_value = JSValue::from_bits(hooks.to_bits());
+    if hooks_value.is_undefined() {
+        module_throw_plain_type_error(
+            "Cannot destructure property 'resolve' of 'hooks' as it is undefined.",
+        );
+    }
+    if hooks_value.is_null() {
+        module_throw_plain_type_error(
+            "Cannot destructure property 'resolve' of 'hooks' as it is null.",
+        );
+    }
+
+    let mut resolve = module_undefined();
+    let mut load = module_undefined();
+    if let Some(hooks_obj) = module_object_ptr(hooks) {
+        resolve = module_hook_member(module_get_named_field(hooks_obj, "resolve"), "resolve");
+        load = module_hook_member(module_get_named_field(hooks_obj, "load"), "load");
+    }
+
+    let handle = crate::object::js_object_alloc(0, 2);
+    module_set_field(handle, "resolve", resolve);
+    module_set_field(handle, "load", load);
+
+    let proto = module_hooks_deregister_prototype();
+    let proto_value = module_object_value(proto);
+    crate::object::prototype_chain::object_set_static_prototype(
+        handle as usize,
+        proto_value.to_bits(),
+    );
+    module_object_value(handle)
+}
+
+fn module_register_invalid_specifier(specifier: &str) -> bool {
+    if specifier.starts_with("data:")
+        || specifier.starts_with("file:")
+        || specifier.starts_with("./")
+        || specifier.starts_with("../")
+        || specifier.starts_with('/')
+    {
+        return false;
+    }
+    specifier.is_empty()
+        || specifier.contains('%')
+        || specifier.chars().any(|ch| ch.is_ascii_whitespace())
+}
+
+/// `module.register(specifier[, parentURL][, options])`. Perry does not load
+/// customization modules into the resolver pipeline yet; this entry point
+/// matches Node's observable return value for accepted registrations and
+/// deterministic invalid specifier errors.
+#[no_mangle]
+pub extern "C" fn js_module_register(specifier: f64, _parent_url: f64, _options: f64) -> f64 {
+    let Some(specifier_str) = module_value_to_string(specifier) else {
+        return module_undefined();
+    };
+    if module_register_invalid_specifier(&specifier_str) {
+        let message = format!(
+            "Invalid module \"{}\" is not a valid package name",
+            specifier_str
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_MODULE_SPECIFIER");
+    }
     module_undefined()
 }
 
@@ -3503,3 +4664,7 @@ static KEEP_JS_PROCESS_SOURCE_MAPS_ENABLED: extern "C" fn() -> f64 = js_process_
 #[used]
 static KEEP_JS_PROCESS_SET_SOURCE_MAPS_ENABLED: extern "C" fn(f64) -> f64 =
     js_process_set_source_maps_enabled;
+#[used]
+static KEEP_JS_PROCESS_REF: extern "C" fn(f64) -> f64 = js_process_ref;
+#[used]
+static KEEP_JS_PROCESS_UNREF: extern "C" fn(f64) -> f64 = js_process_unref;

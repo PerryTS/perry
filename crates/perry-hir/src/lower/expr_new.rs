@@ -165,6 +165,14 @@ fn module_constructor_name(module_name: &str, method_name: Option<&str>) -> Opti
         ("url", Some("URLPattern")) => Some("URLPattern"),
         ("util", Some("TextEncoder")) => Some("TextEncoder"),
         ("util", Some("TextDecoder")) => Some("TextDecoder"),
+        ("stream/web", Some("TextEncoderStream"))
+        | ("node:stream/web", Some("TextEncoderStream")) => Some("TextEncoderStream"),
+        ("stream/web", Some("TextDecoderStream"))
+        | ("node:stream/web", Some("TextDecoderStream")) => Some("TextDecoderStream"),
+        ("stream/web", Some("CompressionStream"))
+        | ("node:stream/web", Some("CompressionStream")) => Some("CompressionStream"),
+        ("stream/web", Some("DecompressionStream"))
+        | ("node:stream/web", Some("DecompressionStream")) => Some("DecompressionStream"),
         _ => None,
     }
 }
@@ -183,6 +191,10 @@ fn global_member_constructor_name(
             "TextDecoder" => Some("TextDecoder"),
             "MessageChannel" => Some("MessageChannel"),
             "BroadcastChannel" => Some("BroadcastChannel"),
+            "TextEncoderStream" => Some("TextEncoderStream"),
+            "TextDecoderStream" => Some("TextDecoderStream"),
+            "CompressionStream" => Some("CompressionStream"),
+            "DecompressionStream" => Some("DecompressionStream"),
             _ => None,
         };
     }
@@ -243,8 +255,49 @@ fn is_worker_threads_module_name(module_name: &str) -> bool {
     module_name == "worker_threads" || module_name == "node:worker_threads"
 }
 
+fn is_fetch_constructor_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Blob" | "File" | "FormData" | "Headers" | "Request" | "Response"
+    )
+}
+
+fn is_global_object_expr(ctx: &LoweringContext, expr: &Expr) -> bool {
+    matches!(expr, Expr::GlobalGet(_))
+        || matches!(expr, Expr::LocalGet(id) if ctx.global_this_aliases.contains(id))
+}
+
 pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
     let callee_expr = peel_new_callee(new_expr.callee.as_ref());
+
+    if let ast::Expr::Ident(callee_ident) = callee_expr {
+        let is_module_constructor = ctx
+            .lookup_native_module(callee_ident.sym.as_ref())
+            .map(|(module_name, method)| {
+                module_name == "module"
+                    && matches!(method.as_deref(), Some("Module") | Some("default"))
+            })
+            .unwrap_or(false);
+        if is_module_constructor {
+            let args = new_expr
+                .args
+                .as_ref()
+                .map(|args| {
+                    args.iter()
+                        .map(|a| lower_expr(ctx, &a.expr))
+                        .collect::<Result<Vec<_>>>()
+                })
+                .transpose()?
+                .unwrap_or_default();
+            return Ok(Expr::NativeMethodCall {
+                module: "module".to_string(),
+                class_name: None,
+                object: None,
+                method: "Module".to_string(),
+                args,
+            });
+        }
+    }
 
     // Issue #422: `new net.Socket()` over a `net` module alias. The
     // generic Member-callee path below would lower this to
@@ -393,7 +446,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     .lookup_native_module(obj_name)
                     .map(|(module_name, _)| module_name == "module")
                     .unwrap_or(false);
-            if is_module_module && prop_ident.sym.as_ref() == "SourceMap" {
+            if is_module_module && matches!(prop_ident.sym.as_ref(), "Module" | "SourceMap") {
                 let args = new_expr
                     .args
                     .as_ref()
@@ -408,7 +461,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     module: "module".to_string(),
                     class_name: None,
                     object: None,
-                    method: "SourceMap".to_string(),
+                    method: prop_ident.sym.to_string(),
                     args,
                 });
             }
@@ -444,6 +497,28 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     method: prop_ident.sym.to_string(),
                     args,
                 });
+            }
+            if is_vm_module && prop_ident.sym.as_ref() == "Module" {
+                let mut exprs = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                exprs.push(Expr::Call {
+                    callee: Box::new(Expr::ExternFuncRef {
+                        name: "js_vm_module_constructor_error".to_string(),
+                        param_types: Vec::new(),
+                        return_type: Type::Any,
+                    }),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                });
+                return Ok(Expr::Sequence(exprs));
             }
             if obj_name == "WebAssembly" && prop_ident.sym.as_ref() == "Module" {
                 let args = new_expr
@@ -676,6 +751,29 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
 
+            let crypto_constructor_export =
+                ctx.lookup_native_module(&class_name)
+                    .and_then(|(module_name, export_name)| {
+                        if matches!(module_name, "crypto" | "node:crypto")
+                            && matches!(export_name, Some("DiffieHellman" | "DiffieHellmanGroup"))
+                        {
+                            export_name.map(str::to_string)
+                        } else {
+                            None
+                        }
+                    });
+            if let Some(method_name) = crypto_constructor_export {
+                let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                return Ok(Expr::Call {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
+                        property: method_name,
+                    }),
+                    args,
+                    type_args: Vec::new(),
+                });
+            }
+
             // #3157: `import { MessageChannel } from "worker_threads"` then
             // `new MessageChannel()` — the bare-ident form must route to the
             // same receiver-less worker_threads NativeMethodCall as the
@@ -735,6 +833,20 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
 
+            if matches!(
+                ctx.lookup_native_module(&class_name),
+                Some(("v8", Some("GCProfiler")))
+            ) {
+                let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                return Ok(Expr::NewDynamic {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::NativeModuleRef("v8".to_string())),
+                        property: "GCProfiler".to_string(),
+                    }),
+                    args,
+                });
+            }
+
             if matches!(class_name.as_str(), "MIMEType" | "MIMEParams") {
                 if let Some((module_name, Some(method_name))) =
                     ctx.lookup_native_module(&class_name)
@@ -766,6 +878,16 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             }
 
             if let Some((module_name, method_name)) = ctx.lookup_native_module(&class_name) {
+                if matches!((module_name, method_name), ("module", Some("Module"))) {
+                    let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                    return Ok(Expr::NativeMethodCall {
+                        module: "module".to_string(),
+                        class_name: None,
+                        object: None,
+                        method: "Module".to_string(),
+                        args,
+                    });
+                }
                 if let Some(class_name) = module_constructor_name(module_name, method_name) {
                     if let Some(expr) =
                         lower_url_encoding_constructor(ctx, class_name, new_expr.args.as_deref())?
@@ -1391,8 +1513,17 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .unwrap_or_default();
             if ctx.lookup_class(&class_name).is_none() {
                 if let Some(resolved) = ctx.resolve_class_alias(&class_name) {
-                    if matches!(resolved.as_str(), "Blob" | "File" | "WebSocket") {
-                        if matches!(resolved.as_str(), "Blob" | "File") {
+                    if matches!(
+                        resolved.as_str(),
+                        "Blob"
+                            | "File"
+                            | "FormData"
+                            | "Headers"
+                            | "Request"
+                            | "Response"
+                            | "WebSocket"
+                    ) {
+                        if is_fetch_constructor_name(&resolved) {
                             ctx.uses_fetch = true;
                         }
                         return Ok(Expr::New {
@@ -1534,10 +1665,19 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 {
                     return Ok(nonconstructable_builtin_throw_expr(property, args));
                 }
-                if matches!(object.as_ref(), Expr::GlobalGet(_))
-                    && matches!(property.as_str(), "Blob" | "File" | "WebSocket")
+                if is_global_object_expr(ctx, object.as_ref())
+                    && matches!(
+                        property.as_str(),
+                        "Blob"
+                            | "File"
+                            | "FormData"
+                            | "Headers"
+                            | "Request"
+                            | "Response"
+                            | "WebSocket"
+                    )
                 {
-                    if matches!(property.as_str(), "Blob" | "File") {
+                    if is_fetch_constructor_name(property) {
                         ctx.uses_fetch = true;
                     }
                     return Ok(Expr::New {

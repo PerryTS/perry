@@ -11,6 +11,12 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ir::*;
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WithEnvFrame {
+    pub(crate) local_id: LocalId,
+    pub(crate) local_mark: usize,
+}
+
 pub struct LoweringContext {
     /// Counter for generating unique local IDs
     pub(crate) next_local_id: LocalId,
@@ -181,6 +187,10 @@ pub struct LoweringContext {
     /// (static property key); flushed into `Module.closure_display_names`
     /// alongside `pending_functions`.
     pub(crate) closure_display_names: HashMap<FuncId, String>,
+    /// Test262 assignment name inference: when lowering `lhs = rhs`, a bare
+    /// identifier lhs can provide the `NamedEvaluation` name for an anonymous
+    /// function/class rhs. This slot is set only while lowering that rhs.
+    pub(crate) assignment_inferred_name: Option<String>,
     /// #4101: original source text keyed by FuncId, captured by slicing the
     /// module source against each function's AST span at lowering time.
     /// Flushed into `Module.closure_source_text` alongside `pending_functions`.
@@ -212,6 +222,12 @@ pub struct LoweringContext {
     /// capture-slot would race with self-referential `const f = () => f(...)`
     /// and double-book state shared between sibling closures.
     pub(crate) module_level_ids: HashSet<LocalId>,
+    /// Sloppy assignments to unresolvable identifiers create properties on
+    /// the global object. We model the subset Perry can compile by minting a
+    /// module-level LocalId plus a synthetic top-level `var` slot after module
+    /// lowering, so closures and later top-level reads share storage.
+    pub(crate) sloppy_implicit_globals: Vec<(String, LocalId)>,
+    pub(crate) sloppy_implicit_global_ids: HashSet<LocalId>,
     /// Current function/closure nesting depth (`enter_scope` bumps this,
     /// `exit_scope` decrements). 0 == still at module top level.
     pub(crate) scope_depth: usize,
@@ -256,6 +272,11 @@ pub struct LoweringContext {
     /// unresolvable identifiers throw ReferenceError, but member receivers are
     /// still allowed to use the existing GlobalGet sentinel path.
     pub(crate) unresolved_ident_as_global: bool,
+    /// Active `with` object environment records. Each frame points at the
+    /// synthetic local that stores the object value and the locals length when
+    /// the frame was entered, so declarations inside the block/function can
+    /// continue to lexically shadow the object environment.
+    pub(crate) with_env_stack: Vec<WithEnvFrame>,
     pub(crate) var_hoisted_ids: HashSet<LocalId>,
     /// Shadow index: function name -> index in `functions` Vec (last entry for shadowing)
     pub(crate) functions_index: HashMap<String, usize>,
@@ -396,6 +417,10 @@ pub struct LoweringContext {
     /// the HIR (where codegen consumes them) rather than being patched in
     /// after lowering.
     pub(crate) let_class_aliases: Vec<(String, String)>,
+    /// LocalIds known to hold the global object (`globalThis`). This lets
+    /// value-read recognisers treat `const g = globalThis; g.Response` like
+    /// `globalThis.Response` without relying on source-level names.
+    pub(crate) global_this_aliases: HashSet<LocalId>,
     /// Issue #838: locals whose initializer is `<ClassName>.prototype`.
     /// Lets the assignment lowering recognise `proto.method = fn` as a
     /// prototype-method assignment on the underlying class (rather than
@@ -447,6 +472,11 @@ pub struct LoweringContext {
     /// for methods that already have a dedicated recogniser arm — see
     /// `lower/expr_call.rs` for the dispatch list.
     pub(crate) object_static_method_aliases: HashMap<LocalId, String>,
+    /// Same alias-call repair for selected `Array.<staticMethod>` captures.
+    /// Test262's descriptor helper stores `Array.isArray` in a local and calls
+    /// that alias; Perry's direct-call intrinsic already works, but the value
+    /// read currently lowers to a non-callable sentinel.
+    pub(crate) array_static_method_aliases: HashMap<LocalId, String>,
     /// Issue #444: true when this module is the user-supplied entry file.
     /// Drives `import.meta.main` — Node 24+ / Bun semantics where the entry
     /// module reports `true` and every imported module reports `false`. Set

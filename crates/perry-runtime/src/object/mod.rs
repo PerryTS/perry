@@ -39,10 +39,14 @@ mod global_this_tables;
 mod groupby;
 pub(crate) mod has_own_helpers;
 mod instanceof;
+pub(crate) mod iterator_prototypes;
 mod namespace_create;
 mod native_call_method;
 mod native_module;
+mod native_module_crypto_key_object;
+mod native_module_crypto_random;
 mod native_module_dispatch;
+mod native_module_dispatch_crypto;
 mod native_module_stream;
 mod object_literal_ops;
 mod object_ops;
@@ -55,6 +59,7 @@ mod prototype_helpers;
 mod reflect_support;
 mod util_types;
 mod websocket_global;
+mod with_env;
 pub use alloc::*;
 pub use arguments::*;
 pub(crate) use array_object_ops::*;
@@ -80,6 +85,7 @@ pub use global_this::*;
 pub(crate) use global_this_tables::*;
 pub use groupby::*;
 pub use instanceof::*;
+pub(crate) use iterator_prototypes::{attach_iterator_prototype, iterator_prototype_for_class_id};
 pub use namespace_create::*;
 pub use native_call_method::*;
 pub use native_module::*;
@@ -89,10 +95,12 @@ pub use object_literal_ops::*;
 pub use object_ops::*;
 pub use object_ops_frozen::*;
 pub use polymorphic_index::*;
+pub(crate) use primitive_proto_thunks::primitive_proto_method_value;
 pub use property_key::*;
 pub(crate) use prototype_helpers::*;
 pub(crate) use reflect_support::*;
 pub use util_types::*;
+pub use with_env::*;
 
 static HTTP_METHODS_CACHE: AtomicU64 = AtomicU64::new(0);
 static FS_CONSTANTS_CACHE: AtomicU64 = AtomicU64::new(0);
@@ -576,6 +584,14 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
     });
 }
 
+/// Remove a customized property descriptor for (obj, key), restoring default
+/// data-property attributes for subsequent writes and reflection.
+pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
+    PROPERTY_DESCRIPTORS.with(|m| {
+        m.borrow_mut().remove(&(obj, key.to_string()));
+    });
+}
+
 /// Look up the accessor descriptor (get/set) for (obj, key).
 pub(crate) fn get_accessor_descriptor(obj: usize, key: &str) -> Option<AccessorDescriptor> {
     ACCESSOR_DESCRIPTORS.with(|m| m.borrow().get(&(obj, key.to_string())).copied())
@@ -624,6 +640,14 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
     ACCESSOR_DESCRIPTORS.with(|m| {
         m.borrow_mut().insert((obj, key), acc);
+    });
+}
+
+/// Remove an accessor descriptor for (obj, key), letting ordinary data-property
+/// reads and writes use the object's stored field again.
+pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {
+    ACCESSOR_DESCRIPTORS.with(|m| {
+        m.borrow_mut().remove(&(obj, key.to_string()));
     });
 }
 
@@ -847,6 +871,11 @@ thread_local! {
     /// "small handle" and silently dropped the assignment. Now route through
     /// this side-table keyed by class_id.
     pub(crate) static CLASS_DYNAMIC_PROPS: std::cell::RefCell<std::collections::HashMap<u32, std::collections::HashMap<String, f64>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// Configurable synthetic class-ref keys that were deleted (currently
+    /// `name`). Mirrors the closure deleted-key side table for ClassRef values,
+    /// which are tagged integers rather than ObjectHeader/ClosureHeader values.
+    pub(crate) static CLASS_DELETED_KEYS: std::cell::RefCell<std::collections::HashMap<u32, std::collections::HashSet<String>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
@@ -1367,6 +1396,18 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
     );
     visitor.visit_atomic_i64_slot(&LOCAL_STORAGE_PTR, Ordering::Acquire, Ordering::Release);
     visitor.visit_atomic_i64_slot(&SESSION_STORAGE_PTR, Ordering::Acquire, Ordering::Release);
+    // Shared `%IteratorPrototype%`-style singletons for Array/Map/Set/String
+    // iterator objects. Each iterator instance's `[[Prototype]]` points here, so
+    // these must stay live for the lifetime of any iterator.
+    for slot in [
+        &iterator_prototypes::ITERATOR_PROTOTYPE_PTR,
+        &iterator_prototypes::ARRAY_ITERATOR_PROTOTYPE_PTR,
+        &iterator_prototypes::MAP_ITERATOR_PROTOTYPE_PTR,
+        &iterator_prototypes::SET_ITERATOR_PROTOTYPE_PTR,
+        &iterator_prototypes::STRING_ITERATOR_PROTOTYPE_PTR,
+    ] {
+        visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);
+    }
 }
 
 #[cfg(test)]
@@ -1689,6 +1730,40 @@ pub(crate) fn web_stream_to_string_tag(value: f64) -> Option<&'static str> {
     }
 }
 
+unsafe fn string_value_to_owned(value: f64) -> Option<String> {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv.is_any_string() {
+        return None;
+    }
+    let s = crate::builtins::js_string_coerce(value);
+    if s.is_null() {
+        return None;
+    }
+    let len = (*s).byte_len as usize;
+    let data = (s as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+    std::str::from_utf8(std::slice::from_raw_parts(data, len))
+        .ok()
+        .map(ToOwned::to_owned)
+}
+
+unsafe fn object_to_string_tag_property(value: f64) -> Option<String> {
+    let bits = value.to_bits();
+    if (bits & 0xFFFF_0000_0000_0000) != 0x7FFD_0000_0000_0000 {
+        return None;
+    }
+    let raw_addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+    if raw_addr < 0x1000 {
+        return None;
+    }
+    let sym = crate::symbol::well_known_symbol("toStringTag");
+    if sym.is_null() {
+        return None;
+    }
+    let sym_f64 = f64::from_bits(0x7FFD_0000_0000_0000 | (sym as u64 & 0x0000_FFFF_FFFF_FFFF));
+    let tag_value = crate::symbol::own_symbol_property(value, sym_f64)?;
+    string_value_to_owned(tag_value)
+}
+
 /// `Object.prototype.toString.call(x)` — returns `[object <tag>]` where
 /// `<tag>` is read from the value's class-level `Symbol.toStringTag` getter
 /// if registered, otherwise `Object` (matching Node for plain objects).
@@ -1817,6 +1892,12 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }
+    if let Some(tag) = object_to_string_tag_property(value) {
+        let formatted = format!("[object {}]", tag);
+        let bytes = formatted.as_bytes();
+        let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
     if jsv.is_int32() || jsv.is_number() {
         let bytes = b"[object Number]";
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
@@ -1863,6 +1944,11 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         let obj_ptr = (bits & POINTER_MASK) as *const ObjectHeader;
         if !obj_ptr.is_null() && (obj_ptr as usize) >= 0x1000 {
             let class_id = (*obj_ptr).class_id;
+            if class_id == crate::object::CLASS_ID_COMPRESSION_STREAM {
+                tag_str = Some("CompressionStream".to_string());
+            } else if class_id == crate::object::CLASS_ID_DECOMPRESSION_STREAM {
+                tag_str = Some("DecompressionStream".to_string());
+            }
             if let Some(func_ptr) = lookup_to_string_tag_hook(class_id) {
                 let getter: extern "C" fn(f64) -> f64 = std::mem::transmute(func_ptr as *const u8);
                 let result_f64 = getter(value);

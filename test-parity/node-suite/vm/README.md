@@ -16,4 +16,4 @@ Intentionally open leaves:
 - Full VM module parsing/evaluation beyond deterministic lifecycle fixtures:
   #3132, #3133
 - vm.constants deeper context-loader behavior: #3283
-- measureMemory: #3284
+- Exact V8-backed heap accounting for `measureMemory()` values

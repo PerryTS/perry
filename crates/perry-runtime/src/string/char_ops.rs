@@ -233,6 +233,31 @@ pub extern "C" fn js_string_from_char_code(code: f64) -> *mut StringHeader {
     js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32)
 }
 
+/// Create a string from a spread/apply argument source:
+/// `String.fromCharCode(...arrayLike)` / `String.fromCharCode.apply(_, bytes)`.
+#[no_mangle]
+pub extern "C" fn js_string_from_char_code_array(value: f64) -> *mut StringHeader {
+    let arr = crate::object::js_array_like_to_array(value);
+    if arr.is_null() {
+        return js_string_from_bytes(std::ptr::null(), 0);
+    }
+
+    let len = crate::array::js_array_length(arr) as usize;
+    if len == 0 {
+        return js_string_from_bytes(std::ptr::null(), 0);
+    }
+
+    let mut out = String::with_capacity(len);
+    for i in 0..len {
+        let unit = to_uint16(crate::array::js_array_get_f64(arr, i as u32));
+        match char::from_u32(unit as u32) {
+            Some(ch) => out.push(ch),
+            None => out.push('\u{FFFD}'),
+        }
+    }
+    js_string_from_bytes(out.as_ptr(), out.len() as u32)
+}
+
 /// Throw `RangeError: Invalid code point <n>` for `String.fromCodePoint`,
 /// matching Node's message. Rust's `f64` Display drops the trailing `.0` for
 /// integer-valued floats (`1114112.0` -> "1114112") and keeps fractional

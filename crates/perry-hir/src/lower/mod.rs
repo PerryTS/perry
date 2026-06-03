@@ -71,7 +71,7 @@ pub(crate) use widget_decl::*;
 // transitively when downstream files reach into `crate::lower::Name`,
 // so spelling them out keeps the public-and-internal API stable.
 mod lowering_context;
-pub(crate) use lowering_context::LoweringContext;
+pub(crate) use lowering_context::{LoweringContext, WithEnvFrame};
 
 mod typed_parse;
 pub(crate) use typed_parse::{extract_typed_parse_source_order, resolve_typed_parse_ty};
@@ -95,6 +95,7 @@ pub use lower_module_fn::{
 mod lower_expr;
 pub(crate) use lower_expr::{
     lower_expr, lower_expr_assignment, throw_reference_error_expr, try_desugar_reactive_text,
+    with_set_fallback_for_ident,
 };
 
 // Re-export extracted module functions

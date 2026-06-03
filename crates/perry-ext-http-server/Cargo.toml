@@ -18,6 +18,7 @@ perry-ffi.workspace = true
 perry-ext-ws = { path = "../perry-ext-ws" }
 hyper = { version = "1.4", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"] }
+h2 = "0.4"
 http-body-util = "0.1"
 bytes = "1.5"
 tokio = { workspace = true }

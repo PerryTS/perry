@@ -438,6 +438,31 @@ fn extract_pointer(bits: u64) -> u64 {
     }
 }
 
+fn small_handle_from_value(value: f64) -> Option<i64> {
+    let bits = value.to_bits();
+    let top = bits >> 48;
+    if top == (POINTER_TAG >> 48) {
+        let raw = (bits & POINTER_MASK) as i64;
+        if raw > 0 && raw < 0x10000 {
+            return Some(raw);
+        }
+    } else if top == 0 && bits > 0 && bits < 0x10000 {
+        return Some(bits as i64);
+    }
+    None
+}
+
+fn set_handle_property(target: f64, key: f64, value: f64) -> Option<bool> {
+    let handle = small_handle_from_value(target)?;
+    let Some(name) = key_to_rust_string(key) else {
+        return Some(false);
+    };
+    if let Some(dispatch) = crate::object::handle_property_set_dispatch() {
+        unsafe { dispatch(handle, name.as_ptr(), name.len(), value) };
+    }
+    Some(true)
+}
+
 fn target_get(target: f64, key: f64) -> f64 {
     let obj_ptr = extract_pointer(target.to_bits()) as *const crate::ObjectHeader;
     let key_ptr = extract_pointer(key.to_bits()) as *const crate::StringHeader;
@@ -492,18 +517,134 @@ fn reflect_ordinary_set(target: f64, key: f64, value: f64) -> f64 {
 }
 
 fn target_set(target: f64, key: f64, value: f64) {
-    if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+    let property_key = unsafe { crate::object::js_to_property_key(key) };
+    if unsafe { crate::symbol::js_is_symbol(property_key) } != 0 {
         unsafe {
-            crate::symbol::js_object_set_symbol_property(target, key, value);
+            crate::symbol::js_object_set_symbol_property(target, property_key, value);
         }
         return;
     }
-    let obj_ptr = extract_pointer(target.to_bits()) as *mut crate::ObjectHeader;
-    let key_ptr = extract_pointer(key.to_bits()) as *const crate::StringHeader;
+    let obj_addr = extract_pointer(target.to_bits()) as usize;
+    if crate::closure::is_closure_ptr(obj_addr) {
+        if let Some(name) = key_to_rust_string(property_key) {
+            crate::closure::closure_set_dynamic_prop(obj_addr, &name, value);
+        }
+        return;
+    }
+    let obj_ptr = obj_addr as *mut crate::ObjectHeader;
+    let key_ptr = extract_pointer(property_key.to_bits()) as *const crate::StringHeader;
     if obj_ptr.is_null() || key_ptr.is_null() {
         return;
     }
     crate::object::js_object_set_field_by_name(obj_ptr, key_ptr, value);
+}
+
+fn raw_ptr_from_value(value: f64) -> Option<usize> {
+    let bits = value.to_bits();
+    let top16 = bits >> 48;
+    let raw = if top16 == (POINTER_TAG >> 48) {
+        bits & POINTER_MASK
+    } else if top16 == 0 && bits > 0x10000 {
+        bits
+    } else {
+        return None;
+    } as usize;
+    if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    Some(raw)
+}
+
+fn array_ptr_from_value(value: f64) -> Option<*mut crate::array::ArrayHeader> {
+    let raw = raw_ptr_from_value(value)?;
+    if crate::buffer::is_registered_buffer(raw)
+        || crate::typedarray::lookup_typed_array_kind(raw).is_some()
+        || !crate::object::is_valid_obj_ptr(raw as *const u8)
+    {
+        return None;
+    }
+    unsafe {
+        let gc = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY
+            || (*gc).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+        {
+            Some(raw as *mut crate::array::ArrayHeader)
+        } else {
+            None
+        }
+    }
+}
+
+fn key_is_length(key: f64) -> bool {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(key, &mut scratch) else {
+        return false;
+    };
+    if ptr.is_null() || len != 6 {
+        return false;
+    }
+    unsafe { std::slice::from_raw_parts(ptr, len as usize) == b"length" }
+}
+
+fn parse_canonical_nonnegative_i32(bytes: &[u8]) -> Option<i32> {
+    if bytes.is_empty() || (bytes.len() > 1 && bytes[0] == b'0') {
+        return None;
+    }
+    let mut value = 0u32;
+    for &byte in bytes {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add((byte - b'0') as u32)?;
+        if value > i32::MAX as u32 {
+            return None;
+        }
+    }
+    Some(value as i32)
+}
+
+fn integer_index_key(key: f64) -> Option<i32> {
+    let jsval = crate::value::JSValue::from_bits(key.to_bits());
+    if jsval.is_int32() {
+        let index = jsval.as_int32();
+        return (index >= 0).then_some(index);
+    }
+    if !key.is_nan() {
+        return (key.is_finite() && key >= 0.0 && key.fract() == 0.0 && key <= i32::MAX as f64)
+            .then_some(key as i32);
+    }
+
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(key, &mut scratch) else {
+        return None;
+    };
+    if ptr.is_null() {
+        return None;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+    parse_canonical_nonnegative_i32(bytes)
+}
+
+fn set_integer_indexed_exotic(target: f64, key: f64, value: f64) -> bool {
+    let Some(index) = integer_index_key(key) else {
+        return false;
+    };
+    let Some(raw) = raw_ptr_from_value(target) else {
+        return false;
+    };
+    if crate::buffer::is_registered_buffer(raw) {
+        crate::buffer::js_buffer_set(raw as *mut crate::buffer::BufferHeader, index, value as i32);
+        return true;
+    }
+    if crate::typedarray::lookup_typed_array_kind(raw).is_some() {
+        crate::typedarray::js_typed_array_set(
+            raw as *mut crate::typedarray::TypedArrayHeader,
+            index,
+            value,
+        );
+        return true;
+    }
+    false
 }
 
 #[derive(Clone, Copy)]
@@ -530,6 +671,10 @@ fn key_to_rust_string(value: f64) -> Option<String> {
 }
 
 fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
+    if small_handle_from_value(target).is_some() {
+        return None;
+    }
+
     if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
         let value = unsafe { crate::symbol::js_object_get_symbol_property(target, key) };
         return (value.to_bits() != TAG_UNDEFINED)
@@ -550,6 +695,14 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
         return Some(OwnSetDescriptor::Data {
             writable: attrs.writable(),
         });
+    }
+    if crate::closure::is_closure_ptr(obj_ptr) {
+        if crate::object::has_own_helpers::closure_own_key_present(obj_ptr, &key_name) {
+            return Some(OwnSetDescriptor::Data {
+                writable: !matches!(key_name.as_str(), "name" | "length"),
+            });
+        }
+        return None;
     }
     if crate::object::obj_value_has_own_key(target, key) {
         return Some(OwnSetDescriptor::Data { writable: true });
@@ -624,6 +777,9 @@ fn create_or_update_receiver_property(receiver: f64, key: f64, value: f64) -> bo
                 return call_setter_with_receiver(setter_bits, receiver, value);
             }
         }
+    } else if crate::closure::is_closure_ptr(extract_pointer(receiver.to_bits()) as usize) {
+        target_set(receiver, key, value);
+        return true;
     } else if crate::object::obj_value_no_extend(receiver) {
         return false;
     }
@@ -632,6 +788,10 @@ fn create_or_update_receiver_property(receiver: f64, key: f64, value: f64) -> bo
 }
 
 fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) -> bool {
+    if let Some(ok) = set_handle_property(target, key, value) {
+        return ok;
+    }
+
     let mut current = target;
     for _ in 0..64 {
         if let Some(desc) = own_set_descriptor(current, key) {
@@ -647,6 +807,9 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                     call_setter_with_receiver(setter_bits, receiver, value)
                 }
             };
+        }
+        if crate::closure::is_closure_ptr(extract_pointer(current.to_bits()) as usize) {
+            return create_or_update_receiver_property(receiver, key, value);
         }
         let Some(proto) = prototype_of_for_set(current) else {
             return create_or_update_receiver_property(receiver, key, value);
@@ -667,6 +830,27 @@ pub extern "C" fn js_put_value_set(
     receiver: f64,
     strict: i32,
 ) -> f64 {
+    if lookup(target).is_none() {
+        if set_integer_indexed_exotic(target, key, value) {
+            return value;
+        }
+        if target.to_bits() == receiver.to_bits() && key_is_length(key) {
+            if let Some(arr) = array_ptr_from_value(target) {
+                crate::array::js_array_set_length(arr, value);
+                return value;
+            }
+        }
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_nanbox_f64(target);
+    let key_handle = scope.root_nanbox_f64(key);
+    let value_handle = scope.root_nanbox_f64(value);
+    let receiver_handle = scope.root_nanbox_f64(receiver);
+    let target = target_handle.get_nanbox_f64();
+    let key = key_handle.get_nanbox_f64();
+    let value = value_handle.get_nanbox_f64();
+    let receiver = receiver_handle.get_nanbox_f64();
     let target_bits = target.to_bits();
     if target_bits == TAG_NULL || target_bits == TAG_UNDEFINED {
         let key_name = key_to_rust_string(key).unwrap_or_else(|| "property".to_string());
@@ -682,7 +866,7 @@ pub extern "C" fn js_put_value_set(
         let key_name = key_to_rust_string(key).unwrap_or_else(|| "property".to_string());
         crate::error::throw_immutable_write(0, &key_name);
     }
-    value
+    value_handle.get_nanbox_f64()
 }
 
 /// `key in proxy` — if handler.has exists, call it; otherwise delegate to
@@ -887,26 +1071,16 @@ fn forward_construct(target: f64, args_array: f64, new_target: f64) -> f64 {
     if lookup(target).is_some() {
         return js_proxy_construct(target, args_array, new_target);
     }
-    // Plain function/class target: build the positional arg buffer and
-    // construct via the function-as-constructor path.
-    let args_bits = args_array.to_bits();
-    let arr_ptr = (args_bits & POINTER_MASK) as *const crate::ArrayHeader;
-    let len = if arr_ptr.is_null() {
-        0
-    } else {
-        crate::array::js_array_length(arr_ptr) as usize
-    };
-    let mut buf: Vec<f64> = Vec::with_capacity(len);
-    for i in 0..len {
-        let v = crate::array::js_array_get(arr_ptr, i as u32);
-        buf.push(f64::from_bits(v.bits()));
+    if !is_callable_function(target) {
+        return throw_type_error("target is not a constructor");
     }
+    let buf = create_list_from_array_like(args_array);
     let (ptr, n) = if buf.is_empty() {
         (std::ptr::null::<f64>(), 0usize)
     } else {
         (buf.as_ptr(), buf.len())
     };
-    unsafe { crate::object::js_new_function_construct(target, ptr, n) }
+    unsafe { crate::object::js_new_function_construct_with_new_target(target, ptr, n, new_target) }
 }
 
 /// `new Proxy(...)` / `Reflect.construct(p, args, newTarget)`.
@@ -971,6 +1145,41 @@ pub extern "C" fn js_proxy_construct(proxy_boxed: f64, args_array: f64, new_targ
         return throw_type_error("proxy [[Construct]] trap returned a non-object value");
     }
     result
+}
+
+fn array_from_args(args: &[f64]) -> f64 {
+    let arr = crate::array::js_array_alloc(0);
+    let mut a = arr;
+    for &arg in args {
+        a = crate::array::js_array_push_f64(a, arg);
+    }
+    f64::from_bits(POINTER_TAG | ((a as u64) & POINTER_MASK))
+}
+
+#[no_mangle]
+pub extern "C" fn js_reflect_construct(target: f64, args_like: f64, new_target: f64) -> f64 {
+    if !is_callable_function(target) {
+        return throw_type_error("target is not a constructor");
+    }
+    let nt = if new_target.to_bits() == TAG_UNDEFINED {
+        target
+    } else {
+        new_target
+    };
+    if !is_callable_function(nt) {
+        return throw_type_error("newTarget is not a constructor");
+    }
+    let args = create_list_from_array_like(args_like);
+    if lookup(target).is_some() {
+        let args_array = array_from_args(&args);
+        return js_proxy_construct(target, args_array, nt);
+    }
+    let (ptr, n) = if args.is_empty() {
+        (std::ptr::null::<f64>(), 0usize)
+    } else {
+        (args.as_ptr(), args.len())
+    };
+    unsafe { crate::object::js_new_function_construct_with_new_target(target, ptr, n, nt) }
 }
 
 // ---- Reflect.* helpers (direct wrappers, not proxy-specific) -----

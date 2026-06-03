@@ -102,6 +102,184 @@ pub(crate) extern "C" fn global_this_date_thunk(
     crate::value::js_nanbox_string(string as i64)
 }
 
+fn global_this_fetch_option(init: f64, name: &[u8]) -> f64 {
+    let value = crate::value::JSValue::from_bits(init.to_bits());
+    if !value.is_pointer() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let raw = crate::value::js_nanbox_get_pointer(init);
+    if raw < 0x10000 || !is_valid_obj_ptr(raw as *const u8) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_object_get_field_by_name_f64(raw as *const ObjectHeader, key)
+}
+
+fn global_this_fetch_option_string_ptr(init: f64, name: &[u8]) -> *const crate::StringHeader {
+    let value = global_this_fetch_option(init, name);
+    if matches!(
+        value.to_bits(),
+        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
+    ) {
+        return std::ptr::null();
+    }
+    crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader
+}
+
+fn global_this_body_string_ptr(value: f64) -> *const crate::StringHeader {
+    if matches!(
+        value.to_bits(),
+        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
+    ) {
+        return std::ptr::null();
+    }
+    crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader
+}
+
+fn global_this_headers_handle_from_value(value: f64) -> f64 {
+    if matches!(
+        value.to_bits(),
+        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
+    ) {
+        return 0.0;
+    }
+    let headers = super::global_fetch::call_global_headers_new();
+    if headers.to_bits() == crate::value::TAG_UNDEFINED {
+        return 0.0;
+    }
+    super::global_fetch::call_global_headers_init_from_value(headers, value);
+    headers
+}
+
+fn global_this_init_headers_handle(init: f64) -> f64 {
+    global_this_headers_handle_from_value(global_this_fetch_option(init, b"headers"))
+}
+
+pub(crate) extern "C" fn global_this_blob_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    parts: f64,
+    options: f64,
+) -> f64 {
+    let type_value = global_this_fetch_option(options, b"type");
+    super::global_fetch::call_global_blob_new(parts, type_value)
+}
+
+pub(crate) extern "C" fn global_this_headers_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    init: f64,
+) -> f64 {
+    let headers = super::global_fetch::call_global_headers_new();
+    if headers.to_bits() == crate::value::TAG_UNDEFINED {
+        return headers;
+    }
+    if init.to_bits() != crate::value::TAG_UNDEFINED {
+        super::global_fetch::call_global_headers_init_from_value(headers, init);
+    }
+    headers
+}
+
+pub(crate) extern "C" fn global_this_response_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    body: f64,
+    init: f64,
+) -> f64 {
+    let body_ptr = global_this_body_string_ptr(body);
+    let status = global_this_fetch_option(init, b"status");
+    let status = if status.to_bits() == crate::value::TAG_UNDEFINED {
+        0.0
+    } else {
+        status
+    };
+    let status_text_ptr = global_this_fetch_option_string_ptr(init, b"statusText");
+    let headers_handle = global_this_init_headers_handle(init);
+    super::global_fetch::call_global_response_new(body_ptr, status, status_text_ptr, headers_handle)
+}
+
+pub(crate) extern "C" fn global_this_request_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    input: f64,
+    init: f64,
+) -> f64 {
+    let url_ptr = crate::value::js_get_string_pointer_unified(input) as *const crate::StringHeader;
+    let method_ptr = global_this_fetch_option_string_ptr(init, b"method");
+    let body_ptr = global_this_fetch_option_string_ptr(init, b"body");
+    let headers_handle = global_this_init_headers_handle(init);
+    let referrer_ptr = global_this_fetch_option_string_ptr(init, b"referrer");
+    let referrer_policy_ptr = global_this_fetch_option_string_ptr(init, b"referrerPolicy");
+    let mode_ptr = global_this_fetch_option_string_ptr(init, b"mode");
+    let credentials_ptr = global_this_fetch_option_string_ptr(init, b"credentials");
+    let cache_ptr = global_this_fetch_option_string_ptr(init, b"cache");
+    let redirect_ptr = global_this_fetch_option_string_ptr(init, b"redirect");
+    let integrity_ptr = global_this_fetch_option_string_ptr(init, b"integrity");
+    let keepalive = {
+        let value = global_this_fetch_option(init, b"keepalive");
+        if value.to_bits() == crate::value::TAG_UNDEFINED {
+            f64::from_bits(crate::value::TAG_FALSE)
+        } else {
+            value
+        }
+    };
+    let duplex_ptr = global_this_fetch_option_string_ptr(init, b"duplex");
+    let signal = global_this_fetch_option(init, b"signal");
+    super::global_fetch::call_global_request_new(
+        url_ptr,
+        method_ptr,
+        body_ptr,
+        headers_handle,
+        referrer_ptr,
+        referrer_policy_ptr,
+        mode_ptr,
+        credentials_ptr,
+        cache_ptr,
+        redirect_ptr,
+        integrity_ptr,
+        keepalive,
+        duplex_ptr,
+        signal,
+    )
+}
+
+extern "C" fn global_this_response_error_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    super::global_fetch::call_global_response_static_error()
+}
+
+extern "C" fn global_this_response_json_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+    init: f64,
+) -> f64 {
+    let init_status = global_this_fetch_option(init, b"status");
+    let init_status = if init_status.to_bits() == crate::value::TAG_UNDEFINED {
+        0.0
+    } else {
+        init_status
+    };
+    let init_status_text_ptr = global_this_fetch_option_string_ptr(init, b"statusText");
+    let headers_handle = global_this_init_headers_handle(init);
+    super::global_fetch::call_global_response_static_json(
+        value,
+        init_status,
+        init_status_text_ptr,
+        headers_handle,
+    )
+}
+
+extern "C" fn global_this_response_redirect_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    url: f64,
+    status: f64,
+) -> f64 {
+    let url_ptr = crate::value::js_jsvalue_to_string(url) as *const crate::StringHeader;
+    let status = if status.to_bits() == crate::value::TAG_UNDEFINED {
+        302.0
+    } else {
+        status
+    };
+    super::global_fetch::call_global_response_static_redirect(url_ptr, status)
+}
+
 extern "C" fn global_this_eval_thunk(
     _closure: *const crate::closure::ClosureHeader,
     source: f64,
@@ -347,7 +525,7 @@ pub(crate) extern "C" fn global_this_array_thunk(
     crate::value::js_nanbox_pointer(arr as i64)
 }
 
-extern "C" fn global_this_string_thunk(
+pub(crate) extern "C" fn global_this_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
 ) -> f64 {
@@ -395,6 +573,154 @@ extern "C" fn math_f16round_thunk(
 
 extern "C" fn math_random_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
     crate::math::js_math_random()
+}
+
+fn math_number_arg(value: f64) -> f64 {
+    crate::builtins::js_number_coerce(value)
+}
+
+fn math_to_int32(value: f64) -> i32 {
+    let n = math_number_arg(value);
+    if !n.is_finite() || n == 0.0 {
+        return 0;
+    }
+    const TWO_32: f64 = 4_294_967_296.0;
+    (n.trunc().rem_euclid(TWO_32) as u32) as i32
+}
+
+fn math_to_uint32(value: f64) -> u32 {
+    math_to_int32(value) as u32
+}
+
+macro_rules! math_unary_thunk {
+    ($name:ident, $body:expr) => {
+        extern "C" fn $name(_closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+            let x = math_number_arg(value);
+            ($body)(x)
+        }
+    };
+}
+
+math_unary_thunk!(math_abs_thunk, |x: f64| x.abs());
+math_unary_thunk!(math_acos_thunk, |x: f64| crate::math::js_math_acos(x));
+math_unary_thunk!(math_acosh_thunk, |x: f64| crate::math::js_math_acosh(x));
+math_unary_thunk!(math_asin_thunk, |x: f64| crate::math::js_math_asin(x));
+math_unary_thunk!(math_asinh_thunk, |x: f64| crate::math::js_math_asinh(x));
+math_unary_thunk!(math_atan_thunk, |x: f64| crate::math::js_math_atan(x));
+math_unary_thunk!(math_atanh_thunk, |x: f64| crate::math::js_math_atanh(x));
+math_unary_thunk!(math_cbrt_thunk, |x: f64| crate::math::js_math_cbrt(x));
+math_unary_thunk!(math_ceil_thunk, |x: f64| x.ceil());
+math_unary_thunk!(math_cos_thunk, |x: f64| crate::math::js_math_cos(x));
+math_unary_thunk!(math_cosh_thunk, |x: f64| crate::math::js_math_cosh(x));
+math_unary_thunk!(math_exp_thunk, |x: f64| x.exp());
+math_unary_thunk!(math_expm1_thunk, |x: f64| crate::math::js_math_expm1(x));
+math_unary_thunk!(math_floor_thunk, |x: f64| x.floor());
+math_unary_thunk!(math_fround_thunk, |x: f64| crate::math::js_math_fround(x));
+math_unary_thunk!(math_log_thunk, |x: f64| crate::math::js_math_log(x));
+math_unary_thunk!(math_log10_thunk, |x: f64| crate::math::js_math_log10(x));
+math_unary_thunk!(math_log1p_thunk, |x: f64| crate::math::js_math_log1p(x));
+math_unary_thunk!(math_log2_thunk, |x: f64| crate::math::js_math_log2(x));
+math_unary_thunk!(math_sin_thunk, |x: f64| crate::math::js_math_sin(x));
+math_unary_thunk!(math_sinh_thunk, |x: f64| crate::math::js_math_sinh(x));
+math_unary_thunk!(math_sqrt_thunk, |x: f64| x.sqrt());
+math_unary_thunk!(math_tan_thunk, |x: f64| crate::math::js_math_tan(x));
+math_unary_thunk!(math_tanh_thunk, |x: f64| crate::math::js_math_tanh(x));
+math_unary_thunk!(math_trunc_thunk, |x: f64| x.trunc());
+
+extern "C" fn math_round_thunk(_closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+    let x = math_number_arg(value);
+    if x == 0.0 || x.is_nan() || x.is_infinite() {
+        return x;
+    }
+    let rounded = (x + 0.5).floor();
+    if rounded == 0.0 && x.is_sign_negative() {
+        -0.0
+    } else {
+        rounded
+    }
+}
+
+extern "C" fn math_sign_thunk(_closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+    let x = math_number_arg(value);
+    if x == 0.0 || x.is_nan() {
+        x
+    } else if x.is_sign_negative() {
+        -1.0
+    } else {
+        1.0
+    }
+}
+
+extern "C" fn math_clz32_thunk(_closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+    math_to_uint32(value).leading_zeros() as f64
+}
+
+extern "C" fn math_atan2_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    y: f64,
+    x: f64,
+) -> f64 {
+    crate::math::js_math_atan2(math_number_arg(y), math_number_arg(x))
+}
+
+extern "C" fn math_imul_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    a: f64,
+    b: f64,
+) -> f64 {
+    math_to_int32(a).wrapping_mul(math_to_int32(b)) as f64
+}
+
+extern "C" fn math_pow_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    base: f64,
+    exp: f64,
+) -> f64 {
+    crate::math::js_math_pow(math_number_arg(base), math_number_arg(exp))
+}
+
+extern "C" fn math_min_thunk(_closure: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
+    let values = global_this_rest_array_values(rest);
+    if values.is_empty() {
+        return f64::INFINITY;
+    }
+    let mut result = f64::INFINITY;
+    for value in values {
+        let n = math_number_arg(value);
+        if n.is_nan() {
+            return f64::NAN;
+        }
+        if n < result || (n == 0.0 && result == 0.0 && n.is_sign_negative()) {
+            result = n;
+        }
+    }
+    result
+}
+
+extern "C" fn math_max_thunk(_closure: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
+    let values = global_this_rest_array_values(rest);
+    if values.is_empty() {
+        return f64::NEG_INFINITY;
+    }
+    let mut result = f64::NEG_INFINITY;
+    for value in values {
+        let n = math_number_arg(value);
+        if n.is_nan() {
+            return f64::NAN;
+        }
+        if n > result || (n == 0.0 && result == 0.0 && n.is_sign_positive()) {
+            result = n;
+        }
+    }
+    result
+}
+
+extern "C" fn math_hypot_thunk(_closure: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
+    let mut result = 0.0;
+    for value in global_this_rest_array_values(rest) {
+        result = crate::math::js_math_hypot(result, math_number_arg(value).abs());
+    }
+    result
 }
 
 // #2905: thunks for the standard global helper functions. Each coerces its
@@ -464,7 +790,7 @@ extern "C" fn global_this_decode_uri_component_thunk(
 // `Object`/`String` already have dedicated thunks above; these mirror the
 // bare-call HIR lowering (`Expr::NumberCoerce` / `Expr::BooleanCoerce`) so
 // `const N = Number; N("42")` and `const B = Boolean; B(0)` match Node.
-extern "C" fn global_this_number_thunk(
+pub(crate) extern "C" fn global_this_number_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
 ) -> f64 {
@@ -478,7 +804,7 @@ extern "C" fn global_this_number_thunk(
     crate::builtins::js_number_coerce(value)
 }
 
-extern "C" fn global_this_boolean_thunk(
+pub(crate) extern "C" fn global_this_boolean_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
 ) -> f64 {
@@ -1556,6 +1882,48 @@ extern "C" fn async_generator_proto_throw_thunk(
     generator_proto_method(b"throw", arg, true)
 }
 
+/// #4141: link a freshly-built generator/async-generator instance object into
+/// the spec `[[Prototype]]` chain. Perry lowers `gen()` to a `{next,return,
+/// throw}` object literal; this interposes a fresh intermediate object (the
+/// per-instance stand-in for `g.prototype`) as the instance's `[[Prototype]]`,
+/// whose own `[[Prototype]]` is `%Generator.prototype%` / `%AsyncGenerator.
+/// prototype%`. The result is the two-hop chain Node exposes:
+/// `Object.getPrototypeOf(gen())` → intermediate →
+/// `Object.getPrototypeOf(...)` → the brand-checked prototype carrying
+/// `next`/`return`/`throw`.
+///
+/// Returns `obj` unchanged so codegen can use it inline in return position.
+/// GC: both links go through `object_set_static_prototype`, whose side-table is
+/// traced + pointer-rewritten by the collector (see `prototype_chain.rs`), so
+/// the intermediate stays live as long as the instance does and dies with it.
+#[no_mangle]
+pub extern "C" fn js_generator_attach_prototype(obj: f64, is_async: i32) -> f64 {
+    let jv = JSValue::from_bits(obj.to_bits());
+    if !jv.is_pointer() {
+        return obj;
+    }
+    let obj_ptr = jv.as_pointer::<u8>() as usize;
+    if obj_ptr == 0 {
+        return obj;
+    }
+    let gen_proto = generator_prototype_ptr(is_async != 0);
+    if gen_proto.is_null() {
+        return obj;
+    }
+    // Intermediate object stands in for `g.prototype`: own `[[Prototype]]` is
+    // `%Generator.prototype%`, carries no own methods (the instance inherits
+    // `next`/`return`/`throw` from the brand-checked prototype two hops up).
+    let intermediate = js_object_alloc(0, 0);
+    if intermediate.is_null() {
+        return obj;
+    }
+    let gen_proto_bits = crate::value::js_nanbox_pointer(gen_proto as i64).to_bits();
+    super::prototype_chain::object_set_static_prototype(intermediate as usize, gen_proto_bits);
+    let intermediate_bits = crate::value::js_nanbox_pointer(intermediate as i64).to_bits();
+    super::prototype_chain::object_set_static_prototype(obj_ptr, intermediate_bits);
+    obj
+}
+
 /// Build one generator-intrinsic tower (sync or async) and store its three
 /// objects in the GC-rooted atomics declared in `object/mod.rs`.
 ///
@@ -1676,6 +2044,75 @@ fn ensure_generator_intrinsics() {
     }
 }
 
+fn install_math_namespace(ns_obj: *mut ObjectHeader) {
+    if ns_obj.is_null() {
+        return;
+    }
+    for (name, func_ptr, arity) in [
+        ("abs", math_abs_thunk as *const u8, 1),
+        ("acos", math_acos_thunk as *const u8, 1),
+        ("acosh", math_acosh_thunk as *const u8, 1),
+        ("asin", math_asin_thunk as *const u8, 1),
+        ("asinh", math_asinh_thunk as *const u8, 1),
+        ("atan", math_atan_thunk as *const u8, 1),
+        ("atanh", math_atanh_thunk as *const u8, 1),
+        ("atan2", math_atan2_thunk as *const u8, 2),
+        ("ceil", math_ceil_thunk as *const u8, 1),
+        ("cbrt", math_cbrt_thunk as *const u8, 1),
+        ("expm1", math_expm1_thunk as *const u8, 1),
+        ("clz32", math_clz32_thunk as *const u8, 1),
+        ("cos", math_cos_thunk as *const u8, 1),
+        ("cosh", math_cosh_thunk as *const u8, 1),
+        ("exp", math_exp_thunk as *const u8, 1),
+        ("floor", math_floor_thunk as *const u8, 1),
+        ("fround", math_fround_thunk as *const u8, 1),
+    ] {
+        install_proto_method(ns_obj, name, func_ptr, arity);
+    }
+    install_proto_method_rest_with_length(ns_obj, "hypot", math_hypot_thunk as *const u8, 2, 0);
+    for (name, func_ptr, arity) in [
+        ("imul", math_imul_thunk as *const u8, 2),
+        ("log", math_log_thunk as *const u8, 1),
+        ("log1p", math_log1p_thunk as *const u8, 1),
+        ("log2", math_log2_thunk as *const u8, 1),
+        ("log10", math_log10_thunk as *const u8, 1),
+    ] {
+        install_proto_method(ns_obj, name, func_ptr, arity);
+    }
+    install_proto_method_rest_with_length(ns_obj, "max", math_max_thunk as *const u8, 2, 0);
+    install_proto_method_rest_with_length(ns_obj, "min", math_min_thunk as *const u8, 2, 0);
+    for (name, func_ptr, arity) in [
+        ("pow", math_pow_thunk as *const u8, 2),
+        ("random", math_random_thunk as *const u8, 0),
+        ("round", math_round_thunk as *const u8, 1),
+        ("sign", math_sign_thunk as *const u8, 1),
+        ("sin", math_sin_thunk as *const u8, 1),
+        ("sinh", math_sinh_thunk as *const u8, 1),
+        ("sqrt", math_sqrt_thunk as *const u8, 1),
+        ("tan", math_tan_thunk as *const u8, 1),
+        ("tanh", math_tanh_thunk as *const u8, 1),
+        ("trunc", math_trunc_thunk as *const u8, 1),
+    ] {
+        install_proto_method(ns_obj, name, func_ptr, arity);
+    }
+
+    let constant_attrs = super::PropertyAttrs::new(false, false, false);
+    for (name, value) in [
+        ("E", std::f64::consts::E),
+        ("LN10", std::f64::consts::LN_10),
+        ("LN2", std::f64::consts::LN_2),
+        ("LOG10E", std::f64::consts::LOG10_E),
+        ("LOG2E", std::f64::consts::LOG2_E),
+        ("PI", std::f64::consts::PI),
+        ("SQRT1_2", std::f64::consts::FRAC_1_SQRT_2),
+        ("SQRT2", std::f64::consts::SQRT_2),
+    ] {
+        set_intrinsic_data_prop(ns_obj, name, value, constant_attrs);
+    }
+
+    install_proto_method(ns_obj, "f16round", math_f16round_thunk as *const u8, 1);
+}
+
 /// Populate the freshly-allocated globalThis singleton with built-in
 /// constructor / namespace properties. Called exactly once from the CAS
 /// winner in `js_get_global_this`. Constructors get a ClosureHeader-
@@ -1746,6 +2183,10 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                 crate::messaging::js_broadcast_channel_constructor_call_error as *const u8
             }
             "Date" => global_this_date_thunk as *const u8,
+            "Blob" => global_this_blob_thunk as *const u8,
+            "Headers" => global_this_headers_thunk as *const u8,
+            "Request" => global_this_request_thunk as *const u8,
+            "Response" => global_this_response_thunk as *const u8,
             "URLPattern" => global_this_url_pattern_call_thunk as *const u8,
             "Storage" => crate::web_storage::storage_constructor_illegal as *const u8,
             "Crypto" | "CryptoKey" | "SubtleCrypto" => {
@@ -1769,6 +2210,12 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             }
             "Object" | "String" | "Number" | "Boolean" | "BroadcastChannel" => {
                 crate::closure::js_register_closure_arity(func_ptr, 1);
+            }
+            "Headers" => {
+                crate::closure::js_register_closure_arity(func_ptr, 1);
+            }
+            "Blob" | "Request" | "Response" => {
+                crate::closure::js_register_closure_arity(func_ptr, 2);
             }
             "Error" | "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError"
             | "EvalError" | "URIError" => {
@@ -1865,7 +2312,14 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                     super::PropertyAttrs::new(true, false, true),
                 );
             }
-            if name == "Navigator" || name == "TextEncoderStream" || name == "TextDecoderStream" {
+            if matches!(
+                name,
+                "Navigator"
+                    | "TextEncoderStream"
+                    | "TextDecoderStream"
+                    | "CompressionStream"
+                    | "DecompressionStream"
+            ) {
                 let constructor_key =
                     crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
                 js_object_set_field_by_name(proto_obj, constructor_key, ctor_value);
@@ -1926,6 +2380,35 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                     let gc = (proto_obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE)
                         as *mut crate::gc::GcHeader;
                     (*gc)._reserved |= crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
+                }
+            }
+            // #4140: per-kind `BYTES_PER_ELEMENT` own data property on BOTH the
+            // constructor and its prototype, matching Node's descriptor
+            // `{ value, writable:false, enumerable:false, configurable:false }`.
+            // The bare `Uint8Array.BYTES_PER_ELEMENT` read folds at compile time
+            // (#2902), but the reflective forms — `getOwnPropertyDescriptor`,
+            // `hasOwnProperty`, and the chained `Float64Array.prototype
+            // .BYTES_PER_ELEMENT` — resolve off these installed own properties.
+            let ta_bytes_per_element = match name {
+                "Int8Array" | "Uint8Array" | "Uint8ClampedArray" => Some(1.0),
+                "Int16Array" | "Uint16Array" | "Float16Array" => Some(2.0),
+                "Int32Array" | "Uint32Array" | "Float32Array" => Some(4.0),
+                "Float64Array" | "BigInt64Array" | "BigUint64Array" => Some(8.0),
+                _ => None,
+            };
+            if let Some(bytes) = ta_bytes_per_element {
+                let bpe_attrs = super::PropertyAttrs::new(false, false, false);
+                for target in [closure_ptr as *mut ObjectHeader, proto_obj] {
+                    let bpe_key = crate::string::js_string_from_bytes(
+                        b"BYTES_PER_ELEMENT".as_ptr(),
+                        b"BYTES_PER_ELEMENT".len() as u32,
+                    );
+                    js_object_set_field_by_name(target, bpe_key, bytes);
+                    super::set_builtin_property_attrs(
+                        target as usize,
+                        "BYTES_PER_ELEMENT".to_string(),
+                        bpe_attrs,
+                    );
                 }
             }
         }
@@ -2010,20 +2493,26 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             if ns_obj.is_null() {
                 continue;
             }
-            if name == "Math" {
-                install_proto_method(ns_obj, "f16round", math_f16round_thunk as *const u8, 1);
-                install_proto_method(ns_obj, "random", math_random_thunk as *const u8, 0);
+            // #4139 + #4149: reify each namespace's own members as real
+            // properties so the reflection APIs (`getOwnPropertyDescriptor`,
+            // `getOwnPropertyNames`) observe them. Call sites (`Math.max(...)`,
+            // `JSON.stringify(...)`, `Reflect.get(...)`) are codegen intrinsics
+            // gated on the AST shape and never read these fields. Math uses the
+            // richer install that also exposes per-method name/length descriptors.
+            match name {
+                "Math" => install_math_namespace(ns_obj),
+                "JSON" => install_json_namespace_members(ns_obj),
+                "Reflect" => install_reflect_namespace_members(ns_obj),
+                _ => {}
             }
             crate::value::js_nanbox_pointer(ns_obj as i64)
         };
         js_object_set_field_by_name(singleton, name_key, ns_value);
-        if name == "WebAssembly" {
-            super::set_builtin_property_attrs(
-                singleton as usize,
-                name.to_string(),
-                super::PropertyAttrs::new(true, false, true),
-            );
-        }
+        super::set_builtin_property_attrs(
+            singleton as usize,
+            name.to_string(),
+            super::PropertyAttrs::new(true, false, true),
+        );
     }
     // node:perf_hooks `performance` global — bind it to the same singleton the
     // named import resolves to, so `globalThis.performance ===
@@ -2222,6 +2711,23 @@ extern "C" fn object_get_own_property_names_thunk(
     super::js_object_get_own_property_names(value)
 }
 
+extern "C" fn object_get_own_property_descriptor_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    obj: f64,
+    key: f64,
+) -> f64 {
+    super::js_object_get_own_property_descriptor(obj, key)
+}
+
+extern "C" fn object_define_property_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    obj: f64,
+    key: f64,
+    descriptor: f64,
+) -> f64 {
+    super::js_object_define_property(obj, key, descriptor)
+}
+
 extern "C" fn object_from_entries_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
@@ -2276,6 +2782,49 @@ extern "C" fn array_of_thunk(_closure: *const crate::closure::ClosureHeader, res
         }
     }
     crate::value::js_nanbox_pointer(arr as i64)
+}
+
+extern "C" fn number_is_nan_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::builtins::js_number_is_nan(value)
+}
+
+extern "C" fn number_is_finite_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::builtins::js_number_is_finite(value)
+}
+
+extern "C" fn number_is_integer_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::builtins::js_number_is_integer(value)
+}
+
+extern "C" fn number_is_safe_integer_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::builtins::js_number_is_safe_integer(value)
+}
+
+extern "C" fn number_parse_float_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    global_this_parse_float_thunk(closure, value)
+}
+
+extern "C" fn number_parse_int_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+    radix: f64,
+) -> f64 {
+    global_this_parse_int_thunk(closure, value, radix)
 }
 
 extern "C" fn typed_array_from_thunk(
@@ -2344,6 +2893,40 @@ extern "C" fn url_parse_thunk(
         f64::from_bits(crate::value::TAG_NULL)
     } else {
         crate::value::js_nanbox_pointer(url as i64)
+    }
+}
+
+extern "C" fn subtle_crypto_supports_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let args = global_this_rest_array_values(rest);
+    if args.len() < 2 {
+        let message = format!(
+            "Failed to execute 'supports' on 'SubtleCrypto': 2 arguments required, but only {} present.",
+            args.len()
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_MISSING_ARGS");
+    }
+
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let op = args[0];
+    let algorithm = args[1];
+    let length = args.get(2).copied().unwrap_or(undefined);
+    let ptr = crate::value::JS_NATIVE_WEBCRYPTO_DISPATCH.load(Ordering::SeqCst);
+    if ptr.is_null() {
+        return f64::from_bits(crate::value::TAG_FALSE);
+    }
+    let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+        unsafe { std::mem::transmute(ptr) };
+    let dispatch_args = [op, algorithm, length];
+    unsafe {
+        dispatch(
+            b"supports".as_ptr(),
+            "supports".len(),
+            dispatch_args.as_ptr(),
+            dispatch_args.len(),
+        )
     }
 }
 
@@ -2454,6 +3037,20 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
             );
             install_constructor_static(
                 ctor,
+                "getOwnPropertyDescriptor",
+                object_get_own_property_descriptor_thunk as *const u8,
+                2,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "defineProperty",
+                object_define_property_thunk as *const u8,
+                3,
+                false,
+            );
+            install_constructor_static(
+                ctor,
                 "fromEntries",
                 object_from_entries_thunk as *const u8,
                 1,
@@ -2473,6 +3070,44 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
             install_constructor_static(ctor, "from", array_from_thunk as *const u8, 1, false);
             install_constructor_static(ctor, "of", array_of_thunk as *const u8, 0, true);
         }
+        "Number" => {
+            install_constructor_static(ctor, "isNaN", number_is_nan_thunk as *const u8, 1, false);
+            install_constructor_static(
+                ctor,
+                "isFinite",
+                number_is_finite_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "isInteger",
+                number_is_integer_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "isSafeInteger",
+                number_is_safe_integer_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "parseFloat",
+                number_parse_float_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "parseInt",
+                number_parse_int_thunk as *const u8,
+                2,
+                false,
+            );
+        }
         "ArrayBuffer" => {
             install_constructor_static(
                 ctor,
@@ -2486,22 +3121,24 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
             install_constructor_static(
                 ctor,
                 "error",
-                global_this_builtin_noop_thunk as *const u8,
+                global_this_response_error_thunk as *const u8,
                 0,
                 false,
             );
-            install_constructor_static(
+            install_constructor_static_with_call_arity(
                 ctor,
                 "json",
-                global_this_builtin_noop_thunk as *const u8,
+                global_this_response_json_thunk as *const u8,
                 1,
+                2,
                 false,
             );
-            install_constructor_static(
+            install_constructor_static_with_call_arity(
                 ctor,
                 "redirect",
-                global_this_builtin_noop_thunk as *const u8,
+                global_this_response_redirect_thunk as *const u8,
                 1,
+                2,
                 false,
             );
         }
@@ -2514,6 +3151,21 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
                 false,
             );
             install_constructor_static(ctor, "parse", url_parse_thunk as *const u8, 1, false);
+        }
+        "SubtleCrypto" => {
+            install_constructor_static_with_call_arity(
+                ctor,
+                "supports",
+                subtle_crypto_supports_thunk as *const u8,
+                2,
+                0,
+                true,
+            );
+            super::set_builtin_property_attrs(
+                ctor as usize,
+                "supports".to_string(),
+                super::PropertyAttrs::new(true, true, true),
+            );
         }
         _ => {}
     }
@@ -2588,13 +3240,29 @@ fn install_proto_method_rest(
     func_ptr: *const u8,
     fixed_arity: u32,
 ) {
+    install_proto_method_rest_with_length(
+        proto_obj,
+        method_name,
+        func_ptr,
+        fixed_arity,
+        fixed_arity,
+    );
+}
+
+fn install_proto_method_rest_with_length(
+    proto_obj: *mut ObjectHeader,
+    method_name: &str,
+    func_ptr: *const u8,
+    spec_length: u32,
+    call_fixed_arity: u32,
+) -> f64 {
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     if closure.is_null() {
-        return;
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    crate::closure::js_register_closure_rest(func_ptr, fixed_arity);
+    crate::closure::js_register_closure_rest(func_ptr, call_fixed_arity);
     super::native_module::set_bound_native_closure_name(closure, method_name);
-    super::native_module::set_builtin_closure_length(closure as usize, fixed_arity);
+    super::native_module::set_builtin_closure_length(closure as usize, spec_length);
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
     js_object_set_field_by_name(proto_obj, key, value);
@@ -2613,6 +3281,47 @@ fn install_proto_method_rest(
         "length".to_string(),
         super::PropertyAttrs::new(false, false, true),
     );
+    value
+}
+
+/// #4139: reify the `JSON` namespace's own methods for reflection parity. See
+/// `install_math_namespace` for the rationale (call sites are codegen
+/// intrinsics; these no-op-backed fields exist only for reflection).
+fn install_json_namespace_members(ns_obj: *mut ObjectHeader) {
+    let noop = global_this_builtin_noop_thunk as *const u8;
+    const METHODS: &[(&str, u32)] = &[
+        ("parse", 2),
+        ("stringify", 3),
+        ("rawJSON", 1),
+        ("isRawJSON", 1),
+    ];
+    for (name, arity) in METHODS.iter().copied() {
+        install_proto_method(ns_obj, name, noop, arity);
+    }
+}
+
+/// #4139: reify the `Reflect` namespace's own methods for reflection parity.
+/// See `install_math_namespace` for the rationale.
+fn install_reflect_namespace_members(ns_obj: *mut ObjectHeader) {
+    let noop = global_this_builtin_noop_thunk as *const u8;
+    const METHODS: &[(&str, u32)] = &[
+        ("defineProperty", 3),
+        ("deleteProperty", 2),
+        ("apply", 3),
+        ("construct", 2),
+        ("get", 2),
+        ("getOwnPropertyDescriptor", 2),
+        ("getPrototypeOf", 1),
+        ("has", 2),
+        ("isExtensible", 1),
+        ("ownKeys", 1),
+        ("preventExtensions", 1),
+        ("set", 3),
+        ("setPrototypeOf", 2),
+    ];
+    for (name, arity) in METHODS.iter().copied() {
+        install_proto_method(ns_obj, name, noop, arity);
+    }
 }
 
 /// Install a list of `(method_name, arity)` pairs on a prototype object,
@@ -2708,6 +3417,23 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
     // (own module, to keep this file under the 2000-line gate).
     if collection_proto_thunks::install_collection_proto_methods(builtin_name, proto_obj) {
         install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        return;
+    }
+    // #4100: primitive wrapper prototypes need real thunks for their own
+    // methods so reflective calls brand-check `this` instead of hitting the
+    // generic Object no-op/valueOf fallbacks.
+    if primitive_proto_thunks::install_primitive_proto_methods(builtin_name, proto_obj) {
+        install_noop_proto_methods(
+            proto_obj,
+            &[
+                ("hasOwnProperty", 1),
+                ("isPrototypeOf", 1),
+                ("propertyIsEnumerable", 1),
+            ],
+        );
+        if !matches!(builtin_name, "Number") {
+            install_noop_proto_methods(proto_obj, &[("toLocaleString", 0)]);
+        }
         return;
     }
     match builtin_name {

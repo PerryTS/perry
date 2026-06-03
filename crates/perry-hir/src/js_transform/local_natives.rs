@@ -937,6 +937,7 @@ pub fn fix_native_instance_expr_with_locals(
     match expr {
         // The key case: method calls that might be on native instances
         Expr::Call { callee, args, .. } => {
+            let mut recursed_into_property_object = false;
             // Issue #1193: `$(selector)` where `$` is a CheerioAPI handle.
             // Cheerio's only "call-as-function" shape is `load(html)`'s
             // return value used as a selector — rewrite to the existing
@@ -1033,6 +1034,7 @@ pub fn fix_native_instance_expr_with_locals(
                         native_instances,
                         local_id_instances,
                     );
+                    recursed_into_property_object = true;
                     if let Expr::NativeMethodCall {
                         module: inner_module,
                         method: inner_method,
@@ -1065,7 +1067,14 @@ pub fn fix_native_instance_expr_with_locals(
             }
 
             // Not a native instance call, recurse
-            fix_native_instance_expr_with_locals(callee, native_instances, local_id_instances);
+            if recursed_into_property_object {
+                // The fluent-chain case above already walked the receiver
+                // of this property call. Walking the whole callee again would
+                // revisit the same receiver at every chain level, making long
+                // non-native fluent chains exponential.
+            } else {
+                fix_native_instance_expr_with_locals(callee, native_instances, local_id_instances);
+            }
             for arg in args {
                 fix_native_instance_expr_with_locals(arg, native_instances, local_id_instances);
             }

@@ -637,6 +637,9 @@ where
             f(property);
             f(object);
         }
+        Expr::PrivateBrandCheck { object, .. } => {
+            f(object);
+        }
         Expr::FsWriteFileSync(a, b)
         | Expr::FsAppendFileSync(a, b)
         | Expr::PathJoin(a, b)
@@ -663,7 +666,9 @@ where
                 f(v);
             }
         }
-        Expr::StringFromCharCode(v) | Expr::StringFromCodePoint(v) => {
+        Expr::StringFromCharCode(v)
+        | Expr::StringFromCharCodeSpread(v)
+        | Expr::StringFromCodePoint(v) => {
             f(v);
         }
         Expr::StringRaw {
@@ -1089,6 +1094,9 @@ where
         Expr::StructuredClone { value, options } => {
             f(value);
             f(options);
+        }
+        Expr::LinkGeneratorPrototype { obj, .. } => {
+            f(obj);
         }
         Expr::BufferFromArrayBuffer {
             data,
@@ -1621,6 +1629,16 @@ where
             f(key);
             f(value);
             f(receiver);
+        }
+        Expr::WithGet {
+            object, fallback, ..
+        } => {
+            f(object);
+            f(fallback);
+        }
+        Expr::WithSet { object, value, .. } => {
+            f(object);
+            f(value);
         }
         Expr::ReflectSetPrototypeOf { target, proto } => {
             f(target);

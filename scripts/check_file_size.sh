@@ -157,6 +157,16 @@ crates/perry-hir/src/lower/expr_member.rs
 # `default` namespace shims (#3903). Splitting the per-namespace dispatch
 # helpers into a sibling module is tracked under #1435.
 crates/perry-hir/src/lower/lower_expr.rs
+# Module-declaration lowering tower (import/export binding resolution, re-export
+# wiring, namespace shims). Crossed the 2000-line gate after exported
+# destructuring-binding support added the pattern-walk arms. Splitting the
+# export-binding helpers into a sibling module is tracked under #1435.
+crates/perry-hir/src/lower/module_decl.rs
+# Module collection / resolution driver. Crossed the 2000-line gate after the
+# ESM package `.js` detection helpers (package.json `type`/`exports`/`module`
+# probing) landed. Extracting the package-metadata probe into a sibling module
+# is tracked under #1435.
+crates/perry/src/commands/compile/collect_modules.rs
 # node:process surface (env/argv/hrtime/cpuUsage/resourceUsage + EventEmitter
 # wiring + warning/deprecation emit). Crossed the limit at 2047 LOC after the
 # argument-validation batch landed on main without a split (#3493 setuid/setgid/
@@ -176,6 +186,10 @@ crates/perry-stdlib/src/sqlite.rs
 # Node core native table crossed the limit on current main after namespace
 # alias additions; split per namespace in the native-table cleanup tracked in #1435.
 crates/perry-codegen/src/lower_call/native_table/node_core.rs
+# HTTP/HTTPS native table crossed the limit on current main after ClientRequest
+# header-state surface additions; split per client/server family in the
+# native-table cleanup tracked under #1435.
+crates/perry-codegen/src/lower_call/native_table/http.rs
 # globalThis constructor/prototype registry is over the limit on current main;
 # splitting constructor tables from property dispatch is tracked under #1435.
 crates/perry-runtime/src/object/global_this.rs
@@ -201,6 +215,15 @@ crates/perry-runtime/src/symbol.rs
 # the gate. Kept here as a backstop in case the merged dispatch tower creeps
 # back over; further descriptor/ops splits are tracked under #1435.
 crates/perry-runtime/src/object/object_ops.rs
+# node:http/https native-lowering table (one dispatch arm per ClientRequest /
+# IncomingMessage / ServerResponse member). Crossed the 2000-line gate after the
+# http live-message + ClientRequest header-state surface additions (#4152/#4159).
+# Splitting per message-kind family is tracked under #1435.
+crates/perry-codegen/src/lower_call/native_table/http.rs
+# child_process module root (spawn/exec/fork dispatch + reactor wiring). Crossed
+# the 2000-line gate after the stdio `'ignore'` handling additions. Splitting the
+# spawn/exec/fork families into sibling modules is tracked under #1435.
+crates/perry-runtime/src/child_process/mod.rs
 EOF
 )
 

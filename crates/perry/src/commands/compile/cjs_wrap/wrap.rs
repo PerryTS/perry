@@ -136,6 +136,11 @@ pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Pa
         .map(|(spec, local)| format!("        if (specifier === '{}') return {};", spec, local))
         .collect::<Vec<_>>()
         .join("\n");
+    let require_resolve_cases = require_specs
+        .iter()
+        .map(|spec| format!("        if (specifier === '{}') return '{}';", spec, spec))
+        .collect::<Vec<_>>()
+        .join("\n");
 
     let mut named_exports = extract_exports_from_source(source);
 
@@ -347,10 +352,85 @@ const _cjs = (function() {{
     const __cjs_module = {{ exports: {{}} }};
     var module = __cjs_module;
     var exports = __cjs_module.exports;
+    function __perry_cjs_require_error(kind, code, message) {{
+        const err = kind === 'type' ? new TypeError(message) : new Error(message);
+        err.code = code;
+        return err;
+    }}
+    function __perry_cjs_require_is_builtin(specifier) {{
+        switch (specifier) {{
+            case 'assert': case 'node:assert':
+            case 'assert/strict': case 'node:assert/strict':
+            case 'async_hooks': case 'node:async_hooks':
+            case 'buffer': case 'node:buffer':
+            case 'child_process': case 'node:child_process':
+            case 'cluster': case 'node:cluster':
+            case 'console': case 'node:console':
+            case 'constants': case 'node:constants':
+            case 'crypto': case 'node:crypto':
+            case 'dns': case 'node:dns':
+            case 'dns/promises': case 'node:dns/promises':
+            case 'events': case 'node:events':
+            case 'fs': case 'node:fs':
+            case 'http': case 'node:http':
+            case 'http2': case 'node:http2':
+            case 'https': case 'node:https':
+            case 'module': case 'node:module':
+            case 'net': case 'node:net':
+            case 'os': case 'node:os':
+            case 'path': case 'node:path':
+            case 'path/posix': case 'node:path/posix':
+            case 'path/win32': case 'node:path/win32':
+            case 'perf_hooks': case 'node:perf_hooks':
+            case 'process': case 'node:process':
+            case 'punycode': case 'node:punycode':
+            case 'querystring': case 'node:querystring':
+            case 'readline': case 'node:readline':
+            case 'readline/promises': case 'node:readline/promises':
+            case 'stream': case 'node:stream':
+            case 'stream/promises': case 'node:stream/promises':
+            case 'string_decoder': case 'node:string_decoder':
+            case 'sys': case 'node:sys':
+            case 'test': case 'node:test':
+            case 'test/reporters': case 'node:test/reporters':
+            case 'timers': case 'node:timers':
+            case 'timers/promises': case 'node:timers/promises':
+            case 'tty': case 'node:tty':
+            case 'url': case 'node:url':
+            case 'util': case 'node:util':
+            case 'util/types': case 'node:util/types':
+            case 'worker_threads': case 'node:worker_threads':
+            case 'zlib': case 'node:zlib':
+                return true;
+            default:
+                return false;
+        }}
+    }}
     function require(specifier) {{
+        if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
+        if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');
 {require_cases}
         throw new Error('require() is not supported: ' + specifier);
     }}
+    require.name = 'require';
+    require.resolve = function resolve(specifier, options) {{
+        if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "request" argument must be of type string.');
+{require_resolve_cases}
+        if (__perry_cjs_require_is_builtin(specifier)) return specifier;
+        throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', 'Cannot find module ' + specifier);
+    }};
+    require.resolve.name = 'resolve';
+    require.resolve.paths = function paths(specifier) {{
+        if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "request" argument must be of type string.');
+        return null;
+    }};
+    require.cache = {{}};
+    require.extensions = {{
+        '.js': function(module, filename) {{}},
+        '.json': function(module, filename) {{}},
+        '.node': function(module, filename) {{}},
+    }};
+    require.main = module;
 
     {body_for_iife}
 

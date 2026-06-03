@@ -82,15 +82,20 @@ fn process_metadata_native_property(prop: &str) -> Option<Expr> {
     Some(match prop {
         "allowedNodeEnvironmentFlags"
         | "argv0"
+        | "channel"
         | "config"
+        | "connected"
         | "debugPort"
+        | "disconnect"
         | "execArgv"
         | "execPath"
         | "features"
         | "finalization"
         | "moduleLoadList"
+        | "permission"
         | "release"
         | "report"
+        | "send"
         | "sourceMapsEnabled"
         | "title" => process_native_property(prop),
         _ => return None,
@@ -218,7 +223,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     // match the simple `process.X` Ident-then-prop dispatch. (#347 Phase 3.)
     if let ast::Expr::Member(inner_member) = member.obj.as_ref() {
         if let ast::Expr::Ident(root_ident) = inner_member.obj.as_ref() {
-            if root_ident.sym.as_ref() == "process" {
+            if root_ident.sym.as_ref() == "process" && !ctx.shadows_unqualified_global("process") {
                 if let (ast::MemberProp::Ident(stream_ident), ast::MemberProp::Ident(prop_ident)) =
                     (&inner_member.prop, &member.prop)
                 {
@@ -245,11 +250,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         // dedicated process-property lowering — otherwise the namespace form
         // fell through to a generic native-module PropertyGet that resolved
         // `pid`/`arch`/`platform`/… to `undefined`.
-        let is_process_obj = obj_ident.sym.as_ref() == "process"
-            || matches!(
-                ctx.lookup_native_module(obj_ident.sym.as_ref()),
-                Some(("process", None)) | Some(("process.namespace", None))
-            );
+        let obj_name = obj_ident.sym.as_ref();
+        let process_name_is_shadowed =
+            obj_name == "process" && ctx.shadows_unqualified_global("process");
+        let is_process_obj = !process_name_is_shadowed
+            && (obj_name == "process"
+                || matches!(
+                    ctx.lookup_native_module(obj_name),
+                    Some(("process", None)) | Some(("process.namespace", None))
+                ));
         if is_process_obj {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 let prop = prop_ident.sym.as_ref();
@@ -268,15 +277,6 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "stdout" => return Ok(Expr::ProcessStdout),
                     "stderr" => return Ok(Expr::ProcessStderr),
                     "env" => return Ok(Expr::ProcessEnv),
-                    // #1407 / #1397: IPC-only members. When the process
-                    // wasn't spawned with an IPC channel (the default),
-                    // Node leaves these as `undefined` rather than
-                    // exposing a dummy method/boolean. Reads here must
-                    // short-circuit to Undefined so
-                    // `typeof process.send === "undefined"` matches Node
-                    // and downstream `if (process.send)` /
-                    // `if (process.connected)` guards do the right thing.
-                    "send" | "disconnect" | "connected" => return Ok(Expr::Undefined),
                     // #1349: process.execArgv is the array of runtime CLI
                     // flags the interpreter was started with (`["--inspect",
                     // ...]` for Node). Perry binaries are AOT — there's no
@@ -335,23 +335,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // .includes(name)) now does the right thing instead
                     // of crashing on the 0.0 sentinel.
                     "moduleLoadList" => return Ok(Expr::Array(vec![])),
-                    // #1482: process.finalization — control surface added
-                    // in Node 22 for FinalizationRegistry-like lifecycle
-                    // hooks (register / registerBeforeExit / unregister).
-                    // Perry doesn't have the runtime support yet, but
-                    // shape-only consumers feature-detect on
-                    // `typeof process.finalization === "object"` first;
-                    // returning an Object with the three documented
-                    // method names (currently undefined) closes that
-                    // gap. Real implementations of register / unregister
-                    // are tracked separately.
-                    "finalization" => {
-                        return Ok(Expr::Object(vec![
-                            ("register".to_string(), Expr::Undefined),
-                            ("registerBeforeExit".to_string(), Expr::Undefined),
-                            ("unregister".to_string(), Expr::Undefined),
-                        ]));
-                    }
+                    "finalization" => return Ok(process_native_property("finalization")),
                     // #1379: process.config — object describing build-time
                     // config (`{ variables, target_defaults }` in Node).
                     // Perry has no `node-gyp`-style build to surface, but
@@ -507,7 +491,6 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "version" => return Ok(Expr::ProcessVersion),
                     "versions" => return Ok(Expr::ProcessVersions),
                     "env" => return Ok(Expr::ProcessEnv),
-                    "send" | "disconnect" | "connected" => return Ok(Expr::Undefined),
                     "execArgv" => return Ok(Expr::Array(Vec::new())),
                     "release" => {
                         return Ok(Expr::Object(vec![
@@ -528,13 +511,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         })
                     }
                     "moduleLoadList" => return Ok(Expr::Array(vec![])),
-                    "finalization" => {
-                        return Ok(Expr::Object(vec![
-                            ("register".to_string(), Expr::Undefined),
-                            ("registerBeforeExit".to_string(), Expr::Undefined),
-                            ("unregister".to_string(), Expr::Undefined),
-                        ]));
-                    }
+                    "finalization" => return Ok(process_native_property("finalization")),
                     "config" => {
                         return Ok(Expr::Object(vec![
                             ("variables".to_string(), Expr::Object(Vec::new())),
@@ -1411,6 +1388,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if matches!(module_name.as_str(), "http" | "https")
+                    && class_name == "ClientRequest"
+                    && is_http_client_request_method_name(&property_name)
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "http"
                     && class_name == "IncomingMessage"
                     && is_http_incoming_message_method_name(&property_name)
@@ -1420,9 +1406,27 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
-                } else if module_name == "http"
+                } else if matches!(module_name.as_str(), "http" | "https")
                     && class_name == "IncomingMessage"
                     && is_http_incoming_message_runtime_property_name(&property_name)
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if matches!(module_name.as_str(), "http" | "https")
+                    && class_name == "ServerResponse"
+                    && is_http_server_response_method_name(&property_name)
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if matches!(module_name.as_str(), "http" | "https")
+                    && class_name == "ServerResponse"
+                    && is_http_server_response_runtime_property_name(&property_name)
                 {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
@@ -1446,6 +1450,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             | ("ClientRequest", "protocol")
                             | ("ClientRequest", "host")
                             | ("ClientRequest", "path")
+                            | ("ClientRequest", "aborted")
+                            | ("ClientRequest", "connection")
+                            | ("ClientRequest", "destroyed")
+                            | ("ClientRequest", "finished")
+                            | ("ClientRequest", "maxHeadersCount")
+                            | ("ClientRequest", "reusedSocket")
+                            | ("ClientRequest", "socket")
+                            | ("ClientRequest", "writableEnded")
+                            | ("ClientRequest", "writableFinished")
                             | ("Agent", "createConnection")
                             | ("Agent", "createSocket")
                             | ("IncomingMessage", "method")
@@ -1656,16 +1669,36 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             }
         }
     }
-    let member_reads_global_fetch = matches!(
+    let member_object_is_global_this = matches!(
         unwrap_transparent(member.obj.as_ref()),
         ast::Expr::Ident(i) if i.sym.as_ref() == "globalThis"
-    ) && match &member.prop {
-        ast::MemberProp::Ident(p) => p.sym.as_ref() == "fetch",
-        ast::MemberProp::Computed(c) => {
-            matches!(c.expr.as_ref(), ast::Expr::Lit(ast::Lit::Str(s)) if s.value.as_str() == Some("fetch"))
-        }
-        ast::MemberProp::PrivateName(_) => false,
-    };
+    ) || matches!(&object_expr, Expr::LocalGet(id) if ctx.global_this_aliases.contains(id));
+    let member_reads_global_fetch = member_object_is_global_this
+        && match &member.prop {
+            ast::MemberProp::Ident(p) => matches!(
+                p.sym.as_ref(),
+                "fetch" | "Blob" | "File" | "FormData" | "Headers" | "Request" | "Response"
+            ),
+            ast::MemberProp::Computed(c) => {
+                matches!(
+                    c.expr.as_ref(),
+                    ast::Expr::Lit(ast::Lit::Str(s))
+                        if matches!(
+                            s.value.as_str(),
+                            Some(
+                                "fetch"
+                                    | "Blob"
+                                    | "File"
+                                    | "FormData"
+                                    | "Headers"
+                                    | "Request"
+                                    | "Response"
+                            )
+                        )
+                )
+            }
+            ast::MemberProp::PrivateName(_) => false,
+        };
     if member_reads_global_fetch {
         ctx.uses_fetch = true;
     }
@@ -1691,7 +1724,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     } = &object_expr
     {
         if matches!(inner.as_ref(), Expr::GlobalGet(0))
-            && crate::analysis::is_builtin_global_value_name(property)
+            && (crate::analysis::is_builtin_global_value_name(property)
+                // #4139: `Math`/`JSON`/`Reflect` bare values now lower to
+                // `PropertyGet { GlobalGet(0), <name> }` (see lower_expr.rs) so
+                // reflection sees the real namespace object. But in member-OBJECT
+                // position (`Math.max(…)`, `JSON.stringify(…)`, `Reflect.get(…)`)
+                // the intrinsic call / constant-fold paths expect the bare
+                // `GlobalGet(0)` receiver — undo the reroute here exactly as for
+                // the built-in constructors, keeping those paths byte-identical.
+                || matches!(property.as_str(), "Math" | "JSON" | "Reflect"))
         {
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                 if obj_ident.sym.as_ref() == property.as_str() && property != "globalThis" {
@@ -2376,11 +2417,107 @@ fn is_classic_stream_method_name(prop: &str) -> bool {
 }
 
 fn is_http_incoming_message_method_name(prop: &str) -> bool {
-    matches!(prop, "setEncoding")
+    matches!(
+        prop,
+        "on" | "addListener"
+            | "setEncoding"
+            | "setTimeout"
+            | "pause"
+            | "resume"
+            | "destroy"
+            | "read"
+    )
+}
+
+fn is_http_client_request_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "on" | "end"
+            | "write"
+            | "setHeader"
+            | "setTimeout"
+            | "listenerCount"
+            | "getHeader"
+            | "hasHeader"
+            | "removeHeader"
+            | "getHeaderNames"
+            | "getHeaders"
+            | "getRawHeaderNames"
+            | "abort"
+            | "destroy"
+            | "flushHeaders"
+            | "cork"
+            | "uncork"
+            | "setNoDelay"
+            | "setSocketKeepAlive"
+    )
 }
 
 fn is_http_incoming_message_runtime_property_name(prop: &str) -> bool {
-    matches!(prop, "rawHeaders")
+    matches!(
+        prop,
+        "method"
+            | "url"
+            | "httpVersion"
+            | "headers"
+            | "rawHeaders"
+            | "headersDistinct"
+            | "trailers"
+            | "rawTrailers"
+            | "trailersDistinct"
+            | "complete"
+            | "aborted"
+            | "destroyed"
+            | "socket"
+            | "connection"
+            | "signal"
+            | "remoteAddress"
+            | "remotePort"
+    )
+}
+
+fn is_http_server_response_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "setHeader"
+            | "getHeader"
+            | "removeHeader"
+            | "hasHeader"
+            | "getHeaders"
+            | "getHeaderNames"
+            | "appendHeader"
+            | "setHeaders"
+            | "writeHead"
+            | "write"
+            | "addTrailers"
+            | "end"
+            | "flushHeaders"
+            | "cork"
+            | "uncork"
+            | "setTimeout"
+            | "writeEarlyHints"
+            | "writeContinue"
+            | "writeProcessing"
+            | "on"
+            | "addListener"
+    )
+}
+
+fn is_http_server_response_runtime_property_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "statusCode"
+            | "statusMessage"
+            | "headersSent"
+            | "writableEnded"
+            | "writableFinished"
+            | "finished"
+            | "sendDate"
+            | "strictContentLength"
+            | "req"
+            | "socket"
+            | "connection"
+    )
 }
 
 fn is_dns_resolver_method_name(prop: &str) -> bool {

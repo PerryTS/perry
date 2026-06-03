@@ -233,6 +233,17 @@ fn parse_eval_ident_name(src: &str) -> Option<&str> {
     }
 }
 
+pub(crate) fn direct_eval_var_decl_name(body: &str) -> Option<String> {
+    let src = body.trim().trim_end_matches(';').trim();
+    let decl = src.strip_prefix("var ")?;
+    let name_raw = decl
+        .split_once('=')
+        .map(|(name, _)| name)
+        .unwrap_or(decl)
+        .trim_end_matches(';');
+    parse_eval_ident_name(trim_js_eval_ws(name_raw)).map(str::to_string)
+}
+
 fn parse_eval_literal(src: &str) -> Option<Expr> {
     let s = trim_js_eval_ws(src);
     if let Some(inner) = s.strip_prefix('"').and_then(|rest| rest.strip_suffix('"')) {
@@ -254,7 +265,26 @@ fn try_direct_eval_simple_assignment_fold(ctx: &mut LoweringContext, body: &str)
     let src = body.trim().trim_end_matches(';').trim();
     let is_var_assignment = src.starts_with("var ");
     let assignment = src.strip_prefix("var ").unwrap_or(src);
-    let (name_raw, value_raw) = assignment.split_once('=')?;
+    let (name_raw, value_raw) = match assignment.split_once('=') {
+        Some(parts) => parts,
+        None if is_var_assignment => {
+            let name = direct_eval_var_decl_name(body)?;
+            if let Some(id) = ctx.lookup_local(&name) {
+                if !ctx.var_hoisted_ids.contains(&id) {
+                    return Some(Expr::SyntaxErrorNew(Box::new(Expr::String(format!(
+                        "eval var declaration conflicts with lexical binding `{name}`"
+                    )))));
+                }
+                return Some(Expr::Undefined);
+            }
+            if !ctx.current_strict {
+                let id = ctx.define_local(name, perry_types::Type::Any);
+                ctx.var_hoisted_ids.insert(id);
+            }
+            return Some(Expr::Undefined);
+        }
+        None => return None,
+    };
     let name = parse_eval_ident_name(trim_js_eval_ws(name_raw))?;
     let value = parse_eval_literal(value_raw)?;
     if let Some(id) = ctx.lookup_local(name) {

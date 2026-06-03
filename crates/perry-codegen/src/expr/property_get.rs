@@ -107,6 +107,46 @@ fn lower_runtime_property_get_by_name(
     ))
 }
 
+fn is_primitive_builtin_proto_method(builtin_name: &str, method_name: &str) -> bool {
+    match builtin_name {
+        "Number" => matches!(
+            method_name,
+            "toExponential" | "toFixed" | "toLocaleString" | "toPrecision" | "toString" | "valueOf"
+        ),
+        "Boolean" | "Symbol" => matches!(method_name, "toString" | "valueOf"),
+        "BigInt" => matches!(method_name, "toString" | "valueOf"),
+        _ => false,
+    }
+}
+
+fn builtin_prototype_method_read<'a>(
+    object: &'a Expr,
+    property: &'a str,
+) -> Option<(&'a str, &'a str)> {
+    let Expr::PropertyGet {
+        object: ctor_object,
+        property: proto_property,
+    } = object
+    else {
+        return None;
+    };
+    if proto_property != "prototype" {
+        return None;
+    }
+    let Expr::PropertyGet {
+        object: global_object,
+        property: builtin_name,
+    } = ctor_object.as_ref()
+    else {
+        return None;
+    };
+    if !matches!(global_object.as_ref(), Expr::GlobalGet(_)) {
+        return None;
+    }
+    is_primitive_builtin_proto_method(builtin_name, property)
+        .then_some((builtin_name.as_str(), property))
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::PropertyGet { object, property }
@@ -429,6 +469,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `js_array_set_f64` (no return value, no realloc) since there's
         // no local to write a possibly-realloc'd pointer back to.
         Expr::PropertyGet { object, property } => {
+            if let Some((builtin_name, method_name)) =
+                builtin_prototype_method_read(object, property)
+            {
+                let builtin_idx = ctx.strings.intern(builtin_name);
+                let builtin_bytes_global =
+                    format!("@{}", ctx.strings.entry(builtin_idx).bytes_global);
+                let builtin_len = builtin_name.len().to_string();
+                let method_idx = ctx.strings.intern(method_name);
+                let method_bytes_global =
+                    format!("@{}", ctx.strings.entry(method_idx).bytes_global);
+                let method_len = method_name.len().to_string();
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_builtin_prototype_method_value",
+                    &[
+                        (PTR, &builtin_bytes_global),
+                        (I64, &builtin_len),
+                        (PTR, &method_bytes_global),
+                        (I64, &method_len),
+                    ],
+                ));
+            }
             // date-fns `constructFrom(date, value)` reads `date.constructor`
             // to clone Dates without naming Date directly. Perry stores
             // Date as a raw f64 timestamp (no ObjectHeader), so the
@@ -741,7 +803,69 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &ctor_handle), (I64, &key_raw)],
                     ));
                 }
-                if matches!(property.as_str(), "f16round" | "random") {
+                if property == "supports" {
+                    let ctor_idx = ctx.strings.intern("SubtleCrypto");
+                    let ctor_bytes_global =
+                        format!("@{}", ctx.strings.entry(ctor_idx).bytes_global);
+                    let ctor_len = "SubtleCrypto".len().to_string();
+                    let ctor = ctx.block().call(
+                        DOUBLE,
+                        "js_get_global_this_builtin_value",
+                        &[(PTR, &ctor_bytes_global), (I64, &ctor_len)],
+                    );
+                    let key_idx = ctx.strings.intern(property);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let blk = ctx.block();
+                    let ctor_handle = unbox_to_i64(blk, &ctor);
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_object_get_field_by_name_f64",
+                        &[(I64, &ctor_handle), (I64, &key_raw)],
+                    ));
+                }
+                if matches!(
+                    property.as_str(),
+                    "abs"
+                        | "acos"
+                        | "acosh"
+                        | "asin"
+                        | "asinh"
+                        | "atan"
+                        | "atan2"
+                        | "atanh"
+                        | "cbrt"
+                        | "ceil"
+                        | "clz32"
+                        | "cos"
+                        | "cosh"
+                        | "exp"
+                        | "expm1"
+                        | "f16round"
+                        | "floor"
+                        | "fround"
+                        | "hypot"
+                        | "imul"
+                        | "log"
+                        | "log1p"
+                        | "log2"
+                        | "log10"
+                        | "max"
+                        | "min"
+                        | "pow"
+                        | "random"
+                        | "round"
+                        | "sign"
+                        | "sin"
+                        | "sinh"
+                        | "sqrt"
+                        | "tan"
+                        | "tanh"
+                        | "trunc"
+                ) {
                     let math_idx = ctx.strings.intern("Math");
                     let math_bytes_global =
                         format!("@{}", ctx.strings.entry(math_idx).bytes_global);

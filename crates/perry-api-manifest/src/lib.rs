@@ -1193,6 +1193,8 @@ mod tests {
                     ("CountQueuingStrategy", ApiKind::Class),
                     ("TextEncoderStream", ApiKind::Class),
                     ("TextDecoderStream", ApiKind::Class),
+                    ("CompressionStream", ApiKind::Class),
+                    ("DecompressionStream", ApiKind::Class),
                 ],
             ),
             (

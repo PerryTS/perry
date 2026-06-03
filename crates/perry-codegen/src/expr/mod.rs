@@ -1480,6 +1480,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ArrayShift(..)
         | Expr::SetNew
         | Expr::In { .. }
+        | Expr::PrivateBrandCheck { .. }
         | Expr::ParseInt { .. }
         | Expr::ParseFloat(..)
         | Expr::RegExp { .. }
@@ -1493,7 +1494,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ObjectSuperPropertyGet { .. }
         | Expr::ObjectSuperMethodCall { .. }
         | Expr::FsReadFileBinary(..) => super_method::lower(ctx, expr),
-        Expr::InstanceOf { .. }
+        Expr::WithGet { .. }
+        | Expr::WithSet { .. }
+        | Expr::InstanceOf { .. }
         | Expr::Delete(..)
         | Expr::Sequence(..)
         | Expr::ArrayFrom(..)
@@ -1654,6 +1657,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::RegExpExecGroups => misc_methods::lower(ctx, expr),
         Expr::SetClear(..)
         | Expr::StringFromCodePoint(..)
+        | Expr::StringFromCharCodeSpread(..)
         | Expr::StringRaw { .. }
         | Expr::StringAt { .. }
         | Expr::StringCodePointAt { .. }
@@ -1844,6 +1848,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::RegisterFunctionPrototypeMethod { .. }
         | Expr::GetFunctionPrototypeMethod { .. }
         | Expr::ClassStaticSymbolSet { .. }
+        | Expr::LinkGeneratorPrototype { .. }
         | Expr::NativeModuleRef(..) => static_field_meta::lower(ctx, expr),
         Expr::PodLayoutSizeOf { .. }
         | Expr::PodLayoutAlignOf { .. }

@@ -68,6 +68,9 @@ check("nested value 0/0", array[0][0], 1);
 check("nested value 0/1", array[0][1], 2);
 check("nested value 1/0", array[1][0], 3);
 
+check("assignment expression result participates in following GetValue",
+  (c262_parity_eval_order_y = 1) + c262_parity_eval_order_y, 2);
+
 checkThrows("unresolvable lhs is read before sloppy rhs assignment", ReferenceError, function() {
   c262_parity_unbound_x + (c262_parity_unbound_x = 1);
 });
@@ -119,6 +122,19 @@ checkThrows("symbol addition throws after both ToPrimitive calls", TypeError, fu
   })();
 });
 check("symbol TypeError trace", trace, "1234");
+
+check("object plus function default stringification",
+  ({} + function(){return 1}),
+  ({}.toString() + function(){return 1}.toString()));
+check("function plus object default stringification",
+  (function(){return 1} + {}),
+  (function(){return 1}.toString() + {}.toString()));
+check("function plus function default stringification",
+  (function(){return 1} + function(){return 1}),
+  (function(){return 1}.toString() + function(){return 1}.toString()));
+check("object plus object default stringification",
+  ({} + {}),
+  ({}.toString() + {}.toString()));
 
 if (failures.length !== 0) {
   throw new Error(failures.join("\n"));

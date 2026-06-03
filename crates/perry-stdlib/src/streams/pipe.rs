@@ -1,14 +1,17 @@
 //! `ReadableStream.pipeTo` implementation details.
 
 use super::{
-    box_promise, next_id, reject_type_error, transform_close, transform_write, ReadableState,
-    WritableState, NEXT_STREAM_ID, READABLE_STREAMS, TAG_UNDEFINED, TRANSFORM_PAIRS,
-    WRITABLE_STREAMS,
+    box_promise, js_writable_stream_close, maybe_pull, next_id, reject_type_error, transform_close,
+    writable_stream_write, ReadableState, NEXT_STREAM_ID, READABLE_STREAMS, TAG_UNDEFINED,
+    TRANSFORM_PAIRS, WRITABLE_STREAMS,
 };
 use perry_runtime::{
-    js_closure_call0, js_closure_call1, js_nanbox_get_pointer, js_promise_new, js_promise_reject,
-    js_promise_resolve, ClosureHeader, JSValue, ObjectHeader, Promise,
+    js_nanbox_get_pointer, js_object_get_field_by_name, js_promise_new, js_promise_reject,
+    js_promise_resolve, js_string_from_bytes, ClosureHeader, JSValue, ObjectHeader, Promise,
 };
+
+const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 
 #[derive(Clone, Copy)]
 struct PipeLockIds {
@@ -93,84 +96,368 @@ extern "C" fn readable_stream_pipe_to_microtask(closure: *const ClosureHeader) -
             writer_id: capture_f64(closure, 4) as usize,
         };
         let prevent_close = perry_runtime::value::js_is_truthy(capture_f64(closure, 5)) != 0;
-        let result = run_readable_stream_pipe_to(r_id, w_id, prevent_close);
-        release_pipe_locks(r_id, w_id, locks);
-        match result {
-            Ok(()) => js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED)),
-            Err(reason) => js_promise_reject(promise, f64::from_bits(reason)),
+        pipe_step(r_id, w_id, promise, locks, prevent_close);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn readable_stream_pipe_to_read_fulfilled(
+    closure: *const ClosureHeader,
+    result: f64,
+) -> f64 {
+    unsafe {
+        let r_id = capture_f64(closure, 0) as usize;
+        let w_id = capture_f64(closure, 1) as usize;
+        let promise = promise_from_capture(closure, 2);
+        let locks = PipeLockIds {
+            reader_id: capture_f64(closure, 3) as usize,
+            writer_id: capture_f64(closure, 4) as usize,
+        };
+        let prevent_close = perry_runtime::value::js_is_truthy(capture_f64(closure, 5)) != 0;
+        if perry_runtime::promise::js_promise_state(promise) != 0 {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        match pipe_iter_result(result) {
+            Some((true, _)) => finish_pipe(r_id, w_id, promise, locks, prevent_close),
+            Some((false, value)) => {
+                pipe_write_then_continue(r_id, w_id, promise, locks, prevent_close, value)
+            }
+            None => reject_pipe(r_id, w_id, promise, locks, result.to_bits()),
         }
     }
     f64::from_bits(TAG_UNDEFINED)
 }
 
-unsafe fn run_readable_stream_pipe_to(
+extern "C" fn readable_stream_pipe_to_write_fulfilled(
+    closure: *const ClosureHeader,
+    _value: f64,
+) -> f64 {
+    unsafe {
+        let r_id = capture_f64(closure, 0) as usize;
+        let w_id = capture_f64(closure, 1) as usize;
+        let promise = promise_from_capture(closure, 2);
+        let locks = PipeLockIds {
+            reader_id: capture_f64(closure, 3) as usize,
+            writer_id: capture_f64(closure, 4) as usize,
+        };
+        let prevent_close = perry_runtime::value::js_is_truthy(capture_f64(closure, 5)) != 0;
+        pipe_step(r_id, w_id, promise, locks, prevent_close);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn readable_stream_pipe_to_close_fulfilled(
+    closure: *const ClosureHeader,
+    _value: f64,
+) -> f64 {
+    let r_id = capture_f64(closure, 0) as usize;
+    let w_id = capture_f64(closure, 1) as usize;
+    let promise = promise_from_capture(closure, 2);
+    let locks = PipeLockIds {
+        reader_id: capture_f64(closure, 3) as usize,
+        writer_id: capture_f64(closure, 4) as usize,
+    };
+    release_pipe_locks(r_id, w_id, locks);
+    js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn readable_stream_pipe_to_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {
+    unsafe {
+        let r_id = capture_f64(closure, 0) as usize;
+        let w_id = capture_f64(closure, 1) as usize;
+        let promise = promise_from_capture(closure, 2);
+        let locks = PipeLockIds {
+            reader_id: capture_f64(closure, 3) as usize,
+            writer_id: capture_f64(closure, 4) as usize,
+        };
+        reject_pipe(r_id, w_id, promise, locks, reason.to_bits());
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+enum PipeReadStep {
+    Chunk(u64),
+    Done,
+    Pending,
+    Error(u64),
+}
+
+unsafe fn pipe_next_read(readable_id: usize) -> PipeReadStep {
+    let mut g = READABLE_STREAMS.lock().unwrap();
+    match g.get_mut(&readable_id) {
+        Some(s) => {
+            if let Some(c) = s.chunks.pop_front() {
+                PipeReadStep::Chunk(c)
+            } else if s.state == ReadableState::Closed {
+                PipeReadStep::Done
+            } else if s.state == ReadableState::Errored {
+                PipeReadStep::Error(s.error_value)
+            } else {
+                PipeReadStep::Pending
+            }
+        }
+        None => PipeReadStep::Done,
+    }
+}
+
+unsafe fn pipe_step(
     readable_id: usize,
     writable_id: usize,
+    promise: *mut Promise,
+    locks: PipeLockIds,
     prevent_close: bool,
-) -> Result<(), u64> {
+) {
+    if perry_runtime::promise::js_promise_state(promise) != 0 {
+        return;
+    }
     loop {
-        let chunk_or_done: Result<u64, bool> = {
-            let mut g = READABLE_STREAMS.lock().unwrap();
-            match g.get_mut(&readable_id) {
-                Some(s) => {
-                    if let Some(c) = s.chunks.pop_front() {
-                        Ok(c)
-                    } else if s.state == ReadableState::Closed {
-                        Err(true)
-                    } else if s.state == ReadableState::Errored {
-                        return Err(s.error_value);
-                    } else {
-                        Err(true)
-                    }
-                }
-                None => Err(true),
+        match pipe_next_read(readable_id) {
+            PipeReadStep::Chunk(chunk) => {
+                pipe_write_then_continue(
+                    readable_id,
+                    writable_id,
+                    promise,
+                    locks,
+                    prevent_close,
+                    chunk,
+                );
+                return;
             }
-        };
-        match chunk_or_done {
-            Ok(chunk) => {
-                // TransformStream's writable side has write_cb=0, so route
-                // through transform_write to run the user transform function.
-                if TRANSFORM_PAIRS.lock().unwrap().contains_key(&writable_id) {
-                    let _ = transform_write(writable_id, f64::from_bits(chunk));
-                } else {
-                    let write_cb = WRITABLE_STREAMS
-                        .lock()
-                        .unwrap()
-                        .get(&writable_id)
-                        .map(|w| w.write_cb)
-                        .unwrap_or(0);
-                    if write_cb != 0 {
-                        js_closure_call1(write_cb as *const ClosureHeader, f64::from_bits(chunk));
-                    }
-                }
+            PipeReadStep::Done => {
+                finish_pipe(readable_id, writable_id, promise, locks, prevent_close);
+                return;
             }
-            Err(_done) => break,
+            PipeReadStep::Error(reason) => {
+                reject_pipe(readable_id, writable_id, promise, locks, reason);
+                return;
+            }
+            PipeReadStep::Pending => {
+                wait_for_next_read(readable_id, writable_id, promise, locks, prevent_close);
+                return;
+            }
         }
     }
+}
 
+unsafe fn finish_pipe(
+    readable_id: usize,
+    writable_id: usize,
+    promise: *mut Promise,
+    locks: PipeLockIds,
+    prevent_close: bool,
+) {
     if prevent_close {
-        return Ok(());
+        release_pipe_locks(readable_id, writable_id, locks);
+        js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
+        return;
     }
 
-    if TRANSFORM_PAIRS.lock().unwrap().contains_key(&writable_id) {
-        let _ = transform_close(writable_id);
+    let close_promise = if TRANSFORM_PAIRS.lock().unwrap().contains_key(&writable_id) {
+        transform_close(writable_id)
     } else {
-        let close_cb = WRITABLE_STREAMS
-            .lock()
-            .unwrap()
-            .get(&writable_id)
-            .map(|w| w.close_cb)
-            .unwrap_or(0);
-        if close_cb != 0 {
-            js_closure_call0(close_cb as *const ClosureHeader);
+        js_writable_stream_close(writable_id as f64)
+    };
+    let fulfilled = pipe_closure(
+        readable_stream_pipe_to_close_fulfilled as *const u8,
+        readable_id,
+        writable_id,
+        promise,
+        locks,
+        prevent_close,
+    );
+    let rejected = pipe_closure(
+        readable_stream_pipe_to_rejected as *const u8,
+        readable_id,
+        writable_id,
+        promise,
+        locks,
+        prevent_close,
+    );
+    perry_runtime::closure::js_register_closure_arity(
+        readable_stream_pipe_to_close_fulfilled as *const u8,
+        1,
+    );
+    perry_runtime::closure::js_register_closure_arity(
+        readable_stream_pipe_to_rejected as *const u8,
+        1,
+    );
+    let _ = perry_runtime::promise::js_promise_then(close_promise, fulfilled, rejected);
+}
+
+unsafe fn reject_pipe(
+    readable_id: usize,
+    writable_id: usize,
+    promise: *mut Promise,
+    locks: PipeLockIds,
+    reason: u64,
+) {
+    release_pipe_locks(readable_id, writable_id, locks);
+    js_promise_reject(promise, f64::from_bits(reason));
+}
+
+unsafe fn pipe_write_then_continue(
+    readable_id: usize,
+    writable_id: usize,
+    promise: *mut Promise,
+    locks: PipeLockIds,
+    prevent_close: bool,
+    chunk: u64,
+) {
+    let write_promise = writable_stream_write(writable_id, locks.writer_id, f64::from_bits(chunk));
+    let fulfilled = pipe_closure(
+        readable_stream_pipe_to_write_fulfilled as *const u8,
+        readable_id,
+        writable_id,
+        promise,
+        locks,
+        prevent_close,
+    );
+    let rejected = pipe_closure(
+        readable_stream_pipe_to_rejected as *const u8,
+        readable_id,
+        writable_id,
+        promise,
+        locks,
+        prevent_close,
+    );
+    perry_runtime::closure::js_register_closure_arity(
+        readable_stream_pipe_to_write_fulfilled as *const u8,
+        1,
+    );
+    perry_runtime::closure::js_register_closure_arity(
+        readable_stream_pipe_to_rejected as *const u8,
+        1,
+    );
+    let _ = perry_runtime::promise::js_promise_then(write_promise, fulfilled, rejected);
+}
+
+unsafe fn wait_for_next_read(
+    readable_id: usize,
+    writable_id: usize,
+    promise: *mut Promise,
+    locks: PipeLockIds,
+    prevent_close: bool,
+) {
+    let read_promise = js_promise_new();
+    if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&readable_id) {
+        if s.state == ReadableState::Readable {
+            s.pending_reads.push_back(read_promise);
+        } else if s.state == ReadableState::Closed {
+            let result = pipe_iter_result_object(TAG_UNDEFINED, true);
+            js_promise_resolve(read_promise, f64::from_bits(result));
+        } else {
+            js_promise_reject(read_promise, f64::from_bits(s.error_value));
         }
-        if let Some(w) = WRITABLE_STREAMS.lock().unwrap().get_mut(&writable_id) {
-            w.state = WritableState::Closed;
-            let cp = w.closed_promise;
-            js_promise_resolve(cp, f64::from_bits(TAG_UNDEFINED));
-        }
+    } else {
+        let result = pipe_iter_result_object(TAG_UNDEFINED, true);
+        js_promise_resolve(read_promise, f64::from_bits(result));
     }
-    Ok(())
+    maybe_pull(readable_id);
+
+    let fulfilled = pipe_closure(
+        readable_stream_pipe_to_read_fulfilled as *const u8,
+        readable_id,
+        writable_id,
+        promise,
+        locks,
+        prevent_close,
+    );
+    let rejected = pipe_closure(
+        readable_stream_pipe_to_rejected as *const u8,
+        readable_id,
+        writable_id,
+        promise,
+        locks,
+        prevent_close,
+    );
+    perry_runtime::closure::js_register_closure_arity(
+        readable_stream_pipe_to_read_fulfilled as *const u8,
+        1,
+    );
+    perry_runtime::closure::js_register_closure_arity(
+        readable_stream_pipe_to_rejected as *const u8,
+        1,
+    );
+    let _ = perry_runtime::promise::js_promise_then(read_promise, fulfilled, rejected);
+}
+
+unsafe fn pipe_iter_result(result: f64) -> Option<(bool, u64)> {
+    let jsval = JSValue::from_bits(result.to_bits());
+    if !jsval.is_pointer() {
+        return None;
+    }
+    let obj = js_nanbox_get_pointer(result) as *const ObjectHeader;
+    if obj.is_null() {
+        return None;
+    }
+    let done_key = js_string_from_bytes(b"done".as_ptr(), 4);
+    let value_key = js_string_from_bytes(b"value".as_ptr(), 5);
+    let done = js_object_get_field_by_name(obj, done_key);
+    let value = js_object_get_field_by_name(obj, value_key);
+    Some((
+        perry_runtime::value::js_is_truthy(f64::from_bits(done.bits())) != 0,
+        value.bits(),
+    ))
+}
+
+unsafe fn pipe_iter_result_object(value_bits: u64, done: bool) -> u64 {
+    let obj = perry_runtime::js_object_alloc(0, 2);
+    let keys = perry_runtime::js_array_alloc(2);
+    let k_value = js_string_from_bytes(b"value".as_ptr(), 5);
+    let k_done = js_string_from_bytes(b"done".as_ptr(), 4);
+    perry_runtime::js_array_push(keys, JSValue::string_ptr(k_value));
+    perry_runtime::js_array_push(keys, JSValue::string_ptr(k_done));
+    perry_runtime::js_object_set_field(obj, 0, JSValue::from_bits(value_bits));
+    perry_runtime::js_object_set_field(
+        obj,
+        1,
+        JSValue::from_bits(if done { TAG_TRUE } else { TAG_FALSE }),
+    );
+    perry_runtime::js_object_set_keys(obj, keys);
+    JSValue::object_ptr(obj as *mut u8).bits()
+}
+
+fn pipe_closure(
+    func: *const u8,
+    readable_id: usize,
+    writable_id: usize,
+    promise: *mut Promise,
+    locks: PipeLockIds,
+    prevent_close: bool,
+) -> *mut perry_runtime::ClosureHeader {
+    let closure = perry_runtime::closure::js_closure_alloc(func, 6);
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        closure,
+        0,
+        (readable_id as f64).to_bits() as i64,
+    );
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        closure,
+        1,
+        (writable_id as f64).to_bits() as i64,
+    );
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        closure,
+        2,
+        box_promise(promise).to_bits() as i64,
+    );
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        closure,
+        3,
+        (locks.reader_id as f64).to_bits() as i64,
+    );
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        closure,
+        4,
+        (locks.writer_id as f64).to_bits() as i64,
+    );
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        closure,
+        5,
+        (if prevent_close { 1.0 } else { 0.0f64 }).to_bits() as i64,
+    );
+    closure
 }
 
 /// `readable.pipeTo(writable)` acquires the source/destination locks

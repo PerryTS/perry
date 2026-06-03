@@ -51,7 +51,7 @@ pub(crate) fn lower_lit(lit: &ast::Lit) -> Result<Expr> {
         }
         ast::Lit::Str(s) => {
             if let Some(valid_utf8) = s.value.as_str() {
-                Ok(Expr::String(valid_utf8.to_string()))
+                Ok(Expr::String(normalize_swc_string_literal(s, valid_utf8)))
             } else {
                 // Lone surrogates (U+D800..U+DFFF): SWC stores them as WTF-8 bytes.
                 // as_str() returns None because they can't be represented as valid UTF-8.
@@ -66,6 +66,27 @@ pub(crate) fn lower_lit(lit: &ast::Lit) -> Result<Expr> {
             flags: re.flags.to_string(),
         }),
         _ => Err(anyhow!("Unsupported literal type")),
+    }
+}
+
+fn normalize_swc_string_literal(lit: &ast::Str, decoded: &str) -> String {
+    let Some(raw) = lit.raw.as_ref().map(|raw| raw.as_ref()) else {
+        return decoded.to_string();
+    };
+    if raw.is_ascii() || decoded.is_ascii() {
+        return decoded.to_string();
+    }
+    let mut bytes = Vec::with_capacity(decoded.len());
+    for ch in decoded.chars() {
+        let code = ch as u32;
+        if code > 0xFF {
+            return decoded.to_string();
+        }
+        bytes.push(code as u8);
+    }
+    match String::from_utf8(bytes) {
+        Ok(repaired) => repaired,
+        Err(_) => decoded.to_string(),
     }
 }
 
@@ -149,6 +170,31 @@ pub(crate) fn get_binding_name(pat: &ast::Pat) -> Result<String> {
     }
 }
 
+pub(crate) fn collect_binding_names(pat: &ast::Pat, out: &mut Vec<String>) {
+    match pat {
+        ast::Pat::Ident(ident) => push_unique_name(out, ident.id.sym.to_string()),
+        ast::Pat::Array(arr) => {
+            for elem in arr.elems.iter().flatten() {
+                collect_binding_names(elem, out);
+            }
+        }
+        ast::Pat::Object(obj) => {
+            for prop in &obj.props {
+                match prop {
+                    ast::ObjectPatProp::Assign(assign) => {
+                        push_unique_name(out, assign.key.sym.to_string());
+                    }
+                    ast::ObjectPatProp::KeyValue(kv) => collect_binding_names(&kv.value, out),
+                    ast::ObjectPatProp::Rest(rest) => collect_binding_names(&rest.arg, out),
+                }
+            }
+        }
+        ast::Pat::Assign(assign) => collect_binding_names(&assign.left, out),
+        ast::Pat::Rest(rest) => collect_binding_names(&rest.arg, out),
+        ast::Pat::Expr(_) | ast::Pat::Invalid(_) => {}
+    }
+}
+
 /// Static counter for generating unique synthetic names for destructuring patterns
 static DESTRUCT_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
@@ -222,13 +268,25 @@ pub(crate) fn generate_param_destructuring_stmts(
             // "Assignment to constant variable" (hit by Hono's RegExpRouter).
             crate::destructuring::lower_pattern_binding(ctx, pat, Expr::LocalGet(param_id), true)
         }
+        ast::Pat::Rest(rest) if is_destructuring_pattern(&rest.arg) => {
+            crate::destructuring::lower_pattern_binding(
+                ctx,
+                &rest.arg,
+                Expr::LocalGet(param_id),
+                true,
+            )
+        }
         _ => Ok(Vec::new()),
     }
 }
 
 /// Check if a pattern is a destructuring pattern (array or object)
 pub(crate) fn is_destructuring_pattern(pat: &ast::Pat) -> bool {
-    matches!(pat, ast::Pat::Array(_) | ast::Pat::Object(_))
+    match pat {
+        ast::Pat::Array(_) | ast::Pat::Object(_) => true,
+        ast::Pat::Rest(rest) => is_destructuring_pattern(&rest.arg),
+        _ => false,
+    }
 }
 
 fn push_unique_name(names: &mut Vec<String>, name: String) {
@@ -794,16 +852,20 @@ pub(crate) fn predeclare_implicit_assignment_targets(
             id
         } else if let Some(id) = ctx.lookup_local(&name) {
             id
+        } else if ctx.scope_depth > 0 {
+            ctx.define_sloppy_implicit_global(name.clone())
         } else {
             ctx.define_local(name.clone(), Type::Any)
         };
-        stmts.push(Stmt::Let {
-            id,
-            name,
-            ty: Type::Any,
-            mutable: true,
-            init: Some(Expr::Undefined),
-        });
+        if ctx.scope_depth == 0 || !ctx.sloppy_implicit_global_ids.contains(&id) {
+            stmts.push(Stmt::Let {
+                id,
+                name,
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            });
+        }
     }
     stmts
 }

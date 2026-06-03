@@ -239,6 +239,11 @@ pub extern "C" fn js_build_class_keys_array(
     if !cached.is_null() {
         return cached;
     }
+    if field_count == 0 || packed_keys_len == 0 || packed_keys.is_null() {
+        let arr = crate::array::js_array_alloc_with_length_longlived(0);
+        shape_cache_insert(shape_id, arr);
+        return arr;
+    }
     let keys_bytes = unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) };
     let keys: Vec<&[u8]> = keys_bytes
         .split(|&b| b == 0)

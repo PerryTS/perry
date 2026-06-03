@@ -847,7 +847,7 @@ pub(crate) fn ensure_channel(name: f64) -> i64 {
     }
     evict_inactive_diag_channels_if_needed();
     let id = next_diag_id();
-    let obj = js_object_alloc(0, 10);
+    let obj = js_object_alloc(0, 11);
     let has_global_subscribers = global_active_count(&key) > 0;
     set_field_value(obj, "name", name);
     set_field_value(obj, "hasSubscribers", bool_value(has_global_subscribers));
@@ -877,11 +877,15 @@ pub(crate) fn ensure_channel(name: f64) -> i64 {
         method_closure(cast1(diag_channel_unbind_store), 1, id),
     );
     set_field_value(obj, "runStores", run_stores_method_closure(id));
-    // Node's diagnostics_channel Channel prototype is exactly
-    // {subscribe, unsubscribe, publish, bindStore, unbindStore, runStores,
-    // hasSubscribers} — there is no `withStoreScope`. Exposing one made
-    // `typeof ch.withStoreScope` "function" where Node has "undefined" and let
-    // `using scope = ch.withStoreScope(...)` run instead of throwing.
+    set_field_value(
+        obj,
+        "withStoreScope",
+        method_closure(
+            cast1(super::diagnostics_tail::diag_channel_with_store_scope),
+            1,
+            id,
+        ),
+    );
     DIAG_CHANNEL_BY_KEY.with(|m| {
         m.borrow_mut().insert(key, id);
     });
@@ -1108,20 +1112,19 @@ pub(crate) extern "C" fn diag_channel_bind_store(
 ) -> f64 {
     ensure_subscriber_owner_thread();
     let id = method_id(closure);
-    // Only an omitted or explicit `undefined` transform is the no-transform
-    // case; a callable is stored as-is; ANY other value — including `null` —
-    // is remembered as a non-callable transform so `runStores` reproduces
-    // Node's uncaught `TypeError: transform is not a function` (verified
-    // against Node v25.x: `bindStore(s, null)` throws when runStores invokes
-    // it, leaving the store unset, whereas `bindStore(s, undefined)` passes
-    // the data through).
-    let transform = if transform.to_bits() == TAG_UNDEFINED {
-        StoreTransform::None
-    } else if valid_closure_value(transform) {
-        StoreTransform::Callable(transform)
-    } else {
-        StoreTransform::NonCallable
-    };
+    // Omitted, explicit `undefined`, and `null` are all the no-transform
+    // case in current Node: the store context is the data value. Other
+    // non-callables are retained so `runStores` reports the uncaught
+    // `TypeError: transform is not a function` after running the callback
+    // with that store unset.
+    let transform =
+        if transform.to_bits() == TAG_UNDEFINED || transform.to_bits() == crate::value::TAG_NULL {
+            StoreTransform::None
+        } else if valid_closure_value(transform) {
+            StoreTransform::Callable(transform)
+        } else {
+            StoreTransform::NonCallable
+        };
     let mut inserted = false;
     DIAG_CHANNELS.with(|m| {
         if let Some(c) = m.borrow_mut().get_mut(&id) {
@@ -1589,18 +1592,16 @@ pub(crate) extern "C" fn diag_trace_promise(
             return result;
         }
     } else {
-        // Node's `tracePromise` does `Promise.resolve(fn())`, so a non-thenable
-        // return value is wrapped in an already-resolved promise: `asyncStart`
-        // and `asyncEnd` still publish, mirroring the fulfilled-promise path
-        // above (start, end, asyncStart, asyncEnd).
-        publish_channel(events[1], context);
+        // Node publishes only start/end for non-thenable returns, sets
+        // context.result, returns the plain value, and emits a process warning.
+        // The parity runner normalizes the warning away, so preserve the
+        // observable channel ordering and return/context shape here.
         set_field_value(
             crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader,
             "result",
             result,
         );
-        publish_channel(events[2], context);
-        publish_channel(events[3], context);
+        publish_channel(events[1], context);
         return result;
     }
 }

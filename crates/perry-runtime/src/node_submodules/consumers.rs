@@ -64,8 +64,7 @@ pub(crate) fn bytes_to_uint8_array_value(bytes: &[u8]) -> f64 {
 }
 
 pub(crate) fn bytes_to_text_value(bytes: &[u8]) -> f64 {
-    let cow = String::from_utf8_lossy(bytes);
-    let ptr = js_string_from_bytes(cow.as_bytes().as_ptr(), cow.len() as u32);
+    let ptr = crate::buffer::buf_bytes_to_utf8_string(bytes);
     f64::from_bits(JSValue::string_ptr(ptr).bits())
 }
 

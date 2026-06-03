@@ -8,6 +8,72 @@
 
 use super::*;
 
+unsafe fn call_primitive_closure_value(
+    receiver: f64,
+    value: JSValue,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if value.is_undefined() {
+        return None;
+    }
+    let bits = value.bits();
+    if (bits & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
+        return None;
+    }
+    let ptr = (bits & crate::value::POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(ptr) {
+        return None;
+    }
+    let bound = crate::closure::clone_closure_rebind_this(bits, receiver);
+    let this_receiver = crate::object::js_object_coerce(receiver);
+    let prev_this = crate::object::js_implicit_this_set(this_receiver);
+    let result = crate::closure::js_native_call_value(f64::from_bits(bound), args_ptr, args_len);
+    crate::object::js_implicit_this_set(prev_this);
+    Some(result)
+}
+
+unsafe fn call_primitive_builtin_prototype_method(
+    receiver: f64,
+    builtin_name: &[u8],
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    let ctor =
+        crate::object::js_get_global_this_builtin_value(builtin_name.as_ptr(), builtin_name.len());
+    let ctor_value = JSValue::from_bits(ctor.to_bits());
+    if !ctor_value.is_pointer() {
+        return None;
+    }
+    let registered = crate::object::class_registry::js_get_function_prototype_method(
+        ctor,
+        method_name.as_ptr(),
+        method_name.len(),
+    );
+    if let Some(result) = call_primitive_closure_value(
+        receiver,
+        JSValue::from_bits(registered.to_bits()),
+        args_ptr,
+        args_len,
+    ) {
+        return Some(result);
+    }
+    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto_value = JSValue::from_bits(proto.to_bits());
+    if !proto_value.is_pointer() {
+        return None;
+    }
+    let proto_ptr = proto_value.as_pointer::<ObjectHeader>();
+    if proto_ptr.is_null() {
+        return None;
+    }
+    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    let value = js_object_get_field_by_name(proto_ptr, key);
+    call_primitive_closure_value(receiver, value, args_ptr, args_len)
+}
+
 /// Call a method on an object with dynamic dispatch
 /// This is used for runtime method calls when the method cannot be resolved statically.
 /// object: NaN-boxed f64 containing an object pointer
@@ -174,6 +240,43 @@ pub unsafe extern "C" fn js_native_call_method_value(
             let bytes_ptr = (str_ptr as *const i8).add(std::mem::size_of::<crate::StringHeader>());
             let bytes_len = (*str_ptr).byte_len as usize;
             return js_native_call_method(object, bytes_ptr, bytes_len, args_ptr, args_len);
+        }
+    }
+
+    // `str[Symbol.iterator]()` — a primitive string carries no symbol property
+    // slot, so the symbol-property read below would return undefined. Route the
+    // well-known iterator symbol on a string receiver to the string method
+    // dispatcher, which builds a real String iterator object.
+    if is_symbol_key {
+        let iter_wk = crate::symbol::well_known_symbol("iterator");
+        let is_iterator_symbol = !iter_wk.is_null() && {
+            let iter_f64 = f64::from_bits(JSValue::pointer(iter_wk as *const u8).bits());
+            crate::symbol::sym_key_from_f64(key) == crate::symbol::sym_key_from_f64(iter_f64)
+        };
+        if is_iterator_symbol {
+            let obj_val = JSValue::from_bits(object.to_bits());
+            if obj_val.is_any_string() {
+                // `str[Symbol.iterator]()` — a primitive string carries no symbol
+                // property slot, so route to the string method dispatcher which
+                // builds a real String iterator object.
+                let name = b"Symbol.iterator";
+                return js_native_call_method(
+                    object,
+                    name.as_ptr() as *const i8,
+                    name.len(),
+                    args_ptr,
+                    args_len,
+                );
+            }
+            if obj_val.is_pointer() {
+                let obj = obj_val.as_pointer::<ObjectHeader>();
+                // `arguments[Symbol.iterator]()` — an arguments exotic object
+                // implements the Array iterator protocol but stores no symbol
+                // slot. `js_get_iterator` materializes it to an array iterator.
+                if !obj.is_null() && crate::object::is_arguments_object(obj) {
+                    return crate::symbol::js_get_iterator(object);
+                }
+            }
         }
     }
 
@@ -798,6 +901,7 @@ pub unsafe extern "C" fn js_native_call_method(
     let arg_handles = root_scope.root_nanbox_f64_slice(&original_args);
     let refreshed_args = || crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
     let object = object_handle.get_nanbox_f64();
+    let jsval = JSValue::from_bits(object.to_bits());
     // RAII recursion depth guard: prevent stack overflow from circular module deps.
     // The guard auto-decrements on drop, covering all ~20 return points in this function.
     // When max depth is hit, return a pointer to a static empty object instead of undefined.
@@ -816,6 +920,31 @@ pub unsafe extern "C" fn js_native_call_method(
         }
     };
 
+    {
+        let raw_addr = if jsval.is_pointer() {
+            crate::value::js_nanbox_get_pointer(object) as usize
+        } else if (object.to_bits() >> 48) == 0 {
+            object.to_bits() as usize
+        } else {
+            0
+        };
+        // Fetch, stream, and other runtime objects use small tagged handles that
+        // are pointer-shaped but not heap allocations. Avoid asking the closure
+        // probe to dereference those handles as addresses.
+        if raw_addr >= 0x100000
+            && crate::closure::is_closure_ptr(raw_addr)
+            && !crate::closure::closure_is_key_deleted(raw_addr, method_name)
+        {
+            let dyn_val = crate::closure::closure_get_dynamic_prop(raw_addr, method_name);
+            if dyn_val.to_bits() != crate::value::TAG_UNDEFINED {
+                let prev_this = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
+                let result = crate::closure::js_native_call_value(dyn_val, args_ptr, args_len);
+                IMPLICIT_THIS.with(|c| c.set(prev_this));
+                return result;
+            }
+        }
+    }
+
     // Check if this is a JS handle (V8 object from JS runtime)
     if crate::value::is_js_handle(object) {
         let func_ptr =
@@ -829,7 +958,6 @@ pub unsafe extern "C" fn js_native_call_method(
         return f64::from_bits(0x7FF8_0000_0000_0001); // undefined
     }
 
-    let jsval = JSValue::from_bits(object.to_bits());
     if (object.to_bits() >> 48) == 0x7FFE {
         let class_id = (object.to_bits() & 0xFFFF_FFFF) as u32;
         if crate::object::class_prototype_ref_id(object).is_some() {
@@ -865,7 +993,7 @@ pub unsafe extern "C" fn js_native_call_method(
         // codegen-registered text (or a synthesized native form), rather than
         // falling through to the generic `"[object Object]"`.
         let raw_addr = crate::value::js_nanbox_get_pointer(object) as usize;
-        if crate::closure::is_closure_ptr(raw_addr) {
+        if raw_addr >= 0x100000 && crate::closure::is_closure_ptr(raw_addr) {
             let func_ptr = (*(raw_addr as *const crate::closure::ClosureHeader)).func_ptr as usize;
             let s = crate::builtins::function_source_for_func_ptr(func_ptr);
             let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
@@ -1297,6 +1425,12 @@ pub unsafe extern "C" fn js_native_call_method(
         let s_ptr = crate::value::js_get_string_pointer_unified(object_handle.get_nanbox_f64())
             as *const crate::StringHeader;
         if !s_ptr.is_null() {
+            // NOTE: user-defined `String.prototype` methods on primitive string
+            // receivers are routed through the `primitive_kind` fallback below
+            // (after native string-method dispatch). Intercepting here, *before*
+            // native dispatch, re-enters `js_native_call_method` via the #4100
+            // brand-check re-dispatch thunk installed on `String.prototype`
+            // (e.g. `replace`), causing unbounded recursion.
             let s_handle = root_scope.root_string_ptr(s_ptr);
             let receiver_string = || s_handle.get_raw_const_ptr::<crate::StringHeader>();
             let arg_at = |i: usize| -> Option<f64> {
@@ -1343,6 +1477,13 @@ pub unsafe extern "C" fn js_native_call_method(
                 }
                 "at" => {
                     return crate::string::js_string_at(s_ptr, arg_i32(0));
+                }
+                // `str[Symbol.iterator]()` returns a real String iterator object
+                // (codepoint-aware, surrogate pairs collapse to one element) so
+                // `Object.getPrototypeOf(''[Symbol.iterator]())` resolves to
+                // `%StringIteratorPrototype%` and generic `.next()` drivers work.
+                "Symbol.iterator" | "@@iterator" => {
+                    return crate::string::string_values_iter(receiver_string());
                 }
                 "charAt" => {
                     let result = crate::string::js_string_char_at(s_ptr, arg_i32(0));
@@ -2344,6 +2485,12 @@ pub unsafe extern "C" fn js_native_call_method(
                     method_name,
                 );
             }
+            if (*obj).class_id == crate::string::STRING_ITERATOR_CLASS_ID {
+                return crate::string::dispatch_string_iterator_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                );
+            }
             // #2874: lazy iterator-helper objects (`Iterator.from(x)` and the
             // chain it produces: `.map`/`.filter`/`.take`/`.drop`/`.flatMap`/
             // `.toArray`/`.forEach`/`.reduce`/`.some`/`.every`/`.find`/`.next`).
@@ -2834,6 +2981,12 @@ pub unsafe extern "C" fn js_native_call_method(
                     method_name,
                 );
             }
+            if (*obj).class_id == crate::string::STRING_ITERATOR_CLASS_ID {
+                return crate::string::dispatch_string_iterator_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                );
+            }
             // #2874: lazy iterator-helper objects, same as the NaN-boxed path.
             if (*obj).class_id == crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID {
                 return crate::iterator_helpers::dispatch_iterator_helper_method(
@@ -2964,6 +3117,26 @@ pub unsafe extern "C" fn js_native_call_method(
             if jsval.is_undefined() || jsval.is_null() {
                 return f64::from_bits(JSValue::bool(false).bits());
             }
+            if (object.to_bits() >> 48) == 0x7FFE {
+                let key_value = if args_len >= 1 && !args_ptr.is_null() {
+                    *args_ptr
+                } else {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                };
+                let key_str = crate::builtins::js_string_coerce(key_value);
+                let class_id = (object.to_bits() & 0xFFFF_FFFF) as u32;
+                let present = if key_str.is_null() {
+                    false
+                } else {
+                    super::has_own_helpers::str_from_string_header(key_str)
+                        .map(|key| {
+                            matches!(key, "length" | "name" | "prototype")
+                                && !super::class_registry::class_is_key_deleted(class_id, key)
+                        })
+                        .unwrap_or(false)
+                };
+                return f64::from_bits(JSValue::bool(present).bits());
+            }
             if jsval.is_pointer() {
                 let key_value = if args_len >= 1 && !args_ptr.is_null() {
                     *args_ptr
@@ -2973,6 +3146,32 @@ pub unsafe extern "C" fn js_native_call_method(
                 let key_str = crate::builtins::js_string_coerce(key_value);
                 if key_str.is_null() {
                     return f64::from_bits(JSValue::bool(false).bits());
+                }
+                if let Some(class_id) = super::class_ref_id(object) {
+                    let present = super::has_own_helpers::str_from_string_header(key_str)
+                        .map(|key| {
+                            if super::class_registry::class_is_key_deleted(class_id, key) {
+                                false
+                            } else if key == "name"
+                                && super::class_registry::lookup_static_method_in_chain(
+                                    class_id, key,
+                                )
+                                .is_none()
+                            {
+                                super::class_registry::class_name_for_id(class_id).is_some()
+                            } else {
+                                CLASS_DYNAMIC_PROPS.with(|m| {
+                                    m.borrow()
+                                        .get(&class_id)
+                                        .is_some_and(|props| props.contains_key(key))
+                                }) || super::class_registry::lookup_static_method_in_chain(
+                                    class_id, key,
+                                )
+                                .is_some()
+                            }
+                        })
+                        .unwrap_or(false);
+                    return f64::from_bits(JSValue::bool(present).bits());
                 }
                 // #3655: a closure receiver (functions ARE objects). Report
                 // the built-in `name`/`length` (+ constructor `prototype`)
@@ -3708,6 +3907,24 @@ pub unsafe extern "C" fn js_native_call_method(
         None
     };
     if let Some(kind) = primitive_kind {
+        let builtin_name = match kind {
+            "string" => Some(b"String".as_slice()),
+            "number" => Some(b"Number".as_slice()),
+            "boolean" => Some(b"Boolean".as_slice()),
+            "bigint" => Some(b"BigInt".as_slice()),
+            _ => None,
+        };
+        if let Some(name) = builtin_name {
+            if let Some(result) = call_primitive_builtin_prototype_method(
+                object,
+                name,
+                method_name,
+                args_ptr,
+                args_len,
+            ) {
+                return result;
+            }
+        }
         crate::error::js_throw_type_error_not_a_function(
             kind.as_ptr(),
             kind.len(),

@@ -146,7 +146,7 @@ fn utf16le_bytes_to_string(bytes: &[u8]) -> *mut StringHeader {
 /// walks the bytes again for utf16 counting on non-ASCII). For pure-ASCII
 /// inputs we land on `js_string_from_ascii_bytes` directly — one byte scan
 /// total. Non-ASCII falls through to the spec-correct lossy path.
-fn buf_bytes_to_utf8_string(bytes: &[u8]) -> *mut StringHeader {
+pub(crate) fn buf_bytes_to_utf8_string(bytes: &[u8]) -> *mut StringHeader {
     if bytes.is_ascii() {
         return js_string_from_ascii_bytes(bytes.as_ptr(), bytes.len() as u32);
     }

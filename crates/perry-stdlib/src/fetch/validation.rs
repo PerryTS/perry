@@ -4,6 +4,10 @@
 //! statusText validation + empty-string default) and #2643 (Request method
 //! normalization + forbidden methods + GET/HEAD body rejection).
 
+use perry_runtime::JSValue;
+
+const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+
 /// Web Fetch reason-phrase validation (HTTP token rules). A valid
 /// `statusText` byte is HTAB (0x09), SP (0x20), VCHAR (0x21..=0x7E),
 /// or obs-text (0x80..=0xFF). Anything else (e.g. a newline) is invalid.
@@ -34,19 +38,23 @@ pub(crate) fn normalize_method(raw: &str) -> String {
     }
 }
 
-pub(crate) fn canonical_reason(status: u16) -> &'static str {
-    match status {
-        200 => "OK",
-        201 => "Created",
-        204 => "No Content",
-        301 => "Moved Permanently",
-        302 => "Found",
-        304 => "Not Modified",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        403 => "Forbidden",
-        404 => "Not Found",
-        500 => "Internal Server Error",
-        _ => "",
+pub(crate) fn redirect_status_from_value(status: f64) -> i32 {
+    if status.to_bits() == TAG_UNDEFINED {
+        return 302;
     }
+    let number = JSValue::from_bits(status.to_bits()).to_number();
+    if !number.is_finite() {
+        return 0;
+    }
+    (number.trunc() % 65536.0) as i32
+}
+
+pub(crate) fn is_redirect_status(status: i32) -> bool {
+    matches!(status, 301 | 302 | 303 | 307 | 308)
+}
+
+pub(crate) fn parse_redirect_location(raw: &str) -> Result<String, ()> {
+    reqwest::Url::parse(raw)
+        .map(|parsed| parsed.to_string())
+        .map_err(|_| ())
 }

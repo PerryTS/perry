@@ -18,7 +18,7 @@
 //! on its registration, the Promise resolves correctly through
 //! the microtask queue.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use perry_ffi::{
     alloc_buffer, alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, JsValue,
@@ -166,6 +166,62 @@ pub extern "C" fn js_node_http_im_raw_headers_json(handle: i64) -> *mut StringHe
             serde_json::to_string(&flat).unwrap_or_else(|_| "[]".to_string())
         })
         .unwrap_or_else(|| "[]".to_string());
+    alloc_string(&s).as_raw()
+}
+
+/// `req.headersDistinct` — lowercase keys mapped to arrays of values,
+/// preserving duplicates from `rawHeaders`.
+#[no_mangle]
+pub extern "C" fn js_node_http_im_headers_distinct_json(handle: i64) -> *mut StringHeader {
+    let s = get_handle::<IncomingMessage>(handle)
+        .map(|im| {
+            let mut distinct: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for (name, value) in &im.raw_headers {
+                distinct
+                    .entry(name.to_lowercase())
+                    .or_default()
+                    .push(value.clone());
+            }
+            serde_json::to_string(&distinct).unwrap_or_else(|_| "{}".to_string())
+        })
+        .unwrap_or_else(|| "{}".to_string());
+    alloc_string(&s).as_raw()
+}
+
+/// `req.trailers` — JSON-stringify the lowercase-keyed trailer map.
+#[no_mangle]
+pub extern "C" fn js_node_http_im_trailers_json(handle: i64) -> *mut StringHeader {
+    let s = get_handle::<IncomingMessage>(handle)
+        .map(|im| {
+            let trailers: BTreeMap<&String, &String> = im.trailers.iter().collect();
+            serde_json::to_string(&trailers).unwrap_or_else(|_| "{}".to_string())
+        })
+        .unwrap_or_else(|| "{}".to_string());
+    alloc_string(&s).as_raw()
+}
+
+/// `req.rawTrailers` — flat original-case trailer list. Trailers are not
+/// collected yet, so this is currently the Node-compatible empty array.
+#[no_mangle]
+pub extern "C" fn js_node_http_im_raw_trailers_json(_handle: i64) -> *mut StringHeader {
+    alloc_string("[]").as_raw()
+}
+
+/// `req.trailersDistinct` — lowercase trailer keys mapped to arrays.
+#[no_mangle]
+pub extern "C" fn js_node_http_im_trailers_distinct_json(handle: i64) -> *mut StringHeader {
+    let s = get_handle::<IncomingMessage>(handle)
+        .map(|im| {
+            let mut distinct: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for (name, value) in &im.trailers {
+                distinct
+                    .entry(name.to_lowercase())
+                    .or_default()
+                    .push(value.clone());
+            }
+            serde_json::to_string(&distinct).unwrap_or_else(|_| "{}".to_string())
+        })
+        .unwrap_or_else(|| "{}".to_string());
     alloc_string(&s).as_raw()
 }
 
@@ -375,6 +431,13 @@ pub unsafe extern "C" fn js_node_http_im_set_encoding(
     if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
         im.encoding = Some(encoding);
     }
+    handle
+}
+
+/// `req.setTimeout(msecs[, callback])` — timeout scheduling is transport-owned
+/// for now; expose Node's chainable shape.
+#[no_mangle]
+pub extern "C" fn js_node_http_im_set_timeout(handle: i64, _msecs: f64, _callback: i64) -> i64 {
     handle
 }
 

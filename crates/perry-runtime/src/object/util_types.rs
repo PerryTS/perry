@@ -73,12 +73,15 @@ fn pointer_addr(value: f64) -> Option<usize> {
 
 #[inline]
 fn value_is_arguments_object(value: f64) -> bool {
-    if crate::array::js_array_is_array(value).to_bits() != crate::value::TAG_TRUE {
-        return false;
-    }
     let Some(addr) = pointer_addr(value) else {
         return false;
     };
+    if crate::object::is_arguments_object(addr as *const ObjectHeader) {
+        return true;
+    }
+    if crate::array::js_array_is_array(value).to_bits() != crate::value::TAG_TRUE {
+        return false;
+    }
     unsafe {
         crate::array::array_has_arguments_object_flag(addr as *const crate::array::ArrayHeader)
     }
@@ -114,11 +117,11 @@ fn object_field_is_closure(obj: *const ObjectHeader, key: &[u8]) -> bool {
     value_is_closure(value)
 }
 
-const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_0060;
-const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_0061;
-const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_0062;
-const CLASS_ID_BOXED_BIGINT: u32 = 0xFFFF_0063;
-const CLASS_ID_BOXED_SYMBOL: u32 = 0xFFFF_0064;
+const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_00D0;
+const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_00D1;
+const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_00D2;
+const CLASS_ID_BOXED_BIGINT: u32 = 0xFFFF_00D3;
+const CLASS_ID_BOXED_SYMBOL: u32 = 0xFFFF_00D4;
 
 #[no_mangle]
 pub extern "C" fn js_util_types_is_arguments_object(value: f64) -> f64 {

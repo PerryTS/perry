@@ -414,6 +414,25 @@ fn readable_from_retains_buffer_chunks_for_consumers() {
 }
 
 #[test]
+fn readable_from_set_encoding_read_decodes_buffer_chunks() {
+    let mut arr = crate::array::js_array_alloc(1);
+    arr = crate::array::js_array_push_f64(arr, buffer_value(b"{\"snapshot\":true}"));
+    let opts = crate::object::js_object_alloc(0, 1);
+    js_object_set_field_by_name(opts, hidden_key(b"objectMode"), f64::from_bits(TAG_FALSE));
+
+    let readable = js_node_stream_readable_from_options(
+        box_pointer(arr as *const u8),
+        box_pointer(opts as *const u8),
+    );
+    let handle = raw_ptr_from_value(readable) as i64;
+    js_node_stream_method_set_encoding(handle, string_value("utf8"));
+
+    let got = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert!(JSValue::from_bits(got.to_bits()).is_any_string());
+    assert_eq!(string_contents(got), "{\"snapshot\":true}");
+}
+
+#[test]
 fn readable_from_typed_uint8array_retains_numeric_byte_chunks() {
     let mut arr = crate::array::js_array_alloc(3);
     arr = crate::array::js_array_push_f64(arr, 1.0);

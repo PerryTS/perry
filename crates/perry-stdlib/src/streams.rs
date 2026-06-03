@@ -22,6 +22,10 @@
 //! Stubs: BYOB readers and full custom `QueuingStrategy` size accounting —
 //! see the inline comment on each site.
 
+use flate2::read::{
+    DeflateDecoder, DeflateEncoder, GzDecoder, GzEncoder, ZlibDecoder, ZlibEncoder,
+};
+use flate2::Compression;
 use perry_runtime::{
     js_array_alloc, js_array_push, js_closure_call0, js_closure_call1, js_closure_call2,
     js_nanbox_get_pointer, js_object_alloc, js_object_get_field_by_name, js_object_set_field,
@@ -29,6 +33,7 @@ use perry_runtime::{
     js_promise_resolve, js_string_from_bytes, ClosureHeader, JSValue, ObjectHeader, Promise,
 };
 use std::collections::{HashMap, VecDeque};
+use std::io::Read;
 use std::os::raw::c_int;
 use std::sync::Mutex;
 
@@ -97,6 +102,9 @@ struct WritableStreamData {
     ready_promise: *mut Promise,
     /// Resolved when the stream finishes / rejects on error.
     closed_promise: *mut Promise,
+    /// Pending `close()` request, if close is waiting for queued writes.
+    close_request_promise: *mut Promise,
+    close_started: bool,
 }
 
 struct TransformStreamData {
@@ -104,6 +112,28 @@ struct TransformStreamData {
     writable_handle: usize,
     transform_cb: i64,
     flush_cb: i64,
+    native: Option<NativeTransformKind>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WebCompressionFormat {
+    Gzip,
+    Deflate,
+    DeflateRaw,
+    Brotli,
+}
+
+enum NativeTransformKind {
+    TextEncoder,
+    TextDecoder {
+        fatal: bool,
+        pending: Vec<u8>,
+    },
+    Compression {
+        format: WebCompressionFormat,
+        decompress: bool,
+        chunks: Vec<u8>,
+    },
 }
 
 struct ReaderData {
@@ -211,6 +241,7 @@ fn scan_stream_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>
             }
             visitor.visit_raw_mut_ptr_slot(&mut s.ready_promise);
             visitor.visit_raw_mut_ptr_slot(&mut s.closed_promise);
+            visitor.visit_raw_mut_ptr_slot(&mut s.close_request_promise);
             if s.state == WritableState::Errored {
                 visit_stream_value_slot(visitor, &mut s.error_value);
             }
@@ -261,6 +292,23 @@ unsafe fn closure_from_bits(bits: u64) -> i64 {
     }
 }
 
+unsafe fn stream_object_field(object: f64, name: &[u8]) -> f64 {
+    let value = JSValue::from_bits(object.to_bits());
+    if !value.is_pointer() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let obj = js_nanbox_get_pointer(object) as *const ObjectHeader;
+    if obj.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    f64::from_bits(js_object_get_field_by_name(obj, key).bits())
+}
+
+unsafe fn stream_object_closure(object: f64, name: &[u8]) -> i64 {
+    closure_from_bits(stream_object_field(object, name).to_bits())
+}
+
 unsafe fn build_iter_result(value_bits: u64, done: bool) -> u64 {
     let obj = js_object_alloc(0, 2);
     let keys = js_array_alloc(2);
@@ -291,15 +339,26 @@ unsafe fn alloc_uint8array_from_bytes(bytes: &[u8]) -> u64 {
 
 unsafe fn read_bytes_from_chunk(chunk_bits: u64) -> Option<Vec<u8>> {
     let top = chunk_bits >> 48;
-    if top != 0x7FFD {
+    let addr = if top == 0x7FFD || top == 0x7FFF {
+        (chunk_bits & POINTER_MASK) as usize
+    } else if top == 0 && chunk_bits >= 0x10000 {
+        chunk_bits as usize
+    } else {
+        return None;
+    };
+    if addr < 0x1000 {
         return None;
     }
-    let ptr = (chunk_bits & POINTER_MASK) as *mut perry_runtime::buffer::BufferHeader;
-    if ptr.is_null() {
+    if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
+        let ta = addr as *const perry_runtime::typedarray::TypedArrayHeader;
+        return perry_runtime::typedarray::typed_array_bytes(ta).map(|bytes| bytes.to_vec());
+    }
+    if !perry_runtime::buffer::is_registered_buffer(addr) {
         return None;
     }
+    let ptr = addr as *const perry_runtime::buffer::BufferHeader;
     let len = (*ptr).length as usize;
-    let data = perry_runtime::buffer::buffer_data_mut(ptr) as *const u8;
+    let data = perry_runtime::buffer::buffer_data(ptr);
     Some(std::slice::from_raw_parts(data, len).to_vec())
 }
 
@@ -337,6 +396,13 @@ unsafe fn make_type_error_with_message(msg: &str) -> u64 {
     JSValue::pointer(err as *const u8).bits()
 }
 
+unsafe fn make_type_error_with_code(message: &str, code: &'static str) -> u64 {
+    let s = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    perry_runtime::node_submodules::register_error_code_pub(s, code);
+    let err = perry_runtime::error::js_typeerror_new(s);
+    JSValue::pointer(err as *const u8).bits()
+}
+
 unsafe fn make_range_error_with_code(message: &str, code: &'static str) -> u64 {
     let s = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     perry_runtime::node_submodules::register_error_code_pub(s, code);
@@ -346,6 +412,11 @@ unsafe fn make_range_error_with_code(message: &str, code: &'static str) -> u64 {
 
 unsafe fn throw_type_error(message: &str) -> ! {
     let err = make_type_error_with_message(message);
+    perry_runtime::exception::js_throw(f64::from_bits(err))
+}
+
+unsafe fn throw_type_error_with_code(message: &str, code: &'static str) -> ! {
+    let err = make_type_error_with_code(message, code);
     perry_runtime::exception::js_throw(f64::from_bits(err))
 }
 
@@ -432,6 +503,8 @@ fn alloc_writable(write_cb: i64, close_cb: i64, abort_cb: i64, hwm: f64) -> usiz
             error_value: 0,
             ready_promise: ready,
             closed_promise: closed,
+            close_request_promise: std::ptr::null_mut(),
+            close_started: false,
         },
     );
     id
@@ -453,7 +526,39 @@ unsafe fn invoke_start(stream_id: usize) {
     }
 }
 
-unsafe fn maybe_pull(stream_id: usize) {
+extern "C" fn readable_pull_microtask(closure: *const ClosureHeader) -> f64 {
+    unsafe {
+        let stream_bits = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as u64;
+        let stream_id = f64::from_bits(stream_bits) as usize;
+        let cb = perry_runtime::closure::js_closure_get_capture_ptr(closure, 1);
+        let pull_returns_byte_chunk =
+            perry_runtime::closure::js_closure_get_capture_ptr(closure, 2) != 0;
+        let should_pull = {
+            let mut g = READABLE_STREAMS.lock().unwrap();
+            match g.get_mut(&stream_id) {
+                Some(s) if s.state == ReadableState::Readable && s.pulling => true,
+                Some(s) => {
+                    s.pulling = false;
+                    false
+                }
+                None => false,
+            }
+        };
+        if should_pull {
+            if pull_returns_byte_chunk {
+                pull_deferred_byte_chunk(stream_id, cb);
+            } else {
+                js_closure_call1(cb as *const ClosureHeader, stream_id as f64);
+            }
+            if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
+                s.pulling = false;
+            }
+        }
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+pub(super) unsafe fn maybe_pull(stream_id: usize) {
     let (cb, controller, should_pull, pull_returns_byte_chunk) = {
         let mut g = READABLE_STREAMS.lock().unwrap();
         match g.get_mut(&stream_id) {
@@ -472,14 +577,17 @@ unsafe fn maybe_pull(stream_id: usize) {
     if !should_pull {
         return;
     }
-    if pull_returns_byte_chunk {
-        pull_deferred_byte_chunk(stream_id, cb);
-    } else {
-        js_closure_call1(cb as *const ClosureHeader, controller);
-    }
-    if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
-        s.pulling = false;
-    }
+    let pull_fn = readable_pull_microtask as *const u8;
+    perry_runtime::closure::js_register_closure_arity(pull_fn, 0);
+    let pull = perry_runtime::closure::js_closure_alloc(pull_fn, 3);
+    perry_runtime::closure::js_closure_set_capture_ptr(pull, 0, controller.to_bits() as i64);
+    perry_runtime::closure::js_closure_set_capture_ptr(pull, 1, cb);
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        pull,
+        2,
+        if pull_returns_byte_chunk { 1 } else { 0 },
+    );
+    perry_runtime::builtins::js_queue_microtask(pull as i64);
 }
 
 unsafe fn pull_deferred_byte_chunk(stream_id: usize, cb: i64) {
@@ -608,6 +716,32 @@ pub unsafe extern "C" fn js_readable_stream_new_with_strategy_and_source_type(
         closure_from_bits(start_bits.to_bits()),
         closure_from_bits(pull_bits.to_bits()),
         closure_from_bits(cancel_bits.to_bits()),
+        f64::from_bits(read_high_water_mark(strategy)),
+        is_byte_stream,
+        size_cb,
+    );
+    invoke_start(id);
+    maybe_pull(id);
+    id as f64
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_readable_stream_new_from_source_object(
+    source: f64,
+    strategy: f64,
+) -> f64 {
+    ensure_gc_registered();
+    let source_type = stream_object_field(source, b"type");
+    let is_byte_stream = value_string_equals(source_type, b"bytes");
+    let size_cb = if is_byte_stream {
+        0
+    } else {
+        read_queuing_strategy_size(strategy)
+    };
+    let id = alloc_readable_with_strategy(
+        stream_object_closure(source, b"start"),
+        stream_object_closure(source, b"pull"),
+        stream_object_closure(source, b"cancel"),
         f64::from_bits(read_high_water_mark(strategy)),
         is_byte_stream,
         size_cb,
@@ -797,6 +931,25 @@ unsafe fn value_string_equals(value: f64, expected: &[u8]) -> bool {
 
     let data = (ptr as *const u8).add(std::mem::size_of::<perry_runtime::StringHeader>());
     std::slice::from_raw_parts(data, len) == expected
+}
+
+unsafe fn js_string_value_to_string(value: f64, coerce: bool) -> Option<String> {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !coerce && !jsval.is_any_string() {
+        return None;
+    }
+    let ptr = if coerce {
+        perry_runtime::value::js_jsvalue_to_string(value) as *const perry_runtime::StringHeader
+    } else {
+        perry_runtime::value::js_get_string_pointer_unified(value)
+            as *const perry_runtime::StringHeader
+    };
+    if ptr.is_null() || (ptr as usize) < 0x10000 {
+        return None;
+    }
+    let len = (*ptr).byte_len as usize;
+    let data = (ptr as *const u8).add(std::mem::size_of::<perry_runtime::StringHeader>());
+    Some(String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned())
 }
 
 #[no_mangle]
@@ -1409,6 +1562,7 @@ pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
         }
     };
     let mut closed_rejection: Option<(usize, u64)> = None;
+    let mut closed_resolution: Option<usize> = None;
     let outcome: Option<(u64, bool, bool)> = {
         let mut g = READABLE_STREAMS.lock().unwrap();
         match g.get_mut(&stream_id) {
@@ -1420,6 +1574,10 @@ pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
                             s.error_value = error;
                             if let Some(reader_id) = s.reader_handle {
                                 closed_rejection = Some((reader_id, error));
+                            }
+                        } else if s.state == ReadableState::Closed {
+                            if let Some(reader_id) = s.reader_handle {
+                                closed_resolution = Some(reader_id);
                             }
                         }
                     }
@@ -1445,6 +1603,17 @@ pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
         if let Some(p) = p {
             js_promise_reject(p, f64::from_bits(reason));
         }
+    }
+    if let Some(reader_id) = closed_resolution {
+        let p = READERS
+            .lock()
+            .unwrap()
+            .get(&reader_id)
+            .map(|r| r.closed_promise);
+        if let Some(p) = p {
+            js_promise_resolve(p, f64::from_bits(TAG_UNDEFINED));
+        }
+        close_pending(stream_id);
     }
     match outcome {
         Some((value, _, true)) => {
@@ -1745,6 +1914,30 @@ pub unsafe extern "C" fn js_writable_stream_new_with_sink_type(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn js_writable_stream_new_from_sink_object(sink: f64, hwm: f64) -> f64 {
+    ensure_gc_registered();
+    let sink_type = stream_object_field(sink, b"type");
+    if sink_type.to_bits() != TAG_UNDEFINED {
+        throw_range_error_with_code(
+            "The argument 'type' is invalid. Received a non-undefined value",
+            "ERR_INVALID_ARG_VALUE",
+        );
+    }
+
+    let id = alloc_writable(
+        stream_object_closure(sink, b"write"),
+        stream_object_closure(sink, b"close"),
+        stream_object_closure(sink, b"abort"),
+        hwm,
+    );
+    let start_cb = stream_object_closure(sink, b"start");
+    if start_cb != 0 {
+        js_closure_call1(start_cb as *const ClosureHeader, id as f64);
+    }
+    id as f64
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn js_writable_stream_throw_invalid_sink() -> f64 {
     throw_invalid_arg_type("The \"sink\" argument must be of type object")
 }
@@ -1794,23 +1987,40 @@ pub unsafe extern "C" fn js_writable_stream_locked(stream_handle: f64) -> f64 {
 pub unsafe extern "C" fn js_writable_stream_close(stream_handle: f64) -> *mut Promise {
     let promise = js_promise_new();
     let id = stream_handle as usize;
-    let (cb, closed_p) = {
+    let start_close = {
         let mut g = WRITABLE_STREAMS.lock().unwrap();
         match g.get_mut(&id) {
-            Some(s) => {
-                s.state = WritableState::Closed;
-                (s.close_cb, s.closed_promise)
+            Some(s) => match s.state {
+                WritableState::Writable => {
+                    s.state = WritableState::Closing;
+                    s.close_request_promise = promise;
+                    !s.in_flight && s.write_queue.is_empty()
+                }
+                WritableState::Closing => {
+                    if !s.close_request_promise.is_null() {
+                        return s.close_request_promise;
+                    }
+                    s.close_request_promise = promise;
+                    !s.in_flight && s.write_queue.is_empty()
+                }
+                WritableState::Closed => {
+                    js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
+                    return promise;
+                }
+                WritableState::Errored => {
+                    js_promise_reject(promise, f64::from_bits(s.error_value));
+                    return promise;
+                }
+            },
+            None => {
+                js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
+                return promise;
             }
-            None => (0, std::ptr::null_mut()),
         }
     };
-    if cb != 0 {
-        js_closure_call0(cb as *const ClosureHeader);
+    if start_close {
+        finish_writable_close(id);
     }
-    if !closed_p.is_null() {
-        js_promise_resolve(closed_p, f64::from_bits(TAG_UNDEFINED));
-    }
-    js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
     promise
 }
 
@@ -1819,15 +2029,18 @@ pub unsafe extern "C" fn js_writable_stream_abort(stream_handle: f64, reason: f6
     let promise = js_promise_new();
     let id = stream_handle as usize;
     let reason_bits = reason.to_bits();
-    let (cb, closed_p) = {
+    let (cb, closed_p, close_request) = {
         let mut g = WRITABLE_STREAMS.lock().unwrap();
         match g.get_mut(&id) {
             Some(s) => {
                 s.state = WritableState::Errored;
                 s.error_value = reason_bits;
-                (s.abort_cb, s.closed_promise)
+                let close_request = s.close_request_promise;
+                s.close_request_promise = std::ptr::null_mut();
+                s.close_started = false;
+                (s.abort_cb, s.closed_promise, close_request)
             }
-            None => (0, std::ptr::null_mut()),
+            None => (0, std::ptr::null_mut(), std::ptr::null_mut()),
         }
     };
     if cb != 0 {
@@ -1835,6 +2048,9 @@ pub unsafe extern "C" fn js_writable_stream_abort(stream_handle: f64, reason: f6
     }
     if !closed_p.is_null() {
         js_promise_reject(closed_p, reason);
+    }
+    if !close_request.is_null() {
+        js_promise_reject(close_request, reason);
     }
     js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
     promise
@@ -1856,7 +2072,7 @@ fn sync_writer_ready_promise(stream_id: usize, writer_id: usize, ready: *mut Pro
     }
 }
 
-unsafe fn install_writable_backpressure_ready(stream_id: usize, writer_id: usize) {
+pub(super) unsafe fn install_writable_backpressure_ready(stream_id: usize, writer_id: usize) {
     let ready = js_promise_new();
     if let Some(s) = WRITABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
         s.ready_promise = ready;
@@ -1871,6 +2087,24 @@ fn writable_capture_usize(closure: *const ClosureHeader, idx: u32) -> usize {
 
 fn writable_capture_promise(closure: *const ClosureHeader, idx: u32) -> *mut Promise {
     perry_runtime::closure::js_closure_get_capture_ptr(closure, idx) as *mut Promise
+}
+
+extern "C" fn writable_write_start_microtask(closure: *const ClosureHeader) -> f64 {
+    unsafe {
+        let stream_id = writable_capture_usize(closure, 0);
+        let writer_id = writable_capture_usize(closure, 1);
+        let cb = perry_runtime::closure::js_closure_get_capture_ptr(closure, 2);
+        let chunk_bits = perry_runtime::closure::js_closure_get_capture_ptr(closure, 3) as u64;
+        let write_promise = writable_capture_promise(closure, 4);
+        run_writable_write(
+            stream_id,
+            writer_id,
+            cb,
+            f64::from_bits(chunk_bits),
+            write_promise,
+        );
+    }
+    f64::from_bits(TAG_UNDEFINED)
 }
 
 extern "C" fn writable_write_fulfilled(closure: *const ClosureHeader, _value: f64) -> f64 {
@@ -1932,7 +2166,167 @@ unsafe fn attach_writable_write_handlers(
     let _ = perry_runtime::promise::js_promise_then(sink_promise, on_fulfilled, on_rejected);
 }
 
-unsafe fn run_writable_write(
+unsafe fn try_call_writable_write(cb: i64, chunk: f64) -> Result<f64, u64> {
+    let trap_buf = perry_runtime::exception::js_try_push();
+    let jumped = perry_runtime::ffi::setjmp::setjmp(trap_buf as *mut c_int);
+    if jumped == 0 {
+        let result = js_closure_call1(cb as *const ClosureHeader, chunk);
+        perry_runtime::exception::js_try_end();
+        Ok(result)
+    } else {
+        let err = perry_runtime::exception::js_get_exception();
+        perry_runtime::exception::js_clear_exception();
+        perry_runtime::exception::js_try_end();
+        Err(err.to_bits())
+    }
+}
+
+unsafe fn try_call_writable_close(cb: i64) -> Result<f64, u64> {
+    let trap_buf = perry_runtime::exception::js_try_push();
+    let jumped = perry_runtime::ffi::setjmp::setjmp(trap_buf as *mut c_int);
+    if jumped == 0 {
+        let result = js_closure_call0(cb as *const ClosureHeader);
+        perry_runtime::exception::js_try_end();
+        Ok(result)
+    } else {
+        let err = perry_runtime::exception::js_get_exception();
+        perry_runtime::exception::js_clear_exception();
+        perry_runtime::exception::js_try_end();
+        Err(err.to_bits())
+    }
+}
+
+extern "C" fn writable_close_fulfilled(closure: *const ClosureHeader, _value: f64) -> f64 {
+    unsafe {
+        let stream_id = writable_capture_usize(closure, 0);
+        let close_promise = writable_capture_promise(closure, 1);
+        finish_writable_close_success(stream_id, close_promise);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn writable_close_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {
+    unsafe {
+        let stream_id = writable_capture_usize(closure, 0);
+        let close_promise = writable_capture_promise(closure, 1);
+        finish_writable_close_error(stream_id, close_promise, reason);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+unsafe fn attach_writable_close_handlers(
+    stream_id: usize,
+    close_promise: *mut Promise,
+    sink_promise: *mut Promise,
+) {
+    let fulfilled_fn = writable_close_fulfilled as *const u8;
+    let rejected_fn = writable_close_rejected as *const u8;
+    perry_runtime::closure::js_register_closure_arity(fulfilled_fn, 1);
+    perry_runtime::closure::js_register_closure_arity(rejected_fn, 1);
+
+    let on_fulfilled = perry_runtime::closure::js_closure_alloc(fulfilled_fn, 2);
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        on_fulfilled,
+        0,
+        (stream_id as f64).to_bits() as i64,
+    );
+    perry_runtime::closure::js_closure_set_capture_ptr(on_fulfilled, 1, close_promise as i64);
+
+    let on_rejected = perry_runtime::closure::js_closure_alloc(rejected_fn, 2);
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        on_rejected,
+        0,
+        (stream_id as f64).to_bits() as i64,
+    );
+    perry_runtime::closure::js_closure_set_capture_ptr(on_rejected, 1, close_promise as i64);
+
+    let _ = perry_runtime::promise::js_promise_then(sink_promise, on_fulfilled, on_rejected);
+}
+
+unsafe fn finish_writable_close(stream_id: usize) {
+    let (cb, close_promise) = {
+        let mut g = WRITABLE_STREAMS.lock().unwrap();
+        match g.get_mut(&stream_id) {
+            Some(s) if s.state == WritableState::Closing => {
+                if s.in_flight || !s.write_queue.is_empty() || s.close_started {
+                    return;
+                }
+                s.close_started = true;
+                (s.close_cb, s.close_request_promise)
+            }
+            _ => return,
+        }
+    };
+
+    if cb == 0 {
+        finish_writable_close_success(stream_id, close_promise);
+        return;
+    }
+    let result = match try_call_writable_close(cb) {
+        Ok(result) => result,
+        Err(reason) => {
+            finish_writable_close_error(stream_id, close_promise, f64::from_bits(reason));
+            return;
+        }
+    };
+    let sink_promise = perry_runtime::promise::js_promise_resolved(result);
+    if !sink_promise.is_null() {
+        attach_writable_close_handlers(stream_id, close_promise, sink_promise);
+        return;
+    }
+    finish_writable_close_success(stream_id, close_promise);
+}
+
+unsafe fn finish_writable_close_success(stream_id: usize, promise: *mut Promise) {
+    let (ready, closed) = {
+        let mut g = WRITABLE_STREAMS.lock().unwrap();
+        match g.get_mut(&stream_id) {
+            Some(s) => {
+                s.state = WritableState::Closed;
+                s.close_request_promise = std::ptr::null_mut();
+                s.close_started = false;
+                (s.ready_promise, s.closed_promise)
+            }
+            None => (std::ptr::null_mut(), std::ptr::null_mut()),
+        }
+    };
+    if !promise.is_null() {
+        js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
+    }
+    if !ready.is_null() {
+        js_promise_resolve(ready, f64::from_bits(TAG_UNDEFINED));
+    }
+    if !closed.is_null() {
+        js_promise_resolve(closed, f64::from_bits(TAG_UNDEFINED));
+    }
+}
+
+unsafe fn finish_writable_close_error(stream_id: usize, promise: *mut Promise, reason: f64) {
+    let (ready, closed) = {
+        let mut g = WRITABLE_STREAMS.lock().unwrap();
+        match g.get_mut(&stream_id) {
+            Some(s) => {
+                s.state = WritableState::Errored;
+                s.error_value = reason.to_bits();
+                s.close_request_promise = std::ptr::null_mut();
+                s.close_started = false;
+                (s.ready_promise, s.closed_promise)
+            }
+            None => (std::ptr::null_mut(), std::ptr::null_mut()),
+        }
+    };
+    if !promise.is_null() {
+        js_promise_reject(promise, reason);
+    }
+    if !ready.is_null() {
+        js_promise_reject(ready, reason);
+    }
+    if !closed.is_null() {
+        js_promise_reject(closed, reason);
+    }
+}
+
+pub(super) unsafe fn run_writable_write(
     stream_id: usize,
     writer_id: usize,
     cb: i64,
@@ -1943,101 +2337,30 @@ unsafe fn run_writable_write(
         finish_writable_write_success(stream_id, writer_id, promise);
         return;
     }
-    let result = js_closure_call1(cb as *const ClosureHeader, chunk);
-    if perry_runtime::promise::js_value_is_promise(result) != 0 {
-        let sink_promise = js_nanbox_get_pointer(result) as *mut Promise;
-        if !sink_promise.is_null() {
-            attach_writable_write_handlers(stream_id, writer_id, promise, sink_promise);
+    let result = match try_call_writable_write(cb, chunk) {
+        Ok(result) => result,
+        Err(reason) => {
+            finish_writable_write_error(stream_id, promise, f64::from_bits(reason));
             return;
         }
+    };
+    let sink_promise = perry_runtime::promise::js_promise_resolved(result);
+    if !sink_promise.is_null() {
+        attach_writable_write_handlers(stream_id, writer_id, promise, sink_promise);
+        return;
     }
     finish_writable_write_success(stream_id, writer_id, promise);
 }
 
-unsafe fn finish_writable_write_success(stream_id: usize, writer_id: usize, promise: *mut Promise) {
-    if !promise.is_null() {
-        js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
-    }
-
-    let (next, ready) = {
-        let mut g = WRITABLE_STREAMS.lock().unwrap();
-        match g.get_mut(&stream_id) {
-            Some(s) => {
-                s.in_flight = false;
-                let next = if s.state == WritableState::Writable {
-                    s.write_queue.pop_front().map(|(chunk, p)| {
-                        s.in_flight = true;
-                        (s.write_cb, f64::from_bits(chunk), p)
-                    })
-                } else {
-                    None
-                };
-                let ready = if s.state == WritableState::Writable && writable_desired_size(s) > 0.0
-                {
-                    s.ready_promise
-                } else {
-                    std::ptr::null_mut()
-                };
-                (next, ready)
-            }
-            None => (None, std::ptr::null_mut()),
-        }
-    };
-
-    if !ready.is_null() {
-        js_promise_resolve(ready, f64::from_bits(TAG_UNDEFINED));
-    }
-    if let Some((cb, chunk, queued_promise)) = next {
-        run_writable_write(stream_id, writer_id, cb, chunk, queued_promise);
-    }
-}
-
-unsafe fn finish_writable_write_error(stream_id: usize, promise: *mut Promise, reason: f64) {
-    let (ready, closed, queued) = {
-        let mut g = WRITABLE_STREAMS.lock().unwrap();
-        match g.get_mut(&stream_id) {
-            Some(s) => {
-                s.in_flight = false;
-                s.state = WritableState::Errored;
-                s.error_value = reason.to_bits();
-                let queued: Vec<*mut Promise> = s.write_queue.drain(..).map(|(_, p)| p).collect();
-                (s.ready_promise, s.closed_promise, queued)
-            }
-            None => (std::ptr::null_mut(), std::ptr::null_mut(), Vec::new()),
-        }
-    };
-
-    if !promise.is_null() {
-        js_promise_reject(promise, reason);
-    }
-    for queued_promise in queued {
-        if !queued_promise.is_null() {
-            js_promise_reject(queued_promise, reason);
-        }
-    }
-    if !ready.is_null() {
-        js_promise_reject(ready, reason);
-    }
-    if !closed.is_null() {
-        js_promise_reject(closed, reason);
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_writer_write(writer_handle: f64, chunk: f64) -> *mut Promise {
-    let promise = js_promise_new();
-    let writer_id = writer_handle as usize;
-    let stream_id = match WRITERS.lock().unwrap().get(&writer_id) {
-        Some(w) if w.locked => w.stream_handle,
-        _ => {
-            let err = make_error_with_message("Writer is no longer locked to a stream");
-            js_promise_reject(promise, f64::from_bits(err));
-            return promise;
-        }
-    };
+pub(super) unsafe fn writable_stream_write(
+    stream_id: usize,
+    writer_id: usize,
+    chunk: f64,
+) -> *mut Promise {
     if TRANSFORM_PAIRS.lock().unwrap().contains_key(&stream_id) {
         return transform_write(stream_id, chunk);
     }
+    let promise = js_promise_new();
     let mut start_write = None;
     let needs_pending_ready;
     {
@@ -2069,9 +2392,127 @@ pub unsafe extern "C" fn js_writer_write(writer_handle: f64, chunk: f64) -> *mut
         install_writable_backpressure_ready(stream_id, writer_id);
     }
     if let Some((cb, chunk, write_promise)) = start_write {
-        run_writable_write(stream_id, writer_id, cb, chunk, write_promise);
+        let start_fn = writable_write_start_microtask as *const u8;
+        perry_runtime::closure::js_register_closure_arity(start_fn, 0);
+        let start = perry_runtime::closure::js_closure_alloc(start_fn, 5);
+        perry_runtime::closure::js_closure_set_capture_ptr(
+            start,
+            0,
+            (stream_id as f64).to_bits() as i64,
+        );
+        perry_runtime::closure::js_closure_set_capture_ptr(
+            start,
+            1,
+            (writer_id as f64).to_bits() as i64,
+        );
+        perry_runtime::closure::js_closure_set_capture_ptr(start, 2, cb);
+        perry_runtime::closure::js_closure_set_capture_ptr(start, 3, chunk.to_bits() as i64);
+        perry_runtime::closure::js_closure_set_capture_ptr(start, 4, write_promise as i64);
+        perry_runtime::builtins::js_queue_microtask(start as i64);
     }
     promise
+}
+
+unsafe fn finish_writable_write_success(stream_id: usize, writer_id: usize, promise: *mut Promise) {
+    if !promise.is_null() {
+        js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
+    }
+
+    let (next, ready, close_now) = {
+        let mut g = WRITABLE_STREAMS.lock().unwrap();
+        match g.get_mut(&stream_id) {
+            Some(s) => {
+                s.in_flight = false;
+                let next =
+                    if s.state == WritableState::Writable || s.state == WritableState::Closing {
+                        s.write_queue.pop_front().map(|(chunk, p)| {
+                            s.in_flight = true;
+                            (s.write_cb, f64::from_bits(chunk), p)
+                        })
+                    } else {
+                        None
+                    };
+                let ready = if s.state == WritableState::Writable && writable_desired_size(s) > 0.0
+                {
+                    s.ready_promise
+                } else {
+                    std::ptr::null_mut()
+                };
+                let close_now = s.state == WritableState::Closing
+                    && next.is_none()
+                    && !s.in_flight
+                    && s.write_queue.is_empty();
+                (next, ready, close_now)
+            }
+            None => (None, std::ptr::null_mut(), false),
+        }
+    };
+
+    if !ready.is_null() {
+        js_promise_resolve(ready, f64::from_bits(TAG_UNDEFINED));
+    }
+    if let Some((cb, chunk, queued_promise)) = next {
+        run_writable_write(stream_id, writer_id, cb, chunk, queued_promise);
+    } else if close_now {
+        finish_writable_close(stream_id);
+    }
+}
+
+unsafe fn finish_writable_write_error(stream_id: usize, promise: *mut Promise, reason: f64) {
+    let (ready, closed, close_request, queued) = {
+        let mut g = WRITABLE_STREAMS.lock().unwrap();
+        match g.get_mut(&stream_id) {
+            Some(s) => {
+                s.in_flight = false;
+                s.state = WritableState::Errored;
+                s.error_value = reason.to_bits();
+                let close_request = s.close_request_promise;
+                s.close_request_promise = std::ptr::null_mut();
+                s.close_started = false;
+                let queued: Vec<*mut Promise> = s.write_queue.drain(..).map(|(_, p)| p).collect();
+                (s.ready_promise, s.closed_promise, close_request, queued)
+            }
+            None => (
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                Vec::new(),
+            ),
+        }
+    };
+
+    if !promise.is_null() {
+        js_promise_reject(promise, reason);
+    }
+    for queued_promise in queued {
+        if !queued_promise.is_null() {
+            js_promise_reject(queued_promise, reason);
+        }
+    }
+    if !ready.is_null() {
+        js_promise_reject(ready, reason);
+    }
+    if !close_request.is_null() {
+        js_promise_reject(close_request, reason);
+    }
+    if !closed.is_null() {
+        js_promise_reject(closed, reason);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_writer_write(writer_handle: f64, chunk: f64) -> *mut Promise {
+    let writer_id = writer_handle as usize;
+    let stream_id = match WRITERS.lock().unwrap().get(&writer_id) {
+        Some(w) if w.locked => w.stream_handle,
+        _ => {
+            let promise = js_promise_new();
+            let err = make_error_with_message("Writer is no longer locked to a stream");
+            js_promise_reject(promise, f64::from_bits(err));
+            return promise;
+        }
+    };
+    writable_stream_write(stream_id, writer_id, chunk)
 }
 
 #[no_mangle]
@@ -2176,10 +2617,20 @@ pub unsafe extern "C" fn js_transform_stream_new(
     flush_bits: f64,
     hwm: f64,
 ) -> f64 {
-    ensure_gc_registered();
     let start_cb = closure_from_bits(start_bits.to_bits());
     let transform_cb = closure_from_bits(transform_bits.to_bits());
     let flush_cb = closure_from_bits(flush_bits.to_bits());
+    alloc_transform_stream(start_cb, transform_cb, flush_cb, None, hwm)
+}
+
+unsafe fn alloc_transform_stream(
+    start_cb: i64,
+    transform_cb: i64,
+    flush_cb: i64,
+    native: Option<NativeTransformKind>,
+    hwm: f64,
+) -> f64 {
+    ensure_gc_registered();
 
     // Allocate the readable side empty (controller is its own handle).
     let readable_id = alloc_readable(0, 0, 0, hwm);
@@ -2213,6 +2664,8 @@ pub unsafe extern "C" fn js_transform_stream_new(
             error_value: 0,
             ready_promise: ready,
             closed_promise: closed,
+            close_request_promise: std::ptr::null_mut(),
+            close_started: false,
         },
     );
 
@@ -2224,6 +2677,7 @@ pub unsafe extern "C" fn js_transform_stream_new(
             writable_handle: writable_id,
             transform_cb,
             flush_cb,
+            native,
         },
     );
     TRANSFORM_PAIRS.lock().unwrap().insert(writable_id, id);
@@ -2236,6 +2690,20 @@ pub unsafe extern "C" fn js_transform_stream_new(
         js_closure_call1(start_cb as *const ClosureHeader, readable_id as f64);
     }
     id as f64
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_transform_stream_new_from_transformer_object(
+    transformer: f64,
+    hwm: f64,
+) -> f64 {
+    ensure_gc_registered();
+    js_transform_stream_new(
+        stream_object_field(transformer, b"start"),
+        stream_object_field(transformer, b"transform"),
+        stream_object_field(transformer, b"flush"),
+        hwm,
+    )
 }
 
 #[no_mangle]
@@ -2276,7 +2744,7 @@ fn transform_writable_for_readable(readable_id: usize) -> Option<usize> {
 /// — invokes the user transform with (chunk, transformController) where
 /// the transformController is the readable-side stream handle (so
 /// `controller.enqueue(...)` reuses the readable controller path).
-unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Promise {
+pub(super) unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Promise {
     let promise = js_promise_new();
     {
         let g = WRITABLE_STREAMS.lock().unwrap();
@@ -2293,19 +2761,42 @@ unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Promise {
             }
         }
     }
+    let mut handled_native = false;
+    let mut native_error = None;
     let (transform_cb, readable_id) = {
         let pairs = TRANSFORM_PAIRS.lock().unwrap();
         match pairs.get(&writable_id) {
             Some(t_id) => {
-                let g = TRANSFORM_STREAMS.lock().unwrap();
-                match g.get(t_id) {
-                    Some(t) => (t.transform_cb, t.readable_handle),
+                let mut g = TRANSFORM_STREAMS.lock().unwrap();
+                match g.get_mut(t_id) {
+                    Some(t) => {
+                        if let Some(native) = t.native.as_mut() {
+                            handled_native = true;
+                            if let Err(error_bits) =
+                                native_transform_write(native, t.readable_handle, chunk)
+                            {
+                                native_error = Some(error_bits);
+                            }
+                        }
+                        (t.transform_cb, t.readable_handle)
+                    }
                     None => (0, 0),
                 }
             }
             None => (0, 0),
         }
     };
+    if let Some(error_bits) = native_error {
+        if readable_id != 0 {
+            js_readable_stream_controller_error(readable_id as f64, f64::from_bits(error_bits));
+        }
+        js_promise_reject(promise, f64::from_bits(error_bits));
+        return promise;
+    }
+    if handled_native {
+        js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
+        return promise;
+    }
     if transform_cb != 0 && readable_id != 0 {
         js_closure_call2(
             transform_cb as *const ClosureHeader,
@@ -2320,22 +2811,47 @@ unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Promise {
     promise
 }
 
-unsafe fn transform_close(writable_id: usize) -> *mut Promise {
+pub(super) unsafe fn transform_close(writable_id: usize) -> *mut Promise {
     let promise = js_promise_new();
+    let mut handled_native = false;
+    let mut native_error = None;
     let (flush_cb, readable_id) = {
         let pairs = TRANSFORM_PAIRS.lock().unwrap();
         match pairs.get(&writable_id) {
             Some(t_id) => {
-                let g = TRANSFORM_STREAMS.lock().unwrap();
-                match g.get(t_id) {
-                    Some(t) => (t.flush_cb, t.readable_handle),
+                let mut g = TRANSFORM_STREAMS.lock().unwrap();
+                match g.get_mut(t_id) {
+                    Some(t) => {
+                        if let Some(native) = t.native.as_mut() {
+                            handled_native = true;
+                            if let Err(error_bits) =
+                                native_transform_close(native, t.readable_handle)
+                            {
+                                native_error = Some(error_bits);
+                            }
+                        }
+                        (t.flush_cb, t.readable_handle)
+                    }
                     None => (0, 0),
                 }
             }
             None => (0, 0),
         }
     };
-    if flush_cb != 0 && readable_id != 0 {
+    if let Some(error_bits) = native_error {
+        if readable_id != 0 {
+            js_readable_stream_controller_error(readable_id as f64, f64::from_bits(error_bits));
+        }
+        if let Some(s) = WRITABLE_STREAMS.lock().unwrap().get_mut(&writable_id) {
+            s.state = WritableState::Errored;
+            s.error_value = error_bits;
+            let cp = s.closed_promise;
+            js_promise_reject(cp, f64::from_bits(error_bits));
+        }
+        js_promise_reject(promise, f64::from_bits(error_bits));
+        return promise;
+    }
+    if !handled_native && flush_cb != 0 && readable_id != 0 {
         js_closure_call1(flush_cb as *const ClosureHeader, readable_id as f64);
     }
     if readable_id != 0 {
@@ -2348,6 +2864,320 @@ unsafe fn transform_close(writable_id: usize) -> *mut Promise {
     }
     js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
     promise
+}
+
+fn split_utf8_prefix(bytes: &[u8]) -> Result<(usize, bool), ()> {
+    match std::str::from_utf8(bytes) {
+        Ok(_) => Ok((bytes.len(), false)),
+        Err(err) => {
+            if err.error_len().is_none() {
+                Ok((err.valid_up_to(), true))
+            } else {
+                Err(())
+            }
+        }
+    }
+}
+
+unsafe fn enqueue_string(readable_id: usize, text: &str) {
+    let ptr = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    js_readable_stream_controller_enqueue(
+        readable_id as f64,
+        f64::from_bits(JSValue::string_ptr(ptr).bits()),
+    );
+}
+
+unsafe fn native_text_decoder_drain(
+    pending: &mut Vec<u8>,
+    fatal: bool,
+    readable_id: usize,
+    flush: bool,
+) -> Result<(), u64> {
+    if pending.is_empty() {
+        return Ok(());
+    }
+    if fatal {
+        let (valid_len, incomplete) = split_utf8_prefix(pending).map_err(|_| {
+            make_type_error_with_code(
+                "The encoded data was not valid for encoding utf-8",
+                "ERR_ENCODING_INVALID_ENCODED_DATA",
+            )
+        })?;
+        if valid_len > 0 {
+            let text = std::str::from_utf8(&pending[..valid_len]).map_err(|_| {
+                make_type_error_with_code(
+                    "The encoded data was not valid for encoding utf-8",
+                    "ERR_ENCODING_INVALID_ENCODED_DATA",
+                )
+            })?;
+            enqueue_string(readable_id, text);
+            pending.drain(..valid_len);
+        }
+        if flush && !pending.is_empty() {
+            return Err(make_type_error_with_code(
+                "The encoded data was not valid for encoding utf-8",
+                "ERR_ENCODING_INVALID_ENCODED_DATA",
+            ));
+        }
+        if !incomplete && !pending.is_empty() {
+            return Err(make_type_error_with_code(
+                "The encoded data was not valid for encoding utf-8",
+                "ERR_ENCODING_INVALID_ENCODED_DATA",
+            ));
+        }
+        return Ok(());
+    }
+
+    if flush {
+        let text = String::from_utf8_lossy(pending).into_owned();
+        pending.clear();
+        if !text.is_empty() {
+            enqueue_string(readable_id, &text);
+        }
+        return Ok(());
+    }
+
+    let (valid_len, incomplete) = split_utf8_prefix(pending).unwrap_or((pending.len(), false));
+    let emit_len = if incomplete { valid_len } else { pending.len() };
+    if emit_len > 0 {
+        let text = String::from_utf8_lossy(&pending[..emit_len]).into_owned();
+        enqueue_string(readable_id, &text);
+        pending.drain(..emit_len);
+    }
+    Ok(())
+}
+
+fn run_web_compression_codec(
+    format: WebCompressionFormat,
+    decompress: bool,
+    input: &[u8],
+) -> std::io::Result<Vec<u8>> {
+    let mut out = Vec::new();
+    match (format, decompress) {
+        (WebCompressionFormat::Gzip, false) => {
+            GzEncoder::new(input, Compression::default()).read_to_end(&mut out)?;
+        }
+        (WebCompressionFormat::Gzip, true) => {
+            GzDecoder::new(input).read_to_end(&mut out)?;
+        }
+        (WebCompressionFormat::Deflate, false) => {
+            ZlibEncoder::new(input, Compression::default()).read_to_end(&mut out)?;
+        }
+        (WebCompressionFormat::Deflate, true) => {
+            ZlibDecoder::new(input).read_to_end(&mut out)?;
+        }
+        (WebCompressionFormat::DeflateRaw, false) => {
+            DeflateEncoder::new(input, Compression::default()).read_to_end(&mut out)?;
+        }
+        (WebCompressionFormat::DeflateRaw, true) => {
+            DeflateDecoder::new(input).read_to_end(&mut out)?;
+        }
+        (WebCompressionFormat::Brotli, false) => {
+            let mut reader = brotli::CompressorReader::new(input, 4096, 11, 22);
+            reader.read_to_end(&mut out)?;
+        }
+        (WebCompressionFormat::Brotli, true) => {
+            let mut reader = brotli::Decompressor::new(input, 4096);
+            reader.read_to_end(&mut out)?;
+        }
+    }
+    Ok(out)
+}
+
+unsafe fn native_transform_write(
+    native: &mut NativeTransformKind,
+    readable_id: usize,
+    chunk: f64,
+) -> Result<(), u64> {
+    match native {
+        NativeTransformKind::TextEncoder => {
+            let text = js_string_value_to_string(chunk, true).unwrap_or_default();
+            let bytes = alloc_uint8array_from_bytes(text.as_bytes());
+            js_readable_stream_controller_enqueue(readable_id as f64, f64::from_bits(bytes));
+            Ok(())
+        }
+        NativeTransformKind::TextDecoder { fatal, pending } => {
+            let bytes = read_bytes_from_chunk(chunk.to_bits()).ok_or_else(|| {
+                make_type_error_with_code(
+                    "The \"chunk\" argument must be an instance of Buffer, TypedArray, DataView, or ArrayBuffer",
+                    "ERR_INVALID_ARG_TYPE",
+                )
+            })?;
+            pending.extend_from_slice(&bytes);
+            native_text_decoder_drain(pending, *fatal, readable_id, false)
+        }
+        NativeTransformKind::Compression { chunks, .. } => {
+            let bytes = read_bytes_from_chunk(chunk.to_bits()).ok_or_else(|| {
+                make_type_error_with_code(
+                    "The \"chunk\" argument must be an instance of Buffer, TypedArray, DataView, or ArrayBuffer",
+                    "ERR_INVALID_ARG_TYPE",
+                )
+            })?;
+            chunks.extend_from_slice(&bytes);
+            Ok(())
+        }
+    }
+}
+
+unsafe fn native_transform_close(
+    native: &mut NativeTransformKind,
+    readable_id: usize,
+) -> Result<(), u64> {
+    match native {
+        NativeTransformKind::TextEncoder => Ok(()),
+        NativeTransformKind::TextDecoder { fatal, pending } => {
+            native_text_decoder_drain(pending, *fatal, readable_id, true)
+        }
+        NativeTransformKind::Compression {
+            format,
+            decompress,
+            chunks,
+        } => match run_web_compression_codec(*format, *decompress, chunks) {
+            Ok(out) => {
+                let chunk = alloc_uint8array_from_bytes(&out);
+                js_readable_stream_controller_enqueue(readable_id as f64, f64::from_bits(chunk));
+                chunks.clear();
+                Ok(())
+            }
+            Err(err) => Err(make_type_error_with_code(&err.to_string(), "Z_DATA_ERROR")),
+        },
+    }
+}
+
+unsafe fn attach_stream_field(object_value: f64, name: &[u8], value: f64) {
+    let ptr = js_nanbox_get_pointer(object_value) as *mut ObjectHeader;
+    if ptr.is_null() || (ptr as usize) < 0x10000 {
+        return;
+    }
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_object_set_field_by_name(ptr, key, value);
+}
+
+unsafe fn attach_stream_string_field(object_value: f64, name: &[u8], value: &[u8]) {
+    let ptr = js_string_from_bytes(value.as_ptr(), value.len() as u32);
+    attach_stream_field(
+        object_value,
+        name,
+        f64::from_bits(JSValue::string_ptr(ptr).bits()),
+    );
+}
+
+unsafe fn attach_stream_bool_field(object_value: f64, name: &[u8], value: bool) {
+    attach_stream_field(
+        object_value,
+        name,
+        f64::from_bits(if value { TAG_TRUE } else { TAG_FALSE }),
+    );
+}
+
+unsafe fn attach_transform_endpoints(object_value: f64, readable_id: usize, writable_id: usize) {
+    attach_stream_field(object_value, b"readable", readable_id as f64);
+    attach_stream_field(object_value, b"writable", writable_id as f64);
+}
+
+unsafe fn bool_option(options: f64, name: &[u8]) -> bool {
+    let jsval = JSValue::from_bits(options.to_bits());
+    if !jsval.is_pointer() {
+        return false;
+    }
+    let value =
+        perry_runtime::value::js_get_property(options, name.as_ptr() as i64, name.len() as i64);
+    perry_runtime::value::js_is_truthy(value) != 0
+}
+
+unsafe fn parse_text_decoder_stream_label(label: f64) {
+    let jsval = JSValue::from_bits(label.to_bits());
+    if jsval.is_undefined()
+        || value_string_equals(label, b"utf-8")
+        || value_string_equals(label, b"utf8")
+    {
+        return;
+    }
+    let label_text = js_string_value_to_string(label, true).unwrap_or_default();
+    let message = format!("The \"{label_text}\" encoding is not supported");
+    throw_range_error_with_code(&message, "ERR_ENCODING_NOT_SUPPORTED");
+}
+
+unsafe fn parse_web_compression_format(value: f64, constructor_name: &str) -> WebCompressionFormat {
+    if value_string_equals(value, b"gzip") {
+        return WebCompressionFormat::Gzip;
+    }
+    if value_string_equals(value, b"deflate") {
+        return WebCompressionFormat::Deflate;
+    }
+    if value_string_equals(value, b"deflate-raw") {
+        return WebCompressionFormat::DeflateRaw;
+    }
+    if value_string_equals(value, b"brotli") {
+        return WebCompressionFormat::Brotli;
+    }
+    let received =
+        js_string_value_to_string(value, true).unwrap_or_else(|| "undefined".to_string());
+    let message = format!(
+        "Failed to construct '{constructor_name}': 1st argument value '{received}' is not a valid enum value of type CompressionFormat."
+    );
+    throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
+}
+
+unsafe fn build_native_transform_object(object_value: f64, native: NativeTransformKind) -> f64 {
+    let handle = alloc_transform_stream(0, 0, 0, Some(native), 1.0);
+    let readable_id = js_transform_stream_readable(handle) as usize;
+    let writable_id = js_transform_stream_writable(handle) as usize;
+    attach_transform_endpoints(object_value, readable_id, writable_id);
+    object_value
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_stream_web_text_encoder_stream_new() -> f64 {
+    let object = perry_runtime::object::js_text_encoder_stream_new();
+    attach_stream_string_field(object, b"encoding", b"utf-8");
+    build_native_transform_object(object, NativeTransformKind::TextEncoder)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_stream_web_text_decoder_stream_new(label: f64, options: f64) -> f64 {
+    parse_text_decoder_stream_label(label);
+    let fatal = bool_option(options, b"fatal");
+    let ignore_bom = bool_option(options, b"ignoreBOM");
+    let object = perry_runtime::object::js_text_decoder_stream_new();
+    attach_stream_string_field(object, b"encoding", b"utf-8");
+    attach_stream_bool_field(object, b"fatal", fatal);
+    attach_stream_bool_field(object, b"ignoreBOM", ignore_bom);
+    build_native_transform_object(
+        object,
+        NativeTransformKind::TextDecoder {
+            fatal,
+            pending: Vec::new(),
+        },
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_stream_web_compression_stream_new(format: f64) -> f64 {
+    let format = parse_web_compression_format(format, "CompressionStream");
+    let object = perry_runtime::object::js_compression_stream_new();
+    build_native_transform_object(
+        object,
+        NativeTransformKind::Compression {
+            format,
+            decompress: false,
+            chunks: Vec::new(),
+        },
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_stream_web_decompression_stream_new(format: f64) -> f64 {
+    let format = parse_web_compression_format(format, "DecompressionStream");
+    let object = perry_runtime::object::js_decompression_stream_new();
+    build_native_transform_object(
+        object,
+        NativeTransformKind::Compression {
+            format,
+            decompress: true,
+            chunks: Vec::new(),
+        },
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -2802,5 +3632,28 @@ mod tests {
         assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x3456_7890)));
         assert!(emitted.contains(&0x7FFF_0000_0000_4567));
         READABLE_STREAMS.lock().unwrap().clear();
+    }
+
+    #[test]
+    fn web_compression_formats_round_trip() {
+        let input = b"hello stream/web compression";
+        for format in [
+            WebCompressionFormat::Gzip,
+            WebCompressionFormat::Deflate,
+            WebCompressionFormat::DeflateRaw,
+            WebCompressionFormat::Brotli,
+        ] {
+            let compressed = run_web_compression_codec(format, false, input).unwrap();
+            assert!(!compressed.is_empty());
+            let decompressed = run_web_compression_codec(format, true, &compressed).unwrap();
+            assert_eq!(decompressed, input);
+        }
+    }
+
+    #[test]
+    fn utf8_split_prefix_tracks_incomplete_sequence() {
+        assert_eq!(split_utf8_prefix(&[0x68, 0xc3]).unwrap(), (1, true));
+        assert_eq!(split_utf8_prefix(&[0xc3, 0xa9]).unwrap(), (2, false));
+        assert!(split_utf8_prefix(&[0xff]).is_err());
     }
 }

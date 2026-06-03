@@ -423,6 +423,166 @@ fn print_console_text(text: &str, stderr: bool) {
 #[no_mangle]
 pub extern "C" fn js_console_noop() {}
 
+fn console_undefined() -> f64 {
+    f64::from_bits(JSValue::undefined().bits())
+}
+
+fn throw_plain_console_error(message: &str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_error_new_with_message(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn throw_console_symbol_to_string_type_error() -> ! {
+    let message = b"Cannot convert a Symbol value to a string";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn console_is_callable(value: f64) -> bool {
+    let ptr = crate::value::js_nanbox_get_pointer(value) as usize;
+    ptr >= 0x1000 && crate::closure::is_closure_ptr(ptr)
+}
+
+unsafe fn console_string_len(value: f64) -> Option<usize> {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_any_string() {
+        return None;
+    }
+    let ptr = crate::value::js_jsvalue_to_string(value) as *const StringHeader;
+    if ptr.is_null() {
+        return None;
+    }
+    Some((*ptr).byte_len as usize)
+}
+
+fn console_make_named_function(
+    scope: &crate::gc::RuntimeHandleScope,
+    name: &str,
+    func_ptr: *const u8,
+    call_arity: u32,
+    exposed_length: u32,
+) -> f64 {
+    crate::closure::js_register_closure_arity(func_ptr, call_arity);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure_handle = scope.root_raw_mut_ptr(closure);
+    crate::object::set_bound_native_closure_name(
+        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
+        name,
+    );
+    crate::object::set_builtin_closure_length(
+        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
+        exposed_length,
+    );
+    let closure = closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>();
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+fn console_set_field(obj: *mut crate::object::ObjectHeader, name: &str, value: f64) {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    crate::object::js_object_set_field_by_name(obj, key, value);
+}
+
+extern "C" fn console_context_method_noop(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    console_undefined()
+}
+
+extern "C" fn console_task_run(
+    _closure: *const crate::closure::ClosureHeader,
+    callback: f64,
+) -> f64 {
+    if !console_is_callable(callback) {
+        throw_plain_console_error("First argument must be a function.");
+    }
+    unsafe { crate::closure::js_native_call_value(callback, std::ptr::null(), 0) }
+}
+
+/// `console.context([name])` returns an inspector-scoped console object in
+/// Node. Perry has no inspector context plumbing here, but the object shape is
+/// observable by feature detection.
+#[no_mangle]
+pub extern "C" fn js_console_context(name: f64) -> f64 {
+    let jsval = JSValue::from_bits(name.to_bits());
+    if !jsval.is_undefined() {
+        if unsafe { crate::symbol::js_is_symbol(name) != 0 } {
+            throw_console_symbol_to_string_type_error();
+        }
+        let _ = crate::value::js_jsvalue_to_string(name);
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = crate::object::js_object_alloc(0, 0);
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    for method in [
+        "assert",
+        "clear",
+        "count",
+        "countReset",
+        "debug",
+        "dir",
+        "dirXml",
+        "error",
+        "group",
+        "groupCollapsed",
+        "groupEnd",
+        "info",
+        "log",
+        "profile",
+        "profileEnd",
+        "table",
+        "time",
+        "timeEnd",
+        "timeLog",
+        "timeStamp",
+        "trace",
+        "warn",
+    ] {
+        let func = console_make_named_function(
+            &scope,
+            method,
+            console_context_method_noop as *const u8,
+            0,
+            1,
+        );
+        let func_handle = scope.root_nanbox_f64(func);
+        console_set_field(
+            obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+            method,
+            func_handle.get_nanbox_f64(),
+        );
+    }
+
+    crate::value::js_nanbox_pointer(
+        obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64
+    )
+}
+
+/// `console.createTask(name)` is V8 inspector async-stack tagging. The
+/// compatibility surface returns `{ run(fn) }`; `run` executes and forwards
+/// the callback result while preserving thrown errors.
+#[no_mangle]
+pub extern "C" fn js_console_create_task(name: f64) -> f64 {
+    let len = unsafe { console_string_len(name) };
+    if len.unwrap_or(0) == 0 {
+        throw_plain_console_error("First argument must be a non-empty string.");
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = crate::object::js_object_alloc(0, 0);
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let run = console_make_named_function(&scope, "run", console_task_run as *const u8, 1, 0);
+    let run_handle = scope.root_nanbox_f64(run);
+    console_set_field(
+        obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        "run",
+        run_handle.get_nanbox_f64(),
+    );
+    crate::value::js_nanbox_pointer(
+        obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64
+    )
+}
+
 /// Debug trace for module initialization order.
 /// Called before each _perry_init_* call to identify which module crashes.
 /// No-op in release builds; re-enable eprintln for debugging.

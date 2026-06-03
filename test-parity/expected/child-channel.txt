@@ -1,0 +1,19 @@
+close 0 null
+parent disconnect
+parent message reply ping
+stdout child channel object true true
+stdout child channel ref return false
+stdout child channel refs function function
+stdout child channel unref return false
+stdout child connected after disconnect false
+stdout child connected boolean true true
+stdout child direct channel type object
+stdout child direct connected true
+stdout child direct send type function
+stdout child disconnect function true true
+stdout child message ping
+stdout child ready
+stdout child send cb null
+stdout child send function true true
+stdout child send length 4
+stdout child send return true

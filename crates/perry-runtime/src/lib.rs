@@ -55,6 +55,7 @@ pub mod iterator_helpers;
 pub mod map;
 pub mod math;
 pub mod messaging;
+pub mod module_require;
 pub mod native_abi;
 pub mod native_arena;
 pub mod native_handle;
@@ -63,6 +64,7 @@ pub mod net_validate;
 pub mod node_http2_constants;
 pub mod node_inspector;
 pub mod node_repl;
+pub mod node_sea;
 pub mod node_stream;
 pub mod node_submodules;
 pub mod node_test;
@@ -371,6 +373,7 @@ mod stdlib_pump {
         // so it runs even when perry-stdlib isn't linked. Zero-cost (one relaxed
         // atomic load) when there are no live children.
         crate::child_process::reactor::cp_reactor_pump();
+        crate::process::js_process_ipc_drain();
         let f = STDLIB_PUMP_FN.load(Ordering::Acquire);
         if !f.is_null() {
             unsafe {
@@ -404,6 +407,9 @@ mod stdlib_pump {
         // #1934: a live spawn-reactor child keeps the event loop alive even when
         // perry-stdlib isn't linked (or reports no handles).
         if crate::child_process::reactor::cp_reactor_has_live() {
+            return 1;
+        }
+        if crate::process::js_process_ipc_has_active() != 0 {
             return 1;
         }
         if crate::os::js_process_signal_has_active() != 0 {

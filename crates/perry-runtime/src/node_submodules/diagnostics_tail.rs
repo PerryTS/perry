@@ -118,10 +118,6 @@ pub(crate) extern "C" fn diag_store_scope_dispose(closure: *const ClosureHeader)
     undefined()
 }
 
-// Not wired to a Channel method: Node has no `withStoreScope` on the
-// diagnostics_channel Channel. Retained (unused) so the store-scope machinery
-// it exercises stays available if a future Node revision adds the API.
-#[allow(dead_code)]
 pub(crate) extern "C" fn diag_channel_with_store_scope(
     closure: *const ClosureHeader,
     data: f64,

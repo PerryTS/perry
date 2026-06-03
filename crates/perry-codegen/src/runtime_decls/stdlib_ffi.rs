@@ -13,6 +13,8 @@ use super::*;
 pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // ========== node:vm ==========
     module.declare_function("js_vm_create_context", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_vm_module_call", DOUBLE, &[]);
+    module.declare_function("js_vm_module_constructor_error", DOUBLE, &[]);
 
     // ========== node:repl ==========
     module.declare_function("js_repl_start", DOUBLE, &[DOUBLE]);
@@ -58,6 +60,31 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_http_client_request_host", I64, &[I64]);
     module.declare_function("js_http_client_request_path", I64, &[I64]);
     module.declare_function("js_http_client_request_listener_count", DOUBLE, &[I64, I64]);
+    module.declare_function("js_http_client_request_get_header", DOUBLE, &[I64, I64]);
+    module.declare_function("js_http_client_request_has_header", DOUBLE, &[I64, I64]);
+    module.declare_function("js_http_client_request_remove_header", DOUBLE, &[I64, I64]);
+    module.declare_function("js_http_client_request_get_header_names", DOUBLE, &[I64]);
+    module.declare_function("js_http_client_request_get_headers", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_http_client_request_get_raw_header_names",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function("js_http_client_request_abort", DOUBLE, &[I64]);
+    module.declare_function("js_http_client_request_destroy", I64, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_http_client_request_noop_undefined",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_http_client_request_aborted", DOUBLE, &[I64]);
+    module.declare_function("js_http_client_request_destroyed", DOUBLE, &[I64]);
+    module.declare_function("js_http_client_request_finished", DOUBLE, &[I64]);
+    module.declare_function("js_http_client_request_reused_socket", DOUBLE, &[I64]);
+    module.declare_function("js_http_client_request_max_headers_count", DOUBLE, &[I64]);
+    module.declare_function("js_http_client_request_writable_ended", DOUBLE, &[I64]);
+    module.declare_function("js_http_client_request_writable_finished", DOUBLE, &[I64]);
+    module.declare_function("js_http_client_request_socket", DOUBLE, &[I64]);
     module.declare_function("js_http_get", I64, &[DOUBLE, I64]);
     // #3226/#3227/#3228 — overload-normalizing client factories take a
     // single `NA_VARARGS` array (i64 ArrayHeader ptr) and return a
@@ -159,6 +186,10 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http_im_http_version", I64, &[I64]);
     module.declare_function("js_node_http_im_headers_json", I64, &[I64]);
     module.declare_function("js_node_http_im_raw_headers_json", I64, &[I64]);
+    module.declare_function("js_node_http_im_headers_distinct_json", I64, &[I64]);
+    module.declare_function("js_node_http_im_trailers_json", I64, &[I64]);
+    module.declare_function("js_node_http_im_raw_trailers_json", I64, &[I64]);
+    module.declare_function("js_node_http_im_trailers_distinct_json", I64, &[I64]);
     module.declare_function("js_node_http_im_complete", I32, &[I64]);
     module.declare_function("js_node_http_im_aborted", I32, &[I64]);
     module.declare_function("js_node_http_im_destroyed", I32, &[I64]);
@@ -169,19 +200,35 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http_im_destroy", VOID, &[I64]);
     module.declare_function("js_node_http_im_on", DOUBLE, &[I64, I64, I64]);
     module.declare_function("js_node_http_im_read", DOUBLE, &[I64]);
+    module.declare_function("js_node_http_im_set_timeout", I64, &[I64, DOUBLE, I64]);
     // ServerResponse:
     module.declare_function("js_node_http_res_set_status", VOID, &[I64, DOUBLE]);
     module.declare_function("js_node_http_res_get_status", DOUBLE, &[I64]);
     module.declare_function("js_node_http_res_set_status_message", VOID, &[I64, I64]);
     module.declare_function("js_node_http_res_set_header", VOID, &[I64, I64, I64]);
+    module.declare_function("js_node_http_res_set_header_self", I64, &[I64, I64, I64]);
     module.declare_function("js_node_http_res_get_header", DOUBLE, &[I64, I64]);
     module.declare_function("js_node_http_res_remove_header", VOID, &[I64, I64]);
     module.declare_function("js_node_http_res_has_header", I32, &[I64, I64]);
+    module.declare_function("js_node_http_res_has_header_value", DOUBLE, &[I64, I64]);
     module.declare_function("js_node_http_res_get_headers_json", I64, &[I64]);
     module.declare_function("js_node_http_res_get_header_names_json", I64, &[I64]);
+    module.declare_function("js_node_http_res_append_header", I64, &[I64, I64, I64]);
+    module.declare_function("js_node_http_res_set_headers", I64, &[I64, DOUBLE]);
+    module.declare_function("js_node_http_res_get_status_message", DOUBLE, &[I64]);
     module.declare_function("js_node_http_res_headers_sent", I32, &[I64]);
     module.declare_function("js_node_http_res_writable_ended", I32, &[I64]);
     module.declare_function("js_node_http_res_writable_finished", I32, &[I64]);
+    module.declare_function("js_node_http_res_finished", I32, &[I64]);
+    module.declare_function("js_node_http_res_send_date", I32, &[I64]);
+    module.declare_function("js_node_http_res_set_send_date", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_node_http_res_strict_content_length", I32, &[I64]);
+    module.declare_function(
+        "js_node_http_res_set_strict_content_length",
+        VOID,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_http_res_req_handle", I64, &[I64]);
     module.declare_function(
         "js_node_http_res_write_head",
         VOID,
@@ -191,6 +238,14 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http_res_add_trailers", VOID, &[I64, DOUBLE]);
     module.declare_function("js_node_http_res_end", VOID, &[I64, DOUBLE]);
     module.declare_function("js_node_http_res_flush_headers", VOID, &[I64]);
+    module.declare_function("js_node_http_res_cork", VOID, &[I64]);
+    module.declare_function("js_node_http_res_uncork", VOID, &[I64]);
+    module.declare_function("js_node_http_res_set_timeout", I64, &[I64, DOUBLE, I64]);
+    module.declare_function(
+        "js_node_http_res_write_early_hints",
+        VOID,
+        &[I64, DOUBLE, I64],
+    );
     module.declare_function("js_node_http_res_write_continue", VOID, &[I64]);
     module.declare_function("js_node_http_res_write_processing", VOID, &[I64]);
     module.declare_function("js_node_http_res_on", DOUBLE, &[I64, I64, I64]);
@@ -258,7 +313,9 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         &[I64, DOUBLE, I64],
     );
     // node:http2 secure server (HTTP/2 with ALPN):
+    module.declare_function("js_node_http2_create_server", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_node_http2_create_secure_server", I64, &[DOUBLE, I64]);
+    module.declare_function("js_node_http2_connect", I64, &[DOUBLE, DOUBLE, I64]);
     module.declare_function("js_node_http2_server_listen", I64, &[I64, I64]);
     module.declare_function("js_node_http2_server_close", VOID, &[I64, I64]);
     module.declare_function("js_node_http2_server_address_json", I64, &[I64]);
@@ -528,6 +585,10 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_zlib_brotli_decompress_sync", I64, &[DOUBLE]);
     module.declare_function("js_zlib_brotli_compress", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_brotli_decompress", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_zstd_compress_sync", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_zstd_decompress_sync", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_zstd_compress", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_zstd_decompress", VOID, &[DOUBLE, DOUBLE]);
     // #1843 — Transform-stream factories: `_opts` (DOUBLE) in, i64 handle out.
     // (`js_zlib_create_brotli_decompress` is declared alongside the other
     // crypto/zlib helpers in runtime_decls/strings.rs.)
@@ -539,6 +600,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_zlib_create_inflate_raw", I64, &[DOUBLE]);
     module.declare_function("js_zlib_create_unzip", I64, &[DOUBLE]);
     module.declare_function("js_zlib_create_brotli_compress", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_create_zstd_compress", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_create_zstd_decompress", I64, &[DOUBLE]);
 
     // ========== Buffer ==========
     module.declare_function("js_buffer_alloc_unsafe", I64, &[I32]);
@@ -929,6 +992,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // crypto.hkdfSync(digest, ikm, salt, info, keylen) -> ArrayBuffer.
     module.declare_function("js_crypto_hkdf_sync", I64, &[I64, I64, I64, I64, DOUBLE]);
     module.declare_function("js_crypto_pbkdf2", I64, &[I64, I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_crypto_argon2_sync", I64, &[I64, DOUBLE]);
+    module.declare_function("js_crypto_argon2_async", DOUBLE, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_crypto_random_bytes_hex", I64, &[DOUBLE]);
     module.declare_function("js_crypto_random_nonce", I64, &[]);
     module.declare_function("js_crypto_scrypt", I64, &[I64, I64, DOUBLE]);
@@ -1203,6 +1268,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_stream_is_errored", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_is_readable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_is_writable", DOUBLE, &[DOUBLE]);
+    // #2685: top-level stream helpers.
+    module.declare_function("js_node_stream_is_array_buffer_view", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_node_stream_is_uint8_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_node_stream_is_destroyed", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_node_stream_uint8_array_to_buffer", DOUBLE, &[DOUBLE]);
     // #1537: getDefaultHighWaterMark(objectMode) / setDefaultHighWaterMark(objectMode, value).
     module.declare_function("js_node_stream_get_default_hwm", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_set_default_hwm", DOUBLE, &[DOUBLE, DOUBLE]);
@@ -1305,8 +1375,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_domain_intercept", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_domain_add", I64, &[I64, DOUBLE]);
     module.declare_function("js_domain_remove", I64, &[I64, DOUBLE]);
-    module.declare_function("js_domain_enter", I64, &[I64]);
-    module.declare_function("js_domain_exit", I64, &[I64]);
+    module.declare_function("js_domain_enter", DOUBLE, &[I64]);
+    module.declare_function("js_domain_exit", DOUBLE, &[I64]);
 
     // ========== StringDecoder (issue #848) ==========
     // `js_string_decoder_new` allocates a real handle; `write` / `end`
@@ -1517,6 +1587,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_console_assert", VOID, &[DOUBLE, I64]);
     module.declare_function("js_console_assert_spread", VOID, &[DOUBLE, I64]);
     module.declare_function("js_console_group", VOID, &[I64]);
+    module.declare_function("js_console_context", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_console_create_task", DOUBLE, &[DOUBLE]);
 
     // ========== Fetch ==========
     module.declare_function("js_fetch_get", I64, &[I64]);

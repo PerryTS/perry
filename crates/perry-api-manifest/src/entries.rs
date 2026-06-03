@@ -105,6 +105,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "__disposable__",
     "readline",
     "repl",
+    "sea",
     "string_decoder",
     "querystring",
     "cluster",
@@ -173,7 +174,7 @@ pub const NODE_SUBMODULES: &[&str] = &[
 /// Internal manifest keys used by dispatch/property gates but not importable
 /// module specifiers.
 #[cfg(test)]
-pub(crate) const INTERNAL_MODULE_KEYS: &[&str] = &["punycode.ucs2"];
+pub(crate) const INTERNAL_MODULE_KEYS: &[&str] = &["inspector.Network", "punycode.ucs2"];
 
 /// Modules handled entirely by `perry-runtime` — the linker doesn't
 /// need to pull in `perry-stdlib` for these. Migrated from
@@ -194,6 +195,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "dgram",
     "inspector",
     "inspector/promises",
+    "sea",
     "stream",
     "module",
     "url",
@@ -695,12 +697,19 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("iroh", "streamFinish", true, None),
     method("iroh", "streamReadToEnd", true, None),
     method("iroh", "connClose", true, None),
+    property("sea", "default"),
+    method("sea", "isSea", false, None),
+    method("sea", "getAsset", false, None),
+    method("sea", "getAssetAsBlob", false, None),
+    method("sea", "getRawAsset", false, None),
+    method("sea", "getAssetKeys", false, None),
     property("inspector", "default"),
     method("inspector", "open", false, None),
     method("inspector", "close", false, None),
     method("inspector", "url", false, None),
     method("inspector", "waitForDebugger", false, None),
     property("inspector", "console"),
+    property("inspector", "Network"),
     class("inspector", "Session"),
     method("inspector", "Session", false, None),
     method("inspector", "connect", true, Some("Session")),
@@ -709,6 +718,20 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("inspector", "post", true, Some("Session")),
     method("inspector", "on", true, Some("Session")),
     method("inspector", "once", true, Some("Session")),
+    internal_method("inspector.Network", "requestWillBeSent", false, None),
+    internal_method("inspector.Network", "responseReceived", false, None),
+    internal_method("inspector.Network", "loadingFinished", false, None),
+    internal_method("inspector.Network", "loadingFailed", false, None),
+    internal_method("inspector.Network", "dataSent", false, None),
+    internal_method("inspector.Network", "dataReceived", false, None),
+    internal_method("inspector.Network", "webSocketCreated", false, None),
+    internal_method("inspector.Network", "webSocketClosed", false, None),
+    internal_method(
+        "inspector.Network",
+        "webSocketHandshakeResponseReceived",
+        false,
+        None,
+    ),
     property("inspector/promises", "default"),
     class("inspector/promises", "Session"),
     method("inspector/promises", "Session", false, None),
@@ -2144,6 +2167,39 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         ZLIB_CALLBACK_ARGS,
         TypeSpec::Void,
     ),
+    // #2510 — Zstd one-shot compress/decompress (sync + callback-form).
+    method_sig(
+        "zlib",
+        "zstdCompressSync",
+        false,
+        None,
+        &[p_any("p0"), ZLIB_OPTIONS_PARAM],
+        TypeSpec::String,
+    ),
+    method_sig(
+        "zlib",
+        "zstdDecompressSync",
+        false,
+        None,
+        &[p_any("p0"), ZLIB_OPTIONS_PARAM],
+        TypeSpec::String,
+    ),
+    method_sig(
+        "zlib",
+        "zstdCompress",
+        false,
+        None,
+        ZLIB_CALLBACK_ARGS,
+        TypeSpec::Void,
+    ),
+    method_sig(
+        "zlib",
+        "zstdDecompress",
+        false,
+        None,
+        ZLIB_CALLBACK_ARGS,
+        TypeSpec::Void,
+    ),
     // #1843 — Transform-stream factories. Each returns a stream handle
     // supporting `.write`/`.end`/`.on('data'|'end'|'error')`/`.pipe`.
     zlib_stream_factory("createGzip"),
@@ -2829,6 +2885,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // #1367: X509Certificate — `new X509Certificate(pem|der)` + read-only
     // subject/issuer/validFrom/validTo/serialNumber/fingerprint/ca props.
     class("crypto", "X509Certificate"),
+    // #2565: public `KeyObject` constructor export. Runtime exposes the
+    // class-like function and the supported secret-key `KeyObject.from`.
+    class("crypto", "KeyObject"),
     // Legacy Netscape SPKAC helper namespace:
     // crypto.Certificate.{verifySpkac,exportPublicKey,exportChallenge}.
     property("crypto", "Certificate"),
@@ -2836,15 +2895,26 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "createDiffieHellman", false, None),
     method("crypto", "createDiffieHellmanGroup", false, None),
     method("crypto", "getDiffieHellman", false, None),
+    // #2706/#2716: Node also exposes the legacy DH factories as
+    // constructor-named exports and exposes the one-shot `diffieHellman`
+    // helper. Runtime/codegen routes these to the same classic-DH and X25519
+    // helpers as the existing factory forms.
+    class("crypto", "DiffieHellman"),
+    class("crypto", "DiffieHellmanGroup"),
+    method("crypto", "diffieHellman", false, None),
+    method("crypto", "encapsulate", false, None),
+    method("crypto", "decapsulate", false, None),
     method("crypto", "createPrivateKey", false, None),
     method("crypto", "createPublicKey", false, None),
     method("crypto", "generateKeyPairSync", false, None),
+    method("crypto", "generateKeyPair", false, None),
     // #3927: `crypto.generateKeySync("aes"|"hmac", { length })` — the codegen
     // dispatch (expr/calls.rs → js_crypto_generate_key_sync) and the secret-key
     // KeyObject metadata (type/symmetricKeySize/export, fixed for 192/256 by
     // #3930) were already complete; only this manifest row was missing, so the
     // #463 unimplemented-API gate rejected the call before codegen ran.
     method("crypto", "generateKeySync", false, None),
+    method("crypto", "generateKey", false, None),
     method("crypto", "createHmac", false, None),
     // `crypto.createCipheriv(alg, key, iv)` / `createDecipheriv(...)` —
     // issue #1075. Registers a CipherHandle dispatched via the
@@ -2875,11 +2945,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "createSecretKey", false, None),
     method("crypto", "pbkdf2Sync", false, None),
     method("crypto", "pbkdf2", false, None),
+    method("crypto", "argon2Sync", false, None),
+    method("crypto", "argon2", false, None),
     // crypto.scryptSync(password, salt, keylen, options?) -> Buffer. Wired in
     // codegen `expr/calls.rs`; HIR types the result as Uint8Array.
     method("crypto", "scryptSync", false, None),
+    method("crypto", "scrypt", false, None),
     // crypto.hkdfSync(digest, ikm, salt, info, keylen) -> ArrayBuffer.
     method("crypto", "hkdfSync", false, None),
+    method("crypto", "hkdf", false, None),
     // crypto.generateKeyPairSync(type, options) -> { publicKey, privateKey }
     // PEM strings (RSA / EC P-256). Wired in codegen `expr/calls.rs`.
     method("crypto", "generateKeyPairSync", false, None),
@@ -2906,6 +2980,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "getCipherInfo", false, None),
     method("crypto", "getCurves", false, None),
     method("crypto", "getFips", false, None),
+    method("crypto", "setFips", false, None),
+    method("crypto", "secureHeapUsed", false, None),
+    method("crypto", "generatePrime", false, None),
+    method("crypto", "generatePrimeSync", false, None),
+    method("crypto", "checkPrime", false, None),
+    method("crypto", "checkPrimeSync", false, None),
     // Web Crypto API (issue #561) — `crypto.subtle.*`. The HIR
     // lowering at `crates/perry-hir/src/lower/expr_call.rs` recognizes
     // the `crypto.subtle.<method>(args)` chain and emits a
@@ -3270,10 +3350,25 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("path/win32", "posix"),
     property("path/win32", "win32"),
     // node:module - shape stubs plus runtime-backed builtin detection.
+    property("module", "Module"),
     property("module", "builtinModules"),
     property("module", "constants"),
+    property("module", "default"),
+    property("module", "globalPaths"),
+    property("module", "_cache"),
+    property("module", "_extensions"),
+    property("module", "_pathCache"),
     property("module", "wrap"),
     property("module", "wrapper"),
+    method("module", "_findPath", false, None),
+    method("module", "_initPaths", false, None),
+    method("module", "_load", false, None),
+    method("module", "_nodeModulePaths", false, None),
+    method("module", "_preloadModules", false, None),
+    method("module", "_resolveFilename", false, None),
+    method("module", "_resolveLookupPaths", false, None),
+    class("module", "Module"),
+    method("module", "Module", false, None),
     method("module", "createRequire", false, None),
     method("module", "findPackageJSON", false, None),
     method("module", "findSourceMap", false, None),
@@ -3351,6 +3446,31 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "chdir", false, None),
     method("process", "kill", false, None),
     method("process", "getBuiltinModule", false, None),
+    method("process", "execve", false, None),
+    method("process", "ref", false, None),
+    method("process", "unref", false, None),
+    method("process", "binding", false, None),
+    method("process", "_linkedBinding", false, None),
+    method("process", "dlopen", false, None),
+    method("process", "_rawDebug", false, None),
+    method("process", "_debugProcess", false, None),
+    method("process", "_debugEnd", false, None),
+    method("process", "_startProfilerIdleNotifier", false, None),
+    method("process", "_stopProfilerIdleNotifier", false, None),
+    method("process", "reallyExit", false, None),
+    method("process", "_fatalException", false, None),
+    method("process", "_tickCallback", false, None),
+    method("process", "_getActiveHandles", false, None),
+    method("process", "_getActiveRequests", false, None),
+    method("process", "openStdin", false, None),
+    method("process", "_kill", false, None),
+    property("process", "_eval"),
+    property("process", "_events"),
+    property("process", "_eventsCount"),
+    property("process", "_exiting"),
+    property("process", "_maxListeners"),
+    property("process", "_preload_modules"),
+    property("process", "domain"),
     method_sig(
         "process",
         "loadEnvFile",
@@ -3457,6 +3577,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("process", "features"),
     property("process", "finalization"),
     property("process", "moduleLoadList"),
+    property("process", "permission"),
     property("process", "release"),
     property("process", "report"),
     property("process", "title"),
@@ -3747,6 +3868,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("console", "profile", false, None),
     method("console", "profileEnd", false, None),
     method("console", "timeStamp", false, None),
+    method("console", "context", false, None),
+    method("console", "createTask", false, None),
     // --- util (a small surface — Perry implements util.inspect /
     //     util.format / util.promisify shapes through builtins.rs;
     //     the rest are documented stubs) ---
@@ -4074,6 +4197,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("stream", "isErrored", false, None),
     method("stream", "isReadable", false, None),
     method("stream", "isWritable", false, None),
+    // #2685: Node exposes these byte-view helpers and destroyed-state
+    // predicate directly from `node:stream`.
+    method("stream", "_isArrayBufferView", false, None),
+    method("stream", "_isUint8Array", false, None),
+    method("stream", "_uint8ArrayToBuffer", false, None),
+    method("stream", "isDestroyed", false, None),
     // #1537: `stream.getDefaultHighWaterMark(objectMode)` /
     // `setDefaultHighWaterMark(objectMode, value)` — the per-mode platform
     // default highWaterMark (65536 byte / 16 objectMode), mutable at runtime.
@@ -4165,6 +4294,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("stream", "destroyed", true, None),
     // --- child_process (synchronous + async exec surface;
     //     spawn/fork are documented but not yet codegen'd) ---
+    method("child_process", "_forkChild", false, None),
     method("child_process", "exec", false, None),
     method("child_process", "execSync", false, None),
     method("child_process", "execFile", false, None),
@@ -4377,6 +4507,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Experimental VM module rows are gated at runtime and are not public
     // no-flag named exports, but the codegen dispatch table still needs
     // manifest counterparts for the lifecycle/cached-data methods.
+    internal_method("vm", "Module", false, None),
     internal_method("vm", "SourceTextModule", false, None),
     internal_method("vm", "SyntheticModule", false, None),
     internal_method("vm", "status", true, None),
@@ -5039,25 +5170,62 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "destroy", true, Some("IncomingMessage")),
     method("http", "read", true, Some("IncomingMessage")),
     method("http", "setEncoding", true, Some("IncomingMessage")),
+    method("http", "setTimeout", true, Some("IncomingMessage")),
     // Issue #769 — `ClientRequest.setTimeout(ms)` for `http.request` /
     // `http.get` returns. Class filter differs from any existing http
     // method, so the manifest-consistency drift guard requires a row
     // here even though the test collapses class_filter variants.
     method("http", "setTimeout", true, Some("ClientRequest")),
     method("http", "listenerCount", true, Some("ClientRequest")),
+    method("http", "setHeader", true, Some("ClientRequest")),
+    method("http", "getHeader", true, Some("ClientRequest")),
+    method("http", "hasHeader", true, Some("ClientRequest")),
+    method("http", "removeHeader", true, Some("ClientRequest")),
+    method("http", "getHeaderNames", true, Some("ClientRequest")),
+    method("http", "getHeaders", true, Some("ClientRequest")),
+    method("http", "getRawHeaderNames", true, Some("ClientRequest")),
+    method("http", "abort", true, Some("ClientRequest")),
+    method("http", "destroy", true, Some("ClientRequest")),
+    method("http", "flushHeaders", true, Some("ClientRequest")),
+    method("http", "cork", true, Some("ClientRequest")),
+    method("http", "uncork", true, Some("ClientRequest")),
+    method("http", "setNoDelay", true, Some("ClientRequest")),
+    method("http", "setSocketKeepAlive", true, Some("ClientRequest")),
     method("http", "__get_method", true, Some("ClientRequest")),
     method("http", "__get_protocol", true, Some("ClientRequest")),
     method("http", "__get_host", true, Some("ClientRequest")),
     method("http", "__get_path", true, Some("ClientRequest")),
+    method("http", "__get_aborted", true, Some("ClientRequest")),
+    method("http", "__get_connection", true, Some("ClientRequest")),
+    method("http", "__get_destroyed", true, Some("ClientRequest")),
+    method("http", "__get_finished", true, Some("ClientRequest")),
+    method("http", "__get_maxHeadersCount", true, Some("ClientRequest")),
+    method("http", "__get_reusedSocket", true, Some("ClientRequest")),
+    method("http", "__get_socket", true, Some("ClientRequest")),
+    method("http", "__get_writableEnded", true, Some("ClientRequest")),
+    method(
+        "http",
+        "__get_writableFinished",
+        true,
+        Some("ClientRequest"),
+    ),
     method("http", "setHeader", true, Some("ServerResponse")),
     method("http", "getHeader", true, Some("ServerResponse")),
     method("http", "removeHeader", true, Some("ServerResponse")),
     method("http", "hasHeader", true, Some("ServerResponse")),
+    method("http", "getHeaders", true, Some("ServerResponse")),
+    method("http", "getHeaderNames", true, Some("ServerResponse")),
+    method("http", "appendHeader", true, Some("ServerResponse")),
+    method("http", "setHeaders", true, Some("ServerResponse")),
     method("http", "writeHead", true, Some("ServerResponse")),
     method("http", "write", true, Some("ServerResponse")),
     method("http", "addTrailers", true, Some("ServerResponse")),
     method("http", "end", true, Some("ServerResponse")),
     method("http", "flushHeaders", true, Some("ServerResponse")),
+    method("http", "cork", true, Some("ServerResponse")),
+    method("http", "uncork", true, Some("ServerResponse")),
+    method("http", "setTimeout", true, Some("ServerResponse")),
+    method("http", "writeEarlyHints", true, Some("ServerResponse")),
     method("http", "writeContinue", true, Some("ServerResponse")),
     method("http", "writeProcessing", true, Some("ServerResponse")),
     method("http", "on", true, Some("ServerResponse")),
@@ -5084,6 +5252,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "__get_statusCode", true, Some("ServerResponse")),
     method("http", "__set_statusCode", true, Some("ServerResponse")),
     method("http", "__set_statusMessage", true, Some("ServerResponse")),
+    method("http", "__set_sendDate", true, Some("ServerResponse")),
+    method(
+        "http",
+        "__set_strictContentLength",
+        true,
+        Some("ServerResponse"),
+    ),
     method("http", "__get_headersSent", true, Some("ServerResponse")),
     method("http", "__get_writableEnded", true, Some("ServerResponse")),
     method(

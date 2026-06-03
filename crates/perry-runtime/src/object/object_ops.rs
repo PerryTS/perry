@@ -509,6 +509,31 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
 
+        if let Some(class_id) = super::class_ref_id(obj_value) {
+            let present = super::has_own_helpers::str_from_string_header(key_str)
+                .map(|key| {
+                    if super::class_registry::class_is_key_deleted(class_id, key) {
+                        false
+                    } else if matches!(key, "length" | "prototype") {
+                        true
+                    } else if key == "name"
+                        && super::class_registry::lookup_static_method_in_chain(class_id, key)
+                            .is_none()
+                    {
+                        super::class_registry::class_name_for_id(class_id).is_some()
+                    } else {
+                        CLASS_DYNAMIC_PROPS.with(|m| {
+                            m.borrow()
+                                .get(&class_id)
+                                .is_some_and(|props| props.contains_key(key))
+                        }) || super::class_registry::lookup_static_method_in_chain(class_id, key)
+                            .is_some()
+                    }
+                })
+                .unwrap_or(false);
+            return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+        }
+
         // #3655: functions/closures carry built-in own `name`/`length`
         // (and `prototype` for constructors) plus any user-attached props.
         // Route them here instead of through `extract_obj_ptr`/`own_key_present`,
@@ -1045,7 +1070,7 @@ pub extern "C" fn js_object_define_property(
 /// so the property is enumerable-filterable and discoverable by `getOwnPropertyNames`
 /// even when the value is undefined or the property is an accessor (no underlying slot).
 #[allow(unused_assignments)]
-pub(super) unsafe fn ensure_key_in_keys_array(
+pub(crate) unsafe fn ensure_key_in_keys_array(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
 ) {
@@ -1570,6 +1595,16 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                     }
                     return f64::from_bits(TAG_NULL);
                 }
+                // Built-in iterator instances (Array/Map/Set/String iterators)
+                // share a `%...IteratorPrototype%` singleton. Their instances
+                // normally carry it as a recorded static prototype (returned
+                // above), but resolve by class id too so the chain holds even if
+                // the static-prototype side-table entry was dropped.
+                if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT {
+                    if let Some(proto) = super::iterator_prototype_for_class_id((*obj).class_id) {
+                        return proto;
+                    }
+                }
             }
             return obj_value;
         }
@@ -1635,6 +1670,11 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                         return f64::from_bits(proto_bits);
                     }
                     return f64::from_bits(TAG_NULL);
+                }
+                if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT {
+                    if let Some(proto) = super::iterator_prototype_for_class_id((*obj).class_id) {
+                        return proto;
+                    }
                 }
             }
             return obj_value;

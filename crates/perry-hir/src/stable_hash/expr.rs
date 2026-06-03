@@ -10,6 +10,22 @@ use super::primitives::{tag, SH};
 use super::StableHasher;
 use crate::ir::*;
 
+fn hash_with_set_fallback<H: StableHasher>(h: &mut H, fallback: &WithSetFallback) {
+    match fallback {
+        WithSetFallback::Local(id) => {
+            tag(h, 0);
+            id.hash(h);
+        }
+        WithSetFallback::ThrowReferenceError => tag(h, 1),
+        WithSetFallback::ThrowConstAssignment => tag(h, 2),
+        WithSetFallback::Ignore => tag(h, 3),
+        WithSetFallback::SloppyImplicit(id) => {
+            tag(h, 4);
+            id.hash(h);
+        }
+    }
+}
+
 #[rustfmt::skip]
 impl SH for Expr {
     fn hash<H: StableHasher>(&self, h: &mut H) {
@@ -57,6 +73,7 @@ impl SH for Expr {
             Expr::Void(e) => { tag(h, 37); e.as_ref().hash(h); }
             Expr::InstanceOf { expr, ty, ty_expr } => { tag(h, 38); expr.as_ref().hash(h); ty.hash(h); ty_expr.hash(h); }
             Expr::In { property, object } => { tag(h, 39); property.as_ref().hash(h); object.as_ref().hash(h); }
+            Expr::PrivateBrandCheck { class_name, field_name, object } => { tag(h, 12401); class_name.hash(h); field_name.hash(h); object.as_ref().hash(h); }
             Expr::Await(e) => { tag(h, 40); e.as_ref().hash(h); }
             Expr::Yield { value, delegate } => { tag(h, 41); value.hash(h); delegate.hash(h); }
             Expr::New { class_name, args, type_args, } => { tag(h, 42); class_name.hash(h); args.hash(h); type_args.hash(h); }
@@ -252,6 +269,7 @@ impl SH for Expr {
             Expr::DecodeURIComponent(e) => { tag(h, 186); e.as_ref().hash(h); }
             Expr::StructuredClone { value, options } => { tag(h, 187); value.as_ref().hash(h); options.as_ref().hash(h); }
             Expr::QueueMicrotask(e) => { tag(h, 188); e.as_ref().hash(h); }
+            Expr::LinkGeneratorPrototype { obj, is_async } => { tag(h, 4141); obj.as_ref().hash(h); is_async.hash(h); }
             Expr::IterResultSet(e, b) => { tag(h, 189); e.as_ref().hash(h); b.hash(h); }
             Expr::IterResultGetValue => tag(h, 190),
             Expr::IterResultGetDone => tag(h, 191),
@@ -377,6 +395,7 @@ impl SH for Expr {
             Expr::ArrayValues(e) => { tag(h, 281); e.as_ref().hash(h); }
             Expr::StringSplit(a, b) => { tag(h, 282); a.as_ref().hash(h); b.as_ref().hash(h); }
             Expr::StringFromCharCode(e) => { tag(h, 283); e.as_ref().hash(h); }
+            Expr::StringFromCharCodeSpread(e) => { tag(h, 12045); e.as_ref().hash(h); }
             Expr::StringFromCodePoint(e) => { tag(h, 284); e.as_ref().hash(h); }
             Expr::StringRaw { call_site, substitutions } => { tag(h, 12047); call_site.as_ref().hash(h); substitutions.hash(h); }
             Expr::StringAt { string, index } => { tag(h, 285); string.as_ref().hash(h); index.as_ref().hash(h); }
@@ -568,6 +587,8 @@ impl SH for Expr {
             Expr::ReflectGet { target, key, receiver } => { tag(h, 433); target.as_ref().hash(h); key.as_ref().hash(h); receiver.as_ref().hash(h); }
             Expr::ReflectSet { target, key, value } => { tag(h, 434); target.as_ref().hash(h); key.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::PutValueSet { target, key, value, receiver, strict } => { tag(h, 12235); target.as_ref().hash(h); key.as_ref().hash(h); value.as_ref().hash(h); receiver.as_ref().hash(h); strict.hash(h); }
+            Expr::WithGet { object, property, fallback } => { tag(h, 12236); object.as_ref().hash(h); property.hash(h); fallback.as_ref().hash(h); }
+            Expr::WithSet { object, property, value, fallback, strict } => { tag(h, 12237); object.as_ref().hash(h); property.hash(h); value.as_ref().hash(h); hash_with_set_fallback(h, fallback); strict.hash(h); }
             Expr::ReflectHas { target, key } => { tag(h, 435); target.as_ref().hash(h); key.as_ref().hash(h); }
             Expr::ReflectDelete { target, key } => { tag(h, 436); target.as_ref().hash(h); key.as_ref().hash(h); }
             Expr::ReflectOwnKeys(e) => { tag(h, 437); e.as_ref().hash(h); }

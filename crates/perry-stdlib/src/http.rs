@@ -17,6 +17,11 @@ use std::sync::Mutex;
 use crate::common::async_bridge::spawn;
 use crate::common::{for_each_handle_mut_of, get_handle_mut, register_handle, Handle};
 
+mod client_request_surface;
+pub(crate) use client_request_surface::{
+    dispatch_client_request_method, dispatch_client_request_property,
+};
+
 extern "C" {
     fn js_value_is_closure(value_bits: i64) -> i32;
     fn js_class_method_bind(
@@ -97,6 +102,8 @@ fn scan_http_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) 
             visitor.visit_i64_slot(&mut agent.create_socket);
         }
     });
+
+    client_request_surface::scan_roots(visitor);
 }
 
 /// Events that fire on the main thread via js_http_process_pending
@@ -1041,9 +1048,7 @@ pub unsafe extern "C" fn js_http_set_header(
         None => return handle,
     };
 
-    if let Some(req) = get_handle_mut::<ClientRequestHandle>(handle) {
-        req.headers.insert(name, value);
-    }
+    client_request_surface::set_header(handle, &name, value);
 
     handle
 }

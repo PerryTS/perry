@@ -774,6 +774,28 @@ module.exports = inner;
     }
 
     #[test]
+    fn wrap_preserves_regex_control_unicode_escapes() {
+        // Undici 8's lib/web/infra/index.js contains this CJS-body regex.
+        // Perry normalizes Unicode identifier escapes before SWC parses; the
+        // normalizer must not turn regex char-class escapes into source text.
+        let src = "'use strict'\n\
+                   const ASCII_WHITESPACE_REPLACE_REGEX = /[\\u0009\\u000A\\u000C\\u000D\\u0020]/g // eslint-disable-line no-control-regex\n\
+                   if (!ASCII_WHITESPACE_REPLACE_REGEX.test(' ')) {\n\
+                     throw new Error('unexpected regex result')\n\
+                   }\n\
+                   module.exports = ASCII_WHITESPACE_REPLACE_REGEX;\n";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/undici-infra.js"));
+        let parsed = perry_parser::parse_typescript(&wrapped, "undici-infra.js");
+
+        assert!(
+            parsed.is_ok(),
+            "undici-style CJS regex wrap failed to parse: {:?}\nwrapped:\n{}",
+            parsed.err(),
+            wrapped
+        );
+    }
+
+    #[test]
     fn extract_exports_skips_default_reserved_word() {
         // Issue #845 — pino: `module.exports.default = pino` flows into the
         // named-export loop and pre-fix emitted `export const default =

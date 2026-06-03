@@ -18,7 +18,7 @@ use perry_hir::Expr;
 
 use crate::expr::{lower_array_literal, lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I32, I64, PTR};
 
 use super::{build_headers_from_object, extract_options_fields, get_raw_string_ptr};
 
@@ -1174,6 +1174,7 @@ pub(super) fn lower_builtin_new(
             let mut cancel = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut source_type = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut strategy = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let mut source_object = None;
             if !args.is_empty() {
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
                     for (k, vexpr) in &props {
@@ -1196,11 +1197,19 @@ pub(super) fn lower_builtin_new(
                         }
                     }
                 } else {
-                    let _ = lower_expr(ctx, &args[0])?;
+                    source_object = Some(lower_expr(ctx, &args[0])?);
                 }
             }
             if args.len() >= 2 {
                 strategy = lower_expr(ctx, &args[1])?;
+            }
+            if let Some(source) = source_object {
+                let h = ctx.block().call(
+                    DOUBLE,
+                    "js_readable_stream_new_from_source_object",
+                    &[(DOUBLE, &source), (DOUBLE, &strategy)],
+                );
+                return Ok(Some(h));
             }
             let h = ctx.block().call(
                 DOUBLE,
@@ -1232,6 +1241,7 @@ pub(super) fn lower_builtin_new(
             let mut abort = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut sink_type = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut hwm = double_literal(1.0);
+            let mut sink_object = None;
             if !args.is_empty() {
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
                     for (k, vexpr) in &props {
@@ -1257,7 +1267,7 @@ pub(super) fn lower_builtin_new(
                         }
                     }
                 } else {
-                    let _ = lower_expr(ctx, &args[0])?;
+                    sink_object = Some(lower_expr(ctx, &args[0])?);
                 }
             }
             if args.len() >= 2 {
@@ -1275,6 +1285,14 @@ pub(super) fn lower_builtin_new(
                         &[(DOUBLE, &strategy)],
                     );
                 }
+            }
+            if let Some(sink) = sink_object {
+                let h = ctx.block().call(
+                    DOUBLE,
+                    "js_writable_stream_new_from_sink_object",
+                    &[(DOUBLE, &sink), (DOUBLE, &hwm)],
+                );
+                return Ok(Some(h));
             }
             let h = ctx.block().call(
                 DOUBLE,
@@ -1296,6 +1314,7 @@ pub(super) fn lower_builtin_new(
             let mut transform = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut flush = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut hwm = double_literal(1.0);
+            let mut transformer_object = None;
             if !args.is_empty() {
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
                     for (k, vexpr) in &props {
@@ -1315,7 +1334,7 @@ pub(super) fn lower_builtin_new(
                         }
                     }
                 } else {
-                    let _ = lower_expr(ctx, &args[0])?;
+                    transformer_object = Some(lower_expr(ctx, &args[0])?);
                 }
             }
             if args.len() >= 2 {
@@ -1326,6 +1345,14 @@ pub(super) fn lower_builtin_new(
                         }
                     }
                 }
+            }
+            if let Some(transformer) = transformer_object {
+                let h = ctx.block().call(
+                    DOUBLE,
+                    "js_transform_stream_new_from_transformer_object",
+                    &[(DOUBLE, &transformer), (DOUBLE, &hwm)],
+                );
+                return Ok(Some(h));
             }
             let h = ctx.block().call(
                 DOUBLE,
@@ -1340,16 +1367,53 @@ pub(super) fn lower_builtin_new(
             Ok(Some(h))
         }
 
-        "TextEncoderStream" | "TextDecoderStream" => {
+        "TextEncoderStream" => {
             for a in args {
                 let _ = lower_expr(ctx, a)?;
             }
-            let runtime = if class_name == "TextEncoderStream" {
-                "js_text_encoder_stream_new"
+            let h = ctx
+                .block()
+                .call(DOUBLE, "js_stream_web_text_encoder_stream_new", &[]);
+            Ok(Some(h))
+        }
+
+        "TextDecoderStream" => {
+            let label = if !args.is_empty() {
+                lower_expr(ctx, &args[0])?
             } else {
-                "js_text_decoder_stream_new"
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
-            let h = ctx.block().call(DOUBLE, runtime, &[]);
+            let options = if args.len() >= 2 {
+                lower_expr(ctx, &args[1])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(2) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let h = ctx.block().call(
+                DOUBLE,
+                "js_stream_web_text_decoder_stream_new",
+                &[(DOUBLE, &label), (DOUBLE, &options)],
+            );
+            Ok(Some(h))
+        }
+
+        "CompressionStream" | "DecompressionStream" => {
+            let format = if !args.is_empty() {
+                lower_expr(ctx, &args[0])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let runtime = if class_name == "CompressionStream" {
+                "js_stream_web_compression_stream_new"
+            } else {
+                "js_stream_web_decompression_stream_new"
+            };
+            let h = ctx.block().call(DOUBLE, runtime, &[(DOUBLE, &format)]);
             Ok(Some(h))
         }
 

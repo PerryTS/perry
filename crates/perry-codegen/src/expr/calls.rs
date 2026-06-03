@@ -560,12 +560,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(blk.call(DOUBLE, "js_crypto_create_ecdh", &[(I64, &curve_handle)]))
         }
 
-        // `crypto.createDiffieHellman(...)` / `crypto.getDiffieHellman(name)`
-        // / `crypto.createDiffieHellmanGroup(name)` classic DH handles.
+        // `crypto.createDiffieHellman(...)` / legacy constructor alias
+        // `crypto.DiffieHellman(...)` / `crypto.getDiffieHellman(name)` /
+        // `crypto.createDiffieHellmanGroup(name)` / constructor alias
+        // `crypto.DiffieHellmanGroup(name)` classic DH handles.
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if (property == "createDiffieHellman" || property == "getDiffieHellman" || property == "createDiffieHellmanGroup") && matches!(
+                Expr::PropertyGet { object, property } if (property == "createDiffieHellman" || property == "DiffieHellman" || property == "getDiffieHellman" || property == "createDiffieHellmanGroup" || property == "DiffieHellmanGroup") && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -576,7 +578,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 unreachable!()
             };
-            if property == "getDiffieHellman" || property == "createDiffieHellmanGroup" {
+            if property == "getDiffieHellman"
+                || property == "createDiffieHellmanGroup"
+                || property == "DiffieHellmanGroup"
+            {
                 let group = if let Some(arg) = args.first() {
                     lower_expr(ctx, arg)?
                 } else {
@@ -715,6 +720,71 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let secret = blk.call(I64, "js_crypto_diffie_hellman", &[(DOUBLE, &options)]);
             Ok(nanbox_pointer_inline(blk, &secret))
+        }
+
+        // `crypto.encapsulate(publicKey[, callback])` — currently covers the
+        // high-value X25519 KEM path using Perry's KeyObject surrogate.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "encapsulate" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.is_empty() {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let key = lower_expr(ctx, &args[0])?;
+            if let Some(callback) = args.get(1) {
+                let callback = lower_expr(ctx, callback)?;
+                let blk = ctx.block();
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_crypto_encapsulate_async",
+                    &[(DOUBLE, &key), (DOUBLE, &callback)],
+                ))
+            } else {
+                let blk = ctx.block();
+                let result = blk.call(I64, "js_crypto_encapsulate", &[(DOUBLE, &key)]);
+                Ok(nanbox_pointer_inline(blk, &result))
+            }
+        }
+
+        // `crypto.decapsulate(privateKey, ciphertext[, callback])` — X25519
+        // ciphertexts return the recovered shared key Buffer.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "decapsulate" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 2 {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let key = lower_expr(ctx, &args[0])?;
+            let ciphertext = lower_expr(ctx, &args[1])?;
+            if let Some(callback) = args.get(2) {
+                let callback = lower_expr(ctx, callback)?;
+                let blk = ctx.block();
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_crypto_decapsulate_async",
+                    &[(DOUBLE, &key), (DOUBLE, &ciphertext), (DOUBLE, &callback)],
+                ))
+            } else {
+                let blk = ctx.block();
+                let shared = blk.call(
+                    I64,
+                    "js_crypto_decapsulate",
+                    &[(DOUBLE, &key), (DOUBLE, &ciphertext)],
+                );
+                Ok(nanbox_pointer_inline(blk, &shared))
+            }
         }
 
         // Standalone `crypto.createHmac(alg, key)` / legacy
@@ -1090,12 +1160,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ));
             }
             if is_generate {
-                let buf = blk.call(
-                    I64,
+                Ok(blk.call(
+                    DOUBLE,
                     "js_crypto_generate_prime_sync",
                     &[(DOUBLE, &first_box), (DOUBLE, &options_box)],
-                );
-                Ok(nanbox_pointer_inline(blk, &buf))
+                ))
             } else {
                 Ok(blk.call(
                     DOUBLE,
@@ -1440,6 +1509,56 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (DOUBLE, &options_box),
                     (DOUBLE, &cb_box),
                 ],
+            ))
+        }
+
+        // crypto.argon2Sync(algorithm, parameters) -> Buffer.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "argon2Sync" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 2 {
+                return Ok(double_literal(0.0));
+            }
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let params_box = lower_expr(ctx, &args[1])?;
+            let blk = ctx.block();
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            let buf_handle = blk.call(
+                I64,
+                "js_crypto_argon2_sync",
+                &[(I64, &alg_handle), (DOUBLE, &params_box)],
+            );
+            Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
+
+        // crypto.argon2(algorithm, parameters, callback)
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "argon2" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 3 {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let params_box = lower_expr(ctx, &args[1])?;
+            let cb_box = lower_expr(ctx, &args[2])?;
+            let blk = ctx.block();
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_argon2_async",
+                &[(I64, &alg_handle), (DOUBLE, &params_box), (DOUBLE, &cb_box)],
             ))
         }
 

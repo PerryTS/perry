@@ -28,7 +28,38 @@ pub use super::class_handles::{
 };
 use super::*;
 
+thread_local! {
+    static CLASS_DELETED_KEYS: std::cell::RefCell<std::collections::HashMap<u32, std::collections::HashSet<String>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+pub(crate) fn class_mark_key_deleted(class_id: u32, key: &str) {
+    if class_id == 0 {
+        return;
+    }
+    CLASS_DELETED_KEYS.with(|m| {
+        m.borrow_mut()
+            .entry(class_id)
+            .or_default()
+            .insert(key.to_string());
+    });
+}
+
+pub(crate) fn class_is_key_deleted(class_id: u32, key: &str) -> bool {
+    CLASS_DELETED_KEYS.with(|m| {
+        m.borrow()
+            .get(&class_id)
+            .map(|keys| keys.contains(key))
+            .unwrap_or(false)
+    })
+}
+
 pub(crate) fn class_dynamic_prop_root_store(class_id: u32, name: String, value: f64) {
+    CLASS_DELETED_KEYS.with(|m| {
+        if let Some(keys) = m.borrow_mut().get_mut(&class_id) {
+            keys.remove(&name);
+        }
+    });
     CLASS_DYNAMIC_PROPS.with(|m| {
         m.borrow_mut()
             .entry(class_id)
@@ -36,6 +67,14 @@ pub(crate) fn class_dynamic_prop_root_store(class_id: u32, name: String, value: 
             .insert(name, value);
     });
     crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+}
+
+pub(crate) fn class_delete_own_dynamic_prop(class_id: u32, name: &str) {
+    CLASS_DYNAMIC_PROPS.with(|m| {
+        if let Some(props) = m.borrow_mut().get_mut(&class_id) {
+            props.remove(name);
+        }
+    });
 }
 
 pub(crate) fn class_prototype_method_value_cache_root_store(
@@ -659,6 +698,13 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
             || func_ptr == global_this_array_thunk as *const u8 as usize
             || func_ptr == global_this_object_thunk as *const u8 as usize
             || func_ptr == global_this_date_thunk as *const u8 as usize
+            || func_ptr == global_this_blob_thunk as *const u8 as usize
+            || func_ptr == global_this_headers_thunk as *const u8 as usize
+            || func_ptr == global_this_request_thunk as *const u8 as usize
+            || func_ptr == global_this_response_thunk as *const u8 as usize
+            || func_ptr == global_this_string_thunk as *const u8 as usize
+            || func_ptr == global_this_number_thunk as *const u8 as usize
+            || func_ptr == global_this_boolean_thunk as *const u8 as usize
             || func_ptr == webcrypto_illegal_constructor_thunk as *const u8 as usize
             || func_ptr
                 == crate::messaging::js_message_channel_constructor_call_error as *const u8
@@ -729,8 +775,29 @@ fn text_decoder_bool_option(options: f64, name: &str) -> f64 {
     f64::from_bits(crate::value::JSValue::bool(crate::value::js_is_truthy(value_f64) != 0).bits())
 }
 
+unsafe fn validate_web_compression_stream_format(format: f64) {
+    let ptr = crate::builtins::js_string_coerce(format) as *const crate::StringHeader;
+    if ptr.is_null() {
+        crate::fs::validate::throw_type_error_with_code(
+            "The argument 'format' is invalid.",
+            "ERR_INVALID_ARG_VALUE",
+        );
+    }
+    let len = (*ptr).byte_len as usize;
+    let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let bytes = std::slice::from_raw_parts(data, len);
+    if matches!(bytes, b"gzip" | b"deflate" | b"deflate-raw" | b"brotli") {
+        return;
+    }
+    let received = String::from_utf8_lossy(bytes);
+    let message = format!("The argument 'format' is invalid. Received '{received}'");
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
+}
+
 pub(crate) const CLASS_ID_TEXT_ENCODER_STREAM: u32 = 0x7FFF_FF30;
 pub(crate) const CLASS_ID_TEXT_DECODER_STREAM: u32 = 0x7FFF_FF31;
+pub(crate) const CLASS_ID_COMPRESSION_STREAM: u32 = 0x7FFF_FF32;
+pub(crate) const CLASS_ID_DECOMPRESSION_STREAM: u32 = 0x7FFF_FF33;
 
 unsafe fn text_encoding_stream_new_with_constructor(constructor: f64, class_id: u32) -> f64 {
     let stream = js_object_alloc(class_id, 0);
@@ -776,6 +843,16 @@ pub unsafe extern "C" fn js_text_encoder_stream_new() -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_text_decoder_stream_new() -> f64 {
     text_encoding_stream_new(b"TextDecoderStream", CLASS_ID_TEXT_DECODER_STREAM)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_compression_stream_new() -> f64 {
+    text_encoding_stream_new(b"CompressionStream", CLASS_ID_COMPRESSION_STREAM)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_decompression_stream_new() -> f64 {
+    text_encoding_stream_new(b"DecompressionStream", CLASS_ID_DECOMPRESSION_STREAM)
 }
 
 #[no_mangle]
@@ -1230,6 +1307,20 @@ pub unsafe extern "C" fn js_new_function_construct(
                 _ => unreachable!(),
             };
         }
+        if module == "zlib" && matches!(method.as_str(), "ZstdCompress" | "ZstdDecompress") {
+            let ptr =
+                crate::value::JS_NATIVE_ZLIB_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+            if !ptr.is_null() {
+                let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                    std::mem::transmute(ptr);
+                let factory = if method == "ZstdCompress" {
+                    "createZstdCompress"
+                } else {
+                    "createZstdDecompress"
+                };
+                return dispatch(factory.as_ptr(), factory.len(), args_ptr, args_len);
+            }
+        }
     }
 
     // date-fns `constructFrom` clones a Date via
@@ -1296,6 +1387,46 @@ pub unsafe extern "C" fn js_new_function_construct(
                     .copied()
                     .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::js_object_coerce(value);
+            }
+            "Blob" => {
+                let parts = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let options = args
+                    .get(1)
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::object::global_this_blob_thunk(std::ptr::null(), parts, options);
+            }
+            "Headers" => {
+                let init = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::object::global_this_headers_thunk(std::ptr::null(), init);
+            }
+            "Request" => {
+                let input = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let init = args
+                    .get(1)
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::object::global_this_request_thunk(std::ptr::null(), input, init);
+            }
+            "Response" => {
+                let body = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let init = args
+                    .get(1)
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::object::global_this_response_thunk(std::ptr::null(), body, init);
             }
             "Event" => {
                 let event_type = args
@@ -1412,6 +1543,28 @@ pub unsafe extern "C" fn js_new_function_construct(
                 return text_encoding_stream_new_with_constructor(
                     func_value,
                     CLASS_ID_TEXT_DECODER_STREAM,
+                );
+            }
+            "CompressionStream" => {
+                let format = args
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                validate_web_compression_stream_format(format);
+                return text_encoding_stream_new_with_constructor(
+                    func_value,
+                    CLASS_ID_COMPRESSION_STREAM,
+                );
+            }
+            "DecompressionStream" => {
+                let format = args
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                validate_web_compression_stream_format(format);
+                return text_encoding_stream_new_with_constructor(
+                    func_value,
+                    CLASS_ID_DECOMPRESSION_STREAM,
                 );
             }
             "MessageChannel" => {
@@ -1583,6 +1736,81 @@ pub unsafe extern "C" fn js_new_function_construct(
         if constructor_return_overrides_this(result) {
             return result;
         }
+    }
+    nan_boxed
+}
+
+fn constructor_prototype_bits(new_target: f64) -> Option<u64> {
+    let bits = new_target.to_bits();
+    if (bits >> 48) != 0x7FFD {
+        return global_object_prototype_bits();
+    }
+    let raw = (bits & crate::value::POINTER_MASK) as usize;
+    if raw == 0 {
+        return global_object_prototype_bits();
+    }
+    let key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), b"prototype".len() as u32);
+    let proto = js_object_get_field_by_name_f64(raw as *const ObjectHeader, key);
+    if unsafe { super::value_is_object_like(proto) } || super::class_ref_id(proto).is_some() {
+        Some(proto.to_bits())
+    } else {
+        global_object_prototype_bits()
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_new_function_construct_with_new_target(
+    func_value: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+    new_target: f64,
+) -> f64 {
+    let nt = if new_target.to_bits() == crate::value::TAG_UNDEFINED {
+        func_value
+    } else {
+        new_target
+    };
+    if nt.to_bits() == func_value.to_bits() {
+        return js_new_function_construct(func_value, args_ptr, args_len);
+    }
+    if crate::proxy::js_proxy_is_proxy(func_value) == 1 {
+        let arr = crate::array::js_array_alloc(0);
+        let mut a = arr;
+        if !args_ptr.is_null() {
+            for i in 0..args_len {
+                a = crate::array::js_array_push_f64(a, *args_ptr.add(i));
+            }
+        }
+        let arr_box = f64::from_bits(0x7FFD_0000_0000_0000 | (a as u64 & 0x0000_FFFF_FFFF_FFFF));
+        return crate::proxy::js_proxy_construct(func_value, arr_box, nt);
+    }
+    if !is_callable_function_value(func_value) {
+        return js_new_function_construct(func_value, args_ptr, args_len);
+    }
+    if is_arrow_function_value(func_value) {
+        crate::fs::validate::throw_type_error_with_code(
+            "Arrow function is not a constructor",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
+
+    let obj_ptr = js_object_alloc(0, 0);
+    let nan_boxed = crate::value::js_nanbox_pointer(obj_ptr as i64);
+    if let Some(proto_bits) = constructor_prototype_bits(nt) {
+        super::prototype_chain::object_set_static_prototype(obj_ptr as usize, proto_bits);
+    }
+
+    let prev_this = crate::object::js_implicit_this_get();
+    let prev_new_target = crate::object::js_new_target_get();
+    crate::object::js_implicit_this_set(nan_boxed);
+    crate::object::js_new_target_set(nt);
+    let prev_current_new_target = CURRENT_NEW_TARGET.with(|value| value.replace(nt.to_bits()));
+    let result = crate::closure::js_native_call_value(func_value, args_ptr, args_len);
+    CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target));
+    crate::object::js_new_target_set(prev_new_target);
+    crate::object::js_implicit_this_set(prev_this);
+    if constructor_return_overrides_this(result) {
+        return result;
     }
     nan_boxed
 }
@@ -2119,6 +2347,7 @@ fn visit_metadata_nanbox_key(
 #[cfg(test)]
 pub(crate) fn test_clear_class_side_table_roots() {
     CLASS_DYNAMIC_PROPS.with(|m| m.borrow_mut().clear());
+    CLASS_DELETED_KEYS.with(|m| m.borrow_mut().clear());
     CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| cache.borrow_mut().clear());
     if let Ok(mut guard) = CLASS_PROTOTYPE_METHODS.write() {
         *guard = None;

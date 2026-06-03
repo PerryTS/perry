@@ -1,120 +1,12 @@
-//! Dispatch table for `(native_module_namespace).method(...)` calls
-//! that escape into the runtime tower from
+//! Dispatch table for native module method calls that escape into the runtime tower from
 //! `js_native_call_method`.
 //!
 //! Split out of `object/mod.rs` (issue #1103). Pure relocation — no
 //! logic changes.
 
+use super::native_module_dispatch_crypto::crypto_random_fill_sync_dispatch;
 use super::*;
-
-fn crypto_dispatch_value_addr(value: f64) -> usize {
-    let bits = value.to_bits();
-    if (bits >> 48) >= 0x7FF8 {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else {
-        bits as usize
-    }
-}
-
-fn crypto_random_fill_number_arg(value: f64, name: &str) -> Option<f64> {
-    let js = JSValue::from_bits(value.to_bits());
-    if js.is_undefined() {
-        return None;
-    }
-    if !js.is_number() && !js.is_int32() {
-        let message = format!(
-            "The \"{}\" argument must be of type number. Received {}",
-            name,
-            crate::fs::validate::describe_received(value)
-        );
-        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
-    }
-    Some(if js.is_int32() {
-        js.as_int32() as f64
-    } else {
-        value
-    })
-}
-
-fn crypto_random_fill_range(total: usize, offset_bits: f64, size_bits: f64) -> (usize, usize) {
-    let offset = match crypto_random_fill_number_arg(offset_bits, "offset") {
-        Some(n) if n.is_finite() && n >= 0.0 && n <= total as f64 => n as usize,
-        Some(n) => {
-            let message = format!(
-                "The value of \"offset\" is out of range. It must be >= 0 && <= {}. Received {}",
-                total, n
-            );
-            crate::fs::validate::throw_range_error_with_code(&message);
-        }
-        None => 0,
-    };
-    let size = match crypto_random_fill_number_arg(size_bits, "size") {
-        Some(n) if n.is_finite() && n >= 0.0 && n <= i32::MAX as f64 => n as usize,
-        Some(n) => {
-            let message = format!(
-                "The value of \"size\" is out of range. It must be >= 0 && <= 2147483647. Received {}",
-                n
-            );
-            crate::fs::validate::throw_range_error_with_code(&message);
-        }
-        None => total.saturating_sub(offset),
-    };
-    let end = offset.saturating_add(size);
-    if end > total {
-        let message = format!(
-            "The value of \"size + offset\" is out of range. It must be <= {}. Received {}",
-            total, end
-        );
-        crate::fs::validate::throw_range_error_with_code(&message);
-    }
-    (offset, size)
-}
-
-fn crypto_random_fill_invalid_buf(value: f64) -> ! {
-    let message = format!(
-        "The \"buf\" argument must be an instance of Buffer, TypedArray, DataView, or ArrayBuffer. Received {}",
-        crate::fs::validate::describe_received(value)
-    );
-    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
-}
-
-unsafe fn crypto_random_fill_sync_dispatch(target: f64, offset_bits: f64, size_bits: f64) -> f64 {
-    use rand::RngCore;
-
-    let addr = crypto_dispatch_value_addr(target);
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-        let ta = addr as *mut crate::typedarray::TypedArrayHeader;
-        if let Some(data) = crate::typedarray::typed_array_bytes_mut(ta) {
-            let elem_size = (*ta).elem_size as usize;
-            let len = if elem_size == 0 {
-                0
-            } else {
-                data.len() / elem_size
-            };
-            let (start_elem, count_elem) = crypto_random_fill_range(len, offset_bits, size_bits);
-            let start = start_elem.saturating_mul(elem_size);
-            let end = start
-                .saturating_add(count_elem.saturating_mul(elem_size))
-                .min(data.len());
-            if end > start {
-                rand::thread_rng().fill_bytes(&mut data[start..end]);
-            }
-            return target;
-        }
-        crypto_random_fill_invalid_buf(target);
-    }
-    if crate::buffer::is_registered_buffer(addr) {
-        let buf = addr as *mut crate::buffer::BufferHeader;
-        let total = (*buf).length as usize;
-        let (start, count) = crypto_random_fill_range(total, offset_bits, size_bits);
-        if count > 0 {
-            let data = crate::buffer::buffer_data_mut(buf);
-            rand::thread_rng().fill_bytes(std::slice::from_raw_parts_mut(data.add(start), count));
-        }
-        return target;
-    }
-    crypto_random_fill_invalid_buf(target);
-}
+use crate::value::TAG_UNDEFINED;
 
 /// #3712: coerce a NaN-boxed value to an owned UTF-8 `String`, matching the
 /// `${val}` coercion Node applies before building HTTP error messages.
@@ -258,6 +150,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         "path.default" => ("path", false),
         "path.posix.default" => ("path.posix", false),
         "path.win32.default" => ("path.win32", false),
+        "process.default" => ("process", false),
         "querystring.default" => ("querystring", false),
         "url.default" => ("url", false),
         "util.default" => ("util", false),
@@ -483,6 +376,22 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("inspector/promises", "Session") => {
             crate::node_inspector::js_node_inspector_promises_session_new()
         }
+        ("inspector.Network", "requestWillBeSent")
+        | ("inspector.Network", "responseReceived")
+        | ("inspector.Network", "loadingFinished")
+        | ("inspector.Network", "loadingFailed")
+        | ("inspector.Network", "dataSent")
+        | ("inspector.Network", "dataReceived")
+        | ("inspector.Network", "webSocketCreated")
+        | ("inspector.Network", "webSocketClosed")
+        | ("inspector.Network", "webSocketHandshakeResponseReceived") => {
+            crate::node_inspector::js_node_inspector_network_notify(arg(0))
+        }
+        ("sea", "isSea") => crate::node_sea::js_sea_is_sea(),
+        ("sea", "getAsset") => crate::node_sea::js_sea_get_asset(arg(0), arg(1)),
+        ("sea", "getAssetAsBlob") => crate::node_sea::js_sea_get_asset_as_blob(arg(0), arg(1)),
+        ("sea", "getRawAsset") => crate::node_sea::js_sea_get_raw_asset(arg(0)),
+        ("sea", "getAssetKeys") => crate::node_sea::js_sea_get_asset_keys(),
         // ── Buffer constructor static API ──
         // `class MyBuffer extends Buffer {}; MyBuffer.from(...)` reaches this
         // path through js_class_static_method_call's native-superclass
@@ -601,16 +510,36 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "eventNames") => ptr_to_f64(crate::os::js_process_event_names() as *const u8),
         ("process", "setMaxListeners") => crate::os::js_process_set_max_listeners(arg(0)),
         ("process", "getMaxListeners") => crate::os::js_process_get_max_listeners(),
+        ("process", "send") => {
+            crate::process::process_ipc_send_call(arg(0), arg(1), arg(2), arg(3))
+        }
+        ("process", "disconnect") => crate::process::process_ipc_disconnect_call(),
         ("process", "emitWarning") => {
             crate::process::js_process_emit_warning(arg(0), arg(1), arg(2));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "getBuiltinModule") => crate::process::js_process_get_builtin_module(arg(0)),
+        ("process", "execve") => crate::process::js_process_execve(arg(0), arg(1), arg(2)),
+        ("module", "createRequire") => crate::module_require::js_module_create_require(arg(0)),
         ("module", "enableCompileCache") => crate::process::js_module_enable_compile_cache(arg(0)),
         ("module", "flushCompileCache") => crate::process::js_module_flush_compile_cache(),
         ("module", "getCompileCacheDir") => crate::process::js_module_get_compile_cache_dir(),
         ("module", "getSourceMapsSupport") => crate::process::js_module_get_source_maps_support(),
         ("module", "isBuiltin") => crate::process::js_module_is_builtin(arg(0)),
+        ("module", "Module") => crate::process::js_module_module_new(arg(0)),
+        ("module", "_findPath") => crate::process::js_module_find_path(arg(0), arg(1), arg(2)),
+        ("module", "_initPaths") => crate::process::js_module_init_paths(),
+        ("module", "_load") => crate::process::js_module_load(arg(0), arg(1), arg(2)),
+        ("module", "_nodeModulePaths") => crate::process::js_module_node_module_paths(arg(0)),
+        ("module", "_preloadModules") => crate::process::js_module_preload_modules(arg(0)),
+        ("module", "_resolveFilename") => {
+            crate::process::js_module_resolve_filename(arg(0), arg(1), arg(2), arg(3))
+        }
+        ("module", "_resolveLookupPaths") => {
+            crate::process::js_module_resolve_lookup_paths(arg(0), arg(1))
+        }
+        ("module", "register") => crate::process::js_module_register(arg(0), arg(1), arg(2)),
+        ("module", "registerHooks") => crate::process::js_module_register_hooks(arg(0)),
         ("module", "setSourceMapsSupport") => {
             crate::process::js_module_set_source_maps_support(arg(0), arg(1))
         }
@@ -625,6 +554,27 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "constrainedMemory") => crate::process::js_process_constrained_memory(),
         ("process", "resourceUsage") => crate::process::js_process_resource_usage(),
         ("process", "getActiveResourcesInfo") => crate::process::js_process_active_resources_info(),
+        ("process", "binding") => crate::process::js_process_binding(arg(0)),
+        ("process", "_linkedBinding") => crate::process::js_process_linked_binding(arg(0)),
+        ("process", "dlopen") => crate::process::js_process_dlopen(),
+        ("process", "_rawDebug") => crate::process::js_process_raw_debug(),
+        ("process", "_debugProcess") => crate::process::js_process_debug_process(),
+        ("process", "_debugEnd") => crate::process::js_process_debug_end(),
+        ("process", "_startProfilerIdleNotifier") => {
+            crate::process::js_process_start_profiler_idle_notifier()
+        }
+        ("process", "_stopProfilerIdleNotifier") => {
+            crate::process::js_process_stop_profiler_idle_notifier()
+        }
+        ("process", "reallyExit") => crate::process::js_process_really_exit(),
+        ("process", "_fatalException") => {
+            crate::process::js_process_fatal_exception(arg(0), arg(1))
+        }
+        ("process", "_tickCallback") => crate::process::js_process_tick_callback(),
+        ("process", "_getActiveHandles") => crate::process::js_process_get_active_handles(),
+        ("process", "_getActiveRequests") => crate::process::js_process_get_active_requests(),
+        ("process", "openStdin") => crate::process::js_process_open_stdin(),
+        ("process", "_kill") => crate::process::js_process_internal_kill(),
         ("process", "getuid") => crate::process::js_process_getuid(),
         ("process", "geteuid") => crate::process::js_process_geteuid(),
         ("process", "getgid") => crate::process::js_process_getgid(),
@@ -633,6 +583,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "setSourceMapsEnabled") => {
             crate::process::js_process_set_source_maps_enabled(arg(0))
         }
+        ("process", "ref") => crate::process::js_process_ref(arg(0)),
+        ("process", "unref") => crate::process::js_process_unref(arg(0)),
         ("process", "hasUncaughtExceptionCaptureCallback") => {
             crate::process::js_process_has_uncaught_exception_capture_callback()
         }
@@ -733,11 +685,18 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "cpuUsage") => crate::process::js_process_cpu_usage(arg(0)),
         // ── crypto module ──
         ("crypto", "randomFillSync") if args_len >= 1 => {
-            crypto_random_fill_sync_dispatch(arg(0), arg(1), arg(2))
+            super::native_module_crypto_random::random_fill_sync(arg(0), arg(1), arg(2))
+        }
+        ("crypto", "KeyObject") => crate::fs::validate::throw_type_error_with_code(
+            "Class constructor KeyObject cannot be invoked without 'new'",
+            "ERR_CONSTRUCT_CALL_REQUIRED",
+        ),
+        ("crypto.KeyObject", "from") => {
+            super::native_module_crypto_key_object::key_object_from(arg(0))
         }
         ("crypto.webcrypto", "getRandomValues") if args_len >= 1 => {
             let undefined = f64::from_bits(JSValue::undefined().bits());
-            crypto_random_fill_sync_dispatch(arg(0), undefined, undefined)
+            super::native_module_crypto_random::random_fill_sync(arg(0), undefined, undefined)
         }
         // node:vm (createContext via #4050; rest #4079/#4087)
         ("vm", m) => crate::node_vm::dispatch_vm_method(m, arg(0), arg(1), arg(2)),
@@ -1639,16 +1598,10 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("console", "profile") | ("console", "profileEnd") | ("console", "timeStamp") => {
             f64::from_bits(JSValue::undefined().bits())
         }
-        ("stream", "compose") => crate::node_stream::js_node_stream_compose_args(pack_args()),
-        ("stream", "duplexPair") => crate::node_stream::js_node_stream_duplex_pair(arg(0)),
-        ("stream", "pipeline") => crate::node_stream::js_node_stream_pipeline(pack_args()),
-        // Classic stream constructors are legacy-callable in Node:
-        // `PassThrough()` behaves like `new PassThrough()`.
-        ("stream", "Readable") => crate::node_stream::js_node_stream_readable_new(arg(0)),
-        ("stream", "Writable") => crate::node_stream::js_node_stream_writable_new(arg(0)),
-        ("stream", "Duplex") => crate::node_stream::js_node_stream_duplex_new(arg(0)),
-        ("stream", "Transform") => crate::node_stream::js_node_stream_transform_new(arg(0)),
-        ("stream", "PassThrough") => crate::node_stream::js_node_stream_passthrough_new(arg(0)),
+        ("console", "context") => crate::builtins::js_console_context(arg(0)),
+        ("console", "createTask") => crate::builtins::js_console_create_task(arg(0)),
+        ("stream", _) => dispatch_stream_native_module_method(method_name, args_ptr, args_len)
+            .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits())),
         ("readline", "clearLine") => {
             crate::readline_helpers::js_readline_clear_line_args(pack_args())
         }
@@ -1686,8 +1639,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // codegen arms (`expr/child_proc.rs`); this arm mirrors them for the
         // value-call form. `cmd` / `file` / `module` strings come in NaN-boxed
         // (SSO-safe via `js_string_materialize_to_heap`); `args` is the array
-        // pointer (or null); `opts` is the options-object pointer (or 0 →
-        // undefined inside the impls).
+        // pointer (or null); `opts` is the options-object pointer (or 0).
         ("child_process", "spawn") => {
             let cmd = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
             let args_p = optional_ptr_addr(arg(1)) as i64;
@@ -1718,6 +1670,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             let file = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
             crate::child_process::js_child_process_exec_file_sync(file, arg(1), arg(2))
         }
+        ("child_process", "_forkChild") => crate::child_process::js_fork_child(args_len),
         ("child_process", "fork") => {
             let module = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
             let args_p = optional_ptr_addr(arg(1)) as i64;
@@ -1865,11 +1818,19 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("v8", "getHeapSpaceStatistics") => crate::node_v8::js_v8_get_heap_space_statistics(),
         ("v8", "getHeapCodeStatistics") => crate::node_v8::js_v8_get_heap_code_statistics(),
         ("v8", "cachedDataVersionTag") => crate::node_v8::js_v8_cached_data_version_tag(),
+        ("v8", "getHeapSnapshot") => crate::node_v8::js_v8_get_heap_snapshot(arg(0)),
+        ("v8", "writeHeapSnapshot") => crate::node_v8::js_v8_write_heap_snapshot(arg(0), arg(1)),
 
-        // #3142: `new v8.GCProfiler()` is the "v8.GCProfiler" namespace.
-        // `start()` returns undefined; `stop()` returns the report object.
-        ("v8.GCProfiler", "start") => f64::from_bits(JSValue::undefined().bits()),
-        ("v8.GCProfiler", "stop") => crate::node_v8::js_v8_gc_profiler_report(),
+        // #3142: `new v8.GCProfiler()` keeps a small started flag on the
+        // native-module instance. `stop()` returns a report only after start.
+        ("v8.GCProfiler", "start") => {
+            let recv = crate::value::js_nanbox_pointer(obj as i64);
+            crate::node_v8::js_v8_gc_profiler_start(recv)
+        }
+        ("v8.GCProfiler", "stop") => {
+            let recv = crate::value::js_nanbox_pointer(obj as i64);
+            crate::node_v8::js_v8_gc_profiler_stop(recv)
+        }
 
         // node:repl non-interactive server and constructor surface.
         ("repl", "start") => crate::node_repl::js_repl_start(arg(0)),

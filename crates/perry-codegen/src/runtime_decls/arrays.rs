@@ -137,6 +137,8 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_spread_append", I64, &[I64, DOUBLE]);
     // Generator / iterator protocol: walk `.next()`/`.value` loop and collect into array.
     module.declare_function("js_iterator_to_array", I64, &[DOUBLE]);
+    module.declare_function("js_iterator_next_result", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_iterator_close_if_not_done", DOUBLE, &[DOUBLE, DOUBLE]);
     // #1831: `yield*` iterator resolution — `operand[Symbol.iterator]()` or the
     // operand itself when already an iterator. Returns a NaN-boxed JSValue.
     module.declare_function("js_get_iterator", DOUBLE, &[DOUBLE]);

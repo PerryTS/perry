@@ -151,6 +151,90 @@ pub extern "C" fn js_fetch_with_options(
     std::ptr::null_mut()
 }
 
+#[cfg(not(feature = "external-fetch-symbols"))]
+#[no_mangle]
+pub extern "C" fn js_blob_new(_parts: f64, _type_value: f64) -> f64 {
+    perry_stub_warn("js_blob_new", FETCH_REASON, None);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
+#[no_mangle]
+pub extern "C" fn js_headers_new() -> f64 {
+    perry_stub_warn("js_headers_new", FETCH_REASON, None);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
+#[no_mangle]
+pub extern "C" fn js_headers_init_from_value(_handle: f64, _init: f64) -> f64 {
+    perry_stub_warn("js_headers_init_from_value", FETCH_REASON, None);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
+#[no_mangle]
+pub extern "C" fn js_request_new(
+    _url_ptr: *const crate::string::StringHeader,
+    _method_ptr: *const crate::string::StringHeader,
+    _body_ptr: *const crate::string::StringHeader,
+    _headers_handle: f64,
+    _referrer_ptr: *const crate::string::StringHeader,
+    _referrer_policy_ptr: *const crate::string::StringHeader,
+    _mode_ptr: *const crate::string::StringHeader,
+    _credentials_ptr: *const crate::string::StringHeader,
+    _cache_ptr: *const crate::string::StringHeader,
+    _redirect_ptr: *const crate::string::StringHeader,
+    _integrity_ptr: *const crate::string::StringHeader,
+    _keepalive: f64,
+    _duplex_ptr: *const crate::string::StringHeader,
+    _signal: f64,
+) -> f64 {
+    perry_stub_warn("js_request_new", FETCH_REASON, None);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
+#[no_mangle]
+pub extern "C" fn js_response_new(
+    _body_ptr: *const crate::string::StringHeader,
+    _status: f64,
+    _status_text_ptr: *const crate::string::StringHeader,
+    _headers_handle: f64,
+) -> f64 {
+    perry_stub_warn("js_response_new", FETCH_REASON, None);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
+#[no_mangle]
+pub extern "C" fn js_response_static_json(
+    _value: f64,
+    _init_status: f64,
+    _init_status_text_ptr: *const crate::string::StringHeader,
+    _headers_handle: f64,
+) -> f64 {
+    perry_stub_warn("js_response_static_json", FETCH_REASON, None);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
+#[no_mangle]
+pub extern "C" fn js_response_static_redirect(
+    _url_ptr: *const crate::string::StringHeader,
+    _status: f64,
+) -> f64 {
+    perry_stub_warn("js_response_static_redirect", FETCH_REASON, None);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
+#[no_mangle]
+pub extern "C" fn js_response_static_error() -> f64 {
+    perry_stub_warn("js_response_static_error", FETCH_REASON, None);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 // === readline (#347) stubs ===
 // `process.stdin.setRawMode(...)` and `process.stdin.on(...)` always
 // codegen direct extern calls to these symbols, even when the user's

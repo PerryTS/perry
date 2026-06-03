@@ -115,17 +115,5 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: ws.abort() during active pipeTo \u2014 pipeTo Promise doesn't reject. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/web/writer-write-resolves-after-sink": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: writer.write() Promise resolution timing \u2014 resolves before sink processes chunk. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/web/cancel-during-pull": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: cancel() during pull \u2014 read() does not resolve {done:true}. Flips to PASS when #1545 lands."
   }
 }

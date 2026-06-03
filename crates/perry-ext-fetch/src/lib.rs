@@ -20,7 +20,8 @@ use std::sync::Mutex;
 // keep lib.rs under the 2,000-line lint gate.
 mod validation;
 use validation::{
-    is_forbidden_method, is_null_body_status, is_valid_status_text, normalize_method,
+    is_forbidden_method, is_null_body_status, is_redirect_status, is_valid_status_text,
+    normalize_method, parse_redirect_location, redirect_status_from_value,
 };
 use validation::{throw_range_error, throw_type_error};
 
@@ -1300,22 +1301,27 @@ pub unsafe extern "C" fn js_response_static_json(
     }) as f64
 }
 
-/// `Response.redirect(url, status)` — static.
-///
-/// # Safety
-/// `url_ptr` must be null or a Perry-runtime `StringHeader`.
+/// `Response.redirect(url, status)` — static. `url_ptr` must be null or a
+/// Perry-runtime `StringHeader`.
 #[no_mangle]
 pub unsafe extern "C" fn js_response_static_redirect(
     url_ptr: *const StringHeader,
     status: f64,
 ) -> f64 {
     let url = read_str(url_ptr).unwrap_or_default();
-    let status = status as u16;
+    let status = redirect_status_from_value(status);
+    if !is_redirect_status(status) {
+        throw_range_error(&format!("Invalid status code {status}"));
+    }
+    let location = match parse_redirect_location(&url) {
+        Ok(location) => location,
+        Err(_) => throw_type_error(&format!("Failed to parse URL from {url}")),
+    };
     let mut headers = HeadersStore::default();
-    headers.set("location", &url);
+    headers.set("location", &location);
     store_response(FetchResponse {
-        status,
-        status_text: "Found".to_string(),
+        status: status as u16,
+        status_text: String::new(),
         headers,
         body: Vec::new(),
         type_name: "default".to_string(),

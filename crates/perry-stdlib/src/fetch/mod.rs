@@ -38,8 +38,8 @@ pub use body_metadata::*;
 // keep this file under the 2,000-line lint gate.
 mod validation;
 use validation::{
-    canonical_reason, is_forbidden_method, is_null_body_status, is_valid_status_text,
-    normalize_method,
+    is_forbidden_method, is_null_body_status, is_redirect_status, is_valid_status_text,
+    normalize_method, parse_redirect_location, redirect_status_from_value,
 };
 
 // Web Fetch handles must stay below the `0x100000` small-handle cutoff while
@@ -1677,16 +1677,19 @@ pub unsafe extern "C" fn js_response_static_redirect(
     status: f64,
 ) -> f64 {
     let url = string_from_header(url_ptr).unwrap_or_default();
-    let status_u16 = if status == 0.0 || status.is_nan() {
-        302
-    } else {
-        status as u16
+    let status_u16 = redirect_status_from_value(status);
+    if !is_redirect_status(status_u16) {
+        throw_fetch_range_error(&format!("Invalid status code {status_u16}"));
+    }
+    let location = match parse_redirect_location(&url) {
+        Ok(location) => location,
+        Err(_) => throw_fetch_type_error(&format!("Failed to parse URL from {url}")),
     };
     let mut headers = HeadersStore::default();
-    headers.set("location", &url);
+    headers.set("location", &location);
     handle_to_f64(alloc_response(
-        status_u16,
-        canonical_reason(status_u16).to_string(),
+        status_u16 as u16,
+        String::new(),
         headers,
         Vec::new(),
         false,

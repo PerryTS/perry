@@ -16,10 +16,14 @@
 //!   Node-compatible object/array *shapes* with numeric values sourced from
 //!   Perry's arena / RSS counters. The field *names and types* match Node so
 //!   package feature-detection works; the values reflect Perry internals.
-//! * `v8.GCProfiler` (#3142) — `new v8.GCProfiler()` is represented as the
-//!   `"v8.GCProfiler"` native-module namespace; `start()` returns `undefined`
-//!   and `stop()` returns a `{ version, startTime, statistics, endTime }`
-//!   report object, matching Node's shape.
+//! * `v8.getHeapSnapshot([options])` / `writeHeapSnapshot([filename[, options]])`
+//!   (#3140) — expose Node-shaped heap snapshot output. Perry does not embed V8,
+//!   so the snapshot is a minimal valid V8 heap-snapshot JSON document rather
+//!   than a full object graph dump.
+//! * `v8.GCProfiler` (#3142) — `new v8.GCProfiler()` allocates a small native
+//!   instance; `start()` returns `undefined` and `stop()` returns a
+//!   `{ version, startTime, statistics, endTime }` report object only after the
+//!   profiler has been started.
 
 use crate::object::ObjectHeader;
 use crate::string::js_string_from_bytes;
@@ -41,6 +45,16 @@ static KEEP_V8_CODE_STATS: extern "C" fn() -> f64 = js_v8_get_heap_code_statisti
 static KEEP_V8_SPACE_STATS: extern "C" fn() -> f64 = js_v8_get_heap_space_statistics;
 #[used]
 static KEEP_V8_VERSION_TAG: extern "C" fn() -> f64 = js_v8_cached_data_version_tag;
+#[used]
+static KEEP_V8_GET_HEAP_SNAPSHOT: extern "C" fn(f64) -> f64 = js_v8_get_heap_snapshot;
+#[used]
+static KEEP_V8_WRITE_HEAP_SNAPSHOT: extern "C" fn(f64, f64) -> f64 = js_v8_write_heap_snapshot;
+#[used]
+static KEEP_V8_GC_PROFILER_NEW: extern "C" fn() -> f64 = js_v8_gc_profiler_new;
+#[used]
+static KEEP_V8_GC_PROFILER_START: extern "C" fn(f64) -> f64 = js_v8_gc_profiler_start;
+#[used]
+static KEEP_V8_GC_PROFILER_STOP: extern "C" fn(f64) -> f64 = js_v8_gc_profiler_stop;
 #[used]
 static KEEP_V8_GC_PROFILER_REPORT: extern "C" fn() -> f64 = js_v8_gc_profiler_report;
 // #3680: Serializer / Deserializer class constructors.
@@ -65,6 +79,20 @@ const TAG_UNDEFINED_BITS: u64 = 0x7FFC_0000_0000_0001;
 fn undefined() -> f64 {
     f64::from_bits(TAG_UNDEFINED_BITS)
 }
+
+const V8_HEAP_SNAPSHOT_JSON: &str = concat!(
+    r#"{"snapshot":{"meta":{"#,
+    r#""node_fields":["type","name","id","self_size","edge_count","trace_node_id","detachedness"],"#,
+    r#""node_types":[["hidden","array","string","object","code","closure","regexp","number","native","synthetic","concatenated string","sliced string","symbol","bigint"],"string","number","number","number","number","number"],"#,
+    r#""edge_fields":["type","name_or_index","to_node"],"#,
+    r#""edge_types":[["context","element","property","internal","hidden","shortcut","weak"],"string_or_number","node"],"#,
+    r#""trace_function_info_fields":["function_id","name","script_name","script_id","line","column"],"#,
+    r#""trace_node_fields":["id","function_info_index","count","size","children"],"#,
+    r#""sample_fields":["timestamp_us","last_assigned_id"],"#,
+    r#""location_fields":["object_index","script_id","line","column"]},"#,
+    r#""node_count":0,"edge_count":0,"trace_function_count":0},"#,
+    r#""nodes":[],"edges":[],"trace_function_infos":[],"trace_tree":[],"samples":[],"locations":[],"strings":["<dummy>"]}"#
+);
 
 /// Build a plain object from `(name, value)` numeric/any pairs.
 unsafe fn build_object(pairs: &[(&str, f64)]) -> f64 {
@@ -105,6 +133,71 @@ unsafe fn input_bytes(value: f64) -> Option<Vec<u8>> {
         );
     }
     None
+}
+
+fn is_valid_heap_snapshot_options(value: f64) -> bool {
+    let jsv = JSValue::from_bits(value.to_bits());
+    if jsv.is_undefined() {
+        return true;
+    }
+    if !jsv.is_pointer() || jsv.is_any_string() {
+        return false;
+    }
+    let ptr = jsv.as_pointer::<u8>() as usize;
+    if ptr < crate::gc::GC_HEADER_SIZE + 0x1000 || crate::closure::is_closure_ptr(ptr) {
+        return false;
+    }
+    unsafe {
+        let header =
+            &*((ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+        header.obj_type == crate::gc::GC_TYPE_OBJECT
+    }
+}
+
+fn validate_heap_snapshot_options(value: f64) {
+    if is_valid_heap_snapshot_options(value) {
+        return;
+    }
+    let message = format!(
+        "The \"options\" argument must be of type object. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+fn default_heap_snapshot_path() -> String {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let name = format!("Heap-{}-{}.heapsnapshot", std::process::id(), millis);
+    std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join(name)
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn string_value(value: &str) -> f64 {
+    let ptr = js_string_from_bytes(value.as_ptr(), value.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+fn snapshot_readable_stream() -> f64 {
+    let chunk = bytes_to_buffer(V8_HEAP_SNAPSHOT_JSON.as_bytes());
+    let mut chunks = crate::array::js_array_alloc(1);
+    chunks = crate::array::js_array_push_f64(chunks, chunk);
+    let chunks_value = f64::from_bits(JSValue::pointer(chunks as *const u8).bits());
+    let opts = crate::object::js_object_alloc(0, 1);
+    let object_mode_key = b"objectMode";
+    let object_mode = js_string_from_bytes(object_mode_key.as_ptr(), object_mode_key.len() as u32);
+    crate::object::js_object_set_field_by_name(
+        opts,
+        object_mode,
+        f64::from_bits(JSValue::bool(false).bits()),
+    );
+    let opts_value = f64::from_bits(JSValue::pointer(opts as *const u8).bits());
+    crate::node_stream::js_node_stream_readable_from_options(chunks_value, opts_value)
 }
 
 /// `v8.serialize(value)` → Node `Buffer` holding the structured-clone payload.
@@ -243,6 +336,35 @@ pub extern "C" fn js_v8_cached_data_version_tag() -> f64 {
     0x5045_5252u32 as f64
 }
 
+/// `v8.getHeapSnapshot([options])` → Readable stream of heap-snapshot JSON.
+#[no_mangle]
+pub extern "C" fn js_v8_get_heap_snapshot(options: f64) -> f64 {
+    validate_heap_snapshot_options(options);
+    snapshot_readable_stream()
+}
+
+/// `v8.writeHeapSnapshot([filename[, options]])` → written filename.
+#[no_mangle]
+pub extern "C" fn js_v8_write_heap_snapshot(filename: f64, options: f64) -> f64 {
+    let filename_value = JSValue::from_bits(filename.to_bits());
+    let path = if filename_value.is_undefined() {
+        default_heap_snapshot_path()
+    } else {
+        crate::fs::validate::validate_path("path", filename);
+        unsafe {
+            crate::fs::decode_path_value(filename)
+                .unwrap_or_else(|| crate::fs::validate::throw_invalid_path_arg("path", filename))
+        }
+    };
+    validate_heap_snapshot_options(options);
+    match std::fs::write(&path, V8_HEAP_SNAPSHOT_JSON.as_bytes()) {
+        Ok(()) => string_value(&path),
+        Err(err) => unsafe {
+            crate::exception::js_throw(crate::fs::build_fs_error_value(&err, "open", &path))
+        },
+    }
+}
+
 // ============================================================
 // #3680: `v8.Serializer` / `v8.Deserializer` class instances
 // ============================================================
@@ -307,7 +429,7 @@ pub extern "C" fn js_v8_serializer_new(default_flag: f64) -> f64 {
 pub extern "C" fn js_v8_deserializer_new(buffer: f64) -> f64 {
     let bytes = unsafe { input_bytes(buffer) };
     let Some(bytes) = bytes else {
-        return crate::fs::validate::throw_type_error_with_code(
+        crate::fs::validate::throw_type_error_with_code(
             "The \"buffer\" argument must be an instance of Buffer, TypedArray, or DataView.",
             "ERR_INVALID_ARG_TYPE",
         );
@@ -492,6 +614,64 @@ pub extern "C" fn js_v8_throw_not_building_snapshot() -> f64 {
 pub extern "C" fn js_v8_promise_hook_register() -> f64 {
     let c = crate::closure::js_closure_alloc_singleton(js_v8_noop_undefined as *const u8);
     crate::value::js_nanbox_pointer(c as i64)
+}
+
+/// `new v8.GCProfiler()` → fresh profiler object.
+#[no_mangle]
+pub extern "C" fn js_v8_gc_profiler_new() -> f64 {
+    unsafe {
+        let module = "v8.GCProfiler";
+        let obj = crate::object::js_object_alloc(crate::object::NATIVE_MODULE_CLASS_ID, 2);
+        let module_name = js_string_from_bytes(module.as_ptr(), module.len() as u32);
+        crate::object::js_object_set_field(obj, 0, JSValue::string_ptr(module_name));
+        crate::object::js_object_set_field(obj, 1, JSValue::bool(false));
+
+        let mut keys = crate::array::js_array_alloc(1);
+        let key = b"__module__";
+        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        keys = crate::array::js_array_push(keys, JSValue::string_ptr(key_ptr));
+        crate::object::js_object_set_keys(obj, keys);
+        f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    }
+}
+
+fn gc_profiler_object(recv: f64) -> Option<*mut ObjectHeader> {
+    let value = JSValue::from_bits(recv.to_bits());
+    if !value.is_pointer() {
+        return None;
+    }
+    let obj = (recv.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    if obj.is_null() {
+        return None;
+    }
+    Some(obj)
+}
+
+/// `(new v8.GCProfiler()).start()` → `undefined`.
+#[no_mangle]
+pub extern "C" fn js_v8_gc_profiler_start(recv: f64) -> f64 {
+    if let Some(obj) = gc_profiler_object(recv) {
+        unsafe {
+            crate::object::js_object_set_field(obj, 1, JSValue::bool(true));
+        }
+    }
+    undefined()
+}
+
+/// `(new v8.GCProfiler()).stop()` → report after start, otherwise `undefined`.
+#[no_mangle]
+pub extern "C" fn js_v8_gc_profiler_stop(recv: f64) -> f64 {
+    let Some(obj) = gc_profiler_object(recv) else {
+        return undefined();
+    };
+    let started = unsafe { crate::object::js_object_get_field(obj, 1) };
+    if !started.is_bool() || !started.as_bool() {
+        return undefined();
+    }
+    unsafe {
+        crate::object::js_object_set_field(obj, 1, JSValue::bool(false));
+    }
+    js_v8_gc_profiler_report()
 }
 
 /// `(new v8.GCProfiler()).stop()` report object.

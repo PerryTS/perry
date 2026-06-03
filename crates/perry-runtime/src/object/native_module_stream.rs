@@ -37,6 +37,19 @@ pub(crate) fn attach_stream_legacy_prototype(constructor_value: f64) {
         "prototype",
         proto_value,
     );
+    let closure = (constructor_value.to_bits() & crate::value::POINTER_MASK) as usize;
+    for name in [
+        "_isArrayBufferView",
+        "_isUint8Array",
+        "_uint8ArrayToBuffer",
+        "isDestroyed",
+    ] {
+        crate::closure::closure_set_dynamic_prop(
+            closure,
+            name,
+            bound_native_callable_export_value("stream", name),
+        );
+    }
 }
 
 pub(crate) fn attach_stream_constructor_prototype(constructor_value: f64, name: &str) {
@@ -76,6 +89,53 @@ pub(crate) fn is_stream_event_emitter_prototype_value(value: f64) -> bool {
         return false;
     }
     STREAM_EVENT_EMITTER_PROTOTYPES.with(|protos| protos.borrow().contains(&bits))
+}
+
+pub(crate) unsafe fn dispatch_stream_native_module_method(
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    let arg = |n: usize| -> f64 {
+        if n < args_len && !args_ptr.is_null() {
+            *args_ptr.add(n)
+        } else {
+            f64::from_bits(JSValue::undefined().bits())
+        }
+    };
+    let pack_args = || -> *mut crate::array::ArrayHeader {
+        let mut arr = crate::array::js_array_alloc(args_len as u32);
+        for i in 0..args_len {
+            arr = crate::array::js_array_push_f64(arr, arg(i));
+        }
+        arr
+    };
+
+    Some(match method_name {
+        "compose" => crate::node_stream::js_node_stream_compose_args(pack_args()),
+        "duplexPair" => crate::node_stream::js_node_stream_duplex_pair(arg(0)),
+        "pipeline" => crate::node_stream::js_node_stream_pipeline(pack_args()),
+        "finished" => crate::node_stream::js_node_stream_finished(pack_args()),
+        "isDisturbed" => crate::node_stream::js_node_stream_is_disturbed(arg(0)),
+        "isErrored" => crate::node_stream::js_node_stream_is_errored(arg(0)),
+        "isReadable" => crate::node_stream::js_node_stream_is_readable(arg(0)),
+        "isWritable" => crate::node_stream::js_node_stream_is_writable(arg(0)),
+        "getDefaultHighWaterMark" => crate::node_stream::js_node_stream_get_default_hwm(arg(0)),
+        "setDefaultHighWaterMark" => {
+            crate::node_stream::js_node_stream_set_default_hwm(arg(0), arg(1))
+        }
+        "addAbortSignal" => crate::node_stream::js_node_stream_add_abort_signal(arg(0), arg(1)),
+        "_isArrayBufferView" => crate::node_stream::js_node_stream_is_array_buffer_view(arg(0)),
+        "_isUint8Array" => crate::node_stream::js_node_stream_is_uint8_array(arg(0)),
+        "_uint8ArrayToBuffer" => crate::node_stream::js_node_stream_uint8_array_to_buffer(arg(0)),
+        "isDestroyed" => crate::node_stream::js_node_stream_is_destroyed(arg(0)),
+        "Readable" => crate::node_stream::js_node_stream_readable_new(arg(0)),
+        "Writable" => crate::node_stream::js_node_stream_writable_new(arg(0)),
+        "Duplex" => crate::node_stream::js_node_stream_duplex_new(arg(0)),
+        "Transform" => crate::node_stream::js_node_stream_transform_new(arg(0)),
+        "PassThrough" => crate::node_stream::js_node_stream_passthrough_new(arg(0)),
+        _ => return None,
+    })
 }
 
 #[cfg(test)]

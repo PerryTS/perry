@@ -6,3 +6,7 @@ const rs = new ReadableStream({
 });
 const reader = (rs as any).getReader({ mode: "byob" });
 console.log("has byobRead:", typeof reader.read === "function");
+console.log("has closed:", "closed" in reader);
+console.log("locked before release:", rs.locked);
+reader.releaseLock();
+console.log("locked after release:", rs.locked);

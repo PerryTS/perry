@@ -238,6 +238,16 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
             raw_ptr as *const crate::typedarray::TypedArrayHeader,
         );
     }
+    // A built-in iterator object (`arr.values()`, `map.entries()`, a String
+    // iterator, …) IS already an iterator: drive `.next()` via the class-id
+    // tower directly. These now inherit `[Symbol.iterator]` from the shared
+    // `%IteratorPrototype%`, so the symbol-method read below would resolve the
+    // inherited thunk and call it WITHOUT binding `this` — which yields a bad
+    // result. Short-circuit here to keep `Array.from(arr.values())` / `[...it]`
+    // working.
+    if is_builtin_iterator_class_id(raw_ptr) {
+        return js_iterator_to_array(value);
+    }
     // Arguments objects spread like arrays (spec:
     // `arguments[Symbol.iterator] === Array.prototype.values`).
     if crate::object::is_arguments_object(raw_ptr as *const crate::object::ObjectHeader) {
@@ -291,6 +301,94 @@ pub extern "C" fn js_array_spread_append(dest: *mut ArrayHeader, source: f64) ->
     js_array_concat(dest, arr)
 }
 
+/// `true` when `raw_ptr` is a heap `GC_TYPE_OBJECT` whose class id is one of the
+/// built-in iterator families (array / map / set / string / buffer / iterator-
+/// helper). These dispatch `.next()` via the class-id tower in
+/// `js_native_call_method`, so they should be driven directly rather than via the
+/// (now inherited) `[Symbol.iterator]` method.
+pub(crate) fn is_builtin_iterator_class_id(raw_ptr: usize) -> bool {
+    if raw_ptr < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return false;
+    }
+    unsafe {
+        let gc =
+            (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT {
+            return false;
+        }
+        let class_id = (*(raw_ptr as *const crate::object::ObjectHeader)).class_id;
+        matches!(
+            class_id,
+            crate::array::ARRAY_ITERATOR_CLASS_ID
+                | crate::collection_iter_object::MAP_ITERATOR_CLASS_ID
+                | crate::collection_iter_object::SET_ITERATOR_CLASS_ID
+                | crate::buffer::BUFFER_ITERATOR_CLASS_ID
+                | crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID
+        ) || class_id == crate::string::STRING_ITERATOR_CLASS_ID
+    }
+}
+
+fn is_object_like_value(value: f64) -> bool {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        let bits = value.to_bits();
+        return bits != 0
+            && bits <= 0x0000_FFFF_FFFF_FFFF
+            && bits > 0x10000
+            && crate::closure::is_closure_ptr(bits as usize);
+    }
+    let raw = crate::value::js_nanbox_get_pointer(value) as usize;
+    raw >= 0x10000 && !crate::symbol::is_registered_symbol(raw)
+}
+
+#[cold]
+fn throw_iterator_result_not_object() -> ! {
+    let msg = b"Iterator result is not an object";
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(msg_str);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// `IteratorNext(iterator)` for assignment destructuring lowering.
+#[no_mangle]
+pub extern "C" fn js_iterator_next_result(iter_f64: f64) -> f64 {
+    let next = named_field(iter_f64, b"next");
+    if !is_callable_value(next) {
+        crate::closure::throw_not_callable();
+    }
+    let prev_this = crate::object::js_implicit_this_set(iter_f64);
+    let result = unsafe { crate::closure::js_native_call_value(next, std::ptr::null(), 0) };
+    crate::object::js_implicit_this_set(prev_this);
+    if !is_object_like_value(result) {
+        throw_iterator_result_not_object();
+    }
+    result
+}
+
+/// `IteratorClose(iterator)` when destructuring exits before the iterator is done.
+#[no_mangle]
+pub extern "C" fn js_iterator_close_if_not_done(iter_f64: f64, done_f64: f64) -> f64 {
+    if crate::value::js_is_truthy(done_f64) != 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+
+    let ret = named_field(iter_f64, b"return");
+    if ret.to_bits() == crate::value::TAG_UNDEFINED {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    if !is_callable_value(ret) {
+        crate::closure::throw_not_callable();
+    }
+
+    let prev_this = crate::object::js_implicit_this_set(iter_f64);
+    let result = unsafe { crate::closure::js_native_call_value(ret, std::ptr::null(), 0) };
+    crate::object::js_implicit_this_set(prev_this);
+    if !is_object_like_value(result) {
+        throw_iterator_result_not_object();
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 /// Issue #1572 — node:stream uses this from `node_stream::ns_iter_flat_map`
 /// to drive an async-iterable mapper result (an `async function*` return
 /// value) without re-deriving the `Symbol.asyncIterator` lookup +
@@ -324,10 +422,13 @@ pub(crate) fn sync_iterator_to_array_if_not_async(iter_f64: f64) -> Option<*mut 
     if iter_ptr == 0 {
         return Some(arr);
     }
-    let iter_obj = iter_ptr as *const ObjectHeader;
+    let _iter_obj = iter_ptr as *const ObjectHeader;
 
-    let next_key = js_string_from_bytes(b"next".as_ptr(), 4);
-    let next_val = js_object_get_field_by_name(iter_obj, next_key);
+    // OWN-field only: an inherited built-in `.next` (now provided by the shared
+    // `%...IteratorPrototype%`) needs `this` bound by the class-id tower, so it
+    // must take the method-dispatch path, not the raw closure call.
+    let next_val = crate::object::js_object_get_own_field_or_undef(iter_f64, b"next".as_ptr(), 4);
+    let next_val = crate::value::JSValue::from_bits(next_val.to_bits());
     let next_f64 = unsafe { f64::from_bits(std::mem::transmute::<_, u64>(next_val)) };
     let next_ptr = if next_val.is_undefined() {
         std::ptr::null::<closure::ClosureHeader>()
@@ -438,13 +539,18 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     if iter_ptr == 0 {
         return arr;
     }
-    let iter_obj = iter_ptr as *const ObjectHeader;
+    let _iter_obj = iter_ptr as *const ObjectHeader;
 
     // Look up the "next" method on the iterator object as a stored closure
     // FIELD (the common case for generator objects / effect's `SingleShotGen`,
-    // which store `next` as an own callable property).
-    let next_key = js_string_from_bytes(b"next".as_ptr(), 4);
-    let next_val = js_object_get_field_by_name(iter_obj, next_key);
+    // which store `next` as an own callable property). Use the OWN-field getter:
+    // built-in iterators (array/map/set/string) now inherit `.next` from their
+    // shared `%...IteratorPrototype%` singleton, and that inherited thunk relies
+    // on `this` being bound by the class-id method tower — so an INHERITED
+    // `.next` must take the method-dispatch path below, not this raw
+    // closure-call (which doesn't bind `this`).
+    let next_val = crate::object::js_object_get_own_field_or_undef(iter_f64, b"next".as_ptr(), 4);
+    let next_val = crate::value::JSValue::from_bits(next_val.to_bits());
     let next_f64 = unsafe { f64::from_bits(std::mem::transmute::<_, u64>(next_val)) };
     let next_ptr = if next_val.is_undefined() {
         std::ptr::null::<closure::ClosureHeader>()
@@ -513,9 +619,11 @@ fn js_async_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     if iter_ptr == 0 {
         return arr;
     }
-    let iter_obj = iter_ptr as *const ObjectHeader;
-    let next_key = js_string_from_bytes(b"next".as_ptr(), 4);
-    let next_val = js_object_get_field_by_name(iter_obj, next_key);
+    let _ = iter_ptr;
+    // OWN-field only (see sync variant): inherited built-in `.next` needs the
+    // class-id method tower to bind `this`.
+    let next_val = crate::object::js_object_get_own_field_or_undef(iter_f64, b"next".as_ptr(), 4);
+    let next_val = crate::value::JSValue::from_bits(next_val.to_bits());
     let next_f64 = unsafe { f64::from_bits(std::mem::transmute::<_, u64>(next_val)) };
     let next_ptr = if next_val.is_undefined() {
         std::ptr::null::<closure::ClosureHeader>()

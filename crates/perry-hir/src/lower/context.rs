@@ -67,6 +67,7 @@ impl LoweringContext {
             exportable_object_vars: HashSet::new(),
             pending_functions: Vec::new(),
             closure_display_names: HashMap::new(),
+            assignment_inferred_name: None,
             closure_source_text: HashMap::new(),
             func_return_native_instances: Vec::new(),
             pending_classes: Vec::new(),
@@ -75,6 +76,8 @@ impl LoweringContext {
             pre_registered_module_vars: HashSet::new(),
             pre_registered_module_var_decls: HashSet::new(),
             module_level_ids: HashSet::new(),
+            sloppy_implicit_globals: Vec::new(),
+            sloppy_implicit_global_ids: HashSet::new(),
             scope_depth: 0,
             scope_local_marks: Vec::new(),
             inside_block_scope: 0,
@@ -86,6 +89,7 @@ impl LoweringContext {
             suppress_stdlib_dispatch_guard_once: false,
             lowering_call_callee: false,
             unresolved_ident_as_global: false,
+            with_env_stack: Vec::new(),
             var_hoisted_ids: HashSet::new(),
             functions_index: HashMap::new(),
             classes_index: HashMap::new(),
@@ -115,11 +119,13 @@ impl LoweringContext {
             class_method_return_types: Vec::new(),
             class_captures: Vec::new(),
             let_class_aliases: Vec::new(),
+            global_this_aliases: HashSet::new(),
             prototype_aliases: HashMap::new(),
             prototype_function_aliases: HashMap::new(),
             function_valued_locals: HashSet::new(),
             prototype_function_locals: HashMap::new(),
             object_static_method_aliases: HashMap::new(),
+            array_static_method_aliases: HashMap::new(),
             is_entry_module: false,
             module_strict: false,
             strict_mode_stack: Vec::new(),
@@ -614,6 +620,23 @@ impl LoweringContext {
         id
     }
 
+    pub(crate) fn define_sloppy_implicit_global(&mut self, name: String) -> LocalId {
+        if let Some((_, id, _)) = self
+            .locals
+            .iter()
+            .rev()
+            .find(|(n, id, _)| n == &name && self.sloppy_implicit_global_ids.contains(id))
+        {
+            return *id;
+        }
+        let id = self.fresh_local();
+        self.module_level_ids.insert(id);
+        self.sloppy_implicit_global_ids.insert(id);
+        self.sloppy_implicit_globals.push((name.clone(), id));
+        self.locals.push((name, id, Type::Any));
+        id
+    }
+
     /// Drop module-level LocalIds from a closure's `captures` list. Module-
     /// level variables are loaded directly from their global data slot inside
     /// the closure body (see `closures.rs` auto-loading pass), so passing them
@@ -633,6 +656,41 @@ impl LoweringContext {
             .rev()
             .find(|(n, _, _)| n == name)
             .map(|(_, id, _)| *id)
+    }
+
+    fn lookup_local_index(&self, name: &str) -> Option<usize> {
+        self.locals.iter().rposition(|(n, _, _)| n == name)
+    }
+
+    pub(crate) fn push_with_env(&mut self, local_id: LocalId) {
+        let local_mark = self.locals.len();
+        self.with_env_stack.push(WithEnvFrame {
+            local_id,
+            local_mark,
+        });
+    }
+
+    pub(crate) fn pop_with_env(&mut self) {
+        self.with_env_stack.pop();
+    }
+
+    pub(crate) fn active_with_envs_for_ident(&self, name: &str) -> Vec<LocalId> {
+        let nearest_local_index = self.lookup_local_index(name);
+        let mut envs = Vec::new();
+        for frame in self.with_env_stack.iter().rev() {
+            if nearest_local_index.is_some_and(|idx| idx >= frame.local_mark) {
+                break;
+            }
+            envs.push(frame.local_id);
+        }
+        envs
+    }
+
+    pub(crate) fn shadows_unqualified_global(&self, name: &str) -> bool {
+        self.lookup_local(name).is_some()
+            || self.lookup_func(name).is_some()
+            || self.lookup_imported_func(name).is_some()
+            || self.lookup_class(name).is_some()
     }
 
     pub(crate) fn lookup_local_type(&self, name: &str) -> Option<&Type> {
@@ -959,6 +1017,14 @@ impl LoweringContext {
     }
 
     pub(crate) fn lookup_native_instance(&self, name: &str) -> Option<(&str, &str)> {
+        fn exposes_plain_object_fields(module: &str, class: &str) -> bool {
+            // `node:module`'s CommonJS Module constructor returns an ordinary
+            // heap object with data fields (`id`, `path`, `exports`, ...).
+            // Rewriting those reads as native receiver methods makes them
+            // miss the object's actual properties.
+            matches!((module, class), ("module", "Module") | ("repl", _))
+        }
+
         // Issue #1132 — walk the scoped instances back-to-front so a
         // later (inner-scope) registration shadows an earlier
         // (outer-scope) one with the same name. `native_instances` is
@@ -979,7 +1045,7 @@ impl LoweringContext {
             // bound methods; routing them through handle-dispatch native
             // getters turns ordinary fields like `Recoverable.err` into
             // zero-arg FFI calls.
-            .filter(|(_, module, _)| module != "repl")
+            .filter(|(_, module, class)| !exposes_plain_object_fields(module, class))
             .map(|(_, module, class)| (module.as_str(), class.as_str()))
             .or_else(|| {
                 // Check module-level instances (survive scope exits).
@@ -988,7 +1054,7 @@ impl LoweringContext {
                     .iter()
                     .rev()
                     .find(|(n, _, _)| n == name)
-                    .filter(|(_, module, _)| module != "repl")
+                    .filter(|(_, module, class)| !exposes_plain_object_fields(module, class))
                     .map(|(_, module, class)| (module.as_str(), class.as_str()))
             })
     }
@@ -1074,7 +1140,15 @@ impl LoweringContext {
         debug_assert!(self.scope_depth > 0, "exit_scope called at module depth");
         self.scope_depth = self.scope_depth.saturating_sub(1);
         self.scope_local_marks.pop();
-        self.locals.truncate(mark.0);
+        if self.locals.len() > mark.0 {
+            let mut kept: Vec<(String, LocalId, Type)> = Vec::new();
+            for entry in self.locals.drain(mark.0..) {
+                if self.sloppy_implicit_global_ids.contains(&entry.1) {
+                    kept.push(entry);
+                }
+            }
+            self.locals.extend(kept);
+        }
         self.native_instances.truncate(mark.1);
         // Remove index entries for functions being truncated, then restore any
         // earlier entries that were shadowed by the removed ones.

@@ -1,4 +1,340 @@
 use super::*;
+use perry_runtime::{js_closure_call0, js_closure_call1, ClosureHeader};
+use std::collections::HashMap;
+use std::sync::{Mutex, Once};
+
+#[derive(Default)]
+struct CryptoDigestStream {
+    listeners: HashMap<String, Vec<i64>>,
+    pipes: Vec<u64>,
+    encoding: Option<String>,
+    ended: bool,
+}
+
+impl CryptoDigestStream {
+    fn scan_roots(&mut self, visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
+        for callbacks in self.listeners.values_mut() {
+            for cb in callbacks {
+                visitor.visit_i64_slot(cb);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CryptoStreamKind {
+    Hash,
+    Hmac,
+}
+
+enum CryptoStreamEvent {
+    Data {
+        kind: CryptoStreamKind,
+        handle: i64,
+        bytes: Vec<u8>,
+        encoding: Option<String>,
+    },
+    End {
+        kind: CryptoStreamKind,
+        handle: i64,
+    },
+}
+
+lazy_static::lazy_static! {
+    static ref CRYPTO_STREAM_PENDING_EVENTS: Mutex<Vec<CryptoStreamEvent>> = Mutex::new(Vec::new());
+}
+
+static CRYPTO_STREAM_GC_REGISTERED: Once = Once::new();
+
+fn ensure_crypto_stream_gc_scanner() {
+    CRYPTO_STREAM_GC_REGISTERED.call_once(|| {
+        perry_runtime::gc::gc_register_mutable_root_scanner_named(
+            "stdlib:crypto-streams",
+            scan_crypto_stream_roots,
+        );
+    });
+}
+
+fn scan_crypto_stream_roots(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
+    crate::common::handle::for_each_handle_mut_of::<HashHandle, _>(|h| {
+        h.stream.lock().unwrap().scan_roots(visitor);
+    });
+    crate::common::handle::for_each_handle_mut_of::<HmacHandle, _>(|h| {
+        h.stream.lock().unwrap().scan_roots(visitor);
+    });
+}
+
+extern "C" {
+    fn js_native_call_method_str_key(
+        object: f64,
+        name_handle: i64,
+        args_ptr: *const f64,
+        args_len: usize,
+    ) -> f64;
+}
+
+fn nanbox_handle(handle: i64) -> f64 {
+    f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
+}
+
+fn js_true() -> f64 {
+    f64::from_bits(JSValue::bool(true).bits())
+}
+
+fn unbox_to_i64(value: f64) -> i64 {
+    (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
+}
+
+fn update_hash_state(state: &mut HashState, bytes: &[u8]) {
+    match state {
+        HashState::Sha1(x) => Sha256Digest::update(x, bytes),
+        HashState::Sha224(x) => Sha256Digest::update(x, bytes),
+        HashState::Sha256(x) => Sha256Digest::update(x, bytes),
+        HashState::Sha384(x) => Sha256Digest::update(x, bytes),
+        HashState::Sha512(x) => Sha256Digest::update(x, bytes),
+        HashState::Sha512_256(x) => Sha256Digest::update(x, bytes),
+        HashState::Shake128(x) => sha3::digest::Update::update(x, bytes),
+        HashState::Shake256(x) => sha3::digest::Update::update(x, bytes),
+        HashState::Md5(x) => Md5Digest::update(x, bytes),
+    }
+}
+
+fn finalize_hash_state(
+    state: Option<HashState>,
+    output_len: Option<usize>,
+    option_len: Option<usize>,
+) -> Option<Vec<u8>> {
+    Some(match state? {
+        HashState::Sha1(x) => x.finalize().to_vec(),
+        HashState::Sha224(x) => x.finalize().to_vec(),
+        HashState::Sha256(x) => x.finalize().to_vec(),
+        HashState::Sha384(x) => x.finalize().to_vec(),
+        HashState::Sha512(x) => x.finalize().to_vec(),
+        HashState::Sha512_256(x) => x.finalize().to_vec(),
+        HashState::Shake128(x) => {
+            let mut out = vec![0u8; option_len.or(output_len).unwrap_or(16)];
+            let mut reader = x.finalize_xof();
+            reader.read(&mut out);
+            out
+        }
+        HashState::Shake256(x) => {
+            let mut out = vec![0u8; option_len.or(output_len).unwrap_or(32)];
+            let mut reader = x.finalize_xof();
+            reader.read(&mut out);
+            out
+        }
+        HashState::Md5(x) => x.finalize().to_vec(),
+    })
+}
+
+fn update_hmac_state(state: &mut HmacState, bytes: &[u8]) {
+    use hmac::Mac;
+    match state {
+        HmacState::Sha1(x) => Mac::update(x, bytes),
+        HmacState::Sha224(x) => Mac::update(x, bytes),
+        HmacState::Sha256(x) => Mac::update(x, bytes),
+        HmacState::Sha384(x) => Mac::update(x, bytes),
+        HmacState::Sha512(x) => Mac::update(x, bytes),
+        HmacState::Sha512_256(x) => Mac::update(x, bytes),
+        HmacState::Md5(x) => Mac::update(x, bytes),
+    }
+}
+
+fn finalize_hmac_state(state: Option<HmacState>) -> Vec<u8> {
+    use hmac::Mac;
+    match state {
+        Some(HmacState::Sha1(x)) => x.finalize().into_bytes().to_vec(),
+        Some(HmacState::Sha224(x)) => x.finalize().into_bytes().to_vec(),
+        Some(HmacState::Sha256(x)) => x.finalize().into_bytes().to_vec(),
+        Some(HmacState::Sha384(x)) => x.finalize().into_bytes().to_vec(),
+        Some(HmacState::Sha512(x)) => x.finalize().into_bytes().to_vec(),
+        Some(HmacState::Sha512_256(x)) => x.finalize().into_bytes().to_vec(),
+        Some(HmacState::Md5(x)) => x.finalize().into_bytes().to_vec(),
+        None => Vec::new(),
+    }
+}
+
+fn encoded_digest(bytes: &[u8], encoding: &str) -> String {
+    match encoding {
+        "hex" => hex::encode(bytes),
+        "base64" => base64::engine::general_purpose::STANDARD.encode(bytes),
+        "base64url" => base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes),
+        "binary" | "latin1" => String::from_utf8_lossy(bytes).into_owned(),
+        _ => String::from_utf8_lossy(bytes).into_owned(),
+    }
+}
+
+unsafe fn digest_value(bytes: &[u8], encoding: Option<&str>) -> f64 {
+    if let Some(enc) = encoding {
+        let encoded = encoded_digest(bytes, &enc.to_ascii_lowercase());
+        let s = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);
+        return nanbox_str(s);
+    }
+    nanbox_pointer_f64(alloc_buffer_from_slice(bytes) as usize)
+}
+
+unsafe fn emit_callback0(cb: i64) {
+    if cb != 0 {
+        js_closure_call0(cb as *const ClosureHeader);
+    }
+}
+
+unsafe fn emit_callback1(cb: i64, arg: f64) {
+    if cb != 0 {
+        js_closure_call1(cb as *const ClosureHeader, arg);
+    }
+}
+
+fn listeners_for(kind: CryptoStreamKind, handle: i64, event: &str) -> Vec<i64> {
+    match kind {
+        CryptoStreamKind::Hash => get_handle_mut::<HashHandle>(handle)
+            .and_then(|h| h.stream.lock().unwrap().listeners.get(event).cloned())
+            .unwrap_or_default(),
+        CryptoStreamKind::Hmac => get_handle_mut::<HmacHandle>(handle)
+            .and_then(|h| h.stream.lock().unwrap().listeners.get(event).cloned())
+            .unwrap_or_default(),
+    }
+}
+
+fn pipes_for(kind: CryptoStreamKind, handle: i64) -> Vec<u64> {
+    match kind {
+        CryptoStreamKind::Hash => get_handle_mut::<HashHandle>(handle)
+            .map(|h| h.stream.lock().unwrap().pipes.clone())
+            .unwrap_or_default(),
+        CryptoStreamKind::Hmac => get_handle_mut::<HmacHandle>(handle)
+            .map(|h| h.stream.lock().unwrap().pipes.clone())
+            .unwrap_or_default(),
+    }
+}
+
+unsafe fn forward_method(dest_bits: u64, name: &[u8], args: &[f64]) {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    if key.is_null() {
+        return;
+    }
+    js_native_call_method_str_key(
+        f64::from_bits(dest_bits),
+        key as i64,
+        args.as_ptr(),
+        args.len(),
+    );
+}
+
+unsafe fn forward_write(dest_bits: u64, bytes: &[u8], encoding: Option<&str>) {
+    let chunk = digest_value(bytes, encoding);
+    forward_method(dest_bits, b"write", &[chunk]);
+}
+
+unsafe fn forward_end(dest_bits: u64) {
+    forward_method(dest_bits, b"end", &[]);
+}
+
+fn queue_crypto_stream_digest(
+    kind: CryptoStreamKind,
+    handle: i64,
+    bytes: Vec<u8>,
+    encoding: Option<String>,
+) {
+    {
+        let mut pending = CRYPTO_STREAM_PENDING_EVENTS.lock().unwrap();
+        pending.push(CryptoStreamEvent::Data {
+            kind,
+            handle,
+            bytes,
+            encoding,
+        });
+        pending.push(CryptoStreamEvent::End { kind, handle });
+    }
+    crate::common::async_bridge::ensure_pump_registered();
+    perry_runtime::event_pump::js_notify_main_thread();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_stream_process_pending() -> i32 {
+    let events = {
+        let mut pending = CRYPTO_STREAM_PENDING_EVENTS.lock().unwrap();
+        std::mem::take(&mut *pending)
+    };
+    let count = events.len() as i32;
+    for event in events {
+        match event {
+            CryptoStreamEvent::Data {
+                kind,
+                handle,
+                bytes,
+                encoding,
+            } => {
+                let callbacks = listeners_for(kind, handle, "data");
+                if !callbacks.is_empty() {
+                    let value = digest_value(&bytes, encoding.as_deref());
+                    for cb in callbacks {
+                        emit_callback1(cb, value);
+                    }
+                }
+                for dest in pipes_for(kind, handle) {
+                    forward_write(dest, &bytes, encoding.as_deref());
+                }
+            }
+            CryptoStreamEvent::End { kind, handle } => {
+                for event_name in ["end", "finish", "close"] {
+                    for cb in listeners_for(kind, handle, event_name) {
+                        emit_callback0(cb);
+                    }
+                }
+                for dest in pipes_for(kind, handle) {
+                    forward_end(dest);
+                }
+            }
+        }
+    }
+    count
+}
+
+pub fn js_crypto_stream_has_active_handles() -> i32 {
+    if CRYPTO_STREAM_PENDING_EVENTS.lock().unwrap().is_empty() {
+        0
+    } else {
+        1
+    }
+}
+
+unsafe fn stream_event_name(value: f64) -> Option<String> {
+    string_from_jsvalue(value.to_bits())
+}
+
+unsafe fn register_stream_listener(stream: &Mutex<CryptoDigestStream>, args: &[f64]) {
+    if args.len() < 2 {
+        return;
+    }
+    ensure_crypto_stream_gc_scanner();
+    let Some(event) = stream_event_name(args[0]) else {
+        return;
+    };
+    stream
+        .lock()
+        .unwrap()
+        .listeners
+        .entry(event)
+        .or_default()
+        .push(unbox_to_i64(args[1]));
+}
+
+unsafe fn set_stream_encoding(stream: &Mutex<CryptoDigestStream>, args: &[f64]) {
+    let encoding = args
+        .first()
+        .and_then(|value| string_from_jsvalue(value.to_bits()))
+        .map(|s| s.to_ascii_lowercase());
+    stream.lock().unwrap().encoding = encoding;
+}
+
+fn stream_pipe(stream: &Mutex<CryptoDigestStream>, args: &[f64]) -> f64 {
+    if let Some(dest) = args.first() {
+        stream.lock().unwrap().pipes.push(dest.to_bits());
+        *dest
+    } else {
+        nanbox_undefined()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Hash handle — powers `const h = crypto.createHash('sha1'); h.update(x);
@@ -28,8 +364,9 @@ pub enum HashState {
 pub struct HashHandle {
     /// `Option` so `digest()` can `take()` ownership of the hasher
     /// (sha1/sha2 `finalize()` consumes `self`).
-    state: std::sync::Mutex<Option<HashState>>,
+    state: Mutex<Option<HashState>>,
     output_len: Option<usize>,
+    stream: Mutex<CryptoDigestStream>,
 }
 
 /// Allocate a new Hash handle for the given algorithm. Returns the handle
@@ -64,8 +401,9 @@ pub unsafe extern "C" fn js_crypto_create_hash_options(alg_ptr: i64, options_bit
     let output_len = object_field_bits(options_bits.to_bits(), b"outputLength")
         .and_then(|bits| nanboxed_to_usize(f64::from_bits(bits)));
     let handle: Handle = register_handle(HashHandle {
-        state: std::sync::Mutex::new(Some(state)),
+        state: Mutex::new(Some(state)),
         output_len,
+        stream: Mutex::new(CryptoDigestStream::default()),
     });
     f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
 }
@@ -93,17 +431,7 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
             let bytes = decode_hash_update_value(args[0], &encoding);
             let mut guard = h.state.lock().unwrap();
             if let Some(state) = guard.as_mut() {
-                match state {
-                    HashState::Sha1(x) => Sha256Digest::update(x, &bytes),
-                    HashState::Sha224(x) => Sha256Digest::update(x, &bytes),
-                    HashState::Sha256(x) => Sha256Digest::update(x, &bytes),
-                    HashState::Sha384(x) => Sha256Digest::update(x, &bytes),
-                    HashState::Sha512(x) => Sha256Digest::update(x, &bytes),
-                    HashState::Sha512_256(x) => Sha256Digest::update(x, &bytes),
-                    HashState::Shake128(x) => sha3::digest::Update::update(x, &bytes),
-                    HashState::Shake256(x) => sha3::digest::Update::update(x, &bytes),
-                    HashState::Md5(x) => Md5Digest::update(x, &bytes),
-                }
+                update_hash_state(state, &bytes);
             }
             f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
         }
@@ -116,27 +444,8 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
             let option_len = arg0
                 .and_then(|arg| object_field_bits(arg.to_bits(), b"outputLength"))
                 .and_then(|bits| nanboxed_to_usize(f64::from_bits(bits)));
-            let digest: Vec<u8> = match state {
-                Some(HashState::Sha1(x)) => x.finalize().to_vec(),
-                Some(HashState::Sha224(x)) => x.finalize().to_vec(),
-                Some(HashState::Sha256(x)) => x.finalize().to_vec(),
-                Some(HashState::Sha384(x)) => x.finalize().to_vec(),
-                Some(HashState::Sha512(x)) => x.finalize().to_vec(),
-                Some(HashState::Sha512_256(x)) => x.finalize().to_vec(),
-                Some(HashState::Shake128(x)) => {
-                    let mut out = vec![0u8; option_len.or(h.output_len).unwrap_or(16)];
-                    let mut reader = x.finalize_xof();
-                    reader.read(&mut out);
-                    out
-                }
-                Some(HashState::Shake256(x)) => {
-                    let mut out = vec![0u8; option_len.or(h.output_len).unwrap_or(32)];
-                    let mut reader = x.finalize_xof();
-                    reader.read(&mut out);
-                    out
-                }
-                Some(HashState::Md5(x)) => x.finalize().to_vec(),
-                None => return f64::from_bits(0x7FFC_0000_0000_0001),
+            let Some(digest) = finalize_hash_state(state, h.output_len, option_len) else {
+                return f64::from_bits(0x7FFC_0000_0000_0001);
             };
             if args.is_empty() || is_undefined_f64(args[0]) {
                 let buf = alloc_buffer_from_slice(&digest);
@@ -185,11 +494,60 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
                 return f64::from_bits(0x7FFC_0000_0000_0001);
             };
             let handle: Handle = register_handle(HashHandle {
-                state: std::sync::Mutex::new(Some(state)),
+                state: Mutex::new(Some(state)),
                 output_len: h.output_len,
+                stream: Mutex::new(CryptoDigestStream::default()),
             });
             f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
         }
+        "write" if !args.is_empty() => {
+            let encoding = arg_string(args, 1);
+            let bytes = decode_hash_update_value(args[0], &encoding);
+            let mut guard = h.state.lock().unwrap();
+            if let Some(state) = guard.as_mut() {
+                update_hash_state(state, &bytes);
+            }
+            js_true()
+        }
+        "end" => {
+            if let Some(chunk) = args.first().copied() {
+                let v = JSValue::from_bits(chunk.to_bits());
+                if !v.is_undefined() && !v.is_null() {
+                    let encoding = arg_string(args, 1);
+                    let bytes = decode_hash_update_value(chunk, &encoding);
+                    let mut guard = h.state.lock().unwrap();
+                    if let Some(state) = guard.as_mut() {
+                        update_hash_state(state, &bytes);
+                    }
+                }
+            }
+            let encoding = {
+                let mut stream = h.stream.lock().unwrap();
+                if stream.ended {
+                    return nanbox_handle(handle);
+                }
+                stream.ended = true;
+                stream.encoding.clone()
+            };
+            let state = {
+                let mut guard = h.state.lock().unwrap();
+                guard.take()
+            };
+            if let Some(digest) = finalize_hash_state(state, h.output_len, None) {
+                queue_crypto_stream_digest(CryptoStreamKind::Hash, handle, digest, encoding);
+            }
+            nanbox_handle(handle)
+        }
+        "on" | "once" | "addListener" if args.len() >= 2 => {
+            register_stream_listener(&h.stream, args);
+            nanbox_handle(handle)
+        }
+        "setEncoding" => {
+            set_stream_encoding(&h.stream, args);
+            nanbox_handle(handle)
+        }
+        "pipe" => stream_pipe(&h.stream, args),
+        "destroy" | "close" => nanbox_undefined(),
         _ => f64::from_bits(0x7FFC_0000_0000_0001),
     }
 }
@@ -199,6 +557,15 @@ pub unsafe fn dispatch_hash_property(handle: i64, property: &str) -> f64 {
         "update" => b"update",
         "digest" => b"digest",
         "copy" => b"copy",
+        "write" => b"write",
+        "end" => b"end",
+        "on" => b"on",
+        "once" => b"once",
+        "addListener" => b"addListener",
+        "pipe" => b"pipe",
+        "setEncoding" => b"setEncoding",
+        "destroy" => b"destroy",
+        "close" => b"close",
         _ => return nanbox_undefined(),
     };
     let this_f64 = nanbox_pointer_f64(handle as usize);
@@ -245,7 +612,8 @@ pub enum HmacState {
 pub struct HmacHandle {
     /// `Option` so `digest()` can `take()` ownership of the MAC
     /// (`finalize()` consumes `self`).
-    state: std::sync::Mutex<Option<HmacState>>,
+    state: Mutex<Option<HmacState>>,
+    stream: Mutex<CryptoDigestStream>,
 }
 
 /// Allocate a new HMAC handle for `(alg, key)`. Mirrors `js_crypto_create_hash`
@@ -293,7 +661,8 @@ pub unsafe extern "C" fn js_crypto_create_hmac(alg_ptr: i64, key_ptr: i64) -> f6
         _ => return f64::from_bits(0x7FFC_0000_0000_0001),
     };
     let handle: Handle = register_handle(HmacHandle {
-        state: std::sync::Mutex::new(Some(state)),
+        state: Mutex::new(Some(state)),
+        stream: Mutex::new(CryptoDigestStream::default()),
     });
     f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
 }
@@ -301,7 +670,6 @@ pub unsafe extern "C" fn js_crypto_create_hmac(alg_ptr: i64, key_ptr: i64) -> f6
 /// Dispatch `update` / `digest` on an HmacHandle. Called from
 /// `common/dispatch.rs::js_handle_method_dispatch`.
 pub unsafe fn dispatch_hmac(handle: i64, method: &str, args: &[f64]) -> f64 {
-    use hmac::Mac;
     let h = match get_handle_mut::<HmacHandle>(handle) {
         Some(h) => h,
         None => return f64::from_bits(0x7FFC_0000_0000_0001),
@@ -324,15 +692,7 @@ pub unsafe fn dispatch_hmac(handle: i64, method: &str, args: &[f64]) -> f64 {
             let bytes = decode_hash_update_value(args[0], &encoding);
             let mut guard = h.state.lock().unwrap();
             if let Some(state) = guard.as_mut() {
-                match state {
-                    HmacState::Sha1(x) => Mac::update(x, &bytes),
-                    HmacState::Sha224(x) => Mac::update(x, &bytes),
-                    HmacState::Sha256(x) => Mac::update(x, &bytes),
-                    HmacState::Sha384(x) => Mac::update(x, &bytes),
-                    HmacState::Sha512(x) => Mac::update(x, &bytes),
-                    HmacState::Sha512_256(x) => Mac::update(x, &bytes),
-                    HmacState::Md5(x) => Mac::update(x, &bytes),
-                }
+                update_hmac_state(state, &bytes);
             }
             // Return the same handle (NaN-boxed) so the chain
             // `hmac.update(data).digest(enc)` continues against the same
@@ -344,20 +704,10 @@ pub unsafe fn dispatch_hmac(handle: i64, method: &str, args: &[f64]) -> f64 {
                 let mut guard = h.state.lock().unwrap();
                 guard.take()
             };
-            let digest: Vec<u8> = match state {
-                Some(HmacState::Sha1(x)) => x.finalize().into_bytes().to_vec(),
-                Some(HmacState::Sha224(x)) => x.finalize().into_bytes().to_vec(),
-                Some(HmacState::Sha256(x)) => x.finalize().into_bytes().to_vec(),
-                Some(HmacState::Sha384(x)) => x.finalize().into_bytes().to_vec(),
-                Some(HmacState::Sha512(x)) => x.finalize().into_bytes().to_vec(),
-                Some(HmacState::Sha512_256(x)) => x.finalize().into_bytes().to_vec(),
-                Some(HmacState::Md5(x)) => x.finalize().into_bytes().to_vec(),
-                // Node keeps Hmac.digest() idempotent in shape after the
-                // first finalization: encoded digests become an empty string
-                // and buffer digests become an empty Buffer instead of
-                // `undefined`.
-                None => Vec::new(),
-            };
+            // Node keeps Hmac.digest() idempotent in shape after the first
+            // finalization: encoded digests become an empty string and buffer
+            // digests become an empty Buffer instead of `undefined`.
+            let digest = finalize_hmac_state(state);
             if args.is_empty() || is_undefined_f64(args[0]) {
                 let buf = alloc_buffer_from_slice(&digest);
                 f64::from_bits(0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF))
@@ -384,6 +734,53 @@ pub unsafe fn dispatch_hmac(handle: i64, method: &str, args: &[f64]) -> f64 {
                 f64::from_bits(0x7FFF_0000_0000_0000u64 | ((s as u64) & 0x0000_FFFF_FFFF_FFFF))
             }
         }
+        "write" if !args.is_empty() => {
+            let encoding = arg_string(args, 1);
+            let bytes = decode_hash_update_value(args[0], &encoding);
+            let mut guard = h.state.lock().unwrap();
+            if let Some(state) = guard.as_mut() {
+                update_hmac_state(state, &bytes);
+            }
+            js_true()
+        }
+        "end" => {
+            if let Some(chunk) = args.first().copied() {
+                let v = JSValue::from_bits(chunk.to_bits());
+                if !v.is_undefined() && !v.is_null() {
+                    let encoding = arg_string(args, 1);
+                    let bytes = decode_hash_update_value(chunk, &encoding);
+                    let mut guard = h.state.lock().unwrap();
+                    if let Some(state) = guard.as_mut() {
+                        update_hmac_state(state, &bytes);
+                    }
+                }
+            }
+            let encoding = {
+                let mut stream = h.stream.lock().unwrap();
+                if stream.ended {
+                    return nanbox_handle(handle);
+                }
+                stream.ended = true;
+                stream.encoding.clone()
+            };
+            let state = {
+                let mut guard = h.state.lock().unwrap();
+                guard.take()
+            };
+            let digest = finalize_hmac_state(state);
+            queue_crypto_stream_digest(CryptoStreamKind::Hmac, handle, digest, encoding);
+            nanbox_handle(handle)
+        }
+        "on" | "once" | "addListener" if args.len() >= 2 => {
+            register_stream_listener(&h.stream, args);
+            nanbox_handle(handle)
+        }
+        "setEncoding" => {
+            set_stream_encoding(&h.stream, args);
+            nanbox_handle(handle)
+        }
+        "pipe" => stream_pipe(&h.stream, args),
+        "destroy" | "close" => nanbox_undefined(),
         _ => f64::from_bits(0x7FFC_0000_0000_0001),
     }
 }
@@ -392,6 +789,15 @@ pub unsafe fn dispatch_hmac_property(handle: i64, property: &str) -> f64 {
     let name_bytes: &'static [u8] = match property {
         "update" => b"update",
         "digest" => b"digest",
+        "write" => b"write",
+        "end" => b"end",
+        "on" => b"on",
+        "once" => b"once",
+        "addListener" => b"addListener",
+        "pipe" => b"pipe",
+        "setEncoding" => b"setEncoding",
+        "destroy" => b"destroy",
+        "close" => b"close",
         _ => return nanbox_undefined(),
     };
     let this_f64 = nanbox_pointer_f64(handle as usize);

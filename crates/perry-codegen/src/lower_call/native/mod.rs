@@ -81,6 +81,36 @@ pub(crate) fn lower_native_method_call(
     object: Option<&Expr>,
     args: &[Expr],
 ) -> Result<String> {
+    if module == "__perry_runtime" && class_name.is_none() && object.is_none() {
+        match method {
+            "iteratorNextResult" => {
+                let iter = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                return Ok(ctx
+                    .block()
+                    .call(DOUBLE, "js_iterator_next_result", &[(DOUBLE, &iter)]));
+            }
+            "iteratorCloseIfNotDone" => {
+                let iter = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                let done = args.get(1).map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_iterator_close_if_not_done",
+                    &[(DOUBLE, &iter), (DOUBLE, &done)],
+                ));
+            }
+            _ => {}
+        }
+    }
+
     // Web Fetch API dispatch — Response / Headers / Request / static
     // factories. Handled before the receiver-less early-out so that
     // `Response.json(v)` (object.is_none()) finds its runtime function.
@@ -194,16 +224,19 @@ pub(crate) fn lower_native_method_call(
         return Ok(v);
     }
 
-    // node:v8 (#3137/#3138). serialize/deserialize + heap-stat helpers route to
-    // the `js_v8_*` runtime entry points. All are receiver-less statics.
+    // node:v8 (#3137/#3138/#3140). serialize/deserialize + heap-stat/snapshot
+    // helpers route to the `js_v8_*` runtime entry points. All are receiver-less
+    // statics.
     if module == "v8" && object.is_none() {
         let runtime = match method {
-            "serialize" => Some(("js_v8_serialize", true)),
-            "deserialize" => Some(("js_v8_deserialize", true)),
-            "getHeapStatistics" => Some(("js_v8_get_heap_statistics", false)),
-            "getHeapCodeStatistics" => Some(("js_v8_get_heap_code_statistics", false)),
-            "getHeapSpaceStatistics" => Some(("js_v8_get_heap_space_statistics", false)),
-            "cachedDataVersionTag" => Some(("js_v8_cached_data_version_tag", false)),
+            "serialize" => Some(("js_v8_serialize", 1usize)),
+            "deserialize" => Some(("js_v8_deserialize", 1)),
+            "getHeapStatistics" => Some(("js_v8_get_heap_statistics", 0)),
+            "getHeapCodeStatistics" => Some(("js_v8_get_heap_code_statistics", 0)),
+            "getHeapSpaceStatistics" => Some(("js_v8_get_heap_space_statistics", 0)),
+            "cachedDataVersionTag" => Some(("js_v8_cached_data_version_tag", 0)),
+            "getHeapSnapshot" => Some(("js_v8_get_heap_snapshot", 1)),
+            "writeHeapSnapshot" => Some(("js_v8_write_heap_snapshot", 2)),
             // #3679: diagnostic-control / coverage helpers — Node-shaped no-op
             // callables returning `undefined` (Perry has no V8 engine to drive
             // real flag mutation or coverage capture). Args are evaluated for
@@ -211,26 +244,26 @@ pub(crate) fn lower_native_method_call(
             "setFlagsFromString"
             | "takeCoverage"
             | "stopCoverage"
-            | "setHeapSnapshotNearHeapLimit" => Some(("js_v8_noop_undefined", false)),
+            | "setHeapSnapshotNearHeapLimit" => Some(("js_v8_noop_undefined", 0)),
             _ => None,
         };
-        if let Some((fname, takes_arg)) = runtime {
-            if takes_arg {
-                let arg = if let Some(first) = args.first() {
-                    lower_expr(ctx, first)?
+        if let Some((fname, arity)) = runtime {
+            let mut lowered = Vec::with_capacity(arity);
+            for i in 0..arity {
+                let arg = if let Some(expr) = args.get(i) {
+                    lower_expr(ctx, expr)?
                 } else {
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 };
-                // Lower remaining args for side effects (Node ignores them).
-                for extra in args.iter().skip(1) {
-                    let _ = lower_expr(ctx, extra)?;
-                }
-                return Ok(ctx.block().call(DOUBLE, fname, &[(DOUBLE, &arg)]));
+                lowered.push(arg);
             }
-            for extra in args {
+            // Lower remaining args for side effects (Node ignores them).
+            for extra in args.iter().skip(arity) {
                 let _ = lower_expr(ctx, extra)?;
             }
-            return Ok(ctx.block().call(DOUBLE, fname, &[]));
+            let call_args: Vec<(crate::types::LlvmType, &str)> =
+                lowered.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
+            return Ok(ctx.block().call(DOUBLE, fname, &call_args));
         }
     }
 
@@ -275,6 +308,24 @@ pub(crate) fn lower_native_method_call(
                 let _ = lower_expr(ctx, extra)?;
             }
             return Ok(ctx.block().call(DOUBLE, fname, &[(DOUBLE, &arg)]));
+        }
+
+        // #3142: named-import GCProfiler instances lower their method calls to
+        // NativeMethodCall with `class_name == "GCProfiler"`. Route those to
+        // the same small runtime state machine as namespace-member calls.
+        if class_name == Some("GCProfiler") && matches!(method, "start" | "stop") {
+            if let Some(object) = object {
+                let recv = lower_expr(ctx, object)?;
+                for extra in args {
+                    let _ = lower_expr(ctx, extra)?;
+                }
+                let fname = if method == "start" {
+                    "js_v8_gc_profiler_start"
+                } else {
+                    "js_v8_gc_profiler_stop"
+                };
+                return Ok(ctx.block().call(DOUBLE, fname, &[(DOUBLE, &recv)]));
+            }
         }
     }
 

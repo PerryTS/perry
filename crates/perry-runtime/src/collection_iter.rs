@@ -179,6 +179,25 @@ pub(crate) fn builtin_prototype_method(builtin_name: &str, method_name: &str) ->
     }
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn js_builtin_prototype_method_value(
+    builtin_ptr: *const u8,
+    builtin_len: usize,
+    method_ptr: *const u8,
+    method_len: usize,
+) -> f64 {
+    let builtin = match std::str::from_utf8(std::slice::from_raw_parts(builtin_ptr, builtin_len)) {
+        Ok(value) => value,
+        Err(_) => return f64::from_bits(TAG_UNDEFINED),
+    };
+    let method = match std::str::from_utf8(std::slice::from_raw_parts(method_ptr, method_len)) {
+        Ok(value) => value,
+        Err(_) => return f64::from_bits(TAG_UNDEFINED),
+    };
+    crate::object::primitive_proto_method_value(builtin, method)
+        .unwrap_or_else(|| builtin_prototype_method(builtin, method))
+}
+
 pub(crate) enum ConstructorIter {
     Empty,
     Array(f64),

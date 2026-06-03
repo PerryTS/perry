@@ -27,6 +27,26 @@ use crate::lower_types::{extract_param_type_with_ctx, extract_ts_type_with_ctx};
 
 use super::{lower_expr, LoweringContext};
 
+fn is_fetch_global_value_name(name: &str) -> bool {
+    matches!(
+        name,
+        "fetch" | "Blob" | "File" | "FormData" | "Headers" | "Request" | "Response"
+    )
+}
+
+fn builtin_global_value_expr(ctx: &mut LoweringContext, name: &str) -> Option<Expr> {
+    if !crate::analysis::is_builtin_global_value_name(name) {
+        return None;
+    }
+    if is_fetch_global_value_name(name) {
+        ctx.uses_fetch = true;
+    }
+    Some(Expr::PropertyGet {
+        object: Box::new(Expr::GlobalGet(0)),
+        property: name.to_string(),
+    })
+}
+
 /// Resolution of an object-literal `KeyValue` property key.
 enum KeyResolution {
     /// A statically-known string key (`x:`, `"x":`, `1:`, `[Enum.M]:`,
@@ -525,6 +545,8 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         (Expr::FuncRef(func_id), Type::Any)
                     } else if ctx.lookup_class(&name).is_some() {
                         (Expr::ClassRef(name.clone()), Type::Any)
+                    } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
+                        (value, Type::Any)
                     } else {
                         bail = true;
                         break;
@@ -703,6 +725,8 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             Expr::FuncRef(func_id)
                         } else if ctx.lookup_class(&name).is_some() {
                             Expr::ClassRef(name.clone())
+                        } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
+                            value
                         } else {
                             continue;
                         };
@@ -977,6 +1001,8 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         Expr::LocalGet(local_id)
                     } else if ctx.lookup_class(&name).is_some() {
                         Expr::ClassRef(name.clone())
+                    } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
+                        value
                     } else {
                         continue;
                     };

@@ -137,7 +137,7 @@ pub(super) fn try_url_date_weakref_instance(
         };
         // #809: `Some("Object")` (object literal / `Object.create`)
         // joins URL as a "definitely not a Date" receiver.
-        let allow_ambiguous_date = !matches!(
+        let receiver_may_be_date = !matches!(
             recv_class,
             Some("URL")
                 | Some("Object")
@@ -148,18 +148,20 @@ pub(super) fn try_url_date_weakref_instance(
                 | Some("Uint8ClampedArray")
                 | Some("Array")
         );
-        // Methods we treat as Date-only when the receiver is unambiguously
-        // Date or unknown (current behavior). `toString` / `toJSON` etc.
-        // skip these arms when `recv_class` proves the receiver is NOT a Date.
+        // Most ambiguous Date methods retain the historical "unknown may be
+        // Date" behavior. Direct `.toJSON()` is different: userland classes
+        // commonly expose it as a plain method, and bracket/computed forms
+        // already dispatch generically, so only statically-known Date
+        // receivers should use the Date intrinsic.
 
         // Check for Date instance method calls (date.getTime(), etc.)
         if let ast::MemberProp::Ident(method_ident) = &member.prop {
             let method_name = method_ident.sym.as_ref();
-            // toJSON has two competing receiver shapes: Buffer-like values
-            // need their own `.toJSON()` (exact Node toJSON output), every
-            // other shape falls into the Date arms below. We must lower the
-            // receiver to discriminate. Cache the lowered expr so we don't
-            // re-lower in the Date `toJSON` arm at line ~263.
+            // toJSON has competing receiver shapes: Buffer-like values need
+            // their own `.toJSON()` (exact Node toJSON output), statically
+            // known Dates need DateToJSON, and ordinary userland objects must
+            // remain a generic method call. Cache the lowered receiver so we
+            // don't re-lower in the Date `toJSON` arm below.
             let mut cached_recv: Option<Expr> = None;
             if method_name == "toJSON" {
                 let recv_expr = lower_expr(ctx, &member.obj)?;
@@ -195,6 +197,11 @@ pub(super) fn try_url_date_weakref_instance(
                     | "toISOString"
                     | "valueOf"
             );
+            let allow_date_method = if method_name == "toJSON" {
+                recv_class == Some("Date")
+            } else {
+                receiver_may_be_date
+            };
             if method_name == "setTime"
                 && is_node_test_mock_timers_receiver(ctx, member.obj.as_ref())
             {
@@ -202,8 +209,9 @@ pub(super) fn try_url_date_weakref_instance(
                 // Date setter fallback below also matches `.setTime(...)` on
                 // unknown receivers, so keep this known non-Date receiver on
                 // the generic method-call path.
-            } else if ambiguous && !allow_ambiguous_date {
-                // Receiver is statically a non-Date class (e.g. URL).
+            } else if ambiguous && !allow_date_method {
+                // Receiver is statically a non-Date class (e.g. URL), or this
+                // is `.toJSON()` on an unknown/userland receiver.
                 // Skip the Date arms below — fall through to generic.
             } else {
                 match method_name {

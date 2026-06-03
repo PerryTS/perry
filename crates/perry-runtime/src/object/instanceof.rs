@@ -158,6 +158,17 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
+        if module == "crypto" && method == "KeyObject" {
+            let addr = value_addr(value);
+            return if addr != 0
+                && (crate::buffer::is_secret_key(addr)
+                    || crate::buffer::asymmetric_key_meta(addr).is_some())
+            {
+                f64::from_bits(crate::value::TAG_TRUE)
+            } else {
+                f64::from_bits(TAG_FALSE)
+            };
+        }
         if module == "perf_hooks" {
             let class_id = match method.as_str() {
                 "Performance" => crate::perf_hooks::CLASS_ID_PERFORMANCE,
@@ -224,6 +235,11 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             "ArrayBuffer" => 0xFFFF0025,
             "Array" => 0xFFFF0024,
             "Object" => 0xFFFF0050,
+            "Number" => 0xFFFF00D0,
+            "String" => 0xFFFF00D1,
+            "Boolean" => 0xFFFF00D2,
+            "BigInt" => 0xFFFF00D3,
+            "Symbol" => 0xFFFF00D4,
             "Date" => 0xFFFF0020,
             "Error" => crate::error::CLASS_ID_ERROR,
             "TypeError" => crate::error::CLASS_ID_TYPE_ERROR,
@@ -237,6 +253,8 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             "Navigator" => crate::navigator::NAVIGATOR_CLASS_ID,
             "TextEncoderStream" => crate::object::CLASS_ID_TEXT_ENCODER_STREAM,
             "TextDecoderStream" => crate::object::CLASS_ID_TEXT_DECODER_STREAM,
+            "CompressionStream" => crate::object::CLASS_ID_COMPRESSION_STREAM,
+            "DecompressionStream" => crate::object::CLASS_ID_DECOMPRESSION_STREAM,
             "Event" => crate::event_target::CLASS_ID_EVENT,
             "CustomEvent" => crate::event_target::CLASS_ID_CUSTOM_EVENT,
             "DOMException" => crate::event_target::CLASS_ID_DOM_EXCEPTION,

@@ -53,12 +53,94 @@ fn function<'a>(module: &'a perry_hir::Module, name: &str) -> &'a Function {
         .unwrap_or_else(|| panic!("function `{name}` not found"))
 }
 
+fn closure_display_names(module: &perry_hir::Module) -> Vec<String> {
+    let mut names: Vec<String> = module.closure_display_names.values().cloned().collect();
+    names.sort();
+    names
+}
+
 fn is_number_literal(expr: &Expr, expected: f64) -> bool {
     match expr {
         Expr::Number(actual) => *actual == expected,
         Expr::Integer(actual) => (*actual as f64) == expected,
         _ => false,
     }
+}
+
+#[test]
+fn assignment_named_evaluation_names_bare_identifier_rhs_functions() {
+    let module = lower_src(
+        r#"
+        var arrow, fn, gen, cover;
+        arrow = () => {};
+        fn = function() {};
+        gen = function*() {};
+        cover = (function() {});
+        "#,
+    );
+
+    let names = closure_display_names(&module);
+    assert!(names.contains(&"arrow".to_string()), "{names:?}");
+    assert!(names.contains(&"fn".to_string()), "{names:?}");
+    assert!(names.contains(&"gen".to_string()), "{names:?}");
+    assert!(names.contains(&"cover".to_string()), "{names:?}");
+}
+
+#[test]
+fn assignment_named_evaluation_skips_non_identifier_lhs_and_sequence_rhs() {
+    let module = lower_src(
+        r#"
+        var fn, xCover, o;
+        o = {};
+        (fn) = function() {};
+        xCover = (0, function() {});
+        o.attr = function() {};
+        "#,
+    );
+
+    let names = closure_display_names(&module);
+    assert!(!names.contains(&"fn".to_string()), "{names:?}");
+    assert!(!names.contains(&"xCover".to_string()), "{names:?}");
+    assert!(!names.contains(&"attr".to_string()), "{names:?}");
+}
+
+#[test]
+fn assignment_named_evaluation_names_anonymous_class_identifier_rhs_only() {
+    let module = lower_src(
+        r#"
+        var xCls, cls, xCls2;
+        xCls = class x {};
+        cls = class {};
+        xCls2 = class { static name() {} };
+        "#,
+    );
+
+    let class_names: Vec<&str> = module
+        .classes
+        .iter()
+        .map(|class| class.name.as_str())
+        .collect();
+    assert!(class_names.contains(&"x"), "{class_names:?}");
+    assert!(class_names.contains(&"cls"), "{class_names:?}");
+    assert!(!class_names.contains(&"xCls"), "{class_names:?}");
+    assert!(!class_names.contains(&"xCls2"), "{class_names:?}");
+}
+
+#[test]
+fn array_is_array_static_alias_call_lowers_to_intrinsic() {
+    let module = lower_src(
+        r#"
+        var __isArray = Array.isArray;
+        var copy = __isArray;
+        const result = copy([]);
+        "#,
+    );
+
+    assert!(
+        matches!(top_level_init(&module, "result"), Expr::ArrayIsArray(_)),
+        "{:?}",
+        top_level_init(&module, "result")
+    );
 }
 
 #[test]
@@ -179,6 +261,50 @@ fn sloppy_assignment_expression_creates_storage_before_following_getvalue() {
     } = top_level_init(&module, "result")
     else {
         panic!("result should lower as addition");
+    };
+
+    assert!(
+        matches!(left.as_ref(), Expr::LocalSet(id, value) if *id == y_id && is_number_literal(value, 1.0)),
+        "{left:?}"
+    );
+    assert!(matches!(right.as_ref(), Expr::LocalGet(id) if *id == y_id));
+}
+
+#[test]
+fn sloppy_assignment_in_if_test_creates_storage_before_following_getvalue() {
+    let module = lower_src("if ((y = 1) + y !== 2) { throw new Error('bad'); }");
+    let y_id = module
+        .init
+        .iter()
+        .find_map(|stmt| match stmt {
+            Stmt::Let {
+                id,
+                name,
+                init: Some(Expr::Undefined),
+                ..
+            } if name == "y" => Some(*id),
+            _ => None,
+        })
+        .expect("sloppy assignment target in if test should be predeclared");
+
+    let Some(Stmt::If { condition, .. }) = module
+        .init
+        .iter()
+        .find(|stmt| matches!(stmt, Stmt::If { .. }))
+    else {
+        panic!("expected lowered if statement, got {:?}", module.init);
+    };
+
+    let Expr::Compare { left, .. } = condition else {
+        panic!("if test should lower as comparison, got {condition:?}");
+    };
+    let Expr::Binary {
+        op: BinaryOp::Add,
+        left,
+        right,
+    } = left.as_ref()
+    else {
+        panic!("comparison lhs should lower as addition, got {left:?}");
     };
 
     assert!(

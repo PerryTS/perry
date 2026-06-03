@@ -99,6 +99,91 @@ fn allows_user_object_dispatch() {
 }
 
 #[test]
+fn allows_local_process_shadow_pipe_call() {
+    let src = r#"
+        const process = {
+            pipe(value: string) {
+                return value + "!";
+            },
+        };
+        const out = process.pipe("ok");
+    "#;
+    try_lower(src, "/tmp/host.ts")
+        .expect("local `process` binding must not lower as global process");
+}
+
+#[test]
+fn allows_parameter_process_shadow_pipe_call() {
+    let src = r#"
+        function run(process: { pipe(value: string): string }) {
+            return process.pipe("ok");
+        }
+    "#;
+    try_lower(src, "/tmp/host.ts")
+        .expect("parameter `process` binding must not lower as global process");
+}
+
+#[test]
+fn allows_function_local_process_shadow_pipe_call() {
+    let src = r#"
+        interface Pipeable<T> {
+            pipe<U>(fn: (value: T) => U): U
+        }
+
+        function makePipeable<T>(value: T): Pipeable<T> {
+            return {
+                pipe(fn) {
+                    return fn(value)
+                },
+            }
+        }
+
+        function run(): string {
+            const process = makePipeable("effect-pipe-shadow")
+            return process.pipe((value) => `${value}: ok`)
+        }
+    "#;
+    try_lower(src, "/tmp/host.ts")
+        .expect("function-local `process` binding must not lower as global process");
+}
+
+#[test]
+fn allows_class_process_shadow_pipe_call() {
+    let src = r#"
+        class process {
+            static pipe(value: string) {
+                return value;
+            }
+        }
+        const out = process.pipe("ok");
+    "#;
+    try_lower(src, "/tmp/host.ts")
+        .expect("class `process` binding must not lower as global process");
+}
+
+#[test]
+fn allows_imported_process_shadow_pipe_call() {
+    let src = r#"
+        import { process } from "effect";
+        const out = process.pipe("ok");
+    "#;
+    try_lower(src, "/tmp/host.ts")
+        .expect("imported `process` binding must not lower as global process");
+}
+
+#[test]
+fn still_refuses_global_process_pipe_call() {
+    let src = r#"
+        process.pipe("ok");
+    "#;
+    let err = try_lower(src, "/tmp/host.ts").expect_err("global process.pipe must stay gated");
+    assert!(
+        err.contains("`process.pipe` is not implemented in Perry"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn site_annotation_opts_out() {
     let src = r#"
         const k: string = "exit";

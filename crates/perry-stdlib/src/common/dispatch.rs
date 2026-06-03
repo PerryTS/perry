@@ -228,6 +228,11 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return value;
     }
 
+    #[cfg(feature = "http-client")]
+    if let Some(value) = crate::http::dispatch_client_request_method(handle, method_name, &args) {
+        return value;
+    }
+
     // node:sqlite DatabaseSync handle. Keep this before the better-sqlite3
     // SQLite fallbacks because method names like prepare/exec/close overlap
     // but the lifecycle/error semantics are intentionally different.
@@ -376,8 +381,21 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // keep hash before net to avoid changing the priority of in-registry
     // matches relative to the v0.5.98/#88 ordering.
     #[cfg(feature = "crypto")]
-    if matches!(method_name, "update" | "digest" | "copy")
-        && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    if matches!(
+        method_name,
+        "update"
+            | "digest"
+            | "copy"
+            | "write"
+            | "end"
+            | "on"
+            | "once"
+            | "addListener"
+            | "pipe"
+            | "setEncoding"
+            | "destroy"
+            | "close"
+    ) && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_hash(handle, method_name, &args);
     }
@@ -386,8 +404,20 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // the runtime path the codegen falls back to whenever `alg` isn't a
     // literal `"sha256"`. See #1076 for the silent-empty bug this closes.
     #[cfg(feature = "crypto")]
-    if matches!(method_name, "update" | "digest")
-        && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    if matches!(
+        method_name,
+        "update"
+            | "digest"
+            | "write"
+            | "end"
+            | "on"
+            | "once"
+            | "addListener"
+            | "pipe"
+            | "setEncoding"
+            | "destroy"
+            | "close"
+    ) && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_hmac(handle, method_name, &args);
     }
@@ -618,6 +648,13 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
 
     #[cfg(feature = "external-http-client-pump")]
     if let Some(value) =
+        unsafe { super::dispatch_http::dispatch_client_request_method(handle, method_name, &args) }
+    {
+        return value;
+    }
+
+    #[cfg(feature = "external-http-client-pump")]
+    if let Some(value) =
         unsafe { super::dispatch_http::dispatch_client_incoming_method(handle, method_name, &args) }
     {
         return value;
@@ -644,6 +681,8 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             fn js_ext_http_server_is_handle(handle: i64) -> i32;
             fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
             fn js_ext_http_server_response_is_handle(handle: i64) -> i32;
+            fn js_ext_http2_session_is_handle(handle: i64) -> i32;
+            fn js_ext_http2_stream_is_handle(handle: i64) -> i32;
             fn js_ext_http_server_dispatch_method(
                 handle: i64,
                 method_ptr: *const u8,
@@ -659,6 +698,20 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
                 args_len: usize,
             ) -> f64;
             fn js_ext_http_server_response_dispatch_method(
+                handle: i64,
+                method_ptr: *const u8,
+                method_len: usize,
+                args_ptr: *const f64,
+                args_len: usize,
+            ) -> f64;
+            fn js_ext_http2_session_dispatch_method(
+                handle: i64,
+                method_ptr: *const u8,
+                method_len: usize,
+                args_ptr: *const f64,
+                args_len: usize,
+            ) -> f64;
+            fn js_ext_http2_stream_dispatch_method(
                 handle: i64,
                 method_ptr: *const u8,
                 method_len: usize,
@@ -688,16 +741,50 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
 
         let is_incoming_message_method = matches!(
             method_name,
-            "on" | "addListener" | "setEncoding" | "pause" | "resume" | "destroy" | "read"
+            "on" | "addListener"
+                | "setEncoding"
+                | "setTimeout"
+                | "pause"
+                | "resume"
+                | "destroy"
+                | "read"
         ) || matches!(
             method_name,
-            "method" | "url" | "httpVersion" | "headers" | "rawHeaders"
+            "method"
+                | "url"
+                | "httpVersion"
+                | "headers"
+                | "rawHeaders"
+                | "headersDistinct"
+                | "trailers"
+                | "rawTrailers"
+                | "trailersDistinct"
+                | "socket"
+                | "connection"
+                | "signal"
+                | "remoteAddress"
+                | "remotePort"
         ) || matches!(
             method_name,
-            "__get_method" | "__get_url" | "__get_httpVersion" | "__get_headers"
+            "__get_method"
+                | "__get_url"
+                | "__get_httpVersion"
+                | "__get_headers"
+                | "__get_headersDistinct"
+                | "__get_trailers"
         ) || matches!(
             method_name,
-            "__get_rawHeaders" | "__get_complete" | "__get_aborted" | "__get_destroyed"
+            "__get_rawHeaders"
+                | "__get_rawTrailers"
+                | "__get_trailersDistinct"
+                | "__get_complete"
+                | "__get_aborted"
+                | "__get_destroyed"
+                | "__get_socket"
+                | "__get_connection"
+                | "__get_signal"
+                | "__get_remoteAddress"
+                | "__get_remotePort"
         );
         if is_incoming_message_method
             && unsafe { js_ext_http_incoming_message_is_handle(handle) } != 0
@@ -715,25 +802,106 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
 
         let is_server_response_method = matches!(
             method_name,
-            "setHeader" | "getHeader" | "removeHeader" | "hasHeader" | "writeHead" | "write"
+            "setHeader"
+                | "getHeader"
+                | "removeHeader"
+                | "hasHeader"
+                | "getHeaders"
+                | "getHeaderNames"
+                | "appendHeader"
+                | "setHeaders"
+                | "writeHead"
+                | "write"
         ) || matches!(
             method_name,
-            "addTrailers" | "end" | "flushHeaders" | "writeContinue" | "writeProcessing"
+            "addTrailers"
+                | "end"
+                | "flushHeaders"
+                | "cork"
+                | "uncork"
+                | "setTimeout"
+                | "writeEarlyHints"
+                | "writeContinue"
+                | "writeProcessing"
         ) || matches!(
             method_name,
             "on" | "addListener" | "setStatus" | "getStatus"
         ) || matches!(
             method_name,
-            "__get_statusCode" | "__set_statusCode" | "__set_statusMessage"
+            "__get_statusCode" | "__get_statusMessage" | "__set_statusCode" | "__set_statusMessage"
         ) || matches!(
             method_name,
-            "__get_headersSent" | "__get_writableEnded" | "__get_writableFinished"
+            "__get_headersSent"
+                | "__get_writableEnded"
+                | "__get_writableFinished"
+                | "__get_finished"
+                | "__get_sendDate"
+                | "__set_sendDate"
+                | "__get_strictContentLength"
+                | "__set_strictContentLength"
+                | "__get_req"
+                | "__get_socket"
+                | "__get_connection"
         );
         if is_server_response_method
             && unsafe { js_ext_http_server_response_is_handle(handle) } != 0
         {
             return unsafe {
                 js_ext_http_server_response_dispatch_method(
+                    handle,
+                    method_name.as_ptr(),
+                    method_name.len(),
+                    args.as_ptr(),
+                    args.len(),
+                )
+            };
+        }
+
+        let is_h2_session_method = matches!(
+            method_name,
+            "request"
+                | "on"
+                | "addListener"
+                | "close"
+                | "destroy"
+                | "ref"
+                | "unref"
+                | "setTimeout"
+                | "setLocalWindowSize"
+                | "ping"
+                | "settings"
+                | "goaway"
+        );
+        if is_h2_session_method && unsafe { js_ext_http2_session_is_handle(handle) } != 0 {
+            return unsafe {
+                js_ext_http2_session_dispatch_method(
+                    handle,
+                    method_name.as_ptr(),
+                    method_name.len(),
+                    args.as_ptr(),
+                    args.len(),
+                )
+            };
+        }
+
+        let is_h2_stream_method = matches!(
+            method_name,
+            "on" | "addListener"
+                | "setEncoding"
+                | "respond"
+                | "end"
+                | "close"
+                | "setTimeout"
+                | "priority"
+                | "additionalHeaders"
+                | "pushStream"
+                | "respondWithFD"
+                | "respondWithFile"
+                | "sendTrailers"
+        );
+        if is_h2_stream_method && unsafe { js_ext_http2_stream_is_handle(handle) } != 0 {
+            return unsafe {
+                js_ext_http2_stream_dispatch_method(
                     handle,
                     method_name.as_ptr(),
                     method_name.len(),
@@ -1429,6 +1597,11 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         return value;
     }
 
+    #[cfg(feature = "http-client")]
+    if let Some(value) = crate::http::dispatch_client_request_property(handle, property_name) {
+        return value;
+    }
+
     #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
     if let Some(value) = crate::tls::dispatch_tls_property(handle, property_name) {
         return value;
@@ -1561,6 +1734,8 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             fn js_ext_http_server_is_handle(handle: i64) -> i32;
             fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
             fn js_ext_http_server_response_is_handle(handle: i64) -> i32;
+            fn js_ext_http2_session_is_handle(handle: i64) -> i32;
+            fn js_ext_http2_stream_is_handle(handle: i64) -> i32;
             fn js_ext_http_server_dispatch_property(
                 handle: i64,
                 property_ptr: *const u8,
@@ -1572,6 +1747,16 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 property_len: usize,
             ) -> f64;
             fn js_ext_http_server_response_dispatch_property(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+            ) -> f64;
+            fn js_ext_http2_session_dispatch_property(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+            ) -> f64;
+            fn js_ext_http2_stream_dispatch_property(
                 handle: i64,
                 property_ptr: *const u8,
                 property_len: usize,
@@ -1607,12 +1792,22 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "httpVersion"
                 | "headers"
                 | "rawHeaders"
+                | "headersDistinct"
+                | "trailers"
+                | "rawTrailers"
+                | "trailersDistinct"
                 | "complete"
                 | "aborted"
                 | "destroyed"
+                | "socket"
+                | "connection"
+                | "signal"
+                | "remoteAddress"
+                | "remotePort"
                 | "on"
                 | "addListener"
                 | "setEncoding"
+                | "setTimeout"
                 | "pause"
                 | "resume"
                 | "destroy"
@@ -1631,18 +1826,33 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         if matches!(
             property_name,
             "statusCode"
+                | "statusMessage"
                 | "headersSent"
                 | "writableEnded"
                 | "writableFinished"
+                | "finished"
+                | "sendDate"
+                | "strictContentLength"
+                | "req"
+                | "socket"
+                | "connection"
                 | "setHeader"
                 | "getHeader"
                 | "removeHeader"
                 | "hasHeader"
+                | "getHeaders"
+                | "getHeaderNames"
+                | "appendHeader"
+                | "setHeaders"
                 | "writeHead"
                 | "write"
                 | "addTrailers"
                 | "end"
                 | "flushHeaders"
+                | "cork"
+                | "uncork"
+                | "setTimeout"
+                | "writeEarlyHints"
                 | "writeContinue"
                 | "writeProcessing"
                 | "on"
@@ -1651,6 +1861,78 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         {
             return unsafe {
                 js_ext_http_server_response_dispatch_property(
+                    handle,
+                    property_name.as_ptr(),
+                    property_name.len(),
+                )
+            };
+        }
+
+        if matches!(
+            property_name,
+            "request"
+                | "on"
+                | "addListener"
+                | "close"
+                | "destroy"
+                | "ref"
+                | "unref"
+                | "setTimeout"
+                | "setLocalWindowSize"
+                | "ping"
+                | "settings"
+                | "goaway"
+                | "type"
+                | "encrypted"
+                | "connecting"
+                | "closed"
+                | "destroyed"
+                | "alpnProtocol"
+                | "localSettings"
+                | "remoteSettings"
+                | "state"
+                | "socket"
+        ) && unsafe { js_ext_http2_session_is_handle(handle) } != 0
+        {
+            return unsafe {
+                js_ext_http2_session_dispatch_property(
+                    handle,
+                    property_name.as_ptr(),
+                    property_name.len(),
+                )
+            };
+        }
+
+        if matches!(
+            property_name,
+            "on" | "addListener"
+                | "setEncoding"
+                | "respond"
+                | "end"
+                | "close"
+                | "setTimeout"
+                | "priority"
+                | "additionalHeaders"
+                | "pushStream"
+                | "respondWithFD"
+                | "respondWithFile"
+                | "sendTrailers"
+                | "id"
+                | "pending"
+                | "closed"
+                | "destroyed"
+                | "aborted"
+                | "rstCode"
+                | "headersSent"
+                | "sentHeaders"
+                | "session"
+                | "state"
+                | "bufferSize"
+                | "endAfterHeaders"
+        ) && unsafe { js_ext_http2_stream_is_handle(handle) } != 0
+        {
+            return unsafe {
+                js_ext_http2_stream_dispatch_property(
                     handle,
                     property_name.as_ptr(),
                     property_name.len(),
@@ -1768,6 +2050,13 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
 
     #[cfg(feature = "external-http-client-pump")]
     if let Some(value) =
+        unsafe { super::dispatch_http::dispatch_client_request_property(handle, property_name) }
+    {
+        return value;
+    }
+
+    #[cfg(feature = "external-http-client-pump")]
+    if let Some(value) =
         unsafe { super::dispatch_http::dispatch_client_incoming_property(handle, property_name) }
     {
         return value;
@@ -1825,15 +2114,40 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     }
 
     #[cfg(feature = "crypto")]
-    if matches!(property_name, "update" | "digest" | "copy")
-        && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    if matches!(
+        property_name,
+        "update"
+            | "digest"
+            | "copy"
+            | "write"
+            | "end"
+            | "on"
+            | "once"
+            | "addListener"
+            | "pipe"
+            | "setEncoding"
+            | "destroy"
+            | "close"
+    ) && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_hash_property(handle, property_name);
     }
 
     #[cfg(feature = "crypto")]
-    if matches!(property_name, "update" | "digest")
-        && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    if matches!(
+        property_name,
+        "update"
+            | "digest"
+            | "write"
+            | "end"
+            | "on"
+            | "once"
+            | "addListener"
+            | "pipe"
+            | "setEncoding"
+            | "destroy"
+            | "close"
+    ) && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_hmac_property(handle, property_name);
     }
@@ -2133,7 +2447,10 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
     }
 
     #[cfg(feature = "external-http-server-pump")]
-    if matches!(property_name, "statusCode" | "statusMessage") {
+    if matches!(
+        property_name,
+        "statusCode" | "statusMessage" | "sendDate" | "strictContentLength"
+    ) {
         extern "C" {
             fn js_ext_http_server_response_is_handle(handle: i64) -> i32;
             fn js_ext_http_server_response_dispatch_property_set(
@@ -2193,8 +2510,8 @@ pub unsafe extern "C" fn js_handle_prototype_dispatch(handle: i64) -> f64 {
 unsafe extern "C" fn js_node_http_native_dispatch(
     module_ptr: *const u8,
     module_len: usize,
-    _method_ptr: *const u8,
-    _method_len: usize,
+    method_ptr: *const u8,
+    method_len: usize,
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
@@ -2202,6 +2519,7 @@ unsafe extern "C" fn js_node_http_native_dispatch(
     extern "C" {
         fn js_node_http_create_server_with_options(first_arg: f64, second_arg: f64) -> i64;
         fn js_node_https_create_server(opts_f64: f64, handler: i64) -> i64;
+        fn js_node_http2_create_server(first_arg: f64, second_arg: f64) -> i64;
         fn js_node_http2_create_secure_server(opts_f64: f64, handler: i64) -> i64;
         fn js_value_is_closure(value_bits: i64) -> i32;
     }
@@ -2210,6 +2528,11 @@ unsafe extern "C" fn js_node_http_native_dispatch(
         ""
     } else {
         std::str::from_utf8(std::slice::from_raw_parts(module_ptr, module_len)).unwrap_or("")
+    };
+    let method = if method_ptr.is_null() || method_len == 0 {
+        ""
+    } else {
+        std::str::from_utf8(std::slice::from_raw_parts(method_ptr, method_len)).unwrap_or("")
     };
     let arg = |n: usize| -> f64 {
         if n < args_len && !args_ptr.is_null() {
@@ -2238,7 +2561,10 @@ unsafe extern "C" fn js_node_http_native_dispatch(
     let handle = match module {
         "http" => js_node_http_create_server_with_options(options_f64, handler_f64),
         "https" => js_node_https_create_server(options_f64, handler_ptr),
-        "http2" => js_node_http2_create_secure_server(options_f64, handler_ptr),
+        "http2" if method == "createSecureServer" => {
+            js_node_http2_create_secure_server(options_f64, handler_ptr)
+        }
+        "http2" => js_node_http2_create_server(options_f64, handler_f64),
         _ => return undefined,
     };
     if handle == 0 {
@@ -2279,6 +2605,45 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
                 *const perry_runtime::StringHeader,
             ) -> *mut perry_runtime::Promise,
         );
+        #[cfg(feature = "http-client")]
+        fn js_register_global_fetch_constructors(
+            blob_new: unsafe extern "C" fn(f64, f64) -> f64,
+            headers_new: extern "C" fn() -> f64,
+            headers_init_from_value: unsafe extern "C" fn(f64, f64) -> f64,
+            request_new: unsafe extern "C" fn(
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                f64,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                f64,
+                *const perry_runtime::StringHeader,
+                f64,
+            ) -> f64,
+            response_new: unsafe extern "C" fn(
+                *const perry_runtime::StringHeader,
+                f64,
+                *const perry_runtime::StringHeader,
+                f64,
+            ) -> f64,
+            response_static_json: unsafe extern "C" fn(
+                f64,
+                f64,
+                *const perry_runtime::StringHeader,
+                f64,
+            ) -> f64,
+            response_static_redirect: unsafe extern "C" fn(
+                *const perry_runtime::StringHeader,
+                f64,
+            ) -> f64,
+            response_static_error: extern "C" fn() -> f64,
+        );
         fn js_register_worker_threads_namespace_getters(
             worker_data: extern "C" fn() -> f64,
             is_main_thread: extern "C" fn() -> f64,
@@ -2299,6 +2664,17 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     crate::string_decoder::string_decoder_prototype_value();
     #[cfg(feature = "http-client")]
     js_register_global_fetch_with_options(crate::fetch::js_fetch_with_options);
+    #[cfg(feature = "http-client")]
+    js_register_global_fetch_constructors(
+        crate::fetch_blob::js_blob_new,
+        crate::fetch::js_headers_new,
+        crate::fetch::js_headers_init_from_value,
+        crate::fetch::js_request_new,
+        crate::fetch::js_response_new,
+        crate::fetch::js_response_static_json,
+        crate::fetch::js_response_static_redirect,
+        crate::fetch::js_response_static_error,
+    );
     #[cfg(feature = "bundled-events")]
     unsafe extern "C" fn event_emitter_probe(handle: i64) -> bool {
         crate::events::is_event_emitter_handle(handle)

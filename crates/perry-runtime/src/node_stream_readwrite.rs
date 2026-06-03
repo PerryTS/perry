@@ -1,6 +1,4 @@
-//! node:stream — readable/writable state machine (flow control, pipes, read/write/transform impl) (split out of node_stream.rs for the 2000-line
-//! file-size gate, #1987). Shares the parent module's constants, hidden-key
-//! accessors and state primitives via `use super::*`.
+//! node:stream readable/writable state, split from node_stream.rs for #1987.
 #![allow(unused_imports)]
 use super::*;
 use crate::closure::{
@@ -240,6 +238,9 @@ pub(super) fn emit_readable_data(stream: f64, chunk: f64) {
 }
 
 pub(super) fn emit_readable_data_unchecked(stream: f64, chunk: f64) {
+    let Some(chunk) = super::decode_readable_chunk_for_encoding(stream, chunk) else {
+        return;
+    };
     let _ = emit_stream_event(stream, string_value(b"data"), &[chunk]);
     write_chunk_to_pipe_destinations(stream, chunk);
 }
@@ -440,6 +441,27 @@ pub(super) fn pipe_stream_to_destination(stream: f64, dest: f64, end_dest: bool)
     dest
 }
 
+fn is_small_native_handle_destination(value: f64) -> bool {
+    let bits = value.to_bits();
+    if (bits >> 48) as u16 != 0x7FFD {
+        return false;
+    }
+    let raw = bits & 0x0000_FFFF_FFFF_FFFF;
+    raw > 0 && raw < 0x0010_0000
+}
+
+fn call_small_native_pipe_method(dest: f64, method: &'static [u8], args: &[f64]) -> f64 {
+    unsafe {
+        crate::object::js_native_call_method(
+            dest,
+            method.as_ptr() as *const i8,
+            method.len(),
+            args.as_ptr(),
+            args.len(),
+        )
+    }
+}
+
 pub(super) fn remove_pipe_no_end_destination_once(stream: f64, dest: f64) -> bool {
     let arr_value = pipe_no_end_destinations(stream);
     let arr = raw_ptr_from_value(arr_value) as *const crate::array::ArrayHeader;
@@ -526,6 +548,13 @@ pub(super) fn write_chunk_to_pipe_destinations(stream: f64, chunk: f64) {
         dests.push(crate::array::js_array_get_f64(arr, i));
     }
     for dest in dests {
+        if is_small_native_handle_destination(dest) {
+            let ret = call_small_native_pipe_method(dest, b"write", &[chunk]);
+            if ret.to_bits() == TAG_FALSE {
+                let _ = pause_readable_stream(stream);
+            }
+            continue;
+        }
         let ret = write_writable_chunk(
             dest,
             chunk,
@@ -552,6 +581,10 @@ pub(super) fn end_pipe_destinations(stream: f64) {
         dests.push(crate::array::js_array_get_f64(arr, i));
     }
     for dest in dests {
+        if is_small_native_handle_destination(dest) {
+            let _ = call_small_native_pipe_method(dest, b"end", &[]);
+            continue;
+        }
         if stream_destroyed(dest) || has_truthy_hidden(dest, hidden_finish_emitted_key()) {
             continue;
         }
@@ -855,6 +888,18 @@ pub(super) fn read_stream_available_default(stream: f64) -> f64 {
         schedule_readable_end(stream);
     }
     let encoded = readable_encoding_tag(stream).is_some();
+    if encoded {
+        let mut decoded = Vec::with_capacity(values.len());
+        for value in values {
+            if let Some(value) = super::decode_readable_chunk_for_encoding(stream, value) {
+                decoded.push(value);
+            }
+        }
+        values = decoded;
+        if values.is_empty() {
+            return f64::from_bits(TAG_NULL);
+        }
+    }
     if values.len() == 1 {
         if encoded {
             return values[0];
@@ -1766,11 +1811,6 @@ pub(super) fn push_chunk_values(value: f64, out: &mut Vec<f64>, depth: u8) {
 }
 
 /// Drain the chunk storage Perry attaches in `Readable.from(iterable)`.
-///
-/// This intentionally handles only the current stream stub's concrete shapes:
-/// arrays of strings/Buffers/Uint8Arrays/ArrayBuffers plus direct single
-/// string/binary chunks. It gives `node:stream/consumers` useful data without
-/// pretending Perry has a full Node stream pump yet.
 pub fn js_node_stream_collect_bytes(stream: f64) -> Vec<u8> {
     js_node_stream_collect_bytes_result(stream).unwrap_or_default()
 }
@@ -1875,12 +1915,7 @@ pub(crate) fn js_node_stream_readable_chunks_result(stream: f64) -> Result<Optio
     Ok(Some(out))
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Method tables. Order is locked in — it determines the shape's
-// packed-keys order. Each method set's length is a unique
-// shape-cache key when added to its base shape id, so the Readable,
-// Writable, and Duplex method tables stay in distinct shape bands.
-// ─────────────────────────────────────────────────────────────────
+// Method table order determines packed-key order and shape-cache identity.
 
 pub(super) fn readable_methods() -> [(&'static str, StubFn); 39] {
     [
@@ -1908,11 +1943,7 @@ pub(super) fn readable_methods() -> [(&'static str, StubFn); 39] {
         ("destroy", cast1(ns_destroy1)),
         ("setEncoding", cast1(ns_set_encoding1)),
         ("isPaused", cast0(ns_is_paused0)),
-        // #1558 — async iterator helpers. The consuming helpers accept a
-        // trailing `{ signal }` options arg; the lazy transforms accept one
-        // too (Node's signature). Arities are registered in
-        // `register_iter_helper_arities` so under-supplied calls pad the
-        // missing trailing args with `undefined`.
+        // #1558: async iterator helpers; arities pad missing options args.
         ("toArray", cast1(ns_iter_to_array)),
         ("map", cast2(ns_iter_map)),
         ("filter", cast2(ns_iter_filter)),

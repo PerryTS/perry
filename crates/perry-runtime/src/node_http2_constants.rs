@@ -7,7 +7,19 @@ thread_local! {
     static SENSITIVE_HEADERS_SYMBOL: Cell<u64> = const { Cell::new(0) };
 }
 
-pub(crate) const HTTP2_NAMESPACE_KEYS: &[&[u8]] = &[b"constants", b"sensitiveHeaders"];
+pub(crate) const HTTP2_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"Http2ServerRequest",
+    b"Http2ServerResponse",
+    b"connect",
+    b"constants",
+    b"createSecureServer",
+    b"createServer",
+    b"getDefaultSettings",
+    b"getPackedSettings",
+    b"getUnpackedSettings",
+    b"performServerHandshake",
+    b"sensitiveHeaders",
+];
 
 macro_rules! with_http2_constants {
     ($callback:ident $(, $arg:expr)?) => {

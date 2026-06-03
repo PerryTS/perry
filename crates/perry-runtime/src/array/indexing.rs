@@ -4,11 +4,24 @@ use std::ptr;
 
 #[no_mangle]
 pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
+    let arr = {
+        let bits = arr as u64;
+        let top16 = bits >> 48;
+        if top16 >= 0x7FF8 {
+            if top16 != (crate::value::POINTER_TAG >> 48) {
+                return 0;
+            }
+            (bits & crate::value::POINTER_MASK) as *const ArrayHeader
+        } else {
+            arr
+        }
+    };
     if !arr.is_null() {
-        if crate::set::is_registered_set(arr as usize) {
+        let addr = arr as usize;
+        if crate::set::is_registered_set(addr) {
             return crate::set::js_set_size(arr as *const crate::set::SetHeader);
         }
-        if crate::map::is_registered_map(arr as usize) {
+        if crate::map::is_registered_map(addr) {
             return crate::map::js_map_size(arr as *const crate::map::MapHeader);
         }
     }

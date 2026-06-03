@@ -506,6 +506,12 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
     // reader's queue and dispatches to question/line/close callbacks.
     count += crate::readline::js_readline_process_pending();
 
+    // Process pending crypto Hash/Hmac stream digest events (#2479).
+    #[cfg(feature = "crypto")]
+    {
+        count += unsafe { crate::crypto::js_crypto_stream_process_pending() };
+    }
+
     // Process pending zlib stream events (#1843) — `createGzip()` etc.
     // buffer input across `.write()` and queue 'data'/'end' on `.end()`;
     // drained + dispatched to listeners (and forwarded to `.pipe()` dests)
@@ -697,6 +703,12 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
     }
     if crate::worker_threads::js_worker_threads_has_pending() != 0 {
         return 1;
+    }
+    #[cfg(feature = "crypto")]
+    {
+        if crate::crypto::js_crypto_stream_has_active_handles() != 0 {
+            return 1;
+        }
     }
     // Bundled-fastify — keep the loop alive while any FastifyServerHandle
     // is in the "listening" state. Paired with

@@ -7,7 +7,6 @@ use super::*;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
-#[cfg(not(feature = "external-fetch-symbols"))]
 const FETCH_REASON: &str =
     "fetch symbol from perry-stdlib not linked into this binary (runtime-only build)";
 
@@ -18,11 +17,68 @@ type FetchWithOptionsFn = unsafe extern "C" fn(
     *const crate::StringHeader,
 ) -> *mut crate::promise::Promise;
 
+type FetchBlobNewFn = unsafe extern "C" fn(f64, f64) -> f64;
+type FetchHeadersNewFn = extern "C" fn() -> f64;
+type FetchHeadersInitFromValueFn = unsafe extern "C" fn(f64, f64) -> f64;
+type FetchRequestNewFn = unsafe extern "C" fn(
+    *const crate::StringHeader,
+    *const crate::StringHeader,
+    *const crate::StringHeader,
+    f64,
+    *const crate::StringHeader,
+    *const crate::StringHeader,
+    *const crate::StringHeader,
+    *const crate::StringHeader,
+    *const crate::StringHeader,
+    *const crate::StringHeader,
+    *const crate::StringHeader,
+    f64,
+    *const crate::StringHeader,
+    f64,
+) -> f64;
+type FetchResponseNewFn =
+    unsafe extern "C" fn(*const crate::StringHeader, f64, *const crate::StringHeader, f64) -> f64;
+type FetchResponseStaticJsonFn =
+    unsafe extern "C" fn(f64, f64, *const crate::StringHeader, f64) -> f64;
+type FetchResponseStaticRedirectFn = unsafe extern "C" fn(*const crate::StringHeader, f64) -> f64;
+type FetchResponseStaticErrorFn = extern "C" fn() -> f64;
+
 static GLOBAL_FETCH_WITH_OPTIONS: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static GLOBAL_FETCH_BLOB_NEW: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static GLOBAL_FETCH_HEADERS_NEW: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static GLOBAL_FETCH_HEADERS_INIT_FROM_VALUE: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static GLOBAL_FETCH_REQUEST_NEW: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static GLOBAL_FETCH_RESPONSE_NEW: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static GLOBAL_FETCH_RESPONSE_STATIC_JSON: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static GLOBAL_FETCH_RESPONSE_STATIC_REDIRECT: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static GLOBAL_FETCH_RESPONSE_STATIC_ERROR: AtomicPtr<()> = AtomicPtr::new(null_mut());
 
 #[no_mangle]
 pub extern "C" fn js_register_global_fetch_with_options(f: FetchWithOptionsFn) {
     GLOBAL_FETCH_WITH_OPTIONS.store(f as *mut (), Ordering::Release);
+}
+
+#[no_mangle]
+pub extern "C" fn js_register_global_fetch_constructors(
+    blob_new: FetchBlobNewFn,
+    headers_new: FetchHeadersNewFn,
+    headers_init_from_value: FetchHeadersInitFromValueFn,
+    request_new: FetchRequestNewFn,
+    response_new: FetchResponseNewFn,
+    response_static_json: FetchResponseStaticJsonFn,
+    response_static_redirect: FetchResponseStaticRedirectFn,
+    response_static_error: FetchResponseStaticErrorFn,
+) {
+    GLOBAL_FETCH_BLOB_NEW.store(blob_new as *mut (), Ordering::Release);
+    GLOBAL_FETCH_HEADERS_NEW.store(headers_new as *mut (), Ordering::Release);
+    GLOBAL_FETCH_HEADERS_INIT_FROM_VALUE
+        .store(headers_init_from_value as *mut (), Ordering::Release);
+    GLOBAL_FETCH_REQUEST_NEW.store(request_new as *mut (), Ordering::Release);
+    GLOBAL_FETCH_RESPONSE_NEW.store(response_new as *mut (), Ordering::Release);
+    GLOBAL_FETCH_RESPONSE_STATIC_JSON.store(response_static_json as *mut (), Ordering::Release);
+    GLOBAL_FETCH_RESPONSE_STATIC_REDIRECT
+        .store(response_static_redirect as *mut (), Ordering::Release);
+    GLOBAL_FETCH_RESPONSE_STATIC_ERROR.store(response_static_error as *mut (), Ordering::Release);
 }
 
 fn fetch_option(init: f64, name: &[u8]) -> f64 {
@@ -94,6 +150,128 @@ unsafe fn call_fetch_with_options(
     }
     crate::stub_diag::perry_stub_warn("js_fetch_with_options", FETCH_REASON, None);
     null_mut()
+}
+
+fn warn_unregistered_fetch_symbol(name: &'static str) -> f64 {
+    crate::stub_diag::perry_stub_warn(name, FETCH_REASON, None);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+pub(super) fn call_global_blob_new(parts: f64, type_value: f64) -> f64 {
+    let f = GLOBAL_FETCH_BLOB_NEW.load(Ordering::Acquire);
+    if !f.is_null() {
+        let func: FetchBlobNewFn = unsafe { std::mem::transmute(f) };
+        return unsafe { func(parts, type_value) };
+    }
+    warn_unregistered_fetch_symbol("js_blob_new")
+}
+
+pub(super) fn call_global_headers_new() -> f64 {
+    let f = GLOBAL_FETCH_HEADERS_NEW.load(Ordering::Acquire);
+    if !f.is_null() {
+        let func: FetchHeadersNewFn = unsafe { std::mem::transmute(f) };
+        return func();
+    }
+    warn_unregistered_fetch_symbol("js_headers_new")
+}
+
+pub(super) fn call_global_headers_init_from_value(handle: f64, init: f64) -> f64 {
+    let f = GLOBAL_FETCH_HEADERS_INIT_FROM_VALUE.load(Ordering::Acquire);
+    if !f.is_null() {
+        let func: FetchHeadersInitFromValueFn = unsafe { std::mem::transmute(f) };
+        return unsafe { func(handle, init) };
+    }
+    warn_unregistered_fetch_symbol("js_headers_init_from_value")
+}
+
+pub(super) fn call_global_request_new(
+    url_ptr: *const crate::StringHeader,
+    method_ptr: *const crate::StringHeader,
+    body_ptr: *const crate::StringHeader,
+    headers_handle: f64,
+    referrer_ptr: *const crate::StringHeader,
+    referrer_policy_ptr: *const crate::StringHeader,
+    mode_ptr: *const crate::StringHeader,
+    credentials_ptr: *const crate::StringHeader,
+    cache_ptr: *const crate::StringHeader,
+    redirect_ptr: *const crate::StringHeader,
+    integrity_ptr: *const crate::StringHeader,
+    keepalive: f64,
+    duplex_ptr: *const crate::StringHeader,
+    signal: f64,
+) -> f64 {
+    let f = GLOBAL_FETCH_REQUEST_NEW.load(Ordering::Acquire);
+    if !f.is_null() {
+        let func: FetchRequestNewFn = unsafe { std::mem::transmute(f) };
+        return unsafe {
+            func(
+                url_ptr,
+                method_ptr,
+                body_ptr,
+                headers_handle,
+                referrer_ptr,
+                referrer_policy_ptr,
+                mode_ptr,
+                credentials_ptr,
+                cache_ptr,
+                redirect_ptr,
+                integrity_ptr,
+                keepalive,
+                duplex_ptr,
+                signal,
+            )
+        };
+    }
+    warn_unregistered_fetch_symbol("js_request_new")
+}
+
+pub(super) fn call_global_response_new(
+    body_ptr: *const crate::StringHeader,
+    status: f64,
+    status_text_ptr: *const crate::StringHeader,
+    headers_handle: f64,
+) -> f64 {
+    let f = GLOBAL_FETCH_RESPONSE_NEW.load(Ordering::Acquire);
+    if !f.is_null() {
+        let func: FetchResponseNewFn = unsafe { std::mem::transmute(f) };
+        return unsafe { func(body_ptr, status, status_text_ptr, headers_handle) };
+    }
+    warn_unregistered_fetch_symbol("js_response_new")
+}
+
+pub(super) fn call_global_response_static_json(
+    value: f64,
+    init_status: f64,
+    init_status_text_ptr: *const crate::StringHeader,
+    headers_handle: f64,
+) -> f64 {
+    let f = GLOBAL_FETCH_RESPONSE_STATIC_JSON.load(Ordering::Acquire);
+    if !f.is_null() {
+        let func: FetchResponseStaticJsonFn = unsafe { std::mem::transmute(f) };
+        return unsafe { func(value, init_status, init_status_text_ptr, headers_handle) };
+    }
+    warn_unregistered_fetch_symbol("js_response_static_json")
+}
+
+pub(super) fn call_global_response_static_redirect(
+    url_ptr: *const crate::StringHeader,
+    status: f64,
+) -> f64 {
+    let f = GLOBAL_FETCH_RESPONSE_STATIC_REDIRECT.load(Ordering::Acquire);
+    if !f.is_null() {
+        let func: FetchResponseStaticRedirectFn = unsafe { std::mem::transmute(f) };
+        return unsafe { func(url_ptr, status) };
+    }
+    warn_unregistered_fetch_symbol("js_response_static_redirect")
+}
+
+pub(super) fn call_global_response_static_error() -> f64 {
+    let f = GLOBAL_FETCH_RESPONSE_STATIC_ERROR.load(Ordering::Acquire);
+    if !f.is_null() {
+        let func: FetchResponseStaticErrorFn = unsafe { std::mem::transmute(f) };
+        return func();
+    }
+    warn_unregistered_fetch_symbol("js_response_static_error")
 }
 
 pub(super) extern "C" fn global_this_fetch_thunk(

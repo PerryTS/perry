@@ -56,6 +56,9 @@ fn is_cjs_style_native_default_import(module_name: &str) -> bool {
             | "dns"
             | "dns/promises"
             | "events"
+            | "inspector"
+            | "inspector/promises"
+            | "module"
             | "os"
             | "path"
             | "path/posix"
@@ -66,6 +69,13 @@ fn is_cjs_style_native_default_import(module_name: &str) -> bool {
             | "url"
             | "util"
     )
+}
+
+fn node_submodule_default_export_key(module_name: &str) -> Option<&'static str> {
+    match module_name {
+        "test/reporters" => Some("test_reporters"),
+        _ => None,
+    }
 }
 
 pub(crate) fn lower_module_decl(
@@ -224,6 +234,8 @@ pub(crate) fn lower_module_decl(
                                     ("util.types".to_string(), None)
                                 } else if source == "punycode" && imported == "ucs2" {
                                     ("punycode.ucs2".to_string(), None)
+                                } else if source == "inspector" && imported == "Network" {
+                                    ("inspector.Network".to_string(), None)
                                 } else {
                                     (source.clone(), Some(imported.clone()))
                                 };
@@ -321,32 +333,29 @@ pub(crate) fn lower_module_decl(
                             if source == "process" {
                                 ctx.register_builtin_module_alias(local.clone(), source.clone());
                             }
-                        } else if is_node_builtin_module(&source) {
-                            // #3906: a CJS-backed Node builtin *submodule* that
-                            // isn't in NATIVE_MODULES (e.g. `node:timers/promises`,
-                            // `node:stream/promises`). Its default export is the
-                            // module object — CJS `default === module.exports`,
-                            // the same value as the `import * as` namespace shape.
-                            // Without this it fell to the JS-module default path
-                            // below and resolved to an `ExternFuncRef` boolean
-                            // stub (`typeof === "boolean"`). Mirror the namespace
-                            // handling so the default binding is the module object.
+                        } else if node_submodule_default_export_key(&source).is_some() {
                             ctx.register_imported_func(local.clone(), local.clone());
-                            ctx.namespace_import_locals.insert(local.clone());
+                            specifiers.push(ImportSpecifier::Default { local });
+                            continue;
+                        } else if is_node_builtin_module(&source) {
+                            if source == "diagnostics_channel" {
+                                ctx.register_imported_func(local.clone(), local.clone());
+                                specifiers.push(ImportSpecifier::Default { local });
+                                continue;
+                            }
+                            // #3906: a CJS-backed Node builtin *submodule* that
+                            // isn't in NATIVE_MODULES (e.g.
+                            // `node:timers/promises`, `node:stream/promises`).
+                            // Its default import is an actual `default` binding,
+                            // not the module namespace object. Register it as an
+                            // imported function so the compile driver can route
+                            // the binding through the known-node-submodule
+                            // default export path instead of the generic JS
+                            // module fallback.
+                            ctx.register_imported_func(local.clone(), local.clone());
                             if source == "fs/promises" {
                                 ctx.register_builtin_module_alias(local.clone(), source.clone());
                             }
-                            // Treat the default binding as the module-namespace
-                            // object (CJS default === module.exports). Pushing a
-                            // Namespace specifier (not Default) puts `local` into
-                            // the driver's `namespace_imports`, so `typeof local`
-                            // folds to "object" and `local.member(...)` dispatches
-                            // through the submodule namespace — exactly like the
-                            // `import * as local` shape.
-                            specifiers.push(ImportSpecifier::Namespace {
-                                local: local.clone(),
-                            });
-                            continue;
                         } else {
                             // Default import from JS module — register so calls resolve to
                             // ExternFuncRef. Use the LOCAL name as the original-name marker
@@ -490,6 +499,26 @@ pub(crate) fn lower_module_decl(
                 ast::Decl::Var(var_decl) => {
                     // Handle exported variables
                     for decl in &var_decl.decls {
+                        if is_destructuring_pattern(&decl.name) {
+                            let mut names = Vec::new();
+                            collect_binding_names(&decl.name, &mut names);
+                            if decl.init.is_some() {
+                                let mutable = var_decl.kind != ast::VarDeclKind::Const;
+                                let is_var = var_decl.kind == ast::VarDeclKind::Var;
+                                let stmts =
+                                    lower_var_decl_with_destructuring(ctx, decl, mutable, is_var)?;
+                                module.init.extend(stmts);
+                                for name in names {
+                                    module.exports.push(Export::Named {
+                                        local: name.clone(),
+                                        exported: name.clone(),
+                                    });
+                                    module.exported_objects.push(name);
+                                }
+                                continue;
+                            }
+                        }
+
                         let name = get_binding_name(&decl.name)?;
                         let ty = extract_binding_type(&decl.name);
                         if let Some(init) = &decl.init {
@@ -547,24 +576,17 @@ pub(crate) fn lower_module_decl(
                                             _ => None,
                                         }
                                     };
-                                    // Issue #848: StringDecoder runs entirely through
-                                    // HANDLE_METHOD_DISPATCH / HANDLE_PROPERTY_DISPATCH
-                                    // — registering it as a typed native instance would
-                                    // re-route `d.write` (property read) through the
-                                    // NativeMethodCall-with-empty-args path that
-                                    // pre-invokes the FFI as a getter, so
-                                    // `typeof d.write === "function"` would silently
-                                    // become `"number"` (the empty-string write return,
-                                    // misclassified). Skipping the registration lets
-                                    // the regular PropertyGet path fall into
-                                    // HANDLE_PROPERTY_DISPATCH which returns the bound-
-                                    // method closure built by `js_class_method_bind` —
-                                    // `typeof` reads `"function"`, and the eventual
-                                    // call routes through HANDLE_METHOD_DISPATCH back
-                                    // to the same `dispatch_string_decoder` impl.
+                                    // Handle-backed constructors dispatch through
+                                    // HANDLE_*_DISPATCH; don't register them as
+                                    // typed native instances or property reads can
+                                    // be routed through native-class method lowering.
                                     let module_name = match (class_name, module_name.as_deref()) {
                                         ("StringDecoder", Some("string_decoder"))
-                                        | ("Recoverable" | "REPLServer", Some("repl")) => None,
+                                        | ("Recoverable" | "REPLServer", Some("repl"))
+                                        | (
+                                            "DiffieHellman" | "DiffieHellmanGroup",
+                                            Some("crypto" | "node:crypto"),
+                                        ) => None,
                                         _ => module_name,
                                     };
                                     if let Some(native_module) = module_name {
@@ -618,16 +640,16 @@ pub(crate) fn lower_module_decl(
                                                 _ => None,
                                             }
                                         };
-                                        // Issue #848: StringDecoder runs entirely through
-                                        // HANDLE_*_DISPATCH (see the gate on the sync path
-                                        // above for the full rationale). Defensive mirror
-                                        // on this awaited-new branch so the same skip
-                                        // applies to `await new StringDecoder(...)` —
-                                        // which is unusual but legal TS.
+                                        // Mirror the handle-backed constructor skip
+                                        // on this awaited-new branch.
                                         let module_name = match (class_name, module_name.as_deref())
                                         {
                                             ("StringDecoder", Some("string_decoder"))
-                                            | ("Recoverable" | "REPLServer", Some("repl")) => None,
+                                            | ("Recoverable" | "REPLServer", Some("repl"))
+                                            | (
+                                                "DiffieHellman" | "DiffieHellmanGroup",
+                                                Some("crypto" | "node:crypto"),
+                                            ) => None,
                                             _ => module_name,
                                         };
                                         if let Some(native_module) = module_name {
@@ -885,19 +907,32 @@ pub(crate) fn lower_module_decl(
                                     let native_info = ctx
                                         .lookup_native_module(class_name_str)
                                         .map(|(m, _)| m.to_string());
-                                    if let Some(module_name) =
-                                        native_info.filter(|module_name| module_name != "repl")
-                                    {
-                                        ctx.register_native_instance(
-                                            name.clone(),
-                                            module_name.clone(),
-                                            class_name_str.to_string(),
+                                    if let Some(module_name) = native_info {
+                                        let is_handle_backed_constructor = matches!(
+                                            (class_name_str, module_name.as_str()),
+                                            (
+                                                "StringDecoder",
+                                                "string_decoder" | "node:string_decoder"
+                                            ) | (
+                                                "Recoverable" | "REPLServer",
+                                                "repl" | "node:repl"
+                                            ) | (
+                                                "DiffieHellman" | "DiffieHellmanGroup",
+                                                "crypto" | "node:crypto"
+                                            )
                                         );
-                                        ctx.module_native_instances.push((
-                                            name.clone(),
-                                            module_name,
-                                            class_name_str.to_string(),
-                                        ));
+                                        if !is_handle_backed_constructor {
+                                            ctx.register_native_instance(
+                                                name.clone(),
+                                                module_name.clone(),
+                                                class_name_str.to_string(),
+                                            );
+                                            ctx.module_native_instances.push((
+                                                name.clone(),
+                                                module_name,
+                                                class_name_str.to_string(),
+                                            ));
+                                        }
                                     }
                                 } else if let ast::Expr::Member(member) = new_expr.callee.as_ref() {
                                     if let (
@@ -1905,7 +1940,36 @@ pub(crate) fn lower_namespace_as_class(
                     ast::Decl::Var(var_decl) => {
                         // Lower exported namespace variables as module-level locals
                         let mutable = var_decl.kind != ast::VarDeclKind::Const;
+                        let is_var = var_decl.kind == ast::VarDeclKind::Var;
                         for decl in &var_decl.decls {
+                            if is_destructuring_pattern(&decl.name) {
+                                let mut names = Vec::new();
+                                collect_binding_names(&decl.name, &mut names);
+                                if decl.init.is_some() {
+                                    let stmts = lower_var_decl_with_destructuring(
+                                        ctx, decl, mutable, is_var,
+                                    )?;
+                                    module.init.extend(stmts);
+                                    for name in names {
+                                        if let Some(id) = ctx.lookup_local(&name) {
+                                            ctx.namespace_vars.push((
+                                                ns_name.to_string(),
+                                                name.clone(),
+                                                id,
+                                            ));
+                                        }
+                                        if is_exported {
+                                            module.exported_objects.push(name.clone());
+                                            module.exports.push(Export::Named {
+                                                local: name.clone(),
+                                                exported: name,
+                                            });
+                                        }
+                                    }
+                                    continue;
+                                }
+                            }
+
                             let name = get_binding_name(&decl.name)?;
                             let ty = extract_binding_type(&decl.name);
                             if let Some(init) = &decl.init {

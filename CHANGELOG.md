@@ -2,6 +2,49 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1112 — release: cut v0.5.1112
+
+Distribution release tagging the accumulated work since `v0.5.1028` (1198
+commits: 852 fixes, 42 features, plus tests/docs/chore). No code changes in
+this commit — it is a clean version-bump checkpoint so the release tag points
+at a freshly-CI'd `main` HEAD. Highlights since the last published tag span
+Node.js builtin parity (crypto/webcrypto, http/http2, streams, vm, dgram,
+cluster, path), reflective builtin-prototype brand checks (#3662 family),
+typed-array prototype/constructor coverage, web stream codec constructors, and
+generational-GC evacuation fixes.
+
+## v0.5.1111 — refactor(codegen): split native_table/http.rs (file-size gate)
+
+`crates/perry-codegen/src/lower_call/native_table/http.rs` had grown to 2024
+lines, tripping the 2000-line file-size lint gate and turning the `lint` check
+red on `main` — which blocked every open PR. Split the single `HTTP_ROWS` table
+into three topical sibling modules with no row content or ordering change:
+`http_client.rs` (client request/get factories + http/https Agent rows, carries
+the `cr` helper), `http_server.rs` (node:http + node:https server rows), and
+`http_http2.rs` (node:http2 server + settings helpers + perry/ads rows). The
+parent `native_table::mod` concatenates the three `*_ROWS` slices in the original
+order. Pure mechanical refactor; no behavioral change.
+
+## v0.5.1110 — feat(webcrypto): SubtleCrypto.supports shape (#4146)
+
+Folds in external contributor PR #4146 (merged via automation without the maintainer version bump; this commit reconciles the metadata): adds `crypto.subtle.supports(...)` returning the static algorithm/usage support shape. Implemented in `crates/perry-stdlib/src/webcrypto/supports.rs` with the `globalThis`/`property_get` codegen wiring and a node-suite fixture. No manifest/entries change, so API docs are unaffected.
+
+## v0.5.1109 — fix(process): builtin namespace bootstrap shapes (#4130)
+
+Folds in external contributor PR #4130: fixes the `process` namespace bootstrap shapes — `process.getBuiltinModule(...)` transport surfaces and the internal bootstrap/namespace shape exposed via `process`. Adds the codegen `node_core_process` native-table wiring, HIR lowering, and runtime `process.rs`/`native_module` support plus node-suite fixtures. Merged on top of current `main`; conflicts were confined to the `stream` native-module callable-export list and dispatch, where `main` had since refactored stream handling into `dispatch_stream_native_module_method` — `main`'s refactored form was kept and the PR's stale inline stream arms dropped. Docs regenerated from the manifest.
+
+## v0.5.1108 — feat(crypto): expose implemented helper exports (#4123)
+
+Folds in external contributor PR #4123: surfaces the already-implemented `crypto` helper exports through the manifest and lowering so they are importable/callable — `DiffieHellman`/`DiffieHellmanGroup`/`diffieHellman`, the `generateKey*`/`generatePrime*`/`checkPrime*` family, `secureHeapUsed`, `hkdf`/`hkdfSync`, and `scrypt`/`scryptSync`. Adds the codegen/HIR new-expression + destructuring wiring plus a node-suite DH export-aliases fixture. Merged on top of current `main`; the `native_callable_export_arity` crypto arms conflicted with #4132's freshly-landed `KeyObject` arms (both kept) and the auto-generated doc lines are reconciled by the end-of-batch manifest regen.
+
+## v0.5.1107 — feat(crypto): expose KeyObject shape for secret keys (#4132)
+
+Folds in external contributor PR #4132: exposes the `crypto` `KeyObject` shape for secret keys — `createSecretKey(...)` returns a `KeyObject` with the expected `type`/`symmetricKeySize`/`asymmetricKeyType` surface and `KeyObject`/`instanceof` branding. Adds `crates/perry-runtime/src/object/native_module_crypto_key_object.rs` plus supporting dispatch wiring and a node-suite fixture. Merged on top of current `main`; only the auto-generated doc count/coverage lines conflicted and are reconciled by the end-of-batch manifest regen.
+
+## v0.5.1106 — fix(child_process): fork lifecycle exports (#4110)
+
+Folds in external contributor PR #4110: rounds out the `child_process` fork lifecycle surface — `subprocess[Symbol.dispose]`, the `fork(...).send(...)` callback firing once the IPC channel has closed, and the forked-child object shape. Adds the supporting runtime wiring in `crates/perry-runtime/src/child_process/` plus node-suite parity fixtures. Merged on top of current `main`; only the auto-generated doc count/coverage lines conflicted and were regenerated from the manifest.
+
 ## v0.5.1105 — fix(stream/web): ReadableStream.from sources (#4106)
 
 Folds in external contributor PR #4106: lowers `ReadableStream.from(...)` (and the `node:stream/web` alias) to the `readable_stream` native `from` constructor so building a web `ReadableStream` from an iterable/async-iterable source works. Merged on top of current `main`; the only conflict was in `crates/perry-hir/src/lower/expr_call/native_module.rs`, where this PR's `ReadableStream.from` static-call block and main's broadened `is_process_ref` gate (#process namespace/default-import) landed in the same region — both were kept.

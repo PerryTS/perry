@@ -53,6 +53,8 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "TextDecoder",
     "TextEncoderStream",
     "TextDecoderStream",
+    "CompressionStream",
+    "DecompressionStream",
     "Navigator",
     "URL",
     "URLSearchParams",
@@ -122,6 +124,7 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "Navigator"
         | "DisposableStack"
         | "AsyncDisposableStack" => 0,
+        "CompressionStream" | "DecompressionStream" => 1,
         "Array"
         | "Object"
         | "String"

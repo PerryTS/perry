@@ -27,7 +27,7 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
     let obj = {
         let bits = obj as u64;
         let top16 = bits >> 48;
-        if top16 >= 0x7FF8 {
+        if top16 == 0x7FFD || top16 >= 0x7FF8 {
             if top16 == 0x7FFC {
                 return 0;
             }
@@ -158,6 +158,18 @@ unsafe fn key_to_str_for_diag(key: *const crate::StringHeader) -> String {
         .unwrap_or_else(|_| "<unknown>".to_string())
 }
 
+unsafe fn string_key_eq(key: *const crate::StringHeader, expected: &[u8]) -> bool {
+    if key.is_null() || (key as usize) < 0x10000 {
+        return false;
+    }
+    let len = (*key).byte_len as usize;
+    if len != expected.len() {
+        return false;
+    }
+    let data = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    std::slice::from_raw_parts(data, len) == expected
+}
+
 /// Set a field value by its string key name (dynamic property access)
 /// This searches the keys array for a match and sets the corresponding value.
 /// If the key doesn't exist, it adds it to the object.
@@ -185,6 +197,13 @@ pub extern "C" fn js_object_set_field_by_name(
                     .unwrap_or("")
                     .to_string();
                 if !name.is_empty() {
+                    if name == "name"
+                        && !super::class_registry::class_is_key_deleted(class_id, &name)
+                        && super::class_registry::lookup_static_method_in_chain(class_id, &name)
+                            .is_none()
+                    {
+                        return;
+                    }
                     let has_own_data = CLASS_DYNAMIC_PROPS.with(|m| {
                         m.borrow()
                             .get(&class_id)
@@ -247,7 +266,7 @@ pub extern "C" fn js_object_set_field_by_name(
     let obj = {
         let bits = obj as u64;
         let top16 = bits >> 48;
-        if top16 >= 0x7FF8 {
+        if top16 == 0x7FFD || top16 >= 0x7FF8 {
             // NaN-boxed value — extract lower 48 bits as pointer
             let raw = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
             if raw.is_null() || top16 == 0x7FFC {
@@ -287,6 +306,16 @@ pub extern "C" fn js_object_set_field_by_name(
             }
         }
         return;
+    }
+    unsafe {
+        if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 && string_key_eq(key, b"length") {
+            let gc_header =
+                (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+                crate::array::js_array_set_length(obj as *mut crate::array::ArrayHeader, value);
+                return;
+            }
+        }
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
@@ -398,6 +427,8 @@ pub extern "C" fn js_object_set_field_by_name(
                         if !attrs.writable() {
                             return;
                         }
+                    } else if matches!(name_str, "name" | "length") {
+                        return;
                     }
                     crate::closure::closure_set_dynamic_prop(obj as usize, name_str, value);
                 }
@@ -843,7 +874,10 @@ pub extern "C" fn js_object_set_field_by_name(
                                 let closure = (acc.set & crate::value::POINTER_MASK)
                                     as *const crate::closure::ClosureHeader;
                                 if !closure.is_null() {
+                                    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+                                    let previous_this = super::js_implicit_this_set(receiver);
                                     crate::closure::js_closure_call1(closure, value);
+                                    super::js_implicit_this_set(previous_this);
                                 }
                             } else {
                                 crate::error::throw_immutable_write(0, k);

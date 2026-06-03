@@ -285,6 +285,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // Callable String.raw(callSite, substitutionsArray) -> string (#2789)
     module.declare_function("js_string_raw", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_string_from_char_code", I64, &[DOUBLE]);
+    module.declare_function("js_string_from_char_code_array", I64, &[DOUBLE]);
     module.declare_function("js_string_char_code_at", DOUBLE, &[I64, I32]);
     module.declare_function("js_string_last_index_of", I32, &[I64, I64]);
     module.declare_function(
@@ -321,6 +322,8 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE],
     );
+    // #4141: generator/async-generator instance `[[Prototype]]` linker.
+    module.declare_function("js_generator_attach_prototype", DOUBLE, &[DOUBLE, I32]);
     // WeakRef / FinalizationRegistry (weakref.rs). `js_weakref_new` /
     // `js_finreg_new` return raw `*mut ObjectHeader` (i64 pointer, must be
     // POINTER_TAG-boxed at the call site). The deref/register/unregister
@@ -368,6 +371,16 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         "js_crypto_pbkdf2_async_alg",
         DOUBLE,
         &[I64, I64, DOUBLE, DOUBLE, I64, DOUBLE],
+    );
+    module.declare_function("js_crypto_argon2_sync", I64, &[I64, DOUBLE]);
+    module.declare_function("js_crypto_argon2_async", DOUBLE, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_crypto_encapsulate", I64, &[DOUBLE]);
+    module.declare_function("js_crypto_encapsulate_async", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_crypto_decapsulate", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_crypto_decapsulate_async",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
     );
     module.declare_function(
         "js_crypto_hkdf_bytes_alg",
@@ -435,7 +448,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // crypto.getHashes() / getCiphers() -> string[]; returns *mut ArrayHeader.
     module.declare_function("js_crypto_get_hashes", I64, &[]);
     module.declare_function("js_crypto_get_ciphers", I64, &[]);
-    module.declare_function("js_crypto_generate_prime_sync", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_crypto_generate_prime_sync", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function(
         "js_crypto_generate_prime_async",
         DOUBLE,
@@ -945,6 +958,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_readable_stream_new_from_source_object",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_readable_stream_get_reader", DOUBLE, &[DOUBLE]);
     module.declare_function(
         "js_readable_stream_get_reader_with_options",
@@ -994,6 +1012,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_writable_stream_new_from_sink_object",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_writable_stream_throw_invalid_sink", DOUBLE, &[]);
     module.declare_function("js_writable_stream_get_writer", DOUBLE, &[DOUBLE]);
     module.declare_function("js_writable_stream_locked", DOUBLE, &[DOUBLE]);
@@ -1013,11 +1036,24 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_transform_stream_new_from_transformer_object",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_transform_stream_readable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_transform_stream_writable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_text_encoding_stream_new", DOUBLE, &[]);
     module.declare_function("js_text_encoder_stream_new", DOUBLE, &[]);
     module.declare_function("js_text_decoder_stream_new", DOUBLE, &[]);
+    module.declare_function("js_stream_web_text_encoder_stream_new", DOUBLE, &[]);
+    module.declare_function(
+        "js_stream_web_text_decoder_stream_new",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_stream_web_compression_stream_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_stream_web_decompression_stream_new", DOUBLE, &[DOUBLE]);
     // #1545: node:stream/web QueuingStrategy constructors — take the options
     // object, return a `{ highWaterMark, size }` object.
     module.declare_function("js_streams_strategy_high_water_mark", DOUBLE, &[DOUBLE]);

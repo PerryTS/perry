@@ -17,7 +17,9 @@ mod databases;
 mod dates;
 mod extras;
 mod fastify;
-mod http;
+mod http_client;
+mod http_http2;
+mod http_server;
 mod media;
 mod net_classes_state;
 mod net_events;
@@ -162,7 +164,9 @@ pub(super) static NATIVE_MODULE_TABLE: LazyLock<Vec<NativeModSig>> = LazyLock::n
     v.extend_from_slice(media::MEDIA_ROWS);
     v.extend_from_slice(tui::TUI_ROWS);
     v.extend_from_slice(extras::EXTRAS_ROWS);
-    v.extend_from_slice(http::HTTP_ROWS);
+    v.extend_from_slice(http_client::HTTP_CLIENT_ROWS);
+    v.extend_from_slice(http_server::HTTP_SERVER_ROWS);
+    v.extend_from_slice(http_http2::HTTP_HTTP2_ROWS);
     v
 });
 

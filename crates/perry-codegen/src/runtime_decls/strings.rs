@@ -323,6 +323,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_map_from_array", I64, &[I64]);
     module.declare_function("js_map_from_iterable", I64, &[DOUBLE]);
     module.declare_function("js_object_has_property", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_private_brand_check", DOUBLE, &[DOUBLE, I32, PTR, I32]);
     module.declare_function("js_fs_to_unix_timestamp", DOUBLE, &[DOUBLE]);
     module.declare_function("js_fs_write_file_sync", I32, &[DOUBLE, DOUBLE]);
     module.declare_function(
@@ -676,6 +677,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_v8_get_heap_code_statistics", DOUBLE, &[]);
     module.declare_function("js_v8_get_heap_space_statistics", DOUBLE, &[]);
     module.declare_function("js_v8_cached_data_version_tag", DOUBLE, &[]);
+    module.declare_function("js_v8_get_heap_snapshot", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_v8_write_heap_snapshot", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_v8_gc_profiler_new", DOUBLE, &[]);
+    module.declare_function("js_v8_gc_profiler_start", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_v8_gc_profiler_stop", DOUBLE, &[DOUBLE]);
     module.declare_function("js_v8_gc_profiler_report", DOUBLE, &[]);
     // node:v8 Serializer/Deserializer classes (#3680) + lifecycle/diagnostic (#3679).
     module.declare_function("js_v8_serializer_new", DOUBLE, &[DOUBLE]);
@@ -738,6 +744,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_prepend_once_listener", DOUBLE, &[I64, I64]);
     module.declare_function("js_process_emit", DOUBLE, &[I64, I64]);
     module.declare_function("js_process_emit_before_exit", VOID, &[DOUBLE]);
+    module.declare_function("js_process_run_finalization_exit", VOID, &[]);
     module.declare_function("js_process_remove_listener", DOUBLE, &[I64, I64]);
     module.declare_function("js_process_off", DOUBLE, &[I64, I64]);
     module.declare_function("js_process_remove_all_listeners", DOUBLE, &[I64]);
@@ -748,11 +755,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_set_max_listeners", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_get_max_listeners", DOUBLE, &[]);
     module.declare_function("js_process_get_builtin_module", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_process_execve", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     // #3108: process.sourceMapsEnabled getter + setSourceMapsEnabled(bool).
     module.declare_function("js_process_source_maps_enabled", DOUBLE, &[]);
     module.declare_function("js_process_set_source_maps_enabled", DOUBLE, &[DOUBLE]);
     module.declare_function("js_module_is_builtin", DOUBLE, &[DOUBLE]);
     module.declare_function("js_module_find_package_json", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_module_register", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_module_register_hooks", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_next_tick", VOID, &[I64, I64]);
     module.declare_function("js_process_stdin", DOUBLE, &[]);
     module.declare_function("js_process_stdout", DOUBLE, &[]);
@@ -1024,6 +1034,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // so `inst.constructor === Date` (date-fns / drizzle / lodash duck
     // checks) holds.
     module.declare_function("js_get_global_this_builtin_value", DOUBLE, &[PTR, I64]);
+    module.declare_function(
+        "js_builtin_prototype_method_value",
+        DOUBLE,
+        &[PTR, I64, PTR, I64],
+    );
     // Inline-allocator class registration: emitted once per class
     // with a parent in the entry-block init prelude. The runtime
     // allocators register on every alloc; the inline allocator skips

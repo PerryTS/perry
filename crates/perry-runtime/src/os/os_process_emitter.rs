@@ -232,7 +232,48 @@ fn register_process_listener(
         }
     });
     sync_process_signal_listener(&event);
+    crate::process::process_ipc_note_listener(&event);
     process_namespace_value()
+}
+
+pub(crate) fn add_internal_process_listener(
+    event: &str,
+    callback: *const crate::closure::ClosureHeader,
+) {
+    if callback.is_null() {
+        return;
+    }
+    PROCESS_EMITTER.with(|emitter| {
+        let mut emitter = emitter.borrow_mut();
+        emitter.ensure_event_order(event);
+        emitter
+            .events
+            .entry(event.to_string())
+            .or_default()
+            .push(ProcessListener {
+                callback,
+                raw_wrapper: std::ptr::null(),
+                once: false,
+            });
+    });
+    sync_process_signal_listener(event);
+}
+
+pub(crate) fn remove_internal_process_listener(
+    event: &str,
+    callback: *const crate::closure::ClosureHeader,
+) {
+    if callback.is_null() {
+        return;
+    }
+    PROCESS_EMITTER.with(|emitter| {
+        let mut emitter = emitter.borrow_mut();
+        if let Some(listeners) = emitter.events.get_mut(event) {
+            listeners.retain(|listener| listener.callback != callback);
+        }
+        emitter.prune_event_if_empty(event);
+    });
+    sync_process_signal_listener(event);
 }
 
 fn boxed_bool(value: bool) -> f64 {

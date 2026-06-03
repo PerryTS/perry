@@ -14,10 +14,10 @@ use super::super::LoweringContext;
 /// `toLocaleString`, `valueOf`, `to{Date,Time,LocaleDate,LocaleTime}String`)
 /// should fire. Returns `Some("Date")` for `new Date(...)` and locals typed
 /// as `Date`; `Some("URL")` for `new URL(...)` and locals typed as `URL`;
-/// `None` for everything else (in which case the call falls through to
-/// generic dispatch). Matches receiver shapes by AST first, then by the
-/// caller's `local_types` table — both source-level shapes the user typically
-/// writes for these objects.
+/// `Some("Object")` for source-visible class/object receivers that are
+/// definitely not Date; `None` for everything else. Matches receiver shapes by
+/// AST first, then by the caller's `local_types` table — both source-level
+/// shapes the user typically writes for these objects.
 pub(super) fn static_receiver_class(
     ctx: &LoweringContext,
     obj: &ast::Expr,
@@ -64,7 +64,10 @@ pub(super) fn static_receiver_class(
             _ => None,
         };
         if let Some(class_name) = class_name {
-            return match class_name {
+            let resolved_class = ctx
+                .resolve_class_alias(class_name)
+                .unwrap_or_else(|| class_name.to_string());
+            return match resolved_class.as_str() {
                 "Date" => Some("Date"),
                 "URL" => Some("URL"),
                 "URLPattern" => Some("URLPattern"),
@@ -73,6 +76,7 @@ pub(super) fn static_receiver_class(
                 "SocketAddress" => Some("SocketAddress"),
                 "Uint8Array" => Some("Uint8Array"),
                 "Uint8ClampedArray" => Some("Uint8ClampedArray"),
+                _ if ctx.lookup_class(&resolved_class).is_some() => Some("Object"),
                 _ => None,
             };
         }
@@ -129,8 +133,13 @@ pub(super) fn static_receiver_class(
             return Some("Object");
         }
         if let Some(ty) = ctx.lookup_local_type(name) {
-            if let Type::Named(n) = ty {
-                return match n.as_str() {
+            let named = match ty {
+                Type::Named(n) => Some(n.as_str()),
+                Type::Generic { base, .. } => Some(base.as_str()),
+                _ => None,
+            };
+            if let Some(n) = named {
+                return match n {
                     "Date" => Some("Date"),
                     "URL" => Some("URL"),
                     "URLPattern" => Some("URLPattern"),
@@ -139,7 +148,7 @@ pub(super) fn static_receiver_class(
                     "SocketAddress" => Some("SocketAddress"),
                     "Uint8Array" => Some("Uint8Array"),
                     "Uint8ClampedArray" => Some("Uint8ClampedArray"),
-                    _ => None,
+                    _ => Some("Object"),
                 };
             }
         }

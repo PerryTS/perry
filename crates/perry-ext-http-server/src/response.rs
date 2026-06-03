@@ -72,6 +72,9 @@ pub struct ServerResponse {
     pub headers_sent: bool,
     pub writable_ended: bool,
     pub writable_finished: bool,
+    pub send_date: bool,
+    pub strict_content_length: bool,
+    pub req_handle: i64,
     /// Body chunks accumulated by `.write(chunk)` calls. Assembled
     /// + flushed when `.end()` is called.
     pub buffered_body: Vec<u8>,
@@ -190,10 +193,18 @@ impl ServerResponse {
             headers_sent: false,
             writable_ended: false,
             writable_finished: false,
+            send_date: true,
+            strict_content_length: false,
+            req_handle: 0,
             buffered_body: Vec::new(),
             response_tx: Some(response_tx),
             listeners: HashMap::new(),
         }
+    }
+
+    pub fn with_request_handle(mut self, req_handle: i64) -> Self {
+        self.req_handle = req_handle;
+        self
     }
 
     /// Snapshot the current header map as `Vec<(orig_name, value)>`
@@ -304,6 +315,17 @@ pub unsafe extern "C" fn js_node_http_res_set_header(
     }
 }
 
+/// `res.setHeader(name, value)` chainable wrapper for static dispatch.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_res_set_header_self(
+    handle: i64,
+    name_ptr: *const StringHeader,
+    value_ptr: *const StringHeader,
+) -> i64 {
+    js_node_http_res_set_header(handle, name_ptr, value_ptr);
+    handle
+}
+
 /// `res.getHeader(name)` — case-insensitive lookup. Returns `null`
 /// when the header isn't set.
 #[no_mangle]
@@ -360,6 +382,45 @@ pub unsafe extern "C" fn js_node_http_res_has_header(
     0
 }
 
+/// `res.hasHeader(name)` boolean wrapper for static dispatch.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_res_has_header_value(
+    handle: i64,
+    name_ptr: *const StringHeader,
+) -> f64 {
+    f64::from_bits(JsValue::from_bool(js_node_http_res_has_header(handle, name_ptr) != 0).bits())
+}
+
+/// `res.appendHeader(name, value)` — append another string value to the
+/// in-memory header slot. Multi-value header storage is represented as the
+/// same comma-joined string Node exposes through `String(res.getHeader())`.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_res_append_header(
+    handle: i64,
+    name_ptr: *const StringHeader,
+    value_ptr: *const StringHeader,
+) -> i64 {
+    let name = read_string_header(name_ptr as *mut _).unwrap_or_default();
+    let value = read_string_header(value_ptr as *mut _).unwrap_or_default();
+    if name.is_empty() {
+        return handle;
+    }
+    let lower = name.to_lowercase();
+    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+        if !sr.headers_sent {
+            sr.headers
+                .entry(lower.clone())
+                .and_modify(|existing| {
+                    existing.push(',');
+                    existing.push_str(&value);
+                })
+                .or_insert(value);
+            sr.raw_header_names.entry(lower).or_insert(name);
+        }
+    }
+    handle
+}
+
 /// `res.getHeaders()` — JSON-stringify the lowercase-keyed map.
 /// TS-side parses with `JSON.parse`.
 #[no_mangle]
@@ -376,11 +437,93 @@ pub extern "C" fn js_node_http_res_get_headers_json(handle: i64) -> *mut StringH
 pub extern "C" fn js_node_http_res_get_header_names_json(handle: i64) -> *mut StringHeader {
     let s = get_handle::<ServerResponse>(handle)
         .map(|sr| {
-            let names: Vec<&String> = sr.headers.keys().collect();
+            let mut names: Vec<&String> = sr.headers.keys().collect();
+            names.sort();
             serde_json::to_string(&names).unwrap_or_else(|_| "[]".to_string())
         })
         .unwrap_or_else(|| "[]".to_string());
     alloc_string(&s).as_raw()
+}
+
+/// `res.setHeaders(headers)` — accepts any JSON-stringifiable object shape
+/// Perry can inspect and returns the receiver. Native Node also accepts Map
+/// and Headers; those stringify to `{}` in the current runtime, so this remains
+/// a deterministic no-op for those inputs until iterable extraction lands.
+#[no_mangle]
+pub extern "C" fn js_node_http_res_set_headers(handle: i64, headers_value: f64) -> i64 {
+    let v = JsValue::from_bits(headers_value.to_bits());
+    if v.is_undefined() || v.is_null() {
+        return handle;
+    }
+    let Some(json) = perry_ffi::json_stringify(v) else {
+        return handle;
+    };
+    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+        if !sr.headers_sent {
+            apply_headers_json(sr, &json);
+        }
+    }
+    handle
+}
+
+/// `res.statusMessage` getter.
+#[no_mangle]
+pub extern "C" fn js_node_http_res_get_status_message(handle: i64) -> f64 {
+    if let Some(sr) = get_handle::<ServerResponse>(handle) {
+        if let Some(message) = &sr.status_message {
+            let header = alloc_string(message);
+            return f64::from_bits(STRING_TAG | (header.as_raw() as u64 & PTR_MASK));
+        }
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+/// `res.finished` getter. Node aliases this to the ended state.
+#[no_mangle]
+pub extern "C" fn js_node_http_res_finished(handle: i64) -> i32 {
+    get_handle::<ServerResponse>(handle)
+        .map(|sr| if sr.writable_ended { 1 } else { 0 })
+        .unwrap_or(0)
+}
+
+/// `res.sendDate` getter.
+#[no_mangle]
+pub extern "C" fn js_node_http_res_send_date(handle: i64) -> i32 {
+    get_handle::<ServerResponse>(handle)
+        .map(|sr| if sr.send_date { 1 } else { 0 })
+        .unwrap_or(1)
+}
+
+/// `res.sendDate = bool` setter.
+#[no_mangle]
+pub extern "C" fn js_node_http_res_set_send_date(handle: i64, value: f64) {
+    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+        sr.send_date = jsvalue_truthy(value);
+    }
+}
+
+/// `res.strictContentLength` getter.
+#[no_mangle]
+pub extern "C" fn js_node_http_res_strict_content_length(handle: i64) -> i32 {
+    get_handle::<ServerResponse>(handle)
+        .map(|sr| if sr.strict_content_length { 1 } else { 0 })
+        .unwrap_or(0)
+}
+
+/// `res.strictContentLength = bool` setter.
+#[no_mangle]
+pub extern "C" fn js_node_http_res_set_strict_content_length(handle: i64, value: f64) {
+    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+        sr.strict_content_length = jsvalue_truthy(value);
+    }
+}
+
+/// Paired request handle for `res.req`.
+#[no_mangle]
+pub extern "C" fn js_node_http_res_req_handle(handle: i64) -> i64 {
+    get_handle::<ServerResponse>(handle)
+        .map(|sr| sr.req_handle)
+        .unwrap_or(0)
 }
 
 /// `res.headersSent` getter.
@@ -603,6 +746,26 @@ pub extern "C" fn js_node_http_res_flush_headers(handle: i64) {
     }
 }
 
+/// `res.cork()` — buffered responses are already corked until `.end()`.
+#[no_mangle]
+pub extern "C" fn js_node_http_res_cork(_handle: i64) {}
+
+/// `res.uncork()` — no-op counterpart to `cork()`.
+#[no_mangle]
+pub extern "C" fn js_node_http_res_uncork(_handle: i64) {}
+
+/// `res.setTimeout(msecs[, callback])` — expose Node's chainable control
+/// surface; actual transport timeout scheduling is handled at the server.
+#[no_mangle]
+pub extern "C" fn js_node_http_res_set_timeout(handle: i64, _msecs: f64, _callback: i64) -> i64 {
+    handle
+}
+
+/// `res.writeEarlyHints(headers[, cb])` — accepted no-op until interim
+/// response streaming is implemented.
+#[no_mangle]
+pub extern "C" fn js_node_http_res_write_early_hints(_handle: i64, _headers: f64, _callback: i64) {}
+
 /// `res.writeContinue()` — emits an HTTP/1.1 100-continue. Phase 1
 /// stores the intent only; the actual 100-continue sequence requires
 /// a streaming body path that we'll wire up in a follow-up.
@@ -657,8 +820,24 @@ pub unsafe extern "C" fn js_node_http_res_on(
 // Allocation helper used by server.rs
 // ============================================================================
 
-pub(crate) fn alloc_server_response(response_tx: oneshot::Sender<HyperResponseShape>) -> i64 {
-    register_handle(ServerResponse::new(response_tx))
+pub(crate) fn alloc_server_response_for_request(
+    response_tx: oneshot::Sender<HyperResponseShape>,
+    req_handle: i64,
+) -> i64 {
+    register_handle(ServerResponse::new(response_tx).with_request_handle(req_handle))
+}
+
+fn jsvalue_truthy(value: f64) -> bool {
+    let v = JsValue::from_bits(value.to_bits());
+    if v.is_bool() {
+        v.to_bool()
+    } else if v.is_undefined() || v.is_null() {
+        false
+    } else if v.is_number() {
+        v.to_number() != 0.0
+    } else {
+        true
+    }
 }
 
 #[allow(dead_code)]

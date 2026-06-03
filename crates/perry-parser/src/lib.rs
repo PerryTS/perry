@@ -5,6 +5,7 @@
 
 use anyhow::Result;
 use perry_diagnostics::{Diagnostic, DiagnosticCode, Diagnostics, FileId, SourceCache, Span};
+use std::path::Path;
 use swc_common::{input::StringInput, sync::Lrc, FileName, SourceMap};
 use swc_ecma_ast::{Module, ModuleItem, Script};
 use swc_ecma_parser::{lexer::Lexer, EsSyntax, Parser, Syntax, TsSyntax};
@@ -167,19 +168,155 @@ fn parse_module_or_script(
 
 fn should_parse_as_script(filename: &str, source: &str) -> bool {
     let path = filename.split(['?', '#']).next().unwrap_or(filename);
-    (path.ends_with(".js") || path.ends_with(".cjs") || path.ends_with(".jsx"))
-        && !looks_like_es_module(source)
+    if !(path.ends_with(".js") || path.ends_with(".cjs") || path.ends_with(".jsx")) {
+        return false;
+    }
+    if !path.ends_with(".cjs") && file_is_in_esm_package_context(path) {
+        return false;
+    }
+    !looks_like_es_module(source)
 }
 
 fn looks_like_es_module(source: &str) -> bool {
-    source.lines().any(|line| {
-        let trimmed = line.trim_start();
-        trimmed.starts_with("import ")
-            || trimmed.starts_with("import{")
-            || trimmed.starts_with("export ")
-            || trimmed.starts_with("export{")
-            || trimmed.starts_with("export*")
-    })
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum State {
+        Code,
+        String(u8),
+        LineComment,
+        BlockComment,
+    }
+
+    fn is_ident(b: u8) -> bool {
+        b == b'_' || b == b'$' || b.is_ascii_alphanumeric()
+    }
+
+    fn prev_allows_module_item(bytes: &[u8], mut i: usize) -> bool {
+        while i > 0 {
+            i -= 1;
+            match bytes[i] {
+                b' ' | b'\t' | b'\r' | b'\n' => continue,
+                b';' | b'{' | b'}' => return true,
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    fn next_after_keyword(bytes: &[u8], i: usize, keyword: &[u8]) -> Option<usize> {
+        let end = i.checked_add(keyword.len())?;
+        if bytes.get(i..end)? != keyword {
+            return None;
+        }
+        if i > 0 && is_ident(bytes[i - 1]) {
+            return None;
+        }
+        if bytes.get(end).is_some_and(|b| is_ident(*b)) {
+            return None;
+        }
+        Some(end)
+    }
+
+    let bytes = source.as_bytes();
+    let mut i = 0;
+    let mut state = State::Code;
+    while i < bytes.len() {
+        match state {
+            State::Code => {
+                if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
+                    state = State::String(bytes[i]);
+                    i += 1;
+                } else if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'/') {
+                    state = State::LineComment;
+                    i += 2;
+                } else if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
+                    state = State::BlockComment;
+                    i += 2;
+                } else {
+                    if prev_allows_module_item(bytes, i) {
+                        if let Some(end) = next_after_keyword(bytes, i, b"export") {
+                            if matches!(
+                                bytes.get(end),
+                                Some(b' ' | b'\t' | b'\r' | b'\n' | b'{' | b'*')
+                            ) {
+                                return true;
+                            }
+                        }
+                        if let Some(end) = next_after_keyword(bytes, i, b"import") {
+                            if matches!(
+                                bytes.get(end),
+                                Some(b' ' | b'\t' | b'\r' | b'\n' | b'{' | b'*' | b'"' | b'\'')
+                            ) || bytes.get(end) == Some(&b'.')
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                    i += 1;
+                }
+            }
+            State::String(quote) => {
+                if bytes[i] == b'\\' {
+                    i += 2;
+                } else {
+                    if bytes[i] == quote {
+                        state = State::Code;
+                    }
+                    i += 1;
+                }
+            }
+            State::LineComment => {
+                if bytes[i] == b'\n' {
+                    state = State::Code;
+                }
+                i += 1;
+            }
+            State::BlockComment => {
+                if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                    i += 2;
+                    state = State::Code;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn file_is_in_esm_package_context(filename: &str) -> bool {
+    let path = Path::new(filename);
+    let mut current = Path::new(filename).parent();
+    while let Some(dir) = current {
+        let package_json = dir.join("package.json");
+        if package_json.exists() {
+            if let Ok(content) = std::fs::read_to_string(&package_json) {
+                if package_json_declares_esm_context(&content, dir, path) {
+                    return true;
+                }
+            }
+        }
+        current = dir.parent();
+    }
+    false
+}
+
+fn package_json_declares_esm_context(content: &str, package_dir: &Path, file_path: &Path) -> bool {
+    let compact: String = content.chars().filter(|ch| !ch.is_whitespace()).collect();
+    if compact.contains(r#""type":"module""#) {
+        return true;
+    }
+
+    let relative = match file_path.strip_prefix(package_dir) {
+        Ok(path) => path.to_string_lossy().replace('\\', "/"),
+        Err(_) => return false,
+    };
+    let relative_dot = format!("./{relative}");
+    let quoted_relative = format!(r#""{relative}""#);
+    let quoted_relative_dot = format!(r#""{relative_dot}""#);
+    let metadata_mentions_file =
+        compact.contains(&quoted_relative) || compact.contains(&quoted_relative_dot);
+
+    metadata_mentions_file && (compact.contains(r#""module":"#) || compact.contains(r#""import":"#))
 }
 
 fn script_to_module(script: Script) -> Module {
@@ -195,6 +332,7 @@ fn normalize_unicode_identifier_escapes(source: &str) -> String {
     enum State {
         Code,
         String(u8),
+        Regex { in_class: bool },
         LineComment,
         BlockComment,
     }
@@ -238,16 +376,79 @@ fn normalize_unicode_identifier_escapes(source: &str) -> String {
         char::from_u32(value).map(|ch| (ch, i + 6))
     }
 
+    #[derive(Clone, Copy)]
+    enum LastSig {
+        None,
+        Char(u8),
+        Ident { start: usize, end: usize },
+    }
+
+    fn is_ident_byte(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
+    }
+
+    fn regex_allowed_after_keyword(word: &str) -> bool {
+        matches!(
+            word,
+            "return"
+                | "throw"
+                | "case"
+                | "delete"
+                | "void"
+                | "typeof"
+                | "yield"
+                | "await"
+                | "else"
+                | "do"
+                | "in"
+                | "of"
+        )
+    }
+
+    fn last_sig_allows_regex(last: LastSig, source: &str) -> bool {
+        match last {
+            LastSig::None => true,
+            LastSig::Char(b) => matches!(
+                b,
+                b'(' | b'{'
+                    | b'['
+                    | b'='
+                    | b':'
+                    | b','
+                    | b';'
+                    | b'!'
+                    | b'?'
+                    | b'+'
+                    | b'-'
+                    | b'*'
+                    | b'%'
+                    | b'&'
+                    | b'|'
+                    | b'^'
+                    | b'~'
+                    | b'<'
+                    | b'>'
+            ),
+            LastSig::Ident { start, end } => regex_allowed_after_keyword(&source[start..end]),
+        }
+    }
+
     let bytes = source.as_bytes();
     let mut out = String::with_capacity(source.len());
     let mut i = 0;
     let mut state = State::Code;
+    let mut last_sig = LastSig::None;
     while i < bytes.len() {
         match state {
             State::Code => {
-                if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
+                if bytes[i].is_ascii_whitespace() {
+                    let ch = source[i..].chars().next().unwrap();
+                    out.push(ch);
+                    i += ch.len_utf8();
+                } else if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
                     state = State::String(bytes[i]);
                     out.push(bytes[i] as char);
+                    last_sig = LastSig::Char(bytes[i]);
                     i += 1;
                 } else if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'/') {
                     state = State::LineComment;
@@ -259,16 +460,58 @@ fn normalize_unicode_identifier_escapes(source: &str) -> String {
                     out.push('/');
                     out.push('*');
                     i += 2;
+                } else if bytes[i] == b'/' && last_sig_allows_regex(last_sig, source) {
+                    state = State::Regex { in_class: false };
+                    out.push('/');
+                    last_sig = LastSig::Char(b'/');
+                    i += 1;
                 } else if let Some((ch, next)) = read_escape(bytes, i) {
                     out.push(ch);
+                    if ch == '_' || ch == '$' || ch.is_alphanumeric() {
+                        last_sig = LastSig::Ident {
+                            start: i,
+                            end: next,
+                        };
+                    } else {
+                        last_sig = LastSig::Char(b'\\');
+                    }
                     i = next;
                 } else {
                     let ch = source[i..].chars().next().unwrap();
                     out.push(ch);
-                    i += ch.len_utf8();
+                    if bytes[i].is_ascii() && is_ident_byte(bytes[i]) {
+                        let start = i;
+                        i += 1;
+                        while bytes.get(i).is_some_and(|b| is_ident_byte(*b)) {
+                            out.push(bytes[i] as char);
+                            i += 1;
+                        }
+                        last_sig = LastSig::Ident { start, end: i };
+                    } else {
+                        last_sig = LastSig::Char(bytes[i]);
+                        i += ch.len_utf8();
+                    }
                 }
             }
             State::String(quote) => {
+                if bytes[i] == b'\\' {
+                    out.push('\\');
+                    i += 1;
+                    if i < bytes.len() {
+                        let ch = source[i..].chars().next().unwrap();
+                        out.push(ch);
+                        i += ch.len_utf8();
+                    }
+                } else {
+                    let ch = source[i..].chars().next().unwrap();
+                    out.push(ch);
+                    if bytes[i] == quote {
+                        state = State::Code;
+                    }
+                    i += ch.len_utf8();
+                }
+            }
+            State::Regex { in_class } => {
                 out.push(bytes[i] as char);
                 if bytes[i] == b'\\' {
                     if let Some(&next) = bytes.get(i + 1) {
@@ -277,28 +520,37 @@ fn normalize_unicode_identifier_escapes(source: &str) -> String {
                     } else {
                         i += 1;
                     }
+                } else if bytes[i] == b'[' {
+                    state = State::Regex { in_class: true };
+                    i += 1;
+                } else if bytes[i] == b']' {
+                    state = State::Regex { in_class: false };
+                    i += 1;
+                } else if bytes[i] == b'/' && !in_class {
+                    state = State::Code;
+                    i += 1;
                 } else {
-                    if bytes[i] == quote {
-                        state = State::Code;
-                    }
                     i += 1;
                 }
             }
             State::LineComment => {
-                out.push(bytes[i] as char);
+                let ch = source[i..].chars().next().unwrap();
+                out.push(ch);
                 if bytes[i] == b'\n' {
                     state = State::Code;
                 }
-                i += 1;
+                i += ch.len_utf8();
             }
             State::BlockComment => {
-                out.push(bytes[i] as char);
                 if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                    out.push('*');
                     out.push('/');
                     i += 2;
                     state = State::Code;
                 } else {
-                    i += 1;
+                    let ch = source[i..].chars().next().unwrap();
+                    out.push(ch);
+                    i += ch.len_utf8();
                 }
             }
         }
@@ -426,5 +678,122 @@ mod tests {
         let result = parse_typescript_with_cache(source, "test.js", &mut cache).unwrap();
 
         assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn test_parse_js_regex_preserves_control_unicode_escapes() {
+        let source = r#"
+            const ASCII_WHITESPACE_REPLACE_REGEX = /[\u0009\u000A\u000C\u000D\u0020]/g;
+            export default ASCII_WHITESPACE_REPLACE_REGEX;
+        "#;
+        let mut cache = SourceCache::new();
+
+        let result = parse_typescript_with_cache(source, "undici-cjs-wrap.js", &mut cache).unwrap();
+
+        assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn test_parse_minified_js_module_syntax_uses_module_parser() {
+        let source = r#"const value=1;export{value};"#;
+        let mut cache = SourceCache::new();
+
+        let result = parse_typescript_with_cache(source, "test.js", &mut cache).unwrap();
+
+        assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn test_parse_js_script_regex_preserves_control_unicode_escapes() {
+        let source = r#"
+'use strict'
+
+const ASCII_WHITESPACE_REPLACE_REGEX = /[\u0009\u000A\u000C\u000D\u0020]/g // eslint-disable-line no-control-regex
+
+if (!ASCII_WHITESPACE_REPLACE_REGEX.test(' ')) {
+  throw new Error('unexpected regex result')
+}
+"#;
+        let mut cache = SourceCache::new();
+
+        let result =
+            parse_typescript_with_cache(source, "undici-cjs-wrap-control-regex.js", &mut cache)
+                .unwrap();
+
+        assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn normalize_preserves_non_ascii_in_strings_and_comments() {
+        let source = "const s = \"café\"; // déjà\nconst t = `naïve`; /* año */";
+        assert_eq!(normalize_unicode_identifier_escapes(source), source);
+    }
+
+    #[test]
+    fn normalize_keeps_string_unicode_escapes_literal() {
+        let source = r#"let \u0061 = "\u0062";"#;
+        assert_eq!(
+            normalize_unicode_identifier_escapes(source),
+            r#"let a = "\u0062";"#
+        );
+    }
+
+    #[test]
+    fn test_parse_js_inside_type_module_package_uses_module_parser() {
+        let dir =
+            std::env::temp_dir().join(format!("perry_parser_type_module_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("package.json"), r#"{ "type": "module" }"#).unwrap();
+        let source_path = dir.join("index.js");
+        let mut cache = SourceCache::new();
+
+        let result = parse_typescript_with_cache(
+            "const value = 1; export { value };",
+            source_path.to_str().unwrap(),
+            &mut cache,
+        )
+        .unwrap();
+
+        assert!(result.diagnostics.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_parse_js_referenced_by_import_export_metadata_uses_module_parser() {
+        let dir = std::env::temp_dir().join(format!(
+            "perry_parser_exports_module_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let esm_dir = dir.join("dist/esm");
+        std::fs::create_dir_all(&esm_dir).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{
+  "name": "pkg",
+  "exports": {
+    ".": {
+      "import": {
+        "default": "./dist/esm/index.js"
+      }
+    }
+  },
+  "module": "./dist/esm/index.js"
+}"#,
+        )
+        .unwrap();
+        let source_path = esm_dir.join("index.js");
+        let mut cache = SourceCache::new();
+
+        let result = parse_typescript_with_cache(
+            "await Promise.resolve(1);",
+            source_path.to_str().unwrap(),
+            &mut cache,
+        )
+        .unwrap();
+
+        assert!(result.diagnostics.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

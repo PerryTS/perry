@@ -319,6 +319,14 @@ fn zlib_codes_export_resolves_to_return_code_map() {
         string_from_value(get_object_property(codes, b"-6").unwrap()).as_deref(),
         Some("Z_VERSION_ERROR")
     );
+    assert_eq!(
+        string_from_value(crate::value::js_dyn_index_get(codes, -1.0)).as_deref(),
+        Some("Z_ERRNO")
+    );
+    assert_eq!(
+        string_from_value(crate::value::js_dyn_index_get(codes, -6.0)).as_deref(),
+        Some("Z_VERSION_ERROR")
+    );
 }
 
 #[test]

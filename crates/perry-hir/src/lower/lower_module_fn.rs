@@ -581,6 +581,22 @@ pub fn lower_module_full(
         }
     }
 
+    if !ctx.sloppy_implicit_globals.is_empty() {
+        let mut implicit_globals: Vec<Stmt> = ctx
+            .sloppy_implicit_globals
+            .iter()
+            .map(|(name, id)| Stmt::Let {
+                id: *id,
+                name: name.clone(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            })
+            .collect();
+        implicit_globals.append(&mut module.init);
+        module.init = implicit_globals;
+    }
+
     // Populate exported_native_instances by matching native_instances with exports
     for (local_name, module_name, class_name) in &ctx.native_instances {
         // Check if this native instance is exported

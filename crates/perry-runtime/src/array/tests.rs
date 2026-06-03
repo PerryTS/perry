@@ -1025,6 +1025,20 @@ fn test_array_null_safety() {
 }
 
 #[test]
+fn test_array_length_rejects_nanboxed_non_pointers_before_registry_probe() {
+    for bits in [
+        crate::value::TAG_UNDEFINED,
+        crate::value::TAG_NULL,
+        crate::value::TAG_FALSE,
+        crate::value::TAG_TRUE,
+        crate::value::TAG_HOLE,
+        crate::value::INT32_TAG | 1,
+    ] {
+        assert_eq!(js_array_length(bits as *const ArrayHeader), 0);
+    }
+}
+
+#[test]
 fn test_array_splice_delete_middle() {
     // [1,2,3,4,5].splice(1, 2) -> deleted=[2,3], arr=[1,4,5]
     let arr = js_array_alloc(8);

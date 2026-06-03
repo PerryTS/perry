@@ -27,6 +27,55 @@ fn test_global_this_builtin_constructor_value(name: &str) -> f64 {
     crate::value::js_nanbox_pointer(closure_ptr as i64)
 }
 
+fn js_string_to_rust(value: JSValue) -> String {
+    assert!(
+        value.is_string(),
+        "expected JS string, got bits={:#x}",
+        value.bits()
+    );
+    let ptr = value.as_string_ptr();
+    assert!(!ptr.is_null());
+    unsafe {
+        let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let bytes = std::slice::from_raw_parts(data, (*ptr).byte_len as usize);
+        std::str::from_utf8(bytes).unwrap().to_string()
+    }
+}
+
+#[test]
+fn closure_name_and_length_ignore_plain_assignment() {
+    crate::closure::test_clear_closure_side_tables();
+    unsafe {
+        let closure = crate::closure::js_closure_alloc(
+            crate::object::global_this_builtin_noop_thunk as *const u8,
+            0,
+        );
+        assert!(!closure.is_null());
+        super::native_module::set_bound_native_closure_name(closure, "fn");
+        super::native_module::set_builtin_closure_length(closure as usize, 2);
+
+        let name_key = crate::string::js_string_from_bytes(b"name".as_ptr(), 4);
+        let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+        let custom_key = crate::string::js_string_from_bytes(b"custom".as_ptr(), 6);
+        let replacement = crate::string::js_string_from_bytes(b"changed".as_ptr(), 7);
+        let replacement_value = f64::from_bits(JSValue::string_ptr(replacement).bits());
+        let closure_obj = closure as *mut ObjectHeader;
+
+        js_object_set_field_by_name(closure_obj, name_key, replacement_value);
+        let name = js_object_get_field_by_name(closure_obj, name_key);
+        assert_eq!(js_string_to_rust(name), "fn");
+
+        js_object_set_field_by_name(closure_obj, length_key, 99.0);
+        let length = js_object_get_field_by_name(closure_obj, length_key);
+        assert!(length.is_number());
+        assert_eq!(length.as_number(), 2.0);
+
+        js_object_set_field_by_name(closure_obj, custom_key, replacement_value);
+        let custom = js_object_get_field_by_name(closure_obj, custom_key);
+        assert_eq!(js_string_to_rust(custom), "changed");
+    }
+}
+
 #[test]
 fn test_object_alloc_and_fields() {
     let obj = js_object_alloc(1, 3);

@@ -5,11 +5,11 @@ thread_local! {
         std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
-const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_0060;
-const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_0061;
-const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_0062;
-const CLASS_ID_BOXED_BIGINT: u32 = 0xFFFF_0063;
-const CLASS_ID_BOXED_SYMBOL: u32 = 0xFFFF_0064;
+const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_00D0;
+const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_00D1;
+const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_00D2;
+const CLASS_ID_BOXED_BIGINT: u32 = 0xFFFF_00D3;
+const CLASS_ID_BOXED_SYMBOL: u32 = 0xFFFF_00D4;
 
 pub(super) unsafe fn boxed_primitive_base_for_object(
     obj_ptr: *const crate::object::ObjectHeader,

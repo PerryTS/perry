@@ -7,23 +7,22 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
 | Whole-module gaps (zero coverage) | 15 | 410 | n/a |
-| Partial-module gaps | 32 | 1480 | 597 |
+| Partial-module gaps | 32 | 1285 | 607 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2172** |  |
+| **Total true gaps** |  | **1977** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
 - `Web / Global APIs` — 282
-- `node:os` — 195
 - `node:crypto` — 128
 - `node:http2` — 97
-- `node:process (and global `process`)` — 96
+- `node:process (and global `process`)` — 94
 - `node:test (and node:test/reporters, node:test/mock)` — 93
 - `node:util` — 92
 - `node:http` — 89
-- `node:zlib` — 78
-- `node:stream` — 76
+- `node:zlib` — 70
+- `node:stream` — 75
 - `node:worker_threads` — 60
 
 ### Issue #3598 docs/API closure note
@@ -60,13 +59,12 @@ Selected highlights (full list in `runtime-parity.md`):
 
 ### node:v8
 
-**Total APIs: 58** · Perry covers: 0 · Gap: 58
+**Total APIs: 58** · Perry covers: 3 · Gap: 55
 
 Selected highlights (full list in `runtime-parity.md`):
 
 - `v8.cachedDataVersionTag()`
 - `v8.getHeapCodeStatistics()`
-- `v8.getHeapSnapshot([options])`
 - `v8.getHeapSpaceStatistics()`
 - `v8.getHeapStatistics()`
 - `v8.getCppHeapStatistics([detailLevel])`
@@ -74,9 +72,8 @@ Selected highlights (full list in `runtime-parity.md`):
 - `v8.setFlagsFromString(flags)`
 - `v8.stopCoverage()`
 - `v8.takeCoverage()`
-- `v8.writeHeapSnapshot([filename[, options]])`
 - `v8.setHeapSnapshotNearHeapLimit(limit)`
-- … and 46 more
+- … and 45 more
 
 ### node:dns
 
@@ -131,26 +128,25 @@ Selected highlights (full list in `runtime-parity.md`):
 ### node:vm
 
 **Total APIs: 32** · Perry covers: import/require namespace shape, callable
-export metadata, `vm.constants`, `process.getBuiltinModule("vm")`, and
-`vm.isContext({})`, cached-data/source-map metadata shape, and
-`SourceTextModule.createCachedData()` · Gap: runtime VM execution,
-contextification, VM modules, context-loader constant behavior, and heap
-measurement
+export metadata, `vm.constants`, `process.getBuiltinModule("vm")`,
+`vm.isContext({})`, the narrowed deterministic execution subset for
+`Script`, object-backed context mutation/isolation, `compileFunction`,
+cached-data/source-map metadata shape, `SourceTextModule.createCachedData()`,
+gated `SourceTextModule`/`SyntheticModule` lifecycle behavior, and
+`vm.measureMemory()` result shape and option validation · Gap: full VM module
+parsing/evaluation beyond deterministic lifecycle fixtures,
+`USE_MAIN_CONTEXT_DEFAULT_LOADER` dynamic-import behavior, context-loader
+constant behavior, and exact V8 heap accounting
 
-Shape coverage is fixture-backed in `test-parity/node-suite/vm`; the generated
+Coverage is fixture-backed in `test-parity/node-suite/vm`; the generated
 `test_parity_vm` inventory now skip-lists only the still-open behavior leaves.
 
 Selected highlights (full list in `runtime-parity.md`):
 
-- `new vm.Script(code[, options])`
-- `script.runInContext(contextifiedObject[, options])`
-- `script.runInNewContext([contextObject[, options]])`
-- `script.runInThisContext([options])`
-- `module.error`
-- `module.identifier`
-- `module.namespace`
-- `module.status`
-- `module.evaluate([options])`
+- full `SourceTextModule` / `SyntheticModule` parsing, linking, and evaluation
+  semantics beyond deterministic lifecycle fixtures
+- `vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER` dynamic-import participation
+- `vm.measureMemory([options])`
 - … and 16 more
 
 ### node:dgram
@@ -199,26 +195,7 @@ Selected highlights (full list in `runtime-parity.md`):
 - `session.connectToMainThread()`
 - `session.disconnect()`
 - `'inspectorNotification'`
-- `inspector.Network.requestWillBeSent(params)`
-- `inspector.Network.responseReceived(params)`
-- … and 7 more
-
-### node:domain
-
-**Total APIs: 10** · Perry covers: 0 · Gap: 10
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `domain.create()`
-- `domain.active`
-- `domain.members`
-- `domain.add(emitter)`
-- `domain.bind(callback)`
-- `domain.intercept(callback)`
-- `domain.enter()`
-- `domain.exit()`
-- `domain.remove(emitter)`
-- `domain.run(fn[, ...args])`
+Deeper protocol transport/frontend fidelity remains partial.
 
 ### node:readline/promises
 
@@ -233,19 +210,6 @@ Selected highlights (full list in `runtime-parity.md`):
 - `rl.moveCursor(dx, dy)`
 - `rl.commit()`
 - `rl.rollback()`
-
-### node:stream/consumers
-
-**Total APIs: 6** · Perry covers: 0 · Gap: 6
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `consumers.arrayBuffer(stream)`
-- `consumers.blob(stream)`
-- `consumers.buffer(stream)`
-- `consumers.bytes(stream)`
-- `consumers.json(stream)`
-- `consumers.text(stream)`
 
 ### node:string_decoder
 
@@ -278,80 +242,44 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:os
 
-**Gap APIs: 195** · Already covered: 14
+**Gap APIs: 0** · Already covered: 24
 
-#### Missing from Perry
-
-- `os.availableParallelism()`
-- `os.endianness()`
-- `os.getPriority([pid])`
-- `os.loadavg()`
-- `os.machine()`
-- `os.setPriority([pid, ]priority)`
-- `os.version()`
-- `os.devNull`
-- `os.constants`
-- `SIGHUP`
-- `SIGINT`
-- `SIGQUIT`
-- `SIGILL`
-- `SIGTRAP`
-- `SIGABRT`
-- `SIGIOT`
-- `SIGBUS`
-- `SIGFPE`
-- `SIGKILL`
-- `SIGUSR1`
-- `SIGUSR2`
-- `SIGSEGV`
-- `SIGPIPE`
-- `SIGALRM`
-- `SIGTERM`
-- `SIGCHLD`
-- `SIGSTKFLT`
-- `SIGCONT`
-- `SIGSTOP`
-- `SIGTSTP`
-- `SIGBREAK`
-- `SIGTTIN`
-- `SIGTTOU`
-- `SIGURG`
-- `SIGXCPU`
-- `SIGXFSZ`
-- `SIGVTALRM`
-- `SIGPROF`
-- `SIGWINCH`
-- `SIGIO`
-- `SIGPOLL`
-- `SIGLOST`
-- `SIGPWR`
-- `SIGINFO`
-- `SIGSYS`
-- `SIGUNUSED`
-- `E2BIG`
-- `EACCES`
-- `EADDRINUSE`
-- `EADDRNOTAVAIL`
-- … and 145 more (see `runtime-parity.md` for the full list)
+`node:os` has no remaining public API surface gaps in the manifest-based
+reconciliation. The current manifest includes the modern host helpers
+(`availableParallelism`, `machine`, `version`, `getPriority`, `setPriority`),
+collection helpers (`cpus`, `networkInterfaces`), `userInfo`, `devNull`,
+`EOL`, `constants`, and the ESM/CJS namespace forms. Host-dependent values are
+kept out of exact comparisons; the curated `test-parity/node-suite/os`
+fixtures assert deterministic Node semantics such as return types, object
+shape, nested constants identity, import forms, and validation/error codes.
 
 #### Covered (sampled)
 
 | API | Coverage source |
 |-----|-----------------|
 | `os.arch()` | `manifest:os.arch` |
+| `os.availableParallelism()` | `manifest:os.availableParallelism`; `test-parity/node-suite/os/methods/available-parallelism.ts` |
 | `os.cpus()` | `manifest:os.cpus` |
+| `os.devNull` | `manifest:os.devNull`; `test-parity/node-suite/os/properties/dev-null.ts` |
+| `os.endianness()` | `manifest:os.endianness` |
 | `os.freemem()` | `manifest:os.freemem` |
+| `os.getPriority([pid])` | `manifest:os.getPriority`; `test-parity/node-suite/os/methods/priority.ts` |
 | `os.homedir()` | `manifest:os.homedir` |
 | `os.hostname()` | `manifest:os.hostname` |
+| `os.loadavg()` | `manifest:os.loadavg` |
+| `os.machine()` | `manifest:os.machine`; `test-parity/node-suite/os/methods/endianness-machine.ts` |
 | `os.networkInterfaces()` | `manifest:os.networkInterfaces` |
 | `os.platform()` | `manifest:os.platform` |
 | `os.release()` | `manifest:os.release` |
+| `os.setPriority([pid, ]priority)` | `manifest:os.setPriority`; `test-parity/node-suite/os/methods/priority.ts` |
 | `os.tmpdir()` | `manifest:os.tmpdir` |
 | `os.totalmem()` | `manifest:os.totalmem` |
 | `os.type()` | `manifest:os.type` |
 | `os.uptime()` | `manifest:os.uptime` |
 | `os.userInfo([options])` | `manifest:os.userInfo` |
+| `os.version()` | `manifest:os.version`; `test-parity/node-suite/os/methods/version.ts` |
 | `os.EOL` | `expr:OsEOL` |
+| `os.constants` | `manifest:os.constants`; `test-parity/node-suite/os/constants/` |
 
 ### node:fs
 
@@ -422,12 +350,10 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 
 ### node:crypto
 
-**Gap APIs: 128** · Already covered: 10
+**Gap APIs: 124** · Already covered: 14
 
 #### Missing from Perry
 
-- `crypto.checkPrime(candidate[, options], callback)`
-- `crypto.checkPrimeSync(candidate[, options])`
 - `crypto.createCipheriv(algorithm, key, iv[, options])`
 - `crypto.createDecipheriv(algorithm, key, iv[, options])`
 - `crypto.createDiffieHellman(prime[, primeEncoding][, generator][, generatorEncoding])`
@@ -444,8 +370,6 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `crypto.generateKeySync(type, options)`
 - `crypto.generateKeyPair(type, options, callback)`
 - `crypto.generateKeyPairSync(type, options)`
-- `crypto.generatePrime(size[, options], callback)`
-- `crypto.generatePrimeSync(size[, options])`
 - `crypto.getCipherInfo(nameOrNid[, options])`
 - `crypto.getCiphers()`
 - `crypto.getCurves()`
@@ -470,10 +394,6 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `crypto.sign(algorithm, data, key[, callback])`
 - `crypto.timingSafeEqual(a, b)`
 - `crypto.verify(algorithm, data, key, signature[, callback])`
-- `crypto.argon2(algorithm, parameters, callback)`
-- `crypto.argon2Sync(algorithm, parameters)`
-- `crypto.encapsulate(key[, callback])`
-- `crypto.decapsulate(key, ciphertext[, callback])`
 - `crypto.constants`
 - `crypto.fips`
 - … and 78 more (see `runtime-parity.md` for the full list)
@@ -482,8 +402,16 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 
 | API | Coverage source |
 |-----|-----------------|
+| `crypto.argon2(algorithm, parameters, callback)` | `manifest:crypto.argon2`; `ffi:js_crypto_argon2_async`; `test-parity/node-suite/crypto/argon2/kdf.ts` |
+| `crypto.argon2Sync(algorithm, parameters)` | `manifest:crypto.argon2Sync`; `ffi:js_crypto_argon2_sync`; `test-parity/node-suite/crypto/argon2/kdf.ts` |
+| `crypto.checkPrime(candidate[, options], callback)` | `manifest:crypto.checkPrime`; `ffi:js_crypto_check_prime_async`; `test-parity/node-suite/crypto/prime/generate-check.ts` |
+| `crypto.checkPrimeSync(candidate[, options])` | `manifest:crypto.checkPrimeSync`; `ffi:js_crypto_check_prime_sync`; `test-parity/node-suite/crypto/prime/generate-check.ts` |
 | `crypto.createHash(algorithm[, options])` | `manifest:crypto.createHash` |
 | `crypto.createHmac(algorithm, key[, options])` | `manifest:crypto.createHmac` |
+| `crypto.decapsulate(key, ciphertext[, callback])` | `manifest:crypto.decapsulate`; `ffi:js_crypto_decapsulate`; `test-parity/node-suite/crypto/kem/x25519.ts` |
+| `crypto.encapsulate(key[, callback])` | `manifest:crypto.encapsulate`; `ffi:js_crypto_encapsulate`; `test-parity/node-suite/crypto/kem/x25519.ts` |
+| `crypto.generatePrime(size[, options], callback)` | `manifest:crypto.generatePrime`; `ffi:js_crypto_generate_prime_async`; `test-parity/node-suite/crypto/prime/generate-check.ts` |
+| `crypto.generatePrimeSync(size[, options])` | `manifest:crypto.generatePrimeSync`; `ffi:js_crypto_generate_prime_sync`; `test-parity/node-suite/crypto/prime/generate-check.ts` |
 | `crypto.getRandomValues(typedArray)` | `manifest:crypto.getRandomValues` |
 | `crypto.pbkdf2(password, salt, iterations, keylen, digest, callback)` | `manifest:crypto.pbkdf2` |
 | `crypto.pbkdf2Sync(password, salt, iterations, keylen, digest)` | `manifest:crypto.pbkdf2Sync` |
@@ -495,12 +423,11 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 
 ### node:process (and global `process`)
 
-**Gap APIs: 92** · Already covered: 26
+**Gap APIs: 90** · Already covered: 28
 
 #### Missing from Perry
 
 - `process.abort()`
-- `process.execve(file[, args[, env]])`
 - `process.memoryUsage.rss()`
 - `process.availableMemory()`
 - `process.constrainedMemory()`
@@ -529,12 +456,8 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `process.dlopen(module, filename[, flags])`
 - `process.loadEnvFile(path)`
 - `process.hrtime([time])`
-- `process.permission.has(scope[, reference])`
 - `process.umask()`
 - `process.umask(mask)`
-- `process.finalization.register(ref, callback)`
-- `process.finalization.registerBeforeExit(ref, callback)`
-- `process.finalization.unregister(ref)`
 - `process.ref(maybeRefable)`
 - `process.unref(maybeRefable)`
 - `process.binding(name)`
@@ -556,6 +479,8 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 | `process.kill(pid[, signal])` | `expr:ProcessKill` |
 | `process.hrtime.bigint()` | `expr:ProcessHrtimeBigint` |
 | `process.nextTick(callback[, ...args])` | `expr:ProcessNextTick` |
+| `process.execve(file[, args[, env]])` | `manifest:process.execve` |
+| `process.permission.has(scope[, reference])` | `runtime:process.permission` |
 | `process.pid` | `expr:ProcessPid` |
 | `process.ppid` | `expr:ProcessPpid` |
 | `process.version` | `expr:ProcessVersion` |
@@ -782,8 +707,6 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `zlib.Unzip`
 - `zlib.BrotliCompress`
 - `zlib.BrotliDecompress`
-- `zlib.ZstdCompress`
-- `zlib.ZstdDecompress`
 - `zlib.createDeflate([options])`
 - `zlib.createDeflateRaw([options])`
 - `zlib.createGunzip([options])`
@@ -793,8 +716,6 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `zlib.createUnzip([options])`
 - `zlib.createBrotliCompress([options])`
 - `zlib.createBrotliDecompress([options])`
-- `zlib.createZstdCompress([options])`
-- `zlib.createZstdDecompress([options])`
 - `zlib.deflateRaw(buffer[, options], callback)`
 - `zlib.deflateRawSync(buffer[, options])`
 - `zlib.inflateRaw(buffer[, options], callback)`
@@ -805,10 +726,6 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `zlib.brotliCompressSync(buffer[, options])`
 - `zlib.brotliDecompress(buffer[, options], callback)`
 - `zlib.brotliDecompressSync(buffer[, options])`
-- `zlib.zstdCompress(buffer[, options], callback)`
-- `zlib.zstdCompressSync(buffer[, options])`
-- `zlib.zstdDecompress(buffer[, options], callback)`
-- `zlib.zstdDecompressSync(buffer[, options])`
 - `zlib.close([callback])`
 - `zlib.flush([kind,] callback)`
 - `zlib.params(level, strategy, callback)`
@@ -849,7 +766,7 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 
 ### node:stream
 
-**Gap APIs: 76** · Already covered: 5
+**Gap APIs: 75** · Already covered: 6
 
 #### Missing from Perry
 
@@ -877,7 +794,6 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `readable.setEncoding(encoding)`
 - `readable.isPaused()`
 - `readable.destroy([error])`
-- `readable.wrap(stream)`
 - `readable.compose(stream[, options])`
 - `readable.iterator([options])`
 - `readable.map(fn[, options])`
@@ -1064,14 +980,12 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 
 ### node:stream/web
 
-**Gap APIs: 56** · Already covered: 12
+**Gap APIs: 52** · Already covered: 16
 
 #### Missing from Perry
 
 - `new ReadableStream([underlyingSource[, strategy]])`
-- `readableStream.locked`
 - `readableStream.cancel([reason])`
-- `readableStream.getReader([options])`
 - `readableStream.pipeThrough(transform[, options])`
 - `readableStream.pipeTo(destination[, options])`
 - `readableStream.tee()`
@@ -1079,10 +993,8 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `readableStream[Symbol.asyncIterator]()`
 - `new ReadableStreamDefaultReader(stream)`
 - `new ReadableStreamBYOBReader(stream)`
-- `byobReader.closed`
 - `byobReader.read(view[, options])`
 - `byobReader.cancel([reason])`
-- `byobReader.releaseLock()`
 - `controller.desiredSize`
 - `controller.close()`
 - `controller.enqueue([chunk])`
@@ -1125,10 +1037,14 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 | API | Coverage source |
 |-----|-----------------|
 | `ReadableStream.from(iterable)` | `manifest:stream.from` |
+| `readableStream.locked` | `ffi:js_readable_stream_locked`; `test-parity/node-suite/stream/web/byob-reader.ts` |
+| `readableStream.getReader([options])` | `ffi:js_readable_stream_get_reader_with_options`; `test-parity/node-suite/stream/web/byob-on-byte-stream.ts`; `test-parity/node-suite/stream/web/byob-reader-getReader.ts` |
 | `reader.closed` | `ffi:js_reader_closed` |
 | `reader.read()` | `ffi:js_reader_read` |
 | `reader.cancel([reason])` | `ffi:js_reader_cancel` |
 | `reader.releaseLock()` | `ffi:js_reader_release_lock` |
+| `byobReader.closed` | `ffi:js_reader_closed`; `test-parity/node-suite/stream/web/byob-reader.ts` |
+| `byobReader.releaseLock()` | `ffi:js_reader_release_lock`; `test-parity/node-suite/stream/web/byob-reader.ts` |
 | `writer.closed` | `ffi:js_writer_closed` |
 | `writer.desiredSize` | `ffi:js_writer_desired_size` |
 | `writer.ready` | `ffi:js_writer_ready` |
@@ -1338,15 +1254,16 @@ The FileHandle stream-iter tail is runtime-backed for the direct no-transform so
 
 ### node:sqlite
 
-**Gap APIs: 44** · Already covered: 8
+**Gap APIs: 42** · Already covered: 10
 
-#### Covered by Perry (#3183/#3184)
+#### Covered by Perry
 
 - `new DatabaseSync(path)` (incl. `:memory:`) → rusqlite connection
 - `db.exec(sql)` / `db.prepare(sql)` → `StatementSync` / `db.close()`
 - `stmt.run(...params)` → `{ changes, lastInsertRowid }`
 - `stmt.get(...params)` / `stmt.all(...params)` → row object(s)
 - `stmt.iterate(...params)` (array-backed) / `stmt.columns()` metadata
+- `db.enableLoadExtension(allow)` / `db.loadExtension(path)` extension-loading controls
 
 #### Missing from Perry
 
@@ -1355,8 +1272,6 @@ The FileHandle stream-iter tail is runtime-backed for the direct no-transform so
 - `db.applyChangeset(changeset[, options])`
 - `db.createSession([options])`
 - `db.createTagStore([maxSize])`
-- `db.enableLoadExtension(allow)`
-- `db.loadExtension(path)`
 - `db.location([dbName])`
 - `db.enableDefensive(active)`
 - `db.serialize([dbName])`
@@ -1757,13 +1672,7 @@ The FileHandle stream-iter tail is runtime-backed for the direct no-transform so
 
 ### node:wasi
 
-**Gap APIs: 3** · Already covered: 3
-
-#### Missing from Perry
-
-- `wasi.start(instance)`
-- `wasi.initialize(instance)`
-- `wasi.finalizeBindings(instance[, options])`
+**Gap APIs: 0** · Already covered: 6
 
 #### Covered (sampled)
 
@@ -1772,17 +1681,18 @@ The FileHandle stream-iter tail is runtime-backed for the direct no-transform so
 | `new WASI([options])` | `manifest:wasi.WASI`; `test-parity/node-suite/wasi/classes/constructor-validation.ts` |
 | `wasi.getImportObject()` | `manifest:wasi.getImportObject`; `test-parity/node-suite/wasi/classes/import-object.ts` |
 | `wasi.wasiImport` | `manifest:wasi.wasiImport`; `test-parity/node-suite/wasi/classes/import-object.ts` |
+| `wasi.start(instance)` | `manifest:wasi.start`; `test-parity/node-suite/wasi/lifecycle/start-initialize-finalize.ts` |
+| `wasi.initialize(instance)` | `manifest:wasi.initialize`; `test-parity/node-suite/wasi/lifecycle/start-initialize-finalize.ts` |
+| `wasi.finalizeBindings(instance[, options])` | `manifest:wasi.finalizeBindings`; `test-parity/node-suite/wasi/lifecycle/start-initialize-finalize.ts` |
 
 ### node:module
 
-**Gap APIs: 26** · Already covered: 13
+**Gap APIs: 21** · Already covered: 27
 
 #### Missing from Perry
 
 - `Module.createRequire(filename)`
 - `Module.getSourceMapsSupport()`
-- `Module.register(specifier[, parentURL][, options])`
-- `Module.registerHooks(options)`
 - `Module.runMain()`
 - `Module.setSourceMapsSupport(enabled[, options])`
 - `Module.stripTypeScriptTypes(code[, options])`
@@ -1801,21 +1711,32 @@ The FileHandle stream-iter tail is runtime-backed for the direct no-transform so
 - `module.require(id)`
 - `module.load()`
 - `require.cache` overrides
-- `module._extensions`
-- `module._cache`
-- `module._pathCache`
 - Customization hook callbacks
 
 #### Covered (sampled)
 
 | API | Coverage source |
 |-----|-----------------|
+| `Module` / `new Module(id)` | `manifest:module.Module`; `runtime:js_module_module_new`; `test-parity/node-suite/module/commonjs/module-constructor-cache.ts` |
 | `Module.builtinModules` | `manifest:module.builtinModules`; `runtime:js_module_builtin_modules` |
 | `Module.findPackageJSON(specifier[, base])` | `manifest:module.findPackageJSON`; `runtime:js_module_find_package_json` |
 | `Module.findSourceMap(path)` | `manifest:module.findSourceMap`; `test-parity/node-suite/module/source-map/basic.ts` |
 | `Module.flushCompileCache()` | `manifest:module.flushCompileCache`; `test-parity/node-suite/module/compile-cache/controls.ts` |
+| `Module.globalPaths` | `manifest:module.globalPaths`; `test-parity/node-suite/module/commonjs/module-constructor-cache.ts` |
 | `Module.getCompileCacheDir()` | `manifest:module.getCompileCacheDir`; `test-parity/node-suite/module/compile-cache/controls.ts` |
 | `Module.isBuiltin(moduleName)` | `manifest:module.isBuiltin`; `test-parity/node-suite/module/methods/is-builtin.ts` |
+| `Module._cache` | `manifest:module._cache`; `test-parity/node-suite/module/commonjs/module-constructor-cache.ts` |
+| `Module._extensions` | `manifest:module._extensions`; `test-parity/node-suite/module/commonjs/module-constructor-cache.ts` |
+| `Module._pathCache` | `manifest:module._pathCache`; `test-parity/node-suite/module/commonjs/module-constructor-cache.ts` |
+| `Module._findPath(request, paths)` | `manifest:module._findPath`; `runtime:js_module_find_path`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
+| `Module._initPaths()` | `manifest:module._initPaths`; `runtime:js_module_init_paths`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
+| `Module._load(request, parent, isMain)` | `manifest:module._load`; `runtime:js_module_load`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
+| `Module._nodeModulePaths(from)` | `manifest:module._nodeModulePaths`; `runtime:js_module_node_module_paths`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
+| `Module._preloadModules(requests)` | `manifest:module._preloadModules`; `runtime:js_module_preload_modules`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
+| `Module._resolveFilename(request, parent)` | `manifest:module._resolveFilename`; `runtime:js_module_resolve_filename`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
+| `Module._resolveLookupPaths(request, parent)` | `manifest:module._resolveLookupPaths`; `runtime:js_module_resolve_lookup_paths`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
+| `Module.register(specifier[, parentURL][, options])` | `manifest:module.register`; `test-parity/node-suite/module/loader/register.ts` |
+| `Module.registerHooks(options)` | `manifest:module.registerHooks`; `test-parity/node-suite/module/loader/register-hooks.ts` |
 | `Module.constants.compileCacheStatus` | `manifest:module.constants`; `test-parity/node-suite/module/compile-cache/controls.ts` |
 | `Module.enableCompileCache([cacheDir])` | `manifest:module.enableCompileCache`; `test-parity/node-suite/module/compile-cache/controls.ts` |
 | `new SourceMap(payload[, options])` | `manifest:module.SourceMap`; `test-parity/node-suite/module/source-map/basic.ts` |

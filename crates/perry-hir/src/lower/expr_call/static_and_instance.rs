@@ -385,6 +385,7 @@ pub(super) fn try_static_method_and_instance(
                         | "setHeader"
                         | "setTimeout"
                         | "write"
+                        | "destroy"
                         | "end"
                 );
                 if (is_math_lib && is_math_method)

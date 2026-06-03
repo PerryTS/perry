@@ -1021,7 +1021,15 @@ pub(crate) fn lower_stmt(
                 .init
                 .extend(predeclare_implicit_assignment_targets(ctx, &expr_stmt.expr));
             // Check if this is a destructuring assignment that needs special handling
-            if let ast::Expr::Assign(assign) = expr_stmt.expr.as_ref() {
+            let maybe_assign = match expr_stmt.expr.as_ref() {
+                ast::Expr::Assign(assign) => Some(assign),
+                ast::Expr::Paren(paren) => match paren.expr.as_ref() {
+                    ast::Expr::Assign(assign) => Some(assign),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(assign) = maybe_assign {
                 if let ast::AssignTarget::Pat(pat) = &assign.left {
                     // This is a destructuring assignment at statement level
                     // We can emit proper Let statements for temporaries
@@ -1034,6 +1042,9 @@ pub(crate) fn lower_stmt(
             module.init.push(Stmt::Expr(expr));
         }
         ast::Stmt::If(if_stmt) => {
+            module
+                .init
+                .extend(predeclare_implicit_assignment_targets(ctx, &if_stmt.test));
             let condition = lower_expr(ctx, &if_stmt.test)?;
             // Each branch introduces its own lexical scope. Skip extra push if
             // branch is a BlockStmt (handled there) or an If (else-if chain).
@@ -1314,6 +1325,26 @@ pub(crate) fn lower_stmt(
         }
         ast::Stmt::ForIn(for_in_stmt) => {
             lower_stmt_for_in(ctx, module, for_in_stmt)?;
+        }
+        ast::Stmt::With(with_stmt) => {
+            if ctx.current_strict_mode() || ctx.current_strict {
+                crate::lower_bail!(
+                    with_stmt.span,
+                    "`with` statement is forbidden in strict mode"
+                );
+            }
+            let env_id = ctx.define_local("__perry_with_env".to_string(), Type::Any);
+            module.init.push(Stmt::Let {
+                id: env_id,
+                name: format!("__perry_with_env_{}", env_id),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(lower_expr(ctx, &with_stmt.obj)?),
+            });
+            ctx.push_with_env(env_id);
+            let body_result = lower_body_stmt(ctx, &with_stmt.body);
+            ctx.pop_with_env();
+            module.init.extend(body_result?);
         }
         _ => {}
     }
