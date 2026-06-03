@@ -27,6 +27,7 @@ mod concat;
 mod format;
 mod intern;
 mod io;
+mod iter_object;
 mod locale;
 mod pad;
 mod raw;
@@ -72,6 +73,9 @@ pub use format::{
 };
 pub use intern::{js_string_intern, scan_intern_table_roots, scan_intern_table_roots_mut};
 pub use io::{js_string_error, js_string_print, js_string_warn};
+pub use iter_object::{
+    dispatch_string_iterator_method, string_values_iter, STRING_ITERATOR_CLASS_ID,
+};
 pub use locale::{
     js_string_to_locale_lower_case, js_string_to_locale_upper_case, js_string_validate_locales,
 };

@@ -243,6 +243,43 @@ pub unsafe extern "C" fn js_native_call_method_value(
         }
     }
 
+    // `str[Symbol.iterator]()` — a primitive string carries no symbol property
+    // slot, so the symbol-property read below would return undefined. Route the
+    // well-known iterator symbol on a string receiver to the string method
+    // dispatcher, which builds a real String iterator object.
+    if is_symbol_key {
+        let iter_wk = crate::symbol::well_known_symbol("iterator");
+        let is_iterator_symbol = !iter_wk.is_null() && {
+            let iter_f64 = f64::from_bits(JSValue::pointer(iter_wk as *const u8).bits());
+            crate::symbol::sym_key_from_f64(key) == crate::symbol::sym_key_from_f64(iter_f64)
+        };
+        if is_iterator_symbol {
+            let obj_val = JSValue::from_bits(object.to_bits());
+            if obj_val.is_any_string() {
+                // `str[Symbol.iterator]()` — a primitive string carries no symbol
+                // property slot, so route to the string method dispatcher which
+                // builds a real String iterator object.
+                let name = b"Symbol.iterator";
+                return js_native_call_method(
+                    object,
+                    name.as_ptr() as *const i8,
+                    name.len(),
+                    args_ptr,
+                    args_len,
+                );
+            }
+            if obj_val.is_pointer() {
+                let obj = obj_val.as_pointer::<ObjectHeader>();
+                // `arguments[Symbol.iterator]()` — an arguments exotic object
+                // implements the Array iterator protocol but stores no symbol
+                // slot. `js_get_iterator` materializes it to an array iterator.
+                if !obj.is_null() && crate::object::is_arguments_object(obj) {
+                    return crate::symbol::js_get_iterator(object);
+                }
+            }
+        }
+    }
+
     // Non-string key: read the property value, then invoke it with `this`
     // bound to the receiver (the codegen `Expr::This` fallback reads
     // `IMPLICIT_THIS` when there's no lexical `this`).
@@ -1441,6 +1478,13 @@ pub unsafe extern "C" fn js_native_call_method(
                 "at" => {
                     return crate::string::js_string_at(s_ptr, arg_i32(0));
                 }
+                // `str[Symbol.iterator]()` returns a real String iterator object
+                // (codepoint-aware, surrogate pairs collapse to one element) so
+                // `Object.getPrototypeOf(''[Symbol.iterator]())` resolves to
+                // `%StringIteratorPrototype%` and generic `.next()` drivers work.
+                "Symbol.iterator" | "@@iterator" => {
+                    return crate::string::string_values_iter(receiver_string());
+                }
                 "charAt" => {
                     let result = crate::string::js_string_char_at(s_ptr, arg_i32(0));
                     if result.is_null() {
@@ -2441,6 +2485,12 @@ pub unsafe extern "C" fn js_native_call_method(
                     method_name,
                 );
             }
+            if (*obj).class_id == crate::string::STRING_ITERATOR_CLASS_ID {
+                return crate::string::dispatch_string_iterator_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                );
+            }
             // #2874: lazy iterator-helper objects (`Iterator.from(x)` and the
             // chain it produces: `.map`/`.filter`/`.take`/`.drop`/`.flatMap`/
             // `.toArray`/`.forEach`/`.reduce`/`.some`/`.every`/`.find`/`.next`).
@@ -2927,6 +2977,12 @@ pub unsafe extern "C" fn js_native_call_method(
             }
             if (*obj).class_id == crate::collection_iter_object::SET_ITERATOR_CLASS_ID {
                 return crate::collection_iter_object::dispatch_set_iterator_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                );
+            }
+            if (*obj).class_id == crate::string::STRING_ITERATOR_CLASS_ID {
+                return crate::string::dispatch_string_iterator_method(
                     obj as *mut ObjectHeader,
                     method_name,
                 );

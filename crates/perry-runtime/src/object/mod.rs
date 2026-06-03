@@ -39,6 +39,7 @@ mod global_this_tables;
 mod groupby;
 pub(crate) mod has_own_helpers;
 mod instanceof;
+pub(crate) mod iterator_prototypes;
 mod namespace_create;
 mod native_call_method;
 mod native_module;
@@ -84,6 +85,7 @@ pub use global_this::*;
 pub(crate) use global_this_tables::*;
 pub use groupby::*;
 pub use instanceof::*;
+pub(crate) use iterator_prototypes::{attach_iterator_prototype, iterator_prototype_for_class_id};
 pub use namespace_create::*;
 pub use native_call_method::*;
 pub use native_module::*;
@@ -1394,6 +1396,18 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
     );
     visitor.visit_atomic_i64_slot(&LOCAL_STORAGE_PTR, Ordering::Acquire, Ordering::Release);
     visitor.visit_atomic_i64_slot(&SESSION_STORAGE_PTR, Ordering::Acquire, Ordering::Release);
+    // Shared `%IteratorPrototype%`-style singletons for Array/Map/Set/String
+    // iterator objects. Each iterator instance's `[[Prototype]]` points here, so
+    // these must stay live for the lifetime of any iterator.
+    for slot in [
+        &iterator_prototypes::ITERATOR_PROTOTYPE_PTR,
+        &iterator_prototypes::ARRAY_ITERATOR_PROTOTYPE_PTR,
+        &iterator_prototypes::MAP_ITERATOR_PROTOTYPE_PTR,
+        &iterator_prototypes::SET_ITERATOR_PROTOTYPE_PTR,
+        &iterator_prototypes::STRING_ITERATOR_PROTOTYPE_PTR,
+    ] {
+        visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);
+    }
 }
 
 #[cfg(test)]

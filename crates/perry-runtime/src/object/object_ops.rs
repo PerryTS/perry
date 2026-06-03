@@ -1595,6 +1595,16 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                     }
                     return f64::from_bits(TAG_NULL);
                 }
+                // Built-in iterator instances (Array/Map/Set/String iterators)
+                // share a `%...IteratorPrototype%` singleton. Their instances
+                // normally carry it as a recorded static prototype (returned
+                // above), but resolve by class id too so the chain holds even if
+                // the static-prototype side-table entry was dropped.
+                if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT {
+                    if let Some(proto) = super::iterator_prototype_for_class_id((*obj).class_id) {
+                        return proto;
+                    }
+                }
             }
             return obj_value;
         }
@@ -1660,6 +1670,11 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                         return f64::from_bits(proto_bits);
                     }
                     return f64::from_bits(TAG_NULL);
+                }
+                if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT {
+                    if let Some(proto) = super::iterator_prototype_for_class_id((*obj).class_id) {
+                        return proto;
+                    }
                 }
             }
             return obj_value;

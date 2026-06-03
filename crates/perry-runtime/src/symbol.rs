@@ -1731,6 +1731,20 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
             }
         }
     }
+    // A built-in iterator object (array/map/set/string/buffer/iterator-helper)
+    // IS already an iterator and returns itself from `[Symbol.iterator]`. It now
+    // INHERITS `[Symbol.iterator]` from the shared `%IteratorPrototype%`, but
+    // that inherited thunk relies on the caller binding `this`; reading + calling
+    // it here would not, yielding a bad result. Return the iterator unchanged.
+    {
+        let jsv = crate::value::JSValue::from_bits(val_f64.to_bits());
+        if jsv.is_pointer() {
+            let raw = jsv.as_pointer::<u8>() as usize;
+            if crate::array::is_builtin_iterator_class_id(raw) {
+                return val_f64;
+            }
+        }
+    }
     let iter_wk = well_known_symbol("iterator");
     if !iter_wk.is_null() {
         let sym_f64 = f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
