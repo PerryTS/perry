@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1858 entries across 107 modules
+// Coverage: 1860 entries across 107 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3065,6 +3065,8 @@ declare module "process" {
   /** stdlib */
   export function reallyExit(...args: any[]): any;
   /** stdlib */
+  export function ref(...args: any[]): any;
+  /** stdlib */
   export function resourceUsage(...args: any[]): any;
   /** stdlib */
   export function setSourceMapsEnabled(...args: any[]): any;
@@ -3086,6 +3088,8 @@ declare module "process" {
   export function threadCpuUsage(...args: any[]): any;
   /** stdlib */
   export function umask(...args: any[]): any;
+  /** stdlib */
+  export function unref(...args: any[]): any;
   /** stdlib */
   export function uptime(...args: any[]): any;
 }

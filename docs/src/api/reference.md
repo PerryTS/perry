@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2710 entries across 110 modules.
+Total: 2712 entries across 110 modules.
 
 ## Modules
 
@@ -2630,6 +2630,7 @@ Total: 2710 entries across 110 modules.
 - `nextTick` — module
 - `openStdin` — module
 - `reallyExit` — module
+- `ref` — module
 - `resourceUsage` — module
 - `setSourceMapsEnabled` — module
 - `setSourceMapsEnabled` — module
@@ -2643,6 +2644,7 @@ Total: 2710 entries across 110 modules.
 - `sourceMapsEnabled` — module
 - `threadCpuUsage` — module
 - `umask` — module
+- `unref` — module
 - `uptime` — module
 
 ### Properties
