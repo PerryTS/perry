@@ -36,6 +36,7 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     } else {
         cp_undefined()
     };
+    let abort_signal = cp_read_abort_signal(opts_val);
 
     // Launch interpreter: options.execPath → $PERRY_FORK_EXECPATH → "node".
     let exec_path = cp_value_to_string(cp_get_field(opts_val, b"execPath"))
@@ -141,6 +142,8 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
         advanced,
         timeout,
         kill_signal,
+        abort_signal,
+        opts_val,
     );
     if !launched {
         // Spawn failure: emit a deferred `error`, leave `connected` false.
@@ -173,6 +176,8 @@ fn fork_launch(
     advanced: bool,
     timeout: Option<Duration>,
     kill_signal: i32,
+    abort_signal: Option<f64>,
+    opts_val: f64,
 ) -> bool {
     use std::os::unix::io::AsRawFd;
     use std::os::unix::net::UnixStream;
@@ -210,7 +215,7 @@ fn fork_launch(
             cp_set_field(cp, b"connected", TAG_TRUE_F64);
             let channel = crate::object::js_object_alloc(0, 0);
             cp_set_field(cp, b"channel", cp_box_ptr(channel as *const u8));
-            reactor::cp_register_live_child(
+            let handle = reactor::cp_register_live_child(
                 cp,
                 stdout_obj,
                 stderr_obj,
@@ -221,6 +226,7 @@ fn fork_launch(
                 timeout,
                 kill_signal,
             );
+            reactor::cp_install_abort_signal(handle, abort_signal, opts_val);
             true
         }
         Err(_) => false,
@@ -237,11 +243,13 @@ fn fork_launch(
     advanced: bool,
     timeout: Option<Duration>,
     kill_signal: i32,
+    abort_signal: Option<f64>,
+    opts_val: f64,
 ) -> bool {
     let _ = advanced;
     match command.spawn() {
         Ok(child) => {
-            reactor::cp_register_live_child(
+            let handle = reactor::cp_register_live_child(
                 cp,
                 stdout_obj,
                 stderr_obj,
@@ -252,6 +260,7 @@ fn fork_launch(
                 timeout,
                 kill_signal,
             );
+            reactor::cp_install_abort_signal(handle, abort_signal, opts_val);
             true
         }
         Err(_) => false,

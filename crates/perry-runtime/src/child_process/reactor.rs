@@ -80,6 +80,8 @@ enum CpEvent {
     /// Timeout expired; terminate the live child with this signal on the main
     /// thread so JS-visible `killed` is updated with the same event ordering.
     Timeout { handle: u64, signal: i32 },
+    /// `AbortSignal` attached through `options.signal` fired.
+    Abort { handle: u64 },
 }
 
 static CP_EVENT_QUEUE: Mutex<Vec<CpEvent>> = Mutex::new(Vec::new());
@@ -108,6 +110,12 @@ struct LiveChild {
     /// #2130: whether the IPC channel uses V8 structured-clone framing
     /// (`serialization: 'advanced'`) rather than newline-delimited JSON.
     ipc_advanced: bool,
+    /// NaN-boxed AbortSignal value for listener cleanup/GC rooting.
+    abort_signal_bits: u64,
+    /// NaN-boxed abort-listener closure value for listener cleanup/GC rooting.
+    abort_listener_bits: u64,
+    /// Signal number used when `options.signal` aborts this child.
+    abort_kill_signal: i32,
 }
 
 static CP_LIVE: Mutex<Option<HashMap<u64, LiveChild>>> = Mutex::new(None);
@@ -133,6 +141,18 @@ fn cp_queue_lock() -> std::sync::MutexGuard<'static, Vec<CpEvent>> {
 fn cp_push_event(ev: CpEvent) {
     cp_queue_lock().push(ev);
     crate::event_pump::js_notify_main_thread();
+}
+
+#[inline]
+fn libc_sigterm() -> i32 {
+    #[cfg(unix)]
+    {
+        libc::SIGTERM
+    }
+    #[cfg(not(unix))]
+    {
+        15
+    }
 }
 
 /// Spawn a reader thread that streams `pipe` to the event queue until EOF.
@@ -312,6 +332,9 @@ pub(super) fn cp_register_live_child(
                 closed: false,
                 ipc_send,
                 ipc_advanced,
+                abort_signal_bits: 0,
+                abort_listener_bits: 0,
+                abort_kill_signal: libc_sigterm(),
             },
         );
     }
@@ -336,6 +359,92 @@ pub(super) fn cp_register_live_child(
     // Wake the loop so 'spawn' fires on the next tick.
     crate::event_pump::js_notify_main_thread();
     handle
+}
+
+extern "C" fn cp_abort_listener(closure: *const ClosureHeader) -> f64 {
+    let handle = js_closure_get_capture_ptr(closure, 0) as u64;
+    cp_push_event(CpEvent::Abort { handle });
+    cp_undefined()
+}
+
+pub(super) fn cp_install_abort_signal(handle: u64, signal: Option<f64>, opts_val: f64) {
+    let Some(signal) = signal else {
+        return;
+    };
+    let Some(signal_ptr) = crate::url::abort::abort_signal_ptr_from_value(signal) else {
+        return;
+    };
+
+    let listener = js_closure_alloc(cp_abort_listener as *const u8, 1);
+    js_closure_set_capture_ptr(listener, 0, handle as i64);
+    let listener_val = cp_box_ptr(listener as *const u8);
+    let kill_signal = cp_read_abort_kill_signal(opts_val);
+
+    if let Some(map) = cp_live_lock().as_mut() {
+        if let Some(lc) = map.get_mut(&handle) {
+            lc.abort_signal_bits = signal.to_bits();
+            lc.abort_listener_bits = listener_val.to_bits();
+            lc.abort_kill_signal = kill_signal;
+        }
+    }
+
+    if crate::url::js_abort_signal_is_aborted(signal_ptr) != 0 {
+        cp_push_event(CpEvent::Abort { handle });
+    } else {
+        crate::url::js_abort_signal_add_listener(signal_ptr, cp_box_string("abort"), listener_val);
+    }
+}
+
+fn cp_read_abort_kill_signal(opts_val: f64) -> i32 {
+    if cp_object_ptr(opts_val).is_none() {
+        return libc_sigterm();
+    }
+    let signal = cp_get_field(opts_val, b"killSignal");
+    if JSValue::from_bits(signal.to_bits()).is_undefined() {
+        return libc_sigterm();
+    }
+    cp_signal_number_from_value(signal)
+}
+
+fn cp_signal_number_from_value(signal: f64) -> i32 {
+    #[cfg(unix)]
+    {
+        cp_parse_signal(signal)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = signal;
+        libc_sigterm()
+    }
+}
+
+fn cp_take_abort_fields(handle: u64) -> Option<(u64, i32, u64, u64)> {
+    let mut guard = cp_live_lock();
+    let lc = guard.as_mut()?.get_mut(&handle)?;
+    let fields = (
+        lc.cp_bits,
+        lc.abort_kill_signal,
+        lc.abort_signal_bits,
+        lc.abort_listener_bits,
+    );
+    lc.abort_signal_bits = 0;
+    lc.abort_listener_bits = 0;
+    Some(fields)
+}
+
+fn cp_cleanup_abort_listener(signal_bits: u64, listener_bits: u64) {
+    if signal_bits == 0 || listener_bits == 0 {
+        return;
+    }
+    let signal = f64::from_bits(signal_bits);
+    let Some(signal_ptr) = crate::url::abort::abort_signal_ptr_from_value(signal) else {
+        return;
+    };
+    crate::url::js_abort_signal_remove_listener(
+        signal_ptr,
+        cp_box_string("abort"),
+        f64::from_bits(listener_bits),
+    );
 }
 
 /// `child.send(message)` — serialize `message` to JSON (main thread) and write
@@ -448,6 +557,7 @@ pub extern "C" fn js_child_process_spawn_streams(
     } else {
         cp_undefined()
     };
+    let abort_signal = cp_read_abort_signal(opts_val);
 
     // stdout/stderr Readable + stdin Writable sub-objects.
     let stdout_obj = cp_build_readable();
@@ -508,7 +618,7 @@ pub extern "C" fn js_child_process_spawn_streams(
 
     match command.spawn() {
         Ok(child) => {
-            cp_register_live_child(
+            let handle = cp_register_live_child(
                 cp,
                 stdout_obj,
                 stderr_obj,
@@ -519,6 +629,7 @@ pub extern "C" fn js_child_process_spawn_streams(
                 timeout,
                 kill_signal,
             );
+            cp_install_abort_signal(handle, abort_signal, opts_val);
         }
         Err(e) => {
             // Spawn failure (e.g. ENOENT): Node emits a single `error` event and
@@ -556,6 +667,7 @@ pub(super) extern "C" fn cp_emit_spawn_error(closure: *const ClosureHeader) -> f
 
 pub(super) fn cp_register_reactor_arities() {
     crate::closure::js_register_closure_arity(cp_emit_spawn_error as *const u8, 0);
+    crate::closure::js_register_closure_arity(cp_abort_listener as *const u8, 0);
 }
 
 // ============================================================================
@@ -689,12 +801,25 @@ fn cp_reactor_pump_inner() {
                     cp_set_field(f64::from_bits(cp_bits), b"killed", TAG_TRUE_F64);
                 }
             }
+            CpEvent::Abort { handle } => {
+                let Some((cp_bits, kill_signal, signal_bits, listener_bits)) =
+                    cp_take_abort_fields(handle)
+                else {
+                    continue;
+                };
+                cp_cleanup_abort_listener(signal_bits, listener_bits);
+                if cp_live_kill_signal(handle, kill_signal) {
+                    let cp = f64::from_bits(cp_bits);
+                    cp_set_field(cp, b"killed", TAG_TRUE_F64);
+                    cp_emit(cp, "error", &[cp_abort_error(None)]);
+                }
+            }
         }
     }
 
     // --- Phase B: emit `exit`+`close` once a child has exited AND both
     // streams have hit EOF, so all `data`/`end` have already fired. ---
-    let to_close: Vec<(u64, u64, Option<i32>, Option<i32>)> = {
+    let to_close: Vec<(u64, u64, Option<i32>, Option<i32>, u64, u64)> = {
         let mut guard = cp_live_lock();
         let mut out = Vec::new();
         if let Some(map) = guard.as_mut() {
@@ -705,14 +830,24 @@ fn cp_reactor_pump_inner() {
                 if let Some((code, signal)) = lc.exited {
                     if !lc.stdout_open && !lc.stderr_open {
                         lc.closed = true;
-                        out.push((*h, lc.cp_bits, code, signal));
+                        out.push((
+                            *h,
+                            lc.cp_bits,
+                            code,
+                            signal,
+                            lc.abort_signal_bits,
+                            lc.abort_listener_bits,
+                        ));
+                        lc.abort_signal_bits = 0;
+                        lc.abort_listener_bits = 0;
                     }
                 }
             }
         }
         out
     };
-    for (handle, cp_bits, code, signal) in to_close {
+    for (handle, cp_bits, code, signal, abort_signal_bits, abort_listener_bits) in to_close {
+        cp_cleanup_abort_listener(abort_signal_bits, abort_listener_bits);
         let cp = f64::from_bits(cp_bits);
         let code_f = code.map(|c| c as f64).unwrap_or(TAG_NULL_F64);
         let signal_f = signal
@@ -804,6 +939,63 @@ pub(super) fn cp_live_kill(handle: u64, signal: f64) -> bool {
     cp_live_kill_signum(handle, cp_signal_from_value(signal)).is_some()
 }
 
+fn cp_live_kill_signal(handle: u64, signum: i32) -> bool {
+    let pid = {
+        let guard = cp_live_lock();
+        match guard.as_ref().and_then(|map| map.get(&handle)) {
+            // Skip if already reaped — the pid may have been recycled by the OS.
+            Some(lc) if lc.exited.is_none() => lc.pid,
+            _ => return false,
+        }
+    };
+    #[cfg(unix)]
+    {
+        unsafe { libc::kill(pid, signum) == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (pid, signum);
+        false
+    }
+}
+
+/// Map a JS `kill` signal argument to a Unix signal number. Default / no-arg
+/// (`undefined` or the `0.0` padding) → `SIGTERM`.
+#[cfg(unix)]
+fn cp_parse_signal(signal: f64) -> i32 {
+    const SIGTERM: i32 = libc::SIGTERM;
+    if JSValue::from_bits(signal.to_bits()).is_undefined() {
+        return SIGTERM;
+    }
+    if let Some(name) = cp_value_to_string(signal) {
+        return cp_signal_number(&name).unwrap_or(SIGTERM);
+    }
+    if signal.is_finite() {
+        let n = signal as i32;
+        // 0 is the "no-arg" padding sentinel — treat as the default SIGTERM.
+        return if n == 0 { SIGTERM } else { n };
+    }
+    SIGTERM
+}
+
+/// Inverse of `super::cp_signal_name` for the common signals.
+#[cfg(unix)]
+fn cp_signal_number(name: &str) -> Option<i32> {
+    Some(match name {
+        "SIGHUP" => libc::SIGHUP,
+        "SIGINT" => libc::SIGINT,
+        "SIGQUIT" => libc::SIGQUIT,
+        "SIGABRT" => libc::SIGABRT,
+        "SIGKILL" => libc::SIGKILL,
+        "SIGTERM" => libc::SIGTERM,
+        "SIGUSR1" => libc::SIGUSR1,
+        "SIGUSR2" => libc::SIGUSR2,
+        "SIGSTOP" => libc::SIGSTOP,
+        "SIGCONT" => libc::SIGCONT,
+        _ => return None,
+    })
+}
+
 // ============================================================================
 // Event-loop integration hooks (wired from lib.rs / gc/mod.rs).
 // ============================================================================
@@ -824,6 +1016,12 @@ pub(crate) fn cp_reactor_scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
     if let Some(map) = cp_live_lock().as_mut() {
         for lc in map.values_mut() {
             visitor.visit_nanbox_u64_slot(&mut lc.cp_bits);
+            if lc.abort_signal_bits != 0 {
+                visitor.visit_nanbox_u64_slot(&mut lc.abort_signal_bits);
+            }
+            if lc.abort_listener_bits != 0 {
+                visitor.visit_nanbox_u64_slot(&mut lc.abort_listener_bits);
+            }
         }
     }
 }

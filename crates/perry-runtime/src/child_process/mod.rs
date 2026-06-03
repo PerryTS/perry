@@ -560,6 +560,7 @@ pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64,
     // sit in the `arg1` slot, so the encoding is read from there. When `arg1`
     // is the callback the lookup no-ops and the default applies.
     let mode = cp_read_output_mode(arg1, true);
+    let abort_signal = cp_read_abort_signal(arg1);
 
     if cmd_ptr.is_null() {
         let empty = cp_box_output(b"", &mode);
@@ -576,6 +577,21 @@ pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64,
         let cmd_bytes = std::slice::from_raw_parts(data_ptr, len);
         String::from_utf8_lossy(cmd_bytes).into_owned()
     };
+
+    if abort_signal.is_some_and(cp_abort_signal_is_aborted) {
+        let stdout_box = cp_box_output(b"", &mode);
+        if cb.is_null() {
+            return stdout_box;
+        }
+        let stderr_box = cp_box_output(b"", &mode);
+        crate::closure::js_closure_call3(
+            cb,
+            cp_abort_error(Some(&cmd_str)),
+            stdout_box,
+            stderr_box,
+        );
+        return f64::from_bits(TAG_UNDEFINED_BITS);
+    }
 
     // `exec` always runs through the shell. The options object sits in the
     // `arg1` slot (`exec(cmd, options, cb)`); when `arg1` is the callback
@@ -637,6 +653,7 @@ pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64,
 const CP_SHAPE_ID: u32 = 0x7FFF_FD00;
 const CP_READABLE_SHAPE_ID: u32 = 0x7FFF_FD40;
 const CP_WRITABLE_SHAPE_ID: u32 = 0x7FFF_FD80;
+const CP_ABORT_ERROR_CLASS_ID: u32 = 0x7FFF_FDC0;
 
 #[inline]
 fn cp_undefined() -> f64 {
@@ -1525,6 +1542,29 @@ pub(super) fn cp_read_argv0(opts_val: f64) -> Option<String> {
     cp_value_to_string(cp_get_field(opts_val, b"argv0"))
 }
 
+pub(super) fn cp_read_abort_signal(opts_val: f64) -> Option<f64> {
+    if cp_object_ptr(opts_val).is_none() {
+        return None;
+    }
+    let signal = cp_get_field(opts_val, b"signal");
+    if JSValue::from_bits(signal.to_bits()).is_undefined() {
+        return None;
+    }
+    if crate::url::abort::abort_signal_ptr_from_value(signal).is_some() {
+        return Some(signal);
+    }
+    let message = format!(
+        "The \"options.signal\" property must be an instance of AbortSignal. Received {}",
+        crate::fs::validate::describe_received(signal)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+pub(super) fn cp_abort_signal_is_aborted(signal: f64) -> bool {
+    crate::url::abort::abort_signal_ptr_from_value(signal)
+        .is_some_and(|ptr| crate::url::js_abort_signal_is_aborted(ptr) != 0)
+}
+
 pub(super) fn cp_spawnargs_argv0(default: &str, opts_val: f64) -> String {
     cp_read_argv0(opts_val).unwrap_or_else(|| default.to_string())
 }
@@ -1859,6 +1899,24 @@ fn cp_make_range_error(message: &str, extra: &[(&str, f64)]) -> f64 {
     )
 }
 
+pub(super) fn cp_abort_error(cmd: Option<&str>) -> f64 {
+    crate::object::js_register_class_extends_error(CP_ABORT_ERROR_CLASS_ID);
+    let obj = crate::object::js_object_alloc(CP_ABORT_ERROR_CLASS_ID, 4);
+    let set = |key: &str, value: f64| {
+        let kp = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        js_object_set_field_by_name(obj, kp, value);
+    };
+    set("code", cp_box_string("ABORT_ERR"));
+    set("name", cp_box_string("AbortError"));
+    set("message", cp_box_string("The operation was aborted"));
+    if let Some(cmd) = cmd {
+        set("cmd", cp_box_string(cmd));
+    }
+    let hidden = crate::object::PropertyAttrs::new(true, false, true);
+    crate::object::set_property_attrs(obj as usize, "message".to_string(), hidden);
+    cp_box_ptr(obj as *const u8)
+}
+
 /// `[null, stdout, stderr]` — the Node `output` array shared by spawnSync and
 /// the execSync throw error.
 fn cp_output_array(stdout: f64, stderr: f64) -> f64 {
@@ -2074,6 +2132,22 @@ pub extern "C" fn js_child_process_exec_file(
     let arg_strs = cp_args_from_value(args_val);
     // execFile defaults to utf8 (callback stdout/stderr are strings).
     let mode = cp_read_output_mode(opts_val, true);
+    let abort_signal = cp_read_abort_signal(opts_val);
+
+    if abort_signal.is_some_and(cp_abort_signal_is_aborted) {
+        let stdout_box = cp_box_output(b"", &mode);
+        if cb.is_null() {
+            return stdout_box;
+        }
+        let stderr_box = cp_box_output(b"", &mode);
+        crate::closure::js_closure_call3(
+            cb,
+            cp_abort_error(Some(&cp_file_cmd_display(&file_str, &arg_strs))),
+            stdout_box,
+            stderr_box,
+        );
+        return f64::from_bits(TAG_UNDEFINED_BITS);
+    }
 
     // `cwd`/`env` come from the options slot; when `opts_val` is the callback
     // (`execFile(file, args, cb)`) it's a closure, so the helper no-ops.
