@@ -1,5 +1,5 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
-use perry_hir::{Class, Function, Module, ModuleInitKind, Stmt};
+use perry_hir::{Class, Export, Expr, Function, Module, ModuleInitKind, Stmt};
 use perry_types::Type;
 
 fn empty_opts() -> CompileOptions {
@@ -129,6 +129,23 @@ fn module_with_static_and_instance_method_name_collision() -> Module {
     module
 }
 
+fn module_with_exported_value_alias_colliding_with_function() -> Module {
+    let mut module = module_with_duplicate_local_function_names();
+    module.functions = vec![function(1, "graphql")];
+    module.init = vec![Stmt::Let {
+        id: 10,
+        name: "graphql2".to_string(),
+        ty: Type::Number,
+        mutable: false,
+        init: Some(Expr::Number(42.0)),
+    }];
+    module.exports = vec![Export::Named {
+        local: "graphql2".to_string(),
+        exported: "graphql".to_string(),
+    }];
+    module
+}
+
 #[test]
 fn duplicate_local_function_names_get_unique_llvm_symbols() {
     let ir = String::from_utf8(
@@ -179,6 +196,29 @@ fn static_method_name_does_not_clobber_instance_method_symbol() {
             "define double @perry_static_duplicate_function_symbols_ts__PackageJson__create("
         )
         .count(),
+        1
+    );
+}
+
+#[test]
+fn exported_value_alias_does_not_clobber_local_function_symbol() {
+    let ir = String::from_utf8(
+        compile_module(
+            &module_with_exported_value_alias_colliding_with_function(),
+            empty_opts(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        ir.matches("define double @perry_fn_duplicate_function_symbols_ts__graphql()")
+            .count(),
+        1
+    );
+    assert_eq!(
+        ir.matches("define double @perry_fn_duplicate_function_symbols_ts__graphql__local_1(")
+            .count(),
         1
     );
 }

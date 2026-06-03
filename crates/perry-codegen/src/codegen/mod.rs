@@ -1828,6 +1828,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .entry(sanitize(exported_name))
             .or_insert(*func_id);
     }
+    for export in &hir.exports {
+        if let perry_hir::Export::Named { local, exported } = export {
+            if local != exported {
+                public_symbol_owners
+                    .entry(sanitize(exported))
+                    .or_insert(u32::MAX);
+            }
+        }
+    }
     let mut local_symbol_counts: HashMap<String, usize> = HashMap::new();
     for f in &hir.functions {
         *local_symbol_counts.entry(sanitize(&f.name)).or_insert(0) += 1;
