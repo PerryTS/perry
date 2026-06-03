@@ -81,16 +81,15 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     } else {
         index as i32
     };
-    if idx_i32 < 0 {
-        return f64::from_bits(TAG_UNDEFINED);
-    }
-    if let Some(value) = unsafe {
-        crate::object::arguments_object_get_index(
-            raw_ptr as *const crate::object::ObjectHeader,
-            idx_i32 as u32,
-        )
-    } {
-        return value;
+    if idx_i32 >= 0 {
+        if let Some(value) = unsafe {
+            crate::object::arguments_object_get_index(
+                raw_ptr as *const crate::object::ObjectHeader,
+                idx_i32 as u32,
+            )
+        } {
+            return value;
+        }
     }
     // Registry-backed Buffer (`Buffer.from(...)`, `js_buffer_alloc`, the
     // `'data'`-event chunk an http/net listener receives). These carry NO
