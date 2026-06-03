@@ -11,6 +11,7 @@
 //! use a hash-keyed target dir so consecutive runs with the same
 //! profile are no-ops after the first build.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -55,6 +56,40 @@ impl OptimizedLibs {
     }
 }
 
+fn well_known_iteration_set(ctx: &CompilationContext) -> BTreeSet<String> {
+    let mut iteration_set: BTreeSet<String> = ctx.native_module_imports.iter().cloned().collect();
+    if ctx.uses_fetch && !iteration_set.contains("fetch") && !iteration_set.contains("node-fetch") {
+        iteration_set.insert("fetch".to_string());
+    }
+    iteration_set
+}
+
+/// Resolve only the prebuilt well-known wrapper archives.
+///
+/// Used when automatic runtime/stdlib specialization is disabled. The
+/// no-auto path still needs wrapper archives for FFI symbols that are not
+/// defined by the full prebuilt stdlib, such as the `perry-ext-http` server
+/// entry points recorded by the codegen FFI registry.
+pub(super) fn resolve_no_auto_optimized_libs(
+    ctx: &CompilationContext,
+    target: Option<&str>,
+    format: OutputFormat,
+    verbose: u8,
+) -> OptimizedLibs {
+    if matches!(format, OutputFormat::Text) && verbose > 0 {
+        eprintln!("  auto-optimize: skipped; using prebuilt target/release/libperry_*.a");
+    }
+    let well_known_libs = if std::env::var_os("PERRY_DISABLE_WELL_KNOWN").is_none() {
+        resolve_prebuilt_ext_libs(&well_known_iteration_set(ctx), target, format, verbose)
+    } else {
+        Vec::new()
+    };
+    OptimizedLibs {
+        well_known_libs,
+        ..OptimizedLibs::empty()
+    }
+}
+
 /// Rebuild perry-runtime + perry-stdlib in a single cargo invocation with
 /// the chosen Cargo features and panic mode, and return paths to the
 /// resulting archives. Both halves fall back to the prebuilt libraries
@@ -73,11 +108,7 @@ pub(super) fn build_optimized_libs(
     verbose: u8,
 ) -> OptimizedLibs {
     let use_well_known = std::env::var_os("PERRY_DISABLE_WELL_KNOWN").is_none();
-    let mut iteration_set: std::collections::BTreeSet<String> =
-        ctx.native_module_imports.iter().cloned().collect();
-    if ctx.uses_fetch && !iteration_set.contains("fetch") && !iteration_set.contains("node-fetch") {
-        iteration_set.insert("fetch".to_string());
-    }
+    let iteration_set = well_known_iteration_set(ctx);
 
     // `PERRY_NO_AUTO_OPTIMIZE=1` — opt out of the per-app feature-set
     // specialization and use the prebuilt `target/release/libperry_*.a`
@@ -96,21 +127,7 @@ pub(super) fn build_optimized_libs(
     // owned by `perry-ext-http`, and the full prebuilt stdlib does not
     // define those wrapper-only entry points.
     if std::env::var_os("PERRY_NO_AUTO_OPTIMIZE").is_some() {
-        if matches!(format, OutputFormat::Text) && verbose > 0 {
-            eprintln!(
-                "  auto-optimize: skipped (PERRY_NO_AUTO_OPTIMIZE=1); \
-                 using prebuilt target/release/libperry_*.a"
-            );
-        }
-        let well_known_libs = if use_well_known {
-            resolve_prebuilt_ext_libs(&iteration_set, target, format, verbose)
-        } else {
-            Vec::new()
-        };
-        return OptimizedLibs {
-            well_known_libs,
-            ..OptimizedLibs::empty()
-        };
+        return resolve_no_auto_optimized_libs(ctx, target, format, verbose);
     }
     // (compute_required_features + features_to_cargo_arg imported at module top)
     let mut features = compute_required_features(
@@ -1110,6 +1127,22 @@ fn binding_needs_shared_tokio(module: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock poisoned")
+    }
+
+    fn set_env_var(key: &str, value: Option<&str>) {
+        match value {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+    }
 
     /// Closes #507. The well-known flip's "shared tokio" allowlist
     /// must match the set of perry-ext-* crates whose own
@@ -1138,5 +1171,79 @@ mod tests {
         // Defensive default: if a module isn't in the allowlist,
         // treat it as CPU-only (existing v0.5.586 behavior).
         assert!(!binding_needs_shared_tokio("definitely-not-a-real-package"));
+    }
+
+    #[test]
+    fn no_auto_still_resolves_prebuilt_well_known_archives() {
+        let _guard = env_lock();
+        let old_lib_dir = std::env::var("PERRY_LIB_DIR").ok();
+        let old_runtime_dir = std::env::var("PERRY_RUNTIME_DIR").ok();
+        let old_disable_well_known = std::env::var("PERRY_DISABLE_WELL_KNOWN").ok();
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let http =
+            super::super::well_known::lookup_well_known("http").expect("http well-known binding");
+        let net =
+            super::super::well_known::lookup_well_known("net").expect("net well-known binding");
+        let ws = super::super::well_known::lookup_well_known("ws").expect("ws well-known binding");
+        let http_lib = dir
+            .path()
+            .join(super::super::well_known::ext_staticlib_filename(
+                &http.lib,
+                rust_target_triple(None),
+            ));
+        let net_lib = dir
+            .path()
+            .join(super::super::well_known::ext_staticlib_filename(
+                &net.lib,
+                rust_target_triple(None),
+            ));
+        let ws_lib = dir
+            .path()
+            .join(super::super::well_known::ext_staticlib_filename(
+                &ws.lib,
+                rust_target_triple(None),
+            ));
+        std::fs::write(&http_lib, b"!<arch>\n").expect("write fake http archive");
+        std::fs::write(&net_lib, b"!<arch>\n").expect("write fake net archive");
+        std::fs::write(&ws_lib, b"!<arch>\n").expect("write fake ws archive");
+
+        set_env_var(
+            "PERRY_LIB_DIR",
+            Some(dir.path().to_str().expect("utf8 temp path")),
+        );
+        set_env_var("PERRY_RUNTIME_DIR", None);
+        set_env_var("PERRY_DISABLE_WELL_KNOWN", None);
+
+        let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+        ctx.native_module_imports.insert("http".to_string());
+        ctx.native_module_imports.insert("net".to_string());
+        ctx.native_module_imports.insert("ws".to_string());
+        let libs = resolve_no_auto_optimized_libs(&ctx, None, OutputFormat::Json, 0);
+
+        set_env_var("PERRY_LIB_DIR", old_lib_dir.as_deref());
+        set_env_var("PERRY_RUNTIME_DIR", old_runtime_dir.as_deref());
+        set_env_var(
+            "PERRY_DISABLE_WELL_KNOWN",
+            old_disable_well_known.as_deref(),
+        );
+
+        assert_eq!(libs.runtime, None);
+        assert_eq!(libs.stdlib, None);
+        assert!(
+            libs.well_known_libs.contains(&http_lib),
+            "expected no-auto well-known libs to include {http_lib:?}, got {:?}",
+            libs.well_known_libs
+        );
+        assert!(
+            libs.well_known_libs.contains(&net_lib),
+            "expected no-auto well-known libs to include {net_lib:?}, got {:?}",
+            libs.well_known_libs
+        );
+        assert!(
+            libs.well_known_libs.contains(&ws_lib),
+            "expected no-auto well-known libs to include {ws_lib:?}, got {:?}",
+            libs.well_known_libs
+        );
     }
 }

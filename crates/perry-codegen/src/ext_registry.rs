@@ -377,6 +377,14 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_net_server_listener_count",                OwnerKind::WellKnown("net")),
     ("js_net_server_event_names",                   OwnerKind::WellKnown("net")),
 
+    // HTTP upgrade flows can surface a Perry WebSocket client handle through
+    // `node:http` without a source-level `import "ws"`. The codegen receiver
+    // rows still emit the ws client helper symbols, so those calls must flip
+    // the `ws` well-known wrapper onto the link line independently.
+    ("js_ws_send_client_i64",                       OwnerKind::WellKnown("ws")),
+    ("js_ws_close_client_i64",                      OwnerKind::WellKnown("ws")),
+    ("js_ws_on_client_i64",                         OwnerKind::WellKnown("ws")),
+
     // ── #1724: global Blob/File + URL object-URL helpers ──────────────
     // `new Blob([...])`, `new File([...], name)`, `URL.createObjectURL`,
     // `URL.revokeObjectURL`, and `resolveObjectURL` (node:buffer) are all
@@ -550,11 +558,14 @@ mod tests {
             "js_node_http_res_set_strict_content_length",
             "js_net_socket_listeners",
             "js_net_socket_raw_listeners",
+            "js_ws_on_client_i64",
+            "js_ws_send_client_i64",
+            "js_ws_close_client_i64",
         ] {
-            let owner = if symbol.starts_with("js_net_") {
-                OwnerKind::WellKnown("net")
-            } else {
-                OwnerKind::WellKnown("http")
+            let owner = match symbol {
+                symbol if symbol.starts_with("js_net_") => OwnerKind::WellKnown("net"),
+                symbol if symbol.starts_with("js_ws_") => OwnerKind::WellKnown("ws"),
+                _ => OwnerKind::WellKnown("http"),
             };
             assert_symbol_routes_to(symbol, owner);
         }

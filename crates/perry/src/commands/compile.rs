@@ -4002,12 +4002,14 @@ pub fn run_with_parse_cache(
     // for this binary and rebuild perry-runtime + perry-stdlib in a
     // hash-keyed target dir. Both halves fall back to the prebuilt full
     // libraries if the rebuild fails or the workspace source isn't on
-    // disk. `--no-auto-optimize` disables the rebuild path entirely.
+    // disk. `--no-auto-optimize` disables runtime/stdlib rebuilds but
+    // still resolves prebuilt well-known wrapper archives whose symbols
+    // are absent from the full stdlib.
     //
     // The legacy `--minimal-stdlib` flag is now a no-op alias for
     // backward compat — auto-mode already does what it used to and more.
     let optimized_libs: OptimizedLibs = if args.no_auto_optimize {
-        OptimizedLibs::empty()
+        optimized_libs::resolve_no_auto_optimized_libs(&ctx, target.as_deref(), format, verbose)
     } else {
         build_optimized_libs(&ctx, target.as_deref(), &compiled_features, format, verbose)
     };
