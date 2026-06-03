@@ -3,8 +3,8 @@
 use crate::closure::ClosureHeader;
 use crate::typedarray::{
     clean_ta_ptr, js_typed_array_get, js_typed_array_length, js_typed_array_set,
-    lookup_typed_array_kind, TypedArrayHeader, KIND_INT16, KIND_INT32, KIND_INT8, KIND_UINT16,
-    KIND_UINT32, KIND_UINT8,
+    lookup_typed_array_kind, TypedArrayHeader, KIND_BIGINT64, KIND_BIGUINT64, KIND_INT16,
+    KIND_INT32, KIND_INT8, KIND_UINT16, KIND_UINT32, KIND_UINT8,
 };
 use crate::value::JSValue;
 
@@ -23,17 +23,31 @@ fn throw_type_error(message: &[u8]) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+fn throw_type_error_string(message: String) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 fn throw_range_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = crate::error::js_rangeerror_new(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-fn supported_integer_kind(kind: u8) -> bool {
+fn numeric_integer_kind(kind: u8) -> bool {
     matches!(
         kind,
         KIND_INT8 | KIND_UINT8 | KIND_INT16 | KIND_UINT16 | KIND_INT32 | KIND_UINT32
     )
+}
+
+fn bigint_integer_kind(kind: u8) -> bool {
+    matches!(kind, KIND_BIGINT64 | KIND_BIGUINT64)
+}
+
+fn supported_integer_kind(kind: u8) -> bool {
+    numeric_integer_kind(kind) || bigint_integer_kind(kind)
 }
 
 enum AtomicView {
@@ -52,6 +66,10 @@ impl AtomicView {
         }
     }
 
+    fn is_bigint(&self) -> bool {
+        bigint_integer_kind(self.kind())
+    }
+
     fn length(&self) -> i32 {
         match self {
             AtomicView::TypedArray { ptr, .. } => js_typed_array_length(*ptr),
@@ -59,7 +77,7 @@ impl AtomicView {
         }
     }
 
-    fn get(&self, index: i32) -> f64 {
+    fn get_numeric(&self, index: i32) -> f64 {
         match self {
             AtomicView::TypedArray { ptr, .. } => js_typed_array_get(*ptr, index),
             AtomicView::Uint8ArrayBuffer(ptr) => {
@@ -69,11 +87,29 @@ impl AtomicView {
         }
     }
 
-    fn set(&self, index: i32, value: f64) {
+    fn set_numeric(&self, index: i32, value: f64) {
         match self {
             AtomicView::TypedArray { ptr, .. } => js_typed_array_set(*ptr, index, value),
             AtomicView::Uint8ArrayBuffer(ptr) => {
                 crate::buffer::js_buffer_set(*ptr, index, value as i32);
+            }
+        }
+    }
+
+    fn get_bigint_bits(&self, index: i32) -> u64 {
+        match self {
+            AtomicView::TypedArray { ptr, .. } => typed_array_bigint_bits(*ptr, index),
+            AtomicView::Uint8ArrayBuffer(_) => {
+                throw_type_error(b"Atomics operation requires a BigInt typed array")
+            }
+        }
+    }
+
+    fn set_bigint_bits(&self, index: i32, value: u64) {
+        match self {
+            AtomicView::TypedArray { ptr, .. } => typed_array_set_bigint_bits(*ptr, index, value),
+            AtomicView::Uint8ArrayBuffer(_) => {
+                throw_type_error(b"Atomics operation requires a BigInt typed array")
             }
         }
     }
@@ -138,6 +174,9 @@ fn atomics_to_index(index: f64, length: i32) -> i32 {
 
 fn number_arg(value: f64) -> f64 {
     let js = JSValue::from_bits(value.to_bits());
+    if js.is_bigint() {
+        throw_type_error(b"Cannot convert a BigInt value to a number");
+    }
     if js.is_any_string() {
         let ptr = crate::value::js_get_string_pointer_unified(value)
             as *const crate::string::StringHeader;
@@ -201,6 +240,125 @@ fn bitwise_result_for_kind(kind: u8, bits: u32) -> f64 {
     }
 }
 
+fn format_number_label(value: f64) -> String {
+    if value.is_nan() {
+        return "NaN".to_string();
+    }
+    if value.is_infinite() {
+        return if value.is_sign_negative() {
+            "-Infinity".to_string()
+        } else {
+            "Infinity".to_string()
+        };
+    }
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    if value.fract() == 0.0 && value.abs() < 1e21 {
+        return format!("{value:.0}");
+    }
+    format!("{value}")
+}
+
+fn throw_number_to_bigint_error(value: f64, js: JSValue) -> ! {
+    let label = if js.is_int32() {
+        js.as_int32().to_string()
+    } else {
+        format_number_label(value)
+    };
+    throw_type_error_string(format!("Cannot convert {label} to a BigInt"))
+}
+
+fn bigint_value(value: f64) -> f64 {
+    let js = JSValue::from_bits(value.to_bits());
+    if js.is_bigint() {
+        return value;
+    }
+    if js.is_int32() || js.is_number() {
+        throw_number_to_bigint_error(value, js);
+    }
+    if js.is_bool() || js.is_any_string() {
+        let ptr = crate::bigint::js_bigint_from_f64(value);
+        return f64::from_bits(JSValue::bigint_ptr(ptr).bits());
+    }
+    if js.is_undefined() {
+        throw_type_error(b"Cannot convert undefined to a BigInt");
+    }
+    if js.is_null() {
+        throw_type_error(b"Cannot convert null to a BigInt");
+    }
+    throw_type_error(b"Cannot convert value to a BigInt");
+}
+
+fn bigint_bits(value: f64) -> u64 {
+    let coerced = bigint_value(value);
+    let ptr = JSValue::from_bits(coerced.to_bits()).as_bigint_ptr();
+    let ptr = crate::bigint::clean_bigint_ptr(ptr);
+    if ptr.is_null() {
+        return 0;
+    }
+    unsafe { (*ptr).limbs[0] }
+}
+
+fn bigint_result_for_kind(kind: u8, bits: u64) -> f64 {
+    let ptr = match kind {
+        KIND_BIGINT64 => crate::bigint::js_bigint_from_i64(bits as i64),
+        KIND_BIGUINT64 => crate::bigint::js_bigint_from_u64(bits),
+        _ => crate::bigint::js_bigint_from_i64(bits as i64),
+    };
+    f64::from_bits(JSValue::bigint_ptr(ptr).bits())
+}
+
+fn typed_array_bigint_bits(ta: *const TypedArrayHeader, index: i32) -> u64 {
+    let ta = clean_ta_ptr(ta);
+    if ta.is_null() || index < 0 {
+        return 0;
+    }
+    unsafe {
+        if crate::native_arena::is_native_typed_view(ta) {
+            crate::native_arena::validate_view_alive(
+                crate::native_arena::native_view_from_typed_array(ta),
+            );
+        }
+        if index as u32 >= (*ta).length {
+            return 0;
+        }
+        let data = crate::typedarray::typed_array_bytes(ta).unwrap_or(&[]);
+        let off = (index as usize).saturating_mul((*ta).elem_size as usize);
+        let bytes = data.get(off..off + 8).unwrap_or(&[]);
+        if bytes.len() != 8 {
+            return 0;
+        }
+        u64::from_ne_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ])
+    }
+}
+
+fn typed_array_set_bigint_bits(ta: *mut TypedArrayHeader, index: i32, value: u64) {
+    let ta = clean_ta_ptr(ta) as *mut TypedArrayHeader;
+    if ta.is_null() || index < 0 {
+        return;
+    }
+    unsafe {
+        if crate::native_arena::is_native_typed_view(ta as *const TypedArrayHeader) {
+            crate::native_arena::validate_view_alive(
+                crate::native_arena::native_view_from_typed_array(ta as *const TypedArrayHeader),
+            );
+        }
+        if index as u32 >= (*ta).length {
+            return;
+        }
+        let Some(data) = crate::typedarray::typed_array_bytes_mut(ta) else {
+            return;
+        };
+        let off = (index as usize).saturating_mul((*ta).elem_size as usize);
+        if let Some(slot) = data.get_mut(off..off + 8) {
+            slot.copy_from_slice(&value.to_ne_bytes());
+        }
+    }
+}
+
 fn slot(view: f64, index: f64) -> (AtomicView, i32) {
     let view = atomics_view_arg(view);
     let idx = atomics_to_index(index, view.length());
@@ -213,19 +371,32 @@ fn int32_slot(view: f64, index: f64) -> (AtomicView, i32) {
     (view, idx)
 }
 
-fn atomics_bitwise(view: f64, index: f64, value: f64, op: impl FnOnce(u32, u32) -> u32) -> f64 {
+fn atomics_bitwise(view: f64, index: f64, value: f64, op: impl FnOnce(u64, u64) -> u64) -> f64 {
     let (view, idx) = slot(view, index);
+    if view.is_bigint() {
+        let kind = view.kind();
+        let previous = view.get_bigint_bits(idx);
+        let result = op(previous, bigint_bits(value));
+        view.set_bigint_bits(idx, result);
+        return bigint_result_for_kind(kind, previous);
+    }
     let kind = view.kind();
-    let previous = view.get(idx);
-    let result = op(to_uint32_bits(previous), to_uint32_bits(value));
-    view.set(idx, bitwise_result_for_kind(kind, result));
+    let previous = view.get_numeric(idx);
+    let result = op(
+        to_uint32_bits(previous) as u64,
+        to_uint32_bits(value) as u64,
+    );
+    view.set_numeric(idx, bitwise_result_for_kind(kind, result as u32));
     previous
 }
 
 #[no_mangle]
 pub extern "C" fn js_atomics_load(_closure: *const ClosureHeader, view: f64, index: f64) -> f64 {
     let (view, idx) = slot(view, index);
-    view.get(idx)
+    if view.is_bigint() {
+        return bigint_result_for_kind(view.kind(), view.get_bigint_bits(idx));
+    }
+    view.get_numeric(idx)
 }
 
 #[no_mangle]
@@ -242,8 +413,13 @@ pub extern "C" fn js_atomics_store(
     value: f64,
 ) -> f64 {
     let (view, idx) = slot(view, index);
-    view.set(idx, coerce_for_kind(view.kind(), value));
-    view.get(idx)
+    if view.is_bigint() {
+        let stored = bigint_value(value);
+        view.set_bigint_bits(idx, bigint_bits(stored));
+        return stored;
+    }
+    view.set_numeric(idx, coerce_for_kind(view.kind(), value));
+    view.get_numeric(idx)
 }
 
 #[no_mangle]
@@ -254,8 +430,14 @@ pub extern "C" fn js_atomics_add(
     value: f64,
 ) -> f64 {
     let (view, idx) = slot(view, index);
-    let previous = view.get(idx);
-    view.set(
+    if view.is_bigint() {
+        let kind = view.kind();
+        let previous = view.get_bigint_bits(idx);
+        view.set_bigint_bits(idx, previous.wrapping_add(bigint_bits(value)));
+        return bigint_result_for_kind(kind, previous);
+    }
+    let previous = view.get_numeric(idx);
+    view.set_numeric(
         idx,
         coerce_for_kind(view.kind(), previous + numeric_arg(value)),
     );
@@ -270,8 +452,14 @@ pub extern "C" fn js_atomics_sub(
     value: f64,
 ) -> f64 {
     let (view, idx) = slot(view, index);
-    let previous = view.get(idx);
-    view.set(
+    if view.is_bigint() {
+        let kind = view.kind();
+        let previous = view.get_bigint_bits(idx);
+        view.set_bigint_bits(idx, previous.wrapping_sub(bigint_bits(value)));
+        return bigint_result_for_kind(kind, previous);
+    }
+    let previous = view.get_numeric(idx);
+    view.set_numeric(
         idx,
         coerce_for_kind(view.kind(), previous - numeric_arg(value)),
     );
@@ -316,8 +504,14 @@ pub extern "C" fn js_atomics_exchange(
     value: f64,
 ) -> f64 {
     let (view, idx) = slot(view, index);
-    let previous = view.get(idx);
-    view.set(idx, coerce_for_kind(view.kind(), value));
+    if view.is_bigint() {
+        let kind = view.kind();
+        let previous = view.get_bigint_bits(idx);
+        view.set_bigint_bits(idx, bigint_bits(value));
+        return bigint_result_for_kind(kind, previous);
+    }
+    let previous = view.get_numeric(idx);
+    view.set_numeric(idx, coerce_for_kind(view.kind(), value));
     previous
 }
 
@@ -330,9 +524,21 @@ pub extern "C" fn js_atomics_compare_exchange(
     replacement: f64,
 ) -> f64 {
     let (view, idx) = slot(view, index);
-    let previous = view.get(idx);
-    if previous == coerce_for_kind(view.kind(), expected) {
-        view.set(idx, coerce_for_kind(view.kind(), replacement));
+    if view.is_bigint() {
+        let kind = view.kind();
+        let previous = view.get_bigint_bits(idx);
+        let expected = bigint_bits(expected);
+        let replacement = bigint_bits(replacement);
+        if previous == expected {
+            view.set_bigint_bits(idx, replacement);
+        }
+        return bigint_result_for_kind(kind, previous);
+    }
+    let previous = view.get_numeric(idx);
+    let expected = coerce_for_kind(view.kind(), expected);
+    let replacement = coerce_for_kind(view.kind(), replacement);
+    if previous == expected {
+        view.set_numeric(idx, replacement);
     }
     previous
 }
@@ -359,7 +565,7 @@ pub extern "C" fn js_atomics_wait(
 ) -> f64 {
     let (view, idx) = int32_slot(view, index);
     let expected = coerce_for_kind(KIND_INT32, expected);
-    if view.get(idx) != expected {
+    if view.get_numeric(idx) != expected {
         return string_value(b"not-equal");
     }
 
