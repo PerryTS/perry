@@ -2,6 +2,26 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1116 — fix(events): node:events module-level static helpers dispatch (events.once/on/listenerCount/...)
+
+`events.once(emitter, name)` and the other `node:events` module-level static
+helpers (`on`, `listenerCount`, `getMaxListeners`, `setMaxListeners`,
+`getEventListeners`, `addAbortListener`) — accessed via
+`import * as events from "node:events"` — returned `undefined` instead of
+dispatching to their runtime implementations (issue #850: `await events.once(...)`
+resolved to `undefined`, so `result.length` threw).
+
+The runtime (`js_events_once` etc.) and the codegen native dispatch table
+(`net_events.rs`, `has_receiver: false` rows) were both present, but the HIR
+lowering in `expr_call/module_static.rs` had no arm for the `events` namespace,
+so `events.<helper>(...)` fell through to a generic property-call on the
+resolved `NativeModuleRef` and produced `undefined`. Added an `events` arm to
+`try_module_static_methods` that lowers these helpers to a receiver-less
+`NativeMethodCall { module: "events" }`, gated on the receiver identifier
+actually resolving to the node:events namespace import (not a shadowing local).
+Verified `events.once(em, "ready")` resolves to `["value-1"]` and
+`test_issue_850_eventemitter` byte-matches `node --experimental-strip-types`.
+
 ## v0.5.1115 — fix(typedarray): Uint8Array.of/from build the buffer-backed representation
 
 `Uint8Array.of(...)` / `Uint8Array.from(...)` produced garbage bytes

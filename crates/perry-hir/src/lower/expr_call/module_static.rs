@@ -525,6 +525,44 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
+            // node:events module-level static helpers via `import * as events
+            // from "node:events"; events.once(em, name)` (and `on`,
+            // `listenerCount`, `getMaxListeners`, `setMaxListeners`,
+            // `getEventListeners`, `addAbortListener`). These take the emitter
+            // as a positional arg (`has_receiver: false` in the codegen native
+            // table), so they lower to a receiver-less NativeMethodCall on the
+            // `events` module. Without this, `events.<helper>(...)` fell through
+            // to a generic property-call on the resolved `NativeModuleRef` and
+            // returned `undefined` (issue #850: `events.once(...)` never built a
+            // Promise). Gated on the receiver identifier actually resolving to
+            // the node:events namespace import (not a shadowing local).
+            if ctx.lookup_local(obj_name).is_none()
+                && (ctx.lookup_builtin_module_alias(obj_name) == Some("events")
+                    || matches!(ctx.lookup_native_module(obj_name), Some(("events", _))))
+            {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let m = method_ident.sym.as_ref();
+                    if matches!(
+                        m,
+                        "once"
+                            | "on"
+                            | "listenerCount"
+                            | "getMaxListeners"
+                            | "setMaxListeners"
+                            | "getEventListeners"
+                            | "addAbortListener"
+                    ) {
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "events".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: m.to_string(),
+                            args,
+                        }));
+                    }
+                }
+            }
+
             // Check for Response.json(value) / Response.redirect(url, status?) /
             // Response.error() static factories.
             if obj_ident.sym.as_ref() == "Response" {
