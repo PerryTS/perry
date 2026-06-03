@@ -235,6 +235,10 @@ crates/perry-container-compose/src/backend.rs
 # the `container` feature). Splitting the FFI surface per command family is
 # tracked under #1435.
 crates/perry-stdlib/src/container/mod.rs
+# HIR analysis pass (binding/closure/this-capture + builtin-shape analysis).
+# Crossed the 2000-line gate after the prototype/super assignment parity arms.
+# Splitting per analysis concern is tracked under #1435.
+crates/perry-hir/src/analysis.rs
 EOF
 )
 
