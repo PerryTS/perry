@@ -1017,6 +1017,14 @@ impl LoweringContext {
     }
 
     pub(crate) fn lookup_native_instance(&self, name: &str) -> Option<(&str, &str)> {
+        fn exposes_plain_object_fields(module: &str, class: &str) -> bool {
+            // `node:module`'s CommonJS Module constructor returns an ordinary
+            // heap object with data fields (`id`, `path`, `exports`, ...).
+            // Rewriting those reads as native receiver methods makes them
+            // miss the object's actual properties.
+            matches!((module, class), ("module", "Module") | ("repl", _))
+        }
+
         // Issue #1132 — walk the scoped instances back-to-front so a
         // later (inner-scope) registration shadows an earlier
         // (outer-scope) one with the same name. `native_instances` is
@@ -1037,7 +1045,7 @@ impl LoweringContext {
             // bound methods; routing them through handle-dispatch native
             // getters turns ordinary fields like `Recoverable.err` into
             // zero-arg FFI calls.
-            .filter(|(_, module, _)| module != "repl")
+            .filter(|(_, module, class)| !exposes_plain_object_fields(module, class))
             .map(|(_, module, class)| (module.as_str(), class.as_str()))
             .or_else(|| {
                 // Check module-level instances (survive scope exits).
@@ -1046,7 +1054,7 @@ impl LoweringContext {
                     .iter()
                     .rev()
                     .find(|(n, _, _)| n == name)
-                    .filter(|(_, module, _)| module != "repl")
+                    .filter(|(_, module, class)| !exposes_plain_object_fields(module, class))
                     .map(|(_, module, class)| (module.as_str(), class.as_str()))
             })
     }

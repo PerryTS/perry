@@ -270,8 +270,9 @@ fn supported_builtin_module_name(name: &str) -> Option<&str> {
     match name {
         "assert" | "assert/strict" | "async_hooks" | "buffer" | "child_process" | "cluster"
         | "console" | "constants" | "crypto" | "dns" | "dns/promises" | "events" | "fs"
-        | "http" | "http2" | "https" | "net" | "os" | "path" | "perf_hooks" | "process"
-        | "punycode" | "querystring" | "readline" | "readline/promises" | "sea" | "stream"
+        | "http" | "http2" | "https" | "module" | "net" | "os" | "path" | "perf_hooks"
+        | "process" | "punycode" | "querystring" | "readline" | "readline/promises" | "sea"
+        | "stream"
         | "stream/promises" | "string_decoder" | "sys" | "test" | "test/reporters" | "timers"
         | "timers/promises" | "tty" | "url" | "util" | "util/types" | "vm" | "worker_threads"
         | "zlib" => Some(name),
@@ -1683,6 +1684,312 @@ pub extern "C" fn js_module_constants() -> f64 {
         module_object_value(compile_cache_status),
     );
     module_object_value(constants)
+}
+
+extern "C" fn module_require_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _specifier: f64,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn module_null() -> f64 {
+    f64::from_bits(crate::value::TAG_NULL)
+}
+
+/// `new Module(id)` — CommonJS module record constructor shape. Perry does not
+/// execute CJS modules through this object yet; this mirrors Node's observable
+/// constructor fields and leaves loading to the resolver helpers below.
+#[no_mangle]
+pub extern "C" fn js_module_module_new(id: f64) -> f64 {
+    let id_string = module_value_to_string(id).unwrap_or_default();
+    let keys = b"id\0path\0exports\0filename\0loaded\0children\0parent\0require\0";
+    let obj =
+        crate::object::js_object_alloc_with_shape(0xC0_00_4D, 8, keys.as_ptr(), keys.len() as u32);
+    let exports = crate::object::js_object_alloc(0, 0);
+    let children = crate::array::js_array_alloc_with_length(0);
+    crate::object::js_object_set_field(
+        obj,
+        0,
+        JSValue::from_bits(module_string_value(&id_string).to_bits()),
+    );
+    crate::object::js_object_set_field(
+        obj,
+        1,
+        JSValue::from_bits(module_string_value(&module_cjs_dirname(&id_string)).to_bits()),
+    );
+    crate::object::js_object_set_field(
+        obj,
+        2,
+        JSValue::from_bits(module_object_value(exports).to_bits()),
+    );
+    crate::object::js_object_set_field(obj, 3, JSValue::from_bits(module_null().to_bits()));
+    crate::object::js_object_set_field(
+        obj,
+        4,
+        JSValue::from_bits(module_bool_value(false).to_bits()),
+    );
+    crate::object::js_object_set_field(
+        obj,
+        5,
+        JSValue::from_bits(JSValue::array_ptr(children).bits()),
+    );
+    crate::object::js_object_set_field(obj, 6, JSValue::from_bits(module_null().to_bits()));
+    crate::object::js_object_set_field(
+        obj,
+        7,
+        JSValue::from_bits(module_function1("require", module_require_thunk, 1).to_bits()),
+    );
+    module_object_value(obj)
+}
+
+fn module_cjs_dirname(path: &str) -> String {
+    if path.is_empty() {
+        return ".".to_string();
+    }
+    std::path::Path::new(path)
+        .parent()
+        .map(|p| {
+            let s = p.to_string_lossy();
+            if s.is_empty() {
+                ".".to_string()
+            } else {
+                s.into_owned()
+            }
+        })
+        .unwrap_or_else(|| ".".to_string())
+}
+
+fn module_cjs_string_array(items: Vec<String>) -> f64 {
+    let arr = crate::array::js_array_alloc_with_length(items.len() as u32);
+    for (i, item) in items.iter().enumerate() {
+        crate::array::js_array_set_f64(arr, i as u32, module_string_value(item));
+    }
+    f64::from_bits(JSValue::array_ptr(arr).bits())
+}
+
+fn module_cjs_array_strings(value: f64) -> Option<Vec<String>> {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let ptr = jv.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
+    if gc_header.obj_type != crate::gc::GC_TYPE_ARRAY {
+        return None;
+    }
+    let arr = ptr as *const crate::array::ArrayHeader;
+    let len = crate::array::js_array_length(arr);
+    let mut out = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        if let Some(item) = module_value_to_string(crate::array::js_array_get_f64(arr, i)) {
+            out.push(item);
+        }
+    }
+    Some(out)
+}
+
+fn module_is_builtin_specifier(specifier: &str) -> bool {
+    if let Some(name) = specifier.strip_prefix("node:") {
+        MODULE_BUILTIN_MODULES.contains(&specifier) || MODULE_BUILTIN_MODULES.contains(&name)
+    } else {
+        MODULE_BUILTIN_MODULES.contains(&specifier)
+    }
+}
+
+fn module_parent_base_dir(parent: f64) -> std::path::PathBuf {
+    if let Some(parent_obj) = module_object_ptr(parent) {
+        if let Some(filename) =
+            module_value_to_string(module_get_named_field(parent_obj, "filename"))
+        {
+            return std::path::PathBuf::from(module_cjs_dirname(&filename));
+        }
+        if let Some(path) = module_value_to_string(module_get_named_field(parent_obj, "path")) {
+            return std::path::PathBuf::from(path);
+        }
+    }
+    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+}
+
+fn module_parent_lookup_paths(parent: f64) -> Option<Vec<String>> {
+    let parent_obj = module_object_ptr(parent)?;
+    module_cjs_array_strings(module_get_named_field(parent_obj, "paths"))
+}
+
+fn module_node_module_paths_vec(from: &str) -> Vec<String> {
+    let mut current = std::path::PathBuf::from(from);
+    if !current.is_absolute() {
+        current = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(current);
+    }
+    let mut out = Vec::new();
+    loop {
+        out.push(current.join("node_modules").to_string_lossy().into_owned());
+        if !current.pop() {
+            break;
+        }
+    }
+    out
+}
+
+fn module_resolve_file(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    if path.is_file() {
+        return Some(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+    }
+    for ext in ["js", "json", "node"] {
+        let candidate = path.with_extension(ext);
+        if candidate.is_file() {
+            return Some(std::fs::canonicalize(&candidate).unwrap_or(candidate));
+        }
+    }
+    if path.is_dir() {
+        for ext in ["js", "json", "node"] {
+            let candidate = path.join(format!("index.{ext}"));
+            if candidate.is_file() {
+                return Some(std::fs::canonicalize(&candidate).unwrap_or(candidate));
+            }
+        }
+    }
+    None
+}
+
+fn module_resolve_local_request(
+    request: &str,
+    parent: f64,
+    lookup_paths: Option<Vec<String>>,
+) -> Option<std::path::PathBuf> {
+    if request.starts_with('/') {
+        return module_resolve_file(std::path::Path::new(request));
+    }
+    if request.starts_with("./") || request.starts_with("../") {
+        let base = module_parent_base_dir(parent);
+        return module_resolve_file(&base.join(request));
+    }
+    let paths = lookup_paths
+        .or_else(|| module_parent_lookup_paths(parent))
+        .unwrap_or_else(|| {
+            module_node_module_paths_vec(&module_parent_base_dir(parent).to_string_lossy())
+        });
+    for lookup in paths {
+        if let Some(path) = module_resolve_file(&std::path::PathBuf::from(lookup).join(request)) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn module_throw_not_found(request: &str) -> ! {
+    let message = format!("Cannot find module '{request}'");
+    crate::fs::validate::throw_error_with_code(&message, "MODULE_NOT_FOUND")
+}
+
+/// `Module._nodeModulePaths(from)` — directory ancestry search order.
+#[no_mangle]
+pub extern "C" fn js_module_node_module_paths(from: f64) -> f64 {
+    let from = module_value_to_string(from).unwrap_or_else(|| ".".to_string());
+    module_cjs_string_array(module_node_module_paths_vec(&from))
+}
+
+/// `Module._resolveLookupPaths(request, parent)` — builtin requests return
+/// `null`; local paths return the parent directory; package requests return
+/// the parent's `paths` array (or a generated node_modules ancestry).
+#[no_mangle]
+pub extern "C" fn js_module_resolve_lookup_paths(request: f64, parent: f64) -> f64 {
+    let Some(request) = module_value_to_string(request) else {
+        return module_cjs_string_array(Vec::new());
+    };
+    if module_is_builtin_specifier(&request) {
+        return module_null();
+    }
+    if request.starts_with("./") || request.starts_with("../") || request.starts_with('/') {
+        return module_cjs_string_array(vec![module_parent_base_dir(parent)
+            .to_string_lossy()
+            .into_owned()]);
+    }
+    let mut paths = module_parent_lookup_paths(parent).unwrap_or_else(|| {
+        module_node_module_paths_vec(&module_parent_base_dir(parent).to_string_lossy())
+    });
+    if let Some(global_paths) =
+        module_cjs_array_strings(crate::object::module_cjs_global_paths_value())
+    {
+        paths.extend(global_paths);
+    }
+    module_cjs_string_array(paths)
+}
+
+/// `Module._resolveFilename(request, parent, isMain, options)` — deterministic
+/// builtin and local-file resolver subset.
+#[no_mangle]
+pub extern "C" fn js_module_resolve_filename(
+    request: f64,
+    parent: f64,
+    _is_main: f64,
+    _options: f64,
+) -> f64 {
+    let Some(request) = module_value_to_string(request) else {
+        module_throw_not_found("");
+    };
+    if module_is_builtin_specifier(&request) {
+        return module_string_value(&request);
+    }
+    match module_resolve_local_request(&request, parent, None) {
+        Some(path) => module_string_value(&path.to_string_lossy()),
+        None => module_throw_not_found(&request),
+    }
+}
+
+/// `Module._findPath(request, paths, isMain)` — search explicit lookup
+/// directories for the same deterministic file cases `_resolveFilename`
+/// supports.
+#[no_mangle]
+pub extern "C" fn js_module_find_path(request: f64, paths: f64, _is_main: f64) -> f64 {
+    let Some(request) = module_value_to_string(request) else {
+        return module_bool_value(false);
+    };
+    if module_is_builtin_specifier(&request) {
+        return module_bool_value(false);
+    }
+    let lookup_paths = module_cjs_array_strings(paths).unwrap_or_default();
+    for lookup in lookup_paths {
+        let candidate = if request.starts_with('/') {
+            std::path::PathBuf::from(&request)
+        } else {
+            std::path::PathBuf::from(lookup).join(&request)
+        };
+        if let Some(path) = module_resolve_file(&candidate) {
+            return module_string_value(&path.to_string_lossy());
+        }
+    }
+    module_bool_value(false)
+}
+
+#[no_mangle]
+pub extern "C" fn js_module_init_paths() -> f64 {
+    let _ = crate::object::module_cjs_global_paths_value();
+    module_undefined()
+}
+
+#[no_mangle]
+pub extern "C" fn js_module_preload_modules(_modules: f64) -> f64 {
+    module_undefined()
+}
+
+/// `Module._load(request, parent, isMain)` — currently implements the safe
+/// builtin path used by feature detection. Non-builtin CJS execution remains
+/// outside this compatibility cut.
+#[no_mangle]
+pub extern "C" fn js_module_load(request: f64, _parent: f64, _is_main: f64) -> f64 {
+    let Some(request) = module_value_to_string(request) else {
+        return module_undefined();
+    };
+    if module_is_builtin_specifier(&request) {
+        return js_process_get_builtin_module(module_string_value(&request));
+    }
+    module_undefined()
 }
 
 /// Constructor for `new module.SourceMap(payload)`. Preserves the payload
@@ -3162,6 +3469,24 @@ static KEEP_JS_MODULE_STRIP_TYPESCRIPT_TYPES: extern "C" fn(f64, f64) -> f64 =
 static KEEP_JS_MODULE_REGISTER: extern "C" fn(f64, f64, f64) -> f64 = js_module_register;
 #[used]
 static KEEP_JS_MODULE_REGISTER_HOOKS: extern "C" fn(f64) -> f64 = js_module_register_hooks;
+#[used]
+static KEEP_JS_MODULE_MODULE_NEW: extern "C" fn(f64) -> f64 = js_module_module_new;
+#[used]
+static KEEP_JS_MODULE_FIND_PATH: extern "C" fn(f64, f64, f64) -> f64 = js_module_find_path;
+#[used]
+static KEEP_JS_MODULE_INIT_PATHS: extern "C" fn() -> f64 = js_module_init_paths;
+#[used]
+static KEEP_JS_MODULE_LOAD: extern "C" fn(f64, f64, f64) -> f64 = js_module_load;
+#[used]
+static KEEP_JS_MODULE_NODE_MODULE_PATHS: extern "C" fn(f64) -> f64 = js_module_node_module_paths;
+#[used]
+static KEEP_JS_MODULE_PRELOAD_MODULES: extern "C" fn(f64) -> f64 = js_module_preload_modules;
+#[used]
+static KEEP_JS_MODULE_RESOLVE_FILENAME: extern "C" fn(f64, f64, f64, f64) -> f64 =
+    js_module_resolve_filename;
+#[used]
+static KEEP_JS_MODULE_RESOLVE_LOOKUP_PATHS: extern "C" fn(f64, f64) -> f64 =
+    js_module_resolve_lookup_paths;
 
 /// Unset an environment variable. Backs `delete process.env.X` (#1344).
 #[no_mangle]

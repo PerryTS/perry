@@ -258,6 +258,35 @@ fn is_global_object_expr(ctx: &LoweringContext, expr: &Expr) -> bool {
 pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
     let callee_expr = peel_new_callee(new_expr.callee.as_ref());
 
+    if let ast::Expr::Ident(callee_ident) = callee_expr {
+        let is_module_constructor = ctx
+            .lookup_native_module(callee_ident.sym.as_ref())
+            .map(|(module_name, method)| {
+                module_name == "module"
+                    && matches!(method.as_deref(), Some("Module") | Some("default"))
+            })
+            .unwrap_or(false);
+        if is_module_constructor {
+            let args = new_expr
+                .args
+                .as_ref()
+                .map(|args| {
+                    args.iter()
+                        .map(|a| lower_expr(ctx, &a.expr))
+                        .collect::<Result<Vec<_>>>()
+                })
+                .transpose()?
+                .unwrap_or_default();
+            return Ok(Expr::NativeMethodCall {
+                module: "module".to_string(),
+                class_name: None,
+                object: None,
+                method: "Module".to_string(),
+                args,
+            });
+        }
+    }
+
     // Issue #422: `new net.Socket()` over a `net` module alias. The
     // generic Member-callee path below would lower this to
     // `Expr::NewDynamic`, whose codegen fallback returns an empty
@@ -405,7 +434,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     .lookup_native_module(obj_name)
                     .map(|(module_name, _)| module_name == "module")
                     .unwrap_or(false);
-            if is_module_module && prop_ident.sym.as_ref() == "SourceMap" {
+            if is_module_module && matches!(prop_ident.sym.as_ref(), "Module" | "SourceMap") {
                 let args = new_expr
                     .args
                     .as_ref()
@@ -420,7 +449,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     module: "module".to_string(),
                     class_name: None,
                     object: None,
-                    method: "SourceMap".to_string(),
+                    method: prop_ident.sym.to_string(),
                     args,
                 });
             }
@@ -837,6 +866,16 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             }
 
             if let Some((module_name, method_name)) = ctx.lookup_native_module(&class_name) {
+                if matches!((module_name, method_name), ("module", Some("Module"))) {
+                    let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                    return Ok(Expr::NativeMethodCall {
+                        module: "module".to_string(),
+                        class_name: None,
+                        object: None,
+                        method: "Module".to_string(),
+                        args,
+                    });
+                }
                 if let Some(class_name) = module_constructor_name(module_name, method_name) {
                     if let Some(expr) =
                         lower_url_encoding_constructor(ctx, class_name, new_expr.args.as_deref())?

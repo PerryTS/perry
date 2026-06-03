@@ -521,6 +521,18 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("module", "getCompileCacheDir") => crate::process::js_module_get_compile_cache_dir(),
         ("module", "getSourceMapsSupport") => crate::process::js_module_get_source_maps_support(),
         ("module", "isBuiltin") => crate::process::js_module_is_builtin(arg(0)),
+        ("module", "Module") => crate::process::js_module_module_new(arg(0)),
+        ("module", "_findPath") => crate::process::js_module_find_path(arg(0), arg(1), arg(2)),
+        ("module", "_initPaths") => crate::process::js_module_init_paths(),
+        ("module", "_load") => crate::process::js_module_load(arg(0), arg(1), arg(2)),
+        ("module", "_nodeModulePaths") => crate::process::js_module_node_module_paths(arg(0)),
+        ("module", "_preloadModules") => crate::process::js_module_preload_modules(arg(0)),
+        ("module", "_resolveFilename") => {
+            crate::process::js_module_resolve_filename(arg(0), arg(1), arg(2), arg(3))
+        }
+        ("module", "_resolveLookupPaths") => {
+            crate::process::js_module_resolve_lookup_paths(arg(0), arg(1))
+        }
         ("module", "register") => crate::process::js_module_register(arg(0), arg(1), arg(2)),
         ("module", "registerHooks") => crate::process::js_module_register_hooks(arg(0)),
         ("module", "setSourceMapsSupport") => {

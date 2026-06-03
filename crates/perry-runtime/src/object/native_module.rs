@@ -30,6 +30,10 @@ thread_local! {
     static WORKER_THREADS_LOCKS_VALUE: Cell<u64> = const { Cell::new(0) };
     static WORKER_THREADS_WEB_LOCKS: RefCell<WebLocksState> =
         RefCell::new(WebLocksState::default());
+    static MODULE_CJS_CACHE_VALUE: Cell<u64> = const { Cell::new(0) };
+    static MODULE_CJS_EXTENSIONS_VALUE: Cell<u64> = const { Cell::new(0) };
+    static MODULE_CJS_PATH_CACHE_VALUE: Cell<u64> = const { Cell::new(0) };
+    static MODULE_CJS_GLOBAL_PATHS_VALUE: Cell<u64> = const { Cell::new(0) };
     static NATIVE_MODULE_NAMESPACES: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
 }
@@ -109,6 +113,34 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
         }
     });
     WORKER_THREADS_LOCKS_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    MODULE_CJS_CACHE_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    MODULE_CJS_EXTENSIONS_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    MODULE_CJS_PATH_CACHE_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    MODULE_CJS_GLOBAL_PATHS_VALUE.with(|slot| {
         let mut value_bits = slot.get();
         if value_bits != 0 {
             visitor.visit_nanbox_u64_slot(&mut value_bits);
@@ -2908,6 +2940,7 @@ fn cjs_default_export_value(module_name: &str) -> Option<f64> {
             b"dgram".as_ptr(),
             "dgram".len(),
         )),
+        "module" => Some(bound_native_callable_export_value("module", "Module")),
         "process" => Some(js_create_native_module_namespace(
             b"process".as_ptr(),
             "process".len(),
@@ -2966,6 +2999,7 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "inspector.Network"
             | "inspector/promises"
             | "inspector/promises.default"
+            | "module"
             | "os"
             | "os.default"
             | "path"
@@ -3193,6 +3227,9 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     let value = crate::value::js_nanbox_pointer(closure as i64);
     let closure_addr = closure as usize;
 
+    if export_module_name == "module" && property_name == "Module" {
+        attach_module_cjs_constructor_statics(closure_addr);
+    }
     if export_module_name == "tty" && matches!(property_name, "ReadStream" | "WriteStream") {
         attach_tty_stream_prototype(value, property_name);
     }
@@ -3663,6 +3700,14 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("module", "flushCompileCache") => Some(0),
         ("module", "getCompileCacheDir") => Some(0),
         ("module", "getSourceMapsSupport") => Some(0),
+        ("module", "Module") => Some(0),
+        ("module", "_findPath") => Some(3),
+        ("module", "_initPaths") => Some(0),
+        ("module", "_load") => Some(3),
+        ("module", "_nodeModulePaths") => Some(1),
+        ("module", "_preloadModules") => Some(1),
+        ("module", "_resolveFilename") => Some(4),
+        ("module", "_resolveLookupPaths") => Some(2),
         ("module", "setSourceMapsSupport") => Some(1),
         ("module", "stripTypeScriptTypes") => Some(1),
         ("module", "syncBuiltinESMExports") => Some(0),
@@ -4198,6 +4243,124 @@ fn native_set_field(obj: *mut ObjectHeader, name: &str, value: f64) {
     js_object_set_field_by_name(obj, key, value);
 }
 
+extern "C" fn module_cjs_extension_noop_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _module: f64,
+    _filename: f64,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn module_cjs_extension_function(name: &str) -> f64 {
+    let func_ptr = module_cjs_extension_noop_thunk as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 2);
+    crate::closure::js_register_closure_length(func_ptr, 2);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    set_bound_native_closure_name(closure, name);
+    crate::object::set_builtin_closure_length(closure as usize, 2);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+fn store_module_cjs_root(slot: &Cell<u64>, value: f64) -> f64 {
+    slot.set(value.to_bits());
+    crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    value
+}
+
+pub(crate) fn module_cjs_cache_value() -> f64 {
+    MODULE_CJS_CACHE_VALUE.with(|slot| {
+        let bits = slot.get();
+        if bits != 0 {
+            return f64::from_bits(bits);
+        }
+        let obj = crate::object::js_object_alloc_null_proto(0, 0);
+        store_module_cjs_root(slot, native_object_value(obj))
+    })
+}
+
+pub(crate) fn module_cjs_path_cache_value() -> f64 {
+    MODULE_CJS_PATH_CACHE_VALUE.with(|slot| {
+        let bits = slot.get();
+        if bits != 0 {
+            return f64::from_bits(bits);
+        }
+        let obj = crate::object::js_object_alloc_null_proto(0, 0);
+        store_module_cjs_root(slot, native_object_value(obj))
+    })
+}
+
+pub(crate) fn module_cjs_extensions_value() -> f64 {
+    MODULE_CJS_EXTENSIONS_VALUE.with(|slot| {
+        let bits = slot.get();
+        if bits != 0 {
+            return f64::from_bits(bits);
+        }
+        let obj = js_object_alloc(0, 3);
+        native_set_field(obj, ".js", module_cjs_extension_function(".js"));
+        native_set_field(obj, ".json", module_cjs_extension_function(".json"));
+        native_set_field(obj, ".node", module_cjs_extension_function(".node"));
+        store_module_cjs_root(slot, native_object_value(obj))
+    })
+}
+
+pub(crate) fn module_cjs_global_paths_value() -> f64 {
+    MODULE_CJS_GLOBAL_PATHS_VALUE.with(|slot| {
+        let bits = slot.get();
+        if bits != 0 {
+            return f64::from_bits(bits);
+        }
+
+        let mut paths = Vec::new();
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = std::path::PathBuf::from(home);
+            paths.push(home.join(".node_modules").to_string_lossy().into_owned());
+            paths.push(home.join(".node_libraries").to_string_lossy().into_owned());
+        }
+        let prefix = std::env::var("PREFIX").unwrap_or_else(|_| "/usr/local".to_string());
+        paths.push(format!("{prefix}/lib/node"));
+
+        let arr = crate::array::js_array_alloc_with_length(paths.len() as u32);
+        for (i, path) in paths.iter().enumerate() {
+            crate::array::js_array_set_f64(arr, i as u32, native_string_value(path));
+        }
+        store_module_cjs_root(slot, f64::from_bits(JSValue::array_ptr(arr).bits()))
+    })
+}
+
+fn attach_module_cjs_constructor_statics(closure_addr: usize) {
+    crate::closure::closure_set_dynamic_prop(closure_addr, "_cache", module_cjs_cache_value());
+    crate::closure::closure_set_dynamic_prop(
+        closure_addr,
+        "_extensions",
+        module_cjs_extensions_value(),
+    );
+    crate::closure::closure_set_dynamic_prop(
+        closure_addr,
+        "_pathCache",
+        module_cjs_path_cache_value(),
+    );
+    crate::closure::closure_set_dynamic_prop(
+        closure_addr,
+        "globalPaths",
+        module_cjs_global_paths_value(),
+    );
+    for name in [
+        "_findPath",
+        "_initPaths",
+        "_load",
+        "_nodeModulePaths",
+        "_preloadModules",
+        "_resolveFilename",
+        "_resolveLookupPaths",
+    ] {
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            name,
+            bound_native_callable_export_value("module", name),
+        );
+    }
+}
+
 fn native_color_tuple(open: i32, close: i32) -> f64 {
     let arr = crate::array::js_array_alloc_with_length(2);
     crate::array::js_array_set_f64(arr, 0, open as f64);
@@ -4564,6 +4727,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("http", "setMaxIdleHTTPParsers")
             | ("http", "setGlobalProxyFromEnv")
             | ("http", "_connectionListener")
+            | ("module", "Module")
             | ("module", "createRequire")
             | ("module", "Module")
             | ("module", "findPackageJSON")
@@ -4571,6 +4735,13 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("module", "flushCompileCache")
             | ("module", "getCompileCacheDir")
             | ("module", "getSourceMapsSupport")
+            | ("module", "_findPath")
+            | ("module", "_initPaths")
+            | ("module", "_load")
+            | ("module", "_nodeModulePaths")
+            | ("module", "_preloadModules")
+            | ("module", "_resolveFilename")
+            | ("module", "_resolveLookupPaths")
             | ("module", "register")
             | ("module", "registerHooks")
             | ("module", "runMain")
@@ -6582,8 +6753,20 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "module" => match property {
+            "Module" => Some(bound_native_callable_export_value("module", "Module")),
             "builtinModules" => Some(crate::process::js_module_builtin_modules()),
             "constants" => Some(crate::process::js_module_constants()),
+            "globalPaths" => Some(module_cjs_global_paths_value()),
+            "_cache" => Some(module_cjs_cache_value()),
+            "_extensions" => Some(module_cjs_extensions_value()),
+            "_pathCache" => Some(module_cjs_path_cache_value()),
+            "_resolveFilename"
+            | "_resolveLookupPaths"
+            | "_load"
+            | "_findPath"
+            | "_nodeModulePaths"
+            | "_initPaths"
+            | "_preloadModules" => Some(bound_native_callable_export_value("module", property)),
             _ => None,
         },
         "inspector" => match property {

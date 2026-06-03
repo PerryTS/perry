@@ -3483,14 +3483,26 @@ Bun status: 🟡 Missing `syncBuiltinESMExports`, `Module#load()`. `module._exte
 
 | API | Node.js | Bun | Notes |
 |-----|---------|-----|-------|
+| `Module` / `new Module(id)` | ✓ | ⚠ | CommonJS constructor internals |
 | `Module.builtinModules` | ✓ | ✓ |  |
 | `Module.createRequire(filename)` | ✓ | ✓ |  |
 | `Module.findPackageJSON(specifier[, base])` | ✓ | ⚠ |  |
 | `Module.findSourceMap(path)` | ✓ | ⚠ |  |
 | `Module.flushCompileCache()` | ✓ | ⚠ |  |
+| `Module.globalPaths` | ✓ | ⚠ | CommonJS global lookup paths |
 | `Module.getCompileCacheDir()` | ✓ | ⚠ |  |
 | `Module.getSourceMapsSupport()` | ✓ | ⚠ |  |
 | `Module.isBuiltin(moduleName)` | ✓ | ✓ |  |
+| `Module._cache` | ✓ | ⚠ | CommonJS module cache |
+| `Module._extensions` | ✓ | ⚠ | extension loader table |
+| `Module._pathCache` | ✓ | ⚠ | CommonJS path cache |
+| `Module._findPath(request, paths)` | ✓ | ⚠ | internal resolver |
+| `Module._initPaths()` | ✓ | ⚠ | initializes global paths |
+| `Module._load(request, parent, isMain)` | ✓ | ⚠ | CommonJS loader entry |
+| `Module._nodeModulePaths(from)` | ✓ | ⚠ | node_modules ancestry |
+| `Module._preloadModules(requests)` | ✓ | ⚠ | preload entry |
+| `Module._resolveFilename(request, parent)` | ✓ | ⚠ | internal resolver |
+| `Module._resolveLookupPaths(request, parent)` | ✓ | ⚠ | internal resolver |
 | `Module.register(specifier[, parentURL][, options])` | ✓ | ✗ | use Bun.plugin instead |
 | `Module.registerHooks(options)` | ✓ | ⚠ |  |
 | `Module.runMain()` | ✓ | ✓ |  |

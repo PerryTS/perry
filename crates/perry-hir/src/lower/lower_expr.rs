@@ -153,6 +153,7 @@ fn is_cjs_style_native_default_import(module_name: &str) -> bool {
             | "dns"
             | "dns/promises"
             | "events"
+            | "module"
             | "os"
             | "path"
             | "path/posix"

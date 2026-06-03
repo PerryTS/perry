@@ -1724,7 +1724,7 @@ The FileHandle stream-iter tail is runtime-backed for the direct no-transform so
 
 ### node:module
 
-**Gap APIs: 24** · Already covered: 15
+**Gap APIs: 21** · Already covered: 27
 
 #### Missing from Perry
 
@@ -1748,21 +1748,30 @@ The FileHandle stream-iter tail is runtime-backed for the direct no-transform so
 - `module.require(id)`
 - `module.load()`
 - `require.cache` overrides
-- `module._extensions`
-- `module._cache`
-- `module._pathCache`
 - Customization hook callbacks
 
 #### Covered (sampled)
 
 | API | Coverage source |
 |-----|-----------------|
+| `Module` / `new Module(id)` | `manifest:module.Module`; `runtime:js_module_module_new`; `test-parity/node-suite/module/commonjs/module-constructor-cache.ts` |
 | `Module.builtinModules` | `manifest:module.builtinModules`; `runtime:js_module_builtin_modules` |
 | `Module.findPackageJSON(specifier[, base])` | `manifest:module.findPackageJSON`; `runtime:js_module_find_package_json` |
 | `Module.findSourceMap(path)` | `manifest:module.findSourceMap`; `test-parity/node-suite/module/source-map/basic.ts` |
 | `Module.flushCompileCache()` | `manifest:module.flushCompileCache`; `test-parity/node-suite/module/compile-cache/controls.ts` |
+| `Module.globalPaths` | `manifest:module.globalPaths`; `test-parity/node-suite/module/commonjs/module-constructor-cache.ts` |
 | `Module.getCompileCacheDir()` | `manifest:module.getCompileCacheDir`; `test-parity/node-suite/module/compile-cache/controls.ts` |
 | `Module.isBuiltin(moduleName)` | `manifest:module.isBuiltin`; `test-parity/node-suite/module/methods/is-builtin.ts` |
+| `Module._cache` | `manifest:module._cache`; `test-parity/node-suite/module/commonjs/module-constructor-cache.ts` |
+| `Module._extensions` | `manifest:module._extensions`; `test-parity/node-suite/module/commonjs/module-constructor-cache.ts` |
+| `Module._pathCache` | `manifest:module._pathCache`; `test-parity/node-suite/module/commonjs/module-constructor-cache.ts` |
+| `Module._findPath(request, paths)` | `manifest:module._findPath`; `runtime:js_module_find_path`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
+| `Module._initPaths()` | `manifest:module._initPaths`; `runtime:js_module_init_paths`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
+| `Module._load(request, parent, isMain)` | `manifest:module._load`; `runtime:js_module_load`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
+| `Module._nodeModulePaths(from)` | `manifest:module._nodeModulePaths`; `runtime:js_module_node_module_paths`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
+| `Module._preloadModules(requests)` | `manifest:module._preloadModules`; `runtime:js_module_preload_modules`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
+| `Module._resolveFilename(request, parent)` | `manifest:module._resolveFilename`; `runtime:js_module_resolve_filename`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
+| `Module._resolveLookupPaths(request, parent)` | `manifest:module._resolveLookupPaths`; `runtime:js_module_resolve_lookup_paths`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
 | `Module.register(specifier[, parentURL][, options])` | `manifest:module.register`; `test-parity/node-suite/module/loader/register.ts` |
 | `Module.registerHooks(options)` | `manifest:module.registerHooks`; `test-parity/node-suite/module/loader/register-hooks.ts` |
 | `Module.constants.compileCacheStatus` | `manifest:module.constants`; `test-parity/node-suite/module/compile-cache/controls.ts` |
