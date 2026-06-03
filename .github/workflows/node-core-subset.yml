@@ -1,0 +1,112 @@
+name: Node Core Subset Radar
+
+on:
+  workflow_dispatch:
+    inputs:
+      apis:
+        description: "Optional space-separated API list, e.g. 'path url buffer'"
+        required: false
+        default: ""
+      max_per_api:
+        description: "Maximum upstream Node tests to sample per API; 0 means no cap"
+        required: false
+        default: "25"
+  schedule:
+    # Advisory nightly compatibility radar. It uploads a report but does not
+    # gate merges or releases.
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: node-core-subset-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  node-core-subset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      NODE_CORE_APIS: ${{ github.event_name == 'workflow_dispatch' && inputs.apis || '' }}
+      NODE_CORE_MAX_PER_API: ${{ github.event_name == 'workflow_dispatch' && inputs.max_per_api || '25' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Sparse checkout pinned Node.js tests
+        run: |
+          set -euo pipefail
+          node_ref="$(cat test-compat/node-core/pinned-version.txt)"
+          git clone --no-checkout --depth 1 --branch "$node_ref" \
+            --filter=blob:none https://github.com/nodejs/node vendor/nodejs
+          git -C vendor/nodejs sparse-checkout set test/parallel test/common test/fixtures
+          git -C vendor/nodejs checkout
+
+      - name: Build Perry release binary
+        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib
+
+      - name: Run Node core subset radar
+        run: |
+          set -euo pipefail
+          args=(
+            --root vendor/nodejs
+            --report test-compat/node-core/report.json
+            --max-per-api "$NODE_CORE_MAX_PER_API"
+          )
+          if [[ -n "$NODE_CORE_APIS" ]]; then
+            read -r -a requested_apis <<< "$NODE_CORE_APIS"
+            args+=(--api "${requested_apis[@]}")
+          fi
+          scripts/node_core_subset.py "${args[@]}"
+
+      - name: Write radar summary
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          report_path = Path("test-compat/node-core/report.json")
+          if not report_path.exists():
+              print("## Node Core Subset Radar")
+              print("")
+              print("No report was generated.")
+              raise SystemExit(0)
+
+          report = json.loads(report_path.read_text())
+          print("## Node Core Subset Radar")
+          print("")
+          print(f"Node corpus: `{report.get('node_pinned', '')}`")
+          print(f"Node runtime: `{report.get('node_runtime', '')}`")
+          print(f"Parity: `{report.get('parity_pct', 0)}%` over `{report.get('judged', 0)}` judged tests")
+          print("")
+          print("| api | pass | diff | runtime-fail | compile-fail | node-skip |")
+          print("| --- | ---: | ---: | ---: | ---: | ---: |")
+          for api, counts in sorted(report.get("per_api", {}).items()):
+              print(
+                  f"| {api} | {counts.get('pass', 0)} | {counts.get('diff', 0)} | "
+                  f"{counts.get('runtime-fail', 0)} | {counts.get('compile-fail', 0)} | "
+                  f"{counts.get('node-skip', 0)} |"
+              )
+          PY
+
+      - name: Upload radar report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: node-core-subset-report
+          path: test-compat/node-core/report.json
+          if-no-files-found: warn

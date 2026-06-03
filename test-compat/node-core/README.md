@@ -105,12 +105,23 @@ timeout is bumped automatically (override with `--compile-timeout`). Restrict
 the sweep with `--api` to keep it tractable. The report records which mode
 produced the numbers (`"auto_optimize": true|false`).
 
-## What a CI job would do
+## CI workflow
+
+`.github/workflows/node-core-subset.yml` runs this radar as an advisory
+nightly job and as a manual `workflow_dispatch` job.
+
+The workflow:
 
 1. Sparse-checks-out `nodejs/node` at `pinned-version.txt`.
-2. Builds Perry, runs `scripts/node_core_subset.py`.
-3. Uploads `report.json` as an artifact.
-4. **Advisory** (non-required) — signal, not gating. Threshold-based
-   gating can be added once the baseline is stable across a few runs.
+2. Builds Perry's release binary.
+3. Runs `scripts/node_core_subset.py` with a bounded per-API sample cap
+   (`max_per_api`, default 25; use 0 for no cap).
+4. Writes a Markdown table to the Actions step summary.
+5. Uploads `test-compat/node-core/report.json` as an artifact.
+
+Manual dispatch also accepts an optional space-separated `apis` list such as
+`path url buffer` for a focused run. The workflow is intentionally
+non-required: it is a compatibility radar, not a merge gate. Threshold-based
+gating can be added once the baseline is stable across a few runs.
 
 Part of #793. Companion to #799 (Test262).
