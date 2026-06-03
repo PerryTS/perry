@@ -162,6 +162,11 @@ crates/perry-hir/src/lower/lower_expr.rs
 # destructuring-binding support added the pattern-walk arms. Splitting the
 # export-binding helpers into a sibling module is tracked under #1435.
 crates/perry-hir/src/lower/module_decl.rs
+# Module collection / resolution driver. Crossed the 2000-line gate after the
+# ESM package `.js` detection helpers (package.json `type`/`exports`/`module`
+# probing) landed. Extracting the package-metadata probe into a sibling module
+# is tracked under #1435.
+crates/perry/src/commands/compile/collect_modules.rs
 # node:process surface (env/argv/hrtime/cpuUsage/resourceUsage + EventEmitter
 # wiring + warning/deprecation emit). Crossed the limit at 2047 LOC after the
 # argument-validation batch landed on main without a split (#3493 setuid/setgid/
