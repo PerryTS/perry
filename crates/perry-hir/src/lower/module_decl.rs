@@ -337,6 +337,11 @@ pub(crate) fn lower_module_decl(
                             specifiers.push(ImportSpecifier::Default { local });
                             continue;
                         } else if is_node_builtin_module(&source) {
+                            if source == "diagnostics_channel" {
+                                ctx.register_imported_func(local.clone(), local.clone());
+                                specifiers.push(ImportSpecifier::Default { local });
+                                continue;
+                            }
                             // #3906: a CJS-backed Node builtin *submodule* that
                             // isn't in NATIVE_MODULES (e.g. `node:timers/promises`,
                             // `node:stream/promises`). Its default export is the
