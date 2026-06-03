@@ -406,6 +406,10 @@ pub(crate) struct FnCtx<'a> {
     /// produces a Promise so subsequent `p.then(cb)` chains route
     /// through `js_promise_then` instead of `js_native_call_method`.
     pub local_async_funcs: &'a std::collections::HashSet<u32>,
+    /// Locally-defined generator wrapper FuncIds after generator lowering.
+    /// Used by direct `FuncRef` calls to re-link returned iterator objects to
+    /// the same closure-cached prototype that `g.prototype` reads expose.
+    pub local_generator_funcs: &'a std::collections::HashSet<u32>,
     /// Type alias map (name → Type) aggregated from all modules. Used
     /// to resolve `Named` types in function signatures and dispatch.
     pub type_aliases: &'a std::collections::HashMap<String, perry_types::Type>,

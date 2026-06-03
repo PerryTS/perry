@@ -885,13 +885,14 @@ pub enum Expr {
     /// #4141: link a freshly-built generator/async-generator instance object
     /// to the spec prototype chain. Emitted ONLY by `transform_generators`
     /// wrapping the `{next,return,throw}` iterator object it returns. At
-    /// runtime, `js_generator_attach_prototype(obj, is_async)` interposes a
-    /// fresh intermediate object as `obj`'s `[[Prototype]]` whose own
-    /// `[[Prototype]]` is `%Generator.prototype%` / `%AsyncGenerator.prototype%`,
-    /// so `Object.getPrototypeOf(Object.getPrototypeOf(gen()))` resolves to the
-    /// brand-checked prototype (mirrors `instance → g.prototype →
-    /// %Generator.prototype%`). Evaluates to `obj` unchanged. `is_async` selects
-    /// the sync vs async generator prototype tower.
+    /// codegen uses the owning closure when available so the instance points at
+    /// the same closure-cached `g.prototype` object exposed by property reads.
+    /// The fallback runtime path interposes a fresh intermediate object whose
+    /// own `[[Prototype]]` is `%Generator.prototype%` /
+    /// `%AsyncGenerator.prototype%`, preserving the two-hop brand-checked
+    /// prototype chain.
+    /// Evaluates to `obj` unchanged. `is_async` selects the sync vs async
+    /// generator prototype tower for the fallback path.
     LinkGeneratorPrototype {
         obj: Box<Expr>,
         is_async: bool,

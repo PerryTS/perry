@@ -15,6 +15,35 @@ use crate::types::{DOUBLE, I32, I64, PTR};
 
 use super::opts::{NamespaceEntry, NamespaceEntryKind};
 
+pub(crate) fn function_body_returns_generator_object(body: &[perry_hir::Stmt]) -> bool {
+    let has_gen_state = body
+        .iter()
+        .any(|stmt| matches!(stmt, perry_hir::Stmt::Let { name, .. } if name == "__gen_state"));
+    if !has_gen_state {
+        return false;
+    }
+    body.iter().any(|stmt| match stmt {
+        // The generator transform may wrap the returned iterator in the
+        // instance-prototype linker; unwrap it so the iterator shape remains
+        // the stable signal that this is a lowered generator wrapper.
+        perry_hir::Stmt::Return(Some(expr)) => {
+            let inner = match expr {
+                perry_hir::Expr::LinkGeneratorPrototype { obj, .. } => obj.as_ref(),
+                other => other,
+            };
+            matches!(inner, perry_hir::Expr::Object(props)
+                if props.len() == 3
+                    && props[0].0 == "next"
+                    && props[1].0 == "return"
+                    && props[2].0 == "throw"
+                    && props
+                        .iter()
+                        .all(|(_, value)| matches!(value, perry_hir::Expr::Closure { .. })))
+        }
+        _ => false,
+    })
+}
+
 /// Compile a single user function into the module.
 /// Shadow-stack push/pop + slot-set emission for every user
 /// function. Default ON as of Phase D part 2 (v0.5.238); set

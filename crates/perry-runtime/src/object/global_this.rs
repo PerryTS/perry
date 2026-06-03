@@ -1886,8 +1886,8 @@ extern "C" fn async_generator_proto_throw_thunk(
 /// the spec `[[Prototype]]` chain. Perry lowers `gen()` to a `{next,return,
 /// throw}` object literal; this interposes a fresh intermediate object (the
 /// per-instance stand-in for `g.prototype`) as the instance's `[[Prototype]]`,
-/// whose own `[[Prototype]]` is `%Generator.prototype%` / `%AsyncGenerator.
-/// prototype%`. The result is the two-hop chain Node exposes:
+/// whose own `[[Prototype]]` is `%Generator.prototype%` /
+/// `%AsyncGenerator.prototype%`. The result is the two-hop chain Node exposes:
 /// `Object.getPrototypeOf(gen())` → intermediate →
 /// `Object.getPrototypeOf(...)` → the brand-checked prototype carrying
 /// `next`/`return`/`throw`.
@@ -1921,6 +1921,42 @@ pub extern "C" fn js_generator_attach_prototype(obj: f64, is_async: i32) -> f64 
     super::prototype_chain::object_set_static_prototype(intermediate as usize, gen_proto_bits);
     let intermediate_bits = crate::value::js_nanbox_pointer(intermediate as i64).to_bits();
     super::prototype_chain::object_set_static_prototype(obj_ptr, intermediate_bits);
+    obj
+}
+
+/// Link a generator/async-generator instance to the concrete generator
+/// function closure's cached `.prototype` object. This is the identity path
+/// Node exposes for `Object.getPrototypeOf(g()) === g.prototype`; the
+/// fallback `js_generator_attach_prototype` above is used when codegen cannot
+/// see the owning closure.
+#[no_mangle]
+pub extern "C" fn js_generator_attach_closure_prototype(
+    obj: f64,
+    closure_ptr: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let jv = JSValue::from_bits(obj.to_bits());
+    if !jv.is_pointer() {
+        return obj;
+    }
+    let obj_ptr = jv.as_pointer::<u8>() as usize;
+    if obj_ptr == 0 {
+        return obj;
+    }
+
+    let closure = crate::closure::clean_closure_ptr(closure_ptr);
+    if closure.is_null() || crate::closure::get_valid_func_ptr(closure).is_null() {
+        return obj;
+    }
+
+    let Some(proto) = generator_function_prototype_of(closure as usize) else {
+        return obj;
+    };
+    let proto_jv = JSValue::from_bits(proto.to_bits());
+    if !proto_jv.is_pointer() {
+        return obj;
+    }
+
+    super::prototype_chain::object_set_static_prototype(obj_ptr, proto.to_bits());
     obj
 }
 

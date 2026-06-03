@@ -7,7 +7,7 @@ use perry_hir::Expr;
 
 use crate::expr::{lower_expr, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::double_literal;
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I32, I64, PTR};
 
 pub fn try_lower_func_ref_call(
     ctx: &mut FnCtx<'_>,
@@ -174,5 +174,18 @@ pub fn try_lower_func_ref_call(
     let arg_slices: Vec<(crate::types::LlvmType, &str)> =
         lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
 
-    Ok(Some(ctx.block().call(DOUBLE, &fname, &arg_slices)))
+    let result = ctx.block().call(DOUBLE, &fname, &arg_slices);
+    if ctx.local_generator_funcs.contains(fid) {
+        let wrap_ptr = format!("@__perry_wrap_{}", fname);
+        let closure_handle =
+            ctx.block()
+                .call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
+        return Ok(Some(ctx.block().call(
+            DOUBLE,
+            "js_generator_attach_closure_prototype",
+            &[(DOUBLE, &result), (I64, &closure_handle)],
+        )));
+    }
+
+    Ok(Some(result))
 }

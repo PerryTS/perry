@@ -19,7 +19,7 @@ use crate::types::{LlvmType, DOUBLE, I64, VOID};
 
 use super::closure::compile_closure;
 use super::entry::compile_module_entry;
-use super::helpers::{sanitize, scoped_fn_name};
+use super::helpers::{function_body_returns_generator_object, sanitize, scoped_fn_name};
 use super::method::{compile_method, compile_static_method};
 use super::opts::CrossModuleCtx;
 use super::spec_function_length;
@@ -39,36 +39,6 @@ struct OptsView<'a> {
     output_type: &'a str,
 }
 use super::string_pool::emit_string_pool;
-
-fn function_body_returns_generator_object(body: &[perry_hir::Stmt]) -> bool {
-    let has_gen_state = body
-        .iter()
-        .any(|stmt| matches!(stmt, perry_hir::Stmt::Let { name, .. } if name == "__gen_state"));
-    if !has_gen_state {
-        return false;
-    }
-    body.iter().any(|stmt| match stmt {
-        // #4141: the returned iterator object is wrapped in
-        // `LinkGeneratorPrototype` (instance `[[Prototype]]` linker); unwrap it
-        // so the `{next,return,throw}` shape — the signal that this function is
-        // a generator wrapper — is still recognized.
-        perry_hir::Stmt::Return(Some(expr)) => {
-            let inner = match expr {
-                perry_hir::Expr::LinkGeneratorPrototype { obj, .. } => obj.as_ref(),
-                other => other,
-            };
-            matches!(inner, perry_hir::Expr::Object(props)
-                if props.len() == 3
-                    && props[0].0 == "next"
-                    && props[1].0 == "return"
-                    && props[2].0 == "throw"
-                    && props
-                        .iter()
-                        .all(|(_, value)| matches!(value, perry_hir::Expr::Closure { .. })))
-        }
-        _ => false,
-    })
-}
 
 /// All the data computed by the prelude of `compile_module` that the
 /// tail half (this file) needs. Bundled so the call from
@@ -491,8 +461,9 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // Emit FuncRef-as-value wrappers. For each user function, generate
     // a thin wrapper `__perry_wrap_<name>` whose signature matches the
     // closure-call ABI: `double(i64 this_closure, double arg0, double
-    // arg1, ...)`. The wrapper discards the closure pointer and forwards
-    // the args to the underlying function.
+    // arg1, ...)`. Most wrappers discard the closure pointer and forward the
+    // args to the underlying function; generator wrappers reuse it to link the
+    // returned iterator to the closure-cached `prototype`.
     //
     // The wrapper exists so that `apply(add, 3, 4)` can pass `add` as
     // a value and have `apply` call it via `js_closure_call2`. Without
@@ -533,7 +504,14 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 )
             })
             .collect();
-        let result = blk.call(DOUBLE, &original_name, &call_args);
+        let mut result = blk.call(DOUBLE, &original_name, &call_args);
+        if function_body_returns_generator_object(&f.body) {
+            result = blk.call(
+                DOUBLE,
+                "js_generator_attach_closure_prototype",
+                &[(DOUBLE, &result), (I64, "%this_closure")],
+            );
+        }
         blk.ret(DOUBLE, &result);
     }
 

@@ -333,13 +333,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(proto_val)
         }
-        // #4141: link a generator/async-generator instance into the spec
-        // prototype chain. `js_generator_attach_prototype` interposes a fresh
-        // intermediate object so `Object.getPrototypeOf(Object.getPrototypeOf(
-        // gen()))` resolves to `%Generator.prototype%`. Returns the instance
-        // unchanged for inline use in return position.
+        // Link a generator/async-generator instance into the spec prototype
+        // chain. Closure bodies can use their own closure pointer to preserve
+        // `Object.getPrototypeOf(g()) === g.prototype`; direct function bodies
+        // fall back to the generic two-hop intrinsic linker and call sites may
+        // relink with a concrete closure when they have one.
         Expr::LinkGeneratorPrototype { obj, is_async } => {
             let obj_val = lower_expr(ctx, obj)?;
+            if let Some(closure_ptr) = ctx.current_closure_ptr.clone() {
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_generator_attach_closure_prototype",
+                    &[(DOUBLE, &obj_val), (crate::types::I64, &closure_ptr)],
+                ));
+            }
             let is_async_str = if *is_async { "1" } else { "0" };
             Ok(ctx.block().call(
                 DOUBLE,

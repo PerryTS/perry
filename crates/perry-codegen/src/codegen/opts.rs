@@ -503,6 +503,11 @@ pub(crate) struct CrossModuleCtx {
     /// `let p = asyncFn();` to `Promise(_)` so subsequent `p.then(cb)`
     /// chains route through `js_promise_then`.
     pub local_async_funcs: std::collections::HashSet<u32>,
+    /// FuncIds of locally-defined generator functions after generator lowering.
+    /// `Function.is_generator` is cleared by the transform, so this is built
+    /// from the lowered iterator-return body shape and used by call lowering
+    /// to attach instances to the closure-owned `g.prototype`.
+    pub local_generator_funcs: std::collections::HashSet<u32>,
     pub type_aliases: std::collections::HashMap<String, perry_types::Type>,
     pub imported_func_param_counts: std::collections::HashMap<String, usize>,
     /// Issue #678: see `CompileOptions::import_function_origin_names`.

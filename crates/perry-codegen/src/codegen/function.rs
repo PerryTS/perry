@@ -201,6 +201,7 @@ pub(super) fn compile_function(
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
+        local_generator_funcs: &cross_module.local_generator_funcs,
         type_aliases: &cross_module.type_aliases,
         imported_func_param_counts: &cross_module.imported_func_param_counts,
         imported_func_has_rest: &cross_module.imported_func_has_rest,

@@ -59,7 +59,8 @@ pub use opts::{
 use artifacts::{emit_module_artifacts, ModuleArtifactsCtx};
 use function::compile_function;
 use helpers::{
-    collect_return_class, emit_buffer_alias_metadata, sanitize, scoped_fn_name, scoped_method_name,
+    collect_return_class, emit_buffer_alias_metadata, function_body_returns_generator_object,
+    sanitize, scoped_fn_name, scoped_method_name,
 };
 
 // Collector and boxing-analysis walkers live in dedicated modules.
@@ -492,6 +493,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // (the per-function loop further down). Built here so the CrossModuleCtx
     // construction is complete before the FnCtx instances reference it.
     let mut local_async_funcs: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut local_generator_funcs: std::collections::HashSet<u32> =
+        std::collections::HashSet::new();
     for f in &hir.functions {
         // Include both truly-async functions and those transformed from
         // async to generator (was_plain_async=true, is_async=false after
@@ -499,6 +502,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // so is_promise_expr must recognize their call sites.
         if f.is_async || f.was_plain_async {
             local_async_funcs.insert(f.id);
+        }
+        if function_body_returns_generator_object(&f.body) {
+            local_generator_funcs.insert(f.id);
         }
     }
 
@@ -1018,6 +1024,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         namespace_member_prefixes: opts.namespace_member_prefixes,
         imported_async_funcs: opts.imported_async_funcs,
         local_async_funcs,
+        local_generator_funcs,
         type_aliases: opts.type_aliases,
         imported_func_param_counts: opts.imported_func_param_counts,
         import_function_origin_names: opts.import_function_origin_names.clone(),

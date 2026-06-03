@@ -324,6 +324,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     );
     // #4141: generator/async-generator instance `[[Prototype]]` linker.
     module.declare_function("js_generator_attach_prototype", DOUBLE, &[DOUBLE, I32]);
+    module.declare_function(
+        "js_generator_attach_closure_prototype",
+        DOUBLE,
+        &[DOUBLE, I64],
+    );
     // WeakRef / FinalizationRegistry (weakref.rs). `js_weakref_new` /
     // `js_finreg_new` return raw `*mut ObjectHeader` (i64 pointer, must be
     // POINTER_TAG-boxed at the call site). The deref/register/unregister
