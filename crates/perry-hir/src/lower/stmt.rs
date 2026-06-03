@@ -1303,6 +1303,7 @@ pub(crate) fn lower_stmt(
         ast::Stmt::Switch(switch_stmt) => {
             let discriminant = lower_expr(ctx, &switch_stmt.discriminant)?;
             let mut cases = Vec::new();
+            let switch_scope_mark = ctx.push_block_scope();
 
             for case in &switch_stmt.cases {
                 let test = case.test.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
@@ -1314,6 +1315,8 @@ pub(crate) fn lower_stmt(
 
                 cases.push(SwitchCase { test, body });
             }
+
+            ctx.pop_block_scope(switch_scope_mark);
 
             module.init.push(Stmt::Switch {
                 discriminant,
