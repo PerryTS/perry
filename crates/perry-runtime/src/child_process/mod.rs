@@ -1383,17 +1383,19 @@ fn cp_apply_options(command: &mut Command, opts_val: f64) {
 pub(super) enum CpStdio {
     Pipe,
     Ignore,
+    Inherit,
 }
 
 fn cp_stdio_kind(value: f64) -> CpStdio {
     match cp_value_to_string(value).as_deref() {
         Some("ignore") => CpStdio::Ignore,
+        Some("inherit") => CpStdio::Inherit,
         _ => CpStdio::Pipe,
     }
 }
 
-/// Read the deterministic live-stdio subset: `pipe` (default) and `ignore`.
-/// Other Node forms (`inherit`, numeric fds, custom streams) intentionally
+/// Read the deterministic live-stdio subset: `pipe` (default), `ignore`, and
+/// `inherit`. Other Node forms (numeric fds, custom streams) intentionally
 /// remain in #2555.
 pub(super) fn cp_read_stdio(opts_val: f64, fds: usize) -> Vec<CpStdio> {
     let mut out = vec![CpStdio::Pipe; fds];
@@ -1403,8 +1405,10 @@ pub(super) fn cp_read_stdio(opts_val: f64, fds: usize) -> Vec<CpStdio> {
 
     let stdio = cp_get_field(opts_val, b"stdio");
     if let Some(s) = cp_value_to_string(stdio) {
-        if s == "ignore" {
-            out.fill(CpStdio::Ignore);
+        match s.as_str() {
+            "ignore" => out.fill(CpStdio::Ignore),
+            "inherit" => out.fill(CpStdio::Inherit),
+            _ => {}
         }
         return out;
     }
@@ -1422,7 +1426,7 @@ pub(super) fn cp_read_stdio(opts_val: f64, fds: usize) -> Vec<CpStdio> {
 pub(super) fn cp_stdio_js_value(kind: CpStdio, pipe_obj: f64) -> f64 {
     match kind {
         CpStdio::Pipe => pipe_obj,
-        CpStdio::Ignore => TAG_NULL_F64,
+        CpStdio::Ignore | CpStdio::Inherit => TAG_NULL_F64,
     }
 }
 
@@ -1430,6 +1434,7 @@ pub(super) fn cp_apply_live_stdio(command: &mut Command, stdio: &[CpStdio]) {
     let to_stdio = |kind: CpStdio| match kind {
         CpStdio::Pipe => Stdio::piped(),
         CpStdio::Ignore => Stdio::null(),
+        CpStdio::Inherit => Stdio::inherit(),
     };
     command.stdin(to_stdio(stdio.first().copied().unwrap_or(CpStdio::Pipe)));
     command.stdout(to_stdio(stdio.get(1).copied().unwrap_or(CpStdio::Pipe)));
