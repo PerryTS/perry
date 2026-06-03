@@ -1305,6 +1305,71 @@ fn subtract_limbs(a: &mut [u64; BIGINT_LIMBS], b: &[u64; BIGINT_LIMBS]) {
     }
 }
 
+/// Mask a 1024-bit two's-complement limb array down to its low `bits` bits,
+/// zeroing everything at or above bit index `bits`. `bits >= BIGINT_BITS`
+/// leaves the value unchanged.
+fn mask_low_bits(mut limbs: [u64; BIGINT_LIMBS], bits: usize) -> [u64; BIGINT_LIMBS] {
+    if bits >= BIGINT_BITS {
+        return limbs;
+    }
+    let full_limbs = bits / 64;
+    let rem = bits % 64;
+    for (i, l) in limbs.iter_mut().enumerate() {
+        if i < full_limbs {
+            // keep
+        } else if i == full_limbs && rem != 0 {
+            *l &= (1u64 << rem) - 1;
+        } else {
+            *l = 0;
+        }
+    }
+    limbs
+}
+
+/// `BigInt.asUintN(bits, bigint)` — wrap `value` to a `bits`-wide UNSIGNED
+/// integer: `value mod 2^bits`, always non-negative. (`asUintN(0, x)` → 0n.)
+#[no_mangle]
+pub extern "C" fn js_bigint_as_uint_n(bits: u32, value: *const BigIntHeader) -> *mut BigIntHeader {
+    let limbs = bigint_limbs_or_zero(value);
+    let masked = mask_low_bits(limbs, bits as usize);
+    bigint_alloc_with_limbs(masked)
+}
+
+/// `BigInt.asIntN(bits, bigint)` — wrap `value` to a `bits`-wide SIGNED
+/// two's-complement integer: `value mod 2^bits`, then interpret the top bit
+/// (bit `bits-1`) as the sign and sign-extend. (`asIntN(0, x)` → 0n.)
+#[no_mangle]
+pub extern "C" fn js_bigint_as_int_n(bits: u32, value: *const BigIntHeader) -> *mut BigIntHeader {
+    let bits = bits as usize;
+    if bits == 0 {
+        return bigint_alloc_with_limbs(ZERO_LIMBS);
+    }
+    if bits >= BIGINT_BITS {
+        // No truncation possible within our width; value already two's-complement.
+        return bigint_alloc_with_limbs(bigint_limbs_or_zero(value));
+    }
+    let mut masked = mask_low_bits(bigint_limbs_or_zero(value), bits);
+    // If the sign bit (bit bits-1) is set, sign-extend: set all bits >= bits-1.
+    let sign_limb = (bits - 1) / 64;
+    let sign_pos = (bits - 1) % 64;
+    let sign_set = (masked[sign_limb] >> sign_pos) & 1 == 1;
+    if sign_set {
+        // Set every bit from `bits` upward to 1 (two's-complement negative).
+        let full_limbs = bits / 64;
+        let rem = bits % 64;
+        for (i, l) in masked.iter_mut().enumerate() {
+            if i < full_limbs {
+                // low full limbs: keep
+            } else if i == full_limbs && rem != 0 {
+                *l |= !((1u64 << rem) - 1);
+            } else if i >= full_limbs {
+                *l = u64::MAX;
+            }
+        }
+    }
+    bigint_alloc_with_limbs(masked)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

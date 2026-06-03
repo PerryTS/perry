@@ -2844,6 +2844,62 @@ extern "C" fn number_is_integer_thunk(
     crate::builtins::js_number_is_integer(value)
 }
 
+/// Shared impl for `BigInt.asIntN`/`asUintN` (both the ctor-static thunks and
+/// the `("bigint", ...)` native-module dispatch). Coerces `bits` via ToIndex
+/// (RangeError on negative/non-integer), brand-checks `value` is a BigInt
+/// (TypeError otherwise), and returns the NaN-boxed result. `signed` selects
+/// asIntN vs asUintN. Diverges (`!`) on bad input, matching Node.
+pub(crate) fn bigint_as_n_dispatch(bits_arg: f64, value_arg: f64, signed: bool) -> f64 {
+    if !bits_arg.is_finite() || bits_arg < 0.0 || bits_arg.fract() != 0.0 {
+        crate::fs::validate::throw_range_error_with_code(
+            "The number of bits is invalid (must be a non-negative integer)",
+        );
+    }
+    let jv = JSValue::from_bits(value_arg.to_bits());
+    if !jv.is_bigint() {
+        crate::fs::validate::throw_type_error_with_code(
+            "Cannot convert value to a BigInt",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
+    let bits = bits_arg as u32;
+    let ptr = jv.as_bigint_ptr() as *const crate::bigint::BigIntHeader;
+    let r = if signed {
+        crate::bigint::js_bigint_as_int_n(bits, ptr)
+    } else {
+        crate::bigint::js_bigint_as_uint_n(bits, ptr)
+    };
+    f64::from_bits(crate::value::js_nanbox_bigint(r as i64).to_bits())
+}
+
+/// FFI entry for the codegen-lowered `BigInt.asIntN(bits, x)` direct call.
+#[no_mangle]
+pub extern "C" fn js_bigint_as_int_n_call(bits: f64, value: f64) -> f64 {
+    bigint_as_n_dispatch(bits, value, true)
+}
+
+/// FFI entry for the codegen-lowered `BigInt.asUintN(bits, x)` direct call.
+#[no_mangle]
+pub extern "C" fn js_bigint_as_uint_n_call(bits: f64, value: f64) -> f64 {
+    bigint_as_n_dispatch(bits, value, false)
+}
+
+extern "C" fn bigint_as_int_n_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    bits: f64,
+    value: f64,
+) -> f64 {
+    bigint_as_n_dispatch(bits, value, true)
+}
+
+extern "C" fn bigint_as_uint_n_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    bits: f64,
+    value: f64,
+) -> f64 {
+    bigint_as_n_dispatch(bits, value, false)
+}
+
 extern "C" fn number_is_safe_integer_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
@@ -3143,6 +3199,23 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
                 ctor,
                 "parseInt",
                 number_parse_int_thunk as *const u8,
+                2,
+                false,
+            );
+        }
+        "BigInt" => {
+            // BigInt.asIntN(bits, bigint) / asUintN(bits, bigint) — spec length 2.
+            install_constructor_static(
+                ctor,
+                "asIntN",
+                bigint_as_int_n_thunk as *const u8,
+                2,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "asUintN",
+                bigint_as_uint_n_thunk as *const u8,
                 2,
                 false,
             );
