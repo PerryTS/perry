@@ -368,6 +368,7 @@ fn module_set_field(obj: *mut crate::object::ObjectHeader, name: &str, value: f6
     crate::object::js_object_set_field_by_name(obj, key, value);
 }
 
+type ModuleFunction0 = extern "C" fn(*const crate::closure::ClosureHeader) -> f64;
 type ModuleFunction1 = extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64;
 type ModuleFunction2 = extern "C" fn(*const crate::closure::ClosureHeader, f64, f64) -> f64;
 
@@ -394,6 +395,20 @@ thread_local! {
         const { Cell::new(std::ptr::null()) };
     static PROCESS_FINALIZATION_BEFORE_EXIT_LISTENER_INSTALLED: Cell<bool> =
         const { Cell::new(false) };
+}
+
+extern "C" fn module_noop_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    module_undefined()
+}
+
+fn module_noop_function(name: &str) -> f64 {
+    let func_ptr = module_noop_thunk as ModuleFunction0 as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 0);
+    crate::closure::js_register_closure_length(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    crate::object::set_bound_native_closure_name(closure, name);
+    crate::object::set_builtin_closure_length(closure as usize, 0);
+    crate::value::js_nanbox_pointer(closure as i64)
 }
 
 fn module_function1(name: &str, thunk: ModuleFunction1, length: u32) -> f64 {
