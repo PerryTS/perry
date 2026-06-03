@@ -1104,7 +1104,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::String(_) | Expr::WtfString(_) => true,
         Expr::LocalGet(id) => {
             match ctx.local_types.get(id) {
-                Some(HirType::String) => true,
+                Some(HirType::String | HirType::StringLiteral(_)) => true,
                 // Union(String, Null/Void) — nullable strings are still
                 // strings at runtime when non-null. The ?. and != null
                 // guard paths lower the non-null case through the string
@@ -1112,7 +1112,9 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 // toUpperCase()` fell through to the generic path and
                 // returned undefined.
                 Some(HirType::Union(members)) => {
-                    members.iter().any(|m| matches!(m, HirType::String))
+                    members
+                        .iter()
+                        .any(|m| matches!(m, HirType::String | HirType::StringLiteral(_)))
                 }
                 _ => false,
             }

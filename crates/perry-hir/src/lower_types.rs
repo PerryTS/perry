@@ -1388,7 +1388,7 @@ pub(crate) fn extract_ts_type_with_ctx(
         // Literal types: "foo", 42, true
         TsLitType(lit) => match &lit.lit {
             ast::TsLit::Number(_) => Type::Number,
-            ast::TsLit::Str(_) => Type::String,
+            ast::TsLit::Str(s) => Type::StringLiteral(s.value.as_str().unwrap_or("").to_string()),
             ast::TsLit::Bool(_) => Type::Boolean,
             ast::TsLit::BigInt(_) => Type::BigInt,
             ast::TsLit::Tpl(_) => Type::String,

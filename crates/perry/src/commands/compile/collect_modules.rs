@@ -733,6 +733,7 @@ fn collect_module_one(
     // the resolver can follow `import(localStringVar)` and
     // `` import(`./prefix_${localStringVar}.ts`) `` paths transitively.
     let module_const_locals = perry_hir::collect_module_const_locals(&hir_module);
+    let dynamic_param_literals = perry_hir::collect_dynamic_import_param_literals(&hir_module);
     let mut dynamic_path_sets: Vec<Vec<String>> = Vec::new();
     perry_hir::for_each_dynamic_import(&hir_module, &mut |expr| {
         if let perry_hir::Expr::DynamicImport { paths, arg } = expr {
@@ -741,9 +742,10 @@ fn collect_module_one(
                 return;
             }
             let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
-            match perry_hir::resolve_import_path_with_consts(
+            match perry_hir::resolve_import_path_with_consts_and_params(
                 arg.as_ref(),
                 &module_const_locals,
+                &dynamic_param_literals,
                 &mut visiting,
             ) {
                 perry_hir::Resolution::Set(set) => {
@@ -823,9 +825,10 @@ fn collect_module_one(
                 return;
             }
             let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
-            match perry_hir::resolve_import_path_with_consts(
+            match perry_hir::resolve_import_path_with_consts_and_params(
                 filename.as_ref(),
                 &module_const_locals,
+                &dynamic_param_literals,
                 &mut visiting,
             ) {
                 perry_hir::Resolution::Set(set) => {
