@@ -74,6 +74,10 @@ pub(crate) fn fd_is_registered(fd: i32) -> bool {
     FD_REGISTRY.with(|r| r.borrow().contains_key(&fd))
 }
 
+pub(crate) fn try_clone_registered_fd(fd: i32) -> Option<fs::File> {
+    FD_REGISTRY.with(|r| r.borrow().get(&fd).and_then(|file| file.try_clone().ok()))
+}
+
 pub(crate) fn filehandle_object_fd(value: f64) -> Option<i32> {
     let bits = value.to_bits();
     if (bits & !POINTER_MASK) != POINTER_TAG {

@@ -1626,9 +1626,27 @@ pub(super) enum CpStdio {
     Pipe,
     Ignore,
     Inherit,
+    Fd(i32),
 }
 
 fn cp_stdio_kind(value: f64) -> CpStdio {
+    let js_value = JSValue::from_bits(value.to_bits());
+    let fd = if js_value.is_int32() {
+        Some(js_value.as_int32())
+    } else if js_value.is_number() {
+        let n = js_value.as_number();
+        if n.is_finite() && n >= 0.0 && n.fract() == 0.0 && n <= i32::MAX as f64 {
+            Some(n as i32)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some(fd) = fd {
+        return CpStdio::Fd(fd);
+    }
+
     match cp_value_to_string(value).as_deref() {
         Some("ignore") => CpStdio::Ignore,
         Some("inherit") => CpStdio::Inherit,
@@ -1636,8 +1654,8 @@ fn cp_stdio_kind(value: f64) -> CpStdio {
     }
 }
 
-/// Read the deterministic live-stdio subset: `pipe` (default), `ignore`, and
-/// `inherit`. Other Node forms (numeric fds, custom streams) intentionally
+/// Read the deterministic live-stdio subset: `pipe` (default), `ignore`,
+/// `inherit`, and numeric fd entries. Custom stream handles intentionally
 /// remain in #2555.
 pub(super) fn cp_read_stdio(opts_val: f64, fds: usize) -> Vec<CpStdio> {
     let mut out = vec![CpStdio::Pipe; fds];
@@ -1646,6 +1664,14 @@ pub(super) fn cp_read_stdio(opts_val: f64, fds: usize) -> Vec<CpStdio> {
     }
 
     let stdio = cp_get_field(opts_val, b"stdio");
+    if let Some(arr) = cp_array_ptr(stdio) {
+        let n = crate::array::js_array_length(arr).min(fds as u32);
+        for i in 0..n {
+            out[i as usize] = cp_stdio_kind(crate::array::js_array_get_f64(arr, i));
+        }
+        return out;
+    }
+
     if let Some(s) = cp_value_to_string(stdio) {
         match s.as_str() {
             "ignore" => out.fill(CpStdio::Ignore),
@@ -1654,21 +1680,13 @@ pub(super) fn cp_read_stdio(opts_val: f64, fds: usize) -> Vec<CpStdio> {
         }
         return out;
     }
-
-    let Some(arr) = cp_array_ptr(stdio) else {
-        return out;
-    };
-    let n = crate::array::js_array_length(arr).min(fds as u32);
-    for i in 0..n {
-        out[i as usize] = cp_stdio_kind(crate::array::js_array_get_f64(arr, i));
-    }
     out
 }
 
 pub(super) fn cp_stdio_js_value(kind: CpStdio, pipe_obj: f64) -> f64 {
     match kind {
         CpStdio::Pipe => pipe_obj,
-        CpStdio::Ignore | CpStdio::Inherit => TAG_NULL_F64,
+        CpStdio::Ignore | CpStdio::Inherit | CpStdio::Fd(_) => TAG_NULL_F64,
     }
 }
 
@@ -1677,10 +1695,31 @@ pub(super) fn cp_apply_live_stdio(command: &mut Command, stdio: &[CpStdio]) {
         CpStdio::Pipe => Stdio::piped(),
         CpStdio::Ignore => Stdio::null(),
         CpStdio::Inherit => Stdio::inherit(),
+        CpStdio::Fd(fd) => cp_stdio_from_fd(fd),
     };
     command.stdin(to_stdio(stdio.first().copied().unwrap_or(CpStdio::Pipe)));
     command.stdout(to_stdio(stdio.get(1).copied().unwrap_or(CpStdio::Pipe)));
     command.stderr(to_stdio(stdio.get(2).copied().unwrap_or(CpStdio::Pipe)));
+}
+
+#[cfg(unix)]
+fn cp_stdio_from_fd(fd: i32) -> Stdio {
+    use std::os::fd::FromRawFd;
+
+    if let Some(file) = crate::fs::try_clone_registered_fd(fd) {
+        return Stdio::from(file);
+    }
+
+    let dup_fd = unsafe { libc::dup(fd) };
+    if dup_fd < 0 {
+        return Stdio::null();
+    }
+    unsafe { Stdio::from_raw_fd(dup_fd) }
+}
+
+#[cfg(not(unix))]
+fn cp_stdio_from_fd(_fd: i32) -> Stdio {
+    Stdio::null()
 }
 
 /// Default shell for `{ shell: true }` (`shell: "<path>"` overrides it).
