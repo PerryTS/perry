@@ -321,6 +321,148 @@ unsafe fn x509_public_key_value(handle: &X509Handle) -> f64 {
     f64::from_bits(JSValue::string_ptr(ptr).bits())
 }
 
+fn x509_signature_algorithm_oid(cert: &x509_cert::Certificate) -> String {
+    cert.signature_algorithm.oid.to_string()
+}
+
+fn x509_signature_algorithm_name(cert: &x509_cert::Certificate) -> Option<&'static str> {
+    match x509_signature_algorithm_oid(cert).as_str() {
+        "1.2.840.113549.1.1.5" => Some("sha1WithRSAEncryption"),
+        "1.2.840.113549.1.1.11" => Some("sha256WithRSAEncryption"),
+        "1.2.840.113549.1.1.12" => Some("sha384WithRSAEncryption"),
+        "1.2.840.113549.1.1.13" => Some("sha512WithRSAEncryption"),
+        "1.2.840.10045.4.3.2" => Some("ecdsa-with-SHA256"),
+        "1.2.840.10045.4.3.3" => Some("ecdsa-with-SHA384"),
+        "1.2.840.10045.4.3.4" => Some("ecdsa-with-SHA512"),
+        _ => None,
+    }
+}
+
+unsafe fn x509_name_legacy_object(name: &x509_cert::name::Name) -> f64 {
+    let attr_count = name.0.iter().map(|rdn| rdn.0.len()).sum::<usize>() as u32;
+    let obj = js_object_alloc(0, attr_count);
+    for rdn in name.0.iter() {
+        for atv in rdn.0.iter() {
+            let key = x509_attr_short_name(&atv.oid.to_string());
+            let value = x509_attr_value(atv);
+            set_object_string_field(obj, key.as_bytes(), &value);
+        }
+    }
+    nanbox_ptr(obj)
+}
+
+fn x509_rsa_public_key(cert: &x509_cert::Certificate) -> Option<(Vec<u8>, RsaPublicKey)> {
+    use x509_cert::der::Encode;
+
+    let spki_der = cert.tbs_certificate.subject_public_key_info.to_der().ok()?;
+    let pem = x509_public_key_pem(&spki_der);
+    let public_key = parse_rsa_public_key_pem(&pem)?;
+    Some((spki_der, public_key))
+}
+
+fn x509_serial_number_hex(cert: &x509_cert::Certificate) -> String {
+    cert.tbs_certificate
+        .serial_number
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{:02X}", b))
+        .collect()
+}
+
+unsafe fn set_undefined_field(obj: *mut ObjectHeader, name: &[u8]) {
+    set_object_value_field(obj, name, nanbox_undefined());
+}
+
+fn x509_bool_f64(value: bool) -> f64 {
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+
+    f64::from_bits(if value { TAG_TRUE } else { TAG_FALSE })
+}
+
+unsafe fn x509_to_legacy_object(handle: &X509Handle) -> f64 {
+    use sha1::Sha1;
+    use sha2::{Digest, Sha256, Sha512};
+
+    let obj = js_object_alloc(0, 20);
+    let tbs = &handle.cert.tbs_certificate;
+
+    set_object_value_field(obj, b"subject", x509_name_legacy_object(&tbs.subject));
+    set_object_value_field(obj, b"issuer", x509_name_legacy_object(&tbs.issuer));
+    match x509_subject_alt_name(&handle.cert) {
+        Some(value) => set_object_string_field(obj, b"subjectaltname", &value),
+        None => set_undefined_field(obj, b"subjectaltname"),
+    }
+    set_undefined_field(obj, b"infoAccess");
+    set_object_value_field(
+        obj,
+        b"ca",
+        x509_bool_f64(x509_basic_constraints_ca(&handle.cert)),
+    );
+
+    if let Some((spki_der, public_key)) = x509_rsa_public_key(&handle.cert) {
+        set_object_string_field(
+            obj,
+            b"modulus",
+            &hex::encode_upper(public_key.n().to_bytes_be()),
+        );
+        set_object_string_field(
+            obj,
+            b"exponent",
+            &format!("0x{}", public_key.e().to_str_radix(16)),
+        );
+        set_object_value_field(
+            obj,
+            b"pubkey",
+            nanbox_ptr(alloc_buffer_from_slice(&spki_der)),
+        );
+        set_object_value_field(obj, b"bits", public_key.n().bits() as f64);
+    } else {
+        set_undefined_field(obj, b"modulus");
+        set_undefined_field(obj, b"exponent");
+        set_undefined_field(obj, b"pubkey");
+        set_undefined_field(obj, b"bits");
+    }
+
+    set_object_string_field(
+        obj,
+        b"valid_from",
+        &x509_format_time(&tbs.validity.not_before),
+    );
+    set_object_string_field(obj, b"valid_to", &x509_format_time(&tbs.validity.not_after));
+    set_object_string_field(
+        obj,
+        b"fingerprint",
+        &x509_colon_hex(&Sha1::digest(&handle.der)),
+    );
+    set_object_string_field(
+        obj,
+        b"fingerprint256",
+        &x509_colon_hex(&Sha256::digest(&handle.der)),
+    );
+    set_object_string_field(
+        obj,
+        b"fingerprint512",
+        &x509_colon_hex(&Sha512::digest(&handle.der)),
+    );
+    match x509_extended_key_usage(&handle.cert) {
+        Some(values) => {
+            set_object_value_field(obj, b"ext_key_usage", x509_string_array_f64(&values))
+        }
+        None => set_undefined_field(obj, b"ext_key_usage"),
+    }
+    set_object_string_field(obj, b"serialNumber", &x509_serial_number_hex(&handle.cert));
+    set_object_value_field(
+        obj,
+        b"raw",
+        nanbox_ptr(alloc_buffer_from_slice(&handle.der)),
+    );
+    set_undefined_field(obj, b"asn1Curve");
+    set_undefined_field(obj, b"nistCurve");
+
+    nanbox_ptr(obj)
+}
+
 fn throw_x509_parse_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = perry_runtime::error::js_error_new_with_message(msg);
@@ -415,7 +557,7 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
     use sha2::{Digest, Sha256, Sha512};
     if matches!(
         property,
-        "toString" | "toJSON" | "checkHost" | "checkEmail" | "checkIP"
+        "toString" | "toJSON" | "toLegacyObject" | "checkHost" | "checkEmail" | "checkIP"
     ) {
         return dispatch_x509_method_property(handle, property);
     }
@@ -435,15 +577,12 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
         "validToDate" => perry_runtime::date::js_date_new_from_timestamp(x509_time_millis(
             &tbs.validity.not_after,
         )),
-        "serialNumber" => {
-            let hex_str: String = tbs
-                .serial_number
-                .as_bytes()
-                .iter()
-                .map(|b| format!("{:02X}", b))
-                .collect();
-            x509_string_f64(&hex_str)
-        }
+        "serialNumber" => x509_string_f64(&x509_serial_number_hex(&h.cert)),
+        "signatureAlgorithm" => match x509_signature_algorithm_name(&h.cert) {
+            Some(value) => x509_string_f64(value),
+            None => nanbox_undefined(),
+        },
+        "signatureAlgorithmOid" => x509_string_f64(&x509_signature_algorithm_oid(&h.cert)),
         "fingerprint" => {
             let digest = Sha1::digest(&h.der);
             x509_string_f64(&x509_colon_hex(&digest))
@@ -466,12 +605,7 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
         },
         "ca" => {
             // BasicConstraints (id-ce 2.5.29.19) cA flag.
-            let is_ca = x509_basic_constraints_ca(&h.cert);
-            f64::from_bits(if is_ca {
-                0x7FFC_0000_0000_0004
-            } else {
-                0x7FFC_0000_0000_0003
-            })
+            x509_bool_f64(x509_basic_constraints_ca(&h.cert))
         }
         "raw" => {
             let buf = alloc_buffer_from_slice(&h.der);
@@ -489,6 +623,7 @@ pub unsafe fn dispatch_x509_method(handle: i64, method: &str, args: &[f64]) -> f
     };
     match method {
         "toString" | "toJSON" => x509_string_f64(&x509_der_to_pem(&h.der)),
+        "toLegacyObject" => x509_to_legacy_object(h),
         "checkHost" => {
             match x509_check_host_value(&h.cert, &x509_required_string_arg(args, "name")) {
                 Some(value) => x509_string_f64(&value),
@@ -529,6 +664,7 @@ pub unsafe fn dispatch_x509_method_property(handle: i64, property: &str) -> f64 
     let name_bytes: &'static [u8] = match property {
         "toString" => b"toString",
         "toJSON" => b"toJSON",
+        "toLegacyObject" => b"toLegacyObject",
         "checkHost" => b"checkHost",
         "checkEmail" => b"checkEmail",
         "checkIP" => b"checkIP",
