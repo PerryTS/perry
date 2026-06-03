@@ -46,6 +46,22 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
             return false;
         }
         let obj_addr = obj as usize;
+        if obj_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+            let gc = gc_header_for(obj);
+            if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY
+                || (*gc).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+            {
+                let arr = crate::array::clean_arr_ptr(obj as *const crate::array::ArrayHeader);
+                if arr.is_null() {
+                    return false;
+                }
+                let key_str = crate::builtins::js_string_coerce(key);
+                if key_str.is_null() {
+                    return false;
+                }
+                return super::has_own_helpers::array_own_key_present(arr, key_str);
+            }
+        }
         if crate::closure::is_closure_ptr(obj_addr) {
             let Some(key_name) = key_to_rust_string(key) else {
                 return false;

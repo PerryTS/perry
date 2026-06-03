@@ -255,9 +255,9 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
     if arr.is_null() {
         return;
     }
+    let n = array_length_from_property_value_or_throw(new_length);
     let scope = crate::gc::RuntimeHandleScope::new();
     let _arr_handle = scope.root_raw_mut_ptr(arr);
-    let n = array_length_from_property_value_or_throw(new_length);
     unsafe {
         let cur = (*arr).length;
         if n < cur {

@@ -513,6 +513,114 @@ fn target_set(target: f64, key: f64, value: f64) {
     crate::object::js_object_set_field_by_name(obj_ptr, key_ptr, value);
 }
 
+fn raw_ptr_from_value(value: f64) -> Option<usize> {
+    let bits = value.to_bits();
+    let top16 = bits >> 48;
+    let raw = if top16 == (POINTER_TAG >> 48) {
+        bits & POINTER_MASK
+    } else if top16 == 0 && bits > 0x10000 {
+        bits
+    } else {
+        return None;
+    } as usize;
+    if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    Some(raw)
+}
+
+fn array_ptr_from_value(value: f64) -> Option<*mut crate::array::ArrayHeader> {
+    let raw = raw_ptr_from_value(value)?;
+    if crate::buffer::is_registered_buffer(raw)
+        || crate::typedarray::lookup_typed_array_kind(raw).is_some()
+        || !crate::object::is_valid_obj_ptr(raw as *const u8)
+    {
+        return None;
+    }
+    unsafe {
+        let gc = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY
+            || (*gc).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+        {
+            Some(raw as *mut crate::array::ArrayHeader)
+        } else {
+            None
+        }
+    }
+}
+
+fn key_is_length(key: f64) -> bool {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(key, &mut scratch) else {
+        return false;
+    };
+    if ptr.is_null() || len != 6 {
+        return false;
+    }
+    unsafe { std::slice::from_raw_parts(ptr, len as usize) == b"length" }
+}
+
+fn parse_canonical_nonnegative_i32(bytes: &[u8]) -> Option<i32> {
+    if bytes.is_empty() || (bytes.len() > 1 && bytes[0] == b'0') {
+        return None;
+    }
+    let mut value = 0u32;
+    for &byte in bytes {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add((byte - b'0') as u32)?;
+        if value > i32::MAX as u32 {
+            return None;
+        }
+    }
+    Some(value as i32)
+}
+
+fn integer_index_key(key: f64) -> Option<i32> {
+    let jsval = crate::value::JSValue::from_bits(key.to_bits());
+    if jsval.is_int32() {
+        let index = jsval.as_int32();
+        return (index >= 0).then_some(index);
+    }
+    if !key.is_nan() {
+        return (key.is_finite() && key >= 0.0 && key.fract() == 0.0 && key <= i32::MAX as f64)
+            .then_some(key as i32);
+    }
+
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(key, &mut scratch) else {
+        return None;
+    };
+    if ptr.is_null() {
+        return None;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+    parse_canonical_nonnegative_i32(bytes)
+}
+
+fn set_integer_indexed_exotic(target: f64, key: f64, value: f64) -> bool {
+    let Some(index) = integer_index_key(key) else {
+        return false;
+    };
+    let Some(raw) = raw_ptr_from_value(target) else {
+        return false;
+    };
+    if crate::buffer::is_registered_buffer(raw) {
+        crate::buffer::js_buffer_set(raw as *mut crate::buffer::BufferHeader, index, value as i32);
+        return true;
+    }
+    if crate::typedarray::lookup_typed_array_kind(raw).is_some() {
+        crate::typedarray::js_typed_array_set(
+            raw as *mut crate::typedarray::TypedArrayHeader,
+            index,
+            value,
+        );
+        return true;
+    }
+    false
+}
+
 #[derive(Clone, Copy)]
 enum OwnSetDescriptor {
     Data { writable: bool },
@@ -688,6 +796,18 @@ pub extern "C" fn js_put_value_set(
     receiver: f64,
     strict: i32,
 ) -> f64 {
+    if lookup(target).is_none() {
+        if set_integer_indexed_exotic(target, key, value) {
+            return value;
+        }
+        if target.to_bits() == receiver.to_bits() && key_is_length(key) {
+            if let Some(arr) = array_ptr_from_value(target) {
+                crate::array::js_array_set_length(arr, value);
+                return value;
+            }
+        }
+    }
+
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_handle = scope.root_nanbox_f64(target);
     let key_handle = scope.root_nanbox_f64(key);

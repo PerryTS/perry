@@ -56,3 +56,27 @@ expectThrow("set inf", () => {
 show("set inf length", typed.length);
 typed.length = 2;
 show("set valid length", typed.length);
+
+const dynamic: any = [1, 2, 3];
+expectThrow("dynamic set neg", () => {
+  dynamic.length = -1;
+});
+show("dynamic set neg length", dynamic.length);
+expectThrow("dynamic set frac", () => {
+  dynamic.length = 2.5;
+});
+show("dynamic set frac length", dynamic.length);
+expectThrow("dynamic set over", () => {
+  dynamic.length = 4294967296;
+});
+show("dynamic set over length", dynamic.length);
+expectThrow("dynamic set nan", () => {
+  dynamic.length = NaN;
+});
+show("dynamic set nan length", dynamic.length);
+expectThrow("dynamic set inf", () => {
+  dynamic.length = Infinity;
+});
+show("dynamic set inf length", dynamic.length);
+dynamic.length = 1;
+show("dynamic set valid length", dynamic.length);
