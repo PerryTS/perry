@@ -1330,15 +1330,16 @@ The FileHandle stream-iter tail is runtime-backed for the direct no-transform so
 
 ### node:sqlite
 
-**Gap APIs: 44** · Already covered: 8
+**Gap APIs: 42** · Already covered: 10
 
-#### Covered by Perry (#3183/#3184)
+#### Covered by Perry
 
 - `new DatabaseSync(path)` (incl. `:memory:`) → rusqlite connection
 - `db.exec(sql)` / `db.prepare(sql)` → `StatementSync` / `db.close()`
 - `stmt.run(...params)` → `{ changes, lastInsertRowid }`
 - `stmt.get(...params)` / `stmt.all(...params)` → row object(s)
 - `stmt.iterate(...params)` (array-backed) / `stmt.columns()` metadata
+- `db.enableLoadExtension(allow)` / `db.loadExtension(path)` extension-loading controls
 
 #### Missing from Perry
 
@@ -1347,8 +1348,6 @@ The FileHandle stream-iter tail is runtime-backed for the direct no-transform so
 - `db.applyChangeset(changeset[, options])`
 - `db.createSession([options])`
 - `db.createTagStore([maxSize])`
-- `db.enableLoadExtension(allow)`
-- `db.loadExtension(path)`
 - `db.location([dbName])`
 - `db.enableDefensive(active)`
 - `db.serialize([dbName])`
