@@ -390,6 +390,7 @@ pub fn linearize_body(
                 // skipping the body tail without going through the update.
                 let body_states_before = states.len();
                 let body_current_before = current.len();
+                let body_catches_before = catches.len();
                 let mut body_rewritten = body.clone();
                 rewrite_break_continue_in_stmts(&mut body_rewritten, state_id);
 
@@ -466,6 +467,14 @@ pub fn linearize_body(
                     after_loop_state,
                     update_state,
                 );
+                for route in &mut catches[body_catches_before..] {
+                    fix_break_continue_sentinels_in_stmts(
+                        &mut route.body,
+                        state_id,
+                        after_loop_state,
+                        update_state,
+                    );
+                }
             }
 
             // While-loop containing yield(s) - similar to for-loop
@@ -515,6 +524,7 @@ pub fn linearize_body(
                 // state (no separate update); `break` jumps to after_loop.
                 let while_states_before = states.len();
                 let while_current_before = current.len();
+                let while_catches_before = catches.len();
                 let mut while_body_rewritten = while_body.clone();
                 rewrite_break_continue_in_stmts(&mut while_body_rewritten, state_id);
 
@@ -561,6 +571,14 @@ pub fn linearize_body(
                     after_loop,
                     cond_state,
                 );
+                for route in &mut catches[while_catches_before..] {
+                    fix_break_continue_sentinels_in_stmts(
+                        &mut route.body,
+                        state_id,
+                        after_loop,
+                        cond_state,
+                    );
+                }
             }
 
             // Try-catch containing yield(s) — linearize the try body directly and

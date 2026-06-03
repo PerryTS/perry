@@ -792,6 +792,7 @@ fn build_async_catch_route_body(
     rewrite_hoisted_lets_in_stmts(&mut rewritten, hoisted_ids);
     rewrite_yield_to_await_in_stmts(&mut rewritten);
     rewrite_catch_returns_to_iter_result(&mut rewritten);
+    rewrite_dispatch_continues_to_iter_returns(&mut rewritten, state_id);
     body.extend(rewritten);
 
     body.push(Stmt::Expr(Expr::LocalSet(
@@ -851,6 +852,7 @@ fn build_async_catch_route_body_direct(
     rewrite_catch_returns_to_iter_result(&mut rewritten);
     rewrite_returns_to_labeled_break(&mut rewritten, step_done_label);
     rewrite_iter_results_in_stmts(&mut rewritten);
+    rewrite_dispatch_continues_to_labeled_break(&mut rewritten, state_id, step_done_label);
     body.extend(rewritten);
 
     body.push(Stmt::Expr(Expr::LocalSet(
@@ -858,6 +860,103 @@ fn build_async_catch_route_body_direct(
         Box::new(Expr::Number(route.post_catch_state as f64)),
     )));
     body
+}
+
+fn rewrite_dispatch_continues_to_iter_returns(stmts: &mut Vec<Stmt>, state_id: LocalId) {
+    rewrite_dispatch_continues(stmts, state_id, |out| {
+        out.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, false))));
+    });
+}
+
+fn rewrite_dispatch_continues_to_labeled_break(
+    stmts: &mut Vec<Stmt>,
+    state_id: LocalId,
+    step_done_label: &str,
+) {
+    let label = step_done_label.to_string();
+    rewrite_dispatch_continues(stmts, state_id, |out| {
+        out.push(Stmt::Expr(Expr::IterResultSet(
+            Box::new(Expr::Undefined),
+            false,
+        )));
+        out.push(Stmt::LabeledBreak(label.clone()));
+    });
+}
+
+fn rewrite_dispatch_continues<F>(stmts: &mut Vec<Stmt>, state_id: LocalId, mut replacement: F)
+where
+    F: FnMut(&mut Vec<Stmt>),
+{
+    rewrite_dispatch_continues_with(stmts, state_id, &mut replacement);
+}
+
+fn rewrite_dispatch_continues_with<F>(stmts: &mut Vec<Stmt>, state_id: LocalId, replacement: &mut F)
+where
+    F: FnMut(&mut Vec<Stmt>),
+{
+    let mut out = Vec::with_capacity(stmts.len());
+    let mut i = 0;
+    while i < stmts.len() {
+        let mut stmt = stmts[i].clone();
+        rewrite_dispatch_continues_in_stmt(&mut stmt, state_id, replacement);
+        out.push(stmt);
+
+        if i + 1 < stmts.len()
+            && is_state_assignment(&stmts[i], state_id)
+            && matches!(stmts[i + 1], Stmt::Continue)
+        {
+            replacement(&mut out);
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    *stmts = out;
+}
+
+fn rewrite_dispatch_continues_in_stmt<F>(stmt: &mut Stmt, state_id: LocalId, replacement: &mut F)
+where
+    F: FnMut(&mut Vec<Stmt>),
+{
+    match stmt {
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            rewrite_dispatch_continues_with(then_branch, state_id, replacement);
+            if let Some(else_branch) = else_branch {
+                rewrite_dispatch_continues_with(else_branch, state_id, replacement);
+            }
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            rewrite_dispatch_continues_with(body, state_id, replacement);
+            if let Some(catch) = catch {
+                rewrite_dispatch_continues_with(&mut catch.body, state_id, replacement);
+            }
+            if let Some(finally) = finally {
+                rewrite_dispatch_continues_with(finally, state_id, replacement);
+            }
+        }
+        Stmt::Switch { cases, .. } => {
+            for case in cases {
+                rewrite_dispatch_continues_with(&mut case.body, state_id, replacement);
+            }
+        }
+        Stmt::Labeled { body, .. } => {
+            rewrite_dispatch_continues_in_stmt(body, state_id, replacement);
+        }
+        Stmt::For { .. } | Stmt::While { .. } | Stmt::DoWhile { .. } => {}
+        _ => {}
+    }
+}
+
+fn is_state_assignment(stmt: &Stmt, state_id: LocalId) -> bool {
+    matches!(stmt, Stmt::Expr(Expr::LocalSet(id, _)) if *id == state_id)
 }
 
 /// Build the async step driver without allocating the `__iter` object.

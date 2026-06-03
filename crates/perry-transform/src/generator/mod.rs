@@ -439,3 +439,275 @@ pub fn transform_plain_async_closure_body(
     );
     synth.body
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn async_generator_catch_route_break_does_not_emit_bare_continue() {
+        let mut func = Function {
+            id: 1,
+            name: "stream".to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![Stmt::While {
+                condition: Expr::Bool(true),
+                body: vec![Stmt::Try {
+                    body: vec![Stmt::Expr(Expr::Yield {
+                        value: Some(Box::new(Expr::Number(1.0))),
+                        delegate: false,
+                    })],
+                    catch: Some(CatchClause {
+                        param: Some((10, "error".to_string())),
+                        body: vec![Stmt::Break],
+                    }),
+                    finally: None,
+                }],
+            }],
+            is_strict: true,
+            is_async: true,
+            is_generator: true,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        };
+
+        let mut next_local_id = 20;
+        let mut next_func_id = 20;
+        transform_generator_function(&mut func, &mut next_local_id, &mut next_func_id);
+
+        let throw_body = find_throw_closure_body(&func.body).expect("generated throw closure");
+        assert!(
+            !stmts_contain_continue(throw_body),
+            "lifted catch route should not leave a bare state-machine Continue in .throw()"
+        );
+        assert!(
+            !stmts_contain_number(throw_body, 1_000_001.0)
+                && !stmts_contain_number(throw_body, 1_000_002.0),
+            "lifted catch route should resolve break/continue sentinels before .throw() emission"
+        );
+    }
+
+    fn find_throw_closure_body(stmts: &[Stmt]) -> Option<&[Stmt]> {
+        for stmt in stmts {
+            if let Some(body) = find_throw_closure_body_in_stmt(stmt) {
+                return Some(body);
+            }
+        }
+        None
+    }
+
+    fn find_throw_closure_body_in_stmt(stmt: &Stmt) -> Option<&[Stmt]> {
+        match stmt {
+            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+                find_throw_closure_body_in_expr(expr)
+            }
+            Stmt::Let { init: Some(expr), .. } => find_throw_closure_body_in_expr(expr),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => find_throw_closure_body_in_expr(condition)
+                .or_else(|| find_throw_closure_body(then_branch))
+                .or_else(|| else_branch.as_deref().and_then(find_throw_closure_body)),
+            Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
+                find_throw_closure_body_in_expr(condition).or_else(|| find_throw_closure_body(body))
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => init
+                .as_ref()
+                .and_then(|stmt| find_throw_closure_body_in_stmt(stmt))
+                .or_else(|| condition.as_ref().and_then(find_throw_closure_body_in_expr))
+                .or_else(|| update.as_ref().and_then(find_throw_closure_body_in_expr))
+                .or_else(|| find_throw_closure_body(body)),
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => find_throw_closure_body(body)
+                .or_else(|| catch.as_ref().and_then(|c| find_throw_closure_body(&c.body)))
+                .or_else(|| finally.as_deref().and_then(find_throw_closure_body)),
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => find_throw_closure_body_in_expr(discriminant).or_else(|| {
+                cases
+                    .iter()
+                    .find_map(|case| find_throw_closure_body(&case.body))
+            }),
+            Stmt::Labeled { body, .. } => find_throw_closure_body_in_stmt(body),
+            _ => None,
+        }
+    }
+
+    fn find_throw_closure_body_in_expr(expr: &Expr) -> Option<&[Stmt]> {
+        match expr {
+            Expr::LinkGeneratorPrototype { obj, .. } => find_throw_closure_body_in_expr(obj),
+            Expr::Object(props) => props.iter().find_map(|(key, value)| {
+                if key == "throw" {
+                    if let Expr::Closure { body, .. } = value {
+                        return Some(body.as_slice());
+                    }
+                }
+                find_throw_closure_body_in_expr(value)
+            }),
+            Expr::Closure { body, .. } => find_throw_closure_body(body),
+            _ => {
+                let mut found = None;
+                perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                    if found.is_none() {
+                        found = find_throw_closure_body_in_expr(child);
+                    }
+                });
+                found
+            }
+        }
+    }
+
+    fn stmts_contain_continue(stmts: &[Stmt]) -> bool {
+        stmts.iter().any(stmt_contains_continue)
+    }
+
+    fn stmt_contains_continue(stmt: &Stmt) -> bool {
+        match stmt {
+            Stmt::Continue => true,
+            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+                expr_contains_continue(expr)
+            }
+            Stmt::Let { init: Some(expr), .. } => expr_contains_continue(expr),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => expr_contains_continue(condition)
+                || stmts_contain_continue(then_branch)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|branch| stmts_contain_continue(branch)),
+            Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
+                expr_contains_continue(condition) || stmts_contain_continue(body)
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => init
+                .as_ref()
+                .is_some_and(|stmt| stmt_contains_continue(stmt))
+                || condition.as_ref().is_some_and(expr_contains_continue)
+                || update.as_ref().is_some_and(expr_contains_continue)
+                || stmts_contain_continue(body),
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => stmts_contain_continue(body)
+                || catch
+                    .as_ref()
+                    .is_some_and(|catch| stmts_contain_continue(&catch.body))
+                || finally.as_ref().is_some_and(|body| stmts_contain_continue(body)),
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => expr_contains_continue(discriminant)
+                || cases.iter().any(|case| stmts_contain_continue(&case.body)),
+            Stmt::Labeled { body, .. } => stmt_contains_continue(body),
+            _ => false,
+        }
+    }
+
+    fn expr_contains_continue(expr: &Expr) -> bool {
+        if let Expr::Closure { body, .. } = expr {
+            return stmts_contain_continue(body);
+        }
+        let mut found = false;
+        perry_hir::walker::walk_expr_children(expr, &mut |child| {
+            if !found && expr_contains_continue(child) {
+                found = true;
+            }
+        });
+        found
+    }
+
+    fn stmts_contain_number(stmts: &[Stmt], needle: f64) -> bool {
+        stmts.iter().any(|stmt| stmt_contains_number(stmt, needle))
+    }
+
+    fn stmt_contains_number(stmt: &Stmt, needle: f64) -> bool {
+        match stmt {
+            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+                expr_contains_number(expr, needle)
+            }
+            Stmt::Let { init: Some(expr), .. } => expr_contains_number(expr, needle),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => expr_contains_number(condition, needle)
+                || stmts_contain_number(then_branch, needle)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|branch| stmts_contain_number(branch, needle)),
+            Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
+                expr_contains_number(condition, needle) || stmts_contain_number(body, needle)
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => init
+                .as_ref()
+                .is_some_and(|stmt| stmt_contains_number(stmt, needle))
+                || condition
+                    .as_ref()
+                    .is_some_and(|expr| expr_contains_number(expr, needle))
+                || update
+                    .as_ref()
+                    .is_some_and(|expr| expr_contains_number(expr, needle))
+                || stmts_contain_number(body, needle),
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => stmts_contain_number(body, needle)
+                || catch
+                    .as_ref()
+                    .is_some_and(|catch| stmts_contain_number(&catch.body, needle))
+                || finally
+                    .as_ref()
+                    .is_some_and(|body| stmts_contain_number(body, needle)),
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => expr_contains_number(discriminant, needle)
+                || cases
+                    .iter()
+                    .any(|case| stmts_contain_number(&case.body, needle)),
+            Stmt::Labeled { body, .. } => stmt_contains_number(body, needle),
+            _ => false,
+        }
+    }
+
+    fn expr_contains_number(expr: &Expr, needle: f64) -> bool {
+        if matches!(expr, Expr::Number(n) if *n == needle) {
+            return true;
+        }
+        let mut found = false;
+        perry_hir::walker::walk_expr_children(expr, &mut |child| {
+            if !found && expr_contains_number(child, needle) {
+                found = true;
+            }
+        });
+        found
+    }
+}
