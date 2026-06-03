@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1846 entries across 106 modules
+// Coverage: 1848 entries across 106 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1921,11 +1921,15 @@ declare module "lru-cache" {
 
 declare module "module" {
   /** stdlib */
+  export class Module { [key: string]: any; }
+  /** stdlib */
   export class SourceMap { [key: string]: any; }
   /** stdlib */
   export const builtinModules: any;
   /** stdlib */
   export const constants: any;
+  /** stdlib */
+  export function Module(...args: any[]): any;
   /** stdlib */
   export function SourceMap(...args: any[]): any;
   /** stdlib */
