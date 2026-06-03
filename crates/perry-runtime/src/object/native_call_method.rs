@@ -2593,13 +2593,12 @@ pub unsafe extern "C" fn js_native_call_method(
                                 //   Object.prototype.hasOwnProperty)` applied to a
                                 // builtin-prototype receiver (test262
                                 // `verifyProperty`).
-                                let field_ptr = crate::value::js_nanbox_get_pointer(
-                                    f64::from_bits(field_val.bits()),
-                                ) as usize;
+                                let field_ptr = crate::value::js_nanbox_get_pointer(f64::from_bits(
+                                    field_val.bits(),
+                                )) as usize;
                                 if crate::closure::is_closure_ptr(field_ptr)
                                     && super::global_this::is_self_redispatching_proto_thunk(
-                                        (*(field_ptr
-                                            as *const crate::closure::ClosureHeader))
+                                        (*(field_ptr as *const crate::closure::ClosureHeader))
                                             .func_ptr,
                                     )
                                 {
