@@ -28,6 +28,31 @@ fn undefined_value() -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+fn timer_handle_id(value: f64) -> Option<i64> {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if !js_value.is_pointer() {
+        return None;
+    }
+    let id = (value.to_bits() & crate::value::POINTER_MASK) as i64;
+    crate::timer::is_known_timer_id(id).then_some(id)
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_ref(value: f64) -> f64 {
+    if let Some(id) = timer_handle_id(value) {
+        crate::timer::js_timer_ref(id);
+    }
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_unref(value: f64) -> f64 {
+    if let Some(id) = timer_handle_id(value) {
+        crate::timer::js_timer_unref(id);
+    }
+    undefined_value()
+}
+
 fn is_function_value(value: f64) -> bool {
     let jv = JSValue::from_bits(value.to_bits());
     if jv.is_pointer() {
@@ -4048,3 +4073,7 @@ static KEEP_JS_PROCESS_SOURCE_MAPS_ENABLED: extern "C" fn() -> f64 = js_process_
 #[used]
 static KEEP_JS_PROCESS_SET_SOURCE_MAPS_ENABLED: extern "C" fn(f64) -> f64 =
     js_process_set_source_maps_enabled;
+#[used]
+static KEEP_JS_PROCESS_REF: extern "C" fn(f64) -> f64 = js_process_ref;
+#[used]
+static KEEP_JS_PROCESS_UNREF: extern "C" fn(f64) -> f64 = js_process_unref;

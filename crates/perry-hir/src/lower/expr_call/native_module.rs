@@ -161,13 +161,13 @@ pub(super) fn try_native_module_methods(
                             }
                         }
                         "ref" | "unref" => {
-                            // #1410: process.ref() / process.unref() — no-ops
-                            // in Node (process always keeps the loop alive,
-                            // so there's nothing to ref/unref). Return
-                            // undefined so callers that probe and invoke them
-                            // (e.g. graceful-shutdown helpers) don't crash on
-                            // "value is not a function".
-                            return Ok(Ok(Expr::Undefined));
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name.to_string(),
+                                args,
+                            }));
                         }
                         "setSourceMapsEnabled" => {
                             // #1400 / #3108: process.setSourceMapsEnabled(bool)

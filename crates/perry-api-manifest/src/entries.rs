@@ -3428,6 +3428,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "kill", false, None),
     method("process", "getBuiltinModule", false, None),
     method("process", "execve", false, None),
+    method("process", "ref", false, None),
+    method("process", "unref", false, None),
     method("process", "binding", false, None),
     method("process", "_linkedBinding", false, None),
     method("process", "dlopen", false, None),

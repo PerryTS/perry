@@ -1734,6 +1734,7 @@ const PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"prependListener",
     b"prependOnceListener",
     b"rawListeners",
+    b"ref",
     b"release",
     b"removeAllListeners",
     b"removeListener",
@@ -1744,6 +1745,7 @@ const PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"setSourceMapsEnabled",
     b"sourceMapsEnabled",
     b"title",
+    b"unref",
     b"uptime",
     b"version",
     b"versions",
@@ -1784,6 +1786,8 @@ const PROCESS_DEFAULT_KEYS: &[&[u8]] = &[
     b"env",
     b"eventNames",
     b"execve",
+    b"ref",
+    b"unref",
     b"execArgv",
     b"execPath",
     b"features",
@@ -3526,6 +3530,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ) => Some(0),
         ("process", "_fatalException") => Some(2),
         ("process", "execve") => Some(1),
+        ("process", "ref" | "unref") => Some(1),
         ("process", "setSourceMapsEnabled") => Some(1),
         (
             "inspector.Network",
@@ -4628,6 +4633,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("process", "getMaxListeners")
             | ("process", "getBuiltinModule")
             | ("process", "execve")
+            | ("process", "ref")
+            | ("process", "unref")
             | ("process", "binding")
             | ("process", "_linkedBinding")
             | ("process", "dlopen")

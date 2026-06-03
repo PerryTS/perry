@@ -566,6 +566,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "setSourceMapsEnabled") => {
             crate::process::js_process_set_source_maps_enabled(arg(0))
         }
+        ("process", "ref") => crate::process::js_process_ref(arg(0)),
+        ("process", "unref") => crate::process::js_process_unref(arg(0)),
         ("process", "hasUncaughtExceptionCaptureCallback") => {
             crate::process::js_process_has_uncaught_exception_capture_callback()
         }
