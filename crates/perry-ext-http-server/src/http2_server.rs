@@ -28,14 +28,15 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder as AutoBuilder;
 use lazy_static::lazy_static;
 use perry_ffi::{
-    alloc_buffer, alloc_string, get_handle, get_handle_mut, iter_handles_of, register_handle,
-    JsClosure, JsValue, ObjectHeader, RawClosureHeader, StringHeader,
+    alloc_buffer, alloc_string, get_handle, get_handle_mut, iter_handle_ids_of, iter_handles_of,
+    register_handle, JsClosure, JsValue, ObjectHeader, RawClosureHeader, StringHeader,
 };
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio_rustls::TlsAcceptor;
 
 use crate::ensure_gc_scanner_registered;
+use crate::http2_session_settings::Http2SettingsState;
 use crate::request::{
     alloc_incoming_message, emit_no_arg_to_listeners, handle_to_pointer_f64, with_implicit_this,
     IncomingMessage,
@@ -49,7 +50,7 @@ use crate::tls::{
 use crate::types::{
     extract_host, extract_port, js_promise_run_microtasks, js_value_is_closure,
     jsvalue_to_body_bytes, jsvalue_to_owned_string, read_string_header, POINTER_TAG, PTR_MASK,
-    STRING_TAG, TAG_UNDEFINED,
+    STRING_TAG, TAG_NULL, TAG_UNDEFINED,
 };
 
 extern "C" {
@@ -108,10 +109,16 @@ pub struct Http2SessionHandle {
     pub connecting: bool,
     pub closed: bool,
     pub destroyed: bool,
+    pub pending_settings_ack: bool,
     pub authority: String,
+    pub local_settings: Http2SettingsState,
+    pub remote_settings: Http2SettingsState,
+    pub local_window_size: i64,
     pub sender: Arc<Mutex<Option<h2::client::SendRequest<Bytes>>>>,
     pub listeners: HashMap<String, Vec<i64>>,
     pub close_callbacks: Vec<i64>,
+    pub pending_callbacks: Vec<i64>,
+    pub timeout_callback: i64,
 }
 
 pub struct Http2StreamHandle {
@@ -154,6 +161,27 @@ enum Http2PendingEvent {
     ClientClose {
         session_handle: i64,
         callback: i64,
+    },
+    SessionSettingsEvent {
+        session_handle: i64,
+        event: &'static str,
+        settings: Http2SettingsState,
+    },
+    SessionSettingsCallback {
+        session_handle: i64,
+        callback: i64,
+        settings: Http2SettingsState,
+    },
+    SessionPingCallback {
+        session_handle: i64,
+        callback: i64,
+        payload: Vec<u8>,
+    },
+    SessionGoaway {
+        session_handle: i64,
+        code: f64,
+        last_stream_id: f64,
+        opaque_data: Vec<u8>,
     },
     ClientError {
         handle: i64,
@@ -211,9 +239,38 @@ fn bool_value(value: bool) -> f64 {
     f64::from_bits(JsValue::from_bool(value).bits())
 }
 
+fn null_value() -> f64 {
+    f64::from_bits(TAG_NULL)
+}
+
 fn string_value(value: &str) -> f64 {
     let header = alloc_string(value);
     f64::from_bits(STRING_TAG | (header.as_raw() as u64 & PTR_MASK))
+}
+
+fn settings_value(settings: &Http2SettingsState) -> f64 {
+    let text = alloc_string(&settings.to_json());
+    unsafe { f64::from_bits(js_json_parse(text.as_raw())) }
+}
+
+fn session_state_value(session: &Http2SessionHandle) -> f64 {
+    let json = format!(
+        "{{\"localWindowSize\":{},\"effectiveLocalWindowSize\":{},\"nextStreamID\":{},\"lastProcStreamID\":0,\"remoteWindowSize\":65535,\"outboundQueueSize\":0,\"deflateDynamicTableSize\":0,\"inflateDynamicTableSize\":0}}",
+        session.local_window_size,
+        session.local_window_size,
+        if session.session_type == 1 { 1 } else { 2 }
+    );
+    let text = alloc_string(&json);
+    unsafe { f64::from_bits(js_json_parse(text.as_raw())) }
+}
+
+fn buffer_value_from_bytes(bytes: &[u8]) -> f64 {
+    let buf = alloc_buffer(bytes);
+    if buf.is_null() {
+        f64::from_bits(TAG_UNDEFINED)
+    } else {
+        f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK))
+    }
 }
 
 fn bind_handle_method(handle: i64, name: &'static [u8]) -> f64 {
@@ -259,6 +316,32 @@ fn call1(callback: i64, arg: f64) {
     }
 }
 
+fn call2(callback: i64, arg0: f64, arg1: f64) {
+    if callback == 0 {
+        return;
+    }
+    unsafe {
+        let raw = callback as *const RawClosureHeader;
+        let closure = JsClosure::from_raw(raw);
+        if !closure.is_null() {
+            let _ = closure.call2(arg0, arg1);
+        }
+    }
+}
+
+fn call3(callback: i64, arg0: f64, arg1: f64, arg2: f64) {
+    if callback == 0 {
+        return;
+    }
+    unsafe {
+        let raw = callback as *const RawClosureHeader;
+        let closure = JsClosure::from_raw(raw);
+        if !closure.is_null() {
+            let _ = closure.call3(arg0, arg1, arg2);
+        }
+    }
+}
+
 fn register_server_session(server_handle: i64) -> i64 {
     let session_handle = register_handle(Http2SessionHandle {
         session_type: 0,
@@ -267,10 +350,16 @@ fn register_server_session(server_handle: i64) -> i64 {
         connecting: false,
         closed: false,
         destroyed: false,
+        pending_settings_ack: true,
         authority: String::new(),
+        local_settings: Http2SettingsState::default(),
+        remote_settings: Http2SettingsState::default(),
+        local_window_size: 65_535,
         sender: Arc::new(Mutex::new(None)),
         listeners: HashMap::new(),
         close_callbacks: Vec::new(),
+        pending_callbacks: Vec::new(),
+        timeout_callback: 0,
     });
     let has_session_listener = get_handle::<Http2SecureServer>(server_handle)
         .and_then(|s| s.base.listeners.get("session"))
@@ -869,6 +958,71 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                     session.close_callbacks.retain(|cb| *cb != callback);
                 }
             }
+            Http2PendingEvent::SessionSettingsEvent {
+                session_handle,
+                event,
+                settings,
+            } => {
+                let listeners = get_handle::<Http2SessionHandle>(session_handle)
+                    .and_then(|s| s.listeners.get(event).cloned())
+                    .unwrap_or_default();
+                let arg = settings_value(&settings);
+                for cb in listeners {
+                    call1(cb, arg);
+                    unsafe {
+                        js_promise_run_microtasks();
+                    }
+                }
+            }
+            Http2PendingEvent::SessionSettingsCallback {
+                session_handle,
+                callback,
+                settings,
+            } => {
+                call2(callback, null_value(), settings_value(&settings));
+                if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
+                    session.pending_callbacks.retain(|cb| *cb != callback);
+                    session.pending_settings_ack = false;
+                }
+                unsafe {
+                    js_promise_run_microtasks();
+                }
+            }
+            Http2PendingEvent::SessionPingCallback {
+                session_handle,
+                callback,
+                payload,
+            } => {
+                call3(
+                    callback,
+                    null_value(),
+                    0.0,
+                    buffer_value_from_bytes(&payload),
+                );
+                if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
+                    session.pending_callbacks.retain(|cb| *cb != callback);
+                }
+                unsafe {
+                    js_promise_run_microtasks();
+                }
+            }
+            Http2PendingEvent::SessionGoaway {
+                session_handle,
+                code,
+                last_stream_id,
+                opaque_data,
+            } => {
+                let listeners = get_handle::<Http2SessionHandle>(session_handle)
+                    .and_then(|s| s.listeners.get("goaway").cloned())
+                    .unwrap_or_default();
+                let opaque = buffer_value_from_bytes(&opaque_data);
+                for cb in listeners {
+                    call3(cb, code, last_stream_id, opaque);
+                    unsafe {
+                        js_promise_run_microtasks();
+                    }
+                }
+            }
             Http2PendingEvent::ClientError { handle, message } => {
                 let listeners = get_handle::<Http2SessionHandle>(handle)
                     .and_then(|s| s.listeners.get("error").cloned())
@@ -920,10 +1074,16 @@ pub unsafe extern "C" fn js_node_http2_connect(
         connecting: true,
         closed: false,
         destroyed: false,
+        pending_settings_ack: true,
         authority: host_port,
+        local_settings: Http2SettingsState::default(),
+        remote_settings: Http2SettingsState::default(),
+        local_window_size: 65_535,
         sender: sender_slot.clone(),
         listeners,
         close_callbacks: Vec::new(),
+        pending_callbacks: Vec::new(),
+        timeout_callback: 0,
     });
 
     perry_ffi::spawn_blocking(move || {
@@ -1184,6 +1344,148 @@ fn start_client_request(stream_handle: i64, body: Vec<u8>) {
     });
 }
 
+fn numeric_value(value: f64) -> Option<f64> {
+    let v = JsValue::from_bits(value.to_bits());
+    if v.is_int32() || v.is_number() {
+        Some(v.to_number())
+    } else {
+        None
+    }
+}
+
+fn queue_session_ping(handle: i64, args: &[f64]) -> f64 {
+    let first_callback = args
+        .first()
+        .copied()
+        .map(|v| closure_arg(Some(v)))
+        .unwrap_or(0);
+    let second_callback = args
+        .get(1)
+        .copied()
+        .map(|v| closure_arg(Some(v)))
+        .unwrap_or(0);
+    let (callback, payload_value) = if second_callback != 0 {
+        (second_callback, args.first().copied())
+    } else {
+        (first_callback, None)
+    };
+    if callback == 0 {
+        return bool_value(false);
+    }
+    let mut payload = payload_value
+        .and_then(jsvalue_to_body_bytes)
+        .unwrap_or_else(|| vec![0; 8]);
+    if payload.len() != 8 {
+        payload.resize(8, 0);
+        payload.truncate(8);
+    }
+    if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
+        session.pending_callbacks.push(callback);
+    }
+    push_h2_event(Http2PendingEvent::SessionPingCallback {
+        session_handle: handle,
+        callback,
+        payload,
+    });
+    bool_value(true)
+}
+
+fn queue_session_settings(handle: i64, args: &[f64]) -> f64 {
+    let settings_value_arg = args
+        .first()
+        .copied()
+        .unwrap_or(f64::from_bits(TAG_UNDEFINED));
+    let callback = args
+        .get(1)
+        .copied()
+        .map(|v| closure_arg(Some(v)))
+        .unwrap_or(0);
+    let mut settings = get_handle::<Http2SessionHandle>(handle)
+        .map(|session| session.local_settings.clone())
+        .unwrap_or_default();
+    settings.apply_value(settings_value_arg);
+    if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
+        session.local_settings = settings.clone();
+        session.pending_settings_ack = true;
+        if callback != 0 {
+            session.pending_callbacks.push(callback);
+        }
+    }
+
+    let caller_type = get_handle::<Http2SessionHandle>(handle)
+        .map(|session| session.session_type)
+        .unwrap_or(1);
+    let peer_type = if caller_type == 1 { 0 } else { 1 };
+    let mut peer_ids = Vec::new();
+    iter_handle_ids_of::<Http2SessionHandle, _>(|peer_id| {
+        if get_handle::<Http2SessionHandle>(peer_id)
+            .map(|session| {
+                session.session_type == peer_type && !session.closed && !session.destroyed
+            })
+            .unwrap_or(false)
+        {
+            peer_ids.push(peer_id);
+        }
+    });
+    for peer_id in peer_ids {
+        if let Some(session) = get_handle_mut::<Http2SessionHandle>(peer_id) {
+            session.remote_settings = settings.clone();
+            push_h2_event(Http2PendingEvent::SessionSettingsEvent {
+                session_handle: peer_id,
+                event: "remoteSettings",
+                settings: settings.clone(),
+            });
+        }
+    }
+    if callback != 0 {
+        push_h2_event(Http2PendingEvent::SessionSettingsCallback {
+            session_handle: handle,
+            callback,
+            settings: settings.clone(),
+        });
+    }
+    push_h2_event(Http2PendingEvent::SessionSettingsEvent {
+        session_handle: handle,
+        event: "localSettings",
+        settings,
+    });
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+fn queue_session_goaway(handle: i64, args: &[f64]) -> f64 {
+    let code = args.first().and_then(|v| numeric_value(*v)).unwrap_or(0.0);
+    let last_stream_id = args.get(1).and_then(|v| numeric_value(*v)).unwrap_or(0.0);
+    let opaque_data = args
+        .get(2)
+        .copied()
+        .and_then(jsvalue_to_body_bytes)
+        .unwrap_or_default();
+    let caller_type = get_handle::<Http2SessionHandle>(handle)
+        .map(|session| session.session_type)
+        .unwrap_or(1);
+    let peer_type = if caller_type == 1 { 0 } else { 1 };
+    let mut peer_ids = Vec::new();
+    iter_handle_ids_of::<Http2SessionHandle, _>(|peer_id| {
+        if get_handle::<Http2SessionHandle>(peer_id)
+            .map(|session| {
+                session.session_type == peer_type && !session.closed && !session.destroyed
+            })
+            .unwrap_or(false)
+        {
+            peer_ids.push(peer_id);
+        }
+    });
+    for peer_id in peer_ids {
+        push_h2_event(Http2PendingEvent::SessionGoaway {
+            session_handle: peer_id,
+            code,
+            last_stream_id,
+            opaque_data: opaque_data.clone(),
+        });
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 #[no_mangle]
 pub extern "C" fn js_ext_http2_session_is_handle(handle: i64) -> i32 {
     if get_handle::<Http2SessionHandle>(handle).is_some() {
@@ -1282,7 +1584,29 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_method(
             }
             self_ref
         }
-        "ref" | "unref" | "setTimeout" | "ping" | "settings" | "goaway" => self_ref,
+        "ref" | "unref" => undef,
+        "setLocalWindowSize" => {
+            if let Some(window_size) = args.first().and_then(|v| numeric_value(*v)) {
+                if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
+                    session.local_window_size = window_size as i64;
+                }
+            }
+            undef
+        }
+        "setTimeout" => {
+            let callback = args
+                .get(1)
+                .copied()
+                .map(|v| closure_arg(Some(v)))
+                .unwrap_or(0);
+            if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
+                session.timeout_callback = callback;
+            }
+            self_ref
+        }
+        "ping" => queue_session_ping(handle, args),
+        "settings" => queue_session_settings(handle, args),
+        "goaway" => queue_session_goaway(handle, args),
         _ => undef,
     }
 }
@@ -1305,6 +1629,7 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_property(
         "ref" => bind_handle_method(handle, b"ref"),
         "unref" => bind_handle_method(handle, b"unref"),
         "setTimeout" => bind_handle_method(handle, b"setTimeout"),
+        "setLocalWindowSize" => bind_handle_method(handle, b"setLocalWindowSize"),
         "ping" => bind_handle_method(handle, b"ping"),
         "settings" => bind_handle_method(handle, b"settings"),
         "goaway" => bind_handle_method(handle, b"goaway"),
@@ -1334,7 +1659,21 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_property(
         "alpnProtocol" => get_handle::<Http2SessionHandle>(handle)
             .map(|s| string_value(&s.alpn_protocol))
             .unwrap_or(undef),
-        "localSettings" | "remoteSettings" | "state" | "socket" => empty_object_value(),
+        "pendingSettingsAck" => bool_value(
+            get_handle::<Http2SessionHandle>(handle)
+                .map(|s| s.pending_settings_ack)
+                .unwrap_or(false),
+        ),
+        "localSettings" => get_handle::<Http2SessionHandle>(handle)
+            .map(|s| settings_value(&s.local_settings))
+            .unwrap_or_else(empty_object_value),
+        "remoteSettings" => get_handle::<Http2SessionHandle>(handle)
+            .map(|s| settings_value(&s.remote_settings))
+            .unwrap_or_else(empty_object_value),
+        "state" => get_handle::<Http2SessionHandle>(handle)
+            .map(session_state_value)
+            .unwrap_or_else(empty_object_value),
+        "socket" => empty_object_value(),
         _ => undef,
     }
 }

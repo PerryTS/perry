@@ -54,6 +54,7 @@ use perry_ffi::{gc_register_mutable_root_scanner_named, iter_handles_of_mut, GcR
 
 mod handle_dispatch;
 mod http2_server;
+mod http2_session_settings;
 mod http2_settings;
 mod https_server;
 mod request;
@@ -146,6 +147,10 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
         for cb in session.close_callbacks.iter_mut() {
             visitor.visit_i64_slot(cb);
         }
+        for cb in session.pending_callbacks.iter_mut() {
+            visitor.visit_i64_slot(cb);
+        }
+        visitor.visit_i64_slot(&mut session.timeout_callback);
     });
     iter_handles_of_mut::<Http2StreamHandle, _>(|stream| {
         scan_listener_roots(&mut stream.listeners, visitor);
