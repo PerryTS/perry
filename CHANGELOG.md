@@ -2,6 +2,17 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1112 — release: cut v0.5.1112
+
+Distribution release tagging the accumulated work since `v0.5.1028` (1198
+commits: 852 fixes, 42 features, plus tests/docs/chore). No code changes in
+this commit — it is a clean version-bump checkpoint so the release tag points
+at a freshly-CI'd `main` HEAD. Highlights since the last published tag span
+Node.js builtin parity (crypto/webcrypto, http/http2, streams, vm, dgram,
+cluster, path), reflective builtin-prototype brand checks (#3662 family),
+typed-array prototype/constructor coverage, web stream codec constructors, and
+generational-GC evacuation fixes.
+
 ## v0.5.1111 — refactor(codegen): split native_table/http.rs (file-size gate)
 
 `crates/perry-codegen/src/lower_call/native_table/http.rs` had grown to 2024
