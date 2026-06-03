@@ -1749,13 +1749,7 @@ The FileHandle stream-iter tail is runtime-backed for the direct no-transform so
 
 ### node:wasi
 
-**Gap APIs: 3** · Already covered: 3
-
-#### Missing from Perry
-
-- `wasi.start(instance)`
-- `wasi.initialize(instance)`
-- `wasi.finalizeBindings(instance[, options])`
+**Gap APIs: 0** · Already covered: 6
 
 #### Covered (sampled)
 
@@ -1764,6 +1758,9 @@ The FileHandle stream-iter tail is runtime-backed for the direct no-transform so
 | `new WASI([options])` | `manifest:wasi.WASI`; `test-parity/node-suite/wasi/classes/constructor-validation.ts` |
 | `wasi.getImportObject()` | `manifest:wasi.getImportObject`; `test-parity/node-suite/wasi/classes/import-object.ts` |
 | `wasi.wasiImport` | `manifest:wasi.wasiImport`; `test-parity/node-suite/wasi/classes/import-object.ts` |
+| `wasi.start(instance)` | `manifest:wasi.start`; `test-parity/node-suite/wasi/lifecycle/start-initialize-finalize.ts` |
+| `wasi.initialize(instance)` | `manifest:wasi.initialize`; `test-parity/node-suite/wasi/lifecycle/start-initialize-finalize.ts` |
+| `wasi.finalizeBindings(instance[, options])` | `manifest:wasi.finalizeBindings`; `test-parity/node-suite/wasi/lifecycle/start-initialize-finalize.ts` |
 
 ### node:module
 
