@@ -186,6 +186,10 @@ crates/perry-stdlib/src/sqlite.rs
 # Node core native table crossed the limit on current main after namespace
 # alias additions; split per namespace in the native-table cleanup tracked in #1435.
 crates/perry-codegen/src/lower_call/native_table/node_core.rs
+# HTTP/HTTPS native table crossed the limit on current main after ClientRequest
+# header-state surface additions; split per client/server family in the
+# native-table cleanup tracked under #1435.
+crates/perry-codegen/src/lower_call/native_table/http.rs
 # globalThis constructor/prototype registry is over the limit on current main;
 # splitting constructor tables from property dispatch is tracked under #1435.
 crates/perry-runtime/src/object/global_this.rs
