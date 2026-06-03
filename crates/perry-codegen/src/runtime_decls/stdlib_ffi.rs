@@ -1283,7 +1283,22 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_stream_pipeline", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_finished", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_duplex_pair", DOUBLE, &[DOUBLE]);
-    // #1540: Readable/Writable .toWeb / .fromWeb — return fresh Duplex stubs.
+    // #2521: Readable/Writable/Duplex .toWeb / .fromWeb adapters.
+    module.declare_function("js_node_stream_readable_to_web", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_node_stream_writable_to_web", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_node_stream_duplex_to_web", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_node_stream_readable_from_web",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_stream_writable_from_web",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_node_stream_duplex_from_web", DOUBLE, &[DOUBLE, DOUBLE]);
+    // Generic fallbacks for call sites without preserved stream class context.
     module.declare_function("js_node_stream_to_web", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_from_web", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_method_readable_aborted", DOUBLE, &[I64]);

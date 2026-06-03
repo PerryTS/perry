@@ -2752,6 +2752,19 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         perry_runtime::fs::js_register_filehandle_readable_web_stream_factory(
             crate::streams::js_readable_stream_deferred_byte_source,
         );
+        perry_runtime::node_stream::js_register_node_stream_web_adapter_callbacks(
+            crate::streams::js_readable_stream_new,
+            crate::streams::js_readable_stream_controller_enqueue,
+            crate::streams::js_readable_stream_controller_close,
+            crate::streams::js_readable_stream_controller_error,
+            crate::streams::js_writable_stream_new,
+            crate::streams::js_readable_stream_get_reader,
+            crate::streams::js_reader_read,
+            crate::streams::js_writable_stream_get_writer,
+            crate::streams::js_writer_write,
+            crate::streams::js_writer_close,
+            crate::streams::js_writer_abort,
+        );
     }
 
     // `instanceof` for WHATWG fetch handles (Response/Request/Headers/Blob).

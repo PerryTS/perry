@@ -1104,14 +1104,36 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
-    // #1540: Web-stream interop. Node exposes static helpers on
-    // both Readable and Writable for converting to/from WHATWG
-    // streams (Readable.toWeb / Readable.fromWeb /
-    // Writable.toWeb / Writable.fromWeb). Perry returns a fresh
-    // Duplex stub for either direction (data isn't propagated
-    // between Node and WHATWG universes yet); typeof + truthy +
-    // method-existence checks pass. Real adapters are tracked
-    // separately.
+    // #2521: Web-stream interop. Class-specific rows route to real
+    // Node/WHATWG adapters; generic rows below remain as shape fallbacks when
+    // HIR did not preserve the stream class receiver.
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "toWeb",
+        class_filter: Some("Readable"),
+        runtime: "js_node_stream_readable_to_web",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "toWeb",
+        class_filter: Some("Writable"),
+        runtime: "js_node_stream_writable_to_web",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "toWeb",
+        class_filter: Some("Duplex"),
+        runtime: "js_node_stream_duplex_to_web",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     NativeModSig {
         module: "stream",
         has_receiver: false,
@@ -1119,6 +1141,33 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_stream_to_web",
         args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "fromWeb",
+        class_filter: Some("Readable"),
+        runtime: "js_node_stream_readable_from_web",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "fromWeb",
+        class_filter: Some("Writable"),
+        runtime: "js_node_stream_writable_from_web",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "fromWeb",
+        class_filter: Some("Duplex"),
+        runtime: "js_node_stream_duplex_from_web",
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
