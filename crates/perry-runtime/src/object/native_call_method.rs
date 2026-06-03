@@ -2577,6 +2577,34 @@ pub unsafe extern "C" fn js_native_call_method(
                             let key_val = crate::array::js_array_get(keys, i as u32);
                             if crate::string::js_string_key_matches_bytes(key_val, method_bytes) {
                                 let field_val = js_object_get_field(obj as *mut _, i as u32);
+                                // #4276: a builtin prototype object
+                                // (`Object.prototype`, `Error.prototype`, every
+                                // `NativeError.prototype`) carries its own
+                                // `hasOwnProperty` as a thunk that just re-calls
+                                // `js_native_call_method(this, "hasOwnProperty")`.
+                                // Invoking it here would re-enter this same field
+                                // scan, re-find the field, and recurse until the
+                                // call-depth guard bails — returning the empty
+                                // `NULL_OBJECT_BYTES` sentinel (`[object Object]`).
+                                // Skip such self-dispatching proto thunks so the
+                                // real `"hasOwnProperty"` arm below computes the
+                                // answer. Reached via the uncurry-this idiom
+                                // `Function.prototype.call.bind(
+                                //   Object.prototype.hasOwnProperty)` applied to a
+                                // builtin-prototype receiver (test262
+                                // `verifyProperty`).
+                                let field_ptr = crate::value::js_nanbox_get_pointer(
+                                    f64::from_bits(field_val.bits()),
+                                ) as usize;
+                                if crate::closure::is_closure_ptr(field_ptr)
+                                    && super::global_this::is_self_redispatching_proto_thunk(
+                                        (*(field_ptr
+                                            as *const crate::closure::ClosureHeader))
+                                            .func_ptr,
+                                    )
+                                {
+                                    break;
+                                }
                                 // Always try the field as a callable —
                                 // `js_native_call_value` validates
                                 // CLOSURE_MAGIC internally and safely

@@ -1048,6 +1048,22 @@ extern "C" fn object_prototype_has_own_property_thunk(
     }
 }
 
+/// #4276: `object_prototype_has_own_property_thunk` re-dispatches through
+/// `js_native_call_method(this, "hasOwnProperty")`. When the receiver is a
+/// builtin prototype object (`Object.prototype`, `Error.prototype`, every
+/// `NativeError.prototype`, …) that carries this thunk as an OWN field, the
+/// dispatcher's own-field scan would re-find the field and call the thunk
+/// again, recursing until the call-depth guard bails and returns the empty
+/// `NULL_OBJECT_BYTES` sentinel — surfacing as `[object Object]`. The field
+/// scan in `js_native_call_method` consults this predicate to skip the
+/// self-dispatching thunk and fall through to the real `"hasOwnProperty"`
+/// arm instead. Exposed by the "uncurry-this" idiom
+/// `Function.prototype.call.bind(Object.prototype.hasOwnProperty)` applied to a
+/// builtin-prototype receiver (test262's `propertyHelper.js` `verifyProperty`).
+pub(crate) fn is_self_redispatching_proto_thunk(func_ptr: *const u8) -> bool {
+    func_ptr == object_prototype_has_own_property_thunk as *const u8
+}
+
 extern "C" fn object_prototype_property_is_enumerable_thunk(
     _closure: *const crate::closure::ClosureHeader,
     key: f64,
