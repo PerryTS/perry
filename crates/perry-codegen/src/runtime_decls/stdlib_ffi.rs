@@ -1547,6 +1547,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
 
     // ========== Atomics ==========
     module.declare_function("js_atomics_load", DOUBLE, &[PTR, DOUBLE, DOUBLE]);
+    module.declare_function("js_atomics_is_lock_free", DOUBLE, &[PTR, DOUBLE]);
     module.declare_function("js_atomics_store", DOUBLE, &[PTR, DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_atomics_add", DOUBLE, &[PTR, DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_atomics_sub", DOUBLE, &[PTR, DOUBLE, DOUBLE, DOUBLE]);
@@ -1560,6 +1561,12 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     );
     module.declare_function(
         "js_atomics_compare_exchange",
+        DOUBLE,
+        &[PTR, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_atomics_notify", DOUBLE, &[PTR, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_atomics_wait",
         DOUBLE,
         &[PTR, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );

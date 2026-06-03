@@ -303,6 +303,7 @@ pub(crate) fn is_builtin_static_function_member(namespace: &str, member: &str) -
         "Atomics" => matches!(
             member,
             "load"
+                | "isLockFree"
                 | "store"
                 | "add"
                 | "sub"
@@ -311,6 +312,8 @@ pub(crate) fn is_builtin_static_function_member(namespace: &str, member: &str) -
                 | "xor"
                 | "exchange"
                 | "compareExchange"
+                | "notify"
+                | "wait"
         ),
         "WebAssembly" => matches!(
             member,
@@ -426,8 +429,11 @@ pub(crate) fn builtin_static_function_length(namespace: &str, member: &str) -> O
         },
         "Atomics" => match member {
             "load" => 2,
+            "isLockFree" => 1,
             "store" | "add" | "sub" | "and" | "or" | "xor" | "exchange" => 3,
             "compareExchange" => 4,
+            "notify" => 3,
+            "wait" => 4,
             _ => return None,
         },
         "WebAssembly" => match member {

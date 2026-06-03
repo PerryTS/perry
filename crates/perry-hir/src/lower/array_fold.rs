@@ -270,7 +270,18 @@ pub(crate) fn is_known_json_static_method(name: &str) -> bool {
 pub(crate) fn is_known_atomics_static_method(name: &str) -> bool {
     matches!(
         name,
-        "load" | "store" | "add" | "sub" | "and" | "or" | "xor" | "exchange" | "compareExchange"
+        "load"
+            | "isLockFree"
+            | "store"
+            | "add"
+            | "sub"
+            | "and"
+            | "or"
+            | "xor"
+            | "exchange"
+            | "compareExchange"
+            | "notify"
+            | "wait"
     )
 }
 

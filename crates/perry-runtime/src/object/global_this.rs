@@ -3365,6 +3365,11 @@ fn install_reflect_namespace_members(ns_obj: *mut ObjectHeader) {
 fn install_atomics_namespace_members(ns_obj: *mut ObjectHeader) {
     for (name, func_ptr, arity) in [
         ("load", crate::atomics::js_atomics_load as *const u8, 2),
+        (
+            "isLockFree",
+            crate::atomics::js_atomics_is_lock_free as *const u8,
+            1,
+        ),
         ("store", crate::atomics::js_atomics_store as *const u8, 3),
         ("add", crate::atomics::js_atomics_add as *const u8, 3),
         ("sub", crate::atomics::js_atomics_sub as *const u8, 3),
@@ -3381,6 +3386,8 @@ fn install_atomics_namespace_members(ns_obj: *mut ObjectHeader) {
             crate::atomics::js_atomics_compare_exchange as *const u8,
             4,
         ),
+        ("notify", crate::atomics::js_atomics_notify as *const u8, 3),
+        ("wait", crate::atomics::js_atomics_wait as *const u8, 4),
     ] {
         install_proto_method(ns_obj, name, func_ptr, arity);
     }

@@ -29,6 +29,7 @@ pub fn try_lower_atomics_static_call(
 
     let (runtime_fn, arity) = match property.as_str() {
         "load" => ("js_atomics_load", 2),
+        "isLockFree" => ("js_atomics_is_lock_free", 1),
         "store" => ("js_atomics_store", 3),
         "add" => ("js_atomics_add", 3),
         "sub" => ("js_atomics_sub", 3),
@@ -37,6 +38,8 @@ pub fn try_lower_atomics_static_call(
         "xor" => ("js_atomics_xor", 3),
         "exchange" => ("js_atomics_exchange", 3),
         "compareExchange" => ("js_atomics_compare_exchange", 4),
+        "notify" => ("js_atomics_notify", 3),
+        "wait" => ("js_atomics_wait", 4),
         _ => return Ok(None),
     };
 

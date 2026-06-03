@@ -8,6 +8,15 @@ use crate::typedarray::{
 };
 use crate::value::JSValue;
 
+fn nanbox_bool(value: bool) -> f64 {
+    f64::from_bits(JSValue::bool(value).bits())
+}
+
+fn string_value(bytes: &[u8]) -> f64 {
+    let ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+    crate::value::js_nanbox_string(ptr as i64)
+}
+
 fn throw_type_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = crate::error::js_typeerror_new(msg);
@@ -94,6 +103,24 @@ fn atomics_view_arg(value: f64) -> AtomicView {
     throw_type_error(b"Atomics operation requires an integer typed array");
 }
 
+fn atomics_int32_view_arg(value: f64) -> AtomicView {
+    let js = JSValue::from_bits(value.to_bits());
+    if !js.is_pointer() {
+        throw_type_error(b"Atomics wait/notify requires an Int32Array");
+    }
+    let raw = clean_ta_ptr(js.as_pointer::<TypedArrayHeader>()) as usize;
+    if raw == 0 {
+        throw_type_error(b"Atomics wait/notify requires an Int32Array");
+    }
+    if lookup_typed_array_kind(raw) == Some(KIND_INT32) {
+        return AtomicView::TypedArray {
+            ptr: raw as *mut TypedArrayHeader,
+            kind: KIND_INT32,
+        };
+    }
+    throw_type_error(b"Atomics wait/notify requires an Int32Array");
+}
+
 fn atomics_to_index(index: f64, length: i32) -> i32 {
     let mut n = JSValue::from_bits(index.to_bits()).to_number();
     if n.is_nan() {
@@ -109,9 +136,9 @@ fn atomics_to_index(index: f64, length: i32) -> i32 {
     i as i32
 }
 
-fn numeric_arg(value: f64) -> f64 {
+fn number_arg(value: f64) -> f64 {
     let js = JSValue::from_bits(value.to_bits());
-    let n = if js.is_any_string() {
+    if js.is_any_string() {
         let ptr = crate::value::js_get_string_pointer_unified(value)
             as *const crate::string::StringHeader;
         if ptr.is_null() {
@@ -121,15 +148,23 @@ fn numeric_arg(value: f64) -> f64 {
                 let len = (*ptr).byte_len as usize;
                 let data =
                     (ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-                std::str::from_utf8(std::slice::from_raw_parts(data, len))
-                    .ok()
-                    .and_then(|s| s.trim().parse::<f64>().ok())
-                    .unwrap_or(f64::NAN)
+                match std::str::from_utf8(std::slice::from_raw_parts(data, len)) {
+                    Ok(s) => match s.trim() {
+                        "Infinity" | "+Infinity" => f64::INFINITY,
+                        "-Infinity" => f64::NEG_INFINITY,
+                        other => other.parse::<f64>().unwrap_or(f64::NAN),
+                    },
+                    Err(_) => f64::NAN,
+                }
             }
         }
     } else {
         js.to_number()
-    };
+    }
+}
+
+fn numeric_arg(value: f64) -> f64 {
+    let n = number_arg(value);
     if n.is_finite() {
         n.trunc()
     } else {
@@ -172,6 +207,12 @@ fn slot(view: f64, index: f64) -> (AtomicView, i32) {
     (view, idx)
 }
 
+fn int32_slot(view: f64, index: f64) -> (AtomicView, i32) {
+    let view = atomics_int32_view_arg(view);
+    let idx = atomics_to_index(index, view.length());
+    (view, idx)
+}
+
 fn atomics_bitwise(view: f64, index: f64, value: f64, op: impl FnOnce(u32, u32) -> u32) -> f64 {
     let (view, idx) = slot(view, index);
     let kind = view.kind();
@@ -185,6 +226,12 @@ fn atomics_bitwise(view: f64, index: f64, value: f64, op: impl FnOnce(u32, u32) 
 pub extern "C" fn js_atomics_load(_closure: *const ClosureHeader, view: f64, index: f64) -> f64 {
     let (view, idx) = slot(view, index);
     view.get(idx)
+}
+
+#[no_mangle]
+pub extern "C" fn js_atomics_is_lock_free(_closure: *const ClosureHeader, size: f64) -> f64 {
+    let n = number_arg(size);
+    nanbox_bool(n.is_finite() && n.trunc() == n && matches!(n as i32, 1 | 2 | 4 | 8))
 }
 
 #[no_mangle]
@@ -288,4 +335,34 @@ pub extern "C" fn js_atomics_compare_exchange(
         view.set(idx, coerce_for_kind(view.kind(), replacement));
     }
     previous
+}
+
+#[no_mangle]
+pub extern "C" fn js_atomics_notify(
+    _closure: *const ClosureHeader,
+    view: f64,
+    index: f64,
+    count: f64,
+) -> f64 {
+    let (_view, _idx) = int32_slot(view, index);
+    let _ = numeric_arg(count);
+    0.0
+}
+
+#[no_mangle]
+pub extern "C" fn js_atomics_wait(
+    _closure: *const ClosureHeader,
+    view: f64,
+    index: f64,
+    expected: f64,
+    timeout: f64,
+) -> f64 {
+    let (view, idx) = int32_slot(view, index);
+    let expected = coerce_for_kind(KIND_INT32, expected);
+    if view.get(idx) != expected {
+        return string_value(b"not-equal");
+    }
+
+    let _ = number_arg(timeout);
+    string_value(b"timed-out")
 }
