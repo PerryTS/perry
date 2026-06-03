@@ -73,12 +73,15 @@ fn pointer_addr(value: f64) -> Option<usize> {
 
 #[inline]
 fn value_is_arguments_object(value: f64) -> bool {
-    if crate::array::js_array_is_array(value).to_bits() != crate::value::TAG_TRUE {
-        return false;
-    }
     let Some(addr) = pointer_addr(value) else {
         return false;
     };
+    if crate::object::is_arguments_object(addr as *const ObjectHeader) {
+        return true;
+    }
+    if crate::array::js_array_is_array(value).to_bits() != crate::value::TAG_TRUE {
+        return false;
+    }
     unsafe {
         crate::array::array_has_arguments_object_flag(addr as *const crate::array::ArrayHeader)
     }
