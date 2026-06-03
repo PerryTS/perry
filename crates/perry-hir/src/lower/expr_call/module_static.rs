@@ -948,6 +948,31 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
+            // `BigInt.asIntN(bits, x)` / `BigInt.asUintN(bits, x)`. Bare `BigInt`
+            // in member position lowers to `globalThis`, so a direct
+            // `BigInt.asIntN(...)` call would read `globalThis.asIntN`
+            // (undefined → "value is not a function"). Route to the runtime via
+            // a receiver-less NativeMethodCall. (The statics are also installed
+            // on the BigInt ctor closure for the `const B = BigInt; B.asIntN`
+            // value path.)
+            if obj_ident.sym.as_ref() == "BigInt" {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let m = method_ident.sym.as_ref();
+                    if m == "asIntN" || m == "asUintN" {
+                        let mut it = args.into_iter();
+                        let bits = it.next().unwrap_or(Expr::Undefined);
+                        let value = it.next().unwrap_or(Expr::Undefined);
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "bigint".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: m.to_string(),
+                            args: vec![bits, value],
+                        }));
+                    }
+                }
+            }
+
             // Check for Number.methodName() static calls
             if obj_ident.sym.as_ref() == "Number" {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {

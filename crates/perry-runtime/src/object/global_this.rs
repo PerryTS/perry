@@ -2844,12 +2844,12 @@ extern "C" fn number_is_integer_thunk(
     crate::builtins::js_number_is_integer(value)
 }
 
-/// Shared helper for `BigInt.asIntN`/`asUintN` thunks: coerce `bits` via
-/// ToIndex (throws RangeError on negative / non-integer) and extract the
-/// BigInt pointer from `value` (throws TypeError if not a BigInt). Diverges
-/// (`!`) on bad input, matching Node's throw semantics.
-fn bigint_as_n_args(bits_arg: f64, value_arg: f64) -> (u32, *const crate::bigint::BigIntHeader) {
-    // ToIndex(bits): non-negative integer; Node throws RangeError otherwise.
+/// Shared impl for `BigInt.asIntN`/`asUintN` (both the ctor-static thunks and
+/// the `("bigint", ...)` native-module dispatch). Coerces `bits` via ToIndex
+/// (RangeError on negative/non-integer), brand-checks `value` is a BigInt
+/// (TypeError otherwise), and returns the NaN-boxed result. `signed` selects
+/// asIntN vs asUintN. Diverges (`!`) on bad input, matching Node.
+pub(crate) fn bigint_as_n_dispatch(bits_arg: f64, value_arg: f64, signed: bool) -> f64 {
     if !bits_arg.is_finite() || bits_arg < 0.0 || bits_arg.fract() != 0.0 {
         crate::fs::validate::throw_range_error_with_code(
             "The number of bits is invalid (must be a non-negative integer)",
@@ -2862,10 +2862,14 @@ fn bigint_as_n_args(bits_arg: f64, value_arg: f64) -> (u32, *const crate::bigint
             "ERR_INVALID_ARG_TYPE",
         );
     }
-    (
-        bits_arg as u32,
-        jv.as_bigint_ptr() as *const crate::bigint::BigIntHeader,
-    )
+    let bits = bits_arg as u32;
+    let ptr = jv.as_bigint_ptr() as *const crate::bigint::BigIntHeader;
+    let r = if signed {
+        crate::bigint::js_bigint_as_int_n(bits, ptr)
+    } else {
+        crate::bigint::js_bigint_as_uint_n(bits, ptr)
+    };
+    f64::from_bits(crate::value::js_nanbox_bigint(r as i64).to_bits())
 }
 
 extern "C" fn bigint_as_int_n_thunk(
@@ -2873,9 +2877,7 @@ extern "C" fn bigint_as_int_n_thunk(
     bits: f64,
     value: f64,
 ) -> f64 {
-    let (bits, ptr) = bigint_as_n_args(bits, value);
-    let r = crate::bigint::js_bigint_as_int_n(bits, ptr);
-    f64::from_bits(crate::value::js_nanbox_bigint(r as i64).to_bits())
+    bigint_as_n_dispatch(bits, value, true)
 }
 
 extern "C" fn bigint_as_uint_n_thunk(
@@ -2883,9 +2885,7 @@ extern "C" fn bigint_as_uint_n_thunk(
     bits: f64,
     value: f64,
 ) -> f64 {
-    let (bits, ptr) = bigint_as_n_args(bits, value);
-    let r = crate::bigint::js_bigint_as_uint_n(bits, ptr);
-    f64::from_bits(crate::value::js_nanbox_bigint(r as i64).to_bits())
+    bigint_as_n_dispatch(bits, value, false)
 }
 
 extern "C" fn number_is_safe_integer_thunk(
