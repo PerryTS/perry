@@ -1869,18 +1869,17 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // object grouping items by their string key. See
     // `crates/perry-runtime/src/object.rs::js_object_group_by`.
     //
-    // `Array.fromAsync(input)` — Node 22+. Dispatched at the LLVM
+    // `Array.fromAsync(input, mapFn?, thisArg?)` — Node 22+. Dispatched at the LLVM
     // codegen level in `lower_call.rs` when the receiver is a global
     // and the property is `fromAsync`. The runtime function returns a
-    // NaN-boxed Promise pointer; for arrays it forwards to
-    // `js_promise_all`, for async iterators it chains `.next()` calls
-    // through `array_from_async_step`.
-    // Both args NaN-boxed f64; runtime validates iterability + callback and
-    // throws TypeError per Node. Object.groupBy → null-proto object (symbol
+    // NaN-boxed Promise pointer; it awaits source values before optional
+    // mapping and awaits mapped results before appending.
+    // Arguments are NaN-boxed f64; runtime validates callback inputs and
+    // rejects TypeError per Node. Object.groupBy → null-proto object (symbol
     // keys preserved); Map.groupBy → Map with un-coerced keys.
     module.declare_function("js_object_group_by", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_map_group_by", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_array_from_async", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_array_from_async", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
 
     // ========== JSX runtime adapter (issue #277, #1653) ==========
     // `js_jsx(type, props)` and `js_jsxs(type, props)` are Perry's built-in

@@ -604,19 +604,29 @@ pub fn try_lower_promise_static_call(
                 _ => {}
             }
         }
-        // `Array.fromAsync(input)` — Node 22+ static method.
+        // `Array.fromAsync(input, mapFn?, thisArg?)` — Node 22+ static method.
         if is_global_constructor_expr(object, "Array") && property == "fromAsync" {
-            if args.is_empty() {
-                return Ok(Some(double_literal(f64::from_bits(
-                    crate::nanbox::TAG_UNDEFINED,
-                ))));
-            }
-            let input = lower_expr(ctx, &args[0])?;
+            let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let input = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                undefined.clone()
+            };
+            let map_fn = if let Some(arg) = args.get(1) {
+                lower_expr(ctx, arg)?
+            } else {
+                undefined.clone()
+            };
+            let this_arg = if let Some(arg) = args.get(2) {
+                lower_expr(ctx, arg)?
+            } else {
+                undefined
+            };
             let blk = ctx.block();
             return Ok(Some(blk.call(
                 DOUBLE,
                 "js_array_from_async",
-                &[(DOUBLE, &input)],
+                &[(DOUBLE, &input), (DOUBLE, &map_fn), (DOUBLE, &this_arg)],
             )));
         }
     }

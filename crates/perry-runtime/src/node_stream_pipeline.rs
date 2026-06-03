@@ -407,7 +407,8 @@ pub(super) fn collect_pipeline_chunks(value: f64) -> Result<f64, f64> {
         return Ok(chunks);
     }
     if object_ptr_from_value(value).is_some() {
-        let collected = crate::promise::js_array_from_async(value);
+        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let collected = crate::promise::js_array_from_async(value, undefined, undefined);
         let settled = settle_pipeline_value(collected)?;
         if is_array_like_value(settled) {
             return Ok(settled);
