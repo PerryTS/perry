@@ -1778,6 +1778,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("v8", "getHeapSpaceStatistics") => crate::node_v8::js_v8_get_heap_space_statistics(),
         ("v8", "getHeapCodeStatistics") => crate::node_v8::js_v8_get_heap_code_statistics(),
         ("v8", "cachedDataVersionTag") => crate::node_v8::js_v8_cached_data_version_tag(),
+        ("v8", "getHeapSnapshot") => crate::node_v8::js_v8_get_heap_snapshot(arg(0)),
+        ("v8", "writeHeapSnapshot") => crate::node_v8::js_v8_write_heap_snapshot(arg(0), arg(1)),
 
         // #3142: `new v8.GCProfiler()` is the "v8.GCProfiler" namespace.
         // `start()` returns undefined; `stop()` returns the report object.

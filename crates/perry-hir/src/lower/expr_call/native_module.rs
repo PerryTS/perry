@@ -482,9 +482,10 @@ pub(super) fn try_native_module_methods(
                 }
             }
 
-            // node:v8 module methods (#3137/#3138). serialize/deserialize and
-            // the heap-stat helpers lower to a receiver-less NativeMethodCall
-            // dispatched in codegen to the `js_v8_*` runtime entry points.
+            // node:v8 module methods (#3137/#3138/#3140).
+            // serialize/deserialize, heap-stat helpers, and heap-snapshot
+            // helpers lower to a receiver-less NativeMethodCall dispatched in
+            // codegen to the `js_v8_*` runtime entry points.
             let is_v8_module =
                 obj_name == "v8" || ctx.lookup_builtin_module_alias(&obj_name) == Some("v8");
             if is_v8_module {
@@ -496,7 +497,9 @@ pub(super) fn try_native_module_methods(
                         | "getHeapStatistics"
                         | "getHeapCodeStatistics"
                         | "getHeapSpaceStatistics"
-                        | "cachedDataVersionTag" => {
+                        | "cachedDataVersionTag"
+                        | "getHeapSnapshot"
+                        | "writeHeapSnapshot" => {
                             return Ok(Ok(Expr::NativeMethodCall {
                                 module: "v8".to_string(),
                                 class_name: None,

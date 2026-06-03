@@ -676,6 +676,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_v8_get_heap_code_statistics", DOUBLE, &[]);
     module.declare_function("js_v8_get_heap_space_statistics", DOUBLE, &[]);
     module.declare_function("js_v8_cached_data_version_tag", DOUBLE, &[]);
+    module.declare_function("js_v8_get_heap_snapshot", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_v8_write_heap_snapshot", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_v8_gc_profiler_report", DOUBLE, &[]);
     // node:v8 Serializer/Deserializer classes (#3680) + lifecycle/diagnostic (#3679).
     module.declare_function("js_v8_serializer_new", DOUBLE, &[DOUBLE]);

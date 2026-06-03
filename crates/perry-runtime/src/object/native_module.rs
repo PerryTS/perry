@@ -2654,13 +2654,11 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         // export surface (the same set the api-manifest / docs / DTS expose and
         // that `hasOwnProperty` / named imports agree on) so `Object.keys(mod)`
         // matches Node. tty / perf_hooks / util.types are byte-identical to
-        // Node; v8 lists the 17 exports Perry implements (the 6 V8-internal
-        // stubs — getHeapSnapshot/getCppHeapStatistics/writeHeapSnapshot/
-        // queryObjects/isStringOneByteRepresentation/startCpuProfile — stay out
-        // of the manifest surface, tracked by #3904). Key order follows Node's.
+        // Node; v8 lists the exports Perry implements. Key order follows Node's.
         "tty" => Some(&[b"isatty", b"ReadStream", b"WriteStream"]),
         "v8" => Some(&[
             b"cachedDataVersionTag",
+            b"getHeapSnapshot",
             b"getHeapStatistics",
             b"getHeapSpaceStatistics",
             b"getHeapCodeStatistics",
@@ -2673,6 +2671,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"takeCoverage",
             b"stopCoverage",
             b"serialize",
+            b"writeHeapSnapshot",
             b"promiseHooks",
             b"startupSnapshot",
             b"setHeapSnapshotNearHeapLimit",

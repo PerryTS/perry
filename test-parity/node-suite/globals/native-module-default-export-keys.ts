@@ -21,7 +21,15 @@ console.log("perf_hooks:", Object.keys(perfHooks).join(","));
 console.log("util/types:", Object.keys(utilTypes).join(","));
 
 // Representative v8 exports are enumerable (Perry exposes its supported subset).
-for (const k of ["serialize", "deserialize", "Serializer", "getHeapStatistics", "cachedDataVersionTag"]) {
+for (const k of [
+  "serialize",
+  "deserialize",
+  "Serializer",
+  "getHeapSnapshot",
+  "getHeapStatistics",
+  "cachedDataVersionTag",
+  "writeHeapSnapshot",
+]) {
   console.log("v8 has", k + ":", Object.keys(v8).includes(k));
 }
 
@@ -31,9 +39,9 @@ console.log("hasOwnProperty agrees:", Object.keys(utilTypes).every((k) => Object
 // Every enumerated v8 key resolves to a value via dynamic read (no `undefined`
 // holes), matching Node's `typeof` for each.
 const v8Keys = [
-  "cachedDataVersionTag", "getHeapStatistics", "getHeapSpaceStatistics", "getHeapCodeStatistics",
+  "cachedDataVersionTag", "getHeapSnapshot", "getHeapStatistics", "getHeapSpaceStatistics", "getHeapCodeStatistics",
   "setFlagsFromString", "Serializer", "Deserializer", "DefaultSerializer", "DefaultDeserializer",
-  "deserialize", "takeCoverage", "stopCoverage", "serialize", "promiseHooks", "startupSnapshot",
+  "deserialize", "takeCoverage", "stopCoverage", "serialize", "writeHeapSnapshot", "promiseHooks", "startupSnapshot",
   "setHeapSnapshotNearHeapLimit", "GCProfiler",
 ];
 for (const k of v8Keys) {

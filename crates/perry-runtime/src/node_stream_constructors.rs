@@ -713,6 +713,7 @@ pub extern "C" fn js_node_stream_readable_from_options(iterable: f64, opts: f64)
                 hidden_chunks_key(),
                 normalized.chunks,
             );
+            initialize_readable_from_buffered_length(readable, normalized.chunks);
             if let Some(source_iterator) = normalized.source_iterator {
                 js_object_set_field_by_name(
                     raw as *mut ObjectHeader,
@@ -728,6 +729,22 @@ pub extern "C" fn js_node_stream_readable_from_options(iterable: f64, opts: f64)
         }
     }
     readable
+}
+
+fn initialize_readable_from_buffered_length(readable: f64, chunks: f64) {
+    let mut values = Vec::new();
+    push_chunk_values(chunks, &mut values, 0);
+    let length = if readable_object_mode(readable) {
+        values.len() as f64
+    } else {
+        let mut bytes = Vec::new();
+        for value in values {
+            append_chunk_bytes(value, &mut bytes, 0);
+        }
+        bytes.len() as f64
+    };
+    set_hidden_value(readable, hidden_buffered_key(), length);
+    set_hidden_value(readable, hidden_key(b"readableLength"), length);
 }
 
 // ─────────────────────────────────────────────────────────────────
