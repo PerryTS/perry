@@ -97,6 +97,9 @@ struct WritableStreamData {
     ready_promise: *mut Promise,
     /// Resolved when the stream finishes / rejects on error.
     closed_promise: *mut Promise,
+    /// Pending `close()` request, if close is waiting for queued writes.
+    close_request_promise: *mut Promise,
+    close_started: bool,
 }
 
 struct TransformStreamData {
@@ -211,6 +214,7 @@ fn scan_stream_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>
             }
             visitor.visit_raw_mut_ptr_slot(&mut s.ready_promise);
             visitor.visit_raw_mut_ptr_slot(&mut s.closed_promise);
+            visitor.visit_raw_mut_ptr_slot(&mut s.close_request_promise);
             if s.state == WritableState::Errored {
                 visit_stream_value_slot(visitor, &mut s.error_value);
             }
@@ -259,6 +263,23 @@ unsafe fn closure_from_bits(bits: u64) -> i64 {
     } else {
         0
     }
+}
+
+unsafe fn stream_object_field(object: f64, name: &[u8]) -> f64 {
+    let value = JSValue::from_bits(object.to_bits());
+    if !value.is_pointer() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let obj = js_nanbox_get_pointer(object) as *const ObjectHeader;
+    if obj.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    f64::from_bits(js_object_get_field_by_name(obj, key).bits())
+}
+
+unsafe fn stream_object_closure(object: f64, name: &[u8]) -> i64 {
+    closure_from_bits(stream_object_field(object, name).to_bits())
 }
 
 unsafe fn build_iter_result(value_bits: u64, done: bool) -> u64 {
@@ -432,6 +453,8 @@ fn alloc_writable(write_cb: i64, close_cb: i64, abort_cb: i64, hwm: f64) -> usiz
             error_value: 0,
             ready_promise: ready,
             closed_promise: closed,
+            close_request_promise: std::ptr::null_mut(),
+            close_started: false,
         },
     );
     id
@@ -453,7 +476,39 @@ unsafe fn invoke_start(stream_id: usize) {
     }
 }
 
-unsafe fn maybe_pull(stream_id: usize) {
+extern "C" fn readable_pull_microtask(closure: *const ClosureHeader) -> f64 {
+    unsafe {
+        let stream_bits = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as u64;
+        let stream_id = f64::from_bits(stream_bits) as usize;
+        let cb = perry_runtime::closure::js_closure_get_capture_ptr(closure, 1);
+        let pull_returns_byte_chunk =
+            perry_runtime::closure::js_closure_get_capture_ptr(closure, 2) != 0;
+        let should_pull = {
+            let mut g = READABLE_STREAMS.lock().unwrap();
+            match g.get_mut(&stream_id) {
+                Some(s) if s.state == ReadableState::Readable && s.pulling => true,
+                Some(s) => {
+                    s.pulling = false;
+                    false
+                }
+                None => false,
+            }
+        };
+        if should_pull {
+            if pull_returns_byte_chunk {
+                pull_deferred_byte_chunk(stream_id, cb);
+            } else {
+                js_closure_call1(cb as *const ClosureHeader, stream_id as f64);
+            }
+            if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
+                s.pulling = false;
+            }
+        }
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+pub(super) unsafe fn maybe_pull(stream_id: usize) {
     let (cb, controller, should_pull, pull_returns_byte_chunk) = {
         let mut g = READABLE_STREAMS.lock().unwrap();
         match g.get_mut(&stream_id) {
@@ -472,14 +527,17 @@ unsafe fn maybe_pull(stream_id: usize) {
     if !should_pull {
         return;
     }
-    if pull_returns_byte_chunk {
-        pull_deferred_byte_chunk(stream_id, cb);
-    } else {
-        js_closure_call1(cb as *const ClosureHeader, controller);
-    }
-    if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
-        s.pulling = false;
-    }
+    let pull_fn = readable_pull_microtask as *const u8;
+    perry_runtime::closure::js_register_closure_arity(pull_fn, 0);
+    let pull = perry_runtime::closure::js_closure_alloc(pull_fn, 3);
+    perry_runtime::closure::js_closure_set_capture_ptr(pull, 0, controller.to_bits() as i64);
+    perry_runtime::closure::js_closure_set_capture_ptr(pull, 1, cb);
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        pull,
+        2,
+        if pull_returns_byte_chunk { 1 } else { 0 },
+    );
+    perry_runtime::builtins::js_queue_microtask(pull as i64);
 }
 
 unsafe fn pull_deferred_byte_chunk(stream_id: usize, cb: i64) {
@@ -608,6 +666,32 @@ pub unsafe extern "C" fn js_readable_stream_new_with_strategy_and_source_type(
         closure_from_bits(start_bits.to_bits()),
         closure_from_bits(pull_bits.to_bits()),
         closure_from_bits(cancel_bits.to_bits()),
+        f64::from_bits(read_high_water_mark(strategy)),
+        is_byte_stream,
+        size_cb,
+    );
+    invoke_start(id);
+    maybe_pull(id);
+    id as f64
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_readable_stream_new_from_source_object(
+    source: f64,
+    strategy: f64,
+) -> f64 {
+    ensure_gc_registered();
+    let source_type = stream_object_field(source, b"type");
+    let is_byte_stream = value_string_equals(source_type, b"bytes");
+    let size_cb = if is_byte_stream {
+        0
+    } else {
+        read_queuing_strategy_size(strategy)
+    };
+    let id = alloc_readable_with_strategy(
+        stream_object_closure(source, b"start"),
+        stream_object_closure(source, b"pull"),
+        stream_object_closure(source, b"cancel"),
         f64::from_bits(read_high_water_mark(strategy)),
         is_byte_stream,
         size_cb,
@@ -1745,6 +1829,30 @@ pub unsafe extern "C" fn js_writable_stream_new_with_sink_type(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn js_writable_stream_new_from_sink_object(sink: f64, hwm: f64) -> f64 {
+    ensure_gc_registered();
+    let sink_type = stream_object_field(sink, b"type");
+    if sink_type.to_bits() != TAG_UNDEFINED {
+        throw_range_error_with_code(
+            "The argument 'type' is invalid. Received a non-undefined value",
+            "ERR_INVALID_ARG_VALUE",
+        );
+    }
+
+    let id = alloc_writable(
+        stream_object_closure(sink, b"write"),
+        stream_object_closure(sink, b"close"),
+        stream_object_closure(sink, b"abort"),
+        hwm,
+    );
+    let start_cb = stream_object_closure(sink, b"start");
+    if start_cb != 0 {
+        js_closure_call1(start_cb as *const ClosureHeader, id as f64);
+    }
+    id as f64
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn js_writable_stream_throw_invalid_sink() -> f64 {
     throw_invalid_arg_type("The \"sink\" argument must be of type object")
 }
@@ -1794,23 +1902,40 @@ pub unsafe extern "C" fn js_writable_stream_locked(stream_handle: f64) -> f64 {
 pub unsafe extern "C" fn js_writable_stream_close(stream_handle: f64) -> *mut Promise {
     let promise = js_promise_new();
     let id = stream_handle as usize;
-    let (cb, closed_p) = {
+    let start_close = {
         let mut g = WRITABLE_STREAMS.lock().unwrap();
         match g.get_mut(&id) {
-            Some(s) => {
-                s.state = WritableState::Closed;
-                (s.close_cb, s.closed_promise)
+            Some(s) => match s.state {
+                WritableState::Writable => {
+                    s.state = WritableState::Closing;
+                    s.close_request_promise = promise;
+                    !s.in_flight && s.write_queue.is_empty()
+                }
+                WritableState::Closing => {
+                    if !s.close_request_promise.is_null() {
+                        return s.close_request_promise;
+                    }
+                    s.close_request_promise = promise;
+                    !s.in_flight && s.write_queue.is_empty()
+                }
+                WritableState::Closed => {
+                    js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
+                    return promise;
+                }
+                WritableState::Errored => {
+                    js_promise_reject(promise, f64::from_bits(s.error_value));
+                    return promise;
+                }
+            },
+            None => {
+                js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
+                return promise;
             }
-            None => (0, std::ptr::null_mut()),
         }
     };
-    if cb != 0 {
-        js_closure_call0(cb as *const ClosureHeader);
+    if start_close {
+        finish_writable_close(id);
     }
-    if !closed_p.is_null() {
-        js_promise_resolve(closed_p, f64::from_bits(TAG_UNDEFINED));
-    }
-    js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
     promise
 }
 
@@ -1819,15 +1944,18 @@ pub unsafe extern "C" fn js_writable_stream_abort(stream_handle: f64, reason: f6
     let promise = js_promise_new();
     let id = stream_handle as usize;
     let reason_bits = reason.to_bits();
-    let (cb, closed_p) = {
+    let (cb, closed_p, close_request) = {
         let mut g = WRITABLE_STREAMS.lock().unwrap();
         match g.get_mut(&id) {
             Some(s) => {
                 s.state = WritableState::Errored;
                 s.error_value = reason_bits;
-                (s.abort_cb, s.closed_promise)
+                let close_request = s.close_request_promise;
+                s.close_request_promise = std::ptr::null_mut();
+                s.close_started = false;
+                (s.abort_cb, s.closed_promise, close_request)
             }
-            None => (0, std::ptr::null_mut()),
+            None => (0, std::ptr::null_mut(), std::ptr::null_mut()),
         }
     };
     if cb != 0 {
@@ -1835,6 +1963,9 @@ pub unsafe extern "C" fn js_writable_stream_abort(stream_handle: f64, reason: f6
     }
     if !closed_p.is_null() {
         js_promise_reject(closed_p, reason);
+    }
+    if !close_request.is_null() {
+        js_promise_reject(close_request, reason);
     }
     js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
     promise
@@ -1856,7 +1987,7 @@ fn sync_writer_ready_promise(stream_id: usize, writer_id: usize, ready: *mut Pro
     }
 }
 
-unsafe fn install_writable_backpressure_ready(stream_id: usize, writer_id: usize) {
+pub(super) unsafe fn install_writable_backpressure_ready(stream_id: usize, writer_id: usize) {
     let ready = js_promise_new();
     if let Some(s) = WRITABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
         s.ready_promise = ready;
@@ -1871,6 +2002,24 @@ fn writable_capture_usize(closure: *const ClosureHeader, idx: u32) -> usize {
 
 fn writable_capture_promise(closure: *const ClosureHeader, idx: u32) -> *mut Promise {
     perry_runtime::closure::js_closure_get_capture_ptr(closure, idx) as *mut Promise
+}
+
+extern "C" fn writable_write_start_microtask(closure: *const ClosureHeader) -> f64 {
+    unsafe {
+        let stream_id = writable_capture_usize(closure, 0);
+        let writer_id = writable_capture_usize(closure, 1);
+        let cb = perry_runtime::closure::js_closure_get_capture_ptr(closure, 2);
+        let chunk_bits = perry_runtime::closure::js_closure_get_capture_ptr(closure, 3) as u64;
+        let write_promise = writable_capture_promise(closure, 4);
+        run_writable_write(
+            stream_id,
+            writer_id,
+            cb,
+            f64::from_bits(chunk_bits),
+            write_promise,
+        );
+    }
+    f64::from_bits(TAG_UNDEFINED)
 }
 
 extern "C" fn writable_write_fulfilled(closure: *const ClosureHeader, _value: f64) -> f64 {
@@ -1932,7 +2081,167 @@ unsafe fn attach_writable_write_handlers(
     let _ = perry_runtime::promise::js_promise_then(sink_promise, on_fulfilled, on_rejected);
 }
 
-unsafe fn run_writable_write(
+unsafe fn try_call_writable_write(cb: i64, chunk: f64) -> Result<f64, u64> {
+    let trap_buf = perry_runtime::exception::js_try_push();
+    let jumped = perry_runtime::ffi::setjmp::setjmp(trap_buf as *mut c_int);
+    if jumped == 0 {
+        let result = js_closure_call1(cb as *const ClosureHeader, chunk);
+        perry_runtime::exception::js_try_end();
+        Ok(result)
+    } else {
+        let err = perry_runtime::exception::js_get_exception();
+        perry_runtime::exception::js_clear_exception();
+        perry_runtime::exception::js_try_end();
+        Err(err.to_bits())
+    }
+}
+
+unsafe fn try_call_writable_close(cb: i64) -> Result<f64, u64> {
+    let trap_buf = perry_runtime::exception::js_try_push();
+    let jumped = perry_runtime::ffi::setjmp::setjmp(trap_buf as *mut c_int);
+    if jumped == 0 {
+        let result = js_closure_call0(cb as *const ClosureHeader);
+        perry_runtime::exception::js_try_end();
+        Ok(result)
+    } else {
+        let err = perry_runtime::exception::js_get_exception();
+        perry_runtime::exception::js_clear_exception();
+        perry_runtime::exception::js_try_end();
+        Err(err.to_bits())
+    }
+}
+
+extern "C" fn writable_close_fulfilled(closure: *const ClosureHeader, _value: f64) -> f64 {
+    unsafe {
+        let stream_id = writable_capture_usize(closure, 0);
+        let close_promise = writable_capture_promise(closure, 1);
+        finish_writable_close_success(stream_id, close_promise);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn writable_close_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {
+    unsafe {
+        let stream_id = writable_capture_usize(closure, 0);
+        let close_promise = writable_capture_promise(closure, 1);
+        finish_writable_close_error(stream_id, close_promise, reason);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+unsafe fn attach_writable_close_handlers(
+    stream_id: usize,
+    close_promise: *mut Promise,
+    sink_promise: *mut Promise,
+) {
+    let fulfilled_fn = writable_close_fulfilled as *const u8;
+    let rejected_fn = writable_close_rejected as *const u8;
+    perry_runtime::closure::js_register_closure_arity(fulfilled_fn, 1);
+    perry_runtime::closure::js_register_closure_arity(rejected_fn, 1);
+
+    let on_fulfilled = perry_runtime::closure::js_closure_alloc(fulfilled_fn, 2);
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        on_fulfilled,
+        0,
+        (stream_id as f64).to_bits() as i64,
+    );
+    perry_runtime::closure::js_closure_set_capture_ptr(on_fulfilled, 1, close_promise as i64);
+
+    let on_rejected = perry_runtime::closure::js_closure_alloc(rejected_fn, 2);
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        on_rejected,
+        0,
+        (stream_id as f64).to_bits() as i64,
+    );
+    perry_runtime::closure::js_closure_set_capture_ptr(on_rejected, 1, close_promise as i64);
+
+    let _ = perry_runtime::promise::js_promise_then(sink_promise, on_fulfilled, on_rejected);
+}
+
+unsafe fn finish_writable_close(stream_id: usize) {
+    let (cb, close_promise) = {
+        let mut g = WRITABLE_STREAMS.lock().unwrap();
+        match g.get_mut(&stream_id) {
+            Some(s) if s.state == WritableState::Closing => {
+                if s.in_flight || !s.write_queue.is_empty() || s.close_started {
+                    return;
+                }
+                s.close_started = true;
+                (s.close_cb, s.close_request_promise)
+            }
+            _ => return,
+        }
+    };
+
+    if cb == 0 {
+        finish_writable_close_success(stream_id, close_promise);
+        return;
+    }
+    let result = match try_call_writable_close(cb) {
+        Ok(result) => result,
+        Err(reason) => {
+            finish_writable_close_error(stream_id, close_promise, f64::from_bits(reason));
+            return;
+        }
+    };
+    let sink_promise = perry_runtime::promise::js_promise_resolved(result);
+    if !sink_promise.is_null() {
+        attach_writable_close_handlers(stream_id, close_promise, sink_promise);
+        return;
+    }
+    finish_writable_close_success(stream_id, close_promise);
+}
+
+unsafe fn finish_writable_close_success(stream_id: usize, promise: *mut Promise) {
+    let (ready, closed) = {
+        let mut g = WRITABLE_STREAMS.lock().unwrap();
+        match g.get_mut(&stream_id) {
+            Some(s) => {
+                s.state = WritableState::Closed;
+                s.close_request_promise = std::ptr::null_mut();
+                s.close_started = false;
+                (s.ready_promise, s.closed_promise)
+            }
+            None => (std::ptr::null_mut(), std::ptr::null_mut()),
+        }
+    };
+    if !promise.is_null() {
+        js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
+    }
+    if !ready.is_null() {
+        js_promise_resolve(ready, f64::from_bits(TAG_UNDEFINED));
+    }
+    if !closed.is_null() {
+        js_promise_resolve(closed, f64::from_bits(TAG_UNDEFINED));
+    }
+}
+
+unsafe fn finish_writable_close_error(stream_id: usize, promise: *mut Promise, reason: f64) {
+    let (ready, closed) = {
+        let mut g = WRITABLE_STREAMS.lock().unwrap();
+        match g.get_mut(&stream_id) {
+            Some(s) => {
+                s.state = WritableState::Errored;
+                s.error_value = reason.to_bits();
+                s.close_request_promise = std::ptr::null_mut();
+                s.close_started = false;
+                (s.ready_promise, s.closed_promise)
+            }
+            None => (std::ptr::null_mut(), std::ptr::null_mut()),
+        }
+    };
+    if !promise.is_null() {
+        js_promise_reject(promise, reason);
+    }
+    if !ready.is_null() {
+        js_promise_reject(ready, reason);
+    }
+    if !closed.is_null() {
+        js_promise_reject(closed, reason);
+    }
+}
+
+pub(super) unsafe fn run_writable_write(
     stream_id: usize,
     writer_id: usize,
     cb: i64,
@@ -1943,101 +2252,30 @@ unsafe fn run_writable_write(
         finish_writable_write_success(stream_id, writer_id, promise);
         return;
     }
-    let result = js_closure_call1(cb as *const ClosureHeader, chunk);
-    if perry_runtime::promise::js_value_is_promise(result) != 0 {
-        let sink_promise = js_nanbox_get_pointer(result) as *mut Promise;
-        if !sink_promise.is_null() {
-            attach_writable_write_handlers(stream_id, writer_id, promise, sink_promise);
+    let result = match try_call_writable_write(cb, chunk) {
+        Ok(result) => result,
+        Err(reason) => {
+            finish_writable_write_error(stream_id, promise, f64::from_bits(reason));
             return;
         }
+    };
+    let sink_promise = perry_runtime::promise::js_promise_resolved(result);
+    if !sink_promise.is_null() {
+        attach_writable_write_handlers(stream_id, writer_id, promise, sink_promise);
+        return;
     }
     finish_writable_write_success(stream_id, writer_id, promise);
 }
 
-unsafe fn finish_writable_write_success(stream_id: usize, writer_id: usize, promise: *mut Promise) {
-    if !promise.is_null() {
-        js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
-    }
-
-    let (next, ready) = {
-        let mut g = WRITABLE_STREAMS.lock().unwrap();
-        match g.get_mut(&stream_id) {
-            Some(s) => {
-                s.in_flight = false;
-                let next = if s.state == WritableState::Writable {
-                    s.write_queue.pop_front().map(|(chunk, p)| {
-                        s.in_flight = true;
-                        (s.write_cb, f64::from_bits(chunk), p)
-                    })
-                } else {
-                    None
-                };
-                let ready = if s.state == WritableState::Writable && writable_desired_size(s) > 0.0
-                {
-                    s.ready_promise
-                } else {
-                    std::ptr::null_mut()
-                };
-                (next, ready)
-            }
-            None => (None, std::ptr::null_mut()),
-        }
-    };
-
-    if !ready.is_null() {
-        js_promise_resolve(ready, f64::from_bits(TAG_UNDEFINED));
-    }
-    if let Some((cb, chunk, queued_promise)) = next {
-        run_writable_write(stream_id, writer_id, cb, chunk, queued_promise);
-    }
-}
-
-unsafe fn finish_writable_write_error(stream_id: usize, promise: *mut Promise, reason: f64) {
-    let (ready, closed, queued) = {
-        let mut g = WRITABLE_STREAMS.lock().unwrap();
-        match g.get_mut(&stream_id) {
-            Some(s) => {
-                s.in_flight = false;
-                s.state = WritableState::Errored;
-                s.error_value = reason.to_bits();
-                let queued: Vec<*mut Promise> = s.write_queue.drain(..).map(|(_, p)| p).collect();
-                (s.ready_promise, s.closed_promise, queued)
-            }
-            None => (std::ptr::null_mut(), std::ptr::null_mut(), Vec::new()),
-        }
-    };
-
-    if !promise.is_null() {
-        js_promise_reject(promise, reason);
-    }
-    for queued_promise in queued {
-        if !queued_promise.is_null() {
-            js_promise_reject(queued_promise, reason);
-        }
-    }
-    if !ready.is_null() {
-        js_promise_reject(ready, reason);
-    }
-    if !closed.is_null() {
-        js_promise_reject(closed, reason);
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_writer_write(writer_handle: f64, chunk: f64) -> *mut Promise {
-    let promise = js_promise_new();
-    let writer_id = writer_handle as usize;
-    let stream_id = match WRITERS.lock().unwrap().get(&writer_id) {
-        Some(w) if w.locked => w.stream_handle,
-        _ => {
-            let err = make_error_with_message("Writer is no longer locked to a stream");
-            js_promise_reject(promise, f64::from_bits(err));
-            return promise;
-        }
-    };
+pub(super) unsafe fn writable_stream_write(
+    stream_id: usize,
+    writer_id: usize,
+    chunk: f64,
+) -> *mut Promise {
     if TRANSFORM_PAIRS.lock().unwrap().contains_key(&stream_id) {
         return transform_write(stream_id, chunk);
     }
+    let promise = js_promise_new();
     let mut start_write = None;
     let needs_pending_ready;
     {
@@ -2069,9 +2307,127 @@ pub unsafe extern "C" fn js_writer_write(writer_handle: f64, chunk: f64) -> *mut
         install_writable_backpressure_ready(stream_id, writer_id);
     }
     if let Some((cb, chunk, write_promise)) = start_write {
-        run_writable_write(stream_id, writer_id, cb, chunk, write_promise);
+        let start_fn = writable_write_start_microtask as *const u8;
+        perry_runtime::closure::js_register_closure_arity(start_fn, 0);
+        let start = perry_runtime::closure::js_closure_alloc(start_fn, 5);
+        perry_runtime::closure::js_closure_set_capture_ptr(
+            start,
+            0,
+            (stream_id as f64).to_bits() as i64,
+        );
+        perry_runtime::closure::js_closure_set_capture_ptr(
+            start,
+            1,
+            (writer_id as f64).to_bits() as i64,
+        );
+        perry_runtime::closure::js_closure_set_capture_ptr(start, 2, cb);
+        perry_runtime::closure::js_closure_set_capture_ptr(start, 3, chunk.to_bits() as i64);
+        perry_runtime::closure::js_closure_set_capture_ptr(start, 4, write_promise as i64);
+        perry_runtime::builtins::js_queue_microtask(start as i64);
     }
     promise
+}
+
+unsafe fn finish_writable_write_success(stream_id: usize, writer_id: usize, promise: *mut Promise) {
+    if !promise.is_null() {
+        js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
+    }
+
+    let (next, ready, close_now) = {
+        let mut g = WRITABLE_STREAMS.lock().unwrap();
+        match g.get_mut(&stream_id) {
+            Some(s) => {
+                s.in_flight = false;
+                let next =
+                    if s.state == WritableState::Writable || s.state == WritableState::Closing {
+                        s.write_queue.pop_front().map(|(chunk, p)| {
+                            s.in_flight = true;
+                            (s.write_cb, f64::from_bits(chunk), p)
+                        })
+                    } else {
+                        None
+                    };
+                let ready = if s.state == WritableState::Writable && writable_desired_size(s) > 0.0
+                {
+                    s.ready_promise
+                } else {
+                    std::ptr::null_mut()
+                };
+                let close_now = s.state == WritableState::Closing
+                    && next.is_none()
+                    && !s.in_flight
+                    && s.write_queue.is_empty();
+                (next, ready, close_now)
+            }
+            None => (None, std::ptr::null_mut(), false),
+        }
+    };
+
+    if !ready.is_null() {
+        js_promise_resolve(ready, f64::from_bits(TAG_UNDEFINED));
+    }
+    if let Some((cb, chunk, queued_promise)) = next {
+        run_writable_write(stream_id, writer_id, cb, chunk, queued_promise);
+    } else if close_now {
+        finish_writable_close(stream_id);
+    }
+}
+
+unsafe fn finish_writable_write_error(stream_id: usize, promise: *mut Promise, reason: f64) {
+    let (ready, closed, close_request, queued) = {
+        let mut g = WRITABLE_STREAMS.lock().unwrap();
+        match g.get_mut(&stream_id) {
+            Some(s) => {
+                s.in_flight = false;
+                s.state = WritableState::Errored;
+                s.error_value = reason.to_bits();
+                let close_request = s.close_request_promise;
+                s.close_request_promise = std::ptr::null_mut();
+                s.close_started = false;
+                let queued: Vec<*mut Promise> = s.write_queue.drain(..).map(|(_, p)| p).collect();
+                (s.ready_promise, s.closed_promise, close_request, queued)
+            }
+            None => (
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                Vec::new(),
+            ),
+        }
+    };
+
+    if !promise.is_null() {
+        js_promise_reject(promise, reason);
+    }
+    for queued_promise in queued {
+        if !queued_promise.is_null() {
+            js_promise_reject(queued_promise, reason);
+        }
+    }
+    if !ready.is_null() {
+        js_promise_reject(ready, reason);
+    }
+    if !close_request.is_null() {
+        js_promise_reject(close_request, reason);
+    }
+    if !closed.is_null() {
+        js_promise_reject(closed, reason);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_writer_write(writer_handle: f64, chunk: f64) -> *mut Promise {
+    let writer_id = writer_handle as usize;
+    let stream_id = match WRITERS.lock().unwrap().get(&writer_id) {
+        Some(w) if w.locked => w.stream_handle,
+        _ => {
+            let promise = js_promise_new();
+            let err = make_error_with_message("Writer is no longer locked to a stream");
+            js_promise_reject(promise, f64::from_bits(err));
+            return promise;
+        }
+    };
+    writable_stream_write(stream_id, writer_id, chunk)
 }
 
 #[no_mangle]
@@ -2213,6 +2569,8 @@ pub unsafe extern "C" fn js_transform_stream_new(
             error_value: 0,
             ready_promise: ready,
             closed_promise: closed,
+            close_request_promise: std::ptr::null_mut(),
+            close_started: false,
         },
     );
 
@@ -2236,6 +2594,20 @@ pub unsafe extern "C" fn js_transform_stream_new(
         js_closure_call1(start_cb as *const ClosureHeader, readable_id as f64);
     }
     id as f64
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_transform_stream_new_from_transformer_object(
+    transformer: f64,
+    hwm: f64,
+) -> f64 {
+    ensure_gc_registered();
+    js_transform_stream_new(
+        stream_object_field(transformer, b"start"),
+        stream_object_field(transformer, b"transform"),
+        stream_object_field(transformer, b"flush"),
+        hwm,
+    )
 }
 
 #[no_mangle]
@@ -2276,7 +2648,7 @@ fn transform_writable_for_readable(readable_id: usize) -> Option<usize> {
 /// — invokes the user transform with (chunk, transformController) where
 /// the transformController is the readable-side stream handle (so
 /// `controller.enqueue(...)` reuses the readable controller path).
-unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Promise {
+pub(super) unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Promise {
     let promise = js_promise_new();
     {
         let g = WRITABLE_STREAMS.lock().unwrap();
@@ -2320,7 +2692,7 @@ unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Promise {
     promise
 }
 
-unsafe fn transform_close(writable_id: usize) -> *mut Promise {
+pub(super) unsafe fn transform_close(writable_id: usize) -> *mut Promise {
     let promise = js_promise_new();
     let (flush_cb, readable_id) = {
         let pairs = TRANSFORM_PAIRS.lock().unwrap();

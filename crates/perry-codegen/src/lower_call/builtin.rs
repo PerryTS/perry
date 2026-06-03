@@ -1174,6 +1174,7 @@ pub(super) fn lower_builtin_new(
             let mut cancel = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut source_type = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut strategy = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let mut source_object = None;
             if !args.is_empty() {
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
                     for (k, vexpr) in &props {
@@ -1196,20 +1197,19 @@ pub(super) fn lower_builtin_new(
                         }
                     }
                 } else {
-                    let source = lower_expr(ctx, &args[0])?;
-                    let key_idx = ctx.strings.intern("type");
-                    let entry = ctx.strings.entry(key_idx);
-                    let key_bytes = format!("@{}", entry.bytes_global);
-                    let key_len = entry.byte_len.to_string();
-                    source_type = ctx.block().call(
-                        DOUBLE,
-                        "js_get_property",
-                        &[(DOUBLE, &source), (PTR, &key_bytes), (I64, &key_len)],
-                    );
+                    source_object = Some(lower_expr(ctx, &args[0])?);
                 }
             }
             if args.len() >= 2 {
                 strategy = lower_expr(ctx, &args[1])?;
+            }
+            if let Some(source) = source_object {
+                let h = ctx.block().call(
+                    DOUBLE,
+                    "js_readable_stream_new_from_source_object",
+                    &[(DOUBLE, &source), (DOUBLE, &strategy)],
+                );
+                return Ok(Some(h));
             }
             let h = ctx.block().call(
                 DOUBLE,
@@ -1241,6 +1241,7 @@ pub(super) fn lower_builtin_new(
             let mut abort = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut sink_type = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut hwm = double_literal(1.0);
+            let mut sink_object = None;
             if !args.is_empty() {
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
                     for (k, vexpr) in &props {
@@ -1266,7 +1267,7 @@ pub(super) fn lower_builtin_new(
                         }
                     }
                 } else {
-                    let _ = lower_expr(ctx, &args[0])?;
+                    sink_object = Some(lower_expr(ctx, &args[0])?);
                 }
             }
             if args.len() >= 2 {
@@ -1284,6 +1285,14 @@ pub(super) fn lower_builtin_new(
                         &[(DOUBLE, &strategy)],
                     );
                 }
+            }
+            if let Some(sink) = sink_object {
+                let h = ctx.block().call(
+                    DOUBLE,
+                    "js_writable_stream_new_from_sink_object",
+                    &[(DOUBLE, &sink), (DOUBLE, &hwm)],
+                );
+                return Ok(Some(h));
             }
             let h = ctx.block().call(
                 DOUBLE,
@@ -1305,6 +1314,7 @@ pub(super) fn lower_builtin_new(
             let mut transform = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut flush = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut hwm = double_literal(1.0);
+            let mut transformer_object = None;
             if !args.is_empty() {
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
                     for (k, vexpr) in &props {
@@ -1324,7 +1334,7 @@ pub(super) fn lower_builtin_new(
                         }
                     }
                 } else {
-                    let _ = lower_expr(ctx, &args[0])?;
+                    transformer_object = Some(lower_expr(ctx, &args[0])?);
                 }
             }
             if args.len() >= 2 {
@@ -1335,6 +1345,14 @@ pub(super) fn lower_builtin_new(
                         }
                     }
                 }
+            }
+            if let Some(transformer) = transformer_object {
+                let h = ctx.block().call(
+                    DOUBLE,
+                    "js_transform_stream_new_from_transformer_object",
+                    &[(DOUBLE, &transformer), (DOUBLE, &hwm)],
+                );
+                return Ok(Some(h));
             }
             let h = ctx.block().call(
                 DOUBLE,
