@@ -9,7 +9,8 @@
 
 use anyhow::Result;
 use perry_types::Type;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use swc_ecma_ast as ast;
 
 use super::*;
@@ -274,7 +275,7 @@ pub fn lower_module_with_class_id_types_and_seed(
     source_file_path: &str,
     start_class_id: ClassId,
     resolved_types: Option<std::collections::HashMap<u32, Type>>,
-    imported_class_fields: Option<&std::collections::HashMap<String, Vec<(String, Type)>>>,
+    imported_class_fields: Option<Arc<HashMap<String, Vec<(String, Type)>>>>,
 ) -> Result<(Module, ClassId)> {
     lower_module_with_class_id_types_seed_and_entry(
         ast_module,
@@ -297,7 +298,7 @@ pub fn lower_module_with_class_id_types_seed_and_entry(
     source_file_path: &str,
     start_class_id: ClassId,
     resolved_types: Option<std::collections::HashMap<u32, Type>>,
-    imported_class_fields: Option<&std::collections::HashMap<String, Vec<(String, Type)>>>,
+    imported_class_fields: Option<Arc<HashMap<String, Vec<(String, Type)>>>>,
     is_entry_module: bool,
 ) -> Result<(Module, ClassId)> {
     lower_module_full(
@@ -323,7 +324,7 @@ pub fn lower_module_full(
     source_file_path: &str,
     start_class_id: ClassId,
     resolved_types: Option<std::collections::HashMap<u32, Type>>,
-    imported_class_fields: Option<&std::collections::HashMap<String, Vec<(String, Type)>>>,
+    imported_class_fields: Option<Arc<HashMap<String, Vec<(String, Type)>>>>,
     is_entry_module: bool,
     is_external_module: bool,
 ) -> Result<(Module, ClassId)> {

@@ -8,6 +8,7 @@
 
 use perry_types::{FuncId, GlobalId, LocalId, Type, TypeParam};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::ir::*;
 
@@ -104,6 +105,10 @@ pub struct LoweringContext {
     /// `(field_name, declared_type)` pairs. Populated by
     /// `register_class_field_types` next to `register_class_field_names`.
     pub(crate) class_field_types: Vec<(String, Vec<(String, Type)>)>,
+    /// Cross-module class field types shared across a second collection pass.
+    /// This avoids cloning the entire graph-wide class field map into every
+    /// module's lowering context.
+    pub(crate) imported_class_field_types: Option<Arc<HashMap<String, Vec<(String, Type)>>>>,
     /// Enums: name -> (id, members with values)
     pub(crate) enums: Vec<(String, EnumId, Vec<(String, EnumValue)>)>,
     /// Interfaces: name -> id

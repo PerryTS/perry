@@ -604,11 +604,7 @@ fn collect_module_one(
     // in another module (and that module was already lowered earlier in
     // the walk OR via the post-pass re-lowering kick-off below). Empty on
     // the first pre-walk; populated for the second authoritative walk.
-    let imported_class_fields = if ctx.cross_module_class_field_types.is_empty() {
-        None
-    } else {
-        Some(&ctx.cross_module_class_field_types)
-    };
+    let imported_class_fields = ctx.cross_module_class_field_types.clone();
     // Issue #444: this module is the user-supplied entry iff its canonical
     // path matches the one stashed by `compile.rs::run_with_parse_cache`
     // before the first `collect_modules` invocation. Bundle-extension

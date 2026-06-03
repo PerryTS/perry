@@ -9,6 +9,7 @@
 use clap::Args;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use perry_hir::{Module as HirModule, ModuleKind};
 
@@ -490,7 +491,8 @@ pub struct CompilationContext {
     /// elsewhere) silently iterates 0 times because the iterable's static
     /// type is unknown and the `SetValues`/`MapEntries` wrap is skipped at
     /// `lower_decl.rs:3737-3747`. See ECS demo-simple repro / #412.
-    pub cross_module_class_field_types: HashMap<String, Vec<(String, perry_types::Type)>>,
+    pub cross_module_class_field_types:
+        Option<Arc<HashMap<String, Vec<(String, perry_types::Type)>>>>,
     /// Minimum Windows version for `--target windows` builds. One of `"7"`,
     /// `"8"`, `"10"`. `"10"` (default) means "no subsystem version suffix";
     /// `"7"` and `"8"` emit `,5.1` / `,6.02` on the linker `/SUBSYSTEM:` flag
@@ -711,7 +713,7 @@ impl CompilationContext {
             uses_fetch: false,
             uses_crypto_builtins: false,
             needs_thread: false,
-            cross_module_class_field_types: HashMap::new(),
+            cross_module_class_field_types: None,
             min_windows_version: "10".to_string(),
             entry_canonical: None,
             extra_stdlib_features: BTreeSet::new(),

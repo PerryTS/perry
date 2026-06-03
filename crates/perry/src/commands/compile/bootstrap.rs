@@ -24,6 +24,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::Result;
 
@@ -176,7 +177,7 @@ pub(super) fn rerun_collect_with_class_field_types(
     if field_map.is_empty() {
         return Ok(());
     }
-    ctx.cross_module_class_field_types = field_map;
+    ctx.cross_module_class_field_types = Some(Arc::new(field_map));
     ctx.native_modules.clear();
     visited.clear();
     *next_class_id = 1;

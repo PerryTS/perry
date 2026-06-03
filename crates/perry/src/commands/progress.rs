@@ -10,6 +10,8 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 pub(crate) struct VerboseProgress {
     enabled: bool,
     last_heartbeat: Mutex<Instant>,
+    last_record: Mutex<Instant>,
+    timings_enabled: bool,
 }
 
 #[derive(Debug, Default)]
@@ -29,12 +31,23 @@ impl VerboseProgress {
         Self {
             enabled: verbose > 0 && matches!(format, OutputFormat::Text),
             last_heartbeat: Mutex::new(Instant::now()),
+            last_record: Mutex::new(Instant::now()),
+            timings_enabled: std::env::var_os("PERRY_PROGRESS_TIMINGS").is_some(),
         }
     }
 
     pub(crate) fn record(&self, snapshot: ProgressSnapshot<'_>) {
         if self.enabled {
-            eprintln!("{}", format_progress_line(&snapshot, false));
+            let mut line = format_progress_line(&snapshot, false);
+            if self.timings_enabled {
+                if let Ok(mut last) = self.last_record.lock() {
+                    let elapsed = last.elapsed();
+                    *last = Instant::now();
+                    line.push_str(" dt_ms=");
+                    line.push_str(&elapsed.as_millis().to_string());
+                }
+            }
+            eprintln!("{line}");
         }
     }
 

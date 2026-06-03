@@ -129,7 +129,7 @@ pub fn synthesize_class_captures(
         std::collections::HashSet::new();
     if let Some(pname) = extends_name {
         if let Some(parent_fields) = ctx.lookup_class_field_names(pname) {
-            for f in parent_fields {
+            for f in parent_fields.iter() {
                 if f.starts_with("__perry_cap_") {
                     inherited_cap_field_names.insert(f.clone());
                 }

@@ -58,6 +58,7 @@ impl LoweringContext {
             class_accessor_names: Vec::new(),
             class_native_extends: Vec::new(),
             class_field_types: Vec::new(),
+            imported_class_field_types: None,
             enums: Vec::new(),
             interfaces: Vec::new(),
             type_aliases: Vec::new(),
@@ -401,11 +402,19 @@ impl LoweringContext {
     }
 
     /// Look up the list of instance field names declared on a class (NOT including inherited).
-    pub(crate) fn lookup_class_field_names(&self, class_name: &str) -> Option<&[String]> {
-        self.class_field_names
-            .iter()
-            .find(|(n, _)| n == class_name)
-            .map(|(_, f)| f.as_slice())
+    pub(crate) fn lookup_class_field_names(
+        &self,
+        class_name: &str,
+    ) -> Option<std::borrow::Cow<'_, [String]>> {
+        if let Some((_, fields)) = self.class_field_names.iter().find(|(n, _)| n == class_name) {
+            return Some(std::borrow::Cow::Borrowed(fields.as_slice()));
+        }
+        self.imported_class_field_types
+            .as_ref()
+            .and_then(|fields| fields.get(class_name))
+            .map(|fields| {
+                std::borrow::Cow::Owned(fields.iter().map(|(name, _)| name.clone()).collect())
+            })
     }
 
     /// Issue #665: register the getter+setter property names for a class.
@@ -472,17 +481,9 @@ impl LoweringContext {
     /// current module's own classes always win.
     pub fn seed_imported_class_fields(
         &mut self,
-        seeds: &std::collections::HashMap<String, Vec<(String, Type)>>,
+        seeds: std::sync::Arc<std::collections::HashMap<String, Vec<(String, Type)>>>,
     ) {
-        for (name, fields) in seeds {
-            if !self.class_field_types.iter().any(|(n, _)| n == name) {
-                self.class_field_types.push((name.clone(), fields.clone()));
-            }
-            if !self.class_field_names.iter().any(|(n, _)| n == name) {
-                let names: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
-                self.class_field_names.push((name.clone(), names));
-            }
-        }
+        self.imported_class_field_types = Some(seeds);
     }
 
     /// Issue #302: look up the declared type of a single instance field on a
@@ -493,10 +494,13 @@ impl LoweringContext {
         class_name: &str,
         field_name: &str,
     ) -> Option<&Type> {
-        self.class_field_types
-            .iter()
-            .find(|(n, _)| n == class_name)
-            .and_then(|(_, fs)| fs.iter().find(|(n, _)| n == field_name).map(|(_, ty)| ty))
+        if let Some((_, fields)) = self.class_field_types.iter().find(|(n, _)| n == class_name) {
+            return fields.iter().find(|(n, _)| n == field_name).map(|(_, ty)| ty);
+        }
+        self.imported_class_field_types
+            .as_ref()
+            .and_then(|fields| fields.get(class_name))
+            .and_then(|fs| fs.iter().find(|(n, _)| n == field_name).map(|(_, ty)| ty))
     }
 
     /// Issue #212: register the outer-scope LocalIds that a nested class
@@ -1264,4 +1268,59 @@ pub(crate) fn perry_ui_handle_widget(name: &str) -> bool {
             | "Table"
             | "TabBar"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn imported_class_fields_are_shared_and_used_as_fallback() {
+        let mut seeds = std::collections::HashMap::new();
+        seeds.insert(
+            "Imported".to_string(),
+            vec![("items".to_string(), Type::Array(Box::new(Type::String)))],
+        );
+
+        let seeds = Arc::new(seeds);
+        let mut ctx = LoweringContext::new("seeded.ts");
+        ctx.seed_imported_class_fields(Arc::clone(&seeds));
+
+        assert_eq!(Arc::strong_count(&seeds), 2);
+        assert!(ctx.class_field_types.is_empty());
+        assert!(ctx.class_field_names.is_empty());
+        assert_eq!(
+            ctx.lookup_class_field_type("Imported", "items"),
+            Some(&Type::Array(Box::new(Type::String)))
+        );
+        assert_eq!(
+            ctx.lookup_class_field_names("Imported")
+                .expect("seeded class names")
+                .as_ref(),
+            ["items".to_string()]
+        );
+
+        ctx.register_class_field_types(
+            "Imported".to_string(),
+            vec![("local".to_string(), Type::Number)],
+        );
+        ctx.register_class_field_names("Imported".to_string(), vec!["local".to_string()]);
+
+        assert_eq!(
+            ctx.lookup_class_field_type("Imported", "items"),
+            None,
+            "local class declarations must shadow imported seeds"
+        );
+        assert_eq!(
+            ctx.lookup_class_field_type("Imported", "local"),
+            Some(&Type::Number)
+        );
+        assert_eq!(
+            ctx.lookup_class_field_names("Imported")
+                .expect("local class names")
+                .as_ref(),
+            ["local".to_string()]
+        );
+    }
 }

@@ -821,7 +821,7 @@ pub fn lower_class_decl(
             std::collections::HashSet::new();
         if let Some(ref parent_name) = extends_name {
             if let Some(parent_fields) = ctx.lookup_class_field_names(parent_name) {
-                for f in parent_fields {
+                for f in parent_fields.iter() {
                     inherited_field_names.insert(f.clone());
                 }
             }
