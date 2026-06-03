@@ -1398,6 +1398,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // so method calls in other functions fall through to the generic
     // dispatch instead of the class method registry.
     let mut module_global_types: HashMap<u32, perry_types::Type> = HashMap::new();
+    let mut emitted_value_getter_symbols: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     // Collect exported variable names so we can create external
     // globals + getter functions for cross-module access.
     let exported_var_names: std::collections::HashSet<String> =
@@ -1458,11 +1460,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 let is_function_alias = hir.exported_functions.iter().any(|(exp, _)| exp == name);
                 if is_exported && !is_also_function && !is_function_alias {
                     let fn_name = format!("perry_fn_{}__{}", module_prefix, sanitize(name),);
-                    let getter = llmod.define_function(&fn_name, DOUBLE, vec![]);
-                    let _ = getter.create_block("entry");
-                    let blk = getter.block_mut(0).unwrap();
-                    let val = blk.load(DOUBLE, &format!("@{}", global_name));
-                    blk.ret(DOUBLE, &val);
+                    if emitted_value_getter_symbols.insert(fn_name.clone()) {
+                        let getter = llmod.define_function(&fn_name, DOUBLE, vec![]);
+                        let _ = getter.create_block("entry");
+                        let blk = getter.block_mut(0).unwrap();
+                        let val = blk.load(DOUBLE, &format!("@{}", global_name));
+                        blk.ret(DOUBLE, &val);
+                    }
 
                     // #460: also emit a duplicate getter under any renamed
                     // export targeting this local. `export { _await as await }`
@@ -1479,6 +1483,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                                 let alias_fn =
                                     format!("perry_fn_{}__{}", module_prefix, sanitize(exported));
                                 if alias_fn == fn_name {
+                                    continue;
+                                }
+                                if !emitted_value_getter_symbols.insert(alias_fn.clone()) {
                                     continue;
                                 }
                                 let g = llmod.define_function(&alias_fn, DOUBLE, vec![]);

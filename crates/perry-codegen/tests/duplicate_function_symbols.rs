@@ -146,6 +146,39 @@ fn module_with_exported_value_alias_colliding_with_function() -> Module {
     module
 }
 
+fn module_with_exported_value_alias_colliding_with_local_value_getter() -> Module {
+    let mut module = module_with_duplicate_local_function_names();
+    module.functions = Vec::new();
+    module.init = vec![
+        Stmt::Let {
+            id: 10,
+            name: "s".to_string(),
+            ty: Type::Number,
+            mutable: false,
+            init: Some(Expr::Number(1.0)),
+        },
+        Stmt::Let {
+            id: 11,
+            name: "a".to_string(),
+            ty: Type::Number,
+            mutable: false,
+            init: Some(Expr::Number(2.0)),
+        },
+    ];
+    module.exported_objects = vec!["s".to_string(), "a".to_string()];
+    module.exports = vec![
+        Export::Named {
+            local: "s".to_string(),
+            exported: "a".to_string(),
+        },
+        Export::Named {
+            local: "a".to_string(),
+            exported: "b".to_string(),
+        },
+    ];
+    module
+}
+
 #[test]
 fn duplicate_local_function_names_get_unique_llvm_symbols() {
     let ir = String::from_utf8(
@@ -218,6 +251,34 @@ fn exported_value_alias_does_not_clobber_local_function_symbol() {
     );
     assert_eq!(
         ir.matches("define double @perry_fn_duplicate_function_symbols_ts__graphql__local_1(")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn exported_value_alias_does_not_clobber_local_value_getter_symbol() {
+    let ir = String::from_utf8(
+        compile_module(
+            &module_with_exported_value_alias_colliding_with_local_value_getter(),
+            empty_opts(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        ir.matches("define double @perry_fn_duplicate_function_symbols_ts__s()")
+            .count(),
+        1
+    );
+    assert_eq!(
+        ir.matches("define double @perry_fn_duplicate_function_symbols_ts__a()")
+            .count(),
+        1
+    );
+    assert_eq!(
+        ir.matches("define double @perry_fn_duplicate_function_symbols_ts__b()")
             .count(),
         1
     );
