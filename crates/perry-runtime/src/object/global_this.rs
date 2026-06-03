@@ -498,6 +498,28 @@ pub(crate) fn webcrypto_method_value(property_name: &str) -> Option<f64> {
     Some(crate::value::js_nanbox_pointer(closure as i64))
 }
 
+fn subtle_crypto_method_spec(property_name: &str) -> Option<(*const u8, u32)> {
+    match property_name {
+        "encapsulateBits" => Some((subtle_crypto_encapsulate_bits_thunk as *const u8, 2)),
+        "decapsulateBits" => Some((subtle_crypto_decapsulate_bits_thunk as *const u8, 3)),
+        "encapsulateKey" => Some((subtle_crypto_encapsulate_key_thunk as *const u8, 5)),
+        "decapsulateKey" => Some((subtle_crypto_decapsulate_key_thunk as *const u8, 6)),
+        _ => None,
+    }
+}
+
+pub(crate) fn subtle_crypto_method_value(property_name: &str) -> Option<f64> {
+    let (func_ptr, length) = subtle_crypto_method_spec(property_name)?;
+    crate::closure::js_register_closure_rest(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+    }
+    super::native_module::set_bound_native_closure_name(closure, property_name);
+    super::native_module::set_builtin_closure_length(closure as usize, length);
+    Some(crate::value::js_nanbox_pointer(closure as i64))
+}
+
 pub(crate) extern "C" fn global_this_array_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -2969,6 +2991,78 @@ extern "C" fn subtle_crypto_supports_thunk(
     }
 }
 
+fn is_subtle_crypto_this(value: f64) -> bool {
+    let js_value = crate::value::JSValue::from_bits(value.to_bits());
+    if !js_value.is_pointer() {
+        return false;
+    }
+    let obj = js_value.as_pointer::<ObjectHeader>();
+    !obj.is_null()
+        && unsafe { (*obj).class_id } == super::native_module::NATIVE_MODULE_CLASS_ID
+        && unsafe { super::native_module::read_native_module_name(obj) }
+            .is_some_and(|name| name == "crypto.subtle")
+}
+
+fn rejected_type_error_with_code_promise(message: &str, code: &'static str) -> f64 {
+    let reason = crate::fs::validate::build_type_error_with_code_value(message, code);
+    let promise = crate::promise::js_promise_rejected(reason);
+    crate::value::js_nanbox_pointer(promise as i64)
+}
+
+fn subtle_crypto_dispatch_rest(method_name: &str, rest: f64) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    if !is_subtle_crypto_this(this_value) {
+        return rejected_type_error_with_code_promise(
+            "Value of \"this\" must be of type SubtleCrypto",
+            "ERR_INVALID_THIS",
+        );
+    }
+
+    let args = global_this_rest_array_values(rest);
+    let ptr = crate::value::JS_NATIVE_WEBCRYPTO_DISPATCH.load(Ordering::SeqCst);
+    if ptr.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+        unsafe { std::mem::transmute(ptr) };
+    unsafe {
+        dispatch(
+            method_name.as_ptr(),
+            method_name.len(),
+            args.as_ptr(),
+            args.len(),
+        )
+    }
+}
+
+extern "C" fn subtle_crypto_encapsulate_bits_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    subtle_crypto_dispatch_rest("encapsulateBits", rest)
+}
+
+extern "C" fn subtle_crypto_decapsulate_bits_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    subtle_crypto_dispatch_rest("decapsulateBits", rest)
+}
+
+extern "C" fn subtle_crypto_encapsulate_key_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    subtle_crypto_dispatch_rest("encapsulateKey", rest)
+}
+
+extern "C" fn subtle_crypto_decapsulate_key_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    subtle_crypto_dispatch_rest("decapsulateKey", rest)
+}
+
 /// Install a single callable static method on a constructor closure as a
 /// `{ writable: true, enumerable: false, configurable: true }` data property
 /// (matching Node's descriptors for built-in statics). `has_rest` registers
@@ -4004,6 +4098,33 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             }
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
+        "SubtleCrypto" => {
+            for (name, func_ptr, length) in [
+                (
+                    "encapsulateBits",
+                    subtle_crypto_encapsulate_bits_thunk as *const u8,
+                    2,
+                ),
+                (
+                    "decapsulateBits",
+                    subtle_crypto_decapsulate_bits_thunk as *const u8,
+                    3,
+                ),
+                (
+                    "encapsulateKey",
+                    subtle_crypto_encapsulate_key_thunk as *const u8,
+                    5,
+                ),
+                (
+                    "decapsulateKey",
+                    subtle_crypto_decapsulate_key_thunk as *const u8,
+                    6,
+                ),
+            ] {
+                install_webcrypto_proto_method_rest_with_length(proto_obj, name, func_ptr, length);
+            }
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
         "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
         | "AggregateError" | "EvalError" | "URIError" => {
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
@@ -4130,6 +4251,20 @@ fn install_webcrypto_proto_method(
     arity: u32,
 ) {
     install_proto_method(proto_obj, method_name, func_ptr, arity);
+    super::set_builtin_property_attrs(
+        proto_obj as usize,
+        method_name.to_string(),
+        super::PropertyAttrs::new(true, true, true),
+    );
+}
+
+fn install_webcrypto_proto_method_rest_with_length(
+    proto_obj: *mut ObjectHeader,
+    method_name: &str,
+    func_ptr: *const u8,
+    length: u32,
+) {
+    install_proto_method_rest_with_length(proto_obj, method_name, func_ptr, length, 0);
     super::set_builtin_property_attrs(
         proto_obj as usize,
         method_name.to_string(),

@@ -3351,6 +3351,13 @@ pub extern "C" fn js_object_get_field_by_name(
                         return JSValue::from_bits(value.to_bits());
                     }
                 }
+                if module_name == "crypto.subtle" {
+                    if let Some(value) =
+                        super::global_this::subtle_crypto_method_value(property_name)
+                    {
+                        return JSValue::from_bits(value.to_bits());
+                    }
+                }
                 // Issue #894: parity with the direct-NativeModuleRef
                 // fast path (`js_native_module_property_by_name`). For
                 // (module, prop) pairs whose property-read should

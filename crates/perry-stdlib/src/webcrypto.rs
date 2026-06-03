@@ -9,6 +9,7 @@
 //! re-exported only inside this module for sibling shards.
 mod aes;
 mod digest;
+mod encapsulation;
 mod hmac;
 mod jwk;
 mod kdf;
@@ -21,12 +22,14 @@ mod wrap;
 #[allow(unused_imports)]
 // Private imports keep sibling modules able to share `pub(super)` helpers.
 use self::{
-    aes::*, digest::*, hmac::*, jwk::*, kdf::*, key_object::*, keys::*, supports::*, util::*,
-    wrap::*,
+    aes::*, digest::*, encapsulation::*, hmac::*, jwk::*, kdf::*, key_object::*, keys::*,
+    supports::*, util::*, wrap::*,
 };
 
 // Public re-exports preserve the parent module surface for FFI entry points.
-pub use self::{aes::*, digest::*, hmac::*, jwk::*, kdf::*, keys::*, supports::*, wrap::*};
+pub use self::{
+    aes::*, digest::*, encapsulation::*, hmac::*, jwk::*, kdf::*, keys::*, supports::*, wrap::*,
+};
 
 /// Dispatcher for captured/dynamic `crypto.subtle.*` calls. Static
 /// `crypto.subtle.method(...)` call sites still lower directly in codegen;
@@ -104,6 +107,10 @@ pub unsafe extern "C" fn js_webcrypto_native_dispatch(
             js_webcrypto_key_object_to_crypto_key(arg(0), arg(1), arg(2), arg(3))
         }
         "supports" if args_len >= 2 => js_webcrypto_supports(arg(0), arg(1), arg(2)),
+        "encapsulateBits" => promise_to_value(js_webcrypto_encapsulate_bits(args_ptr, args_len)),
+        "decapsulateBits" => promise_to_value(js_webcrypto_decapsulate_bits(args_ptr, args_len)),
+        "encapsulateKey" => promise_to_value(js_webcrypto_encapsulate_key(args_ptr, args_len)),
+        "decapsulateKey" => promise_to_value(js_webcrypto_decapsulate_key(args_ptr, args_len)),
         _ => undefined,
     }
 }

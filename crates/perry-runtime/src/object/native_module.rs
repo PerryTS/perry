@@ -3162,6 +3162,11 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
             return value;
         }
     }
+    if module_name == "crypto.subtle" {
+        if let Some(value) = super::global_this::subtle_crypto_method_value(property_name) {
+            return value;
+        }
+    }
 
     // #3687: `node:cluster` is a singleton EventEmitter. Its EventEmitter
     // method surface is exposed ONLY on the default import (the distinct
@@ -5611,6 +5616,11 @@ pub extern "C" fn js_native_module_bind_method(
 
     if module_name == "crypto.webcrypto" {
         if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
+            return value;
+        }
+    }
+    if module_name == "crypto.subtle" {
+        if let Some(value) = super::global_this::subtle_crypto_method_value(property_name) {
             return value;
         }
     }
