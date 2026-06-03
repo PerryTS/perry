@@ -423,6 +423,63 @@ fn x509_info_access(cert: &x509_cert::Certificate) -> Option<String> {
     }
 }
 
+fn x509_handle_arg(value: f64) -> Option<i64> {
+    let bits = value.to_bits();
+    if (bits & 0xFFFF_0000_0000_0000) != 0x7FFD_0000_0000_0000 {
+        return None;
+    }
+    let handle = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
+    crate::common::handle::with_handle::<X509Handle, bool, _>(handle, |_| true)
+        .unwrap_or(false)
+        .then_some(handle)
+}
+
+fn x509_throw_certificate_arg(value: f64) -> ! {
+    let message = format!(
+        "The \"otherCert\" argument must be an instance of X509Certificate. Received {}",
+        perry_runtime::fs::validate::describe_received(value)
+    );
+    perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn x509_name_der(name: &x509_cert::name::Name) -> Option<Vec<u8>> {
+    use x509_cert::der::Encode;
+
+    name.to_der().ok()
+}
+
+fn x509_check_issued_value(cert: &x509_cert::Certificate, issuer: &x509_cert::Certificate) -> bool {
+    use x509_cert::der::Encode;
+
+    let Some(issuer_name) = x509_name_der(&cert.tbs_certificate.issuer) else {
+        return false;
+    };
+    let Some(subject_name) = x509_name_der(&issuer.tbs_certificate.subject) else {
+        return false;
+    };
+    if issuer_name != subject_name {
+        return false;
+    }
+
+    let Some(alg) = x509_rsa_signature_digest(cert) else {
+        return false;
+    };
+    let Some((_, public_key)) = x509_rsa_public_key(issuer) else {
+        return false;
+    };
+    let Some(signature_bytes) = cert.signature.as_bytes() else {
+        return false;
+    };
+    let Ok(signature) = RsaPkcs1v15Signature::try_from(signature_bytes) else {
+        return false;
+    };
+    let Ok(tbs_der) = cert.tbs_certificate.to_der() else {
+        return false;
+    };
+
+    verify_rsa_data(alg, public_key, &tbs_der, &signature)
+}
+
 fn x509_string_f64(s: &str) -> f64 {
     let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
     f64::from_bits(JSValue::string_ptr(ptr).bits())
@@ -896,6 +953,7 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
             | "checkIP"
             | "verify"
             | "checkPrivateKey"
+            | "checkIssued"
     ) {
         return dispatch_x509_method_property(handle, property);
     }
@@ -986,6 +1044,22 @@ pub unsafe fn dispatch_x509_method(handle: i64, method: &str, args: &[f64]) -> f
         },
         "verify" => x509_verify_value(h, args),
         "checkPrivateKey" => x509_check_private_key_value(h, args),
+        "checkIssued" => {
+            let value = args
+                .first()
+                .copied()
+                .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
+            let Some(other_handle) = x509_handle_arg(value) else {
+                x509_throw_certificate_arg(value);
+            };
+            let cert = h.cert.clone();
+            let Some(other_cert) =
+                get_handle_mut::<X509Handle>(other_handle).map(|other| other.cert.clone())
+            else {
+                x509_throw_certificate_arg(value);
+            };
+            js_bool(x509_check_issued_value(&cert, &other_cert))
+        }
         _ => nanbox_undefined(),
     }
 }
@@ -1016,6 +1090,7 @@ pub unsafe fn dispatch_x509_method_property(handle: i64, property: &str) -> f64 
         "checkIP" => b"checkIP",
         "verify" => b"verify",
         "checkPrivateKey" => b"checkPrivateKey",
+        "checkIssued" => b"checkIssued",
         _ => return nanbox_undefined(),
     };
     let this_f64 =
