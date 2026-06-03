@@ -1410,6 +1410,43 @@ pub(super) fn cp_apply_argv0(command: &mut Command, opts_val: f64) {
     }
 }
 
+fn cp_option_detached(opts_val: f64) -> bool {
+    if cp_object_ptr(opts_val).is_none() {
+        return false;
+    }
+    cp_get_field(opts_val, b"detached").to_bits() == TAG_TRUE_F64.to_bits()
+}
+
+pub(super) fn cp_apply_detached(command: &mut Command, opts_val: f64) {
+    if !cp_option_detached(opts_val) {
+        return;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x00000008 | 0x00000200);
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = command;
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CpStdio {
     Pipe,
@@ -1519,6 +1556,7 @@ fn cp_build_command(cmd: &str, args: &[String], opts_val: f64) -> Command {
 
     cp_apply_argv0(&mut command, opts_val);
     cp_apply_options(&mut command, opts_val);
+    cp_apply_detached(&mut command, opts_val);
     command
 }
 
