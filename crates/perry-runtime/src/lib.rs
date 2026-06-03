@@ -52,6 +52,7 @@ pub mod ffi;
 pub mod frame;
 pub mod fs;
 pub mod gc;
+pub mod intl;
 pub mod iterator_helpers;
 pub mod map;
 pub mod math;

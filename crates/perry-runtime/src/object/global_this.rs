@@ -2540,6 +2540,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                 "JSON" => install_json_namespace_members(ns_obj),
                 "Reflect" => install_reflect_namespace_members(ns_obj),
                 "Atomics" => install_atomics_namespace_members(ns_obj),
+                "Intl" => crate::intl::install_intl_namespace(ns_obj),
                 _ => {}
             }
             crate::value::js_nanbox_pointer(ns_obj as i64)

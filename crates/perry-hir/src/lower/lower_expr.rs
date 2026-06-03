@@ -74,6 +74,7 @@ fn is_known_global_identifier_name(name: &str) -> bool {
             | "globalThis"
             | "Buffer"
             | "Date"
+            | "Intl"
             | "JSON"
             | "Math"
             | "Object"
@@ -467,7 +468,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     }
                 };
                 Ok(Expr::String(value))
-            } else if matches!(name.as_str(), "Math" | "JSON" | "Reflect") {
+            } else if matches!(name.as_str(), "Math" | "JSON" | "Reflect" | "Intl") {
                 // #4139: the built-in namespace objects used as VALUES (passed
                 // to `Object.getOwnPropertyDescriptor(Math, …)`, stored in a
                 // local, etc.) must resolve to the real
