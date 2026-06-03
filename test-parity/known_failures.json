@@ -62,11 +62,17 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory \u2014 `node:tls` surface not fully implemented (Socket-level TLS upgrade works via net.upgradeToTLS; the higher-level tls.connect/Server is partial). Tracker for surface coverage."
   },
-  "test_parity_zlib": {
-    "issue": "793",
+  "test_sock_write_map": {
+    "issue": "1634",
     "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:zlib` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "category": "ci-env",
+    "reason": "Tracked in #1634 (parity CI environment fixtures). Net test passes locally with an echo server running, fails on Linux CI (no echo fixture server). Environmental \u2014 issue #91 dispatch fix landed in v0.5.581 and is no longer the cause; needs a CI-side fixture."
+  },
+  "test_ramda_sum": {
+    "issue": "1634",
+    "added": "2026-05-18",
+    "category": "ci-env",
+    "reason": "Tracked in #1634 (parity CI environment fixtures). Ramda npm-package fixture failure on Linux CI; observed on #1038's CI run pre-merge. Companion to the existing test_ramda_user_import skip in the compile-smoke list \u2014 the parity harness can't npm-install ramda. File a CI-side fixture issue if/when this matters for sweep coverage."
   },
   "node-suite/stream/web/abort-during-pipeto": {
     "issue": "1545",
