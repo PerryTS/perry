@@ -18,7 +18,7 @@ use perry_hir::Expr;
 
 use crate::expr::{lower_array_literal, lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I32, I64, PTR};
 
 use super::{build_headers_from_object, extract_options_fields, get_raw_string_ptr};
 
@@ -1196,7 +1196,16 @@ pub(super) fn lower_builtin_new(
                         }
                     }
                 } else {
-                    let _ = lower_expr(ctx, &args[0])?;
+                    let source = lower_expr(ctx, &args[0])?;
+                    let key_idx = ctx.strings.intern("type");
+                    let entry = ctx.strings.entry(key_idx);
+                    let key_bytes = format!("@{}", entry.bytes_global);
+                    let key_len = entry.byte_len.to_string();
+                    source_type = ctx.block().call(
+                        DOUBLE,
+                        "js_get_property",
+                        &[(DOUBLE, &source), (PTR, &key_bytes), (I64, &key_len)],
+                    );
                 }
             }
             if args.len() >= 2 {

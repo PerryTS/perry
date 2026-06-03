@@ -1056,14 +1056,12 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 
 ### node:stream/web
 
-**Gap APIs: 56** · Already covered: 12
+**Gap APIs: 52** · Already covered: 16
 
 #### Missing from Perry
 
 - `new ReadableStream([underlyingSource[, strategy]])`
-- `readableStream.locked`
 - `readableStream.cancel([reason])`
-- `readableStream.getReader([options])`
 - `readableStream.pipeThrough(transform[, options])`
 - `readableStream.pipeTo(destination[, options])`
 - `readableStream.tee()`
@@ -1071,10 +1069,8 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `readableStream[Symbol.asyncIterator]()`
 - `new ReadableStreamDefaultReader(stream)`
 - `new ReadableStreamBYOBReader(stream)`
-- `byobReader.closed`
 - `byobReader.read(view[, options])`
 - `byobReader.cancel([reason])`
-- `byobReader.releaseLock()`
 - `controller.desiredSize`
 - `controller.close()`
 - `controller.enqueue([chunk])`
@@ -1117,10 +1113,14 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 | API | Coverage source |
 |-----|-----------------|
 | `ReadableStream.from(iterable)` | `manifest:stream.from` |
+| `readableStream.locked` | `ffi:js_readable_stream_locked`; `test-parity/node-suite/stream/web/byob-reader.ts` |
+| `readableStream.getReader([options])` | `ffi:js_readable_stream_get_reader_with_options`; `test-parity/node-suite/stream/web/byob-on-byte-stream.ts`; `test-parity/node-suite/stream/web/byob-reader-getReader.ts` |
 | `reader.closed` | `ffi:js_reader_closed` |
 | `reader.read()` | `ffi:js_reader_read` |
 | `reader.cancel([reason])` | `ffi:js_reader_cancel` |
 | `reader.releaseLock()` | `ffi:js_reader_release_lock` |
+| `byobReader.closed` | `ffi:js_reader_closed`; `test-parity/node-suite/stream/web/byob-reader.ts` |
+| `byobReader.releaseLock()` | `ffi:js_reader_release_lock`; `test-parity/node-suite/stream/web/byob-reader.ts` |
 | `writer.closed` | `ffi:js_writer_closed` |
 | `writer.desiredSize` | `ffi:js_writer_desired_size` |
 | `writer.ready` | `ffi:js_writer_ready` |
