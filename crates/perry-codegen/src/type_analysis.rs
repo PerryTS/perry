@@ -1703,6 +1703,7 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
 pub(crate) fn is_array_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match static_type_of(ctx, e) {
         Some(HirType::Array(_)) | Some(HirType::Tuple(_)) => true,
+        Some(HirType::Generic { ref base, .. }) if base == "Array" => true,
         // #3148: %TypedArray% receivers route their not-already-folded methods
         // (fill / reverse / keys / values / entries / set / subarray) through
         // `lower_array_method`; the generic `js_array_*` helpers delegate to the

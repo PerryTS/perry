@@ -132,6 +132,16 @@ fn same_side_effect_free_receiver(target: &Expr, receiver: &Expr) -> bool {
     match (target, receiver) {
         (Expr::LocalGet(id), Expr::LocalGet(receiver_id)) => id == receiver_id,
         (Expr::This, Expr::This) => true,
+        (
+            Expr::PropertyGet { object, property },
+            Expr::PropertyGet {
+                object: receiver_object,
+                property: receiver_property,
+            },
+        ) => {
+            property == receiver_property
+                && same_side_effect_free_receiver(object.as_ref(), receiver_object.as_ref())
+        }
         _ => false,
     }
 }
