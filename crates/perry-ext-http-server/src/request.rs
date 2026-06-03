@@ -74,6 +74,12 @@ pub struct IncomingMessage {
     /// Trailers placeholder — Node populates after `'end'`. We hand
     /// back an empty object until trailing-headers support lands.
     pub trailers: HashMap<String, String>,
+    /// Lazily-created AbortController/AbortSignal pair backing
+    /// `req.signal`.
+    pub signal_controller: f64,
+    pub signal: f64,
+    /// True once `'close'` has fired.
+    pub close_emitted: bool,
 }
 
 impl IncomingMessage {
@@ -104,6 +110,53 @@ impl IncomingMessage {
             paused: false,
             encoding: None,
             trailers: HashMap::new(),
+            signal_controller: f64::from_bits(crate::types::TAG_UNDEFINED),
+            signal: f64::from_bits(crate::types::TAG_UNDEFINED),
+            close_emitted: false,
+        }
+    }
+}
+
+extern "C" {
+    fn js_abort_controller_new() -> *mut perry_ffi::ObjectHeader;
+    fn js_abort_controller_signal(
+        controller: *mut perry_ffi::ObjectHeader,
+    ) -> *mut perry_ffi::ObjectHeader;
+    fn js_abort_controller_abort(controller: *mut perry_ffi::ObjectHeader);
+}
+
+fn is_undefined(value: f64) -> bool {
+    JsValue::from_bits(value.to_bits()).is_undefined()
+}
+
+fn object_value<T>(ptr: *mut T) -> f64 {
+    if ptr.is_null() {
+        f64::from_bits(crate::types::TAG_UNDEFINED)
+    } else {
+        f64::from_bits(JsValue::from_object_ptr(ptr).bits())
+    }
+}
+
+fn ensure_signal(im: &mut IncomingMessage) -> f64 {
+    if !is_undefined(im.signal) {
+        return im.signal;
+    }
+
+    unsafe {
+        let controller = js_abort_controller_new();
+        let signal = js_abort_controller_signal(controller);
+        im.signal_controller = object_value(controller);
+        im.signal = object_value(signal);
+    }
+    im.signal
+}
+
+fn abort_signal(im: &mut IncomingMessage) {
+    let controller =
+        JsValue::from_bits(im.signal_controller.to_bits()).as_pointer::<perry_ffi::ObjectHeader>();
+    if !controller.is_null() {
+        unsafe {
+            js_abort_controller_abort(controller);
         }
     }
 }
@@ -250,6 +303,14 @@ pub extern "C" fn js_node_http_im_destroyed(handle: i64) -> i32 {
         .unwrap_or(0)
 }
 
+/// `req.signal` — lazily-created AbortSignal for the request lifetime.
+#[no_mangle]
+pub extern "C" fn js_node_http_im_signal(handle: i64) -> f64 {
+    get_handle_mut::<IncomingMessage>(handle)
+        .map(ensure_signal)
+        .unwrap_or_else(|| f64::from_bits(crate::types::TAG_UNDEFINED))
+}
+
 /// `req.socket.remoteAddress` — peer IP as a dotted string.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_remote_address(handle: i64) -> *mut StringHeader {
@@ -321,14 +382,12 @@ pub extern "C" fn js_node_http_im_resume(handle: i64) {
 /// `req.destroy()` — mark destroyed and fire `'close'`.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_destroy(handle: i64) {
-    let close_listeners;
     if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
         im.destroyed = true;
-        close_listeners = im.listeners.get("close").cloned().unwrap_or_default();
     } else {
         return;
     }
-    emit_no_arg_to_listeners(&close_listeners);
+    close_incoming_message(handle);
 }
 
 /// `req.on(event, cb)` — register a listener. For `'data'` and `'end'`
@@ -520,6 +579,25 @@ pub(crate) fn emit_no_arg_to_listeners(listeners: &[i64]) {
             }
         }
     }
+}
+
+/// Mark the request as closed, abort `req.signal`, and fire `'close'` once.
+pub(crate) fn close_incoming_message(handle: i64) {
+    let close_listeners;
+    if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
+        if im.close_emitted {
+            return;
+        }
+        im.close_emitted = true;
+        close_listeners = im.listeners.get("close").cloned().unwrap_or_default();
+        if !close_listeners.is_empty() {
+            ensure_signal(im);
+        }
+        abort_signal(im);
+    } else {
+        return;
+    }
+    emit_no_arg_to_listeners(&close_listeners);
 }
 
 // ============================================================================

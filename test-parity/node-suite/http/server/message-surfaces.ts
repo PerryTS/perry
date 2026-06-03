@@ -1,6 +1,7 @@
 import http from "node:http";
 
 const server = http.createServer((req: any, res: any) => {
+  const signal = req.signal;
   console.log(
     "req method types:",
     [
@@ -11,6 +12,13 @@ const server = http.createServer((req: any, res: any) => {
       typeof req.signal,
     ].join("|"),
   );
+  console.log(
+    "req signal:",
+    [typeof signal, signal === req.signal, signal.aborted, typeof signal.reason].join("|"),
+  );
+  req.on("close", () => {
+    console.log("req close signal:", req.signal.aborted);
+  });
   console.log(
     "req meta:",
     [

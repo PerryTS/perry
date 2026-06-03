@@ -138,6 +138,8 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
     });
     iter_handles_of_mut::<IncomingMessage, _>(|im| {
         scan_listener_roots(&mut im.listeners, visitor);
+        visitor.visit_nanbox_f64_slot(&mut im.signal_controller);
+        visitor.visit_nanbox_f64_slot(&mut im.signal);
     });
     iter_handles_of_mut::<ServerResponse, _>(|sr| {
         scan_listener_roots(&mut sr.listeners, visitor);
@@ -197,9 +199,21 @@ mod tests {
         perry_runtime::arena::arena_alloc_gc(32, 8, perry_runtime::gc::GC_TYPE_STRING) as i64
     }
 
+    fn young_gc_value() -> f64 {
+        f64::from_bits(
+            crate::types::POINTER_TAG | (young_gc_root() as u64 & crate::types::PTR_MASK),
+        )
+    }
+
     fn assert_rewritten(before: i64, after: i64) {
         assert_ne!(after, before);
         assert!(perry_runtime::arena::pointer_in_nursery(after as usize));
+    }
+
+    fn assert_nanbox_rewritten(before: f64, after: f64) {
+        assert_ne!(after.to_bits(), before.to_bits());
+        let ptr = after.to_bits() & crate::types::PTR_MASK;
+        assert!(perry_runtime::arena::pointer_in_nursery(ptr as usize));
     }
 
     fn listener_map(event: &str, cb: i64) -> HashMap<String, Vec<i64>> {
@@ -349,6 +363,10 @@ mod tests {
             1234,
         );
         incoming.listeners = listener_map("data", incoming_listener);
+        let incoming_signal_controller = young_gc_value();
+        let incoming_signal = young_gc_value();
+        incoming.signal_controller = incoming_signal_controller;
+        incoming.signal = incoming_signal;
         let incoming_handle = register_handle(incoming);
 
         let response_listener = young_gc_root();
@@ -376,6 +394,8 @@ mod tests {
 
             let incoming = get_handle::<IncomingMessage>(incoming_handle).expect("incoming");
             assert_rewritten(incoming_listener, incoming.listeners["data"][0]);
+            assert_nanbox_rewritten(incoming_signal_controller, incoming.signal_controller);
+            assert_nanbox_rewritten(incoming_signal, incoming.signal);
 
             let response = get_handle::<ServerResponse>(response_handle).expect("response");
             assert_rewritten(response_listener, response.listeners["finish"][0]);

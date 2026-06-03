@@ -24,8 +24,8 @@ use perry_ffi::{
 
 use crate::ensure_gc_scanner_registered;
 use crate::request::{
-    alloc_incoming_message, emit_no_arg_to_listeners, handle_to_pointer_f64, with_implicit_this,
-    IncomingMessage,
+    alloc_incoming_message, close_incoming_message, emit_no_arg_to_listeners,
+    handle_to_pointer_f64, with_implicit_this, IncomingMessage,
 };
 use crate::response::{
     alloc_server_response_for_request, HyperResponseShape, ResponseBody, ServerResponse,
@@ -1019,6 +1019,7 @@ fn process_pending(pending: HttpPendingRequest) {
     }
 
     // Free the per-request handles.
+    close_incoming_message(pending.request_handle);
     perry_ffi::drop_handle(pending.request_handle);
     perry_ffi::drop_handle(pending.response_handle);
 }
