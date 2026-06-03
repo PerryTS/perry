@@ -98,9 +98,87 @@ pub(super) fn x509_colon_hex(bytes: &[u8]) -> String {
         .join(":")
 }
 
+fn x509_find_extension<'a>(
+    cert: &'a x509_cert::Certificate,
+    oid: &str,
+) -> Option<&'a x509_cert::ext::Extension> {
+    cert.tbs_certificate
+        .extensions
+        .as_ref()?
+        .iter()
+        .find(|ext| ext.extn_id.to_string() == oid)
+}
+
+fn x509_format_general_name(name: &x509_cert::ext::pkix::name::GeneralName) -> Option<String> {
+    use x509_cert::ext::pkix::name::GeneralName;
+
+    match name {
+        GeneralName::DnsName(value) => Some(format!("DNS:{}", value.as_str())),
+        GeneralName::Rfc822Name(value) => Some(format!("email:{}", value.as_str())),
+        GeneralName::UniformResourceIdentifier(value) => Some(format!("URI:{}", value.as_str())),
+        GeneralName::IpAddress(value) => {
+            let bytes = value.as_bytes();
+            match bytes.len() {
+                4 => Some(format!(
+                    "IP Address:{}.{}.{}.{}",
+                    bytes[0], bytes[1], bytes[2], bytes[3]
+                )),
+                16 => {
+                    let segments: Vec<String> = bytes
+                        .chunks_exact(2)
+                        .map(|chunk| {
+                            let segment = u16::from_be_bytes([chunk[0], chunk[1]]);
+                            format!("{:x}", segment)
+                        })
+                        .collect();
+                    Some(format!("IP Address:{}", segments.join(":")))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn x509_subject_alt_name(cert: &x509_cert::Certificate) -> Option<String> {
+    use x509_cert::der::Decode;
+
+    let ext = x509_find_extension(cert, "2.5.29.17")?;
+    let san = x509_cert::ext::pkix::SubjectAltName::from_der(ext.extn_value.as_bytes()).ok()?;
+    let names: Vec<String> = san.0.iter().filter_map(x509_format_general_name).collect();
+    if names.is_empty() {
+        None
+    } else {
+        Some(names.join(", "))
+    }
+}
+
+fn x509_extended_key_usage(cert: &x509_cert::Certificate) -> Option<Vec<String>> {
+    use x509_cert::der::Decode;
+
+    let ext = x509_find_extension(cert, "2.5.29.37")?;
+    let key_usage =
+        x509_cert::ext::pkix::ExtendedKeyUsage::from_der(ext.extn_value.as_bytes()).ok()?;
+    let usages: Vec<String> = key_usage.0.iter().map(|oid| oid.to_string()).collect();
+    if usages.is_empty() {
+        None
+    } else {
+        Some(usages)
+    }
+}
+
 fn x509_string_f64(s: &str) -> f64 {
     let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
     f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+unsafe fn x509_string_array_f64(items: &[String]) -> f64 {
+    let mut arr = perry_runtime::js_array_alloc(items.len() as u32);
+    for item in items {
+        let s = js_string_from_bytes(item.as_ptr(), item.len() as u32);
+        arr = perry_runtime::js_array_push(arr, JSValue::string_ptr(s));
+    }
+    nanbox_ptr(arr)
 }
 
 fn x509_time_millis(time: &x509_cert::time::Time) -> f64 {
@@ -265,6 +343,14 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
             let digest = Sha512::digest(&h.der);
             x509_string_f64(&x509_colon_hex(&digest))
         }
+        "subjectAltName" => match x509_subject_alt_name(&h.cert) {
+            Some(value) => x509_string_f64(&value),
+            None => nanbox_undefined(),
+        },
+        "keyUsage" => match x509_extended_key_usage(&h.cert) {
+            Some(values) => x509_string_array_f64(&values),
+            None => nanbox_undefined(),
+        },
         "ca" => {
             // BasicConstraints (id-ce 2.5.29.19) cA flag.
             let is_ca = x509_basic_constraints_ca(&h.cert);

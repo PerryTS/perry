@@ -2213,6 +2213,8 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             | "fingerprint"
             | "fingerprint256"
             | "fingerprint512"
+            | "subjectAltName"
+            | "keyUsage"
             | "ca"
             | "raw"
             | "toString"
