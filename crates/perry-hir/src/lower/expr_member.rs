@@ -1757,7 +1757,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     );
                     let receiver_is_namespace_value = matches!(
                         property.as_str(),
-                        "crypto" | "WebAssembly" | "localStorage" | "sessionStorage"
+                        "Atomics" | "crypto" | "WebAssembly" | "localStorage" | "sessionStorage"
                     );
                     let outer_is_websocket_static = property == "WebSocket"
                         && match &member.prop {

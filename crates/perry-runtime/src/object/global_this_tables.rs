@@ -170,6 +170,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] = &[
     "Math",
     "JSON",
     "Reflect",
+    "Atomics",
     "WebAssembly",
 ];
 

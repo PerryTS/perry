@@ -2539,6 +2539,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                 "Math" => install_math_namespace(ns_obj),
                 "JSON" => install_json_namespace_members(ns_obj),
                 "Reflect" => install_reflect_namespace_members(ns_obj),
+                "Atomics" => install_atomics_namespace_members(ns_obj),
                 _ => {}
             }
             crate::value::js_nanbox_pointer(ns_obj as i64)
@@ -3357,6 +3358,27 @@ fn install_reflect_namespace_members(ns_obj: *mut ObjectHeader) {
     ];
     for (name, arity) in METHODS.iter().copied() {
         install_proto_method(ns_obj, name, noop, arity);
+    }
+}
+
+fn install_atomics_namespace_members(ns_obj: *mut ObjectHeader) {
+    for (name, func_ptr, arity) in [
+        ("load", crate::atomics::js_atomics_load as *const u8, 2),
+        ("store", crate::atomics::js_atomics_store as *const u8, 3),
+        ("add", crate::atomics::js_atomics_add as *const u8, 3),
+        ("sub", crate::atomics::js_atomics_sub as *const u8, 3),
+        (
+            "exchange",
+            crate::atomics::js_atomics_exchange as *const u8,
+            3,
+        ),
+        (
+            "compareExchange",
+            crate::atomics::js_atomics_compare_exchange as *const u8,
+            4,
+        ),
+    ] {
+        install_proto_method(ns_obj, name, func_ptr, arity);
     }
 }
 

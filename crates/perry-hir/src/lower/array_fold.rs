@@ -266,6 +266,14 @@ pub(crate) fn is_known_json_static_method(name: &str) -> bool {
     matches!(name, "parse" | "stringify" | "rawJSON" | "isRawJSON")
 }
 
+/// Names of `Atomics.<name>` static functions Perry's runtime implements.
+pub(crate) fn is_known_atomics_static_method(name: &str) -> bool {
+    matches!(
+        name,
+        "load" | "store" | "add" | "sub" | "exchange" | "compareExchange"
+    )
+}
+
 /// Names of `Number.<name>` static functions Perry's runtime implements.
 pub(crate) fn is_known_number_static_method(name: &str) -> bool {
     matches!(
@@ -294,6 +302,7 @@ pub(crate) fn is_known_namespace_static_function(obj_name: &str, prop_name: &str
         "Promise" => is_known_promise_static_method(prop_name),
         "Math" => is_known_math_static_method(prop_name),
         "JSON" => is_known_json_static_method(prop_name),
+        "Atomics" => is_known_atomics_static_method(prop_name),
         "Number" => is_known_number_static_method(prop_name),
         "String" => is_known_string_static_method(prop_name),
         // #2877: `ArrayBuffer.isView` is a real static function (folded to the

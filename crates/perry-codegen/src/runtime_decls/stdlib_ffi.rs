@@ -1545,6 +1545,22 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_math_sin", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_tan", DOUBLE, &[DOUBLE]);
 
+    // ========== Atomics ==========
+    module.declare_function("js_atomics_load", DOUBLE, &[PTR, DOUBLE, DOUBLE]);
+    module.declare_function("js_atomics_store", DOUBLE, &[PTR, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_atomics_add", DOUBLE, &[PTR, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_atomics_sub", DOUBLE, &[PTR, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_atomics_exchange",
+        DOUBLE,
+        &[PTR, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_atomics_compare_exchange",
+        DOUBLE,
+        &[PTR, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+
     // ========== Number ==========
     module.declare_function("js_number_is_finite", DOUBLE, &[DOUBLE]);
 

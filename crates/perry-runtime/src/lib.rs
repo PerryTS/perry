@@ -28,6 +28,7 @@ pub mod arena;
 pub mod array;
 pub mod async_context;
 pub mod async_hooks;
+pub mod atomics;
 pub mod bigint;
 pub mod r#box;
 pub mod buffer;

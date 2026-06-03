@@ -31,6 +31,7 @@ use crate::expr::{variant_name, FnCtx};
 //   `native_module_dispatch.rs` (#1105 followup): per-branch
 //   extraction of the original `lower_call.rs`'s 4.3k-LOC body so
 //   every file in this directory stays under 2000 lines.
+mod atomics;
 mod buffer_intrinsic;
 mod builtin;
 mod closure_analysis;
@@ -139,6 +140,11 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
     // Namespace member call (#636) — `ns.foo(...)` where `ns` is an
     // ExternFuncRef namespace import.
     if let Some(v) = namespace_call::try_lower_namespace_member_call(ctx, callee, args)? {
+        return Ok(v);
+    }
+
+    // `Atomics.load(...)` / `Atomics.add(...)` and related namespace statics.
+    if let Some(v) = atomics::try_lower_atomics_static_call(ctx, callee, args)? {
         return Ok(v);
     }
 

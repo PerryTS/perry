@@ -122,6 +122,7 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "Math"
             | "JSON"
             | "Reflect"
+            | "Atomics"
             // Test262 installs `globalThis.print`; bare `print(...)` must
             // resolve through the global object instead of the unknown-ident
             // numeric fallback.
@@ -299,6 +300,10 @@ pub(crate) fn is_builtin_static_function_member(namespace: &str, member: &str) -
                 | "set"
                 | "setPrototypeOf"
         ),
+        "Atomics" => matches!(
+            member,
+            "load" | "store" | "add" | "sub" | "exchange" | "compareExchange"
+        ),
         "WebAssembly" => matches!(
             member,
             "compile" | "compileStreaming" | "instantiate" | "instantiateStreaming" | "validate"
@@ -409,6 +414,12 @@ pub(crate) fn builtin_static_function_length(namespace: &str, member: &str) -> O
             | "has"
             | "setPrototypeOf" => 2,
             "getPrototypeOf" | "isExtensible" | "ownKeys" | "preventExtensions" => 1,
+            _ => return None,
+        },
+        "Atomics" => match member {
+            "load" => 2,
+            "store" | "add" | "sub" | "exchange" => 3,
+            "compareExchange" => 4,
             _ => return None,
         },
         "WebAssembly" => match member {
