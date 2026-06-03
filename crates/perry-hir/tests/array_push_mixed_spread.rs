@@ -58,3 +58,36 @@ fn array_push_plain_then_spread_lowers_to_ordered_push_sequence() {
         "plain then spread push should preserve source order in a sequence: {module:#?}"
     );
 }
+
+#[test]
+fn property_push_mixed_spread_lowers_to_single_spread_source() {
+    let module = lower_src(
+        r#"
+        class LazyPath {
+          _cachedPath = [];
+          _path = [];
+          _key = 1;
+          get path() {
+            this._cachedPath.push(...this._path, this._key);
+            return this._cachedPath;
+          }
+        }
+        "#,
+    )
+    .expect("property receiver mixed spread push should lower");
+
+    let debug = format!("{module:#?}");
+    assert!(
+        debug.contains("method: \"push_spread\""),
+        "property receiver mixed spread push should use push_spread: {debug}"
+    );
+    assert!(
+        debug.contains("ArraySpread"),
+        "mixed spread args should be packed into one spread source array: {debug}"
+    );
+    assert!(
+        !debug.contains("method: \"push_spread\",\n")
+            || !debug.contains("args: [\n                                        PropertyGet"),
+        "push_spread should not keep two direct args for codegen: {debug}"
+    );
+}

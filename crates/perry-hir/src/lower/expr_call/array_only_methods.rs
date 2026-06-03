@@ -931,7 +931,26 @@ pub(super) fn try_array_only_methods(
                         };
                         if !is_user_class_receiver {
                             let array_expr = lower_expr(ctx, &member.obj)?;
-                            if call.args.first().is_some_and(|arg| arg.spread.is_some()) {
+                            if call.args.iter().any(|arg| arg.spread.is_some()) {
+                                let args = if args.len() == 1
+                                    && call.args.first().is_some_and(|arg| arg.spread.is_some())
+                                {
+                                    args
+                                } else {
+                                    let elements = call
+                                        .args
+                                        .iter()
+                                        .zip(args.into_iter())
+                                        .map(|(ast_arg, arg)| {
+                                            if ast_arg.spread.is_some() {
+                                                ArrayElement::Spread(arg)
+                                            } else {
+                                                ArrayElement::Expr(arg)
+                                            }
+                                        })
+                                        .collect();
+                                    vec![Expr::ArraySpread(elements)]
+                                };
                                 return Ok(Ok(Expr::NativeMethodCall {
                                     module: "array".to_string(),
                                     method: "push_spread".to_string(),
