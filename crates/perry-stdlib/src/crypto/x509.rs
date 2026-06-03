@@ -657,6 +657,38 @@ unsafe fn x509_asymmetric_key_meta(value: f64) -> Option<(u8, u8)> {
     perry_runtime::buffer::asymmetric_key_meta(ptr as usize)
 }
 
+enum X509PkeyKind {
+    Public,
+    Private(u8),
+    Secret,
+}
+
+unsafe fn x509_pkey_kind(value: f64) -> Option<X509PkeyKind> {
+    let bits = value.to_bits();
+    let js = JSValue::from_bits(bits);
+    if js.is_any_string() && (bits >> 48) as u16 == 0x7FFF {
+        let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
+        if !ptr.is_null() && (ptr as usize) >= 0x1000 {
+            return perry_runtime::buffer::asymmetric_key_meta(ptr as usize).map(
+                |(kind, asym_type)| {
+                    if kind == 2 {
+                        X509PkeyKind::Private(asym_type)
+                    } else {
+                        X509PkeyKind::Public
+                    }
+                },
+            );
+        }
+    }
+    if js.is_pointer() {
+        let addr = bits & 0x0000_FFFF_FFFF_FFFF;
+        if addr >= 0x1000 && perry_runtime::buffer::is_secret_key(addr as usize) {
+            return Some(X509PkeyKind::Secret);
+        }
+    }
+    None
+}
+
 fn throw_x509_pkey_type_error(value: f64) -> ! {
     let message = format!(
         "The \"pkey\" argument must be an instance of KeyObject. Received {}",
@@ -670,6 +702,16 @@ fn throw_x509_pkey_value_error(kind: u8) -> ! {
         "PrivateKeyObject {}"
     } else {
         "KeyObject {}"
+    };
+    let message = format!("The argument 'pkey' is invalid. Received {received}");
+    perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE")
+}
+
+fn throw_x509_pkey_value_error_typed(kind: X509PkeyKind) -> ! {
+    let received = match kind {
+        X509PkeyKind::Public => "PublicKeyObject {}",
+        X509PkeyKind::Private(_) => "PrivateKeyObject {}",
+        X509PkeyKind::Secret => "SecretKeyObject {}",
     };
     let message = format!("The argument 'pkey' is invalid. Received {received}");
     perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE")
@@ -715,6 +757,41 @@ unsafe fn x509_verify_value(handle: &X509Handle, args: &[f64]) -> f64 {
         None => return js_bool(false),
     };
     js_bool(verify_rsa_data(alg, public_key, &tbs_der, &signature))
+}
+
+unsafe fn x509_check_private_key_value(handle: &X509Handle, args: &[f64]) -> f64 {
+    let key_value = args
+        .first()
+        .copied()
+        .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
+    let kind = match x509_pkey_kind(key_value) {
+        Some(kind) => kind,
+        None => throw_x509_pkey_type_error(key_value),
+    };
+    let X509PkeyKind::Private(asym_type) = kind else {
+        throw_x509_pkey_value_error_typed(kind);
+    };
+    if asym_type != 1 {
+        return js_bool(false);
+    }
+
+    let pem = match crypto_key_input_to_private_pem(key_value.to_bits()) {
+        Some(pem) => pem,
+        None => return js_bool(false),
+    };
+    let private_key = match parse_rsa_private_key_pem(&pem) {
+        Some(key) => key,
+        None => return js_bool(false),
+    };
+    let cert_public_key = match x509_rsa_public_key(&handle.cert) {
+        Some((_, key)) => key,
+        None => return js_bool(false),
+    };
+    let private_public_key = RsaPublicKey::from(&private_key);
+    js_bool(
+        cert_public_key.n() == private_public_key.n()
+            && cert_public_key.e() == private_public_key.e(),
+    )
 }
 
 fn throw_x509_parse_error(message: &str) -> ! {
@@ -818,6 +895,7 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
             | "checkEmail"
             | "checkIP"
             | "verify"
+            | "checkPrivateKey"
     ) {
         return dispatch_x509_method_property(handle, property);
     }
@@ -907,6 +985,7 @@ pub unsafe fn dispatch_x509_method(handle: i64, method: &str, args: &[f64]) -> f
             None => nanbox_undefined(),
         },
         "verify" => x509_verify_value(h, args),
+        "checkPrivateKey" => x509_check_private_key_value(h, args),
         _ => nanbox_undefined(),
     }
 }
@@ -936,6 +1015,7 @@ pub unsafe fn dispatch_x509_method_property(handle: i64, property: &str) -> f64 
         "checkEmail" => b"checkEmail",
         "checkIP" => b"checkIP",
         "verify" => b"verify",
+        "checkPrivateKey" => b"checkPrivateKey",
         _ => return nanbox_undefined(),
     };
     let this_f64 =
