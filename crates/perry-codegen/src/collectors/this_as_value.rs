@@ -228,6 +228,41 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
             };
             obj_unsafe || expr_uses_this_as_value(value, fields)
         }
+        // #4126 lowers `this.field = x` ctor stores as `PutValueSet` (with
+        // `target` and `receiver` both `Expr::This`) instead of `PropertySet`.
+        // Mirror the `PropertySet { object: This }` rule: a plain field store
+        // is the safe, scalar-replaceable pattern — only a `this.<method>`
+        // write or a `this` materialized in the value counts as this-as-value.
+        // Without this, every field-assigning constructor marks its class as
+        // using `this` as a value, forcing all instances onto the heap path
+        // (regressed scalar replacement / #945).
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            let target_unsafe = if matches!(target.as_ref(), Expr::This) {
+                match key.as_ref() {
+                    Expr::String(property) => !fields.contains(property),
+                    // Computed/dynamic key — can't prove it's a plain field.
+                    _ => true,
+                }
+            } else {
+                expr_uses_this_as_value(target, fields)
+            };
+            // For an ordinary `this.f = v` store the receiver mirrors the
+            // (safe) `This` target; don't double-count it as this-as-value.
+            let receiver_unsafe = if matches!(target.as_ref(), Expr::This)
+                && matches!(receiver.as_ref(), Expr::This)
+            {
+                false
+            } else {
+                expr_uses_this_as_value(receiver, fields)
+            };
+            target_unsafe || receiver_unsafe || expr_uses_this_as_value(value, fields)
+        }
         Expr::PropertyUpdate {
             object, property, ..
         } => {

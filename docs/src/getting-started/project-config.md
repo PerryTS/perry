@@ -93,7 +93,7 @@ writeFileSync(new URL("../generated/validator.cjs", import.meta.url), moduleCode
 
 Then import the generated validator like any other module:
 
-```ts
+```ts,no-test
 import validate from "./generated/validator.cjs";
 if (!validate(input)) throw new Error("invalid config");
 ```

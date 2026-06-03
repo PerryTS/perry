@@ -2,6 +2,37 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1113 — fix(inline): #945 restore scalar method inlining for PutValueSet constructors
+
+#4126 ("assignment PutValue descriptor semantics") changed `this.field = x`
+constructor stores to lower as `Expr::PutValueSet` instead of
+`Expr::PropertySet`. Three scalar-replacement / escape analyses only
+special-cased `PropertySet{object:This}`, so **every class whose constructor
+assigns a field** was treated as method-shadowing / `this`-escaping. That
+broadly disabled both method inlining and scalar replacement: the
+`run_issue_945_scalar_method_ir_guard.sh` compile-smoke guard regressed (a
+trivial `new C(); obj.getValue()` allocated + dispatched instead of folding to
+a scalar field read), and a large batch of parity tests regressed with it.
+
+Fixes, all mirroring the existing `PropertySet{object:This}` handling:
+- `perry-transform/src/inline/analysis.rs`
+  `construction_expr_can_affect_method_lookup`: add a `PutValueSet{target:This}`
+  arm so a plain field store isn't treated as a method-lookup shadow (restores
+  `method_lookup_safe = true`).
+- `perry-codegen/src/collectors/this_as_value.rs` `expr_uses_this_as_value`: add
+  a `PutValueSet` arm (target+receiver = `This`, string key) so a field store
+  isn't counted as materializing `this` as a value (restores non-escaping
+  scalar replacement).
+- `perry-transform/src/inline/exact_receivers.rs`
+  `invalidate_exact_receivers_for_expr`: add `PutValueSet` to the
+  fact-invalidating write set so an `obj.method = X` override at a use site
+  still suppresses inlining of the overridden method (#945 unsafe variants).
+
+`collectors/escape_check.rs` already grew a `PutValueSet` arm in #4126, so no
+change was needed there. Also tags two doc-example fences with `,no-test`
+(`getting-started/project-config.md`, `ui/on-frame.md`) so the repo-wide
+markdown-fence doc lint passes.
+
 ## v0.5.1112 — release: cut v0.5.1112
 
 Distribution release tagging the accumulated work since `v0.5.1028` (1198
