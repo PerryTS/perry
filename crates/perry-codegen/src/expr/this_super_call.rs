@@ -9,6 +9,7 @@ use anyhow::{anyhow, bail, Result};
 use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
 #[allow(unused_imports)]
 use perry_types::Type as HirType;
+use std::collections::HashSet;
 
 #[allow(unused_imports)]
 use crate::lower_call::{
@@ -108,6 +109,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
                 return Ok(double_literal(0.0));
             };
+            if ctx.class_stack.iter().any(|name| name == &parent_name) {
+                for a in super_args {
+                    let _ = lower_expr(ctx, a)?;
+                }
+                return Ok(double_literal(0.0));
+            }
             let parent_class = match ctx.classes.get(&parent_name).copied() {
                 Some(c) => c,
                 None => {
@@ -408,7 +415,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // preserves the args end-to-end.
             let mut effective_parent_name = parent_name.clone();
             let mut effective_parent_class = parent_class;
+            let mut seen_parent_names = HashSet::new();
+            let mut parent_depth = 0usize;
             loop {
+                parent_depth += 1;
+                if parent_depth > 64
+                    || !seen_parent_names.insert(effective_parent_name.clone())
+                    || ctx
+                        .class_stack
+                        .iter()
+                        .any(|name| name == &effective_parent_name)
+                {
+                    break;
+                }
                 let has_local_body = effective_parent_class.constructor.is_some();
                 let has_real_imported_ctor = ctx
                     .imported_class_ctors
@@ -432,7 +451,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 effective_parent_class = gp_class;
             }
 
-            if let Some(parent_ctor) = &effective_parent_class.constructor {
+            let effective_parent_is_active = ctx
+                .class_stack
+                .iter()
+                .any(|name| name == &effective_parent_name);
+            if effective_parent_is_active {
+                // Cyclic class metadata can otherwise inline the same constructor
+                // body through `super()` until codegen overflows its stack.
+            } else if let Some(parent_ctor) = &effective_parent_class.constructor {
                 let saved_scope =
                     bind_inline_constructor_params(ctx, &parent_ctor.params, &lowered_args);
 
@@ -578,7 +604,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // root-most-first order, then for current_class_name.
             let mut intermediates: Vec<String> = Vec::new();
             let mut walker = current_class.extends_name.as_deref().map(|s| s.to_string());
+            let mut seen_parent_names = HashSet::new();
+            let mut parent_depth = 0usize;
             while let Some(pname) = walker {
+                parent_depth += 1;
+                if parent_depth > 64 || !seen_parent_names.insert(pname.clone()) {
+                    break;
+                }
                 if pname == effective_parent_name {
                     break;
                 }

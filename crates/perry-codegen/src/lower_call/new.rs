@@ -7,6 +7,7 @@
 use anyhow::Result;
 use perry_hir::{Expr, Param};
 use perry_types::Type as HirType;
+use std::collections::HashSet;
 
 use super::lower_builtin_new;
 use crate::expr::{lower_expr, nanbox_pointer_inline, FnCtx};
@@ -305,7 +306,13 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         field_count = 32;
     }
     let mut parent = class.extends_name.as_deref();
+    let mut seen_parent_names = HashSet::new();
+    let mut parent_depth = 0usize;
     while let Some(parent_name) = parent {
+        parent_depth += 1;
+        if parent_depth > 64 || !seen_parent_names.insert(parent_name.to_string()) {
+            break;
+        }
         if let Some(p) = ctx.classes.get(parent_name).copied() {
             field_count += p.fields.len() as u32;
             parent = p.extends_name.as_deref();
@@ -550,7 +557,13 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         let mut packed_keys = String::new();
         let mut parent_chain: Vec<&perry_hir::Class> = Vec::new();
         let mut p = class.extends_name.as_deref();
+        let mut seen_parent_names = HashSet::new();
+        let mut parent_depth = 0usize;
         while let Some(parent_name) = p {
+            parent_depth += 1;
+            if parent_depth > 64 || !seen_parent_names.insert(parent_name.to_string()) {
+                break;
+            }
             if let Some(pc) = ctx.classes.get(parent_name).copied() {
                 parent_chain.push(pc);
                 p = pc.extends_name.as_deref();
@@ -652,8 +665,14 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         // Walk the inheritance chain to find the closest ancestor with
         // an explicit ctor — same logic as the body-inlining loop below.
         let mut walker = class.extends_name.as_deref();
+        let mut seen_parent_names = HashSet::new();
+        let mut parent_depth = 0usize;
         let mut found: Option<String> = None;
         while let Some(pname) = walker {
+            parent_depth += 1;
+            if parent_depth > 64 || !seen_parent_names.insert(pname.to_string()) {
+                break;
+            }
             if let Some(parent_class) = ctx.classes.get(pname).copied() {
                 if parent_class.constructor.is_some() {
                     found = Some(pname.to_string());
@@ -716,7 +735,13 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         // arguments to the parent constructor.
         let mut parent_name = class.extends_name.as_deref();
         let mut found_inherited_ctor = false;
+        let mut seen_parent_names = HashSet::new();
+        let mut parent_depth = 0usize;
         while let Some(pname) = parent_name {
+            parent_depth += 1;
+            if parent_depth > 64 || !seen_parent_names.insert(pname.to_string()) {
+                break;
+            }
             if let Some(parent_class) = ctx.classes.get(pname).copied() {
                 if let Some(parent_ctor) = &parent_class.constructor {
                     let saved_scope =
@@ -892,7 +917,13 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
             let lookup_class = class_name.to_string();
             let mut effective_class_name = lookup_class.clone();
             let mut effective_extends = class.extends_name.clone();
+            let mut seen_parent_names = HashSet::new();
+            let mut parent_depth = 0usize;
             loop {
+                parent_depth += 1;
+                if parent_depth > 64 || !seen_parent_names.insert(effective_class_name.clone()) {
+                    break;
+                }
                 let has_real_ctor = ctx
                     .imported_class_ctors
                     .get(&effective_class_name)
@@ -1129,7 +1160,13 @@ pub(crate) fn apply_field_initializers_recursive(
         }
     } else {
         let mut cur = Some(class_name.to_string());
+        let mut seen_parent_names = HashSet::new();
+        let mut parent_depth = 0usize;
         while let Some(c) = cur {
+            parent_depth += 1;
+            if parent_depth > 64 || !seen_parent_names.insert(c.clone()) {
+                break;
+            }
             let Some(class) = ctx.classes.get(&c).copied() else {
                 break;
             };

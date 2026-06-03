@@ -9,6 +9,7 @@ use anyhow::{anyhow, bail, Result};
 use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
 #[allow(unused_imports)]
 use perry_types::Type as HirType;
+use std::collections::HashSet;
 
 #[allow(unused_imports)]
 use crate::lower_call::{lower_call, lower_native_method_call, lower_new};
@@ -62,8 +63,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .classes
                 .get(&current_class_name)
                 .and_then(|c| c.extends_name.clone());
+            let mut seen_parent_names = HashSet::new();
+            let mut parent_depth = 0usize;
             let mut resolved_fn: Option<String> = None;
             while let Some(p) = parent {
+                parent_depth += 1;
+                if parent_depth > 64 || !seen_parent_names.insert(p.clone()) {
+                    break;
+                }
                 let key = (p.clone(), method.clone());
                 if let Some(fname) = ctx.methods.get(&key).cloned() {
                     resolved_fn = Some(fname);
@@ -119,8 +126,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .classes
                 .get(&current_class_name)
                 .and_then(|c| c.extends_name.clone());
+            let mut seen_parent_names = HashSet::new();
+            let mut parent_depth = 0usize;
             let mut resolved_fn: Option<String> = None;
             while let Some(p) = parent {
+                parent_depth += 1;
+                if parent_depth > 64 || !seen_parent_names.insert(p.clone()) {
+                    break;
+                }
                 let key = (p.clone(), property.clone());
                 if let Some(fname) = ctx.methods.get(&key).cloned() {
                     resolved_fn = Some(fname);

@@ -3,7 +3,7 @@
 use anyhow::{anyhow, Result};
 use clap::Args;
 use perry_hir::{Module as HirModule, ModuleKind};
-use rayon::prelude::*;
+use rayon::{prelude::*, ThreadPoolBuilder};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -102,6 +102,54 @@ use super::progress::{ProgressSnapshot, VerboseProgress};
 
 mod types;
 pub use types::*;
+
+const LARGE_CODEGEN_MODULE_COUNT: usize = 1024;
+const LARGE_CODEGEN_THREAD_CAP: usize = 1;
+
+fn codegen_thread_count(total_modules: usize, host_threads: usize) -> usize {
+    codegen_thread_count_with_override(
+        total_modules,
+        host_threads,
+        std::env::var("PERRY_CODEGEN_THREADS").ok().as_deref(),
+    )
+}
+
+fn codegen_thread_count_with_override(
+    total_modules: usize,
+    host_threads: usize,
+    override_value: Option<&str>,
+) -> usize {
+    let host_threads = host_threads.max(1);
+    if let Some(value) = override_value {
+        if let Ok(parsed) = value.parse::<usize>() {
+            if parsed > 0 {
+                return parsed;
+            }
+        }
+    }
+
+    if total_modules >= LARGE_CODEGEN_MODULE_COUNT {
+        host_threads.min(LARGE_CODEGEN_THREAD_CAP)
+    } else {
+        host_threads
+    }
+}
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn malloc_default_zone() -> *mut std::ffi::c_void;
+    fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
+}
+
+fn release_codegen_memory_pressure() {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        let zone = malloc_default_zone();
+        if !zone.is_null() {
+            let _ = malloc_zone_pressure_relief(zone, 0);
+        }
+    }
+}
 
 // `inject_ios_deeplinks`, `inject_google_auth_info_plist`, and
 // `lookup_bundle_id_from_info_plist` moved to `apple_info_plist.rs`.
@@ -1798,12 +1846,28 @@ pub fn run_with_parse_cache(
 
     let total_codegen_modules = ctx.native_modules.len();
     let codegen_modules_started = AtomicUsize::new(0);
-    let compile_results: Vec<Result<(PathBuf, Vec<u8>), String>> = ctx
+    let host_codegen_threads = std::thread::available_parallelism()
+        .map(|threads| threads.get())
+        .unwrap_or(1);
+    let codegen_threads = codegen_thread_count(total_codegen_modules, host_codegen_threads);
+    if verbose > 0 && codegen_threads < host_codegen_threads {
+        eprintln!(
+            "  • codegen threads: {} (host {}, modules {})",
+            codegen_threads, host_codegen_threads, total_codegen_modules
+        );
+    }
+    let codegen_pool = ThreadPoolBuilder::new()
+        .num_threads(codegen_threads)
+        .thread_name(|idx| format!("perry-codegen-{idx}"))
+        .build()
+        .map_err(|e| anyhow!("failed to create codegen thread pool: {}", e))?;
+    let compile_results: Vec<Result<PathBuf, String>> = codegen_pool.install(|| {
+        ctx
         .native_modules
         .par_iter()
         .map(|(path, hir_module)| {
-            // Compile this module to LLVM IR (or .ll text in bitcode-link mode)
-            // and return the object bytes for the linker to consume.
+            // Compile this module to object bytes (or .ll text in bitcode-link
+            // mode), write it immediately, and return only the path.
             let codegen_index = codegen_modules_started.fetch_add(1, Ordering::Relaxed) + 1;
             progress.record(ProgressSnapshot {
                 stage: "codegen",
@@ -3743,23 +3807,31 @@ pub fn run_with_parse_cache(
             // In bitcode mode the bytes are .ll text; use .ll extension.
             let ext = if bitcode_link { "ll" } else { "o" };
             let obj_path = PathBuf::from(format!("{}.{}", obj_name, ext));
-            return Ok((obj_path, object_code));
+            fs::write(&obj_path, &object_code).map_err(|e| {
+                format!(
+                    "Error writing object file '{}' for module '{}' ({}): {}",
+                    obj_path.display(),
+                    hir_module.name,
+                    path.display(),
+                    e
+                )
+            })?;
+            drop(object_code);
+            release_codegen_memory_pressure();
+            return Ok(obj_path);
         })
-        .collect();
+        .collect()
+    });
 
-    // Tier 4.4 (v0.5.336): partition compile results, then write object
-    // files in parallel via rayon. The OS handles concurrent writes to
-    // distinct paths, and codegen typically finishes producing bytes
-    // faster than a single thread can drain them to disk for projects
-    // with many modules. Pre-fix this was a single sequential
-    // `for ... fs::write(...)`. Errors from compilation print in source
-    // order (preserved); successful writes' "Wrote ..." messages print
-    // after all writes complete.
+    // Partition compile results. Each rayon worker already wrote its
+    // object file before returning, so the driver only retains paths
+    // here. Keeping every module's object bytes in a Vec until after
+    // codegen can OOM large graphs even after codegen itself completed.
     let mut failed_modules: Vec<String> = Vec::new();
-    let mut to_write: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    let mut written_obj_paths: Vec<PathBuf> = Vec::new();
     for result in compile_results {
         match result {
-            Ok(pair) => to_write.push(pair),
+            Ok(obj_path) => written_obj_paths.push(obj_path),
             Err(msg) => {
                 eprintln!("{}", msg);
                 // Extract module name from error message for
@@ -3772,25 +3844,9 @@ pub fn run_with_parse_cache(
         }
     }
 
-    // Parallel write phase. Returns one Result per write so we can
-    // bail on the first I/O error after the par_iter finishes.
-
-    let write_results: Vec<Result<(), std::io::Error>> = to_write
-        .par_iter()
-        .map(|(obj_path, object_code)| fs::write(obj_path, object_code))
-        .collect();
-
-    // Bail on first write failure (I/O errors are usually disk-full /
-    // permission, not per-file recoverable).
-    for r in write_results {
-        if let Err(e) = r {
-            return Err(e.into());
-        }
-    }
-
     // Sequential print + obj_paths collection (output grouped, source
     // order preserved).
-    for (obj_path, _) in to_write {
+    for obj_path in written_obj_paths {
         match format {
             OutputFormat::Text => {
                 let label = if obj_path.extension().and_then(|e| e.to_str()) == Some("ll") {
@@ -5224,6 +5280,32 @@ pub fn run_with_parse_cache(
         is_dylib,
         codegen_cache_stats,
     })
+}
+
+#[cfg(test)]
+mod codegen_thread_tests {
+    use super::{codegen_thread_count_with_override, LARGE_CODEGEN_MODULE_COUNT};
+
+    #[test]
+    fn large_graph_caps_codegen_threads() {
+        assert_eq!(
+            codegen_thread_count_with_override(LARGE_CODEGEN_MODULE_COUNT, 12, None),
+            1
+        );
+    }
+
+    #[test]
+    fn small_graph_uses_host_threads() {
+        assert_eq!(codegen_thread_count_with_override(8, 12, None), 12);
+    }
+
+    #[test]
+    fn env_override_takes_precedence() {
+        assert_eq!(
+            codegen_thread_count_with_override(LARGE_CODEGEN_MODULE_COUNT, 12, Some("4")),
+            4
+        );
+    }
 }
 
 #[cfg(test)]

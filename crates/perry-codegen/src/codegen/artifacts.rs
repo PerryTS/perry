@@ -293,7 +293,14 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 // params (cleared of ids — they'll be fresh).
                 let mut found_params: Vec<perry_hir::Param> = Vec::new();
                 let mut cur = class.extends_name.clone();
+                let mut seen_parent_names: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                let mut parent_depth = 0usize;
                 while let Some(pname) = cur {
+                    parent_depth += 1;
+                    if parent_depth > 64 || !seen_parent_names.insert(pname.clone()) {
+                        break;
+                    }
                     // v0.5.760: also consult `opts.imported_classes` for
                     // cross-module parent ctors. Pre-fix the loop fell
                     // through to the next ancestor when `class_table`'s

@@ -683,7 +683,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // The child here is a local class `c`, so its `extends` resolves in
         // this module's scope first.
         let mut child_prefix: Option<String> = Some(module_prefix.clone());
+        let mut seen_parent_names: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let mut parent_depth = 0usize;
         while let Some(parent_name) = p {
+            parent_depth += 1;
+            if parent_depth > 64 || !seen_parent_names.insert(parent_name.clone()) {
+                break;
+            }
             if let Some((parent_fields, parent_extends, resolved_prefix)) =
                 lookup_class_chain_link(&parent_name, child_prefix.as_deref())
             {
@@ -797,7 +804,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         let mut parent_chain: Vec<(String, Vec<perry_hir::ClassField>)> = Vec::new();
         let mut p = c.extends_name.clone();
         let mut child_prefix: Option<String> = Some(imported_stub_prefixes[c_idx].clone());
+        let mut seen_parent_names: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let mut parent_depth = 0usize;
         while let Some(parent_name) = p {
+            parent_depth += 1;
+            if parent_depth > 64 || !seen_parent_names.insert(parent_name.clone()) {
+                break;
+            }
             // Imported child: resolve the parent among imports first (prefix-
             // disambiguated, including locally-shadowed imports), so a same-
             // named LOCAL class does NOT hijack an imported chain (effect's

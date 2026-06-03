@@ -6,6 +6,7 @@
 
 use perry_hir::{BinaryOp, Expr, UnaryOp};
 use perry_types::Type as HirType;
+use std::collections::HashSet;
 
 use crate::expr::FnCtx;
 
@@ -1073,7 +1074,13 @@ pub(crate) fn declared_field_type(ctx: &FnCtx<'_>, object: &Expr, field: &str) -
         }
         // Walk the inheritance chain.
         let mut parent = class.extends_name.as_deref();
+        let mut seen_parent_names = HashSet::new();
+        let mut parent_depth = 0usize;
         while let Some(p) = parent {
+            parent_depth += 1;
+            if parent_depth > 64 || !seen_parent_names.insert(p.to_string()) {
+                break;
+            }
             let Some(pc) = ctx.classes.get(p) else { break };
             if let Some(f) = pc.fields.iter().find(|f| f.name == field) {
                 return Some(f.ty.clone());
@@ -1550,7 +1557,17 @@ pub(crate) fn class_field_global_index(
     fn count_keyable(fields: &[perry_hir::ClassField]) -> u32 {
         fields.iter().filter(|f| f.key_expr.is_none()).count() as u32
     }
-    fn walk(ctx: &FnCtx<'_>, class_name: &str, property: &str, offset: u32) -> Option<u32> {
+    fn walk(
+        ctx: &FnCtx<'_>,
+        class_name: &str,
+        property: &str,
+        offset: u32,
+        seen_class_names: &mut HashSet<String>,
+        depth: usize,
+    ) -> Option<u32> {
+        if depth > 64 || !seen_class_names.insert(class_name.to_string()) {
+            return None;
+        }
         let class = ctx.classes.get(class_name)?;
         // Bail if a getter/setter shadows the field — those need real
         // method dispatch, not a direct memory access.
@@ -1563,7 +1580,13 @@ pub(crate) fn class_field_global_index(
         let parent_count = if let Some(parent_name) = class.extends_name.as_deref() {
             let mut p_count = 0u32;
             let mut p = Some(parent_name.to_string());
+            let mut seen_parent_names = HashSet::new();
+            let mut parent_depth = 0usize;
             while let Some(name) = p {
+                parent_depth += 1;
+                if parent_depth > 64 || !seen_parent_names.insert(name.clone()) {
+                    return None;
+                }
                 if let Some(parent) = ctx.classes.get(&name) {
                     p_count += count_keyable(&parent.fields);
                     p = parent.extends_name.clone();
@@ -1591,11 +1614,19 @@ pub(crate) fn class_field_global_index(
         }
         // Otherwise walk into the parent chain looking for the field.
         if let Some(parent_name) = class.extends_name.as_deref() {
-            return walk(ctx, parent_name, property, offset);
+            return walk(
+                ctx,
+                parent_name,
+                property,
+                offset,
+                seen_class_names,
+                depth + 1,
+            );
         }
         None
     }
-    walk(ctx, class_name, property, 0)
+    let mut seen_class_names = HashSet::new();
+    walk(ctx, class_name, property, 0, &mut seen_class_names, 0)
 }
 
 pub(crate) fn class_field_declared_type(
@@ -1604,7 +1635,15 @@ pub(crate) fn class_field_declared_type(
     property: &str,
 ) -> Option<HirType> {
     let mut current = ctx.classes.get(class_name).copied();
+    let mut seen_class_names = HashSet::new();
+    let mut current_name = Some(class_name.to_string());
+    let mut parent_depth = 0usize;
     while let Some(cls) = current {
+        let name = current_name.take().unwrap_or_default();
+        parent_depth += 1;
+        if parent_depth > 64 || !seen_class_names.insert(name.clone()) {
+            return None;
+        }
         if let Some(field) = cls
             .fields
             .iter()
@@ -1612,8 +1651,8 @@ pub(crate) fn class_field_declared_type(
         {
             return Some(field.ty.clone());
         }
-        current = cls
-            .extends_name
+        current_name = cls.extends_name.clone();
+        current = current_name
             .as_deref()
             .and_then(|parent| ctx.classes.get(parent).copied());
     }
@@ -1673,7 +1712,13 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
                 .map(|f| &f.ty)
                 .or_else(|| {
                     let mut parent = class.extends_name.as_deref();
+                    let mut seen_parent_names = HashSet::new();
+                    let mut parent_depth = 0usize;
                     while let Some(p) = parent {
+                        parent_depth += 1;
+                        if parent_depth > 64 || !seen_parent_names.insert(p.to_string()) {
+                            break;
+                        }
                         if let Some(pc) = ctx.classes.get(p) {
                             if let Some(f) = pc.fields.iter().find(|f| f.name == *property) {
                                 return Some(&f.ty);
@@ -1817,7 +1862,13 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
                     .or_else(|| {
                         // Walk up the inheritance chain.
                         let mut parent = class.extends_name.as_deref();
+                        let mut seen_parent_names = HashSet::new();
+                        let mut parent_depth = 0usize;
                         while let Some(p) = parent {
+                            parent_depth += 1;
+                            if parent_depth > 64 || !seen_parent_names.insert(p.to_string()) {
+                                break;
+                            }
                             if let Some(pc) = ctx.classes.get(p) {
                                 if let Some(field) = pc.fields.iter().find(|f| f.name == *property)
                                 {

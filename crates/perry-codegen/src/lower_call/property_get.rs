@@ -2,6 +2,8 @@
 //! / instance-method dispatch — the big PropertyGet branch of
 //! `lower_call`. This is by far the longest helper in this directory.
 
+use std::collections::HashSet;
+
 use anyhow::Result;
 use perry_hir::Expr;
 
@@ -147,7 +149,13 @@ pub fn try_lower_property_get_method_call(
         let has_user_to_string = receiver_class_name(ctx, object)
             .map(|cls| {
                 let mut cur = Some(cls);
+                let mut seen = HashSet::new();
+                let mut depth = 0usize;
                 while let Some(c) = cur {
+                    depth += 1;
+                    if depth > 64 || !seen.insert(c.clone()) {
+                        break;
+                    }
                     if ctx
                         .methods
                         .contains_key(&(c.clone(), "toString".to_string()))
@@ -205,7 +213,13 @@ pub fn try_lower_property_get_method_call(
         let has_user_to_string = receiver_class_name(ctx, object)
             .map(|cls| {
                 let mut cur = Some(cls);
+                let mut seen = HashSet::new();
+                let mut depth = 0usize;
                 while let Some(c) = cur {
+                    depth += 1;
+                    if depth > 64 || !seen.insert(c.clone()) {
+                        break;
+                    }
                     if ctx
                         .methods
                         .contains_key(&(c.clone(), "toString".to_string()))
@@ -251,7 +265,13 @@ pub fn try_lower_property_get_method_call(
         let has_user_to_string = receiver_class_name(ctx, object)
             .map(|cls| {
                 let mut cur = Some(cls);
+                let mut seen = HashSet::new();
+                let mut depth = 0usize;
                 while let Some(c) = cur {
+                    depth += 1;
+                    if depth > 64 || !seen.insert(c.clone()) {
+                        break;
+                    }
                     if ctx
                         .methods
                         .contains_key(&(c.clone(), "toString".to_string()))
@@ -980,7 +1000,13 @@ pub fn try_lower_property_get_method_call(
         // (fn_name, is_static, declared_param_count, has_rest, is_synthetic_arguments)
         let mut resolved: Option<(String, bool, usize, bool, bool)> = None;
         let mut cur = Some(cls_name.clone());
+        let mut seen = HashSet::new();
+        let mut depth = 0usize;
         while let Some(c) = cur {
+            depth += 1;
+            if depth > 64 || !seen.insert(c.clone()) {
+                break;
+            }
             if let Some(class_info) = ctx.classes.get(&c) {
                 let sm = class_info
                     .static_methods
@@ -1125,7 +1151,13 @@ pub fn try_lower_property_get_method_call(
         {
             let mut field_owner: Option<String> = None;
             let mut fc = Some(cls_name.clone());
+            let mut seen = HashSet::new();
+            let mut depth = 0usize;
             while let Some(c) = fc {
+                depth += 1;
+                if depth > 64 || !seen.insert(c.clone()) {
+                    break;
+                }
                 if let Some(ci) = ctx.classes.get(&c) {
                     if ci
                         .static_fields
@@ -1346,7 +1378,13 @@ pub fn try_lower_property_get_method_call(
             std::collections::HashSet::new();
         for (start_cls, &start_cid) in ctx.class_ids.iter() {
             let mut cur: Option<String> = Some(start_cls.clone());
+            let mut seen = HashSet::new();
+            let mut depth = 0usize;
             while let Some(c) = cur {
+                depth += 1;
+                if depth > 64 || !seen.insert(c.clone()) {
+                    break;
+                }
                 let key = (c.clone(), property.clone());
                 if let Some(fname) = ctx.methods.get(&key).cloned() {
                     if seen_pairs.insert((start_cid, fname.clone())) {
@@ -1727,7 +1765,13 @@ pub fn try_lower_property_get_method_call(
         // Step 1: walk parent chain for the static method name.
         let mut static_fn: Option<String> = None;
         let mut current_class = Some(class_name.clone());
+        let mut seen = HashSet::new();
+        let mut depth = 0usize;
         while let Some(cur) = current_class {
+            depth += 1;
+            if depth > 64 || !seen.insert(cur.clone()) {
+                break;
+            }
             let key = (cur.clone(), property.clone());
             if let Some(fname) = ctx.methods.get(&key).cloned() {
                 static_fn = Some(fname);
@@ -1754,7 +1798,13 @@ pub fn try_lower_property_get_method_call(
                     .get(sub_name)
                     .and_then(|c| c.extends_name.clone());
                 let mut is_subclass = false;
+                let mut seen = HashSet::new();
+                let mut depth = 0usize;
                 while let Some(p) = parent {
+                    depth += 1;
+                    if depth > 64 || !seen.insert(p.clone()) {
+                        break;
+                    }
                     if p == class_name {
                         is_subclass = true;
                         break;
@@ -1768,7 +1818,13 @@ pub fn try_lower_property_get_method_call(
                 // own parent chain (NOT class_name's chain).
                 let mut cur = Some(sub_name.clone());
                 let mut sub_fn: Option<String> = None;
+                let mut seen = HashSet::new();
+                let mut depth = 0usize;
                 while let Some(c) = cur {
+                    depth += 1;
+                    if depth > 64 || !seen.insert(c.clone()) {
+                        break;
+                    }
                     let key = (c.clone(), property.clone());
                     if let Some(fname) = ctx.methods.get(&key).cloned() {
                         sub_fn = Some(fname);
@@ -1803,7 +1859,13 @@ pub fn try_lower_property_get_method_call(
             // so the unified arg_slices works for every concrete callee.
             let mut max_explicit_arity: usize = 0;
             let mut walk = Some(class_name.clone());
+            let mut seen = HashSet::new();
+            let mut depth = 0usize;
             while let Some(cur) = walk {
+                depth += 1;
+                if depth > 64 || !seen.insert(cur.clone()) {
+                    break;
+                }
                 let key = (cur.clone(), property.clone());
                 if let Some(&n) = ctx.method_param_counts.get(&key) {
                     if n > max_explicit_arity {
@@ -1837,7 +1899,13 @@ pub fn try_lower_property_get_method_call(
             let mut method_has_rest = false;
             let mut method_decl_count = max_explicit_arity;
             let mut rest_walk = Some(class_name.clone());
+            let mut seen = HashSet::new();
+            let mut depth = 0usize;
             while let Some(cur) = rest_walk {
+                depth += 1;
+                if depth > 64 || !seen.insert(cur.clone()) {
+                    break;
+                }
                 let key = (cur.clone(), property.clone());
                 if let Some(&true) = ctx.method_has_rest.get(&key) {
                     method_has_rest = true;
