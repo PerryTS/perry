@@ -1906,6 +1906,37 @@ pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Opt
     Some(crate::value::js_nanbox_pointer(proto as i64))
 }
 
+#[no_mangle]
+pub extern "C" fn js_function_prototype_value_for_read(func_value: f64) -> f64 {
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let jv = crate::value::JSValue::from_bits(func_value.to_bits());
+    if !jv.is_pointer() {
+        return undef;
+    }
+    let ptr = jv.as_pointer() as *const crate::closure::ClosureHeader;
+    if ptr.is_null() || !is_valid_obj_ptr(ptr as *const u8) {
+        return undef;
+    }
+    unsafe {
+        if (*ptr).type_tag != crate::closure::CLOSURE_MAGIC {
+            return undef;
+        }
+    }
+
+    let closure_addr = ptr as usize;
+    if crate::closure::closure_is_key_deleted(closure_addr, "prototype") {
+        return undef;
+    }
+    let dynamic = crate::closure::closure_get_dynamic_prop(closure_addr, "prototype");
+    if dynamic.to_bits() != crate::value::TAG_UNDEFINED {
+        return dynamic;
+    }
+    if let Some(proto) = generator_function_prototype_of(closure_addr) {
+        return proto;
+    }
+    ordinary_function_prototype_value_for_read(func_value).unwrap_or(undef)
+}
+
 /// Lookup helper: returns the registered prototype-method value for
 /// `(class_id, name)`, or None if no assignment matched. Walks the
 /// parent-class chain so methods registered on a base class are found

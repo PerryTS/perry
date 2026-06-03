@@ -1101,6 +1101,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, PTR, I64],
     );
+    module.declare_function("js_function_prototype_value_for_read", DOUBLE, &[DOUBLE]);
     module.declare_function("js_typeerror_new", I64, &[I64]);
     module.declare_function("js_rangeerror_new", I64, &[I64]);
     module.declare_function("js_syntaxerror_new", I64, &[I64]);

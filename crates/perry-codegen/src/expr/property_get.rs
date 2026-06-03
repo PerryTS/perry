@@ -452,23 +452,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let i32_v = blk.call(I32, "js_url_search_params_size", &[(I64, &recv_handle)]);
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
-
-        // `arr[i] = v` — typed-Number array element write.
-        //
-        // INLINE FAST PATH:
-        //
-        //   load length from arr_ptr+0
-        //   if idx < length: inline store, done
-        //   else if idx < capacity: inline store + bump length, done
-        //   else: call js_array_set_f64_extend (slow realloc path)
-        //
-        // The ArrayHeader layout is `{ length: u32, capacity: u32, ... }`
-        // (8 bytes), followed by `[f64; N]` elements at offset 8.
-        //
-        // For non-LocalGet receivers we still use bounds-checked
-        // `js_array_set_f64` (no return value, no realloc) since there's
-        // no local to write a possibly-realloc'd pointer back to.
         Expr::PropertyGet { object, property } => {
+            if property == "prototype"
+                && matches!(object.as_ref(), Expr::FuncRef(_) | Expr::Closure { .. })
+            {
+                let func_value = lower_expr(ctx, object)?;
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_function_prototype_value_for_read",
+                    &[(DOUBLE, &func_value)],
+                ));
+            }
             if let Some((builtin_name, method_name)) =
                 builtin_prototype_method_read(object, property)
             {
