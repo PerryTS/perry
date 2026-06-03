@@ -1,14 +1,8 @@
 //! WeakRef and FinalizationRegistry runtime support.
 //!
-//! Pragmatic / stub implementation: WeakRef holds a STRONG reference internally
-//! (so `deref()` always returns the wrapped value) and FinalizationRegistry stores
-//! registrations but never actually fires the cleanup callbacks. Implementing real
-//! weak references would require integrating with `gc.rs`'s mark phase and
-//! clearing the slot during sweep — that's a multi-day project, and most user code
-//! that uses these APIs only relies on their behaviour for the lifetime of the
-//! references (not on actual collection).
-//!
-//! This implementation matches the Node.js output for `test_gap_weakref_finalization.ts`.
+//! Weak target slots are skipped by the GC's strong-edge scanners. A pre-sweep
+//! weak pass clears collected WeakRef targets and records pending
+//! FinalizationRegistry cleanup jobs, which are queued after explicit `gc()`.
 
 use crate::array::{
     js_array_alloc, js_array_alloc_with_length, js_array_get_f64, js_array_length,
@@ -17,7 +11,10 @@ use crate::array::{
 use crate::object::{
     js_object_alloc_with_shape, js_object_get_field_by_name, js_object_set_field, ObjectHeader,
 };
-use crate::value::{js_nanbox_get_pointer, JSValue, POINTER_MASK};
+use crate::value::{
+    js_nanbox_get_pointer, JSValue, BIGINT_TAG, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_MASK,
+};
+use std::cell::RefCell;
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
@@ -25,8 +22,31 @@ const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 
 const WEAKREF_SHAPE_ID: u32 = 0x7FFF_FE10;
 const FINREG_SHAPE_ID: u32 = 0x7FFF_FE11;
+const FINREG_RECORD_SHAPE_ID: u32 = 0x7FFF_FE14;
 pub const CLASS_ID_WEAKREF: u32 = 0xFFFF_0029;
 pub const CLASS_ID_FINALIZATION_REGISTRY: u32 = 0xFFFF_002A;
+pub const CLASS_ID_FINALIZATION_RECORD: u32 = 0xFFFF_002B;
+
+const WEAKREF_TARGET_FIELD: usize = 0;
+const FINREG_CALLBACK_FIELD: usize = 0;
+const FINREG_ENTRIES_FIELD: usize = 1;
+const FINREG_RECORD_TARGET_FIELD: usize = 0;
+const FINREG_RECORD_TOKEN_FIELD: usize = 1;
+const FINREG_RECORD_HELD_FIELD: usize = 2;
+const FINREG_RECORD_PENDING_FIELD: usize = 3;
+
+#[derive(Clone, Copy)]
+struct PendingFinalizationJob {
+    registry: f64,
+    record: f64,
+    callback: f64,
+    held: f64,
+}
+
+thread_local! {
+    static PENDING_FINALIZATION_JOBS: RefCell<Vec<PendingFinalizationJob>> =
+        const { RefCell::new(Vec::new()) };
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WeakWrapperKind {
@@ -127,29 +147,149 @@ fn is_callable_value(value: f64) -> bool {
     crate::closure::is_closure_ptr((jv.bits() & POINTER_MASK) as usize)
 }
 
-/// Allocate a `WeakRef` wrapper object that strongly holds the target value
-/// in a single sentinel-named field. #1766: the field name uses a `__perry_`
-/// prefix so user code reading `(wr as any).target` returns `undefined` like
-/// Node, instead of leaking the internal storage slot.
+#[inline]
+unsafe fn object_field_slot(obj: *mut ObjectHeader, field_index: usize) -> *mut u64 {
+    (obj as *mut u8)
+        .add(std::mem::size_of::<ObjectHeader>())
+        .cast::<u64>()
+        .add(field_index)
+}
+
+#[inline]
+unsafe fn object_field_bits(obj: *mut ObjectHeader, field_index: usize) -> u64 {
+    *object_field_slot(obj, field_index)
+}
+
+#[inline]
+unsafe fn write_object_field_bits_raw(obj: *mut ObjectHeader, field_index: usize, bits: u64) {
+    *object_field_slot(obj, field_index) = bits;
+}
+
+#[inline]
+fn heap_ptr_from_tagged_bits(bits: u64) -> Option<usize> {
+    let tag = bits & TAG_MASK;
+    if tag != POINTER_TAG && tag != STRING_TAG && tag != BIGINT_TAG {
+        return None;
+    }
+    let ptr = (bits & POINTER_MASK) as usize;
+    (ptr >= 0x1000).then_some(ptr)
+}
+
+#[inline]
+unsafe fn header_from_user_addr(addr: usize) -> *mut crate::gc::GcHeader {
+    (addr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader
+}
+
+#[inline]
+unsafe fn value_points_to_gc_type(
+    bits: u64,
+    valid_ptrs: &crate::gc::ValidPointerSet,
+    obj_type: u8,
+) -> Option<usize> {
+    let ptr = heap_ptr_from_tagged_bits(bits)?;
+    if !valid_ptrs.contains(&ptr) {
+        return None;
+    }
+    let header = header_from_user_addr(ptr);
+    ((*header).obj_type == obj_type).then_some(ptr)
+}
+
+#[inline]
+unsafe fn object_value_with_class(
+    bits: u64,
+    valid_ptrs: &crate::gc::ValidPointerSet,
+    class_id: u32,
+) -> Option<*mut ObjectHeader> {
+    let ptr = value_points_to_gc_type(bits, valid_ptrs, crate::gc::GC_TYPE_OBJECT)?;
+    let obj = ptr as *mut ObjectHeader;
+    ((*obj).class_id == class_id).then_some(obj)
+}
+
+#[inline]
+unsafe fn object_value_to_array(
+    bits: u64,
+    valid_ptrs: &crate::gc::ValidPointerSet,
+) -> Option<*mut ArrayHeader> {
+    value_points_to_gc_type(bits, valid_ptrs, crate::gc::GC_TYPE_ARRAY)
+        .map(|ptr| ptr as *mut ArrayHeader)
+}
+
+#[inline]
+unsafe fn header_is_live(header: *mut crate::gc::GcHeader) -> bool {
+    (*header).gc_flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED) != 0
+}
+
+fn weak_target_should_clear(
+    target_bits: u64,
+    valid_ptrs: &crate::gc::ValidPointerSet,
+    minor_only: bool,
+) -> bool {
+    if target_bits == TAG_UNDEFINED {
+        return false;
+    }
+    let target = f64::from_bits(target_bits);
+    if crate::value::is_js_handle(target) {
+        return false;
+    }
+    let Some(ptr) = heap_ptr_from_tagged_bits(target_bits) else {
+        return false;
+    };
+    if !valid_ptrs.contains(&ptr) {
+        return true;
+    }
+    if minor_only && !crate::arena::pointer_in_nursery(ptr) {
+        return false;
+    }
+    unsafe {
+        let header = header_from_user_addr(ptr);
+        !header_is_live(header)
+    }
+}
+
+/// True when `slot` is a weak target edge and must not be treated as a
+/// strong child during mark/remembered-set scans. Rewrite/copy passes should
+/// still visit these slots so live weak targets get moved addresses repaired.
+pub(crate) unsafe fn is_weak_target_trace_slot(
+    header: *mut crate::gc::GcHeader,
+    slot: *mut u64,
+) -> bool {
+    if header.is_null() || (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        return false;
+    }
+    let obj = (header as *mut u8).add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
+    match (*obj).class_id {
+        CLASS_ID_WEAKREF | CLASS_ID_FINALIZATION_RECORD => {
+            (*obj).field_count > 0 && slot == object_field_slot(obj, 0)
+        }
+        _ => false,
+    }
+}
+
+/// Allocate a `WeakRef` wrapper object. The target is stored in a normal object
+/// field for relocation, but GC mark/remembered-set scans skip that field.
 #[no_mangle]
 pub extern "C" fn js_weakref_new(target: f64) -> *mut ObjectHeader {
     if !is_valid_weak_target(target) {
         weakref_type_error("WeakRef: invalid target");
     }
 
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_nanbox_f64(target);
     let packed = b"__perry_wr_target\0";
     let obj = js_object_alloc_with_shape(WEAKREF_SHAPE_ID, 1, packed.as_ptr(), packed.len() as u32);
-    js_object_set_field(obj, 0, JSValue::from_bits(target.to_bits()));
+    js_object_set_field(
+        obj,
+        WEAKREF_TARGET_FIELD as u32,
+        JSValue::from_bits(target_handle.get_nanbox_u64()),
+    );
     unsafe {
         (*obj).class_id = CLASS_ID_WEAKREF;
     }
     obj
 }
 
-/// Return the wrapped value (or `undefined` if the WeakRef pointer is null).
-/// Stub: a real implementation would return undefined once the GC has collected
-/// the target — Perry's GC doesn't yet track weak references, so this always
-/// returns the strongly-held target.
+/// Return the wrapped value, or `undefined` after the weak target has been
+/// cleared by GC.
 #[no_mangle]
 pub extern "C" fn js_weakref_deref(weakref: f64) -> f64 {
     let ptr = js_nanbox_get_pointer(weakref) as *mut ObjectHeader;
@@ -166,32 +306,73 @@ pub extern "C" fn js_weakref_deref(weakref: f64) -> f64 {
 }
 
 /// Allocate a `FinalizationRegistry` wrapper. The first field stores the cleanup
-/// callback, the second field stores a registrations array — each entry is a
-/// 2-element `[token, held]` array used by `unregister(token)` to find matches.
+/// callback, the second field stores finalization record objects.
 #[no_mangle]
 pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
     if !is_callable_value(callback) {
         weakref_type_error("FinalizationRegistry: cleanup must be callable");
     }
 
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callback_handle = scope.root_nanbox_f64(callback);
     // #1766: sentinel-name internal slots so `(fr as any).callback` /
     // `.entries` return `undefined` like Node.
     let packed = b"__perry_fr_callback\0__perry_fr_entries\0";
     let obj = js_object_alloc_with_shape(FINREG_SHAPE_ID, 2, packed.as_ptr(), packed.len() as u32);
-    js_object_set_field(obj, 0, JSValue::from_bits(callback.to_bits()));
+    js_object_set_field(
+        obj,
+        FINREG_CALLBACK_FIELD as u32,
+        JSValue::from_bits(callback_handle.get_nanbox_u64()),
+    );
     let entries_arr = js_array_alloc(0);
-    js_object_set_field(obj, 1, JSValue::array_ptr(entries_arr));
+    js_object_set_field(
+        obj,
+        FINREG_ENTRIES_FIELD as u32,
+        JSValue::array_ptr(entries_arr),
+    );
     unsafe {
         (*obj).class_id = CLASS_ID_FINALIZATION_REGISTRY;
     }
     obj
 }
 
+fn js_finreg_record_new(target: f64, held: f64, token: f64) -> *mut ObjectHeader {
+    let packed = b"__perry_fr_target\0__perry_fr_token\0__perry_fr_held\0__perry_fr_pending\0";
+    let record = js_object_alloc_with_shape(
+        FINREG_RECORD_SHAPE_ID,
+        4,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+    js_object_set_field(
+        record,
+        FINREG_RECORD_TARGET_FIELD as u32,
+        JSValue::from_bits(target.to_bits()),
+    );
+    js_object_set_field(
+        record,
+        FINREG_RECORD_TOKEN_FIELD as u32,
+        JSValue::from_bits(token.to_bits()),
+    );
+    js_object_set_field(
+        record,
+        FINREG_RECORD_HELD_FIELD as u32,
+        JSValue::from_bits(held.to_bits()),
+    );
+    js_object_set_field(
+        record,
+        FINREG_RECORD_PENDING_FIELD as u32,
+        JSValue::from_bits(TAG_FALSE),
+    );
+    unsafe {
+        (*record).class_id = CLASS_ID_FINALIZATION_RECORD;
+    }
+    record
+}
+
 /// Register a (target, held value, optional token) triple. Returns undefined.
-/// We append a small `[token, held]` 2-element array to the registry's `entries`
-/// array so a later `unregister(token)` can find and remove it. If no token is
-/// provided, we still record an `[undefined, held]` pair so the registration count
-/// is correct (but it can never be unregistered).
+/// The record's target slot is weak; token and held are traced strongly so
+/// `unregister(token)` and eventual cleanup delivery remain deterministic.
 #[no_mangle]
 pub extern "C" fn js_finreg_register(registry: f64, target: f64, held: f64, token: f64) -> f64 {
     if !is_valid_weak_target(target) {
@@ -206,22 +387,37 @@ pub extern "C" fn js_finreg_register(registry: f64, target: f64, held: f64, toke
         weakref_type_error("Invalid unregisterToken");
     }
 
-    let reg_ptr = js_nanbox_get_pointer(registry) as *mut ObjectHeader;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let registry_handle = scope.root_nanbox_f64(registry);
+    let target_handle = scope.root_nanbox_f64(target);
+    let held_handle = scope.root_nanbox_f64(held);
+    let token_handle = scope.root_nanbox_f64(token);
+
+    let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
     if reg_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
+    let record = js_finreg_record_new(
+        target_handle.get_nanbox_f64(),
+        held_handle.get_nanbox_f64(),
+        token_handle.get_nanbox_f64(),
+    );
+    let record_val = f64::from_bits(JSValue::pointer(record as *const u8).bits());
+    let record_handle = scope.root_nanbox_f64(record_val);
+    let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
     let entries_key = crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18);
     let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
     let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
     if entries_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    // Build a 2-element array: [token, held]
-    let pair = js_array_alloc_with_length(2);
-    js_array_set_f64(pair, 0, token);
-    js_array_set_f64(pair, 1, held);
-    let pair_val = f64::from_bits(JSValue::array_ptr(pair).bits());
-    js_array_push_f64(entries_ptr, pair_val);
+    let entries_ptr = js_array_push_f64(entries_ptr, record_handle.get_nanbox_f64());
+    let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
+    js_object_set_field(
+        reg_ptr,
+        FINREG_ENTRIES_FIELD as u32,
+        JSValue::array_ptr(entries_ptr),
+    );
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -235,7 +431,11 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
         weakref_type_error("Invalid unregisterToken");
     }
 
-    let reg_ptr = js_nanbox_get_pointer(registry) as *mut ObjectHeader;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let registry_handle = scope.root_nanbox_f64(registry);
+    let token_handle = scope.root_nanbox_f64(token);
+
+    let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
     if reg_ptr.is_null() {
         return f64::from_bits(TAG_FALSE);
     }
@@ -247,28 +447,223 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
     }
     let len = js_array_length(entries_ptr) as usize;
     let mut found = false;
-    // Rebuild the entries array without the matching pairs.
-    let new_arr = js_array_alloc(0);
+    // Rebuild the entries array without matching records.
+    let new_arr_handle = scope.root_raw_mut_ptr(js_array_alloc(len as u32));
+    let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
+    let entries_key = crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18);
+    let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
+    let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
+    if entries_ptr.is_null() {
+        return f64::from_bits(TAG_FALSE);
+    }
+    let len = js_array_length(entries_ptr) as usize;
+    let token_bits = token_handle.get_nanbox_u64();
     for i in 0..len {
-        let pair_val_f = js_array_get_f64(entries_ptr, i as u32);
-        let pair_ptr = (pair_val_f.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
-        if pair_ptr.is_null() {
+        let record_val = js_array_get_f64(entries_ptr, i as u32);
+        let record_ptr = (record_val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
+        if record_ptr.is_null() {
             continue;
         }
-        let stored_token = js_array_get_f64(pair_ptr, 0);
-        if stored_token.to_bits() == token.to_bits() {
+        let stored_token = unsafe { object_field_bits(record_ptr, FINREG_RECORD_TOKEN_FIELD) };
+        if stored_token == token_bits {
             found = true;
             continue;
         }
-        js_array_push_f64(new_arr, pair_val_f);
+        let pushed = js_array_push_f64(new_arr_handle.get_raw_mut_ptr(), record_val);
+        new_arr_handle.set_raw_mut_ptr(pushed);
     }
     // Replace entries field with the new array.
-    js_object_set_field(reg_ptr, 1, JSValue::array_ptr(new_arr));
+    let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
+    js_object_set_field(
+        reg_ptr,
+        FINREG_ENTRIES_FIELD as u32,
+        JSValue::array_ptr(new_arr_handle.get_raw_mut_ptr()),
+    );
     if found {
         f64::from_bits(TAG_TRUE)
     } else {
         f64::from_bits(TAG_FALSE)
     }
+}
+
+pub(crate) fn clear_pending_finalization_jobs() {
+    PENDING_FINALIZATION_JOBS.with(|jobs| jobs.borrow_mut().clear());
+}
+
+pub(crate) fn scan_pending_finalization_jobs_roots_mut(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+) {
+    PENDING_FINALIZATION_JOBS.with(|jobs| {
+        for job in jobs.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_f64_slot(&mut job.registry);
+            visitor.visit_nanbox_f64_slot(&mut job.record);
+            visitor.visit_nanbox_f64_slot(&mut job.callback);
+            visitor.visit_nanbox_f64_slot(&mut job.held);
+        }
+    });
+}
+
+pub(crate) fn process_weak_targets_after_mark(
+    valid_ptrs: &crate::gc::ValidPointerSet,
+    minor_only: bool,
+    enqueue_callbacks: bool,
+) {
+    crate::arena::arena_walk_objects(|header_ptr| unsafe {
+        let header = header_ptr as *mut crate::gc::GcHeader;
+        if (*header).obj_type != crate::gc::GC_TYPE_OBJECT || !header_is_live(header) {
+            return;
+        }
+        let obj = header_ptr.add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
+        match (*obj).class_id {
+            CLASS_ID_WEAKREF => process_weakref_after_mark(obj, valid_ptrs, minor_only),
+            CLASS_ID_FINALIZATION_REGISTRY => {
+                process_finreg_after_mark(obj, valid_ptrs, minor_only, enqueue_callbacks);
+            }
+            _ => {}
+        }
+    });
+}
+
+unsafe fn process_weakref_after_mark(
+    obj: *mut ObjectHeader,
+    valid_ptrs: &crate::gc::ValidPointerSet,
+    minor_only: bool,
+) {
+    let target_bits = object_field_bits(obj, WEAKREF_TARGET_FIELD);
+    if weak_target_should_clear(target_bits, valid_ptrs, minor_only) {
+        write_object_field_bits_raw(obj, WEAKREF_TARGET_FIELD, TAG_UNDEFINED);
+    }
+}
+
+unsafe fn process_finreg_after_mark(
+    registry: *mut ObjectHeader,
+    valid_ptrs: &crate::gc::ValidPointerSet,
+    minor_only: bool,
+    enqueue_callbacks: bool,
+) {
+    let callback = f64::from_bits(object_field_bits(registry, FINREG_CALLBACK_FIELD));
+    let entries_bits = object_field_bits(registry, FINREG_ENTRIES_FIELD);
+    let Some(entries) = object_value_to_array(entries_bits, valid_ptrs) else {
+        return;
+    };
+    let len = js_array_length(entries) as usize;
+    let registry_value = f64::from_bits(JSValue::pointer(registry as *const u8).bits());
+    for i in 0..len {
+        let record_value = js_array_get_f64(entries, i as u32);
+        let Some(record) = object_value_with_class(
+            record_value.to_bits(),
+            valid_ptrs,
+            CLASS_ID_FINALIZATION_RECORD,
+        ) else {
+            continue;
+        };
+        process_finreg_record_after_mark(
+            registry_value,
+            record,
+            callback,
+            valid_ptrs,
+            minor_only,
+            enqueue_callbacks,
+        );
+    }
+}
+
+unsafe fn process_finreg_record_after_mark(
+    registry: f64,
+    record: *mut ObjectHeader,
+    callback: f64,
+    valid_ptrs: &crate::gc::ValidPointerSet,
+    minor_only: bool,
+    enqueue_callbacks: bool,
+) {
+    let pending_bits = object_field_bits(record, FINREG_RECORD_PENDING_FIELD);
+    let target_bits = object_field_bits(record, FINREG_RECORD_TARGET_FIELD);
+    let collected = weak_target_should_clear(target_bits, valid_ptrs, minor_only);
+    if collected {
+        write_object_field_bits_raw(record, FINREG_RECORD_TARGET_FIELD, TAG_UNDEFINED);
+        write_object_field_bits_raw(record, FINREG_RECORD_PENDING_FIELD, TAG_TRUE);
+    }
+
+    if enqueue_callbacks && (pending_bits == TAG_TRUE || collected) {
+        let held = f64::from_bits(object_field_bits(record, FINREG_RECORD_HELD_FIELD));
+        let record_value = f64::from_bits(JSValue::pointer(record as *const u8).bits());
+        PENDING_FINALIZATION_JOBS.with(|jobs| {
+            jobs.borrow_mut().push(PendingFinalizationJob {
+                registry,
+                record: record_value,
+                callback,
+                held,
+            });
+        });
+        write_object_field_bits_raw(record, FINREG_RECORD_PENDING_FIELD, TAG_FALSE);
+    }
+}
+
+pub(crate) fn queue_pending_finalization_callbacks_after_gc() {
+    let jobs = PENDING_FINALIZATION_JOBS.with(|jobs| std::mem::take(&mut *jobs.borrow_mut()));
+    for job in jobs {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let registry = scope.root_nanbox_f64(job.registry);
+        let record = scope.root_nanbox_f64(job.record);
+        let callback = scope.root_nanbox_f64(job.callback);
+        let held = scope.root_nanbox_f64(job.held);
+        let callback_ptr = js_nanbox_get_pointer(callback.get_nanbox_f64()) as usize;
+        if callback_ptr >= 0x1000 && crate::closure::is_closure_ptr(callback_ptr) {
+            let held_arg = held.get_nanbox_f64();
+            unsafe {
+                crate::builtins::js_queue_next_tick_args(callback_ptr as i64, &held_arg, 1);
+            }
+        }
+        remove_finalization_record_from_registry(
+            registry.get_nanbox_f64(),
+            record.get_nanbox_f64(),
+        );
+    }
+}
+
+fn remove_finalization_record_from_registry(registry: f64, record: f64) {
+    let reg_ptr = js_nanbox_get_pointer(registry) as *mut ObjectHeader;
+    if reg_ptr.is_null() {
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let registry_handle = scope.root_nanbox_f64(registry);
+    let record_handle = scope.root_nanbox_f64(record);
+    let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
+    if reg_ptr.is_null() {
+        return;
+    }
+    let entries_key = crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18);
+    let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
+    let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
+    if entries_ptr.is_null() {
+        return;
+    }
+    let len = js_array_length(entries_ptr) as usize;
+    let new_arr_handle = scope.root_raw_mut_ptr(js_array_alloc(len as u32));
+    let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
+    let entries_key = crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18);
+    let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
+    let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
+    if entries_ptr.is_null() {
+        return;
+    }
+    let record_bits = record_handle.get_nanbox_f64().to_bits();
+    let len = js_array_length(entries_ptr) as usize;
+    for i in 0..len {
+        let current = js_array_get_f64(entries_ptr, i as u32);
+        if current.to_bits() == record_bits {
+            continue;
+        }
+        let pushed = js_array_push_f64(new_arr_handle.get_raw_mut_ptr(), current);
+        new_arr_handle.set_raw_mut_ptr(pushed);
+    }
+    let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
+    js_object_set_field(
+        reg_ptr,
+        FINREG_ENTRIES_FIELD as u32,
+        JSValue::array_ptr(new_arr_handle.get_raw_mut_ptr()),
+    );
 }
 
 // =============================================================================

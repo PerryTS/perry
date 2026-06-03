@@ -552,8 +552,10 @@ pub(super) fn flush_deferred_gc_request() {
             if manual_gc_blocked_by_unsafe_zone() {
                 return;
             }
+            crate::weakref::clear_pending_finalization_jobs();
             gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Manual))
                 .emit_after_current();
+            crate::weakref::queue_pending_finalization_callbacks_after_gc();
         }
         DeferredGcRequest::Collect(kind) => {
             if gc_blocked_by_unsafe_zone() {
@@ -1549,8 +1551,10 @@ pub extern "C" fn js_gc_collect() {
     if defer_gc_request(DeferredGcRequest::Collect(GcTriggerKind::Manual)) {
         return;
     }
+    crate::weakref::clear_pending_finalization_jobs();
     gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Manual))
         .emit_after_current();
+    crate::weakref::queue_pending_finalization_callbacks_after_gc();
 }
 
 pub(super) fn gc_blocked_by_unsafe_zone() -> bool {

@@ -130,13 +130,15 @@ impl DirtyHeaderSlotScan {
         while *remaining > 0 && self.cursor < self.work.len() {
             match &mut self.work[self.cursor] {
                 DirtySlotWork::Single { slot, layout_kind } => unsafe {
-                    process_dirty_slot_work(
-                        *slot,
-                        *layout_kind,
-                        stats,
-                        visit_slot,
-                        &mut self.changed,
-                    );
+                    if !crate::weakref::is_weak_target_trace_slot(self.header, *slot) {
+                        process_dirty_slot_work(
+                            *slot,
+                            *layout_kind,
+                            stats,
+                            visit_slot,
+                            &mut self.changed,
+                        );
+                    }
                     self.cursor += 1;
                     *remaining -= 1;
                 },
@@ -147,13 +149,15 @@ impl DirtyHeaderSlotScan {
                     }
                     while *remaining > 0 && range.cursor < range.end {
                         let slot = range.slots.add(range.cursor);
-                        process_dirty_slot_work(
-                            slot,
-                            range.layout_kind,
-                            stats,
-                            visit_slot,
-                            &mut self.changed,
-                        );
+                        if !crate::weakref::is_weak_target_trace_slot(self.header, slot) {
+                            process_dirty_slot_work(
+                                slot,
+                                range.layout_kind,
+                                stats,
+                                visit_slot,
+                                &mut self.changed,
+                            );
+                        }
                         range.cursor += 1;
                         *remaining -= 1;
                     }
@@ -628,6 +632,9 @@ pub(super) unsafe fn scan_dirty_object_slots(
     visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
         match descriptor {
             GcMutableSlotDescriptor::Slot(slot) => {
+                if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+                    return;
+                }
                 if let Some(layout_kind) = slot.layout_kind {
                     scan_dirty_slot_with_layout(
                         slot.slot,
@@ -641,22 +648,20 @@ pub(super) unsafe fn scan_dirty_object_slots(
                 }
             }
             GcMutableSlotDescriptor::Range { range, layout_kind } => {
-                if let Some(layout_kind) = layout_kind {
-                    scan_dirty_slot_range_with_layout(
-                        range,
-                        layout_kind,
-                        dirty_pages,
-                        stats,
-                        visit_slot,
-                    );
-                } else {
-                    scan_dirty_slot_range(
-                        range.slots(),
-                        range.slot_count(),
-                        dirty_pages,
-                        stats,
-                        visit_slot,
-                    );
+                for (start, end) in dirty_slot_ranges_for(range, dirty_pages, stats) {
+                    stats.dirty_slot_ranges_scanned += 1;
+                    for i in start..end {
+                        let slot = range.slot(i);
+                        if crate::weakref::is_weak_target_trace_slot(header, slot) {
+                            continue;
+                        }
+                        if let Some(layout_kind) = layout_kind {
+                            record_layout_child_slot_read(layout_kind);
+                        }
+                        stats.dirty_slots_scanned += 1;
+                        crate::arena::old_page_account_dirty_slot(slot as usize);
+                        visit_slot(slot, stats);
+                    }
                 }
             }
             GcMutableSlotDescriptor::PointerFreeRange => {}

@@ -154,6 +154,9 @@ pub(super) unsafe fn remember_evacuated_old_copy_young_slots(
         return;
     }
     visit_gc_rewrite_slots(header, |slot| unsafe {
+        if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+            return;
+        }
         slot.record_layout_read();
         remember_evacuated_old_to_young_slot(sticky, header, slot.slot);
     });
@@ -187,6 +190,9 @@ unsafe fn remember_retained_old_to_young_slots(
         return;
     }
     visit_gc_rewrite_slots(header, |slot| unsafe {
+        if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+            return;
+        }
         slot.record_layout_read();
         remember_evacuated_old_to_young_slot(sticky, header, slot.slot);
     });
@@ -385,6 +391,9 @@ pub(super) unsafe fn verify_old_young_parent_slots_covered(
     }
     stats.checked_old_objects = stats.checked_old_objects.saturating_add(1);
     visit_gc_rewrite_slots(header, |slot| unsafe {
+        if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+            return;
+        }
         slot.record_layout_read();
         verify_old_young_slot_covered(snapshot, stats, header, slot.slot);
     });
@@ -484,6 +493,9 @@ pub(super) unsafe fn verify_marked_object_child_marks(
     let parent = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
     stats.checked_marked_objects = stats.checked_marked_objects.saturating_add(1);
     visit_gc_rewrite_slots(header, |slot| unsafe {
+        if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+            return;
+        }
         slot.record_layout_read();
         let Some((child, child_header)) = current_heap_header_for_heap_word(*slot.slot, None)
         else {

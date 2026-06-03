@@ -780,6 +780,7 @@ fn run_malloc_trim(progress_kind: GcProgressKind) -> MallocTrimOutcome {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AtomicFinalizeSubphase {
+    WeakProcessing,
     MinorPrelude,
     BarrierSeedDrain,
     RememberedSetRebuild,
@@ -796,7 +797,7 @@ struct AtomicFinalizeCycleState {
 impl AtomicFinalizeCycleState {
     fn new(collection_kind: GcCollectionKind) -> Self {
         let subphase = match collection_kind {
-            GcCollectionKind::Minor => AtomicFinalizeSubphase::MinorPrelude,
+            GcCollectionKind::Minor => AtomicFinalizeSubphase::WeakProcessing,
             GcCollectionKind::Full => AtomicFinalizeSubphase::BarrierSeedDrain,
         };
         Self {
@@ -809,6 +810,7 @@ impl AtomicFinalizeCycleState {
 
 pub(super) struct GcCycleState {
     collection_kind: GcCollectionKind,
+    trigger_kind: GcTriggerKind,
     progress_kind: GcProgressKind,
     phase: GcCyclePhase,
     trace: Option<GcCycleTrace>,
@@ -831,13 +833,15 @@ pub(super) struct GcCycleState {
 
 impl GcCycleState {
     pub(super) fn new_full(trigger: GcTriggerSnapshot) -> Self {
+        let trigger_kind = trigger.kind;
         let trace = GcCycleTrace::new(GcCollectionKind::Full, trigger);
         let start = Instant::now();
         crate::arena::old_pages_begin_gc_cycle();
         clear_mark_seeds();
         Self {
             collection_kind: GcCollectionKind::Full,
-            progress_kind: trigger.kind.progress_kind(GcCollectionKind::Full),
+            trigger_kind,
+            progress_kind: trigger_kind.progress_kind(GcCollectionKind::Full),
             phase: GcCyclePhase::BuildValidPointerSet,
             trace,
             active_elapsed: start.elapsed(),
@@ -873,8 +877,10 @@ impl GcCycleState {
         old_page_source_blocks: crate::arena::OldArenaSourceBlockSelection,
     ) -> Self {
         let malloc_sweep_due = copied_minor_malloc_sweep_due(trigger.kind);
+        let trigger_kind = trigger.kind;
         Self {
             collection_kind: GcCollectionKind::Minor,
+            trigger_kind,
             progress_kind,
             phase: GcCyclePhase::BuildValidPointerSet,
             trace,
@@ -1145,6 +1151,28 @@ impl GcCycleState {
             .expect("atomic finalize state exists")
             .subphase;
         match subphase {
+            AtomicFinalizeSubphase::WeakProcessing => {
+                if budget == 0 {
+                    return;
+                }
+                let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
+                let minor_only = self.minor.is_some();
+                let enqueue_callbacks = matches!(self.trigger_kind, GcTriggerKind::Manual);
+                crate::weakref::process_weak_targets_after_mark(
+                    valid_ptrs,
+                    minor_only,
+                    enqueue_callbacks,
+                );
+                let next = if minor_only {
+                    AtomicFinalizeSubphase::MinorPrelude
+                } else {
+                    AtomicFinalizeSubphase::DisableBarrier
+                };
+                self.atomic_finalize
+                    .as_mut()
+                    .expect("atomic finalize state exists")
+                    .subphase = next;
+            }
             AtomicFinalizeSubphase::MinorPrelude => {
                 if budget == 0 {
                     return;
@@ -1204,7 +1232,7 @@ impl GcCycleState {
                         self.atomic_finalize
                             .as_mut()
                             .expect("atomic finalize state exists")
-                            .subphase = AtomicFinalizeSubphase::DisableBarrier;
+                            .subphase = AtomicFinalizeSubphase::WeakProcessing;
                     }
                 }
             }

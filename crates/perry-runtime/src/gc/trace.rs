@@ -752,6 +752,9 @@ pub(super) unsafe fn trace_heap_rewrite_slots(
     worklist: &mut Vec<*mut GcHeader>,
 ) {
     visit_gc_rewrite_slots(header, |slot| unsafe {
+        if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+            return;
+        }
         slot.record_layout_read();
         if slot.layout_kind.is_some() {
             record_trace_slot_read();
