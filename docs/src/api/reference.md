@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2668 entries across 109 modules.
+Total: 2670 entries across 109 modules.
 
 ## Modules
 
@@ -407,8 +407,10 @@ Total: 2668 entries across 109 modules.
 
 - `assert` — module
 - `clear` — module
+- `context` — module
 - `count` — module
 - `countReset` — module
+- `createTask` — module
 - `debug` — module
 - `dir` — module
 - `dirxml` — module
