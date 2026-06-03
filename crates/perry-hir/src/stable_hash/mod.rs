@@ -46,6 +46,7 @@ mod widgets;
 mod tests;
 
 use crate::ir::Module;
+use perry_types::Type;
 use primitives::SH;
 
 /// Streaming hasher — minimal API so any djb2/fnv/blake variant can plug in.
@@ -64,6 +65,19 @@ pub fn hash_module(m: &Module) -> u64 {
 /// Streaming variant — fold the HIR hash into an existing `StableHasher`.
 pub fn hash_module_with<H: StableHasher>(m: &Module, h: &mut H) {
     SH::hash(m, h);
+}
+
+/// Convenience: hash a Perry type to a `u64` using the same stable
+/// serialization used by HIR hashes.
+pub fn hash_type(ty: &Type) -> u64 {
+    let mut h = Djb2Hasher::new();
+    hash_type_with(ty, &mut h);
+    h.finish()
+}
+
+/// Streaming variant for folding a type into an existing stable hasher.
+pub fn hash_type_with<H: StableHasher>(ty: &Type, h: &mut H) {
+    SH::hash(ty, h);
 }
 
 /// Local djb2 implementation, mirrored from

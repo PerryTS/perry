@@ -71,11 +71,11 @@ use library_search::{
     find_runtime_library, find_stdlib_library, find_ui_library, find_wasm_host_library,
     windows_pe_subsystem_flag,
 };
-use link::build_and_run_link;
+use link::{build_and_run_link, write_link_cache_manifest};
 pub use lock_scan::collect_native_archives_for_lock;
 pub(crate) use lock_scan::run_lock_verify_for_compile;
-use object_cache::compute_object_cache_key;
 pub use object_cache::ObjectCache;
+use object_cache::{compute_object_cache_key, djb2_hash};
 use optimized_libs::{build_optimized_libs, OptimizedLibs};
 use parse_cache::parse_cached;
 pub use parse_cache::ParseCache;
@@ -120,6 +120,33 @@ pub fn run(
     verbose: u8,
 ) -> Result<CompileResult> {
     run_with_parse_cache(args, None, format, use_color, verbose)
+}
+
+fn object_cache_project_root(input: &Path, fallback_project_root: &Path) -> PathBuf {
+    let input_parent = input
+        .canonicalize()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf));
+
+    if let Some(mut dir) = input_parent.clone() {
+        loop {
+            if dir.join("package.json").exists() || dir.join("perry.toml").exists() {
+                return dir;
+            }
+            if !dir.pop() {
+                break;
+            }
+        }
+    }
+
+    if let (Some(input_parent), Ok(cwd)) = (input_parent, std::env::current_dir()) {
+        let cwd = cwd.canonicalize().unwrap_or(cwd);
+        if input_parent.starts_with(&cwd) {
+            return cwd;
+        }
+    }
+
+    fallback_project_root.to_path_buf()
 }
 
 /// Same as [`run`] but accepts an optional in-memory [`ParseCache`] that
@@ -221,6 +248,7 @@ pub fn run_with_parse_cache(
         .unwrap_or_else(|| PathBuf::from("."));
 
     let mut ctx = CompilationContext::new(project_root.clone());
+    ctx.cache_root = object_cache_project_root(&args.input, &project_root);
 
     // Tier 2.x: package.json + perry.toml + i18n + google_auth config
     // loading lifted into compile/host_config.rs::apply_pkg_and_toml_config.
@@ -1475,8 +1503,11 @@ pub fn run_with_parse_cache(
         ctx.needs_stdlib = true;
     }
 
-    // Pre-compute JS module specifiers
-    let js_module_specifiers: Vec<String> = ctx.js_modules.keys().cloned().collect();
+    // Pre-compute JS module specifiers in canonical order before this
+    // graph-wide list is cloned into every module's CompileOptions and
+    // object-cache key.
+    let mut js_module_specifiers: Vec<String> = ctx.js_modules.keys().cloned().collect();
+    js_module_specifiers.sort();
 
     // Compile native modules in parallel using rayon
 
@@ -1525,7 +1556,7 @@ pub fn run_with_parse_cache(
     // Target dir name for the cache layout. Using the resolved LLVM triple
     // keeps cross-compile caches from colliding with native-host caches.
     let cache_target_dir = target.as_deref().unwrap_or("host");
-    let object_cache = ObjectCache::new(&ctx.project_root, cache_target_dir, cache_enabled);
+    let object_cache = ObjectCache::new(&ctx.cache_root, cache_target_dir, cache_enabled);
     let perry_version = env!("CARGO_PKG_VERSION");
 
     // Issue #100: precompute the dynamic-import plumbing so the rayon
@@ -1798,7 +1829,7 @@ pub fn run_with_parse_cache(
 
     let total_codegen_modules = ctx.native_modules.len();
     let codegen_modules_started = AtomicUsize::new(0);
-    let compile_results: Vec<Result<(PathBuf, Vec<u8>), String>> = ctx
+    let compile_results: Vec<Result<(PathBuf, Vec<u8>, String), String>> = ctx
         .native_modules
         .par_iter()
         .map(|(path, hir_module)| {
@@ -3694,10 +3725,9 @@ pub fn run_with_parse_cache(
                         // differed. Best-effort — IO errors never fail the
                         // build.
                         if std::env::var("PERRY_CACHE_DEBUG_HIR").as_deref() == Ok("1") {
-                            let dump_dir = ctx.project_root.join(".perry-cache").join("debug");
+                            let dump_dir = ctx.cache_root.join(".perry-cache").join("debug");
                             if std::fs::create_dir_all(&dump_dir).is_ok() {
-                                let dump_path =
-                                    dump_dir.join(format!("{:016x}.txt", k));
+                                let dump_path = dump_dir.join(format!("{:016x}.txt", k));
                                 let _ = std::fs::write(
                                     &dump_path,
                                     format!(
@@ -3743,7 +3773,10 @@ pub fn run_with_parse_cache(
             // In bitcode mode the bytes are .ll text; use .ll extension.
             let ext = if bitcode_link { "ll" } else { "o" };
             let obj_path = PathBuf::from(format!("{}.{}", obj_name, ext));
-            return Ok((obj_path, object_code));
+            let object_fingerprint = cache_key
+                .map(|k| format!("cache:{:016x}", k))
+                .unwrap_or_else(|| format!("bytes:{:016x}", djb2_hash(&object_code)));
+            return Ok((obj_path, object_code, object_fingerprint));
         })
         .collect();
 
@@ -3756,7 +3789,7 @@ pub fn run_with_parse_cache(
     // order (preserved); successful writes' "Wrote ..." messages print
     // after all writes complete.
     let mut failed_modules: Vec<String> = Vec::new();
-    let mut to_write: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    let mut to_write: Vec<(PathBuf, Vec<u8>, String)> = Vec::new();
     for result in compile_results {
         match result {
             Ok(pair) => to_write.push(pair),
@@ -3777,7 +3810,7 @@ pub fn run_with_parse_cache(
 
     let write_results: Vec<Result<(), std::io::Error>> = to_write
         .par_iter()
-        .map(|(obj_path, object_code)| fs::write(obj_path, object_code))
+        .map(|(obj_path, object_code, _)| fs::write(obj_path, object_code))
         .collect();
 
     // Bail on first write failure (I/O errors are usually disk-full /
@@ -3790,7 +3823,8 @@ pub fn run_with_parse_cache(
 
     // Sequential print + obj_paths collection (output grouped, source
     // order preserved).
-    for (obj_path, _) in to_write {
+    let mut obj_fingerprints: Vec<String> = Vec::new();
+    for (obj_path, _, object_fingerprint) in to_write {
         match format {
             OutputFormat::Text => {
                 let label = if obj_path.extension().and_then(|e| e.to_str()) == Some("ll") {
@@ -3802,6 +3836,7 @@ pub fn run_with_parse_cache(
             }
             OutputFormat::Json => {}
         }
+        obj_fingerprints.push(object_fingerprint);
         obj_paths.push(obj_path);
     }
 
@@ -4561,6 +4596,7 @@ pub fn run_with_parse_cache(
             bundle_id: None,
             is_dylib,
             codegen_cache_stats,
+            link_cache_stats: None,
         });
     }
 
@@ -4726,6 +4762,7 @@ pub fn run_with_parse_cache(
             // "no embedded event loop, host drives `perry_module_init`" shape.
             is_dylib: true,
             codegen_cache_stats,
+            link_cache_stats: None,
         });
     }
 
@@ -4786,6 +4823,7 @@ pub fn run_with_parse_cache(
             bundle_id: None,
             is_dylib: true,
             codegen_cache_stats,
+            link_cache_stats: None,
         });
     }
 
@@ -4874,11 +4912,12 @@ pub fn run_with_parse_cache(
 
     // Build & run the per-platform link command. Tier 2.1 final extraction
     // (v0.5.342) — see crates/perry/src/commands/compile/link.rs.
-    build_and_run_link(
+    let link_cache_status = build_and_run_link(
         &args.input,
         &ctx,
         target.as_deref(),
         &obj_paths,
+        &obj_fingerprints,
         &compiled_features,
         &runtime_lib,
         &stdlib_lib,
@@ -5143,11 +5182,27 @@ pub fn run_with_parse_cache(
         match format {
             OutputFormat::Text => println!("Wrote executable: {}", exe_path.display()),
             OutputFormat::Json => {
+                let codegen_cache = summarize_codegen_cache_stats(&object_cache).map(
+                    |(hits, misses, stores, store_errors)| {
+                        serde_json::json!({
+                            "hits": hits,
+                            "misses": misses,
+                            "stores": stores,
+                            "store_errors": store_errors,
+                        })
+                    },
+                );
+                let link_cache_stats = link_cache_status.stats();
                 let result = serde_json::json!({
                     "success": true,
                     "output": exe_path.to_string_lossy(),
                     "native_modules": ctx.native_modules.len(),
                     "js_modules": ctx.js_modules.len(),
+                    "codegen_cache": codegen_cache,
+                    "link_cache": {
+                        "linked": link_cache_stats.linked,
+                        "skipped": link_cache_stats.skipped,
+                    },
                 });
                 println!("{}", serde_json::to_string(&result)?);
             }
@@ -5196,17 +5251,20 @@ pub fn run_with_parse_cache(
         format,
     );
 
-    strip_final_binary(
-        &ctx,
-        &exe_path,
-        target.as_deref(),
-        is_dylib,
-        is_ios,
-        is_visionos,
-        is_tvos,
-        is_watchos,
-        is_harmonyos,
-    );
+    if link_cache_status.stats().linked {
+        strip_final_binary(
+            &ctx,
+            &exe_path,
+            target.as_deref(),
+            is_dylib,
+            is_ios,
+            is_visionos,
+            is_tvos,
+            is_watchos,
+            is_harmonyos,
+        );
+        write_link_cache_manifest(&link_cache_status, &exe_path);
+    }
 
     emit_attestation_sidecar(&ctx, &exe_path, format);
 
@@ -5223,7 +5281,28 @@ pub fn run_with_parse_cache(
         bundle_id: result_bundle_id,
         is_dylib,
         codegen_cache_stats,
+        link_cache_stats: Some(link_cache_status.stats()),
     })
+}
+
+#[cfg(test)]
+mod object_cache_root_tests {
+    use super::*;
+
+    #[test]
+    fn object_cache_root_prefers_package_ancestor() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(dir.path().join("package.json"), "{}\n").unwrap();
+        let input = src.join("main.ts");
+        std::fs::write(&input, "console.log(1);\n").unwrap();
+
+        assert_eq!(
+            object_cache_project_root(&input, &src),
+            dir.path().canonicalize().unwrap()
+        );
+    }
 }
 
 #[cfg(test)]

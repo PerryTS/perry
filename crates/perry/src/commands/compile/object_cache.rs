@@ -80,6 +80,12 @@ impl Djb2Hasher {
     }
     /// Feed a named field: "<name>=<value>\x1f".
     fn field(&mut self, name: &str, value: &str) {
+        static DEBUG_KEY_FIELDS: OnceLock<bool> = OnceLock::new();
+        if *DEBUG_KEY_FIELDS
+            .get_or_init(|| std::env::var("PERRY_CACHE_DEBUG_KEY").as_deref() == Ok("1"))
+        {
+            eprintln!("cache-key-field {name}={value:?}");
+        }
         self.write(name.as_bytes());
         self.write(b"=");
         self.write(value.as_bytes());
@@ -88,6 +94,10 @@ impl Djb2Hasher {
     fn finish(self) -> u64 {
         self.state
     }
+}
+
+fn stable_type_key(ty: &perry_types::Type) -> String {
+    format!("{:016x}", perry_hir::stable_hash::hash_type(ty))
 }
 
 /// Compute the on-disk object cache key for one module.
@@ -244,10 +254,19 @@ fn compute_object_cache_key_with_env(
             "0"
         },
     );
-    h.field("js_specs", &opts.js_module_specifiers.join("|"));
     {
+        let mut v: Vec<&String> = opts.js_module_specifiers.iter().collect();
+        v.sort();
+        h.field(
+            "js_specs",
+            &v.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("|"),
+        );
+    }
+    {
+        let mut v: Vec<&(String, String)> = opts.bundled_extensions.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
         let mut buf = String::new();
-        for (path, prefix) in &opts.bundled_extensions {
+        for (path, prefix) in v {
             buf.push_str(path);
             buf.push('@');
             buf.push_str(prefix);
@@ -256,8 +275,10 @@ fn compute_object_cache_key_with_env(
         h.field("bundled_ext", &buf);
     }
     {
+        let mut v: Vec<_> = opts.native_library_functions.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
         let mut buf = String::new();
-        for (name, params, ret) in &opts.native_library_functions {
+        for (name, params, ret) in v {
             buf.push_str(name);
             buf.push(':');
             for (idx, param) in params.iter().enumerate() {
@@ -451,7 +472,7 @@ fn compute_object_cache_key_with_env(
             buf.push_str(
                 &c.field_types
                     .iter()
-                    .map(|ty| format!("{:?}", ty))
+                    .map(stable_type_key)
                     .collect::<Vec<_>>()
                     .join(","),
             );
@@ -517,16 +538,15 @@ fn compute_object_cache_key_with_env(
         );
     }
 
-    // Imported return types (HashMap — MUST sort). Type has Debug but no
-    // Display; Debug is deterministic for this type (all enum/Vec, no
-    // HashMap internally as of v0.5.156).
+    // Imported return types (HashMap — MUST sort). Type can contain nested
+    // HashMaps (ObjectType::properties), so never use Debug output here.
     {
         let mut v: Vec<(&String, &perry_types::Type)> =
             opts.imported_func_return_types.iter().collect();
         v.sort_by(|a, b| a.0.cmp(b.0));
         let s = v
             .iter()
-            .map(|(k, vv)| format!("{}={:?}", k, vv))
+            .map(|(k, vv)| format!("{}={}", k, stable_type_key(vv)))
             .collect::<Vec<_>>()
             .join(",");
         h.field("imported_return_types", &s);
@@ -548,7 +568,7 @@ fn compute_object_cache_key_with_env(
         v.sort_by(|a, b| a.0.cmp(b.0));
         let s = v
             .iter()
-            .map(|(k, vv)| format!("{}={:?}", k, vv))
+            .map(|(k, vv)| format!("{}={}", k, stable_type_key(vv)))
             .collect::<Vec<_>>()
             .join(",");
         h.field("type_aliases", &s);
@@ -1034,6 +1054,146 @@ mod object_cache_tests {
             .insert("bar".into(), "mod_b".into());
         b.import_function_prefixes
             .insert("foo".into(), "mod_a".into());
+        assert_eq!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+    }
+
+    #[test]
+    fn key_stable_for_order_insensitive_graph_lists() {
+        // These graph-wide lists are either derived from collections or are
+        // consumed as lookup metadata, not as an ordered codegen sequence.
+        // Hashing their raw Vec order would make every module key depend on
+        // upstream collection/traversal order.
+        let mut a = empty_opts();
+        let mut b = empty_opts();
+        a.js_module_specifiers = vec!["z.js".into(), "a.js".into()];
+        b.js_module_specifiers = vec!["a.js".into(), "z.js".into()];
+        assert_eq!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+
+        a = empty_opts();
+        b = empty_opts();
+        a.bundled_extensions = vec![
+            ("/project/ext/z.ts".into(), "project_ext_z_ts".into()),
+            ("/project/ext/a.ts".into(), "project_ext_a_ts".into()),
+        ];
+        b.bundled_extensions = vec![
+            ("/project/ext/a.ts".into(), "project_ext_a_ts".into()),
+            ("/project/ext/z.ts".into(), "project_ext_z_ts".into()),
+        ];
+        assert_eq!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+
+        a = empty_opts();
+        b = empty_opts();
+        a.native_library_functions = vec![
+            (
+                "zeta".into(),
+                vec![perry_api_manifest::NativeAbiType::I32],
+                perry_api_manifest::NativeAbiType::F64,
+            ),
+            (
+                "alpha".into(),
+                vec![perry_api_manifest::NativeAbiType::String],
+                perry_api_manifest::NativeAbiType::Bool,
+            ),
+        ];
+        b.native_library_functions = vec![
+            (
+                "alpha".into(),
+                vec![perry_api_manifest::NativeAbiType::String],
+                perry_api_manifest::NativeAbiType::Bool,
+            ),
+            (
+                "zeta".into(),
+                vec![perry_api_manifest::NativeAbiType::I32],
+                perry_api_manifest::NativeAbiType::F64,
+            ),
+        ];
+        assert_eq!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+    }
+
+    fn record_row_type(property_insert_order: &[&str]) -> perry_types::Type {
+        let mut properties = std::collections::HashMap::new();
+        for name in property_insert_order {
+            let ty = match *name {
+                "name" => perry_types::Type::String,
+                "id" | "value" => perry_types::Type::Number,
+                _ => panic!("unexpected property"),
+            };
+            properties.insert(
+                (*name).to_string(),
+                perry_types::PropertyInfo {
+                    ty,
+                    optional: false,
+                    readonly: false,
+                },
+            );
+        }
+        perry_types::Type::Object(perry_types::ObjectType {
+            name: None,
+            properties,
+            property_order: Some(vec!["id".into(), "name".into(), "value".into()]),
+            index_signature: None,
+        })
+    }
+
+    #[test]
+    fn key_stable_for_nested_type_hashmap_order() {
+        let type_a = record_row_type(&["name", "id", "value"]);
+        let type_b = record_row_type(&["id", "name", "value"]);
+
+        let mut a = empty_opts();
+        let mut b = empty_opts();
+        a.type_aliases.insert("RecordRow".into(), type_a.clone());
+        b.type_aliases.insert("RecordRow".into(), type_b.clone());
+        assert_eq!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+
+        a = empty_opts();
+        b = empty_opts();
+        a.imported_func_return_types
+            .insert("loadRecord".into(), type_a.clone());
+        b.imported_func_return_types
+            .insert("loadRecord".into(), type_b.clone());
+        assert_eq!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+
+        let class_for = |field_type| ImportedClass {
+            name: "RowBox".into(),
+            local_alias: None,
+            source_prefix: "feature_ts".into(),
+            constructor_param_count: 0,
+            method_names: vec![],
+            method_param_counts: vec![],
+            method_has_rest: vec![],
+            static_method_names: vec![],
+            getter_names: vec![],
+            setter_names: vec![],
+            parent_name: None,
+            field_names: vec!["row".into()],
+            field_types: vec![field_type],
+            static_field_names: vec![],
+            source_class_id: Some(7),
+        };
+
+        a = empty_opts();
+        b = empty_opts();
+        a.imported_classes.push(class_for(type_a));
+        b.imported_classes.push(class_for(type_b));
         assert_eq!(
             compute_object_cache_key(&a, 1, "0.5.156"),
             compute_object_cache_key(&b, 1, "0.5.156")
