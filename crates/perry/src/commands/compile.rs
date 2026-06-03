@@ -4,7 +4,9 @@ use anyhow::{anyhow, Result};
 use clap::Args;
 use perry_hir::{Module as HirModule, ModuleKind};
 use rayon::{prelude::*, ThreadPoolBuilder};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -105,6 +107,7 @@ pub use types::*;
 
 const LARGE_CODEGEN_MODULE_COUNT: usize = 1024;
 const LARGE_CODEGEN_THREAD_CAP: usize = 1;
+const MAX_OBJECT_FILE_STEM_BYTES: usize = 200;
 
 fn codegen_thread_count(total_modules: usize, host_threads: usize) -> usize {
     codegen_thread_count_with_override(
@@ -133,6 +136,29 @@ fn codegen_thread_count_with_override(
     } else {
         host_threads
     }
+}
+
+fn object_file_stem_for_module(module_name: &str) -> String {
+    let sanitized = module_name
+        .replace(|c: char| !c.is_ascii_alphanumeric() && c != '_', "_")
+        .trim_matches('_')
+        .to_string();
+    let sanitized = if sanitized.is_empty() {
+        "module".to_string()
+    } else {
+        sanitized
+    };
+    if sanitized.len() <= MAX_OBJECT_FILE_STEM_BYTES {
+        return sanitized;
+    }
+
+    let digest = Sha256::digest(module_name.as_bytes());
+    let mut hash = String::with_capacity(16);
+    for byte in &digest[..8] {
+        write!(&mut hash, "{:02x}", byte).expect("write to string");
+    }
+    let prefix_len = MAX_OBJECT_FILE_STEM_BYTES - hash.len() - 1;
+    format!("{}_{}", &sanitized[..prefix_len], hash)
 }
 
 #[cfg(target_os = "macos")]
@@ -3799,11 +3825,7 @@ pub fn run_with_parse_cache(
                     bytes
                 }
             };
-            let obj_name = hir_module
-                .name
-                .replace(|c: char| !c.is_alphanumeric() && c != '_', "_")
-                .trim_matches('_')
-                .to_string();
+            let obj_name = object_file_stem_for_module(&hir_module.name);
             // In bitcode mode the bytes are .ll text; use .ll extension.
             let ext = if bitcode_link { "ll" } else { "o" };
             let obj_path = PathBuf::from(format!("{}.{}", obj_name, ext));
@@ -5284,7 +5306,10 @@ pub fn run_with_parse_cache(
 
 #[cfg(test)]
 mod codegen_thread_tests {
-    use super::{codegen_thread_count_with_override, LARGE_CODEGEN_MODULE_COUNT};
+    use super::{
+        codegen_thread_count_with_override, object_file_stem_for_module,
+        LARGE_CODEGEN_MODULE_COUNT, MAX_OBJECT_FILE_STEM_BYTES,
+    };
 
     #[test]
     fn large_graph_caps_codegen_threads() {
@@ -5305,6 +5330,25 @@ mod codegen_thread_tests {
             codegen_thread_count_with_override(LARGE_CODEGEN_MODULE_COUNT, 12, Some("4")),
             4
         );
+    }
+
+    #[test]
+    fn object_file_stem_preserves_short_sanitized_names() {
+        assert_eq!(
+            object_file_stem_for_module("src/foo-bar.ts"),
+            "src_foo_bar_ts"
+        );
+    }
+
+    #[test]
+    fn object_file_stem_caps_long_names_and_keeps_them_unique() {
+        let prefix = "/tmp/project/node_modules/.bun/@opentelemetry+resources@2.6.1/node_modules/@opentelemetry/resources/build/esm/detectors/platform/node/machine-id/";
+        let darwin = object_file_stem_for_module(&format!("{prefix}getMachineId-darwin.js"));
+        let linux = object_file_stem_for_module(&format!("{prefix}getMachineId-linux.js"));
+
+        assert!(darwin.len() <= MAX_OBJECT_FILE_STEM_BYTES);
+        assert!(linux.len() <= MAX_OBJECT_FILE_STEM_BYTES);
+        assert_ne!(darwin, linux);
     }
 }
 
