@@ -396,6 +396,18 @@ thread_local! {
         const { Cell::new(false) };
 }
 
+extern "C" fn module_source_map_noop(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn module_noop_function(name: &str) -> f64 {
+    let func_ptr = module_source_map_noop as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    crate::object::set_bound_native_closure_name(closure, name);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
 fn module_function1(name: &str, thunk: ModuleFunction1, length: u32) -> f64 {
     let func_ptr = thunk as *const u8;
     crate::closure::js_register_closure_arity(func_ptr, 1);
