@@ -27,22 +27,71 @@ fn supported_integer_kind(kind: u8) -> bool {
     )
 }
 
-fn typed_array_arg(value: f64) -> (*mut TypedArrayHeader, u8) {
+enum AtomicView {
+    TypedArray {
+        ptr: *mut TypedArrayHeader,
+        kind: u8,
+    },
+    Uint8ArrayBuffer(*mut crate::buffer::BufferHeader),
+}
+
+impl AtomicView {
+    fn kind(&self) -> u8 {
+        match self {
+            AtomicView::TypedArray { kind, .. } => *kind,
+            AtomicView::Uint8ArrayBuffer(_) => KIND_UINT8,
+        }
+    }
+
+    fn length(&self) -> i32 {
+        match self {
+            AtomicView::TypedArray { ptr, .. } => js_typed_array_length(*ptr),
+            AtomicView::Uint8ArrayBuffer(ptr) => crate::buffer::js_buffer_length(*ptr),
+        }
+    }
+
+    fn get(&self, index: i32) -> f64 {
+        match self {
+            AtomicView::TypedArray { ptr, .. } => js_typed_array_get(*ptr, index),
+            AtomicView::Uint8ArrayBuffer(ptr) => {
+                crate::buffer::js_buffer_get(*ptr as *const crate::buffer::BufferHeader, index)
+                    as f64
+            }
+        }
+    }
+
+    fn set(&self, index: i32, value: f64) {
+        match self {
+            AtomicView::TypedArray { ptr, .. } => js_typed_array_set(*ptr, index, value),
+            AtomicView::Uint8ArrayBuffer(ptr) => {
+                crate::buffer::js_buffer_set(*ptr, index, value as i32);
+            }
+        }
+    }
+}
+
+fn atomics_view_arg(value: f64) -> AtomicView {
     let js = JSValue::from_bits(value.to_bits());
     if !js.is_pointer() {
         throw_type_error(b"Atomics operation requires an integer typed array");
     }
-    let ta = clean_ta_ptr(js.as_pointer::<TypedArrayHeader>());
-    if ta.is_null() {
+    let raw = clean_ta_ptr(js.as_pointer::<TypedArrayHeader>()) as usize;
+    if raw == 0 {
         throw_type_error(b"Atomics operation requires an integer typed array");
     }
-    let Some(kind) = lookup_typed_array_kind(ta as usize) else {
-        throw_type_error(b"Atomics operation requires an integer typed array");
-    };
-    if !supported_integer_kind(kind) {
-        throw_type_error(b"Atomics operation requires an integer typed array");
+    if let Some(kind) = lookup_typed_array_kind(raw) {
+        if !supported_integer_kind(kind) {
+            throw_type_error(b"Atomics operation requires an integer typed array");
+        }
+        return AtomicView::TypedArray {
+            ptr: raw as *mut TypedArrayHeader,
+            kind,
+        };
     }
-    (ta as *mut TypedArrayHeader, kind)
+    if crate::buffer::is_registered_buffer(raw) && crate::buffer::is_uint8array_buffer(raw) {
+        return AtomicView::Uint8ArrayBuffer(raw as *mut crate::buffer::BufferHeader);
+    }
+    throw_type_error(b"Atomics operation requires an integer typed array");
 }
 
 fn atomics_to_index(index: f64, length: i32) -> i32 {
@@ -101,16 +150,41 @@ fn coerce_for_kind(kind: u8, value: f64) -> f64 {
     }
 }
 
-fn slot(view: f64, index: f64) -> (*mut TypedArrayHeader, u8, i32) {
-    let (ta, kind) = typed_array_arg(view);
-    let idx = atomics_to_index(index, js_typed_array_length(ta));
-    (ta, kind, idx)
+fn to_uint32_bits(value: f64) -> u32 {
+    numeric_arg(value).rem_euclid(4_294_967_296.0) as u32
+}
+
+fn bitwise_result_for_kind(kind: u8, bits: u32) -> f64 {
+    match kind {
+        KIND_INT8 => (bits as u8 as i8) as f64,
+        KIND_UINT8 => (bits as u8) as f64,
+        KIND_INT16 => (bits as u16 as i16) as f64,
+        KIND_UINT16 => (bits as u16) as f64,
+        KIND_INT32 => (bits as i32) as f64,
+        KIND_UINT32 => bits as f64,
+        _ => bits as f64,
+    }
+}
+
+fn slot(view: f64, index: f64) -> (AtomicView, i32) {
+    let view = atomics_view_arg(view);
+    let idx = atomics_to_index(index, view.length());
+    (view, idx)
+}
+
+fn atomics_bitwise(view: f64, index: f64, value: f64, op: impl FnOnce(u32, u32) -> u32) -> f64 {
+    let (view, idx) = slot(view, index);
+    let kind = view.kind();
+    let previous = view.get(idx);
+    let result = op(to_uint32_bits(previous), to_uint32_bits(value));
+    view.set(idx, bitwise_result_for_kind(kind, result));
+    previous
 }
 
 #[no_mangle]
 pub extern "C" fn js_atomics_load(_closure: *const ClosureHeader, view: f64, index: f64) -> f64 {
-    let (ta, _, idx) = slot(view, index);
-    js_typed_array_get(ta, idx)
+    let (view, idx) = slot(view, index);
+    view.get(idx)
 }
 
 #[no_mangle]
@@ -120,9 +194,9 @@ pub extern "C" fn js_atomics_store(
     index: f64,
     value: f64,
 ) -> f64 {
-    let (ta, kind, idx) = slot(view, index);
-    js_typed_array_set(ta, idx, coerce_for_kind(kind, value));
-    js_typed_array_get(ta, idx)
+    let (view, idx) = slot(view, index);
+    view.set(idx, coerce_for_kind(view.kind(), value));
+    view.get(idx)
 }
 
 #[no_mangle]
@@ -132,12 +206,11 @@ pub extern "C" fn js_atomics_add(
     index: f64,
     value: f64,
 ) -> f64 {
-    let (ta, kind, idx) = slot(view, index);
-    let previous = js_typed_array_get(ta, idx);
-    js_typed_array_set(
-        ta,
+    let (view, idx) = slot(view, index);
+    let previous = view.get(idx);
+    view.set(
         idx,
-        coerce_for_kind(kind, previous + numeric_arg(value)),
+        coerce_for_kind(view.kind(), previous + numeric_arg(value)),
     );
     previous
 }
@@ -149,14 +222,43 @@ pub extern "C" fn js_atomics_sub(
     index: f64,
     value: f64,
 ) -> f64 {
-    let (ta, kind, idx) = slot(view, index);
-    let previous = js_typed_array_get(ta, idx);
-    js_typed_array_set(
-        ta,
+    let (view, idx) = slot(view, index);
+    let previous = view.get(idx);
+    view.set(
         idx,
-        coerce_for_kind(kind, previous - numeric_arg(value)),
+        coerce_for_kind(view.kind(), previous - numeric_arg(value)),
     );
     previous
+}
+
+#[no_mangle]
+pub extern "C" fn js_atomics_and(
+    _closure: *const ClosureHeader,
+    view: f64,
+    index: f64,
+    value: f64,
+) -> f64 {
+    atomics_bitwise(view, index, value, |a, b| a & b)
+}
+
+#[no_mangle]
+pub extern "C" fn js_atomics_or(
+    _closure: *const ClosureHeader,
+    view: f64,
+    index: f64,
+    value: f64,
+) -> f64 {
+    atomics_bitwise(view, index, value, |a, b| a | b)
+}
+
+#[no_mangle]
+pub extern "C" fn js_atomics_xor(
+    _closure: *const ClosureHeader,
+    view: f64,
+    index: f64,
+    value: f64,
+) -> f64 {
+    atomics_bitwise(view, index, value, |a, b| a ^ b)
 }
 
 #[no_mangle]
@@ -166,9 +268,9 @@ pub extern "C" fn js_atomics_exchange(
     index: f64,
     value: f64,
 ) -> f64 {
-    let (ta, kind, idx) = slot(view, index);
-    let previous = js_typed_array_get(ta, idx);
-    js_typed_array_set(ta, idx, coerce_for_kind(kind, value));
+    let (view, idx) = slot(view, index);
+    let previous = view.get(idx);
+    view.set(idx, coerce_for_kind(view.kind(), value));
     previous
 }
 
@@ -180,10 +282,10 @@ pub extern "C" fn js_atomics_compare_exchange(
     expected: f64,
     replacement: f64,
 ) -> f64 {
-    let (ta, kind, idx) = slot(view, index);
-    let previous = js_typed_array_get(ta, idx);
-    if previous == coerce_for_kind(kind, expected) {
-        js_typed_array_set(ta, idx, coerce_for_kind(kind, replacement));
+    let (view, idx) = slot(view, index);
+    let previous = view.get(idx);
+    if previous == coerce_for_kind(view.kind(), expected) {
+        view.set(idx, coerce_for_kind(view.kind(), replacement));
     }
     previous
 }

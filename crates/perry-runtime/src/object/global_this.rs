@@ -3367,6 +3367,9 @@ fn install_atomics_namespace_members(ns_obj: *mut ObjectHeader) {
         ("store", crate::atomics::js_atomics_store as *const u8, 3),
         ("add", crate::atomics::js_atomics_add as *const u8, 3),
         ("sub", crate::atomics::js_atomics_sub as *const u8, 3),
+        ("and", crate::atomics::js_atomics_and as *const u8, 3),
+        ("or", crate::atomics::js_atomics_or as *const u8, 3),
+        ("xor", crate::atomics::js_atomics_xor as *const u8, 3),
         (
             "exchange",
             crate::atomics::js_atomics_exchange as *const u8,
