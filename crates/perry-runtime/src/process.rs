@@ -244,7 +244,7 @@ fn supported_builtin_module_name(name: &str) -> Option<&str> {
         "assert" | "assert/strict" | "async_hooks" | "buffer" | "child_process" | "cluster"
         | "console" | "constants" | "crypto" | "dns" | "dns/promises" | "events" | "fs"
         | "http" | "http2" | "https" | "net" | "os" | "path" | "perf_hooks" | "process"
-        | "punycode" | "querystring" | "readline" | "readline/promises" | "stream"
+        | "punycode" | "querystring" | "readline" | "readline/promises" | "sea" | "stream"
         | "stream/promises" | "string_decoder" | "sys" | "test" | "test/reporters" | "timers"
         | "timers/promises" | "tty" | "url" | "util" | "util/types" | "vm" | "worker_threads"
         | "zlib" => Some(name),
@@ -1851,6 +1851,9 @@ pub extern "C" fn js_process_get_builtin_module(id: f64) -> f64 {
     let Ok(specifier) = std::str::from_utf8(bytes) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
+    if specifier == "sea" {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
     let name = specifier.strip_prefix("node:").unwrap_or(specifier);
     let Some(module_name) = supported_builtin_module_name(name) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);

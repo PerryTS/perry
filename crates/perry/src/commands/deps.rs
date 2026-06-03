@@ -302,6 +302,9 @@ fn is_perry_builtin(name: &str) -> bool {
 fn is_supported_node_builtin(name: &str) -> bool {
     let base = name.split('/').next().unwrap_or(name);
     let base = base.strip_prefix("node:").unwrap_or(base);
+    if base == "sea" {
+        return name == "node:sea";
+    }
     matches!(
         base,
         // Real implementations
@@ -314,7 +317,7 @@ fn is_supported_node_builtin(name: &str) -> bool {
         | "cluster" | "child_process" | "dgram" | "dns" | "domain"
         | "repl" | "punycode" | "string_decoder" | "sys" | "v8" | "vm"
         | "constants" | "module" | "async_hooks" | "test" | "trace_events"
-        | "wasi" // NOTE: `inspector`/`inspector/promises` and `sea` are intentionally
+        | "wasi" // NOTE: `inspector`/`inspector/promises` are intentionally
                  // absent — `perry compile` rejects them, so `perry check` must surface
                  // the U006 diagnostic rather than report a clean build (#3744).
     )
@@ -639,7 +642,7 @@ mod tests {
     fn modern_unsupported_builtins_are_flagged() {
         // Compile-rejected modules: recognized as builtins, NOT supported, so
         // `check_node_builtin_imports` surfaces the diagnostic.
-        for m in ["sea", "inspector", "node:inspector/promises", "node:sea"] {
+        for m in ["sea", "inspector", "node:inspector/promises"] {
             assert!(is_node_builtin(m), "{m} should be a recognized builtin");
             assert!(
                 !is_supported_node_builtin(m),
@@ -657,6 +660,7 @@ mod tests {
             "async_hooks",
             "diagnostics_channel",
             "http2",
+            "node:sea",
             "sqlite",
             "test",
             "node:test/reporters",

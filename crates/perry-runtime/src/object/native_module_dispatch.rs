@@ -386,6 +386,11 @@ pub(crate) unsafe fn dispatch_native_module_method(
         | ("inspector.Network", "webSocketHandshakeResponseReceived") => {
             crate::node_inspector::js_node_inspector_network_notify(arg(0))
         }
+        ("sea", "isSea") => crate::node_sea::js_sea_is_sea(),
+        ("sea", "getAsset") => crate::node_sea::js_sea_get_asset(arg(0), arg(1)),
+        ("sea", "getAssetAsBlob") => crate::node_sea::js_sea_get_asset_as_blob(arg(0), arg(1)),
+        ("sea", "getRawAsset") => crate::node_sea::js_sea_get_raw_asset(arg(0)),
+        ("sea", "getAssetKeys") => crate::node_sea::js_sea_get_asset_keys(),
         // ── Buffer constructor static API ──
         // `class MyBuffer extends Buffer {}; MyBuffer.from(...)` reaches this
         // path through js_class_static_method_call's native-superclass

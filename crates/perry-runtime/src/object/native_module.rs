@@ -2581,6 +2581,8 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"default",
         ]),
         "sqlite.constants" => Some(SQLITE_CONSTANTS_KEYS),
+        "sea" => Some(SEA_NAMESPACE_KEYS),
+        "sea.default" => Some(SEA_DEFAULT_KEYS),
         "domain" => Some(&[b"_stack", b"Domain", b"createDomain", b"create", b"active"]),
         // #3677: zlib.constants enumerates the full Z_*/BROTLI_*/ZSTD_* table.
         "zlib.constants" => Some(ZLIB_CONSTANTS_KEYS),
@@ -2851,6 +2853,7 @@ fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
         "punycode.default" => Some("punycode"),
         "querystring.default" => Some("querystring"),
         "repl.default" => Some("repl"),
+        "sea.default" => Some("sea"),
         "url.default" => Some("url"),
         "util.default" => Some("util"),
         _ => None,
@@ -2876,6 +2879,7 @@ fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
         "punycode" => Some("punycode.default"),
         "querystring" => Some("querystring.default"),
         "repl" => Some("repl.default"),
+        "sea" => Some("sea.default"),
         "url" => Some("url.default"),
         "util" => Some("util.default"),
         _ => None,
@@ -2906,8 +2910,8 @@ fn cjs_default_export_value(module_name: &str) -> Option<f64> {
         )),
         "module" => Some(bound_native_callable_export_value("module", "Module")),
         "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "os" | "path"
-        | "path.posix" | "path.win32" | "punycode" | "querystring" | "repl" | "url" | "util"
-        | "inspector" | "inspector/promises" => create_cjs_default_namespace(module_name),
+        | "path.posix" | "path.win32" | "punycode" | "querystring" | "repl" | "sea" | "url"
+        | "util" | "inspector" | "inspector/promises" => create_cjs_default_namespace(module_name),
         _ => None,
     }
 }
@@ -2971,6 +2975,8 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "querystring.default"
             | "repl"
             | "repl.default"
+            | "sea"
+            | "sea.default"
             | "process"
             | "process.namespace"
             | "process.default"
@@ -3544,6 +3550,9 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("console", "createTask") => Some(0),
         ("util", "MIMEParams") => Some(0),
         ("util", "MIMEType") => Some(1),
+        ("sea", "isSea" | "getAssetKeys") => Some(0),
+        ("sea", "getRawAsset") => Some(1),
+        ("sea", "getAsset" | "getAssetAsBlob") => Some(2),
         ("stream", "pipeline" | "compose") => Some(0),
         ("stream", "finished") => Some(3),
         (
@@ -3823,6 +3832,23 @@ const SQLITE_DATABASE_SYNC_PROTOTYPE_METHODS: &[&str] = &[
 ];
 
 const SQLITE_SESSION_PROTOTYPE_METHODS: &[&str] = &["changeset", "patchset", "close"];
+
+const SEA_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"default",
+    b"getAsset",
+    b"getAssetAsBlob",
+    b"getAssetKeys",
+    b"getRawAsset",
+    b"isSea",
+];
+
+const SEA_DEFAULT_KEYS: &[&[u8]] = &[
+    b"isSea",
+    b"getAsset",
+    b"getRawAsset",
+    b"getAssetAsBlob",
+    b"getAssetKeys",
+];
 
 const ASSERT_PROTOTYPE_METHODS: &[&str] = &[
     "fail",
@@ -4995,6 +5021,11 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "setTraceSigInt")
             | ("util", "MIMEParams")
             | ("util", "MIMEType")
+            | ("sea", "isSea")
+            | ("sea", "getAsset")
+            | ("sea", "getAssetAsBlob")
+            | ("sea", "getRawAsset")
+            | ("sea", "getAssetKeys")
             | ("zlib", "Deflate")
             | ("zlib", "DeflateRaw")
             | ("zlib", "Gzip")
