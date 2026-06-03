@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2712 entries across 110 modules.
+Total: 2725 entries across 110 modules.
 
 ## Modules
 
@@ -1817,6 +1817,13 @@ Total: 2712 entries across 110 modules.
 
 - `Module` — module
 - `SourceMap` — module
+- `_findPath` — module
+- `_initPaths` — module
+- `_load` — module
+- `_nodeModulePaths` — module
+- `_preloadModules` — module
+- `_resolveFilename` — module
+- `_resolveLookupPaths` — module
 - `createRequire` — module
 - `enableCompileCache` — module
 - `findPackageJSON` — module
@@ -1834,8 +1841,14 @@ Total: 2712 entries across 110 modules.
 
 ### Properties
 
+- `Module`
+- `_cache`
+- `_extensions`
+- `_pathCache`
 - `builtinModules`
 - `constants`
+- `default`
+- `globalPaths`
 
 ## `moment`
 

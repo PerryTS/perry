@@ -272,10 +272,9 @@ fn supported_builtin_module_name(name: &str) -> Option<&str> {
         | "console" | "constants" | "crypto" | "dns" | "dns/promises" | "events" | "fs"
         | "http" | "http2" | "https" | "module" | "net" | "os" | "path" | "perf_hooks"
         | "process" | "punycode" | "querystring" | "readline" | "readline/promises" | "sea"
-        | "stream"
-        | "stream/promises" | "string_decoder" | "sys" | "test" | "test/reporters" | "timers"
-        | "timers/promises" | "tty" | "url" | "util" | "util/types" | "vm" | "worker_threads"
-        | "zlib" => Some(name),
+        | "stream" | "stream/promises" | "string_decoder" | "sys" | "test" | "test/reporters"
+        | "timers" | "timers/promises" | "tty" | "url" | "util" | "util/types" | "vm"
+        | "worker_threads" | "zlib" => Some(name),
         _ => None,
     }
 }

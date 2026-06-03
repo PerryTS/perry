@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1860 entries across 107 modules
+// Coverage: 1873 entries across 107 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1933,13 +1933,40 @@ declare module "module" {
   /** stdlib */
   export class SourceMap { [key: string]: any; }
   /** stdlib */
+  export const Module: any;
+  /** stdlib */
+  export const _cache: any;
+  /** stdlib */
+  export const _extensions: any;
+  /** stdlib */
+  export const _pathCache: any;
+  /** stdlib */
   export const builtinModules: any;
   /** stdlib */
   export const constants: any;
   /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export const globalPaths: any;
+  /** stdlib */
   export function Module(...args: any[]): any;
   /** stdlib */
   export function SourceMap(...args: any[]): any;
+  /** stdlib */
+  export function _findPath(...args: any[]): any;
+  /** stdlib */
+  export function _initPaths(...args: any[]): any;
+  /** stdlib */
+  export function _load(...args: any[]): any;
+  /** stdlib */
+  export function _nodeModulePaths(...args: any[]): any;
+  /** stdlib */
+  export function _preloadModules(...args: any[]): any;
+  /** stdlib */
+  export function _resolveFilename(...args: any[]): any;
+  /** stdlib */
+  export function _resolveLookupPaths(...args: any[]): any;
   /** stdlib */
   export function createRequire(...args: any[]): any;
   /** stdlib */
