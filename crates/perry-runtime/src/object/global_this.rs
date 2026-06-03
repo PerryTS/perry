@@ -3103,7 +3103,14 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
                 1,
                 false,
             );
-            install_constructor_static(ctor, "assign", object_assign_thunk as *const u8, 1, true);
+            install_constructor_static_with_call_arity(
+                ctor,
+                "assign",
+                object_assign_thunk as *const u8,
+                2,
+                1,
+                true,
+            );
             install_constructor_static(ctor, "hasOwn", object_hasown_thunk as *const u8, 2, false);
         }
         "Array" => {
