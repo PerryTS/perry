@@ -276,6 +276,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             receiver,
             strict,
         } => {
+            if let Expr::String(property) = key.as_ref() {
+                if matches!(property.as_str(), "caller" | "arguments")
+                    && same_side_effect_free_receiver(target, receiver)
+                {
+                    return super::property_set::lower(
+                        ctx,
+                        &Expr::PropertySet {
+                            object: target.clone(),
+                            property: property.clone(),
+                            value: value.clone(),
+                        },
+                    );
+                }
+            }
             if let Some(property) = put_value_static_property_fast_path(ctx, target, key, receiver)
             {
                 return super::property_set::lower(

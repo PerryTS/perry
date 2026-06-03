@@ -476,6 +476,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let key_box = ctx.block().load(DOUBLE, &key_handle_global);
             let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
             let key_raw = ctx.block().and(I64, &key_bits, POINTER_MASK_I64);
+            if matches!(property.as_str(), "caller" | "arguments") {
+                ctx.block().call_void(
+                    "js_object_set_field_by_name",
+                    &[(I64, &obj_bits), (I64, &key_raw), (DOUBLE, &val_double)],
+                );
+                return Ok(val_double);
+            }
             let site_id = emit_typed_feedback_register_site(
                 ctx,
                 TypedFeedbackKind::PropertySet,

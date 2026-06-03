@@ -395,6 +395,35 @@ pub extern "C" fn js_object_set_field_by_name(
             }
         }
 
+        if gc_type == crate::gc::GC_TYPE_CLOSURE {
+            if !key.is_null() {
+                let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_len = (*key).byte_len as usize;
+                let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+                if let Ok(name_str) = std::str::from_utf8(name_bytes) {
+                    if matches!(name_str, "caller" | "arguments")
+                        && crate::closure::closure_is_arrow(
+                            obj as *const crate::closure::ClosureHeader,
+                        )
+                    {
+                        crate::fs::validate::throw_type_error_with_code(
+                            "Restricted function property assignment",
+                            "ERR_INVALID_ARG_TYPE",
+                        );
+                    }
+                    if let Some(attrs) = super::get_property_attrs(obj as usize, name_str) {
+                        if !attrs.writable() {
+                            return;
+                        }
+                    } else if matches!(name_str, "name" | "length") {
+                        return;
+                    }
+                    crate::closure::closure_set_dynamic_prop(obj as usize, name_str, value);
+                }
+            }
+            return;
+        }
+
         // Check if this is a ClosureHeader — closures support dynamic props via separate storage.
         // ClosureHeader has CLOSURE_MAGIC (0x434C4F53) at offset 12.
         // Without this check, (*obj).keys_array reads capture[0] → corruption/crash.

@@ -97,6 +97,8 @@ check("arrow length stops before default", ((x: any, y = 1) => x).length, 1);
 check("arrow typeof", typeof arrow, "function");
 check("arrow prototype chain", Object.getPrototypeOf(arrow), Function.prototype);
 check("arrow has no own prototype", "prototype" in arrow, false);
+check("arrow has no own caller", arrow.hasOwnProperty("caller"), false);
+check("arrow has no own arguments", arrow.hasOwnProperty("arguments"), false);
 
 checkThrowsTypeError("arrow caller getter", () => {
   arrow.caller;
@@ -117,6 +119,33 @@ checkThrowsTypeError("inline arrow is not constructor", () => {
   new (() => {})();
 });
 
+let newTargetFunctionCalls = 0;
+let newTargetConstructorCalls = 0;
+function NewTargetProbe(): any {
+  if (((_: any) => new.target)(0) !== undefined) {
+    newTargetConstructorCalls++;
+  }
+  newTargetFunctionCalls++;
+}
+NewTargetProbe();
+new NewTargetProbe();
+check("arrow lexical new.target function call count", newTargetFunctionCalls, 2);
+check("arrow lexical new.target constructor count", newTargetConstructorCalls, 1);
+
+let superCtorCount = 0;
+class SuperCallBase {
+  constructor() {
+    superCtorCount++;
+  }
+}
+class SuperCallDerived extends SuperCallBase {
+  constructor() {
+    ((_: any) => super())(0);
+  }
+}
+new SuperCallDerived();
+check("arrow lexical super() in constructor", superCtorCount, 1);
+
 if (failures !== 0) {
   throw new Error("c262 arrow parity regression failed");
 }
@@ -124,7 +153,7 @@ if (failures !== 0) {
 console.log("c262 arrow parity ok");
 TS
 
-"$PERRY" compile --no-cache "$TMPDIR/c262_arrow_parity.ts" -o "$TMPDIR/c262_arrow_parity" \
+PERRY_ALLOW_UNIMPLEMENTED=1 PERRY_NO_AUTO_OPTIMIZE=1 "$PERRY" compile --no-cache "$TMPDIR/c262_arrow_parity.ts" -o "$TMPDIR/c262_arrow_parity" \
     >"$TMPDIR/compile.log" 2>&1 || {
         echo "FAIL: compile failed"
         sed 's/^/    /' "$TMPDIR/compile.log" | tail -80
