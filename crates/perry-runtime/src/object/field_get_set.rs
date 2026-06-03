@@ -2663,6 +2663,21 @@ pub extern "C" fn js_object_get_field_by_name(
                     return JSValue::number(crate::set::js_set_size(s) as f64);
                 }
                 if let Some(name) = set_method_value_name(key_bytes) {
+                    // Return the SAME brand-checking thunk installed on
+                    // Set.prototype so `const m = s.forEach; m.call(badThis)`
+                    // throws a TypeError (and `m === Set.prototype.forEach`).
+                    // Falls back to the legacy instance-bound closure if the
+                    // prototype thunk isn't available.
+                    if let Ok(method_name) = std::str::from_utf8(name) {
+                        if let Some(v) =
+                            super::collection_proto_thunks::collection_proto_method_value(
+                                "Set",
+                                method_name,
+                            )
+                        {
+                            return JSValue::from_bits(v.to_bits());
+                        }
+                    }
                     let this_f64 =
                         f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
                     let result = js_class_method_bind(this_f64, name.as_ptr(), name.len());

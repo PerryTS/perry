@@ -65,6 +65,28 @@ fn installed_collection_method_value(
     }
 }
 
+/// Resolve a collection prototype method to the SAME brand-checking thunk value
+/// installed on `<Builtin>.prototype`. Used so reading a method off an *instance*
+/// (`const m = s.forEach`) yields the identical function object as
+/// `Set.prototype.forEach` — which (a) makes `m === Set.prototype.forEach` hold
+/// and (b) routes `m.call(badReceiver)` through the brand check that throws a
+/// `TypeError` on an incompatible `this`. Previously the instance read returned a
+/// `js_class_method_bind` closure pre-bound to the instance, so `.call(0)` kept
+/// the bound Set and silently skipped the check (test262
+/// `Set/prototype/forEach/this-not-object-throw-*`, and the Map/Set families).
+///
+/// `builtin_name` is one of `Map`/`Set`/`WeakMap`/`WeakSet`. Returns `None` for
+/// unknown names/methods so callers fall back to their existing path.
+pub(crate) fn collection_proto_method_value(builtin_name: &str, method_name: &str) -> Option<f64> {
+    let proto = super::global_this::builtin_prototype_value(builtin_name);
+    if proto.to_bits() == crate::value::TAG_UNDEFINED {
+        return None;
+    }
+    let proto_ptr = crate::value::js_nanbox_get_pointer(proto) as *mut ObjectHeader;
+    installed_collection_method_value(proto_ptr, method_name)
+        .filter(|v| v.to_bits() != crate::value::TAG_UNDEFINED)
+}
+
 /// Install the brand-checking `.prototype` methods for the collection named
 /// `builtin_name` (`Map`/`Set`/`WeakMap`/`WeakSet`). Returns `true` when
 /// `builtin_name` is one of those collections — the caller then adds the
