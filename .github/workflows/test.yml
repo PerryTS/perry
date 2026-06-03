@@ -440,12 +440,23 @@ jobs:
           fi
           echo "All ${TOTAL} failures are known/triaged."
 
+      - name: Generate parity matrix trend
+        run: |
+          python3 scripts/parity_matrix_trend.py \
+            --check \
+            --output-json test-parity/reports/parity_matrix_latest.json \
+            --output-md test-parity/reports/parity_matrix_latest.md
+          cat test-parity/reports/parity_matrix_latest.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload parity report
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: parity-report
-          path: test-parity/reports/latest.json
+          path: |
+            test-parity/reports/latest.json
+            test-parity/reports/parity_matrix_latest.json
+            test-parity/reports/parity_matrix_latest.md
 
       # Capture per-test compile stderr written by run_parity_tests.sh into
       # `test-parity/output/*.compile_error.log` so the long-tail

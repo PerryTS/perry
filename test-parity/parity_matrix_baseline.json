@@ -1,0 +1,75 @@
+{
+  "_schema": {
+    "description": "Baseline for scripts/parity_matrix_trend.py. Modules absent from `modules` must pass with zero diff lines. Entries here are existing module-inventory gaps that may fail until their top-level parity smoke tests are retired or narrowed.",
+    "max_diff_lines": "Integer maximum accepted unified-diff changed-line count, or null when the current broad inventory test has not been converted to an exact diff baseline yet.",
+    "allowed_statuses": "Statuses accepted for the module. `pass` is always accepted as an improvement."
+  },
+  "modules": {
+    "dns": {
+      "test_id": "test_parity_dns",
+      "issue": "812",
+      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
+      "max_diff_lines": null
+    },
+    "dns_promises": {
+      "test_id": "test_parity_dns_promises",
+      "issue": "812",
+      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
+      "max_diff_lines": null
+    },
+    "http": {
+      "test_id": "test_parity_http",
+      "issue": "812",
+      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
+      "max_diff_lines": null
+    },
+    "http2": {
+      "test_id": "test_parity_http2",
+      "issue": "812",
+      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
+      "max_diff_lines": null
+    },
+    "https": {
+      "test_id": "test_parity_https",
+      "issue": "812",
+      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
+      "max_diff_lines": null
+    },
+    "net": {
+      "test_id": "test_parity_net",
+      "issue": "812",
+      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
+      "max_diff_lines": null
+    },
+    "sqlite": {
+      "test_id": "test_parity_sqlite",
+      "issue": "812",
+      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
+      "max_diff_lines": null
+    },
+    "stream": {
+      "test_id": "test_parity_stream",
+      "issue": "812",
+      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
+      "max_diff_lines": null
+    },
+    "stream_web": {
+      "test_id": "test_parity_stream_web",
+      "issue": "812",
+      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
+      "max_diff_lines": null
+    },
+    "tls": {
+      "test_id": "test_parity_tls",
+      "issue": "812",
+      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
+      "max_diff_lines": null
+    },
+    "zlib": {
+      "test_id": "test_parity_zlib",
+      "issue": "812",
+      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
+      "max_diff_lines": null
+    }
+  }
+}
