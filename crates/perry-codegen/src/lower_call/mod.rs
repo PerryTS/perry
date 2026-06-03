@@ -5,7 +5,8 @@
 use anyhow::{bail, Result};
 use perry_hir::Expr;
 
-use crate::expr::{variant_name, FnCtx};
+use crate::expr::{lower_expr, unbox_to_i64, variant_name, FnCtx};
+use crate::types::{DOUBLE, I64, PTR};
 
 // Tier 1.3 (v0.5.332): the perry/ui, perry/ui-instance, perry/system,
 // perry/i18n dispatch tables moved to `perry_dispatch` so the JS and
@@ -191,4 +192,54 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         variant_name(callee),
         args.len()
     )
+}
+
+pub(crate) fn emit_closure_value_call(
+    ctx: &mut FnCtx<'_>,
+    closure_box: &str,
+    args: &[Expr],
+) -> Result<String> {
+    if args.len() <= 16 {
+        let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+        for arg in args {
+            lowered_args.push(lower_expr(ctx, arg)?);
+        }
+        let blk = ctx.block();
+        let closure_handle = unbox_to_i64(blk, closure_box);
+        let runtime_fn = format!("js_closure_call{}", lowered_args.len());
+        let mut call_args: Vec<(crate::types::LlvmType, &str)> = vec![(I64, &closure_handle)];
+        for value in &lowered_args {
+            call_args.push((DOUBLE, value.as_str()));
+        }
+        return Ok(blk.call(DOUBLE, &runtime_fn, &call_args));
+    }
+
+    let arg_buf = ctx.func.alloca_entry_array(DOUBLE, args.len());
+    for (idx, arg) in args.iter().enumerate() {
+        let value = lower_expr(ctx, arg)?;
+        let idx_s = idx.to_string();
+        let slot = ctx
+            .block()
+            .gep(DOUBLE, &arg_buf, &[(I64, idx_s.as_str())]);
+        ctx.block().store(DOUBLE, &value, &slot);
+    }
+
+    let ptr_reg = ctx.block().next_reg();
+    ctx.block().emit_raw(format!(
+        "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+        ptr_reg,
+        args.len(),
+        arg_buf
+    ));
+    let arg_count = args.len().to_string();
+    Ok(ctx.block().call(
+        DOUBLE,
+        "js_closure_call_apply_with_spread",
+        &[
+            (DOUBLE, closure_box),
+            (PTR, ptr_reg.as_str()),
+            (I64, arg_count.as_str()),
+            (I64, "0"),
+        ],
+    ))
 }

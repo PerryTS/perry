@@ -11,7 +11,9 @@ use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
 use perry_types::Type as HirType;
 
 #[allow(unused_imports)]
-use crate::lower_call::{lower_call, lower_native_method_call, lower_new};
+use crate::lower_call::{
+    emit_closure_value_call, lower_call, lower_native_method_call, lower_new,
+};
 #[allow(unused_imports)]
 use crate::lower_conditional::{lower_conditional, lower_logical, lower_truthy};
 #[allow(unused_imports)]
@@ -214,27 +216,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if ctx.namespace_reexport_named_imports.contains(class_name)
                         && ctx.imported_vars.contains(method_name)
                     {
-                        let mut lowered: Vec<String> = Vec::with_capacity(args.len());
-                        for a in args {
-                            lowered.push(lower_expr(ctx, a)?);
-                        }
-                        if lowered.len() > 16 {
-                            bail!(
-                                "perry-codegen: namespace static-method closure call with {} args (max 16)",
-                                lowered.len()
-                            );
-                        }
                         ctx.pending_declares.push((fn_name.clone(), DOUBLE, vec![]));
                         let closure_box = ctx.block().call(DOUBLE, &fn_name, &[]);
-                        let blk = ctx.block();
-                        let closure_handle = unbox_to_i64(blk, &closure_box);
-                        let runtime_fn = format!("js_closure_call{}", lowered.len());
-                        let mut call_args: Vec<(crate::types::LlvmType, &str)> =
-                            vec![(I64, &closure_handle)];
-                        for v in &lowered {
-                            call_args.push((DOUBLE, v.as_str()));
-                        }
-                        return Ok(blk.call(DOUBLE, &runtime_fn, &call_args));
+                        return emit_closure_value_call(ctx, &closure_box, args);
                     }
                     let mut lowered: Vec<String> = Vec::with_capacity(args.len());
                     for a in args {

@@ -11,7 +11,7 @@ use perry_api_manifest::{
 use perry_hir::Expr;
 use perry_types::Type as HirType;
 
-use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, FnCtx};
+use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::{
     layout_for_manifest_pod, layout_runtime_id, llvm_type_for_native_rep, materialize_js_value,
@@ -1823,24 +1823,11 @@ pub fn try_lower_extern_func_call(
     if ctx.imported_vars.contains(name) {
         ctx.pending_declares.push((fname.clone(), DOUBLE, vec![]));
         let closure_box = ctx.block().call(DOUBLE, &fname, &[]);
-        let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-        for a in args {
-            lowered_args.push(lower_expr(ctx, a)?);
-        }
-        if lowered_args.len() > 16 {
-            anyhow::bail!(
-                "perry-codegen Phase D.1: closure call with {} args (max 16)",
-                lowered_args.len()
-            );
-        }
-        let blk = ctx.block();
-        let closure_handle = unbox_to_i64(blk, &closure_box);
-        let runtime_fn = format!("js_closure_call{}", lowered_args.len());
-        let mut call_args: Vec<(crate::types::LlvmType, &str)> = vec![(I64, &closure_handle)];
-        for v in &lowered_args {
-            call_args.push((DOUBLE, v.as_str()));
-        }
-        return Ok(Some(blk.call(DOUBLE, &runtime_fn, &call_args)));
+        return Ok(Some(super::emit_closure_value_call(
+            ctx,
+            &closure_box,
+            args,
+        )?));
     }
     // Record the cross-module call so the caller can add a `declare`
     // line for it after the &mut LlFunction borrow is released. The

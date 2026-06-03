@@ -2,7 +2,7 @@
 //! `Call { callee: PropertyGet { ExternFuncRef(ns), method }, args }`
 //! where `ns ∈ namespace_imports`.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use perry_hir::Expr;
 
 use crate::expr::{lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
@@ -268,24 +268,11 @@ pub fn try_lower_namespace_member_call(
         // getter, then closure-call with the user args.
         ctx.pending_declares.push((symbol.clone(), DOUBLE, vec![]));
         let closure_box = ctx.block().call(DOUBLE, &symbol, &[]);
-        let mut lowered: Vec<String> = Vec::with_capacity(args.len());
-        for a in args {
-            lowered.push(lower_expr(ctx, a)?);
-        }
-        if lowered.len() > 16 {
-            bail!(
-                "perry-codegen: namespace closure call with {} args (max 16)",
-                lowered.len()
-            );
-        }
-        let blk = ctx.block();
-        let closure_handle = unbox_to_i64(blk, &closure_box);
-        let runtime_fn = format!("js_closure_call{}", lowered.len());
-        let mut call_args: Vec<(crate::types::LlvmType, &str)> = vec![(I64, &closure_handle)];
-        for v in &lowered {
-            call_args.push((DOUBLE, v.as_str()));
-        }
-        return Ok(Some(blk.call(DOUBLE, &runtime_fn, &call_args)));
+        return Ok(Some(super::emit_closure_value_call(
+            ctx,
+            &closure_box,
+            args,
+        )?));
     }
     // Function-decl-shaped export: direct call with rest bundling.
     let declared_count = ctx
