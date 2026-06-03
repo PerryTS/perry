@@ -195,6 +195,7 @@ fn normalize_unicode_identifier_escapes(source: &str) -> String {
     enum State {
         Code,
         String(u8),
+        Regex { in_class: bool },
         LineComment,
         BlockComment,
     }
@@ -238,16 +239,79 @@ fn normalize_unicode_identifier_escapes(source: &str) -> String {
         char::from_u32(value).map(|ch| (ch, i + 6))
     }
 
+    #[derive(Clone, Copy)]
+    enum LastSig {
+        None,
+        Char(u8),
+        Ident { start: usize, end: usize },
+    }
+
+    fn is_ident_byte(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
+    }
+
+    fn regex_allowed_after_keyword(word: &str) -> bool {
+        matches!(
+            word,
+            "return"
+                | "throw"
+                | "case"
+                | "delete"
+                | "void"
+                | "typeof"
+                | "yield"
+                | "await"
+                | "else"
+                | "do"
+                | "in"
+                | "of"
+        )
+    }
+
+    fn last_sig_allows_regex(last: LastSig, source: &str) -> bool {
+        match last {
+            LastSig::None => true,
+            LastSig::Char(b) => matches!(
+                b,
+                b'(' | b'{'
+                    | b'['
+                    | b'='
+                    | b':'
+                    | b','
+                    | b';'
+                    | b'!'
+                    | b'?'
+                    | b'+'
+                    | b'-'
+                    | b'*'
+                    | b'%'
+                    | b'&'
+                    | b'|'
+                    | b'^'
+                    | b'~'
+                    | b'<'
+                    | b'>'
+            ),
+            LastSig::Ident { start, end } => regex_allowed_after_keyword(&source[start..end]),
+        }
+    }
+
     let bytes = source.as_bytes();
     let mut out = String::with_capacity(source.len());
     let mut i = 0;
     let mut state = State::Code;
+    let mut last_sig = LastSig::None;
     while i < bytes.len() {
         match state {
             State::Code => {
-                if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
+                if bytes[i].is_ascii_whitespace() {
+                    let ch = source[i..].chars().next().unwrap();
+                    out.push(ch);
+                    i += ch.len_utf8();
+                } else if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
                     state = State::String(bytes[i]);
                     out.push(bytes[i] as char);
+                    last_sig = LastSig::Char(bytes[i]);
                     i += 1;
                 } else if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'/') {
                     state = State::LineComment;
@@ -259,13 +323,37 @@ fn normalize_unicode_identifier_escapes(source: &str) -> String {
                     out.push('/');
                     out.push('*');
                     i += 2;
+                } else if bytes[i] == b'/' && last_sig_allows_regex(last_sig, source) {
+                    state = State::Regex { in_class: false };
+                    out.push('/');
+                    last_sig = LastSig::Char(b'/');
+                    i += 1;
                 } else if let Some((ch, next)) = read_escape(bytes, i) {
                     out.push(ch);
+                    if ch == '_' || ch == '$' || ch.is_alphanumeric() {
+                        last_sig = LastSig::Ident {
+                            start: i,
+                            end: next,
+                        };
+                    } else {
+                        last_sig = LastSig::Char(b'\\');
+                    }
                     i = next;
                 } else {
                     let ch = source[i..].chars().next().unwrap();
                     out.push(ch);
-                    i += ch.len_utf8();
+                    if bytes[i].is_ascii() && is_ident_byte(bytes[i]) {
+                        let start = i;
+                        i += 1;
+                        while bytes.get(i).is_some_and(|b| is_ident_byte(*b)) {
+                            out.push(bytes[i] as char);
+                            i += 1;
+                        }
+                        last_sig = LastSig::Ident { start, end: i };
+                    } else {
+                        last_sig = LastSig::Char(bytes[i]);
+                        i += ch.len_utf8();
+                    }
                 }
             }
             State::String(quote) => {
@@ -281,6 +369,28 @@ fn normalize_unicode_identifier_escapes(source: &str) -> String {
                     if bytes[i] == quote {
                         state = State::Code;
                     }
+                    i += 1;
+                }
+            }
+            State::Regex { in_class } => {
+                out.push(bytes[i] as char);
+                if bytes[i] == b'\\' {
+                    if let Some(&next) = bytes.get(i + 1) {
+                        out.push(next as char);
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                } else if bytes[i] == b'[' {
+                    state = State::Regex { in_class: true };
+                    i += 1;
+                } else if bytes[i] == b']' {
+                    state = State::Regex { in_class: false };
+                    i += 1;
+                } else if bytes[i] == b'/' && !in_class {
+                    state = State::Code;
+                    i += 1;
+                } else {
                     i += 1;
                 }
             }
@@ -424,6 +534,39 @@ mod tests {
         let mut cache = SourceCache::new();
 
         let result = parse_typescript_with_cache(source, "test.js", &mut cache).unwrap();
+
+        assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn test_parse_js_regex_preserves_control_unicode_escapes() {
+        let source = r#"
+            const ASCII_WHITESPACE_REPLACE_REGEX = /[\u0009\u000A\u000C\u000D\u0020]/g;
+            export default ASCII_WHITESPACE_REPLACE_REGEX;
+        "#;
+        let mut cache = SourceCache::new();
+
+        let result = parse_typescript_with_cache(source, "undici-cjs-wrap.js", &mut cache).unwrap();
+
+        assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn test_parse_js_script_regex_preserves_control_unicode_escapes() {
+        let source = r#"
+'use strict'
+
+const ASCII_WHITESPACE_REPLACE_REGEX = /[\u0009\u000A\u000C\u000D\u0020]/g // eslint-disable-line no-control-regex
+
+if (!ASCII_WHITESPACE_REPLACE_REGEX.test(' ')) {
+  throw new Error('unexpected regex result')
+}
+"#;
+        let mut cache = SourceCache::new();
+
+        let result =
+            parse_typescript_with_cache(source, "undici-cjs-wrap-control-regex.js", &mut cache)
+                .unwrap();
 
         assert!(result.diagnostics.is_empty());
     }
