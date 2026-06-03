@@ -41,7 +41,11 @@ pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
         } else {
             arr
         };
-        if !raw_ptr.is_null() && (raw_ptr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        let raw_addr = raw_ptr as usize;
+        if !raw_ptr.is_null()
+            && raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000
+            && raw_addr & 0x7 == 0
+        {
             let gc_header =
                 (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if (*gc_header).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
@@ -150,7 +154,11 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
         } else {
             arr
         };
-        if !raw_ptr.is_null() && (raw_ptr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        let raw_addr = raw_ptr as usize;
+        if !raw_ptr.is_null()
+            && raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000
+            && raw_addr & 0x7 == 0
+        {
             let gc_header =
                 (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if (*gc_header).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
@@ -424,7 +432,8 @@ pub extern "C" fn js_array_set_string_key(
     // (non-array) receivers, just call the object setter directly so
     // the standard expando-property path runs.
     let is_array = unsafe {
-        if (arr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        let addr = arr as usize;
+        if addr >= crate::gc::GC_HEADER_SIZE + 0x1000 && addr & 0x7 == 0 {
             let gc_header =
                 (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY

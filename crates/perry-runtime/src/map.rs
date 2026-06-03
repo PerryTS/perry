@@ -91,7 +91,7 @@ pub fn is_registered_map(addr: usize) -> bool {
     // arena-allocated above it, so reject the whole small-handle band before
     // dereferencing `addr - GC_HEADER_SIZE` (deref'ing e.g. a 0x40000 fetch
     // handle reads unmapped memory and segfaults — see is_date_cell_addr).
-    if addr < 0x100000 {
+    if addr < 0x100000 || addr & 0x7 != 0 {
         return false;
     }
     unsafe {

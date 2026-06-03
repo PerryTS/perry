@@ -380,6 +380,9 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
         }
         arr
     };
+    if (cleaned as usize) & 0x7 != 0 {
+        return std::ptr::null();
+    }
     // Issue #233: follow GC_FLAG_FORWARDED forwarding chains. When
     // an array grows (js_array_grow) we install a forwarding pointer
     // at the OLD location so any stale reference — e.g. an async
@@ -395,14 +398,16 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
     let mut cleaned = cleaned;
     unsafe {
         let mut steps = 0u32;
-        while (cleaned as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        while (cleaned as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000
+            && (cleaned as usize) & 0x7 == 0
+        {
             let gc_header =
                 (cleaned as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
                 break;
             }
             let new_user = crate::gc::forwarding_address(gc_header) as u64;
-            if !(HEAP_MIN..HEAP_MAX).contains(&new_user) {
+            if !(HEAP_MIN..HEAP_MAX).contains(&new_user) || new_user & 0x7 != 0 {
                 return std::ptr::null();
             }
             cleaned = new_user as *const ArrayHeader;
@@ -420,7 +425,8 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
     // pointer for every downstream accessor. O(1) on subsequent
     // calls (idempotent via the `materialized` cache).
     unsafe {
-        if (cleaned as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        if (cleaned as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 && (cleaned as usize) & 0x7 == 0
+        {
             let gc_header =
                 (cleaned as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if (*gc_header).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
@@ -566,7 +572,10 @@ unsafe fn array_slots_are_numeric(arr: *const ArrayHeader) -> bool {
 
 #[inline]
 unsafe fn array_gc_header(arr: *const ArrayHeader) -> Option<*mut crate::gc::GcHeader> {
-    if arr.is_null() || (arr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+    if arr.is_null()
+        || (arr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000
+        || (arr as usize) & 0x7 != 0
+    {
         return None;
     }
     let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;

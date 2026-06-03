@@ -113,7 +113,7 @@ pub fn is_registered_set(addr: usize) -> bool {
     // timer ids are NaN-boxed POINTER_TAG values, not heap addresses) before
     // dereferencing the GC header. Managed Sets are arena-allocated above the
     // cutoff. See map::is_registered_map / date::is_date_cell_addr.
-    if addr < 0x100000 {
+    if addr < 0x100000 || addr & 0x7 != 0 {
         return false;
     }
     unsafe {

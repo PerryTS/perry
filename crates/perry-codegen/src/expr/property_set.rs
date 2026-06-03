@@ -144,12 +144,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // of `arr.length` returned the stale original count and the
             // elements stayed live. Statically Array-typed receivers route to
             // `js_array_set_length` which truncates / extends the header.
-            // Open question: dynamic `Any`-typed receivers that happen to be
-            // arrays at runtime still hit the generic path and miss the fix —
-            // they'd need a runtime-side check inside js_object_set_field_by_name
-            // (route to js_array_set_length when the target is registered as
-            // an array). Deliberately out of scope here; the static-typed
-            // case covers the issue's repro.
+            // Dynamic `Any`-typed receivers that happen to be arrays at
+            // runtime route through js_object_set_field_by_name, which has
+            // its own array-length check before ordinary property storage.
             if property == "length" && crate::type_analysis::is_array_expr(ctx, object) {
                 let arr_box = lower_expr(ctx, object)?;
                 let val_double = lower_expr(ctx, value)?;

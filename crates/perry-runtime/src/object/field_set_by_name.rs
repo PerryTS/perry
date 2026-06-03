@@ -158,6 +158,42 @@ unsafe fn key_to_str_for_diag(key: *const crate::StringHeader) -> String {
         .unwrap_or_else(|_| "<unknown>".to_string())
 }
 
+unsafe fn try_set_array_length_before_value_root(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+) -> bool {
+    if key.is_null()
+        || (key as usize) < 0x10000
+        || (key as usize) & 0x7 != 0
+        || obj.is_null()
+        || (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000
+        || (obj as usize) & 0x7 != 0
+    {
+        return false;
+    }
+
+    let value_kind = JSValue::from_bits(value.to_bits());
+    if value_kind.is_pointer() || value_kind.is_string() || value_kind.is_bigint() {
+        return false;
+    }
+
+    let gc_header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*gc_header).obj_type != crate::gc::GC_TYPE_ARRAY {
+        return false;
+    }
+
+    let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let key_len = (*key).byte_len as usize;
+    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+    if key_bytes != b"length" {
+        return false;
+    }
+
+    crate::array::js_array_set_length(obj as *mut crate::array::ArrayHeader, value);
+    true
+}
+
 /// Set a field value by its string key name (dynamic property access)
 /// This searches the keys array for a match and sets the corresponding value.
 /// If the key doesn't exist, it adds it to the object.
@@ -287,6 +323,11 @@ pub extern "C" fn js_object_set_field_by_name(
             }
         }
         return;
+    }
+    unsafe {
+        if try_set_array_length_before_value_root(obj, key, value) {
+            return;
+        }
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);

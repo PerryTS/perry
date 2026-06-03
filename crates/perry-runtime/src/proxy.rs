@@ -513,6 +513,46 @@ fn target_set(target: f64, key: f64, value: f64) {
     crate::object::js_object_set_field_by_name(obj_ptr, key_ptr, value);
 }
 
+fn put_value_value_needs_root(value: f64) -> bool {
+    let js_value = crate::value::JSValue::from_bits(value.to_bits());
+    js_value.is_pointer() || js_value.is_string() || js_value.is_bigint()
+}
+
+fn put_value_array_length_direct_set(target: f64, key: f64, value: f64, receiver: f64) -> bool {
+    if target.to_bits() != receiver.to_bits() || put_value_value_needs_root(value) {
+        return false;
+    }
+
+    let obj_addr = extract_pointer(target.to_bits()) as usize;
+    let key_ptr = extract_pointer(key.to_bits()) as *const crate::StringHeader;
+    if obj_addr < crate::gc::GC_HEADER_SIZE + 0x1000
+        || obj_addr & 0x7 != 0
+        || key_ptr.is_null()
+        || (key_ptr as usize) < 0x10000
+        || (key_ptr as usize) & 0x7 != 0
+    {
+        return false;
+    }
+
+    unsafe {
+        let gc_header =
+            (obj_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*gc_header).obj_type != crate::gc::GC_TYPE_ARRAY {
+            return false;
+        }
+
+        let key_data = (key_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let key_len = (*key_ptr).byte_len as usize;
+        let key_bytes = std::slice::from_raw_parts(key_data, key_len);
+        if key_bytes != b"length" {
+            return false;
+        }
+
+        crate::array::js_array_set_length(obj_addr as *mut crate::array::ArrayHeader, value);
+        true
+    }
+}
+
 #[derive(Clone, Copy)]
 enum OwnSetDescriptor {
     Data { writable: bool },
@@ -688,6 +728,10 @@ pub extern "C" fn js_put_value_set(
     receiver: f64,
     strict: i32,
 ) -> f64 {
+    if put_value_array_length_direct_set(target, key, value, receiver) {
+        return value;
+    }
+
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_handle = scope.root_nanbox_f64(target);
     let key_handle = scope.root_nanbox_f64(key);
