@@ -332,6 +332,28 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             key: Box::new(substitute_expr(key, substitutions)),
             receiver: Box::new(substitute_expr(receiver, substitutions)),
         },
+        Expr::SuperPropertySet {
+            parent_class_id,
+            parent_class_name,
+            key,
+            value,
+        } => Expr::SuperPropertySet {
+            parent_class_id: *parent_class_id,
+            parent_class_name: parent_class_name.clone(),
+            key: Box::new(substitute_expr(key, substitutions)),
+            value: Box::new(substitute_expr(value, substitutions)),
+        },
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => Expr::ObjectSuperPropertySet {
+            home: Box::new(substitute_expr(home, substitutions)),
+            key: Box::new(substitute_expr(key, substitutions)),
+            value: Box::new(substitute_expr(value, substitutions)),
+            receiver: Box::new(substitute_expr(receiver, substitutions)),
+        },
         Expr::ObjectSuperMethodCall {
             home,
             key,

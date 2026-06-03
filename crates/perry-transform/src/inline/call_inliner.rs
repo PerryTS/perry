@@ -33,6 +33,93 @@ fn enter_inline_expr_recursion() -> Option<InlineExprRecursionGuard> {
     entered.then_some(InlineExprRecursionGuard)
 }
 
+fn expr_contains_lexical_super_set(expr: &Expr) -> bool {
+    if matches!(expr, Expr::SuperPropertySet { .. }) {
+        return true;
+    }
+    let mut found = false;
+    walk_expr_children(expr, &mut |child| {
+        if !found && expr_contains_lexical_super_set(child) {
+            found = true;
+        }
+    });
+    found
+}
+
+fn stmt_contains_lexical_super_set(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Let { init, .. } => init.as_ref().is_some_and(expr_contains_lexical_super_set),
+        Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            expr_contains_lexical_super_set(expr)
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_contains_lexical_super_set(condition)
+                || then_branch.iter().any(stmt_contains_lexical_super_set)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|branch| branch.iter().any(stmt_contains_lexical_super_set))
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            expr_contains_lexical_super_set(condition)
+                || body.iter().any(stmt_contains_lexical_super_set)
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_ref()
+                .is_some_and(|stmt| stmt_contains_lexical_super_set(stmt.as_ref()))
+                || condition
+                    .as_ref()
+                    .is_some_and(expr_contains_lexical_super_set)
+                || update.as_ref().is_some_and(expr_contains_lexical_super_set)
+                || body.iter().any(stmt_contains_lexical_super_set)
+        }
+        Stmt::Labeled { body, .. } => stmt_contains_lexical_super_set(body),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            body.iter().any(stmt_contains_lexical_super_set)
+                || catch
+                    .as_ref()
+                    .is_some_and(|catch| catch.body.iter().any(stmt_contains_lexical_super_set))
+                || finally
+                    .as_ref()
+                    .is_some_and(|body| body.iter().any(stmt_contains_lexical_super_set))
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            expr_contains_lexical_super_set(discriminant)
+                || cases.iter().any(|case| {
+                    case.test
+                        .as_ref()
+                        .is_some_and(expr_contains_lexical_super_set)
+                        || case.body.iter().any(stmt_contains_lexical_super_set)
+                })
+        }
+        Stmt::Return(None)
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => false,
+    }
+}
+
+fn method_contains_lexical_super_set(method: &Function) -> bool {
+    method.body.iter().any(stmt_contains_lexical_super_set)
+}
+
 pub fn stmt_contains_return(s: &Stmt) -> bool {
     match s {
         Stmt::Return(_) => true,
@@ -1458,6 +1545,9 @@ pub fn try_inline_simple_call(
                     if !method_candidate.method_lookup_safe {
                         return None;
                     }
+                    if method_contains_lexical_super_set(&method_candidate.func) {
+                        return None;
+                    }
 
                     // Check for single return statement
                     if method_candidate.func.body.len() == 1 {
@@ -1706,6 +1796,7 @@ pub fn try_inline_call(
                     // extra actual args plus their side effects.
                     if !method_candidate.method_lookup_safe
                         || args.len() > method_candidate.func.params.len()
+                        || method_contains_lexical_super_set(&method_candidate.func)
                     {
                         return None;
                     }

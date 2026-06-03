@@ -8,7 +8,13 @@ use crate::walker::walk_expr_children;
 pub(crate) fn uses_this_expr(expr: &Expr) -> bool {
     match expr {
         Expr::This => true,
-        Expr::SuperCall(_) | Expr::SuperMethodCall { .. } | Expr::SuperPropertyGet { .. } => true,
+        Expr::SuperCall(_)
+        | Expr::SuperMethodCall { .. }
+        | Expr::SuperPropertyGet { .. }
+        | Expr::SuperPropertySet { .. }
+        | Expr::ObjectSuperPropertyGet { .. }
+        | Expr::ObjectSuperPropertySet { .. }
+        | Expr::ObjectSuperMethodCall { .. } => true,
         // Nested arrow / closure: if it itself captures `this`, our
         // surrounding scope MUST also capture `this` so the nested closure
         // can inherit it (arrow functions inherit `this` from the enclosing

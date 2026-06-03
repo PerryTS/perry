@@ -971,6 +971,21 @@ pub fn transform_expr(
             transform_expr(key, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(receiver, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
+        Expr::SuperPropertySet { key, value, .. } => {
+            transform_expr(key, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(value, js_imports, extern_func_to_js, local_name_to_js, tracker);
+        }
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            transform_expr(home, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(key, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(value, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(receiver, js_imports, extern_func_to_js, local_name_to_js, tracker);
+        }
         Expr::ObjectSuperMethodCall {
             home,
             key,

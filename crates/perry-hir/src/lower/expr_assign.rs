@@ -920,13 +920,39 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
             }
         }
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::SuperProp(super_prop)) => {
-            let mut exprs = Vec::new();
-            if let ast::SuperProp::Computed(computed) = &super_prop.prop {
-                exprs.push(lower_expr(ctx, &computed.expr)?);
+            if ctx.current_class_member_is_static {
+                let mut exprs = Vec::new();
+                if let ast::SuperProp::Computed(computed) = &super_prop.prop {
+                    exprs.push(lower_expr(ctx, &computed.expr)?);
+                }
+                exprs.push(*value);
+                exprs.push(throw_type_error_const_assignment(""));
+                return Ok(Expr::Sequence(exprs));
             }
-            exprs.push(*value);
-            exprs.push(throw_type_error_const_assignment(""));
-            Ok(Expr::Sequence(exprs))
+            let key = match &super_prop.prop {
+                ast::SuperProp::Ident(ident) => Box::new(Expr::String(ident.sym.to_string())),
+                ast::SuperProp::Computed(computed) => Box::new(lower_expr(ctx, &computed.expr)?),
+            };
+            if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
+                Ok(Expr::ObjectSuperPropertySet {
+                    home: Box::new(Expr::LocalGet(home_id)),
+                    key,
+                    value,
+                    receiver: Box::new(Expr::This),
+                })
+            } else {
+                let parent_class_name = ctx.current_class_super_ident.clone();
+                let parent_class_id = parent_class_name
+                    .as_deref()
+                    .and_then(|parent| ctx.lookup_class(parent))
+                    .unwrap_or(0);
+                Ok(Expr::SuperPropertySet {
+                    parent_class_id,
+                    parent_class_name,
+                    key,
+                    value,
+                })
+            }
         }
         ast::AssignTarget::Pat(pat) => {
             // Destructuring assignment: [a, b] = expr or { a, b } = expr

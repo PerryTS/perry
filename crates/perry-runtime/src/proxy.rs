@@ -670,6 +670,11 @@ fn key_to_rust_string(value: f64) -> Option<String> {
     }
 }
 
+fn property_key_to_rust_string(value: f64) -> Option<String> {
+    let property_key = unsafe { crate::object::js_to_property_key(value) };
+    key_to_rust_string(property_key)
+}
+
 fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
     if small_handle_from_value(target).is_some() {
         return None;
@@ -871,6 +876,115 @@ pub extern "C" fn js_put_value_set(
         crate::error::throw_immutable_write(0, &key_name);
     }
     value_handle.get_nanbox_f64()
+}
+
+fn class_super_accessor_set(
+    parent_class_id: u32,
+    key: f64,
+    value: f64,
+    receiver: f64,
+) -> Option<bool> {
+    let key_name = property_key_to_rust_string(key)?;
+    let registry = crate::object::CLASS_VTABLE_REGISTRY.read().ok()?;
+    let reg = registry.as_ref()?;
+    let mut cid = parent_class_id;
+    let mut depth = 0usize;
+    while cid != 0 && depth < 32 {
+        if let Some(vtable) = reg.get(&cid) {
+            let setter_alias = format!("__set_{}", key_name);
+            if let Some(&setter_ptr) = vtable
+                .setters
+                .get(&key_name)
+                .or_else(|| vtable.setters.get(&setter_alias))
+            {
+                let f: extern "C" fn(f64, f64) -> f64 = unsafe { std::mem::transmute(setter_ptr) };
+                let prev_this = crate::object::js_implicit_this_set(receiver);
+                let _ = f(receiver, value);
+                crate::object::js_implicit_this_set(prev_this);
+                return Some(true);
+            }
+            let getter_alias = format!("__get_{}", key_name);
+            if vtable.getters.contains_key(&key_name) || vtable.getters.contains_key(&getter_alias)
+            {
+                return Some(false);
+            }
+        }
+        match crate::object::get_parent_class_id(cid) {
+            Some(parent) if parent != 0 && parent != cid => {
+                cid = parent;
+                depth += 1;
+            }
+            _ => break,
+        }
+    }
+    None
+}
+
+fn receiver_super_parent_class_id(receiver: f64) -> Option<u32> {
+    let obj = extract_pointer(receiver.to_bits()) as *const crate::ObjectHeader;
+    if obj.is_null() {
+        return None;
+    }
+    let class_id = unsafe { (*obj).class_id };
+    if class_id == 0 {
+        return None;
+    }
+    crate::object::get_parent_class_id(class_id)
+}
+
+fn normalize_accessor_receiver(receiver: f64) -> f64 {
+    let bits = receiver.to_bits();
+    if bits != 0 && (bits >> 48) == 0 {
+        crate::value::js_nanbox_pointer(bits as i64)
+    } else if receiver.is_finite() && receiver > 65_536.0 && receiver.fract() == 0.0 {
+        crate::value::js_nanbox_pointer(receiver as i64)
+    } else {
+        receiver
+    }
+}
+
+/// `super[key] = value` for class methods. The property lookup starts at the
+/// parent prototype, but writes use the current `this` as Receiver.
+#[no_mangle]
+pub extern "C" fn js_super_put_value_set(
+    parent_class_id: u32,
+    key: f64,
+    value: f64,
+    receiver: f64,
+    strict: i32,
+) -> f64 {
+    let receiver = normalize_accessor_receiver(receiver);
+    let receiver_parent_class_id = receiver_super_parent_class_id(receiver);
+    if let Some(ok) =
+        class_super_accessor_set(parent_class_id, key, value, receiver).or_else(|| {
+            receiver_parent_class_id
+                .filter(|cid| *cid != parent_class_id)
+                .and_then(|cid| class_super_accessor_set(cid, key, value, receiver))
+        })
+    {
+        if !ok && strict != 0 {
+            let key_name = key_to_rust_string(key).unwrap_or_else(|| "property".to_string());
+            crate::error::throw_immutable_write(0, &key_name);
+        }
+        return value;
+    }
+
+    let effective_parent_class_id = if parent_class_id != 0 {
+        parent_class_id
+    } else {
+        receiver_parent_class_id.unwrap_or(0)
+    };
+    let proto = crate::object::class_prototype_object(effective_parent_class_id);
+    if !proto.is_null() {
+        let target = crate::value::js_nanbox_pointer(proto as i64);
+        return js_put_value_set(target, key, value, receiver, strict);
+    }
+
+    if strict != 0 {
+        let key_name = key_to_rust_string(key).unwrap_or_else(|| "property".to_string());
+        crate::error::throw_immutable_write(0, &key_name);
+    }
+    value
 }
 
 /// `key in proxy` — if handler.has exists, call it; otherwise delegate to

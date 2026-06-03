@@ -251,6 +251,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     );
     module.declare_function("js_object_super_get", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function(
+        "js_object_super_put_value_set",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, I32],
+    );
+    module.declare_function(
         "js_object_super_call",
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, PTR, I64],

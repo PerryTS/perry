@@ -795,6 +795,21 @@ where
             f(key);
             f(receiver);
         }
+        Expr::SuperPropertySet { key, value, .. } => {
+            f(key);
+            f(value);
+        }
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            f(home);
+            f(key);
+            f(value);
+            f(receiver);
+        }
         Expr::ObjectSuperMethodCall {
             home,
             key,

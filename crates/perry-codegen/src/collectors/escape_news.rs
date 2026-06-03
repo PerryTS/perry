@@ -372,6 +372,21 @@ fn collect_used_new_fields_in_expr(
             collect_used_new_fields_in_expr(key, non_escaping_news, used);
             collect_used_new_fields_in_expr(receiver, non_escaping_news, used);
         }
+        Expr::SuperPropertySet { key, value, .. } => {
+            collect_used_new_fields_in_expr(key, non_escaping_news, used);
+            collect_used_new_fields_in_expr(value, non_escaping_news, used);
+        }
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            collect_used_new_fields_in_expr(home, non_escaping_news, used);
+            collect_used_new_fields_in_expr(key, non_escaping_news, used);
+            collect_used_new_fields_in_expr(value, non_escaping_news, used);
+            collect_used_new_fields_in_expr(receiver, non_escaping_news, used);
+        }
         Expr::ObjectSuperMethodCall {
             home,
             key,

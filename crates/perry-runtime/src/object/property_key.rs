@@ -116,6 +116,37 @@ pub unsafe extern "C" fn js_object_super_get(home: f64, key_value: f64, _receive
     js_object_get_property_key(proto, key_value)
 }
 
+/// `super[key] = value` for object-literal methods using the captured home
+/// object. The prototype is resolved before the RHS has already been evaluated
+/// by codegen; this helper performs the final ordinary [[Set]].
+#[no_mangle]
+pub unsafe extern "C" fn js_object_super_put_value_set(
+    home: f64,
+    key_value: f64,
+    value: f64,
+    receiver: f64,
+    strict: i32,
+) -> f64 {
+    let Some(proto) = object_super_prototype_value(home) else {
+        if strict != 0 {
+            let key_name = crate::builtins::js_string_coerce(key_value);
+            let name = if key_name.is_null() {
+                "property".to_string()
+            } else {
+                let name_ptr =
+                    (key_name as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_len = (*key_name).byte_len as usize;
+                std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
+                    .unwrap_or("property")
+                    .to_string()
+            };
+            crate::error::throw_immutable_write(0, &name);
+        }
+        return value;
+    };
+    crate::proxy::js_put_value_set(proto, key_value, value, receiver, strict)
+}
+
 /// Resolve and call `super[key](...)` for object-literal methods.
 #[no_mangle]
 pub unsafe extern "C" fn js_object_super_call(

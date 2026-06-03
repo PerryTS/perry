@@ -159,6 +159,53 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &closure_handle))
         }
 
+        Expr::SuperPropertySet {
+            parent_class_id,
+            parent_class_name,
+            key,
+            value,
+        } => {
+            let parent_cid = if *parent_class_id != 0 {
+                *parent_class_id
+            } else if let Some(parent_name) = parent_class_name {
+                ctx.class_ids.get(parent_name).copied().unwrap_or(0)
+            } else {
+                let Some(current_class_name) = ctx.class_stack.last().cloned() else {
+                    return Err(anyhow!("super property assignment outside any method body"));
+                };
+                ctx.classes
+                    .get(&current_class_name)
+                    .and_then(|c| c.extends_name.as_ref())
+                    .and_then(|parent| ctx.class_ids.get(parent))
+                    .copied()
+                    .unwrap_or(0)
+            };
+            let recv_v = if let Some(this_slot) = ctx.this_stack.last().cloned() {
+                ctx.block().load(DOUBLE, &this_slot)
+            } else {
+                let helper = if ctx.is_strict_fn {
+                    "js_implicit_this_get"
+                } else {
+                    "js_implicit_this_get_sloppy"
+                };
+                ctx.block().call(DOUBLE, helper, &[])
+            };
+            let key_v = lower_expr(ctx, key)?;
+            let value_v = lower_expr(ctx, value)?;
+            let parent_cid_s = parent_cid.to_string();
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_super_put_value_set",
+                &[
+                    (I32, &parent_cid_s),
+                    (DOUBLE, &key_v),
+                    (DOUBLE, &value_v),
+                    (DOUBLE, &recv_v),
+                    (I32, "1"),
+                ],
+            ))
+        }
+
         Expr::ObjectSuperPropertyGet {
             home,
             key,
@@ -171,6 +218,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 DOUBLE,
                 "js_object_super_get",
                 &[(DOUBLE, &home_v), (DOUBLE, &key_v), (DOUBLE, &recv_v)],
+            ))
+        }
+
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            let home_v = lower_expr(ctx, home)?;
+            let key_v = lower_expr(ctx, key)?;
+            let value_v = lower_expr(ctx, value)?;
+            let recv_v = lower_expr(ctx, receiver)?;
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_object_super_put_value_set",
+                &[
+                    (DOUBLE, &home_v),
+                    (DOUBLE, &key_v),
+                    (DOUBLE, &value_v),
+                    (DOUBLE, &recv_v),
+                    (I32, "1"),
+                ],
             ))
         }
 

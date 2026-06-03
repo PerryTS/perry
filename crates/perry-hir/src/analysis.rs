@@ -422,6 +422,21 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(key, assigned);
             collect_assigned_locals_expr(receiver, assigned);
         }
+        Expr::SuperPropertySet { key, value, .. } => {
+            collect_assigned_locals_expr(key, assigned);
+            collect_assigned_locals_expr(value, assigned);
+        }
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            collect_assigned_locals_expr(home, assigned);
+            collect_assigned_locals_expr(key, assigned);
+            collect_assigned_locals_expr(value, assigned);
+            collect_assigned_locals_expr(receiver, assigned);
+        }
         Expr::ObjectSuperMethodCall {
             home,
             key,
@@ -1959,6 +1974,21 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
         } => {
             replace_this_in_expr(home, this_id);
             replace_this_in_expr(key, this_id);
+            replace_this_in_expr(receiver, this_id);
+        }
+        Expr::SuperPropertySet { key, value, .. } => {
+            replace_this_in_expr(key, this_id);
+            replace_this_in_expr(value, this_id);
+        }
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            replace_this_in_expr(home, this_id);
+            replace_this_in_expr(key, this_id);
+            replace_this_in_expr(value, this_id);
             replace_this_in_expr(receiver, this_id);
         }
         Expr::ObjectSuperMethodCall {

@@ -688,6 +688,21 @@ pub fn check_escapes_in_expr(
             check_escapes_in_expr(key, candidates, classes, escaped);
             check_escapes_in_expr(receiver, candidates, classes, escaped);
         }
+        Expr::SuperPropertySet { key, value, .. } => {
+            check_escapes_in_expr(key, candidates, classes, escaped);
+            check_escapes_in_expr(value, candidates, classes, escaped);
+        }
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            check_escapes_in_expr(home, candidates, classes, escaped);
+            check_escapes_in_expr(key, candidates, classes, escaped);
+            check_escapes_in_expr(value, candidates, classes, escaped);
+            check_escapes_in_expr(receiver, candidates, classes, escaped);
+        }
         Expr::ObjectSuperMethodCall {
             home,
             key,

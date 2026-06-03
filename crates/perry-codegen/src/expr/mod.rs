@@ -1494,7 +1494,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::StaticMethodCall { .. } => static_method::lower(ctx, expr),
         Expr::SuperMethodCall { .. }
         | Expr::SuperPropertyGet { .. }
+        | Expr::SuperPropertySet { .. }
         | Expr::ObjectSuperPropertyGet { .. }
+        | Expr::ObjectSuperPropertySet { .. }
         | Expr::ObjectSuperMethodCall { .. }
         | Expr::FsReadFileBinary(..) => super_method::lower(ctx, expr),
         Expr::WithGet { .. }

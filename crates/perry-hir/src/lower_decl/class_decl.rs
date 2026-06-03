@@ -38,6 +38,18 @@ fn computed_member_name(kind: ast::MethodKind, computed: &ast::ComputedPropName)
     format!("{}_{}_{}", base, computed.span.lo.0, computed.span.hi.0)
 }
 
+fn with_static_member_context<T>(
+    ctx: &mut LoweringContext,
+    is_static: bool,
+    f: impl FnOnce(&mut LoweringContext) -> Result<T>,
+) -> Result<T> {
+    let old = ctx.current_class_member_is_static;
+    ctx.current_class_member_is_static = is_static;
+    let result = f(ctx);
+    ctx.current_class_member_is_static = old;
+    result
+}
+
 fn lower_generic_computed_class_member(
     ctx: &mut LoweringContext,
     method: &ast::ClassMethod,
@@ -48,15 +60,21 @@ fn lower_generic_computed_class_member(
     let (kind, function) = match method.kind {
         ast::MethodKind::Method => (
             ClassComputedMemberKind::Method,
-            lower_class_method_with_name(ctx, method, function_name)?,
+            with_static_member_context(ctx, method.is_static, |ctx| {
+                lower_class_method_with_name(ctx, method, function_name)
+            })?,
         ),
         ast::MethodKind::Getter => (
             ClassComputedMemberKind::Getter,
-            lower_getter_method_with_name(ctx, method, function_name)?,
+            with_static_member_context(ctx, method.is_static, |ctx| {
+                lower_getter_method_with_name(ctx, method, function_name)
+            })?,
         ),
         ast::MethodKind::Setter => (
             ClassComputedMemberKind::Setter,
-            lower_setter_method_with_name(ctx, method, function_name)?,
+            with_static_member_context(ctx, method.is_static, |ctx| {
+                lower_setter_method_with_name(ctx, method, function_name)
+            })?,
         ),
     };
     Ok(ClassComputedMember {
@@ -88,15 +106,21 @@ fn lower_noncomputed_class_member_registration(
     let (kind, function) = match method.kind {
         ast::MethodKind::Method => (
             ClassComputedMemberKind::Method,
-            lower_class_method_with_name(ctx, method, function_name)?,
+            with_static_member_context(ctx, method.is_static, |ctx| {
+                lower_class_method_with_name(ctx, method, function_name)
+            })?,
         ),
         ast::MethodKind::Getter => (
             ClassComputedMemberKind::Getter,
-            lower_getter_method_with_name(ctx, method, function_name)?,
+            with_static_member_context(ctx, method.is_static, |ctx| {
+                lower_getter_method_with_name(ctx, method, function_name)
+            })?,
         ),
         ast::MethodKind::Setter => (
             ClassComputedMemberKind::Setter,
-            lower_setter_method_with_name(ctx, method, function_name)?,
+            with_static_member_context(ctx, method.is_static, |ctx| {
+                lower_setter_method_with_name(ctx, method, function_name)
+            })?,
         ),
     };
     Ok(ClassComputedMember {
@@ -433,7 +457,10 @@ pub fn lower_class_decl(
                                 && method.is_static
                                 && matches!(method.kind, ast::MethodKind::Method)
                             {
-                                let mut func = lower_class_method(ctx, method)?;
+                                let mut func =
+                                    with_static_member_context(ctx, method.is_static, |ctx| {
+                                        lower_class_method(ctx, method)
+                                    })?;
                                 func.name = format!("__perry_wk_hasinstance_{}", name);
                                 ctx.pending_functions.push(func);
                                 continue;
@@ -448,7 +475,10 @@ pub fn lower_class_decl(
                                 && !method.is_static
                                 && matches!(method.kind, ast::MethodKind::Getter)
                             {
-                                let getter = lower_getter_method(ctx, method)?;
+                                let getter =
+                                    with_static_member_context(ctx, method.is_static, |ctx| {
+                                        lower_getter_method(ctx, method)
+                                    })?;
                                 // Inject a `this` parameter at position 0 and rewrite
                                 // any `Expr::This` in the body to `LocalGet(this_id)`.
                                 let this_id = ctx.fresh_local();
@@ -546,7 +576,9 @@ pub fn lower_class_decl(
                 match method.kind {
                     ast::MethodKind::Getter => {
                         // Getter: no parameters, returns a value
-                        let func = lower_getter_method(ctx, method)?;
+                        let func = with_static_member_context(ctx, method.is_static, |ctx| {
+                            lower_getter_method(ctx, method)
+                        })?;
                         if seen_generic_computed_member && can_source_order_register {
                             computed_members.push(lower_noncomputed_class_member_registration(
                                 ctx, method, &prop_name,
@@ -556,7 +588,9 @@ pub fn lower_class_decl(
                     }
                     ast::MethodKind::Setter => {
                         // Setter: takes one parameter
-                        let func = lower_setter_method(ctx, method)?;
+                        let func = with_static_member_context(ctx, method.is_static, |ctx| {
+                            lower_setter_method(ctx, method)
+                        })?;
                         if seen_generic_computed_member && can_source_order_register {
                             computed_members.push(lower_noncomputed_class_member_registration(
                                 ctx, method, &prop_name,
@@ -565,7 +599,9 @@ pub fn lower_class_decl(
                         setters.push((prop_name, func));
                     }
                     ast::MethodKind::Method => {
-                        let mut func = lower_class_method(ctx, method)?;
+                        let mut func = with_static_member_context(ctx, method.is_static, |ctx| {
+                            lower_class_method(ctx, method)
+                        })?;
                         // Issue #212 fixed the broader class-method-captures-
                         // outer-fn-local codegen gap, so the dispose family no
                         // longer needs a silent-drop fallback — the same
@@ -1161,7 +1197,9 @@ pub fn lower_class_from_ast(
                 };
                 match method.kind {
                     ast::MethodKind::Getter => {
-                        let func = lower_getter_method(ctx, method)?;
+                        let func = with_static_member_context(ctx, method.is_static, |ctx| {
+                            lower_getter_method(ctx, method)
+                        })?;
                         if seen_generic_computed_member && can_source_order_register {
                             computed_members.push(lower_noncomputed_class_member_registration(
                                 ctx, method, &prop_name,
@@ -1170,7 +1208,9 @@ pub fn lower_class_from_ast(
                         getters.push((prop_name, func));
                     }
                     ast::MethodKind::Setter => {
-                        let func = lower_setter_method(ctx, method)?;
+                        let func = with_static_member_context(ctx, method.is_static, |ctx| {
+                            lower_setter_method(ctx, method)
+                        })?;
                         if seen_generic_computed_member && can_source_order_register {
                             computed_members.push(lower_noncomputed_class_member_registration(
                                 ctx, method, &prop_name,
@@ -1179,7 +1219,9 @@ pub fn lower_class_from_ast(
                         setters.push((prop_name, func));
                     }
                     ast::MethodKind::Method => {
-                        let func = lower_class_method(ctx, method)?;
+                        let func = with_static_member_context(ctx, method.is_static, |ctx| {
+                            lower_class_method(ctx, method)
+                        })?;
                         if seen_generic_computed_member && can_source_order_register {
                             computed_members.push(lower_noncomputed_class_member_registration(
                                 ctx, method, &prop_name,

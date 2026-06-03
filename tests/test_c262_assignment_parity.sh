@@ -97,6 +97,68 @@ try {
 }
 check(caught && count === 10, "super computed assignment stops when key throws");
 
+class InstanceBase {
+  set prop(v) {
+    this.seen = v;
+  }
+}
+class InstanceDerived extends InstanceBase {
+  setSuperIdentifier() {
+    return super.prop = count += 1;
+  }
+
+  setSuperComputed() {
+    return super[computedKey()] = count += 1;
+  }
+}
+
+var instance = new InstanceDerived();
+count = 0;
+var superSetResult = instance.setSuperIdentifier();
+check(superSetResult === 1 && instance.seen === 1, "instance super assignment calls inherited setter with receiver");
+
+instance = new InstanceDerived();
+count = 0;
+superSetResult = instance.setSuperComputed();
+check(superSetResult === 11 && instance.seen === 11 && count === 11, "instance super computed assignment evaluates key then rhs and uses receiver");
+
+class GetterOnlyBase {
+  get locked() {
+    return "base";
+  }
+}
+class GetterOnlyDerived extends GetterOnlyBase {
+  writeLocked() {
+    super.locked = "override";
+  }
+}
+var getterOnly = new GetterOnlyDerived();
+caught = false;
+try {
+  getterOnly.writeLocked();
+} catch (e) {
+  caught = e instanceof TypeError;
+}
+check(caught && !Object.prototype.hasOwnProperty.call(getterOnly, "locked"), "super assignment to inherited getter-only accessor throws");
+
+var objectSuperHit = "";
+var objectSuperBase = {};
+Object.defineProperty(objectSuperBase, "prop", {
+  set: function(v) {
+    this.objectSeen = v;
+    objectSuperHit = this === objectSuperDerived ? "receiver" : "base";
+  }
+});
+var objectSuperDerived = {
+  write() {
+    return super.prop = count += 1;
+  }
+};
+Object.setPrototypeOf(objectSuperDerived, objectSuperBase);
+count = 0;
+superSetResult = objectSuperDerived.write();
+check(superSetResult === 1 && objectSuperDerived.objectSeen === 1 && objectSuperHit === "receiver", "object-literal super assignment calls inherited setter with receiver");
+
 caught = false;
 try {
   (function() {
@@ -130,9 +192,9 @@ try {
 }
 check(caught, "strict assignment to Function.length throws TypeError");
 
-function Foo() {}
-Object.defineProperty(Foo.prototype, "bar", { value: "unwritable" });
-var foo = new Foo();
+var fooPrototype = {};
+Object.defineProperty(fooPrototype, "bar", { value: "unwritable" });
+var foo = Object.create(fooPrototype);
 foo.bar = "overridden";
 check(!foo.hasOwnProperty("bar") && foo.bar === "unwritable", "sloppy inherited non-writable assignment is ignored");
 
@@ -225,7 +287,7 @@ console.log("PASS c262 assignment parity");
 EOF
 
 cd "$TMPDIR"
-"$PERRY" compile main.js --output test_bin --no-cache >/dev/null 2>&1
+PERRY_NO_AUTO_OPTIMIZE=1 "$PERRY" compile main.js --output test_bin --no-cache >/dev/null 2>&1
 RUN_OUTPUT=$(./test_bin 2>&1)
 
 EXPECTED="PASS c262 assignment parity"

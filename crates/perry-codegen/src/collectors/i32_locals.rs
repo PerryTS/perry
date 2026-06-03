@@ -1410,6 +1410,21 @@ pub fn collect_localset_ids_in_expr_filtered(
             walk(key, out);
             walk(receiver, out);
         }
+        Expr::SuperPropertySet { key, value, .. } => {
+            walk(key, out);
+            walk(value, out);
+        }
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            walk(home, out);
+            walk(key, out);
+            walk(value, out);
+            walk(receiver, out);
+        }
         Expr::ObjectSuperMethodCall {
             home,
             key,

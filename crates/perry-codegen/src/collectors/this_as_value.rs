@@ -203,7 +203,9 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
         } => true,
         Expr::SuperCall(_)
         | Expr::SuperMethodCall { .. }
+        | Expr::SuperPropertySet { .. }
         | Expr::ObjectSuperPropertyGet { .. }
+        | Expr::ObjectSuperPropertySet { .. }
         | Expr::ObjectSuperMethodCall { .. } => true,
         // PropertyGet/Set/Update with `this.<field>` is the safe pattern —
         // scalar replacement intercepts it. With `this.<method>` it falls

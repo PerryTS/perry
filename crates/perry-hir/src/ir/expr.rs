@@ -489,12 +489,30 @@ pub enum Expr {
         property: String,
     },
 
+    // Super property assignment. Codegen resolves the current class's parent
+    // prototype at the use site, evaluates key before value, then performs
+    // ordinary [[Set]] with receiver=this.
+    SuperPropertySet {
+        parent_class_id: u32,
+        parent_class_name: Option<String>,
+        key: Box<Expr>,
+        value: Box<Expr>,
+    },
+
     // Object-literal method `super[key]` read. `home` is the hidden home
     // object captured when the method literal is created; `receiver` is the
     // dynamic `this` for the current call.
     ObjectSuperPropertyGet {
         home: Box<Expr>,
         key: Box<Expr>,
+        receiver: Box<Expr>,
+    },
+
+    // Object-literal method `super[key] = value`.
+    ObjectSuperPropertySet {
+        home: Box<Expr>,
+        key: Box<Expr>,
+        value: Box<Expr>,
         receiver: Box<Expr>,
     },
 

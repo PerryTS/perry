@@ -378,6 +378,21 @@ fn collect_instantiations_in_expr(
             collect_instantiations_in_expr(key, ctx, module, idx);
             collect_instantiations_in_expr(receiver, ctx, module, idx);
         }
+        Expr::SuperPropertySet { key, value, .. } => {
+            collect_instantiations_in_expr(key, ctx, module, idx);
+            collect_instantiations_in_expr(value, ctx, module, idx);
+        }
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            collect_instantiations_in_expr(home, ctx, module, idx);
+            collect_instantiations_in_expr(key, ctx, module, idx);
+            collect_instantiations_in_expr(value, ctx, module, idx);
+            collect_instantiations_in_expr(receiver, ctx, module, idx);
+        }
         Expr::ObjectSuperMethodCall {
             home,
             key,

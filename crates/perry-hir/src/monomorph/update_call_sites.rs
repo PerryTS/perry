@@ -302,6 +302,21 @@ fn update_call_sites_in_expr(
             update_call_sites_in_expr(key, ctx, lookup);
             update_call_sites_in_expr(receiver, ctx, lookup);
         }
+        Expr::SuperPropertySet { key, value, .. } => {
+            update_call_sites_in_expr(key, ctx, lookup);
+            update_call_sites_in_expr(value, ctx, lookup);
+        }
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            update_call_sites_in_expr(home, ctx, lookup);
+            update_call_sites_in_expr(key, ctx, lookup);
+            update_call_sites_in_expr(value, ctx, lookup);
+            update_call_sites_in_expr(receiver, ctx, lookup);
+        }
         Expr::ObjectSuperMethodCall {
             home,
             key,

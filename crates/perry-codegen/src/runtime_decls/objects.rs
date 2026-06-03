@@ -258,6 +258,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, I32],
     );
+    module.declare_function(
+        "js_super_put_value_set",
+        DOUBLE,
+        &[I32, DOUBLE, DOUBLE, DOUBLE, I32],
+    );
     module.declare_function("js_reflect_has", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_reflect_delete", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_reflect_own_keys", DOUBLE, &[DOUBLE]);
