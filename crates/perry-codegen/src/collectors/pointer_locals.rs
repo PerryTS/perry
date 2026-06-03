@@ -1,11 +1,84 @@
 use perry_hir::{BinaryOp, Expr};
-use perry_types::Type;
+use perry_types::{FunctionType, Type};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone)]
 enum LocalWrite {
     Expr(Expr),
     NonPointer,
+}
+
+const MAX_POINTER_ANALYSIS_TYPE_DEPTH: usize = 4;
+
+fn pointer_analysis_type(ty: &Type) -> Type {
+    pointer_analysis_type_inner(ty, 0)
+}
+
+fn pointer_analysis_type_inner(ty: &Type, depth: usize) -> Type {
+    if depth >= MAX_POINTER_ANALYSIS_TYPE_DEPTH {
+        return match ty {
+            Type::Array(_) => Type::Array(Box::new(Type::Any)),
+            Type::Tuple(_) => Type::Tuple(vec![Type::Any]),
+            Type::Object(_) => Type::Object(Default::default()),
+            Type::Function(ft) => Type::Function(FunctionType {
+                params: Vec::new(),
+                return_type: Box::new(Type::Any),
+                is_async: ft.is_async,
+                is_generator: ft.is_generator,
+            }),
+            Type::Union(_) => Type::Any,
+            Type::Promise(_) => Type::Promise(Box::new(Type::Any)),
+            Type::Generic { base, .. } => Type::Generic {
+                base: base.clone(),
+                type_args: Vec::new(),
+            },
+            other => other.clone(),
+        };
+    }
+
+    match ty {
+        Type::Array(elem) => {
+            if depth + 1 >= MAX_POINTER_ANALYSIS_TYPE_DEPTH {
+                Type::Array(Box::new(Type::Any))
+            } else {
+                Type::Array(Box::new(pointer_analysis_type_inner(elem, depth + 1)))
+            }
+        }
+        Type::Tuple(elems) => Type::Tuple(
+            elems
+                .iter()
+                .map(|elem| pointer_analysis_type_inner(elem, depth + 1))
+                .collect(),
+        ),
+        Type::Object(_) => Type::Object(Default::default()),
+        Type::Function(ft) => Type::Function(FunctionType {
+            params: Vec::new(),
+            return_type: Box::new(Type::Any),
+            is_async: ft.is_async,
+            is_generator: ft.is_generator,
+        }),
+        Type::Union(variants) => Type::Union(
+            variants
+                .iter()
+                .map(|variant| pointer_analysis_type_inner(variant, depth + 1))
+                .collect(),
+        ),
+        Type::Promise(inner) => {
+            Type::Promise(Box::new(pointer_analysis_type_inner(inner, depth + 1)))
+        }
+        Type::Generic { base, type_args } => Type::Generic {
+            base: base.clone(),
+            type_args: type_args
+                .iter()
+                .map(|arg| pointer_analysis_type_inner(arg, depth + 1))
+                .collect(),
+        },
+        other => other.clone(),
+    }
+}
+
+fn pointer_analysis_array_type(elem: Type) -> Type {
+    Type::Array(Box::new(pointer_analysis_type_inner(&elem, 1)))
 }
 
 pub fn collect_pointer_typed_locals(
@@ -104,7 +177,7 @@ pub fn collect_pointer_typed_locals(
             Expr::LocalGet(id) => local_value_types
                 .get(id)
                 .or_else(|| local_types.get(id))
-                .cloned()
+                .map(pointer_analysis_type)
                 .or_else(|| {
                     if non_pointer_locals.contains(id) {
                         Some(Type::Number)
@@ -176,10 +249,10 @@ pub fn collect_pointer_typed_locals(
                     match &elem_ty {
                         None => elem_ty = Some(ty),
                         Some(existing) if existing == &ty => {}
-                        Some(_) => return Some(Type::Array(Box::new(Type::Any))),
+                        Some(_) => return Some(pointer_analysis_array_type(Type::Any)),
                     }
                 }
-                Some(Type::Array(Box::new(elem_ty.unwrap_or(Type::Any))))
+                Some(pointer_analysis_array_type(elem_ty.unwrap_or(Type::Any)))
             }
             Expr::IndexGet { object, .. } => {
                 match expr_value_type(object, local_types, local_value_types, non_pointer_locals)? {
@@ -446,7 +519,7 @@ pub fn collect_pointer_typed_locals(
     let mut writes: HashMap<u32, Vec<LocalWrite>> = HashMap::new();
     let mut flat_row_alias_ids: HashSet<u32> = HashSet::new();
     for p in params {
-        local_types.insert(p.id, p.ty.clone());
+        local_types.insert(p.id, pointer_analysis_type(&p.ty));
     }
     collect_facts(stmts, &mut local_types, &mut writes);
     super::integer_locals::collect_flat_row_aliases(stmts, flat_const_ids, &mut flat_row_alias_ids);
@@ -455,7 +528,7 @@ pub fn collect_pointer_typed_locals(
         .iter()
         .filter_map(|(id, ty)| {
             if !matches!(ty, Type::Any | Type::Unknown) {
-                Some((*id, ty.clone()))
+                Some((*id, pointer_analysis_type(ty)))
             } else {
                 None
             }
@@ -484,6 +557,7 @@ pub fn collect_pointer_typed_locals(
                     LocalWrite::NonPointer => Some(Type::Number),
                     LocalWrite::Expr(expr) => {
                         expr_value_type(expr, &local_types, &local_value_types, &non_pointer_locals)
+                            .map(|ty| pointer_analysis_type(&ty))
                     }
                 };
                 match write_ty {
@@ -646,4 +720,101 @@ pub fn collect_pointer_typed_locals(
         &flat_row_alias_ids,
     );
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use perry_hir::{Function, Param, Stmt};
+
+    fn return_array_of_type(depth: usize, leaf: Type) -> Type {
+        (0..depth).fold(leaf, |ty, _| Type::Array(Box::new(ty)))
+    }
+
+    #[test]
+    fn pointer_analysis_caps_deep_array_types() {
+        let ty = return_array_of_type(64, Type::Number);
+        let normalized = pointer_analysis_type(&ty);
+        let mut depth = 0;
+        let mut current = &normalized;
+        while let Type::Array(inner) = current {
+            depth += 1;
+            current = inner;
+        }
+        assert!(depth <= MAX_POINTER_ANALYSIS_TYPE_DEPTH);
+        assert!(matches!(current, Type::Any));
+    }
+
+    #[test]
+    fn recursive_array_map_shape_collects_without_deep_type_growth() {
+        let patch_param = Param {
+            id: 1,
+            name: "patch".to_string(),
+            ty: return_array_of_type(64, Type::Any),
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        };
+        let callback_param = Param {
+            id: 2,
+            name: "p".to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        };
+        let callback = Expr::Closure {
+            func_id: 2,
+            params: vec![callback_param],
+            return_type: Type::Any,
+            body: vec![Stmt::Return(Some(Expr::Call {
+                callee: Box::new(Expr::FuncRef(1)),
+                args: vec![Expr::LocalGet(2)],
+                type_args: Vec::new(),
+            }))],
+            captures: Vec::new(),
+            mutable_captures: Vec::new(),
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+        };
+        let function = Function {
+            id: 1,
+            name: "unixToWin".to_string(),
+            type_params: Vec::new(),
+            params: vec![patch_param],
+            return_type: Type::Any,
+            body: vec![
+                Stmt::Let {
+                    id: 3,
+                    name: "mapped".to_string(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(Expr::ArrayMap {
+                        array: Box::new(Expr::LocalGet(1)),
+                        callback: Box::new(callback),
+                    }),
+                },
+                Stmt::Return(Some(Expr::LocalGet(3))),
+            ],
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        };
+
+        let slots = collect_pointer_typed_locals(&function.params, &function.body, &HashSet::new());
+        assert!(slots.contains_key(&1));
+        assert!(slots.contains_key(&3));
+    }
 }
