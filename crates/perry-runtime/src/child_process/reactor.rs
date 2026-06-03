@@ -439,9 +439,10 @@ pub extern "C" fn js_child_process_spawn_streams(
     let stdin_obj = cp_build_writable();
     let stdio_kinds = cp_read_stdio(opts_val, 3);
 
-    // spawnargs = [command, ...args]
+    // spawnargs = [argv0 ?? command, ...args]
     let mut spawnargs = crate::array::js_array_alloc((arg_strs.len() + 1) as u32);
-    spawnargs = crate::array::js_array_push_f64(spawnargs, cp_box_string(&cmd_str));
+    let argv0 = cp_spawnargs_argv0(&cmd_str, opts_val);
+    spawnargs = crate::array::js_array_push_f64(spawnargs, cp_box_string(&argv0));
     for a in &arg_strs {
         spawnargs = crate::array::js_array_push_f64(spawnargs, cp_box_string(a));
     }

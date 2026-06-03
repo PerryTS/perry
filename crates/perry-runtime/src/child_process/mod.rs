@@ -1321,7 +1321,8 @@ fn cp_args_from_value(value: f64) -> Vec<String> {
 }
 
 // ============================================================================
-// Spawn / exec options: `cwd`, `env`, `shell`, sync buffered I/O — #1780/#2555
+// Spawn / exec options: `cwd`, `env`, `shell`, `argv0`, sync buffered I/O —
+// #1780/#2555
 // ============================================================================
 //
 // These helpers read the common, host-portable options off a NaN-boxed options
@@ -1376,6 +1377,32 @@ fn cp_apply_options(command: &mut Command, opts_val: f64) {
                 command.env(&key, cp_coerce_string(v));
             }
         }
+    }
+}
+
+pub(super) fn cp_read_argv0(opts_val: f64) -> Option<String> {
+    if cp_object_ptr(opts_val).is_none() {
+        return None;
+    }
+    cp_value_to_string(cp_get_field(opts_val, b"argv0"))
+}
+
+pub(super) fn cp_spawnargs_argv0(default: &str, opts_val: f64) -> String {
+    cp_read_argv0(opts_val).unwrap_or_else(|| default.to_string())
+}
+
+pub(super) fn cp_apply_argv0(command: &mut Command, opts_val: f64) {
+    let Some(argv0) = cp_read_argv0(opts_val) else {
+        return;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.arg0(argv0);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (command, argv0);
     }
 }
 
@@ -1481,6 +1508,7 @@ fn cp_build_command(cmd: &str, args: &[String], opts_val: f64) -> Command {
         c
     };
 
+    cp_apply_argv0(&mut command, opts_val);
     cp_apply_options(&mut command, opts_val);
     command
 }
@@ -1839,6 +1867,7 @@ pub extern "C" fn js_child_process_exec_file_sync(
     let arg_strs = cp_args_from_value(args_val);
     let mut command = Command::new(&file_str);
     command.args(&arg_strs);
+    cp_apply_argv0(&mut command, opts_val);
     cp_apply_options(&mut command, opts_val);
     let run_options = cp_read_run_options(opts_val);
     let run = cp_run_to_completion(command, &run_options);

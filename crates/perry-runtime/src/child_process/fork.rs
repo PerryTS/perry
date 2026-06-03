@@ -67,9 +67,10 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     let stdin_obj = cp_build_writable();
     let stdio_kinds = cp_read_stdio(opts_val, 3);
 
-    // spawnargs = [execPath, ...execArgv, module, ...args] (matches Node).
+    // spawnargs = [argv0 ?? execPath, ...execArgv, module, ...args] (matches Node).
     let mut spawnargs = crate::array::js_array_alloc((arg_strs.len() + exec_argv.len() + 2) as u32);
-    spawnargs = crate::array::js_array_push_f64(spawnargs, cp_box_string(&exec_path));
+    let argv0 = cp_spawnargs_argv0(&exec_path, opts_val);
+    spawnargs = crate::array::js_array_push_f64(spawnargs, cp_box_string(&argv0));
     for a in &exec_argv {
         spawnargs = crate::array::js_array_push_f64(spawnargs, cp_box_string(a));
     }
@@ -123,6 +124,7 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     command.args(&exec_argv);
     command.arg(&module);
     command.args(&arg_strs);
+    cp_apply_argv0(&mut command, opts_val);
     cp_apply_options(&mut command, opts_val);
     cp_apply_live_stdio(&mut command, &stdio_kinds);
 
