@@ -464,6 +464,74 @@ pub(crate) fn clean_arr_ptr_mut(arr: *mut ArrayHeader) -> *mut ArrayHeader {
     clean_arr_ptr(arr as *const ArrayHeader) as *mut ArrayHeader
 }
 
+/// Normalize an Array.prototype method receiver into a real ArrayHeader.
+///
+/// `Array.prototype.<method>.call(arrayLike, ...)` lets a *generic array-like
+/// object* — a plain object with a `length` property and indexed keys, e.g.
+/// `{length: 3, 0: "a", 1: "b", 2: "c"}` — stand in for a real Array
+/// (ECMA-262 §23.1.3, every method's ToObject(this)/LengthOfArrayLike steps).
+///
+/// The read-only Array methods (`map`/`filter`/`reduce`/`slice`/`indexOf`/…)
+/// all start with `clean_arr_ptr(arr)` and then dereference the result as if it
+/// were a real ArrayHeader (reading `(*arr).length` + the inline element
+/// buffer). When the receiver is a plain object, `clean_arr_ptr` either nulls
+/// it (TypeError downstream) or — if the object's first u32s happen to pass the
+/// length<=capacity sanity bound — reads the `ObjectHeader` field_count / inline
+/// f64 slots as garbage elements (e.g. `8.48e-314`).
+///
+/// This helper detects the array-like case via the GC header `obj_type`
+/// (`GC_TYPE_OBJECT` == plain object) and materializes it into a real array via
+/// `js_array_from_arraylike` (which ToLength-coerces `length` and reads indexed
+/// keys `"0".."len-1"`). For genuine arrays (`GC_TYPE_ARRAY`), lazy arrays,
+/// typed arrays, buffers, and null/garbage it delegates straight to
+/// `clean_arr_ptr` — so the real-array hot path pays nothing beyond one
+/// already-warm GC-header byte read and a single integer compare.
+///
+/// Returns a pointer that is safe to dereference as an `ArrayHeader`, or null
+/// (preserving the existing empty-result / TypeError-at-call-site behavior).
+#[inline(always)]
+pub(crate) fn normalize_array_receiver(arr: *const ArrayHeader) -> *const ArrayHeader {
+    // Strip a NaN-box tag (if present) to recover the raw heap address so we
+    // can probe the GC header. Mirrors the tag-strip in clean_arr_ptr /
+    // flat_clone's array-like detection.
+    let bits = arr as u64;
+    let raw_addr = if (bits >> 48) >= 0x7FF8 {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else {
+        bits as usize
+    };
+    if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        // Hot path first: read the GC-header obj_type byte. A genuine Array is
+        // GC_TYPE_ARRAY and falls straight through to `clean_arr_ptr` — the
+        // only added cost for `[1,2,3].map(...)` etc. is this one byte read and
+        // an integer compare (the registry lookups below are reached ONLY for a
+        // plain-object receiver, never for real arrays).
+        let obj_type = unsafe {
+            let hdr = (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                as *const crate::gc::GcHeader;
+            (*hdr).obj_type
+        };
+        if obj_type == crate::gc::GC_TYPE_OBJECT
+            // Guard out registered typed arrays / buffers that (theoretically)
+            // carry a plain-object GC tag — those have their own delegation arms
+            // in the callers and must not be materialized as array-likes.
+            && crate::typedarray::lookup_typed_array_kind(raw_addr).is_none()
+            && !crate::buffer::is_registered_buffer(raw_addr)
+        {
+            // Generic array-like object receiver
+            // (`Array.prototype.<m>.call({length, 0:…}, …)`): materialize
+            // `length` + indexed keys into a real array and operate on that.
+            return unsafe {
+                crate::array::js_array_from_arraylike(
+                    raw_addr as *const crate::object::ObjectHeader,
+                )
+            } as *const ArrayHeader;
+        }
+    }
+    // Real array / lazy array / typed array / null / garbage: existing path.
+    clean_arr_ptr(arr)
+}
+
 /// Array header - precedes the elements in memory
 #[repr(C)]
 pub struct ArrayHeader {

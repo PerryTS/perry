@@ -3,7 +3,7 @@ use super::*;
 
 #[no_mangle]
 pub extern "C" fn js_array_indexOf_f64(arr: *const ArrayHeader, value: f64) -> i32 {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return -1;
     }
@@ -74,7 +74,7 @@ pub extern "C" fn js_array_indexOf_jsvalue(
     from_index: f64,
     has_from: i32,
 ) -> i32 {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return -1;
     }
@@ -120,7 +120,7 @@ pub extern "C" fn js_array_last_index_of_jsvalue(
     from_index: f64,
     has_from: i32,
 ) -> i32 {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return -1;
     }
@@ -223,7 +223,7 @@ pub extern "C" fn js_array_includes_jsvalue(
     from_index: f64,
     has_from: i32,
 ) -> i32 {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return 0;
     }

@@ -16,7 +16,7 @@ fn array_receiver_value(arr: *const ArrayHeader) -> f64 {
 /// Returns nothing (void)
 #[no_mangle]
 pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const ClosureHeader) {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return;
     }
@@ -50,7 +50,7 @@ pub extern "C" fn js_array_map(
     arr: *const ArrayHeader,
     callback: *const ClosureHeader,
 ) -> *mut ArrayHeader {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return js_array_alloc(0);
     }
@@ -107,7 +107,7 @@ pub extern "C" fn js_array_map(
 /// effects without allocating or filling the result array.
 #[no_mangle]
 pub extern "C" fn js_array_map_discard(arr: *const ArrayHeader, callback: *const ClosureHeader) {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return;
     }
@@ -130,7 +130,7 @@ pub extern "C" fn js_array_filter(
     arr: *const ArrayHeader,
     callback: *const ClosureHeader,
 ) -> *mut ArrayHeader {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return js_array_alloc(0);
     }
@@ -167,7 +167,7 @@ pub extern "C" fn js_array_filter(
 /// Returns the element as f64, or f64::NAN (undefined) if not found
 #[no_mangle]
 pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const ClosureHeader) -> f64 {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -203,7 +203,7 @@ pub extern "C" fn js_array_findIndex(
     arr: *const ArrayHeader,
     callback: *const ClosureHeader,
 ) -> i32 {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return -1;
     }
@@ -238,7 +238,7 @@ pub extern "C" fn js_array_find_last(
     arr: *const ArrayHeader,
     callback: *const ClosureHeader,
 ) -> f64 {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -269,7 +269,7 @@ pub extern "C" fn js_array_find_last_index(
     arr: *const ArrayHeader,
     callback: *const ClosureHeader,
 ) -> i32 {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return -1;
     }
@@ -298,7 +298,7 @@ pub extern "C" fn js_array_find_last_index(
 /// at - element access supporting negative indices (arr.at(-1) = last)
 #[no_mangle]
 pub extern "C" fn js_array_at(arr: *const ArrayHeader, index: f64) -> f64 {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -347,7 +347,7 @@ pub extern "C" fn js_array_at(arr: *const ArrayHeader, index: f64) -> f64 {
 pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const ClosureHeader) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return f64::from_bits(TAG_FALSE);
     }
@@ -380,7 +380,7 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
 pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const ClosureHeader) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return f64::from_bits(TAG_TRUE);
     }
@@ -414,7 +414,7 @@ pub extern "C" fn js_array_flatMap(
     arr: *const ArrayHeader,
     callback: *const ClosureHeader,
 ) -> *mut ArrayHeader {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return js_array_alloc(0);
     }
@@ -464,7 +464,7 @@ pub extern "C" fn js_array_reduce(
     has_initial: i32,
     initial: f64,
 ) -> f64 {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         if has_initial != 0 {
             return initial;
@@ -533,7 +533,7 @@ pub extern "C" fn js_array_join(
     use crate::string::{js_string_from_bytes, StringHeader};
     use crate::value::JSValue;
 
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return crate::string::js_string_from_bytes(b"".as_ptr(), 0);
     }
@@ -737,7 +737,7 @@ pub extern "C" fn js_array_to_locale_string(
     locales: f64,
     options: f64,
 ) -> *mut crate::string::StringHeader {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return crate::string::js_string_from_bytes(b"".as_ptr(), 0);
     }

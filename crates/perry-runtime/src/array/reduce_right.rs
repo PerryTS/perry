@@ -11,7 +11,7 @@ pub extern "C" fn js_array_reduce_right(
     has_initial: i32,
     initial: f64,
 ) -> f64 {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         if has_initial != 0 {
             return initial;

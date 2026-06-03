@@ -1226,6 +1226,25 @@ pub(super) fn try_builtin_prototype_method_apply_call(
         call.args.iter().skip(1).cloned().collect()
     };
 
+    // `Array.prototype.<m>.call(arrayLike, ...)` — when `<m>` is a known
+    // read-only Array method, this is an explicit, unambiguous request to run
+    // the Array algorithm on a *generic array-like* receiver (a plain object
+    // with `length` + indexed keys; ECMA-262 §23.1.3). The default synthesized
+    // `(thisArg).<m>(...)` member call below only routes to the Array runtime
+    // helper when the receiver is statically array-typed; for an Any/object
+    // receiver it lowers to a dynamic method lookup that finds no `map`/`reduce`
+    // field and throws "value is not a function". Build the dedicated
+    // `Expr::Array*` variant directly so the receiver flows to `js_array_*`
+    // regardless of its static type — the runtime materializes the array-like
+    // (see `normalize_array_receiver`). Only the read-only/returning methods are
+    // handled here; mutators and unsupported shapes fall through to the member
+    // call below (unchanged behavior).
+    if let Some(folded) =
+        try_arraylike_receiver_method(ctx, method_prop.sym.as_ref(), &this_arg.expr, &rest_args)?
+    {
+        return Ok(Some(folded));
+    }
+
     // Synthesize `(thisArg).<method>(rest_args)`: use the resolved method
     // name, make the receiver the real `thisArg`, drop the `.apply`/`.call`
     // wrapper, and re-dispatch.
@@ -1238,6 +1257,176 @@ pub(super) fn try_builtin_prototype_method_apply_call(
     synth_call.callee = ast::Callee::Expr(Box::new(ast::Expr::Member(synth_member)));
     synth_call.args = rest_args;
     Ok(Some(super::lower_call(ctx, &synth_call)?))
+}
+
+/// Build a dedicated `Expr::Array*` HIR variant for `Array.prototype.<m>.call`
+/// / `.apply` on a *generic array-like* receiver, bypassing the receiver-type
+/// gate that the normal member-call fast path applies. `receiver` is the
+/// `thisArg`; `rest_args` are the post-`thisArg` positional arguments (already
+/// expanded from the `.apply` array if applicable).
+///
+/// Returns `Some(expr)` for a supported read-only/returning method, or `None`
+/// for mutators / unsupported methods (caller falls back to the synthesized
+/// member call). The chosen set mirrors the runtime methods that route through
+/// `normalize_array_receiver`.
+fn try_arraylike_receiver_method(
+    ctx: &mut LoweringContext,
+    method: &str,
+    receiver: &ast::Expr,
+    rest_args: &[ast::ExprOrSpread],
+) -> Result<Option<Expr>> {
+    // Any spread in the positional args defeats static argument expansion.
+    if rest_args.iter().any(|a| a.spread.is_some()) {
+        return Ok(None);
+    }
+    // Only fold the read-only/returning methods. Bail early for everything else
+    // (mutators, flat, etc.) BEFORE lowering the receiver, so unrelated shapes
+    // keep the existing member-call behavior with no side effects.
+    let supported = matches!(
+        method,
+        "map"
+            | "filter"
+            | "forEach"
+            | "find"
+            | "findIndex"
+            | "findLast"
+            | "findLastIndex"
+            | "some"
+            | "every"
+            | "flatMap"
+            | "reduce"
+            | "reduceRight"
+            | "indexOf"
+            | "lastIndexOf"
+            | "includes"
+            | "slice"
+            | "at"
+            | "join"
+    );
+    if !supported {
+        return Ok(None);
+    }
+    // Materialize the array-like receiver into a REAL array up front via
+    // `Expr::ArrayFrom` (→ `js_array_from_value` → `js_array_clone`, which has
+    // the array-like `{length, 0:…}` detection). This makes EVERY downstream
+    // method see a genuine `ArrayHeader` — crucial for the methods whose codegen
+    // is INLINED (e.g. `forEach` reads `(*arr).length` + `arr[i]` directly
+    // rather than calling `js_array_forEach`), which the runtime-side
+    // `normalize_array_receiver` can't reach. For a real-array receiver this
+    // clones (correct; the read-only methods don't mutate the receiver), and
+    // for null/undefined `js_array_from_value` throws a TypeError to match Node.
+    // The receiver (`thisArg`) lowers before the positional args, matching
+    // source order.
+    let array_src = lower_expr(ctx, receiver)?;
+    let array = Box::new(Expr::ArrayFrom(Box::new(array_src)));
+    // Lower a positional argument by index, if present.
+    let mut arg = |ctx: &mut LoweringContext, i: usize| -> Result<Option<Box<Expr>>> {
+        match rest_args.get(i) {
+            Some(a) => Ok(Some(Box::new(lower_expr(ctx, &a.expr)?))),
+            None => Ok(None),
+        }
+    };
+    // Callback-taking methods require the callback argument to be present.
+    macro_rules! cb_method {
+        ($variant:ident) => {{
+            let Some(cb) = arg(ctx, 0)? else {
+                return Ok(None);
+            };
+            Ok(Some(Expr::$variant {
+                array,
+                callback: cb,
+            }))
+        }};
+    }
+    match method {
+        "map" => cb_method!(ArrayMap),
+        "filter" => cb_method!(ArrayFilter),
+        "forEach" => cb_method!(ArrayForEach),
+        "find" => cb_method!(ArrayFind),
+        "findIndex" => cb_method!(ArrayFindIndex),
+        "findLast" => cb_method!(ArrayFindLast),
+        "findLastIndex" => cb_method!(ArrayFindLastIndex),
+        "some" => cb_method!(ArraySome),
+        "every" => cb_method!(ArrayEvery),
+        "flatMap" => cb_method!(ArrayFlatMap),
+        "reduce" => {
+            let Some(cb) = arg(ctx, 0)? else {
+                return Ok(None);
+            };
+            let initial = arg(ctx, 1)?;
+            Ok(Some(Expr::ArrayReduce {
+                array,
+                callback: cb,
+                initial,
+            }))
+        }
+        "reduceRight" => {
+            let Some(cb) = arg(ctx, 0)? else {
+                return Ok(None);
+            };
+            let initial = arg(ctx, 1)?;
+            Ok(Some(Expr::ArrayReduceRight {
+                array,
+                callback: cb,
+                initial,
+            }))
+        }
+        "indexOf" => {
+            let Some(value) = arg(ctx, 0)? else {
+                return Ok(None);
+            };
+            let from_index = arg(ctx, 1)?;
+            Ok(Some(Expr::ArrayIndexOf {
+                array,
+                value,
+                from_index,
+            }))
+        }
+        "lastIndexOf" => {
+            let Some(value) = arg(ctx, 0)? else {
+                return Ok(None);
+            };
+            let from_index = arg(ctx, 1)?;
+            Ok(Some(Expr::ArrayLastIndexOf {
+                array,
+                value,
+                from_index,
+            }))
+        }
+        "includes" => {
+            let Some(value) = arg(ctx, 0)? else {
+                return Ok(None);
+            };
+            let from_index = arg(ctx, 1)?;
+            Ok(Some(Expr::ArrayIncludes {
+                array,
+                value,
+                from_index,
+            }))
+        }
+        "slice" => {
+            // `slice()` with no args copies from index 0.
+            let start = match arg(ctx, 0)? {
+                Some(s) => s,
+                None => Box::new(Expr::Integer(0)),
+            };
+            let end = arg(ctx, 1)?;
+            Ok(Some(Expr::ArraySlice { array, start, end }))
+        }
+        "at" => {
+            let index = match arg(ctx, 0)? {
+                Some(i) => i,
+                None => Box::new(Expr::Integer(0)),
+            };
+            Ok(Some(Expr::ArrayAt { array, index }))
+        }
+        "join" => {
+            let separator = arg(ctx, 0)?;
+            Ok(Some(Expr::ArrayJoin { array, separator }))
+        }
+        // Unreachable: `supported` gate above filters to exactly these arms.
+        _ => Ok(None),
+    }
 }
 
 /// #3144: if `init` is a value-read of a builtin prototype method whose

@@ -152,7 +152,7 @@ pub extern "C" fn js_array_slice(
     start: i32,
     end: i32,
 ) -> *mut ArrayHeader {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return js_array_alloc(0);
     }
