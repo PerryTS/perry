@@ -367,7 +367,7 @@ fn default_crypto_key_usages(algo: u8, kind: u8) -> u32 {
         (1, 1) => SIGN | VERIFY,
         (2 | 4 | 5, 1) => ENCRYPT | DECRYPT | WRAP_KEY | UNWRAP_KEY,
         (3, 1) => WRAP_KEY | UNWRAP_KEY,
-        (6 | 7, 1) => DERIVE_KEY | DERIVE_BITS,
+        (6 | 7 | 19 | 20 | 21, 1) => DERIVE_KEY | DERIVE_BITS,
         (8 | 10 | 12 | 14 | 15 | 17, 2) => SIGN,
         (8 | 10 | 12 | 14 | 15 | 17, 3) => VERIFY,
         (9 | 11 | 16 | 18, 2) => DERIVE_KEY | DERIVE_BITS,

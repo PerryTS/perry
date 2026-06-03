@@ -368,7 +368,10 @@ pub(super) unsafe fn ecdh_shared_secret_bytes(
     algo_bits: u64,
     base_key_bits: u64,
 ) -> Option<Vec<u8>> {
-    let algo_name = extract_algo_name(algo_bits)?;
+    let algo_name = match extract_algo_name(algo_bits) {
+        Some(name) => name,
+        None => return None,
+    };
     let algo_upper = algo_name.to_ascii_uppercase();
     if algo_upper != "ECDH" && algo_upper != "X25519" {
         return None;
@@ -487,44 +490,174 @@ pub(super) fn pbkdf2_derive(
     }
 }
 
+fn argon2_algorithm_kind(algo: KeyAlgo) -> Option<argon2::Algorithm> {
+    match algo {
+        KeyAlgo::Argon2d => Some(argon2::Algorithm::Argon2d),
+        KeyAlgo::Argon2i => Some(argon2::Algorithm::Argon2i),
+        KeyAlgo::Argon2id => Some(argon2::Algorithm::Argon2id),
+        _ => None,
+    }
+}
+
+unsafe fn argon2_derive(
+    algo_bits: u64,
+    base_mat: CryptoKeyMaterial,
+    base_key: &[u8],
+    byte_len: usize,
+) -> Result<Option<Vec<u8>>, (&'static str, &'static str)> {
+    let algo_name = match extract_algo_name(algo_bits) {
+        Some(name) => name,
+        None => return Ok(None),
+    };
+    let requested = match argon2_key_algo(&algo_name) {
+        Some(algo) => algo,
+        None => return Ok(None),
+    };
+    if base_mat.algo != requested {
+        return Err(("InvalidAccessError", "Key algorithm mismatch"));
+    }
+    if byte_len < 4 {
+        return Err(("OperationError", "length must be >= 32"));
+    }
+
+    let nonce = match object_field_bytes(algo_bits, b"nonce") {
+        Some(bytes) => bytes,
+        None => {
+            return Err((
+                "TypeError",
+                "Failed to normalize algorithm: passed algorithm cannot be converted to 'Argon2Params' because 'nonce' is required in 'Argon2Params'.",
+            ))
+        }
+    };
+    if nonce.len() < 8 {
+        return Err(("OperationError", "nonce must be at least 8 bytes"));
+    }
+    let parallelism = match object_field_number(algo_bits, b"parallelism") {
+        Some(value) => value,
+        None => {
+            return Err((
+                "TypeError",
+                "Failed to normalize algorithm: passed algorithm cannot be converted to 'Argon2Params' because 'parallelism' is required in 'Argon2Params'.",
+            ))
+        }
+    };
+    if parallelism == 0 || parallelism > 0xFF_FFFF {
+        return Err(("OperationError", "parallelism must be > 0 and <= 16777215"));
+    }
+    let memory = match object_field_number(algo_bits, b"memory") {
+        Some(value) => value,
+        None => {
+            return Err((
+                "TypeError",
+                "Failed to normalize algorithm: passed algorithm cannot be converted to 'Argon2Params' because 'memory' is required in 'Argon2Params'.",
+            ))
+        }
+    };
+    if memory < parallelism.saturating_mul(8).max(8) {
+        return Err((
+            "OperationError",
+            "memory must be at least 8 times the degree of parallelism",
+        ));
+    }
+    let passes = match object_field_number(algo_bits, b"passes") {
+        Some(value) => value,
+        None => {
+            return Err((
+                "TypeError",
+                "Failed to normalize algorithm: passed algorithm cannot be converted to 'Argon2Params' because 'passes' is required in 'Argon2Params'.",
+            ))
+        }
+    };
+    if passes == 0 {
+        return Err(("OperationError", "passes must be > 0"));
+    }
+    let version = object_field_number(algo_bits, b"version").unwrap_or(0x13);
+    if version != 0x13 {
+        return Err(("OperationError", "version must be 0x13"));
+    }
+
+    let associated_data = object_field_bytes(algo_bits, b"associatedData").unwrap_or_default();
+    let secret = object_field_bytes(algo_bits, b"secretValue").unwrap_or_default();
+
+    let mut builder = argon2::ParamsBuilder::new();
+    builder
+        .m_cost(memory)
+        .t_cost(passes)
+        .p_cost(parallelism)
+        .output_len(byte_len);
+    if !associated_data.is_empty() {
+        let data = argon2::AssociatedData::new(&associated_data)
+            .map_err(|_| ("OperationError", "The operation failed"))?;
+        builder.data(data);
+    }
+    let params = builder
+        .build()
+        .map_err(|_| ("OperationError", "The operation failed"))?;
+    let algorithm = argon2_algorithm_kind(requested)
+        .ok_or(("NotSupportedError", "Unrecognized algorithm name"))?;
+    let argon = if secret.is_empty() {
+        argon2::Argon2::new(algorithm, argon2::Version::V0x13, params)
+    } else {
+        argon2::Argon2::new_with_secret(&secret, algorithm, argon2::Version::V0x13, params)
+            .map_err(|_| ("OperationError", "The operation failed"))?
+    };
+    let mut out = vec![0u8; byte_len];
+    argon
+        .hash_password_into(base_key, &nonce, &mut out)
+        .map_err(|_| ("OperationError", "The operation failed"))?;
+    Ok(Some(out))
+}
+
 pub(super) unsafe fn kdf_derive_bytes(
     algo_bits: u64,
     base_key_bits: u64,
     byte_len: usize,
-) -> Option<Vec<u8>> {
-    let algo_name = extract_algo_name(algo_bits)?;
+) -> Result<Option<Vec<u8>>, (&'static str, &'static str)> {
+    let algo_name = match extract_algo_name(algo_bits) {
+        Some(name) => name,
+        None => return Ok(None),
+    };
     let algo_upper = algo_name.to_ascii_uppercase();
     let base_key_addr = strip_ptr(base_key_bits);
-    let base_mat = lookup_crypto_key(base_key_addr)?;
+    let base_mat = match lookup_crypto_key(base_key_addr) {
+        Some(mat) => mat,
+        None => return Ok(None),
+    };
     if base_mat.kind != KeyKind::Secret {
-        return None;
+        return Ok(None);
     }
     let base_key = bytes_from_jsvalue(base_key_bits);
+    if let Some(bytes) = argon2_derive(algo_bits, base_mat, &base_key, byte_len)? {
+        return Ok(Some(bytes));
+    }
     let mut out = vec![0u8; byte_len];
     if algo_upper == "HKDF" {
         if base_mat.algo != KeyAlgo::Hkdf {
-            return None;
+            return Ok(None);
         }
         let hash = extract_algorithm_hash(algo_bits, base_mat.hash);
         let salt = object_field_bytes(algo_bits, b"salt").unwrap_or_default();
         let info = object_field_bytes(algo_bits, b"info").unwrap_or_default();
         if hkdf_expand(hash, &base_key, &salt, &info, &mut out) {
-            return Some(out);
+            return Ok(Some(out));
         }
-        return None;
+        return Ok(None);
     }
     if algo_upper == "PBKDF2" {
         if base_mat.algo != KeyAlgo::Pbkdf2 {
-            return None;
+            return Ok(None);
         }
         let hash = extract_algorithm_hash(algo_bits, base_mat.hash);
         let salt = object_field_bytes(algo_bits, b"salt").unwrap_or_default();
-        let iterations = object_field_number(algo_bits, b"iterations")?;
+        let iterations = match object_field_number(algo_bits, b"iterations") {
+            Some(value) => value,
+            None => return Ok(None),
+        };
         if iterations == 0 {
-            return None;
+            return Ok(None);
         }
         pbkdf2_derive(hash, &base_key, &salt, iterations, &mut out);
-        return Some(out);
+        return Ok(Some(out));
     }
-    None
+    Ok(None)
 }

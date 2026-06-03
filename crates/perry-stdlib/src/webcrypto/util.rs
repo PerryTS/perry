@@ -104,6 +104,9 @@ pub(super) enum KeyAlgo {
     Hmac,
     Hkdf,
     Pbkdf2,
+    Argon2d,
+    Argon2i,
+    Argon2id,
     AesGcm,
     AesKw,
     AesCbc,
@@ -291,6 +294,9 @@ fn runtime_algo_id(algo: KeyAlgo) -> u8 {
         KeyAlgo::EcdhP384 => 16,
         KeyAlgo::EcdsaP521 => 17,
         KeyAlgo::EcdhP521 => 18,
+        KeyAlgo::Argon2d => 19,
+        KeyAlgo::Argon2i => 20,
+        KeyAlgo::Argon2id => 21,
     }
 }
 
@@ -339,6 +345,9 @@ pub(super) fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
                 16 => KeyAlgo::EcdhP384,
                 17 => KeyAlgo::EcdsaP521,
                 18 => KeyAlgo::EcdhP521,
+                19 => KeyAlgo::Argon2d,
+                20 => KeyAlgo::Argon2i,
+                21 => KeyAlgo::Argon2id,
                 _ => return None,
             };
             let hash = match hash {
@@ -534,6 +543,15 @@ pub(super) fn usage_bit(name: &str) -> Option<u32> {
     }
 }
 
+pub(super) fn argon2_key_algo(name: &str) -> Option<KeyAlgo> {
+    match name.to_ascii_uppercase().as_str() {
+        "ARGON2D" => Some(KeyAlgo::Argon2d),
+        "ARGON2I" => Some(KeyAlgo::Argon2i),
+        "ARGON2ID" => Some(KeyAlgo::Argon2id),
+        _ => None,
+    }
+}
+
 pub(super) fn supported_usages(algo: KeyAlgo, kind: KeyKind) -> u32 {
     match (algo, kind) {
         (KeyAlgo::Hmac, KeyKind::Secret) => USAGE_SIGN | USAGE_VERIFY,
@@ -541,7 +559,14 @@ pub(super) fn supported_usages(algo: KeyAlgo, kind: KeyKind) -> u32 {
             USAGE_ENCRYPT | USAGE_DECRYPT | USAGE_WRAP_KEY | USAGE_UNWRAP_KEY
         }
         (KeyAlgo::AesKw, KeyKind::Secret) => USAGE_WRAP_KEY | USAGE_UNWRAP_KEY,
-        (KeyAlgo::Hkdf | KeyAlgo::Pbkdf2, KeyKind::Secret) => USAGE_DERIVE_KEY | USAGE_DERIVE_BITS,
+        (
+            KeyAlgo::Hkdf
+            | KeyAlgo::Pbkdf2
+            | KeyAlgo::Argon2d
+            | KeyAlgo::Argon2i
+            | KeyAlgo::Argon2id,
+            KeyKind::Secret,
+        ) => USAGE_DERIVE_KEY | USAGE_DERIVE_BITS,
         (
             KeyAlgo::EcdsaP256
             | KeyAlgo::EcdsaP384

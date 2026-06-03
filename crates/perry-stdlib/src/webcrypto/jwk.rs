@@ -30,6 +30,7 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     };
     let format_lower = format.to_ascii_lowercase();
     if format_lower != "raw"
+        && format_lower != "raw-secret"
         && format_lower != "spki"
         && format_lower != "pkcs8"
         && format_lower != "jwk"
@@ -59,6 +60,23 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     } else if algo_upper == "PBKDF2" && format_lower == "raw" {
         let hash = extract_algorithm_hash(algo_bits.to_bits(), HashAlgo::Sha256);
         (KeyAlgo::Pbkdf2, hash, KeyKind::Secret)
+    } else if let Some(argon_algo) = argon2_key_algo(&algo_name) {
+        if format_lower != "raw-secret" {
+            return reject_with_dom_exception(
+                "NotSupportedError",
+                "Unsupported algorithm for the given key format",
+            );
+        }
+        if extractable {
+            let message = match argon_algo {
+                KeyAlgo::Argon2d => "Argon2d keys are not extractable",
+                KeyAlgo::Argon2i => "Argon2i keys are not extractable",
+                KeyAlgo::Argon2id => "Argon2id keys are not extractable",
+                _ => unreachable!(),
+            };
+            return reject_with_dom_exception("SyntaxError", message);
+        }
+        (argon_algo, HashAlgo::Sha256, KeyKind::Secret)
     } else if algo_upper == "AES-GCM" && (format_lower == "raw" || format_lower == "jwk") {
         // AES-GCM: 128, 192, or 256-bit keys. We accept any length
         // here and let encrypt/decrypt fail loudly on mismatch.
@@ -151,10 +169,12 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     } else {
         "Usages cannot be empty when importing a private key."
     };
-    let bad_message = if key_algo == KeyAlgo::Hmac {
-        "Unsupported key usage for HMAC key"
-    } else {
-        "Unsupported key usage for the requested algorithm"
+    let bad_message = match key_algo {
+        KeyAlgo::Hmac => "Unsupported key usage for HMAC key",
+        KeyAlgo::Argon2d => "Unsupported key usage for a Argon2d key",
+        KeyAlgo::Argon2i => "Unsupported key usage for a Argon2i key",
+        KeyAlgo::Argon2id => "Unsupported key usage for a Argon2id key",
+        _ => "Unsupported key usage for the requested algorithm",
     };
     let usages = match validate_key_usages(
         key_algo,
@@ -173,7 +193,16 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     } else {
         bytes_from_jsvalue(key_bits.to_bits())
     };
-    if key_bytes.is_empty() && !matches!(key_algo, KeyAlgo::Hkdf | KeyAlgo::Pbkdf2) {
+    if key_bytes.is_empty()
+        && !matches!(
+            key_algo,
+            KeyAlgo::Hkdf
+                | KeyAlgo::Pbkdf2
+                | KeyAlgo::Argon2d
+                | KeyAlgo::Argon2i
+                | KeyAlgo::Argon2id
+        )
+    {
         return reject_with_dom_exception("DataError", "Key data is empty or could not be read");
     }
     if is_ec_key_algo(key_algo) {

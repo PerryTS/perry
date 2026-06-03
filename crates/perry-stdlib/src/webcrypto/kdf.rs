@@ -16,11 +16,14 @@ pub unsafe extern "C" fn js_webcrypto_derive_bits(
             return reject_with_dom_exception("InvalidAccessError", "Key is not a valid CryptoKey")
         }
     };
-    if let Err((name, message)) = require_usage(
-        base_mat,
-        USAGE_DERIVE_BITS,
-        "The requested operation is not valid for the provided key",
-    ) {
+    let algo_name = extract_algo_name(algo_bits.to_bits()).unwrap_or_default();
+    let is_argon2 = argon2_key_algo(&algo_name).is_some();
+    let usage_message = if is_argon2 {
+        "baseKey does not have deriveBits usage"
+    } else {
+        "The requested operation is not valid for the provided key"
+    };
+    if let Err((name, message)) = require_usage(base_mat, USAGE_DERIVE_BITS, usage_message) {
         return reject_with_dom_exception(name, message);
     }
     let bit_len = match number_from_bits(length_bits.to_bits()) {
@@ -28,11 +31,21 @@ pub unsafe extern "C" fn js_webcrypto_derive_bits(
         None => return reject_with_dom_exception("OperationError", "The operation failed"),
     };
     if bit_len % 8 != 0 {
-        return reject_with_dom_exception("OperationError", "The operation failed");
+        let message = if is_argon2 {
+            "length must be a multiple of 8"
+        } else {
+            "The operation failed"
+        };
+        return reject_with_dom_exception("OperationError", message);
+    }
+    if is_argon2 && bit_len < 32 {
+        return reject_with_dom_exception("OperationError", "length must be >= 32");
     }
     let byte_len = (bit_len / 8) as usize;
-    if let Some(bytes) = kdf_derive_bytes(algo_bits.to_bits(), base_key_bits.to_bits(), byte_len) {
-        return resolve_with_bytes(&bytes);
+    match kdf_derive_bytes(algo_bits.to_bits(), base_key_bits.to_bits(), byte_len) {
+        Ok(Some(bytes)) => return resolve_with_bytes(&bytes),
+        Ok(None) => {}
+        Err((name, message)) => return reject_with_dom_exception(name, message),
     }
     let shared = match ecdh_shared_secret_bytes(algo_bits.to_bits(), base_key_bits.to_bits()) {
         Some(s) => s,
@@ -67,11 +80,14 @@ pub unsafe extern "C" fn js_webcrypto_derive_key(
             return reject_with_dom_exception("InvalidAccessError", "Key is not a valid CryptoKey")
         }
     };
-    if let Err((name, message)) = require_usage(
-        base_mat,
-        USAGE_DERIVE_KEY,
-        "The requested operation is not valid for the provided key",
-    ) {
+    let algo_name = extract_algo_name(algo_bits.to_bits()).unwrap_or_default();
+    let is_argon2 = argon2_key_algo(&algo_name).is_some();
+    let usage_message = if is_argon2 {
+        "baseKey does not have deriveKey usage"
+    } else {
+        "The requested operation is not valid for the provided key"
+    };
+    if let Err((name, message)) = require_usage(base_mat, USAGE_DERIVE_KEY, usage_message) {
         return reject_with_dom_exception(name, message);
     }
     let extractable = bool_from_jsvalue(extractable_bits.to_bits());
@@ -122,28 +138,31 @@ pub unsafe extern "C" fn js_webcrypto_derive_key(
         Err((name, message)) => return reject_with_dom_exception(name, message),
     };
     let byte_len = (bit_len / 8) as usize;
-    let key_bytes = if let Some(bytes) =
-        kdf_derive_bytes(algo_bits.to_bits(), base_key_bits.to_bits(), byte_len)
-    {
-        bytes
-    } else {
-        let shared = match ecdh_shared_secret_bytes(algo_bits.to_bits(), base_key_bits.to_bits()) {
-            Some(s) => s,
-            None => {
-                if ecdh_public_private_curve_mismatch(algo_bits.to_bits(), base_key_bits.to_bits())
-                {
-                    return reject_with_dom_exception(
-                        "InvalidAccessError",
-                        "The requested operation is not valid for the provided key",
-                    );
-                }
+    let key_bytes = match kdf_derive_bytes(algo_bits.to_bits(), base_key_bits.to_bits(), byte_len) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => {
+            let shared =
+                match ecdh_shared_secret_bytes(algo_bits.to_bits(), base_key_bits.to_bits()) {
+                    Some(s) => s,
+                    None => {
+                        if ecdh_public_private_curve_mismatch(
+                            algo_bits.to_bits(),
+                            base_key_bits.to_bits(),
+                        ) {
+                            return reject_with_dom_exception(
+                                "InvalidAccessError",
+                                "The requested operation is not valid for the provided key",
+                            );
+                        }
+                        return reject_with_dom_exception("OperationError", "The operation failed");
+                    }
+                };
+            if byte_len > shared.len() {
                 return reject_with_dom_exception("OperationError", "The operation failed");
             }
-        };
-        if byte_len > shared.len() {
-            return reject_with_dom_exception("OperationError", "The operation failed");
+            shared[..byte_len].to_vec()
         }
-        shared[..byte_len].to_vec()
+        Err((name, message)) => return reject_with_dom_exception(name, message),
     };
     let buf = alloc_uint8array_from_slice(&key_bytes);
     if buf.is_null() {

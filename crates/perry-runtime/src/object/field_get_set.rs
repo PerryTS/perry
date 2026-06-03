@@ -84,6 +84,9 @@ fn crypto_key_algorithm_name(algo: u8) -> &'static str {
         14 => "RSA-PSS",
         15 | 17 => "ECDSA",
         16 | 18 => "ECDH",
+        19 => "Argon2d",
+        20 => "Argon2i",
+        21 => "Argon2id",
         _ => "",
     }
 }
