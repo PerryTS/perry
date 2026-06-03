@@ -1365,6 +1365,11 @@ pub extern "C" fn js_reflect_set(target: f64, key: f64, value: f64) -> f64 {
     if lookup(target).is_some() {
         return js_proxy_set(target, key, value);
     }
+    // Reflect.set on a non-object target must throw TypeError (spec step 1),
+    // matching Reflect.has/get/etc. Pre-fix it silently returned false.
+    if !reflect_value_is_object(target) {
+        return reflect_non_object_typeerror("set");
+    }
     reflect_ordinary_set(target, key, value)
 }
 
@@ -1410,6 +1415,11 @@ pub extern "C" fn js_reflect_has(target: f64, key: f64) -> f64 {
 pub extern "C" fn js_reflect_delete(target: f64, key: f64) -> f64 {
     if lookup(target).is_some() {
         return js_proxy_delete(target, key);
+    }
+    // Reflect.deleteProperty on a non-object target must throw TypeError (spec
+    // step 1). Pre-fix it silently returned true.
+    if !reflect_value_is_object(target) {
+        return reflect_non_object_typeerror("deleteProperty");
     }
     reflect_ordinary_delete(target, key)
 }
@@ -1542,6 +1552,13 @@ fn reflect_ordinary_define(obj: f64, key: f64, descriptor: f64) -> f64 {
 /// including `null` for null-prototype objects, not the object itself.
 #[no_mangle]
 pub extern "C" fn js_reflect_get_prototype_of(obj: f64) -> f64 {
+    // Reflect.getPrototypeOf on a non-object target must throw TypeError (spec
+    // step 1). Note `Object.getPrototypeOf` is more lenient (ToObject-coerces
+    // primitives), so guard here before delegating. Proxies have a registered
+    // entry and are objects, so they pass this check and dispatch below.
+    if lookup(obj).is_none() && !reflect_value_is_object(obj) {
+        return reflect_non_object_typeerror("getPrototypeOf");
+    }
     crate::object::js_object_get_prototype_of(obj)
 }
 
