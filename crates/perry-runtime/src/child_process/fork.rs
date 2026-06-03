@@ -18,6 +18,7 @@
 
 use super::*;
 use std::process::Command;
+use std::time::Duration;
 
 /// `child_process.fork(modulePath[, args][, options])`. `module_ptr`/`args_ptr`
 /// are raw (unboxed) `StringHeader` / `ArrayHeader` pointers; `opts_ptr` is a
@@ -66,6 +67,8 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     let stderr_obj = cp_build_readable();
     let stdin_obj = cp_build_writable();
     let stdio_kinds = cp_read_stdio(opts_val, 3);
+    let timeout = cp_read_timeout(opts_val);
+    let kill_signal = cp_read_kill_signal(opts_val);
 
     // spawnargs = [argv0 ?? execPath, ...execArgv, module, ...args] (matches Node).
     let mut spawnargs = crate::array::js_array_alloc((arg_strs.len() + exec_argv.len() + 2) as u32);
@@ -128,7 +131,16 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     cp_apply_options(&mut command, opts_val);
     cp_apply_live_stdio(&mut command, &stdio_kinds);
 
-    let launched = fork_launch(cp, stdout_obj, stderr_obj, stdin_obj, command, advanced);
+    let launched = fork_launch(
+        cp,
+        stdout_obj,
+        stderr_obj,
+        stdin_obj,
+        command,
+        advanced,
+        timeout,
+        kill_signal,
+    );
     if !launched {
         // Spawn failure: emit a deferred `error`, leave `connected` false.
         let msg = format!("fork failed: {exec_path}");
@@ -158,6 +170,8 @@ fn fork_launch(
     stdin_obj: f64,
     mut command: Command,
     advanced: bool,
+    timeout: Option<Duration>,
+    kill_signal: i32,
 ) -> bool {
     use std::os::unix::io::AsRawFd;
     use std::os::unix::net::UnixStream;
@@ -203,6 +217,8 @@ fn fork_launch(
                 child,
                 Some(parent_sock),
                 advanced,
+                timeout,
+                kill_signal,
             );
             true
         }
@@ -218,12 +234,22 @@ fn fork_launch(
     stdin_obj: f64,
     mut command: Command,
     advanced: bool,
+    timeout: Option<Duration>,
+    kill_signal: i32,
 ) -> bool {
     let _ = advanced;
     match command.spawn() {
         Ok(child) => {
             reactor::cp_register_live_child(
-                cp, stdout_obj, stderr_obj, stdin_obj, child, None, false,
+                cp,
+                stdout_obj,
+                stderr_obj,
+                stdin_obj,
+                child,
+                None,
+                false,
+                timeout,
+                kill_signal,
             );
             true
         }

@@ -31,6 +31,7 @@ use std::io::{Read, Write};
 use std::process::{Child, ChildStdin};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
+use std::time::Duration;
 
 // Brings in the `cp_*` helpers, `CpFn`, `CP_SHAPE_ID`, the `TAG_*` consts, and
 // (since this is a descendant module) `mod.rs`'s `use` bindings such as
@@ -76,6 +77,9 @@ enum CpEvent {
     /// #1933: the IPC channel closed (child disconnected or exited) — flip
     /// `connected`/`channel` and emit `'disconnect'`.
     IpcClosed { handle: u64 },
+    /// Timeout expired; terminate the live child with this signal on the main
+    /// thread so JS-visible `killed` is updated with the same event ordering.
+    Timeout { handle: u64, signal: i32 },
 }
 
 static CP_EVENT_QUEUE: Mutex<Vec<CpEvent>> = Mutex::new(Vec::new());
@@ -177,6 +181,13 @@ fn cp_spawn_waiter(handle: u64, mut child: Child) {
     });
 }
 
+fn cp_spawn_timeout(handle: u64, timeout: Duration, signal: i32) {
+    std::thread::spawn(move || {
+        std::thread::sleep(timeout);
+        cp_push_event(CpEvent::Timeout { handle, signal });
+    });
+}
+
 /// IPC reader (#1933): read newline-delimited JSON from the parent socket and
 /// push each line for main-thread parse + `'message'` delivery. For
 /// `serialization: 'advanced'` (#2130) the framing is instead a 4-byte
@@ -256,6 +267,8 @@ pub(super) fn cp_register_live_child(
     mut child: Child,
     ipc: Option<IpcStream>,
     ipc_advanced: bool,
+    timeout: Option<Duration>,
+    kill_signal: i32,
 ) -> u64 {
     let pid = child.id();
     cp_set_field(cp, b"pid", pid as f64);
@@ -311,6 +324,9 @@ pub(super) fn cp_register_live_child(
         cp_spawn_reader(handle, e, true);
     }
     cp_spawn_waiter(handle, child);
+    if let Some(timeout) = timeout {
+        cp_spawn_timeout(handle, timeout, kill_signal);
+    }
     #[cfg(unix)]
     {
         if let Some(sock) = ipc {
@@ -438,6 +454,8 @@ pub extern "C" fn js_child_process_spawn_streams(
     let stderr_obj = cp_build_readable();
     let stdin_obj = cp_build_writable();
     let stdio_kinds = cp_read_stdio(opts_val, 3);
+    let timeout = cp_read_timeout(opts_val);
+    let kill_signal = cp_read_kill_signal(opts_val);
 
     // spawnargs = [argv0 ?? command, ...args]
     let mut spawnargs = crate::array::js_array_alloc((arg_strs.len() + 1) as u32);
@@ -490,7 +508,17 @@ pub extern "C" fn js_child_process_spawn_streams(
 
     match command.spawn() {
         Ok(child) => {
-            cp_register_live_child(cp, stdout_obj, stderr_obj, stdin_obj, child, None, false);
+            cp_register_live_child(
+                cp,
+                stdout_obj,
+                stderr_obj,
+                stdin_obj,
+                child,
+                None,
+                false,
+                timeout,
+                kill_signal,
+            );
         }
         Err(e) => {
             // Spawn failure (e.g. ENOENT): Node emits a single `error` event and
@@ -656,6 +684,11 @@ fn cp_reactor_pump_inner() {
                     }
                 }
             }
+            CpEvent::Timeout { handle, signal } => {
+                if let Some(cp_bits) = cp_live_kill_signum(handle, signal) {
+                    cp_set_field(f64::from_bits(cp_bits), b"killed", TAG_TRUE_F64);
+                }
+            }
         }
     }
 
@@ -739,66 +772,36 @@ pub(super) fn cp_live_stdin_close(handle: u64) {
     }
 }
 
+fn cp_live_kill_signum(handle: u64, signum: i32) -> Option<u64> {
+    let (pid, cp_bits) = {
+        let guard = cp_live_lock();
+        match guard.as_ref().and_then(|map| map.get(&handle)) {
+            // Skip if already reaped — the pid may have been recycled by the OS.
+            Some(lc) if lc.exited.is_none() => (lc.pid, lc.cp_bits),
+            _ => return None,
+        }
+    };
+    #[cfg(unix)]
+    {
+        if unsafe { libc::kill(pid, signum) == 0 } {
+            Some(cp_bits)
+        } else {
+            None
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (pid, signum, cp_bits);
+        None
+    }
+}
+
 /// Signal a live child. `signal` is the JS `kill([signal])` argument (a signal
 /// name string, a number, or — for the no-arg / default case — undefined or the
 /// `0.0` arg-padding, both treated as `SIGTERM`). Returns whether the signal
 /// was delivered.
 pub(super) fn cp_live_kill(handle: u64, signal: f64) -> bool {
-    let pid = {
-        let guard = cp_live_lock();
-        match guard.as_ref().and_then(|map| map.get(&handle)) {
-            // Skip if already reaped — the pid may have been recycled by the OS.
-            Some(lc) if lc.exited.is_none() => lc.pid,
-            _ => return false,
-        }
-    };
-    #[cfg(unix)]
-    {
-        let signum = cp_parse_signal(signal);
-        unsafe { libc::kill(pid, signum) == 0 }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        false
-    }
-}
-
-/// Map a JS `kill` signal argument to a Unix signal number. Default / no-arg
-/// (`undefined` or the `0.0` padding) → `SIGTERM`.
-#[cfg(unix)]
-fn cp_parse_signal(signal: f64) -> i32 {
-    const SIGTERM: i32 = libc::SIGTERM;
-    if JSValue::from_bits(signal.to_bits()).is_undefined() {
-        return SIGTERM;
-    }
-    if let Some(name) = cp_value_to_string(signal) {
-        return cp_signal_number(&name).unwrap_or(SIGTERM);
-    }
-    if signal.is_finite() {
-        let n = signal as i32;
-        // 0 is the "no-arg" padding sentinel — treat as the default SIGTERM.
-        return if n == 0 { SIGTERM } else { n };
-    }
-    SIGTERM
-}
-
-/// Inverse of `super::cp_signal_name` for the common signals.
-#[cfg(unix)]
-fn cp_signal_number(name: &str) -> Option<i32> {
-    Some(match name {
-        "SIGHUP" => libc::SIGHUP,
-        "SIGINT" => libc::SIGINT,
-        "SIGQUIT" => libc::SIGQUIT,
-        "SIGABRT" => libc::SIGABRT,
-        "SIGKILL" => libc::SIGKILL,
-        "SIGTERM" => libc::SIGTERM,
-        "SIGUSR1" => libc::SIGUSR1,
-        "SIGUSR2" => libc::SIGUSR2,
-        "SIGSTOP" => libc::SIGSTOP,
-        "SIGCONT" => libc::SIGCONT,
-        _ => return None,
-    })
+    cp_live_kill_signum(handle, cp_signal_from_value(signal)).is_some()
 }
 
 // ============================================================================

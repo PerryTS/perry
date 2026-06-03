@@ -5,16 +5,17 @@ use std::time::{Duration, Instant};
 use crate::value::JSValue;
 
 use super::{
-    cp_decode_status, cp_get_field, cp_io_error_code, cp_object_ptr, cp_value_to_bytes, CpExit,
+    cp_decode_status, cp_get_field, cp_io_error_code, cp_object_ptr, cp_read_kill_signal,
+    cp_value_to_bytes, CpExit, CP_SIGTERM,
 };
 
 const CP_DEFAULT_MAX_BUFFER: usize = 1024 * 1024;
-const CP_SIGTERM: i32 = 15;
 
 /// Options that affect buffered sync execution after the `Command` is built.
 pub(super) struct CpRunOptions {
     input: Option<Vec<u8>>,
     timeout: Option<Duration>,
+    kill_signal: i32,
     pub(super) max_buffer: usize,
 }
 
@@ -23,6 +24,7 @@ impl Default for CpRunOptions {
         Self {
             input: None,
             timeout: None,
+            kill_signal: CP_SIGTERM,
             max_buffer: CP_DEFAULT_MAX_BUFFER,
         }
     }
@@ -110,6 +112,8 @@ pub(super) fn cp_read_async_run_options(opts_val: f64) -> CpRunOptions {
 }
 
 fn cp_read_timing_and_buffer_options(opts_val: f64, options: &mut CpRunOptions) {
+    options.kill_signal = cp_read_kill_signal(opts_val);
+
     if let Some(timeout) = cp_read_option_number(opts_val, b"timeout") {
         if timeout > 0.0 {
             options.timeout = Some(Duration::from_millis(timeout as u64));
@@ -177,7 +181,8 @@ pub(super) fn cp_run_to_completion(mut command: Command, options: &CpRunOptions)
                     let _ = stdin.write_all(input);
                 }
             }
-            let mut run_error = cp_wait_for_timeout(&mut child, options.timeout);
+            let mut run_error =
+                cp_wait_for_timeout(&mut child, options.timeout, options.kill_signal);
             match child.wait_with_output() {
                 Ok(o) => {
                     let CpExit { code, signal } = cp_decode_status(&o.status);
@@ -188,7 +193,7 @@ pub(super) fn cp_run_to_completion(mut command: Command, options: &CpRunOptions)
                         run_error = Some(CpRunError::MaxBuffer);
                     }
                     let (code, signal) = match run_error {
-                        Some(CpRunError::Timeout) => (None, Some(CP_SIGTERM)),
+                        Some(CpRunError::Timeout) => (None, Some(options.kill_signal)),
                         _ => (code, signal),
                     };
                     CpRun {
@@ -227,6 +232,7 @@ pub(super) fn cp_run_to_completion(mut command: Command, options: &CpRunOptions)
 fn cp_wait_for_timeout(
     child: &mut std::process::Child,
     timeout: Option<Duration>,
+    kill_signal: i32,
 ) -> Option<CpRunError> {
     let timeout = timeout?;
     let deadline = Instant::now() + timeout;
@@ -235,7 +241,7 @@ fn cp_wait_for_timeout(
             Ok(Some(_)) => return None,
             Ok(None) => {
                 if Instant::now() >= deadline {
-                    cp_terminate_child(child);
+                    cp_terminate_child(child, kill_signal);
                     return Some(CpRunError::Timeout);
                 }
                 let remaining = deadline.saturating_duration_since(Instant::now());
@@ -246,10 +252,10 @@ fn cp_wait_for_timeout(
     }
 }
 
-fn cp_terminate_child(child: &mut std::process::Child) {
+fn cp_terminate_child(child: &mut std::process::Child, kill_signal: i32) {
     #[cfg(unix)]
     unsafe {
-        let _ = libc::kill(child.id() as i32, libc::SIGTERM);
+        let _ = libc::kill(child.id() as i32, kill_signal);
     }
     #[cfg(not(unix))]
     {
