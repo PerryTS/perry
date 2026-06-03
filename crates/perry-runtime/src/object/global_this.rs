@@ -3272,7 +3272,7 @@ pub(super) fn install_proto_method(
     value
 }
 
-fn install_proto_method_rest(
+pub(super) fn install_proto_method_rest(
     proto_obj: *mut ObjectHeader,
     method_name: &str,
     func_ptr: *const u8,
@@ -3287,7 +3287,7 @@ fn install_proto_method_rest(
     );
 }
 
-fn install_proto_method_rest_with_length(
+pub(super) fn install_proto_method_rest_with_length(
     proto_obj: *mut ObjectHeader,
     method_name: &str,
     func_ptr: *const u8,
@@ -3579,6 +3579,15 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                     );
                 }
             }
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "DataView" => {
+            // Install the reflectable `byteLength`/`byteOffset`/`buffer`
+            // accessors and the `get*`/`set*` numeric methods on
+            // `DataView.prototype` (own module). Instances already work via
+            // codegen / `buffer_dispatch`; these only close the reflection +
+            // `DataView.prototype.getInt32.call(dv, …)` cascade.
+            super::dataview_proto_thunks::install_dataview_proto_methods(proto_obj);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "Object" => {
