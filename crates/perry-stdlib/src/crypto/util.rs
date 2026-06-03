@@ -113,7 +113,7 @@ pub(super) fn normalize_sign_algorithm(algorithm: &[u8]) -> Option<RsaDigestKind
     }
 }
 
-pub(super) fn parse_rsa_private_key_pem(pem: &str) -> Option<RsaPrivateKey> {
+pub(crate) fn parse_rsa_private_key_pem(pem: &str) -> Option<RsaPrivateKey> {
     use rsa::pkcs1::DecodeRsaPrivateKey;
     use rsa::pkcs8::DecodePrivateKey;
 
@@ -140,7 +140,7 @@ pub(super) fn rsa_private_key_to_pem(private_key: &RsaPrivateKey) -> Option<Stri
         .map(|pem| pem.to_string())
 }
 
-pub(super) fn parse_rsa_public_key_pem(pem: &str) -> Option<RsaPublicKey> {
+pub(crate) fn parse_rsa_public_key_pem(pem: &str) -> Option<RsaPublicKey> {
     use rsa::pkcs1::DecodeRsaPublicKey;
     use rsa::pkcs8::DecodePublicKey;
 
@@ -161,13 +161,13 @@ pub(super) fn rsa_public_key_to_pem(public_key: &RsaPublicKey) -> Option<String>
         .map(|pem| pem.to_string())
 }
 
-pub(super) fn parse_p256_signing_key_pem(pem: &str) -> Option<P256EcdsaSigningKey> {
+pub(crate) fn parse_p256_signing_key_pem(pem: &str) -> Option<P256EcdsaSigningKey> {
     use p256::pkcs8::DecodePrivateKey;
 
     P256EcdsaSigningKey::from_pkcs8_pem(pem).ok()
 }
 
-pub(super) fn parse_p256_verifying_key_pem(pem: &str) -> Option<p256::ecdsa::VerifyingKey> {
+pub(crate) fn parse_p256_verifying_key_pem(pem: &str) -> Option<p256::ecdsa::VerifyingKey> {
     use p256::pkcs8::{DecodePrivateKey, DecodePublicKey};
 
     p256::ecdsa::VerifyingKey::from_public_key_pem(pem)
@@ -196,7 +196,7 @@ pub(super) fn ed25519_public_surrogate(key: &ed25519_dalek::VerifyingKey) -> Str
     format!("{ED25519_PUBLIC_PREFIX}{public}")
 }
 
-pub(super) fn parse_ed25519_private_surrogate(value: &str) -> Option<ed25519_dalek::SigningKey> {
+pub(crate) fn parse_ed25519_private_surrogate(value: &str) -> Option<ed25519_dalek::SigningKey> {
     let rest = value.strip_prefix(ED25519_PRIVATE_PREFIX)?;
     let secret_b64 = rest.split('.').next()?;
     let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -206,7 +206,7 @@ pub(super) fn parse_ed25519_private_surrogate(value: &str) -> Option<ed25519_dal
     Some(ed25519_dalek::SigningKey::from_bytes(&secret))
 }
 
-pub(super) fn parse_ed25519_public_surrogate(value: &str) -> Option<ed25519_dalek::VerifyingKey> {
+pub(crate) fn parse_ed25519_public_surrogate(value: &str) -> Option<ed25519_dalek::VerifyingKey> {
     if let Some(private) = parse_ed25519_private_surrogate(value) {
         return Some(private.verifying_key());
     }
@@ -228,7 +228,7 @@ pub(super) fn x25519_public_surrogate(public: &[u8; 32]) -> String {
     format!("{X25519_PUBLIC_PREFIX}{encoded}")
 }
 
-pub(super) fn parse_x25519_private_surrogate(value: &str) -> Option<[u8; 32]> {
+pub(crate) fn parse_x25519_private_surrogate(value: &str) -> Option<[u8; 32]> {
     let rest = value.strip_prefix(X25519_PRIVATE_PREFIX)?;
     let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(rest.as_bytes())
@@ -236,7 +236,7 @@ pub(super) fn parse_x25519_private_surrogate(value: &str) -> Option<[u8; 32]> {
     secret.as_slice().try_into().ok()
 }
 
-pub(super) fn parse_x25519_public_surrogate(value: &str) -> Option<[u8; 32]> {
+pub(crate) fn parse_x25519_public_surrogate(value: &str) -> Option<[u8; 32]> {
     if let Some(secret) = parse_x25519_private_surrogate(value) {
         let secret = x25519_dalek::StaticSecret::from(secret);
         let public = x25519_dalek::PublicKey::from(&secret);

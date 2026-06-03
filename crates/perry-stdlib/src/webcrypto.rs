@@ -12,6 +12,7 @@ mod digest;
 mod hmac;
 mod jwk;
 mod kdf;
+mod key_object;
 mod keys;
 mod supports;
 mod util;
@@ -19,7 +20,10 @@ mod wrap;
 
 #[allow(unused_imports)]
 // Private imports keep sibling modules able to share `pub(super)` helpers.
-use self::{aes::*, digest::*, hmac::*, jwk::*, kdf::*, keys::*, supports::*, util::*, wrap::*};
+use self::{
+    aes::*, digest::*, hmac::*, jwk::*, kdf::*, key_object::*, keys::*, supports::*, util::*,
+    wrap::*,
+};
 
 // Public re-exports preserve the parent module surface for FFI entry points.
 pub use self::{aes::*, digest::*, hmac::*, jwk::*, kdf::*, keys::*, supports::*, wrap::*};
@@ -96,6 +100,9 @@ pub unsafe extern "C" fn js_webcrypto_native_dispatch(
             arg(5),
             arg(6),
         )),
+        "keyObjectToCryptoKey" if args_len >= 4 => {
+            js_webcrypto_key_object_to_crypto_key(arg(0), arg(1), arg(2), arg(3))
+        }
         "supports" if args_len >= 2 => js_webcrypto_supports(arg(0), arg(1), arg(2)),
         _ => undefined,
     }

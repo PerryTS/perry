@@ -106,8 +106,6 @@ fn crypto_key_algorithm_has_length(algo: u8) -> bool {
 fn crypto_key_named_curve(algo: u8) -> Option<&'static str> {
     match algo {
         8 | 9 => Some("P-256"),
-        10 => Some("Ed25519"),
-        11 => Some("X25519"),
         _ => None,
     }
 }
@@ -3161,6 +3159,7 @@ pub extern "C" fn js_object_get_field_by_name(
                     let static_name: Option<&'static [u8]> = match key_bytes {
                         b"export" => Some(b"export"),
                         b"equals" => Some(b"equals"),
+                        b"toCryptoKey" => Some(b"toCryptoKey"),
                         _ => None,
                     };
                     if let Some(name) = static_name {

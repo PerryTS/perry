@@ -1452,6 +1452,29 @@ pub unsafe extern "C" fn js_native_call_method(
                 }
             };
             match method_name {
+                "toCryptoKey" if crate::buffer::asymmetric_key_meta(s_ptr as usize).is_some() => {
+                    let ptr = crate::value::JS_NATIVE_WEBCRYPTO_DISPATCH
+                        .load(std::sync::atomic::Ordering::SeqCst);
+                    if ptr.is_null() {
+                        return f64::from_bits(JSValue::undefined().bits());
+                    }
+                    let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                        std::mem::transmute(ptr);
+                    let key_value = f64::from_bits(JSValue::string_ptr(s_ptr as *mut _).bits());
+                    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+                    let dispatch_args = [
+                        key_value,
+                        arg_at(0).unwrap_or(undefined),
+                        arg_at(1).unwrap_or(undefined),
+                        arg_at(2).unwrap_or(undefined),
+                    ];
+                    return dispatch(
+                        b"keyObjectToCryptoKey".as_ptr(),
+                        "keyObjectToCryptoKey".len(),
+                        dispatch_args.as_ptr(),
+                        dispatch_args.len(),
+                    );
+                }
                 "export" if crate::buffer::asymmetric_key_meta(s_ptr as usize).is_some() => {
                     // Minimal asymmetric KeyObject-surrogate export surface.
                     // The native crypto layer stores PEM-backed RSA/EC keys
