@@ -2,6 +2,18 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1111 — refactor(codegen): split native_table/http.rs (file-size gate)
+
+`crates/perry-codegen/src/lower_call/native_table/http.rs` had grown to 2024
+lines, tripping the 2000-line file-size lint gate and turning the `lint` check
+red on `main` — which blocked every open PR. Split the single `HTTP_ROWS` table
+into three topical sibling modules with no row content or ordering change:
+`http_client.rs` (client request/get factories + http/https Agent rows, carries
+the `cr` helper), `http_server.rs` (node:http + node:https server rows), and
+`http_http2.rs` (node:http2 server + settings helpers + perry/ads rows). The
+parent `native_table::mod` concatenates the three `*_ROWS` slices in the original
+order. Pure mechanical refactor; no behavioral change.
+
 ## v0.5.1110 — feat(webcrypto): SubtleCrypto.supports shape (#4146)
 
 Folds in external contributor PR #4146 (merged via automation without the maintainer version bump; this commit reconciles the metadata): adds `crypto.subtle.supports(...)` returning the static algorithm/usage support shape. Implemented in `crates/perry-stdlib/src/webcrypto/supports.rs` with the `globalThis`/`property_get` codegen wiring and a node-suite fixture. No manifest/entries change, so API docs are unaffected.
