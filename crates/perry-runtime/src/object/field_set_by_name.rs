@@ -361,6 +361,13 @@ pub extern "C" fn js_object_set_field_by_name(
                     return;
                 }
             }
+            if crate::array::array_is_frozen(arr) {
+                return;
+            }
+            let existing = crate::array::array_named_property_get(arr, key).is_some();
+            if !existing && crate::array::array_is_sealed_or_no_extend(arr) {
+                return;
+            }
             crate::array::array_named_property_set(arr, key, value);
             return;
         }

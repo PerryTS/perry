@@ -237,6 +237,9 @@ pub extern "C" fn js_array_set_f64_unchecked(arr: *mut ArrayHeader, index: u32, 
     if arr.is_null() {
         return;
     }
+    if array_is_frozen(arr) {
+        return;
+    }
     unsafe {
         let length = (*arr).length;
         if index >= length {
@@ -257,6 +260,9 @@ pub extern "C" fn js_array_numeric_set_f64_unboxed(
     index: u32,
     value: f64,
 ) -> i32 {
+    if array_is_frozen(arr) {
+        return 0;
+    }
     unsafe {
         if array_numeric_raw_f64_set_inbounds(arr, index, value) {
             return 1;
@@ -289,6 +295,9 @@ pub extern "C" fn js_array_set_f64(arr: *mut ArrayHeader, index: u32, value: f64
             index as i32,
             value,
         );
+        return;
+    }
+    if array_is_frozen(arr) {
         return;
     }
     unsafe {
@@ -336,6 +345,10 @@ pub extern "C" fn js_array_set_f64_extend(
         );
         return arr;
     }
+    let flags = array_object_flags(arr);
+    let is_frozen = flags & crate::gc::OBJ_FLAG_FROZEN != 0;
+    let blocks_extension =
+        flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0;
     let scope = crate::gc::RuntimeHandleScope::new();
     let _arr_handle = scope.root_raw_mut_ptr(arr);
     let value_handle = scope.root_nanbox_f64(value);
@@ -348,12 +361,19 @@ pub extern "C" fn js_array_set_f64_extend(
 
         // If index is within bounds, just set it
         if index < length {
+            if is_frozen {
+                return arr;
+            }
             let value = canonicalize_array_numeric_store_value(arr, value);
             let value_bits = value.to_bits();
             let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             // GC_STORE_AUDIT(BARRIERED): in-bounds extending set is immediately recorded via note_array_slot.
             ptr::write(elements_ptr.add(index as usize), value);
             note_array_slot(arr, index as usize, value_bits);
+            return arr;
+        }
+
+        if is_frozen || blocks_extension {
             return arr;
         }
 
@@ -463,6 +483,18 @@ pub extern "C" fn js_array_set_string_key(
             return js_array_set_f64_extend(arr, idx, value);
         }
     }
+    if array_is_frozen(arr) {
+        return arr;
+    }
+    let existing = unsafe { array_named_property_get(arr, key).is_some() };
+    if !existing && array_is_sealed_or_no_extend(arr) {
+        return arr;
+    }
+    if let Some(attrs) = crate::object::get_property_attrs(arr as usize, key_str) {
+        if !attrs.writable() {
+            return arr;
+        }
+    }
     // Non-numeric string key — fall through to object-property set on the
     // array's expando map. Arrays with named properties are rare but spec-
     // legal.
@@ -529,10 +561,7 @@ pub extern "C" fn js_array_set_index_or_string(
                 format!("{:.0}", n)
             };
             let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-            unsafe {
-                array_named_property_set(arr, key, value);
-            }
-            return arr;
+            return js_array_set_string_key(arr, key, value);
         }
     }
     arr

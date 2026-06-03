@@ -14,6 +14,9 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
     if arr.is_null() {
         return js_array_alloc(min_capacity);
     }
+    if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
+        return arr;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_mut_ptr(arr);
     unsafe {
@@ -102,6 +105,9 @@ pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut A
     if arr.is_null() {
         return js_array_alloc(0);
     }
+    if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
+        return arr;
+    }
     unsafe {
         let length = (*arr).length;
         let capacity = (*arr).capacity;
@@ -134,6 +140,9 @@ pub extern "C" fn js_array_numeric_push_f64_unboxed(
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return js_array_alloc(0);
+    }
+    if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
+        return arr;
     }
     unsafe {
         if array_numeric_raw_f64_push_inbounds(arr, value) {
@@ -222,6 +231,9 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
     if arr.is_null() {
         return TAG_UNDEFINED_F64;
     }
+    if array_is_frozen(arr) {
+        return TAG_UNDEFINED_F64;
+    }
     unsafe {
         let length = (*arr).length;
         if length == 0 {
@@ -260,6 +272,13 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
     let _arr_handle = scope.root_raw_mut_ptr(arr);
     unsafe {
         let cur = (*arr).length;
+        let flags = array_object_flags(arr);
+        if flags & crate::gc::OBJ_FLAG_FROZEN != 0 {
+            return;
+        }
+        if flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0 && n != cur {
+            return;
+        }
         if n < cur {
             // Truncate: clear elements at indices [n..cur) to TAG_UNDEFINED so
             // any code that resurrects the slot via `arr[i]` reads `undefined`,
@@ -345,6 +364,9 @@ pub extern "C" fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64 {
     if arr.is_null() {
         return TAG_UNDEFINED_F64;
     }
+    if array_is_frozen(arr) {
+        return TAG_UNDEFINED_F64;
+    }
     unsafe {
         let length = (*arr).length;
         if length == 0 {
@@ -370,6 +392,9 @@ pub extern "C" fn js_array_unshift_f64(arr: *mut ArrayHeader, value: f64) -> *mu
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return js_array_alloc(0);
+    }
+    if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
+        return arr;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let _arr_handle = scope.root_raw_mut_ptr(arr);
@@ -421,6 +446,9 @@ pub extern "C" fn js_array_unshift_variadic(
         return js_array_alloc(0);
     }
     if count == 0 {
+        return arr;
+    }
+    if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
         return arr;
     }
     let scope = crate::gc::RuntimeHandleScope::new();

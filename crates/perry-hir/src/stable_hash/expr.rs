@@ -612,7 +612,7 @@ impl SH for Expr {
             Expr::AsyncStepDone { value, step_closure, } => { tag(h, 442); value.as_ref().hash(h); step_closure.as_ref().hash(h); }
             Expr::CurrentStepClosure => tag(h, 443),
             Expr::AsyncFirstCall { step_closure } => { tag(h, 444); step_closure.as_ref().hash(h); }
-            Expr::TaggedTemplateStrings { cooked, raw } => { tag(h, 445); cooked.hash(h); raw.hash(h); }
+            Expr::TaggedTemplateStrings { site_id, cooked, raw } => { tag(h, 445); site_id.hash(h); cooked.hash(h); raw.hash(h); }
             Expr::TemplateRaw(e) => { tag(h, 446); e.as_ref().hash(h); }
             Expr::RegisterClassParentDynamic { class_name, parent_expr, } => { tag(h, 447); class_name.hash(h); parent_expr.as_ref().hash(h); }
             Expr::RegisterClassStaticSymbol { class_name, key_expr, value_expr, } => { tag(h, 12025); class_name.hash(h); key_expr.as_ref().hash(h); value_expr.as_ref().hash(h); }

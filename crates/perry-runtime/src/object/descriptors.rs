@@ -341,10 +341,11 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 let Some(ref name) = key_rust else {
                     return f64::from_bits(crate::value::TAG_UNDEFINED);
                 };
+                let is_frozen = crate::array::array_is_frozen(arr);
                 if name == "length" {
                     return build_data_descriptor(
                         crate::array::js_array_length(arr) as f64,
-                        true,
+                        !is_frozen,
                         false,
                         false,
                     );
@@ -352,7 +353,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 if let Some(index) = super::canonical_array_index(name) {
                     if super::has_own_helpers::array_own_key_present(arr, key_str) {
                         let value = crate::array::js_array_get_f64(arr, index);
-                        return build_data_descriptor(value, true, true, true);
+                        return build_data_descriptor(value, !is_frozen, true, !is_frozen);
                     }
                     return f64::from_bits(crate::value::TAG_UNDEFINED);
                 }

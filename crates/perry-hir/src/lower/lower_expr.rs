@@ -1750,9 +1750,10 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
             // strings array carries the cooked text (escapes processed) AS
             // the array elements AND the raw text (escapes preserved) via
             // a thread-local side table populated at the call site —
-            // `TaggedTemplateStrings` codegen emits both arrays + a
-            // `js_tagged_template_register_raw` call so `strings.raw` reads
-            // can resolve via the matching `Expr::TemplateRaw` fold below.
+            // `TaggedTemplateStrings` codegen emits both arrays, then asks
+            // the runtime for the cached frozen template object so
+            // `strings.raw` reads can resolve via the matching
+            // `Expr::TemplateRaw` fold below.
             let cooked_strings: Vec<Expr> = tpl
                 .quasis
                 .iter()
@@ -1771,6 +1772,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 .map(|q| q.raw.as_ref().to_string())
                 .collect();
             let strings_array = Expr::TaggedTemplateStrings {
+                site_id: ctx.fresh_tagged_template_site_id(),
                 cooked: cooked_strings,
                 raw: raw_strings,
             };

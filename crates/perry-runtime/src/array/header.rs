@@ -16,6 +16,11 @@ thread_local! {
     static TEMPLATE_RAW_MAP: RefCell<HashMap<usize, *mut ArrayHeader>> =
         RefCell::new(HashMap::new());
 
+    /// Tagged-template template-object cache — maps a stable compile-time
+    /// call-site id to the frozen cooked/raw array pair for that site.
+    static TEMPLATE_OBJECT_CACHE: RefCell<HashMap<u64, (*mut ArrayHeader, *mut ArrayHeader)>> =
+        RefCell::new(HashMap::new());
+
     /// Own non-index properties for Array exotic objects.
     ///
     /// Perry's `ArrayHeader` intentionally stays compact: `length`,
@@ -40,6 +45,72 @@ pub enum NumericArrayLayout {
     RawF64 = 1,
 }
 
+#[inline]
+pub(crate) fn array_object_flags(arr: *const ArrayHeader) -> u16 {
+    let arr = clean_arr_ptr(arr);
+    if arr.is_null() || (arr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return 0;
+    }
+    unsafe {
+        let gc_header =
+            (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            (*gc_header)._reserved
+        } else {
+            0
+        }
+    }
+}
+
+#[inline]
+pub(crate) fn array_is_frozen(arr: *const ArrayHeader) -> bool {
+    array_object_flags(arr) & crate::gc::OBJ_FLAG_FROZEN != 0
+}
+
+#[inline]
+pub(crate) fn array_is_sealed_or_no_extend(arr: *const ArrayHeader) -> bool {
+    array_object_flags(arr) & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0
+}
+
+unsafe fn mark_template_array_frozen(arr: *mut ArrayHeader) {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() || (arr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return;
+    }
+    let gc_header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+        (*gc_header)._reserved |=
+            crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
+    }
+}
+
+unsafe fn register_template_raw_pair(cooked: *mut ArrayHeader, raw: *mut ArrayHeader) {
+    if cooked.is_null() || raw.is_null() {
+        return;
+    }
+    TEMPLATE_RAW_MAP.with(|m| {
+        m.borrow_mut().insert(cooked as usize, raw);
+    });
+}
+
+unsafe fn install_template_raw_property(
+    cooked_handle: &crate::gc::RuntimeHandle<'_>,
+    raw_handle: &crate::gc::RuntimeHandle<'_>,
+) {
+    let raw_key = crate::string::js_string_from_bytes(b"raw".as_ptr(), 3);
+    let cooked = cooked_handle.get_raw_mut_ptr::<ArrayHeader>();
+    let raw = raw_handle.get_raw_mut_ptr::<ArrayHeader>();
+    if cooked.is_null() || raw.is_null() {
+        return;
+    }
+    array_named_property_set(cooked, raw_key, crate::value::js_nanbox_pointer(raw as i64));
+    crate::object::set_property_attrs(
+        cooked as usize,
+        "raw".to_string(),
+        crate::object::PropertyAttrs::new(false, false, false),
+    );
+}
+
 /// Register the (cooked, raw) pair for a tagged-template call. Returns
 /// `cooked` (so the codegen can chain it inline into the call args).
 #[no_mangle]
@@ -47,13 +118,59 @@ pub extern "C" fn js_tagged_template_register_raw(
     cooked: *mut ArrayHeader,
     raw: *mut ArrayHeader,
 ) -> *mut ArrayHeader {
-    if !cooked.is_null() && !raw.is_null() {
-        TEMPLATE_RAW_MAP.with(|m| {
-            m.borrow_mut().insert(cooked as usize, raw);
-        });
+    let cooked = clean_arr_ptr_mut(cooked);
+    let raw = clean_arr_ptr_mut(raw);
+    unsafe {
+        register_template_raw_pair(cooked, raw);
     }
     cooked
 }
+
+/// Return the frozen template-strings object for a tagged-template call site,
+/// initializing the per-site cooked/raw pair on first evaluation.
+#[no_mangle]
+pub extern "C" fn js_tagged_template_get_or_init(
+    site_id: u64,
+    cooked: *mut ArrayHeader,
+    raw: *mut ArrayHeader,
+) -> *mut ArrayHeader {
+    if let Some(cached) = TEMPLATE_OBJECT_CACHE.with(|m| {
+        m.borrow()
+            .get(&site_id)
+            .map(|&(cached_cooked, _)| cached_cooked)
+    }) {
+        return cached;
+    }
+
+    let cooked = clean_arr_ptr_mut(cooked);
+    let raw = clean_arr_ptr_mut(raw);
+    if cooked.is_null() || raw.is_null() {
+        return cooked;
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let cooked_handle = scope.root_raw_mut_ptr(cooked);
+    let raw_handle = scope.root_raw_mut_ptr(raw);
+    unsafe {
+        install_template_raw_property(&cooked_handle, &raw_handle);
+        let cooked = cooked_handle.get_raw_mut_ptr::<ArrayHeader>();
+        let raw = raw_handle.get_raw_mut_ptr::<ArrayHeader>();
+        mark_template_array_frozen(raw);
+        mark_template_array_frozen(cooked);
+        register_template_raw_pair(cooked, raw);
+        TEMPLATE_OBJECT_CACHE.with(|m| {
+            m.borrow_mut().insert(site_id, (cooked, raw));
+        });
+    }
+    cooked_handle.get_raw_mut_ptr::<ArrayHeader>()
+}
+
+#[used]
+static KEEP_TAGGED_TEMPLATE_GET_OR_INIT: extern "C" fn(
+    u64,
+    *mut ArrayHeader,
+    *mut ArrayHeader,
+) -> *mut ArrayHeader = js_tagged_template_get_or_init;
 
 /// Read the raw-strings array for a cooked array, or 0 if not a
 /// tagged-template strings array.
@@ -81,6 +198,13 @@ pub fn scan_template_raw_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_template_raw_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    TEMPLATE_OBJECT_CACHE.with(|m| {
+        let mut map = m.borrow_mut();
+        for (_, (cooked_ptr, raw_ptr)) in map.iter_mut() {
+            visitor.visit_raw_mut_ptr_slot(cooked_ptr);
+            visitor.visit_raw_mut_ptr_slot(raw_ptr);
+        }
+    });
     TEMPLATE_RAW_MAP.with(|m| {
         let mut map = m.borrow_mut();
         let mut moved = Vec::new();

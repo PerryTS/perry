@@ -21,6 +21,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // TaggedTemplate Evaluation step 5: `template[Symbol.raw]` returns
     // an array of raw strings).
     module.declare_function("js_tagged_template_register_raw", I64, &[I64, I64]);
+    module.declare_function("js_tagged_template_get_or_init", I64, &[I64, I64, I64]);
     module.declare_function("js_template_raw", I64, &[I64]);
     // Convenience alias for `js_array_alloc(0)`; emitted by lower_call's
     // `new Array()` no-arg branch. Issue #432: clang rejected

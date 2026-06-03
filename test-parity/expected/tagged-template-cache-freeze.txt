@@ -1,0 +1,16 @@
+same: first
+raw same: true
+frozen: true|true
+extensible: false|false
+raw enumerable: false
+values: ["a\n","b","a\\n","b",2,null]
+value: 1
+same: true
+raw same: true
+frozen: true|true
+extensible: false|false
+raw enumerable: false
+values: ["a\n","b","a\\n","b",2,null]
+value: 2
+duplicate site same: first
+duplicate site same: false

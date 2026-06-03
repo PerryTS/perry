@@ -14,6 +14,15 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
+fn stable_tagged_template_site_salt(source_file_path: &str) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in source_file_path.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h & 0xFFFF_FFFF
+}
+
 impl LoweringContext {
     // #854: single-arg constructor (delegates to `with_class_id_start`).
     // Currently only exercised from the `#[cfg(test)]` lowering tests, so it
@@ -27,6 +36,8 @@ impl LoweringContext {
         source_file_path: impl Into<String>,
         start_class_id: ClassId,
     ) -> Self {
+        let source_file_path = source_file_path.into();
+        let tagged_template_site_salt = stable_tagged_template_site_salt(&source_file_path);
         Self {
             next_local_id: 0,
             next_global_id: 0,
@@ -35,6 +46,8 @@ impl LoweringContext {
             next_enum_id: 0,
             next_interface_id: 0,
             next_type_alias_id: 0,
+            tagged_template_site_salt,
+            next_tagged_template_site_id: 0,
             locals: Vec::new(),
             globals: Vec::new(),
             functions: Vec::new(),
@@ -64,7 +77,7 @@ impl LoweringContext {
             current_class_member_is_static: false,
             object_super_home_stack: Vec::new(),
             extern_func_types: Vec::new(),
-            source_file_path: source_file_path.into(),
+            source_file_path,
             exportable_object_vars: HashSet::new(),
             pending_functions: Vec::new(),
             closure_display_names: HashMap::new(),
@@ -133,6 +146,12 @@ impl LoweringContext {
             is_external_module: false,
             optional_require_try_depth: 0,
         }
+    }
+
+    pub(crate) fn fresh_tagged_template_site_id(&mut self) -> u64 {
+        let local_id = self.next_tagged_template_site_id;
+        self.next_tagged_template_site_id = self.next_tagged_template_site_id.wrapping_add(1);
+        (self.tagged_template_site_salt << 32) | u64::from(local_id)
     }
 
     pub(crate) fn fresh_interface(&mut self) -> InterfaceId {

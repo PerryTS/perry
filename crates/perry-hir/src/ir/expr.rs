@@ -2054,13 +2054,13 @@ pub enum Expr {
     IteratorFrom(Box<Expr>),
 
     /// Tagged-template strings literal — codegen builds the cooked-strings
-    /// array AND a parallel raw-strings array, registers the (cooked, raw)
-    /// pair via `js_tagged_template_register_raw`, and returns the cooked
-    /// pointer (NaN-boxed). The raw entries are always known at compile
-    /// time (each quasi's `.raw` text), so they're stored as `String` rather
-    /// than `Expr`. Used by `lower_tagged_tpl` for the non-`String.raw`
-    /// fast-path tag-function call.
+    /// array AND a parallel raw-strings array, then asks the runtime for the
+    /// cached frozen template object for this call site. The raw entries are
+    /// always known at compile time (each quasi's `.raw` text), so they're
+    /// stored as `String` rather than `Expr`. Used by `lower_tagged_tpl` for
+    /// the non-`String.raw` fast-path tag-function call.
     TaggedTemplateStrings {
+        site_id: u64,
         cooked: Vec<Expr>,
         raw: Vec<String>,
     },

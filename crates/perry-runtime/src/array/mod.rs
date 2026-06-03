@@ -36,8 +36,9 @@ pub use self::from_concat::{js_array_concat_variadic, js_array_from_mapped, js_a
 pub(crate) use self::header::{array_has_arguments_object_flag, mark_array_as_arguments_object};
 pub use self::header::{
     js_array_clear_numeric_layout, js_array_is_numeric_f64_layout, js_array_mark_arguments_object,
-    js_array_mark_numeric_f64_layout, js_array_note_numeric_write, js_tagged_template_register_raw,
-    js_template_raw, scan_template_raw_roots, scan_template_raw_roots_mut, ArrayHeader,
+    js_array_mark_numeric_f64_layout, js_array_note_numeric_write, js_tagged_template_get_or_init,
+    js_tagged_template_register_raw, js_template_raw, scan_template_raw_roots,
+    scan_template_raw_roots_mut, ArrayHeader,
 };
 pub use self::immutable::{
     js_array_copy_within, js_array_to_reversed, js_array_to_sorted_default,
@@ -96,12 +97,13 @@ pub use self::splice_slice::{
 pub(crate) use self::alloc::array_length_from_property_value_or_throw;
 pub(crate) use self::alloc::{js_array_from_arraylike, js_array_from_string_codepoints};
 pub(crate) use self::header::{
-    array_byte_size, array_named_property_delete, array_named_property_get,
-    array_named_property_get_by_name, array_named_property_has, array_named_property_names,
-    array_named_property_set, array_numeric_raw_f64_get, array_numeric_raw_f64_push_inbounds,
-    array_numeric_raw_f64_set_inbounds, canonicalize_array_numeric_store_value, clean_arr_ptr,
-    clean_arr_ptr_mut, clear_array_numeric_layout, clear_array_numeric_layout_ptr,
-    gc_element_slot_range, mark_array_layout_unknown, normalize_array_receiver, note_array_slot,
+    array_byte_size, array_is_frozen, array_is_sealed_or_no_extend, array_named_property_delete,
+    array_named_property_get, array_named_property_get_by_name, array_named_property_has,
+    array_named_property_names, array_named_property_set, array_numeric_raw_f64_get,
+    array_numeric_raw_f64_push_inbounds, array_numeric_raw_f64_set_inbounds, array_object_flags,
+    canonicalize_array_numeric_store_value, clean_arr_ptr, clean_arr_ptr_mut,
+    clear_array_numeric_layout, clear_array_numeric_layout_ptr, gc_element_slot_range,
+    mark_array_layout_unknown, normalize_array_receiver, note_array_slot,
     note_array_slot_layout_only, rebuild_array_layout, rebuild_array_layout_exact,
     refresh_array_numeric_layout, replay_array_growth_write_barriers, set_array_numeric_layout,
     store_array_slot, transfer_array_numeric_layout, value_bits_to_number, NumericArrayLayout,

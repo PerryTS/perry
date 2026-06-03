@@ -20,7 +20,7 @@ use crate::lower_string_method::{
     lower_string_concat_chain, lower_string_self_append,
 };
 #[allow(unused_imports)]
-use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::nanbox::{double_literal, i64_literal, POINTER_MASK_I64};
 #[allow(unused_imports)]
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
@@ -638,11 +638,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // Tagged-template strings literal — build cooked array, build raw
-        // array, register the (cooked, raw) pair so subsequent `.raw`
-        // reads resolve via `js_template_raw`, return the cooked array.
+        // array, then fetch/init the frozen per-call-site template object.
         // Same emit shape as the generic `Expr::Array` lowering but with
-        // the side-table registration sandwiched in.
-        Expr::TaggedTemplateStrings { cooked, raw } => {
+        // the template-object initialization sandwiched in.
+        Expr::TaggedTemplateStrings {
+            site_id,
+            cooked,
+            raw,
+        } => {
             // Materialize cooked array — go through lower_array_literal so
             // SSO + GC + length-init logic stays in one place.
             let cooked_box = lower_array_literal(ctx, cooked)?;
@@ -654,10 +657,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let cooked_handle = unbox_to_i64(blk, &cooked_box);
             let raw_handle = unbox_to_i64(blk, &raw_box);
+            let site_id = i64_literal(*site_id);
             let registered = blk.call(
                 I64,
-                "js_tagged_template_register_raw",
-                &[(I64, &cooked_handle), (I64, &raw_handle)],
+                "js_tagged_template_get_or_init",
+                &[(I64, &site_id), (I64, &cooked_handle), (I64, &raw_handle)],
             );
             Ok(nanbox_pointer_inline(blk, &registered))
         }

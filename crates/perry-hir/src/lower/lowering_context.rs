@@ -35,6 +35,10 @@ pub struct LoweringContext {
     pub(crate) next_interface_id: InterfaceId,
     /// Counter for generating unique type alias IDs
     pub(crate) next_type_alias_id: TypeAliasId,
+    /// Deterministic per-module salt for tagged-template call-site cache keys.
+    pub(crate) tagged_template_site_salt: u64,
+    /// Counter for generating unique tagged-template call-site IDs.
+    pub(crate) next_tagged_template_site_id: u32,
     /// Current scope's local variables: name -> (id, type)
     pub(crate) locals: Vec<(String, LocalId, Type)>,
     /// LocalIds that represent immutable bindings (`const`, imports, and
