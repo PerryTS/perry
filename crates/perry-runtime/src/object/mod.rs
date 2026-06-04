@@ -58,6 +58,7 @@ mod property_key;
 pub(crate) mod prototype_chain;
 mod prototype_helpers;
 mod reflect_support;
+mod typed_array_proto_thunks;
 mod util_types;
 mod websocket_global;
 mod with_env;

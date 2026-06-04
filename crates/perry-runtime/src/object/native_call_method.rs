@@ -624,7 +624,7 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
 /// NaN-boxed POINTER_TAG receiver paths so a `Uint8Array` local reaches the
 /// element-typed `js_typed_array_*` helpers regardless of how codegen boxed
 /// the receiver. Issues #2797 / #2798 / #2799 added the callback-bearing arms.
-unsafe fn dispatch_typed_array_method(
+pub(super) unsafe fn dispatch_typed_array_method(
     ta: *mut crate::typedarray::TypedArrayHeader,
     method_name: &str,
     args_ptr: *const f64,
@@ -783,6 +783,100 @@ unsafe fn dispatch_typed_array_method(
             } else {
                 crate::typedarray::js_typed_array_reduce_right(ta, cb, has_init, init)
             }
+        }
+        // Non-callback search / view / join methods. These reach this tower
+        // through the brand-checking `%TypedArray%.prototype` value-path thunks
+        // (`typed_array_proto_thunks`); the receiver-typed fast path lowers them
+        // via dedicated codegen. The array search helpers (`js_array_*_jsvalue`)
+        // detect a registered TypedArray receiver and read its typed store, so a
+        // `TypedArrayHeader*` cast to `ArrayHeader*` is sound here.
+        "indexOf" | "lastIndexOf" | "includes" => {
+            let value = arg0();
+            let (has_from, from) = if args_len >= 2 && !args_ptr.is_null() {
+                (1, *args_ptr.add(1))
+            } else {
+                (0, f64::NAN)
+            };
+            let arr = ta as *const crate::array::ArrayHeader;
+            match method_name {
+                "indexOf" => {
+                    crate::array::js_array_indexOf_jsvalue(arr, value, from, has_from) as f64
+                }
+                "lastIndexOf" => {
+                    crate::array::js_array_last_index_of_jsvalue(arr, value, from, has_from) as f64
+                }
+                _ => f64::from_bits(
+                    JSValue::bool(
+                        crate::array::js_array_includes_jsvalue(arr, value, from, has_from) != 0,
+                    )
+                    .bits(),
+                ),
+            }
+        }
+        "join" => {
+            let sep = arg0();
+            let s = crate::typedarray::js_typed_array_join_value(ta, sep);
+            f64::from_bits(JSValue::string_ptr(s).bits())
+        }
+        // `%TypedArray%.prototype.toLocaleString` defaults to a comma-separated
+        // join (spec: each element's `toLocaleString`, joined by ","). Perry's
+        // numbers stringify identically here, so a default `join` matches Node
+        // for the common numeric cases the brand-check tests exercise.
+        "toLocaleString" => {
+            let s = crate::typedarray::js_typed_array_join_value(
+                ta,
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+            );
+            f64::from_bits(JSValue::string_ptr(s).bits())
+        }
+        "slice" => {
+            let start = if args_len >= 1 && !args_ptr.is_null() && !(*args_ptr).is_nan() {
+                *args_ptr as i32
+            } else {
+                0
+            };
+            let end = if args_len >= 2 && !args_ptr.is_null() && !(*args_ptr.add(1)).is_nan() {
+                *args_ptr.add(1) as i32
+            } else {
+                i32::MAX
+            };
+            let result = crate::typedarray::js_typed_array_slice(ta, start, end);
+            f64::from_bits(JSValue::pointer(result as *mut u8).bits())
+        }
+        "subarray" => {
+            let (has_begin, begin) = if args_len >= 1 && !args_ptr.is_null() {
+                (1, *args_ptr)
+            } else {
+                (0, f64::NAN)
+            };
+            let (has_end, end) = if args_len >= 2 && !args_ptr.is_null() {
+                (1, *args_ptr.add(1))
+            } else {
+                (0, f64::NAN)
+            };
+            let result =
+                crate::typedarray::js_typed_array_subarray(ta, has_begin, begin, has_end, end);
+            f64::from_bits(JSValue::pointer(result as *mut u8).bits())
+        }
+        "reverse" => {
+            let result = crate::typedarray::js_typed_array_reverse(ta);
+            f64::from_bits(JSValue::pointer(result as *mut u8).bits())
+        }
+        "fill" => {
+            let value = arg0();
+            let (has_start, start) = if args_len >= 2 && !args_ptr.is_null() {
+                (1, *args_ptr.add(1))
+            } else {
+                (0, f64::NAN)
+            };
+            let (has_end, end) = if args_len >= 3 && !args_ptr.is_null() {
+                (1, *args_ptr.add(2))
+            } else {
+                (0, f64::NAN)
+            };
+            let result =
+                crate::typedarray::js_typed_array_fill(ta, value, has_start, start, has_end, end);
+            f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
         _ => return None,
     };

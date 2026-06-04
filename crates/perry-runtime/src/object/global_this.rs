@@ -1601,6 +1601,13 @@ fn ensure_typed_array_intrinsic() -> (*mut crate::closure::ClosureHeader, *mut O
     // "length")` to keep working.
     install_typed_array_proto_accessors(proto);
     install_typed_array_iterator_symbol(proto);
+    // Install the brand-checking spec methods on the shared `%TypedArray%`
+    // intrinsic prototype as well. test262's `testTypedArray.js` harness reads
+    // `TypedArray.prototype.<m>` (where `TypedArray ===
+    // Object.getPrototypeOf(Int8Array)`), so the brand check for
+    // `%TypedArray%.prototype.<m>.call(badReceiver)` must also fire when the
+    // method is read off the intrinsic, not just off a per-kind prototype.
+    typed_array_proto_thunks::install_typed_array_proto_methods(proto);
     install_constructor_static_with_call_arity(
         ctor,
         "from",
@@ -4116,43 +4123,25 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
         "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
         | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
         | "BigInt64Array" | "BigUint64Array" => {
-            install_noop_proto_methods(
-                proto_obj,
-                &[
-                    ("at", 1),
-                    ("copyWithin", 2),
-                    ("entries", 0),
-                    ("every", 1),
-                    ("fill", 1),
-                    ("filter", 1),
-                    ("find", 1),
-                    ("findIndex", 1),
-                    ("findLast", 1),
-                    ("findLastIndex", 1),
-                    ("forEach", 1),
-                    ("includes", 1),
-                    ("indexOf", 1),
-                    ("join", 1),
-                    ("keys", 0),
-                    ("lastIndexOf", 1),
-                    ("map", 1),
-                    ("reduce", 1),
-                    ("reduceRight", 1),
-                    ("reverse", 0),
-                    ("set", 2),
-                    ("slice", 2),
-                    ("some", 1),
-                    ("sort", 1),
-                    ("subarray", 2),
-                    ("toLocaleString", 0),
-                    ("toReversed", 0),
-                    ("toSorted", 1),
-                    ("toString", 0),
-                    ("values", 0),
-                    ("with", 2),
-                ],
-            );
+            // `toString` is generic (`%TypedArray%.prototype.toString` is just
+            // `Array.prototype.toString` in the spec — no TypedArray brand
+            // check), so keep it on the shared no-op path for value reads.
+            install_noop_proto_methods(proto_obj, &[("toString", 0)]);
+            // Install the inherited `Object.prototype` data methods FIRST so the
+            // brand-checking typed-array thunks below override the ones that
+            // overlap (e.g. `toLocaleString`, which `%TypedArray%.prototype`
+            // defines with its own ValidateTypedArray brand check rather than
+            // the lenient `Object.prototype` no-op).
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            // Brand-checking thunks for the spec `%TypedArray%.prototype`
+            // methods: a value-path `Int8Array.prototype.map.call(plainArray)`
+            // must throw a `TypeError` (ValidateTypedArray, spec step 1). The
+            // receiver-typed fast path `new Int8Array([…]).map(…)` is lowered
+            // directly to `js_typed_array_*` by codegen and doesn't touch these.
+            // Pre-fix these were `global_this_builtin_noop_thunk`, whose
+            // `.call` re-dispatch landed on the (now array-like-lenient) Array
+            // helper and silently succeeded. #(typedarray-branded-methods).
+            typed_array_proto_thunks::install_typed_array_proto_methods(proto_obj);
         }
         _ => {}
     }
