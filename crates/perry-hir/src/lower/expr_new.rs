@@ -263,8 +263,14 @@ fn is_fetch_constructor_name(name: &str) -> bool {
 }
 
 fn is_global_object_expr(ctx: &LoweringContext, expr: &Expr) -> bool {
-    matches!(expr, Expr::GlobalGet(_))
-        || matches!(expr, Expr::LocalGet(id) if ctx.global_this_aliases.contains(id))
+    match expr {
+        Expr::GlobalGet(_) => true,
+        Expr::LocalGet(id) => ctx.global_this_aliases.contains(id),
+        Expr::PropertyGet { object, property } => {
+            property == "globalThis" && matches!(object.as_ref(), Expr::GlobalGet(_))
+        }
+        _ => false,
+    }
 }
 
 pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
@@ -1676,7 +1682,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .transpose()?
                 .unwrap_or_default();
             if let Expr::PropertyGet { object, property } = callee.as_ref() {
-                if matches!(object.as_ref(), Expr::GlobalGet(_))
+                if is_global_object_expr(ctx, object.as_ref())
                     && matches!(property.as_str(), "Symbol" | "BigInt" | "Math")
                 {
                     return Ok(nonconstructable_builtin_throw_expr(property, args));
