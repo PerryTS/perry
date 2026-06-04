@@ -291,7 +291,7 @@ jobs:
 
       - name: Upload e2e binaries (debugging)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-bins-linux
           path: target/e2e-bin/
@@ -325,7 +325,7 @@ jobs:
 
       - name: Upload crash artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-crashes-${{ matrix.target }}
           path: crates/perry-container-compose/fuzz/artifacts/${{ matrix.target }}/
