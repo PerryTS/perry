@@ -164,6 +164,22 @@ pub(crate) extern "C" fn global_this_blob_thunk(
     super::global_fetch::call_global_blob_new(parts, type_value)
 }
 
+pub(crate) extern "C" fn global_this_file_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    parts: f64,
+    name: f64,
+    options: f64,
+) -> f64 {
+    let type_value = global_this_fetch_option(options, b"type");
+    let last_modified = global_this_fetch_option(options, b"lastModified");
+    let last_modified = if last_modified.to_bits() == crate::value::TAG_UNDEFINED {
+        f64::NAN
+    } else {
+        last_modified
+    };
+    super::global_fetch::call_global_file_new(parts, name, type_value, last_modified)
+}
+
 pub(crate) extern "C" fn global_this_headers_thunk(
     _closure: *const crate::closure::ClosureHeader,
     init: f64,
@@ -2228,6 +2244,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             }
             "Date" => global_this_date_thunk as *const u8,
             "Blob" => global_this_blob_thunk as *const u8,
+            "File" => global_this_file_thunk as *const u8,
             "Headers" => global_this_headers_thunk as *const u8,
             "Request" => global_this_request_thunk as *const u8,
             "Response" => global_this_response_thunk as *const u8,
@@ -2260,6 +2277,9 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             }
             "Blob" | "Request" | "Response" => {
                 crate::closure::js_register_closure_arity(func_ptr, 2);
+            }
+            "File" => {
+                crate::closure::js_register_closure_arity(func_ptr, 3);
             }
             "Error" | "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError"
             | "EvalError" | "URIError" => {

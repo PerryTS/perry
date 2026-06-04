@@ -663,6 +663,12 @@ pub fn dispatch_blob_property(blob_id: usize, prop: &str) -> Option<f64> {
                 js_string_from_bytes(blob.content_type.as_ptr(), blob.content_type.len() as u32);
             JSValue::string_ptr(p).bits()
         }
+        "name" => {
+            let name = blob.file_name.as_ref()?;
+            let p = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            JSValue::string_ptr(p).bits()
+        }
+        "lastModified" => return blob.last_modified_ms,
         _ => return None,
     };
     Some(f64::from_bits(bits))

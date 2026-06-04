@@ -672,6 +672,9 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
     if ptr.is_null() {
         return None;
     }
+    if (ptr as usize) % std::mem::align_of::<crate::closure::ClosureHeader>() != 0 {
+        return None;
+    }
     if !is_valid_obj_ptr(ptr as *const u8) {
         return None;
     }
@@ -699,6 +702,7 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
             || func_ptr == global_this_object_thunk as *const u8 as usize
             || func_ptr == global_this_date_thunk as *const u8 as usize
             || func_ptr == global_this_blob_thunk as *const u8 as usize
+            || func_ptr == global_this_file_thunk as *const u8 as usize
             || func_ptr == global_this_headers_thunk as *const u8 as usize
             || func_ptr == global_this_request_thunk as *const u8 as usize
             || func_ptr == global_this_response_thunk as *const u8 as usize
@@ -1399,6 +1403,26 @@ pub unsafe extern "C" fn js_new_function_construct(
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::global_this_blob_thunk(std::ptr::null(), parts, options);
             }
+            "File" => {
+                let parts = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let name = args
+                    .get(1)
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let options = args
+                    .get(2)
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::object::global_this_file_thunk(
+                    std::ptr::null(),
+                    parts,
+                    name,
+                    options,
+                );
+            }
             "Headers" => {
                 let init = args
                     .first()
@@ -1867,6 +1891,9 @@ fn is_callable_function_value(value: f64) -> bool {
     if ptr.is_null() {
         return false;
     }
+    if (ptr as usize) % std::mem::align_of::<crate::closure::ClosureHeader>() != 0 {
+        return false;
+    }
     if !is_valid_obj_ptr(ptr as *const u8) {
         return false;
     }
@@ -1880,6 +1907,9 @@ fn is_arrow_function_value(value: f64) -> bool {
         return false;
     }
     let ptr = jv.as_pointer() as *const crate::closure::ClosureHeader;
+    if (ptr as usize) % std::mem::align_of::<crate::closure::ClosureHeader>() != 0 {
+        return false;
+    }
     if ptr.is_null() || !is_valid_obj_ptr(ptr as *const u8) {
         return false;
     }

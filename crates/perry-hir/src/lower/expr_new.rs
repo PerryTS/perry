@@ -326,6 +326,17 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     return Ok(expr);
                 }
             }
+            if obj_name == "globalThis"
+                && ctx.lookup_local("globalThis").is_none()
+                && is_fetch_constructor_name(prop_ident.sym.as_ref())
+            {
+                ctx.uses_fetch = true;
+                return Ok(Expr::New {
+                    class_name: prop_ident.sym.to_string(),
+                    args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                    type_args: Vec::new(),
+                });
+            }
 
             let is_net_module =
                 obj_name == "net" || ctx.lookup_builtin_module_alias(obj_name) == Some("net");

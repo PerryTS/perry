@@ -274,6 +274,9 @@ pub fn is_closure_ptr(ptr: usize) -> bool {
     if ptr < 0x10000 {
         return false;
     }
+    if ptr % std::mem::align_of::<ClosureHeader>() != 0 {
+        return false;
+    }
     unsafe {
         let type_tag = *((ptr as *const u8).add(12) as *const u32);
         type_tag == CLOSURE_MAGIC

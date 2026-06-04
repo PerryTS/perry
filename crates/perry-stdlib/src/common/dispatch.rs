@@ -2616,6 +2616,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         #[cfg(feature = "http-client")]
         fn js_register_global_fetch_constructors(
             blob_new: unsafe extern "C" fn(f64, f64) -> f64,
+            file_new: unsafe extern "C" fn(f64, f64, f64, f64) -> f64,
             headers_new: extern "C" fn() -> f64,
             headers_init_from_value: unsafe extern "C" fn(f64, f64) -> f64,
             request_new: unsafe extern "C" fn(
@@ -2675,6 +2676,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     #[cfg(feature = "http-client")]
     js_register_global_fetch_constructors(
         crate::fetch_blob::js_blob_new,
+        crate::fetch_blob::js_file_new,
         crate::fetch::js_headers_new,
         crate::fetch::js_headers_init_from_value,
         crate::fetch::js_request_new,

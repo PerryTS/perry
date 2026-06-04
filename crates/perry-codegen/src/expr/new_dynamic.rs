@@ -455,10 +455,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // also supported because the helper falls back to a
             // class_id=0 empty-object allocation when no synthetic id
             // exists (preserves the pre-fix baseline).
-            // Also route PropertyGet callees through `js_new_function_construct`:
+            // Also route PropertyGet / IndexGet callees through `js_new_function_construct`:
             // covers `new date.constructor(value)` (date-fns
             // `constructFrom`) and generic `new obj.factory(...)` shapes
-            // where `obj.factory` resolves to a closure pointer at
+            // where `obj.factory` or `ctors[i]` resolves to a closure pointer at
             // runtime. The runtime helper detects the global Date /
             // Array / Object thunks and dispatches into the matching
             // real factory; non-matching closures still get the
@@ -468,6 +468,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 Expr::FuncRef(_)
                     | Expr::LocalGet(_)
                     | Expr::PropertyGet { .. }
+                    | Expr::IndexGet { .. }
                     | Expr::Closure { .. }
             );
             if routes_through_function_construct {

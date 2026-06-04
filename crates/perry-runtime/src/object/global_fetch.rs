@@ -18,6 +18,7 @@ type FetchWithOptionsFn = unsafe extern "C" fn(
 ) -> *mut crate::promise::Promise;
 
 type FetchBlobNewFn = unsafe extern "C" fn(f64, f64) -> f64;
+type FetchFileNewFn = unsafe extern "C" fn(f64, f64, f64, f64) -> f64;
 type FetchHeadersNewFn = extern "C" fn() -> f64;
 type FetchHeadersInitFromValueFn = unsafe extern "C" fn(f64, f64) -> f64;
 type FetchRequestNewFn = unsafe extern "C" fn(
@@ -45,6 +46,7 @@ type FetchResponseStaticErrorFn = extern "C" fn() -> f64;
 
 static GLOBAL_FETCH_WITH_OPTIONS: AtomicPtr<()> = AtomicPtr::new(null_mut());
 static GLOBAL_FETCH_BLOB_NEW: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static GLOBAL_FETCH_FILE_NEW: AtomicPtr<()> = AtomicPtr::new(null_mut());
 static GLOBAL_FETCH_HEADERS_NEW: AtomicPtr<()> = AtomicPtr::new(null_mut());
 static GLOBAL_FETCH_HEADERS_INIT_FROM_VALUE: AtomicPtr<()> = AtomicPtr::new(null_mut());
 static GLOBAL_FETCH_REQUEST_NEW: AtomicPtr<()> = AtomicPtr::new(null_mut());
@@ -61,6 +63,7 @@ pub extern "C" fn js_register_global_fetch_with_options(f: FetchWithOptionsFn) {
 #[no_mangle]
 pub extern "C" fn js_register_global_fetch_constructors(
     blob_new: FetchBlobNewFn,
+    file_new: FetchFileNewFn,
     headers_new: FetchHeadersNewFn,
     headers_init_from_value: FetchHeadersInitFromValueFn,
     request_new: FetchRequestNewFn,
@@ -70,6 +73,7 @@ pub extern "C" fn js_register_global_fetch_constructors(
     response_static_error: FetchResponseStaticErrorFn,
 ) {
     GLOBAL_FETCH_BLOB_NEW.store(blob_new as *mut (), Ordering::Release);
+    GLOBAL_FETCH_FILE_NEW.store(file_new as *mut (), Ordering::Release);
     GLOBAL_FETCH_HEADERS_NEW.store(headers_new as *mut (), Ordering::Release);
     GLOBAL_FETCH_HEADERS_INIT_FROM_VALUE
         .store(headers_init_from_value as *mut (), Ordering::Release);
@@ -164,6 +168,20 @@ pub(super) fn call_global_blob_new(parts: f64, type_value: f64) -> f64 {
         return unsafe { func(parts, type_value) };
     }
     warn_unregistered_fetch_symbol("js_blob_new")
+}
+
+pub(super) fn call_global_file_new(
+    parts: f64,
+    name: f64,
+    type_value: f64,
+    last_modified: f64,
+) -> f64 {
+    let f = GLOBAL_FETCH_FILE_NEW.load(Ordering::Acquire);
+    if !f.is_null() {
+        let func: FetchFileNewFn = unsafe { std::mem::transmute(f) };
+        return unsafe { func(parts, name, type_value, last_modified) };
+    }
+    warn_unregistered_fetch_symbol("js_file_new")
 }
 
 pub(super) fn call_global_headers_new() -> f64 {
