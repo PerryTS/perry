@@ -75,6 +75,27 @@ fn assert_build_cache_miss(result: &Value, reason: &str) {
     assert_eq!(result["build_cache"]["miss_reason"], reason, "{result}");
 }
 
+fn assert_codegen_cache(
+    result: &Value,
+    hits: u64,
+    misses: u64,
+    path_reuses: u64,
+    cache_paths_stored: u64,
+    object_temp_writes: u64,
+) {
+    let cache = &result["codegen_cache"];
+    assert_eq!(cache["hits"], hits, "{result}");
+    assert_eq!(cache["misses"], misses, "{result}");
+    assert_eq!(cache["path_reuses"], path_reuses, "{result}");
+    assert_eq!(cache["object_cache_paths_reused"], path_reuses, "{result}");
+    assert_eq!(
+        cache["object_cache_paths_stored"], cache_paths_stored,
+        "{result}"
+    );
+    assert_eq!(cache["hit_bytes_materialized"], 0, "{result}");
+    assert_eq!(cache["object_temp_writes"], object_temp_writes, "{result}");
+}
+
 #[test]
 fn native_compile_skips_link_on_identical_second_build() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -105,6 +126,7 @@ fn native_compile_skips_link_on_identical_second_build() {
     let first = compile_json(project, &entry, &output);
     assert_linked(&first);
     assert_build_cache_miss(&first, "manifest-missing");
+    assert_codegen_cache(&first, 0, 2, 0, 2, 0);
     let first_bytes = fs::read(&output).expect("first output");
     assert_eq!(run_binary(&output).trim(), "42");
 
@@ -144,11 +166,13 @@ fn native_compile_skips_link_on_identical_second_build() {
     let changed = compile_json(project, &entry, &output);
     assert_linked(&changed);
     assert_build_cache_miss(&changed, "source");
+    assert_codegen_cache(&changed, 1, 1, 1, 1, 0);
     assert_eq!(run_binary(&output).trim(), "41");
 
     fs::remove_file(&output).unwrap();
     let missing_output = compile_json(project, &entry, &output);
     assert_linked(&missing_output);
     assert_build_cache_miss(&missing_output, "output");
+    assert_codegen_cache(&missing_output, 2, 0, 2, 0, 0);
     assert!(output.exists());
 }

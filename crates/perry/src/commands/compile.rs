@@ -105,6 +105,21 @@ use super::progress::{ProgressSnapshot, VerboseProgress};
 mod types;
 pub use types::*;
 
+struct NativeObjectArtifact {
+    path: PathBuf,
+    bytes: Option<Vec<u8>>,
+    fingerprint: String,
+    cleanup_after_link: bool,
+    reused_cache_path: bool,
+    stored_cache_path: bool,
+}
+
+impl NativeObjectArtifact {
+    fn materialized_bytes(&self) -> usize {
+        self.bytes.as_ref().map_or(0, Vec::len)
+    }
+}
+
 fn canonical_class_source_prefix(
     class: &perry_hir::Class,
     class_canonical_path: &HashMap<perry_hir::ClassId, String>,
@@ -453,6 +468,7 @@ pub fn run_with_parse_cache(
     }
 
     let mut obj_paths = Vec::new();
+    let mut obj_cleanup_paths = Vec::new();
 
     // Get canonical path of entry module
     let entry_path = args
@@ -1899,7 +1915,7 @@ pub fn run_with_parse_cache(
 
     let total_codegen_modules = ctx.native_modules.len();
     let codegen_modules_started = AtomicUsize::new(0);
-    let compile_results: Vec<Result<(PathBuf, Vec<u8>, String), String>> = ctx
+    let compile_results: Vec<Result<NativeObjectArtifact, String>> = ctx
         .native_modules
         .par_iter()
         .map(|(path, hir_module)| {
@@ -3793,66 +3809,6 @@ pub fn run_with_parse_cache(
             } else {
                 (None, None)
             };
-            let object_code = match cache_key.and_then(|k| object_cache.lookup(k)) {
-                Some(bytes) => bytes,
-                None => {
-                    // PERRY_DEV_VERBOSE=1: report the per-module HIR + cache
-                    // key on every miss, so a user can diff hashes between
-                    // builds and answer "why didn't my cosmetic edit hit?"
-                    // (#686 acceptance criterion).
-                    if let (Some(k), Some(hh)) = (cache_key, hir_hash_for_diag) {
-                        if std::env::var("PERRY_DEV_VERBOSE").as_deref() == Ok("1") {
-                            eprintln!(
-                                "  • cache miss: {} hir={:016x} key={:016x}",
-                                hir_module.name, hh, k
-                            );
-                        }
-                        // PERRY_CACHE_DEBUG_HIR=1: also dump the post-transform
-                        // HIR of misses to .perry-cache/debug/<key>.txt so a
-                        // user can diff two miss-dumps and see exactly what
-                        // differed. Best-effort — IO errors never fail the
-                        // build.
-                        if std::env::var("PERRY_CACHE_DEBUG_HIR").as_deref() == Ok("1") {
-                            let dump_dir = ctx.cache_root.join(".perry-cache").join("debug");
-                            if std::fs::create_dir_all(&dump_dir).is_ok() {
-                                let dump_path = dump_dir.join(format!("{:016x}.txt", k));
-                                let _ = std::fs::write(
-                                    &dump_path,
-                                    format!(
-                                        "module: {}\npath: {}\nhir_hash: {:016x}\ncache_key: {:016x}\n\n{:#?}\n",
-                                        hir_module.name,
-                                        path.display(),
-                                        hh,
-                                        k,
-                                        hir_module,
-                                    ),
-                                );
-                            }
-                        }
-                    }
-                    progress.heartbeat(ProgressSnapshot {
-                        stage: "codegen",
-                        module_path: Some(path),
-                        module_name: Some(&hir_module.name),
-                        visited: Some(codegen_index),
-                        total: Some(total_codegen_modules),
-                        collected: Some(total_codegen_modules),
-                        ..Default::default()
-                    });
-                    let bytes = perry_codegen::compile_module(hir_module, opts).map_err(|e| {
-                        format!(
-                            "Error compiling module '{}' ({}) with --backend llvm: {:#}",
-                            hir_module.name,
-                            path.display(),
-                            e
-                        )
-                    })?;
-                    if let Some(k) = cache_key {
-                        object_cache.store(k, &bytes);
-                    }
-                    bytes
-                }
-            };
             let obj_name = hir_module
                 .name
                 .replace(|c: char| !c.is_alphanumeric() && c != '_', "_")
@@ -3861,10 +3817,92 @@ pub fn run_with_parse_cache(
             // In bitcode mode the bytes are .ll text; use .ll extension.
             let ext = if bitcode_link { "ll" } else { "o" };
             let obj_path = PathBuf::from(format!("{}.{}", obj_name, ext));
+
+            if let Some((key, cached_path)) =
+                cache_key.and_then(|k| object_cache.lookup_path(k).map(|path| (k, path)))
+            {
+                return Ok(NativeObjectArtifact {
+                    path: cached_path,
+                    bytes: None,
+                    fingerprint: format!("cache:{:016x}", key),
+                    cleanup_after_link: false,
+                    reused_cache_path: true,
+                    stored_cache_path: false,
+                });
+            }
+
+            // PERRY_DEV_VERBOSE=1: report the per-module HIR + cache key on
+            // every miss, so a user can diff hashes between builds and answer
+            // "why didn't my cosmetic edit hit?" (#686 acceptance criterion).
+            if let (Some(k), Some(hh)) = (cache_key, hir_hash_for_diag) {
+                if std::env::var("PERRY_DEV_VERBOSE").as_deref() == Ok("1") {
+                    eprintln!(
+                        "  • cache miss: {} hir={:016x} key={:016x}",
+                        hir_module.name, hh, k
+                    );
+                }
+                // PERRY_CACHE_DEBUG_HIR=1: also dump the post-transform HIR of
+                // misses to .perry-cache/debug/<key>.txt so a user can diff two
+                // miss-dumps and see exactly what differed. Best-effort — IO
+                // errors never fail the build.
+                if std::env::var("PERRY_CACHE_DEBUG_HIR").as_deref() == Ok("1") {
+                    let dump_dir = ctx.cache_root.join(".perry-cache").join("debug");
+                    if std::fs::create_dir_all(&dump_dir).is_ok() {
+                        let dump_path = dump_dir.join(format!("{:016x}.txt", k));
+                        let _ = std::fs::write(
+                            &dump_path,
+                            format!(
+                                "module: {}\npath: {}\nhir_hash: {:016x}\ncache_key: {:016x}\n\n{:#?}\n",
+                                hir_module.name,
+                                path.display(),
+                                hh,
+                                k,
+                                hir_module,
+                            ),
+                        );
+                    }
+                }
+            }
+            progress.heartbeat(ProgressSnapshot {
+                stage: "codegen",
+                module_path: Some(path),
+                module_name: Some(&hir_module.name),
+                visited: Some(codegen_index),
+                total: Some(total_codegen_modules),
+                collected: Some(total_codegen_modules),
+                ..Default::default()
+            });
+            let object_code = perry_codegen::compile_module(hir_module, opts).map_err(|e| {
+                format!(
+                    "Error compiling module '{}' ({}) with --backend llvm: {:#}",
+                    hir_module.name,
+                    path.display(),
+                    e
+                )
+            })?;
             let object_fingerprint = cache_key
                 .map(|k| format!("cache:{:016x}", k))
                 .unwrap_or_else(|| format!("bytes:{:016x}", djb2_hash(&object_code)));
-            return Ok((obj_path, object_code, object_fingerprint));
+            if let Some(cached_path) =
+                cache_key.and_then(|k| object_cache.store_and_get_path(k, &object_code))
+            {
+                return Ok(NativeObjectArtifact {
+                    path: cached_path,
+                    bytes: None,
+                    fingerprint: object_fingerprint,
+                    cleanup_after_link: false,
+                    reused_cache_path: false,
+                    stored_cache_path: true,
+                });
+            }
+            return Ok(NativeObjectArtifact {
+                path: obj_path,
+                bytes: Some(object_code),
+                fingerprint: object_fingerprint,
+                cleanup_after_link: true,
+                reused_cache_path: false,
+                stored_cache_path: false,
+            });
         })
         .collect();
 
@@ -3877,10 +3915,10 @@ pub fn run_with_parse_cache(
     // order (preserved); successful writes' "Wrote ..." messages print
     // after all writes complete.
     let mut failed_modules: Vec<String> = Vec::new();
-    let mut to_write: Vec<(PathBuf, Vec<u8>, String)> = Vec::new();
+    let mut artifacts: Vec<NativeObjectArtifact> = Vec::new();
     for result in compile_results {
         match result {
-            Ok(pair) => to_write.push(pair),
+            Ok(artifact) => artifacts.push(artifact),
             Err(msg) => {
                 eprintln!("{}", msg);
                 // Extract module name from error message for
@@ -3896,9 +3934,31 @@ pub fn run_with_parse_cache(
     // Parallel write phase. Returns one Result per write so we can
     // bail on the first I/O error after the par_iter finishes.
 
-    let write_results: Vec<Result<(), std::io::Error>> = to_write
+    let object_cache_paths_reused = artifacts
+        .iter()
+        .filter(|artifact| artifact.reused_cache_path)
+        .count();
+    let object_cache_paths_stored = artifacts
+        .iter()
+        .filter(|artifact| artifact.stored_cache_path)
+        .count();
+    let object_temp_writes = artifacts
+        .iter()
+        .filter(|artifact| artifact.bytes.is_some())
+        .count();
+    let object_bytes_materialized: usize = artifacts
+        .iter()
+        .map(NativeObjectArtifact::materialized_bytes)
+        .sum();
+
+    let write_results: Vec<Result<(), std::io::Error>> = artifacts
         .par_iter()
-        .map(|(obj_path, object_code, _)| fs::write(obj_path, object_code))
+        .filter_map(|artifact| {
+            artifact
+                .bytes
+                .as_ref()
+                .map(|bytes| fs::write(&artifact.path, bytes))
+        })
         .collect();
 
     // Bail on first write failure (I/O errors are usually disk-full /
@@ -3912,20 +3972,27 @@ pub fn run_with_parse_cache(
     // Sequential print + obj_paths collection (output grouped, source
     // order preserved).
     let mut obj_fingerprints: Vec<Option<String>> = Vec::new();
-    for (obj_path, _, object_fingerprint) in to_write {
+    for artifact in artifacts {
         match format {
             OutputFormat::Text => {
-                let label = if obj_path.extension().and_then(|e| e.to_str()) == Some("ll") {
+                let label = if artifact.reused_cache_path {
+                    "Reused cached object"
+                } else if artifact.stored_cache_path {
+                    "Stored cached object"
+                } else if artifact.path.extension().and_then(|e| e.to_str()) == Some("ll") {
                     "Wrote LLVM IR"
                 } else {
                     "Wrote object file"
                 };
-                println!("{}: {}", label, obj_path.display());
+                println!("{}: {}", label, artifact.path.display());
             }
             OutputFormat::Json => {}
         }
-        obj_fingerprints.push(Some(object_fingerprint));
-        obj_paths.push(obj_path);
+        if artifact.cleanup_after_link {
+            obj_cleanup_paths.push(artifact.path.clone());
+        }
+        obj_fingerprints.push(Some(artifact.fingerprint));
+        obj_paths.push(artifact.path);
     }
 
     // Verbose codegen-cache stats. We print here (rather than in dev.rs
@@ -4321,6 +4388,7 @@ pub fn run_with_parse_cache(
                 perry_codegen::stubs::generate_stub_object(&md, &mf, &mi, target.as_deref())?;
             let stub_path = PathBuf::from("_perry_stubs.o");
             fs::write(&stub_path, &stub_bytes)?;
+            obj_cleanup_paths.push(stub_path.clone());
             obj_paths.push(stub_path);
             obj_fingerprints.push(None);
         }
@@ -4385,6 +4453,7 @@ pub fn run_with_parse_cache(
                     // materialization, so the original per-module cache
                     // fingerprints are no longer a trusted proxy for these
                     // bytes.
+                    obj_cleanup_paths.push(linked_obj.clone());
                     let mut linked_obj_paths = vec![linked_obj];
                     linked_obj_paths.extend(stub_objs);
                     obj_fingerprints = vec![None; linked_obj_paths.len()];
@@ -4416,6 +4485,7 @@ pub fn run_with_parse_cache(
                 if !args.keep_intermediates {
                     let _ = fs::remove_file(p);
                 }
+                obj_cleanup_paths.push(obj_path.clone());
                 new_obj_paths.push(obj_path);
                 new_obj_fingerprints.push(None);
             } else {
@@ -4450,6 +4520,7 @@ pub fn run_with_parse_cache(
                 if matches!(format, OutputFormat::Text) {
                     println!("Embedded JS bundle: {}", obj.display());
                 }
+                obj_cleanup_paths.push(obj.clone());
                 obj_paths.push(obj);
                 obj_fingerprints.push(None);
             }
@@ -4675,6 +4746,7 @@ pub fn run_with_parse_cache(
             )?;
             let stub_path = PathBuf::from("_perry_failed_stubs.o");
             fs::write(&stub_path, &stub_bytes)?;
+            obj_cleanup_paths.push(stub_path.clone());
             obj_paths.push(stub_path);
             obj_fingerprints.push(None);
         }
@@ -4841,7 +4913,7 @@ pub fn run_with_parse_cache(
         }
 
         if !args.keep_intermediates {
-            for obj_path in &obj_paths {
+            for obj_path in &obj_cleanup_paths {
                 let _ = fs::remove_file(obj_path);
             }
         }
@@ -4905,7 +4977,7 @@ pub fn run_with_parse_cache(
 
         // Clean up intermediate files
         if !args.keep_intermediates {
-            for obj_path in &obj_paths {
+            for obj_path in &obj_cleanup_paths {
                 let _ = fs::remove_file(obj_path);
             }
         }
@@ -5294,6 +5366,12 @@ pub fn run_with_parse_cache(
                             "misses": misses,
                             "stores": stores,
                             "store_errors": store_errors,
+                            "path_reuses": object_cache.path_reuses(),
+                            "hit_bytes_materialized": object_cache.bytes_materialized(),
+                            "object_temp_writes": object_temp_writes,
+                            "object_bytes_materialized": object_bytes_materialized,
+                            "object_cache_paths_reused": object_cache_paths_reused,
+                            "object_cache_paths_stored": object_cache_paths_stored,
                         })
                     },
                 );
@@ -5387,22 +5465,15 @@ pub fn run_with_parse_cache(
     if let Some(path) = &wasm_host_lib {
         build_cache_runtime_inputs.push(path.clone());
     }
-    // #4434×#4436 merge fixup: `write_manifest_after_success` (added by the
-    // link-cache fingerprint work) takes `&[String]`, but `obj_fingerprints`
-    // carries `Option<String>` (None for objects that can't be fingerprinted,
-    // e.g. well-known archives — those are validated separately through
-    // `build_cache_runtime_inputs`). Flatten None to an empty fingerprint.
-    let obj_fingerprints_for_manifest: Vec<String> = obj_fingerprints
-        .iter()
-        .map(|f| f.clone().unwrap_or_default())
-        .collect();
+    let build_cache_object_fingerprints: Vec<String> =
+        obj_fingerprints.iter().filter_map(Clone::clone).collect();
     build_cache_probe.write_manifest_after_success(
         &mut build_cache_stats,
         &ctx,
         &exe_path,
         target.as_deref(),
         &compiled_features,
-        &obj_fingerprints_for_manifest,
+        &build_cache_object_fingerprints,
         &build_cache_runtime_inputs,
     );
 
@@ -5410,7 +5481,7 @@ pub fn run_with_parse_cache(
 
     print_binary_size(format, &exe_path);
 
-    cleanup_intermediates(args.keep_intermediates, &obj_paths);
+    cleanup_intermediates(args.keep_intermediates, &obj_cleanup_paths);
 
     let final_output_path = result_app_dir.unwrap_or(exe_path);
     let codegen_cache_stats = summarize_codegen_cache_stats(&object_cache);
