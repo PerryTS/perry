@@ -49,6 +49,7 @@ members = [
     "crates/perry-ext-ads",
     "crates/perry-wasm-host",
     "crates/perry-container-compose",
+    "crates/perry-container-e2e",
     "crates/perry-stdlib",
     "crates/perry-diagnostics",
     "crates/perry-ui",

@@ -5367,6 +5367,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "perry-container-e2e"
+version = "0.5.1122"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "perry-diagnostics"
 version = "0.5.1122"
 dependencies = [
