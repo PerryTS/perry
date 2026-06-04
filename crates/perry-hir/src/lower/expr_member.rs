@@ -1787,10 +1787,16 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                                     | "values"
                             )
                         );
+                    // Non-callee `console.log` reads need the namespace
+                    // receiver; the property-only GlobalGet path collides
+                    // with detached `Math.log`.
+                    let receiver_is_detached_console_read =
+                        property == "console" && !member_is_call_callee;
                     if !outer_is_prototype_or_proto
                         && !receiver_is_namespace_value
                         && !outer_is_websocket_static
                         && !outer_is_reified_object_static_value
+                        && !receiver_is_detached_console_read
                     {
                         object_expr = Expr::GlobalGet(0);
                     }
