@@ -104,6 +104,7 @@ pub struct Http2SecureServer {
 
 pub struct Http2SessionHandle {
     pub session_type: i32,
+    pub connected: bool,
     pub encrypted: bool,
     pub alpn_protocol: String,
     pub connecting: bool,
@@ -345,6 +346,7 @@ fn call3(callback: i64, arg0: f64, arg1: f64, arg2: f64) {
 fn register_server_session(server_handle: i64) -> i64 {
     let session_handle = register_handle(Http2SessionHandle {
         session_type: 0,
+        connected: true,
         encrypted: false,
         alpn_protocol: "h2c".to_string(),
         connecting: false,
@@ -1069,12 +1071,13 @@ pub unsafe extern "C" fn js_node_http2_connect(
     }
     let session_handle = register_handle(Http2SessionHandle {
         session_type: 1,
+        connected: false,
         encrypted: false,
         alpn_protocol: "h2c".to_string(),
         connecting: true,
         closed: false,
         destroyed: false,
-        pending_settings_ack: true,
+        pending_settings_ack: false,
         authority: host_port,
         local_settings: Http2SettingsState::default(),
         remote_settings: Http2SettingsState::default(),
@@ -1127,7 +1130,9 @@ pub unsafe extern "C" fn js_node_http2_connect(
                 *slot = Some(sender);
             }
             if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
+                session.connected = true;
                 session.connecting = false;
+                session.pending_settings_ack = true;
             }
             push_h2_event(Http2PendingEvent::ClientConnect { session_handle });
             let _ = connection.await;
@@ -1636,11 +1641,15 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_property(
         "type" => get_handle::<Http2SessionHandle>(handle)
             .map(|s| s.session_type as f64)
             .unwrap_or(0.0),
-        "encrypted" => bool_value(
-            get_handle::<Http2SessionHandle>(handle)
-                .map(|s| s.encrypted)
-                .unwrap_or(false),
-        ),
+        "encrypted" => get_handle::<Http2SessionHandle>(handle)
+            .map(|s| {
+                if s.connected {
+                    bool_value(s.encrypted)
+                } else {
+                    undef
+                }
+            })
+            .unwrap_or(undef),
         "connecting" => bool_value(
             get_handle::<Http2SessionHandle>(handle)
                 .map(|s| s.connecting)
@@ -1657,7 +1666,13 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_property(
                 .unwrap_or(false),
         ),
         "alpnProtocol" => get_handle::<Http2SessionHandle>(handle)
-            .map(|s| string_value(&s.alpn_protocol))
+            .map(|s| {
+                if s.connected {
+                    string_value(&s.alpn_protocol)
+                } else {
+                    undef
+                }
+            })
             .unwrap_or(undef),
         "pendingSettingsAck" => bool_value(
             get_handle::<Http2SessionHandle>(handle)
