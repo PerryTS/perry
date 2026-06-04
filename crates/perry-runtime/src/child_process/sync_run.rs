@@ -1,11 +1,16 @@
+#[cfg(unix)]
+use std::fs::File;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::fd::FromRawFd;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::value::JSValue;
 
 use super::{
-    cp_decode_status, cp_get_field, cp_io_error_code, cp_object_ptr, cp_value_to_bytes, CpExit,
+    cp_array_ptr, cp_decode_status, cp_get_field, cp_io_error_code, cp_js_string_value,
+    cp_object_ptr, cp_value_to_bytes, CpExit,
 };
 
 const CP_DEFAULT_MAX_BUFFER: usize = 1024 * 1024;
@@ -16,6 +21,7 @@ pub(super) struct CpRunOptions {
     input: Option<Vec<u8>>,
     timeout: Option<Duration>,
     pub(super) max_buffer: usize,
+    stdio: [CpSyncStdio; 3],
 }
 
 impl Default for CpRunOptions {
@@ -24,7 +30,26 @@ impl Default for CpRunOptions {
             input: None,
             timeout: None,
             max_buffer: CP_DEFAULT_MAX_BUFFER,
+            stdio: [CpSyncStdio::Pipe; 3],
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CpSyncStdio {
+    Pipe,
+    Ignore,
+    Inherit,
+    Fd(i32),
+}
+
+impl CpRunOptions {
+    pub(super) fn stdout_piped(&self) -> bool {
+        self.stdio[1] == CpSyncStdio::Pipe
+    }
+
+    pub(super) fn stderr_piped(&self) -> bool {
+        self.stdio[2] == CpSyncStdio::Pipe
     }
 }
 
@@ -92,6 +117,7 @@ pub(super) fn cp_read_run_options(opts_val: f64) -> CpRunOptions {
     if let Some(input) = cp_read_input_bytes(cp_get_field(opts_val, b"input")) {
         options.input = Some(input);
     }
+    options.stdio = cp_read_sync_stdio(opts_val);
 
     cp_read_timing_and_buffer_options(opts_val, &mut options);
     options
@@ -120,6 +146,77 @@ fn cp_read_timing_and_buffer_options(opts_val: f64, options: &mut CpRunOptions) 
         if max_buffer >= 0.0 {
             options.max_buffer = max_buffer.min(usize::MAX as f64) as usize;
         }
+    }
+}
+
+fn cp_sync_stdio_kind(value: f64) -> CpSyncStdio {
+    match cp_js_string_value(value).as_deref() {
+        Some("ignore") => return CpSyncStdio::Ignore,
+        Some("inherit") => return CpSyncStdio::Inherit,
+        Some("pipe") => return CpSyncStdio::Pipe,
+        _ => {}
+    }
+
+    let js_value = JSValue::from_bits(value.to_bits());
+    if js_value.is_number() || js_value.is_int32() {
+        let n = js_value.to_number();
+        if n.is_finite() && n >= 0.0 && n.fract() == 0.0 && n <= i32::MAX as f64 {
+            return CpSyncStdio::Fd(n as i32);
+        }
+    }
+
+    CpSyncStdio::Pipe
+}
+
+fn cp_read_sync_stdio(opts_val: f64) -> [CpSyncStdio; 3] {
+    let mut out = [CpSyncStdio::Pipe; 3];
+    let stdio = cp_get_field(opts_val, b"stdio");
+
+    if let Some(s) = cp_js_string_value(stdio) {
+        match s.as_str() {
+            "ignore" => out = [CpSyncStdio::Ignore; 3],
+            "inherit" => out = [CpSyncStdio::Inherit; 3],
+            "pipe" => {}
+            _ => {}
+        }
+        return out;
+    }
+
+    let Some(arr) = cp_array_ptr(stdio) else {
+        return out;
+    };
+    let n = unsafe { (*arr).length }.min(3);
+    for i in 0..n {
+        out[i as usize] = cp_sync_stdio_kind(crate::array::js_array_get_f64(arr, i));
+    }
+    out
+}
+
+#[cfg(unix)]
+fn cp_fd_stdio(fd: i32) -> Option<Stdio> {
+    if let Some(file) = crate::fs::clone_registered_fd(fd) {
+        return Some(Stdio::from(file));
+    }
+
+    let dup_fd = unsafe { libc::dup(fd) };
+    if dup_fd < 0 {
+        return None;
+    }
+    let file = unsafe { File::from_raw_fd(dup_fd) };
+    Some(Stdio::from(file))
+}
+
+#[cfg(not(unix))]
+fn cp_fd_stdio(fd: i32) -> Option<Stdio> {
+    crate::fs::clone_registered_fd(fd).map(Stdio::from)
+}
+
+fn cp_stdio_from_kind(kind: CpSyncStdio, pipe: Stdio) -> Stdio {
+    match kind {
+        CpSyncStdio::Pipe => pipe,
+        CpSyncStdio::Ignore => Stdio::null(),
+        CpSyncStdio::Inherit => Stdio::inherit(),
+        CpSyncStdio::Fd(fd) => cp_fd_stdio(fd).unwrap_or_else(Stdio::null),
     }
 }
 
@@ -162,13 +259,14 @@ impl CpRun {
 /// capture stdout/stderr/exit/pid. Used by the synchronous + buffered-callback
 /// entry points.
 pub(super) fn cp_run_to_completion(mut command: Command, options: &CpRunOptions) -> CpRun {
-    if options.input.is_some() {
-        command.stdin(Stdio::piped());
+    let pipe_stdin = if options.input.is_some() {
+        Stdio::piped()
     } else {
-        command.stdin(Stdio::null());
-    }
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
+        Stdio::null()
+    };
+    command.stdin(cp_stdio_from_kind(options.stdio[0], pipe_stdin));
+    command.stdout(cp_stdio_from_kind(options.stdio[1], Stdio::piped()));
+    command.stderr(cp_stdio_from_kind(options.stdio[2], Stdio::piped()));
     match command.spawn() {
         Ok(mut child) => {
             let pid = child.id();

@@ -395,11 +395,11 @@ pub extern "C" fn js_child_process_exec_sync(
 
     let run_options = cp_read_run_options(opts_val);
     let run = cp_run_to_completion(command, &run_options);
-    let stdout_box = cp_box_output(&run.stdout, &mode);
+    let stdout_box = cp_box_sync_output(&run.stdout, &mode, run_options.stdout_piped());
     if run.success() {
         return stdout_box;
     }
-    let stderr_box = cp_box_output(&run.stderr, &mode);
+    let stderr_box = cp_box_sync_output(&run.stderr, &mode, run_options.stderr_piped());
     cp_sync_throw_error(&run, &cmd_str, stdout_box, stderr_box);
 }
 
@@ -441,11 +441,15 @@ pub extern "C" fn js_child_process_spawn_sync(
     let spawn_failed_before_pid = run.spawn_error.is_some() && run.pid.is_none();
     let stdout_box = if spawn_failed_before_pid {
         cp_undefined()
+    } else if !run_options.stdout_piped() {
+        TAG_NULL_F64
     } else {
         cp_box_output(&run.stdout, &mode)
     };
     let stderr_box = if spawn_failed_before_pid {
         cp_undefined()
+    } else if !run_options.stderr_piped() {
+        TAG_NULL_F64
     } else {
         cp_box_output(&run.stderr, &mode)
     };
@@ -739,6 +743,14 @@ fn cp_value_to_string(value: f64) -> Option<String> {
         std::str::from_utf8(std::slice::from_raw_parts(data, len))
             .ok()
             .map(|s| s.to_string())
+    }
+}
+
+fn cp_js_string_value(value: f64) -> Option<String> {
+    if JSValue::from_bits(value.to_bits()).is_any_string() {
+        cp_value_to_string(value)
+    } else {
+        None
     }
 }
 
@@ -1418,7 +1430,7 @@ pub(super) enum CpStdio {
 }
 
 fn cp_stdio_kind(value: f64) -> CpStdio {
-    match cp_value_to_string(value).as_deref() {
+    match cp_js_string_value(value).as_deref() {
         Some("ignore") => CpStdio::Ignore,
         Some("inherit") => CpStdio::Inherit,
         _ => CpStdio::Pipe,
@@ -1435,7 +1447,7 @@ pub(super) fn cp_read_stdio(opts_val: f64, fds: usize) -> Vec<CpStdio> {
     }
 
     let stdio = cp_get_field(opts_val, b"stdio");
-    if let Some(s) = cp_value_to_string(stdio) {
+    if let Some(s) = cp_js_string_value(stdio) {
         match s.as_str() {
             "ignore" => out.fill(CpStdio::Ignore),
             "inherit" => out.fill(CpStdio::Inherit),
@@ -1588,6 +1600,14 @@ fn cp_box_output(bytes: &[u8], mode: &CpOutput) -> f64 {
     match mode {
         CpOutput::Buffer => cp_make_buffer(bytes),
         CpOutput::Text(enc) => crate::value::js_nanbox_string(cp_encode_text(bytes, enc) as i64),
+    }
+}
+
+fn cp_box_sync_output(bytes: &[u8], mode: &CpOutput, piped: bool) -> f64 {
+    if piped {
+        cp_box_output(bytes, mode)
+    } else {
+        TAG_NULL_F64
     }
 }
 
@@ -1953,11 +1973,11 @@ pub extern "C" fn js_child_process_exec_file_sync(
     let run_options = cp_read_run_options(opts_val);
     let run = cp_run_to_completion(command, &run_options);
 
-    let stdout_box = cp_box_output(&run.stdout, &mode);
+    let stdout_box = cp_box_sync_output(&run.stdout, &mode, run_options.stdout_piped());
     if run.success() {
         return stdout_box;
     }
-    let stderr_box = cp_box_output(&run.stderr, &mode);
+    let stderr_box = cp_box_sync_output(&run.stderr, &mode, run_options.stderr_piped());
     cp_sync_throw_error(
         &run,
         &cp_file_cmd_display(&file_str, &arg_strs),
