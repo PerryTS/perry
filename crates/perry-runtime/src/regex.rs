@@ -541,6 +541,16 @@ pub extern "C" fn js_string_match(
                                 crate::array::store_array_slot(arr, i, undefined.to_bits());
                             }
                         }
+                        // Attach .index / .input as real own properties.
+                        let match_char_offset = caps
+                            .get(0)
+                            .map(|m| str_data[..m.start()].chars().count())
+                            .unwrap_or(0);
+                        set_exec_array_metadata(
+                            arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                            str_data,
+                            match_char_offset as f64,
+                        );
                         LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
                         // fancy-regex path doesn't extract named groups; mirror
                         // the thread-local (`undefined`) on the result object.
@@ -606,6 +616,19 @@ pub extern "C" fn js_string_match(
                             crate::array::store_array_slot(arr, i, undefined.to_bits());
                         }
                     }
+
+                    // Attach .index / .input as real own properties (mirrors
+                    // js_regexp_exec) so they survive aliasing and a later match
+                    // on another regex, instead of a most-recent-match thread-local.
+                    let match_char_offset = caps
+                        .get(0)
+                        .map(|m| str_data[..m.start()].chars().count())
+                        .unwrap_or(0);
+                    set_exec_array_metadata(
+                        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                        str_data,
+                        match_char_offset as f64,
+                    );
 
                     // Build groups object for named captures (same shape as
                     // `regex.exec(str)` does in `js_regexp_exec`). Stored in

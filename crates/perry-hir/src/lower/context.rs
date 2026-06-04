@@ -117,7 +117,6 @@ impl LoweringContext {
             generator_func_names: HashSet::new(),
             async_generator_func_names: HashSet::new(),
             iterator_func_for_class: std::collections::HashMap::new(),
-            regex_exec_locals: HashSet::new(),
             proxy_locals: HashSet::new(),
             builtin_proto_method_locals: HashMap::new(),
             wasm_instance_locals: HashSet::new(),

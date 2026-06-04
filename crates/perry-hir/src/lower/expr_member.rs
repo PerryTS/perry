@@ -1615,28 +1615,12 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 }
             }
         }
-        // RegExpExecArray.index — receiver is a local that holds the result of
-        // regex.exec(...). The runtime stores the most recent exec index in a
-        // thread-local which RegExpExecIndex reads.
-        //
-        // `.groups` is deliberately NOT folded here: the runtime now attaches
-        // the named-capture object as a real own property on the result array
-        // (see regex.rs::set_exec_array_groups), so a generic PropertyGet reads
-        // the per-result value. That keeps `m.groups` correct after an
-        // intervening match on another regex, where a thread-local would be
-        // clobbered.
-        if prop_name == "index" {
-            // Strip non-null assertion (m1! → m1)
-            let inner = match member.obj.as_ref() {
-                ast::Expr::TsNonNull(nn) => nn.expr.as_ref(),
-                other => other,
-            };
-            if let ast::Expr::Ident(ident) = inner {
-                if ctx.regex_exec_locals.contains(&ident.sym.to_string()) {
-                    return Ok(Expr::RegExpExecIndex);
-                }
-            }
-        }
+        // RegExpExecArray `.index` / `.groups` / `.input` are NOT folded to
+        // thread-local reads: the runtime attaches them as real own properties
+        // on each exec/match result array (regex.rs::set_exec_array_metadata /
+        // set_exec_array_groups), so a generic PropertyGet reads the per-result
+        // value. That keeps a stored `m.index` / `m.groups` correct after an
+        // intervening match on another regex, where a thread-local was clobbered.
     }
 
     // Tagged-template `.raw` — recognize `<strings>.raw` where the

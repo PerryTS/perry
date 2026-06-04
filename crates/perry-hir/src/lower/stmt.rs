@@ -480,13 +480,6 @@ pub(crate) fn lower_stmt(
                                 }
                             }
                         }
-                        // Track locals assigned from `regex.exec(...)` so .index/.groups
-                        // accesses route to the bare RegExpExecIndex/Groups variants.
-                        if let (ast::Pat::Ident(ident), Some(init)) = (&decl.name, &decl.init) {
-                            if is_regex_exec_init(ctx, init) {
-                                ctx.regex_exec_locals.insert(ident.id.sym.to_string());
-                            }
-                        }
                         // `const { proxy: revProxy, revoke } = Proxy.revocable(t, h)`
                         // is rewritten to a ProxyNew binding + a dummy revoke binding.
                         if let (ast::Pat::Object(obj_pat), Some(init)) = (&decl.name, &decl.init) {

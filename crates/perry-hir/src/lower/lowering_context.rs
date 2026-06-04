@@ -334,10 +334,6 @@ pub struct LoweringContext {
     /// takes `this` as its first parameter. Consumed by `for...of` to
     /// dispatch through the iterator protocol via a direct FuncRef call.
     pub(crate) iterator_func_for_class: std::collections::HashMap<String, perry_types::FuncId>,
-    /// Local names whose value was assigned from `regex.exec(...)`. Used to
-    /// route `local.index` / `local.groups` to the bare RegExpExecIndex/Groups
-    /// HIR variants which read the runtime's thread-local exec metadata.
-    pub(crate) regex_exec_locals: HashSet<String>,
     pub(crate) proxy_locals: HashSet<String>,
     /// #3144: local name -> builtin prototype method name, for bindings like
     /// `const m = [].map` / `const s = "".slice`. Lets the `.call`/`.apply`
