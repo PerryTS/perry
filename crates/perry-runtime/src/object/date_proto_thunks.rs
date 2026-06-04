@@ -98,22 +98,32 @@ extern "C" fn date_to_json(_closure: *const crate::closure::ClosureHeader) -> f6
     if jsv.is_undefined() || jsv.is_null() {
         super::object_ops::throw_object_type_error(b"Cannot convert undefined or null to object");
     }
-    // ToPrimitive(this, hint Number).
+    // ToPrimitive(this, hint Number): consult `[Symbol.toPrimitive]("number")`
+    // first (called exactly once); only fall back to OrdinaryToPrimitive
+    // (valueOf/toString) when the object has no exotic `@@toPrimitive` —
+    // otherwise a custom @@toPrimitive must win and valueOf/toString must NOT
+    // run. `js_to_primitive` returns the receiver unchanged when no
+    // `@@toPrimitive` is present.
     let tv = if crate::date::is_date_value(this) {
         crate::date::date_cell_timestamp(this)
     } else {
-        match unsafe { crate::value::ordinary_to_primitive_number_for_add(this) } {
-            crate::value::OrdinaryToPrimitiveOutcome::Primitive(p) => p,
-            // A plain object's default `"[object Object]"` is a String, never a
-            // Number, so step 3 (non-finite Number → null) never fires; fall
-            // through to the `toISOString` invocation.
-            crate::value::OrdinaryToPrimitiveOutcome::DefaultString => {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            }
-            crate::value::OrdinaryToPrimitiveOutcome::TypeError => {
-                super::object_ops::throw_object_type_error(
-                    b"Cannot convert object to primitive value",
-                )
+        let exotic = unsafe { crate::symbol::js_to_primitive(this, 1) };
+        if exotic.to_bits() != this.to_bits() {
+            exotic
+        } else {
+            match unsafe { crate::value::ordinary_to_primitive_number_for_add(this) } {
+                crate::value::OrdinaryToPrimitiveOutcome::Primitive(p) => p,
+                // A plain object's default `"[object Object]"` is a String, never
+                // a Number, so step 3 (non-finite Number → null) never fires;
+                // fall through to the `toISOString` invocation.
+                crate::value::OrdinaryToPrimitiveOutcome::DefaultString => {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                }
+                crate::value::OrdinaryToPrimitiveOutcome::TypeError => {
+                    super::object_ops::throw_object_type_error(
+                        b"Cannot convert object to primitive value",
+                    )
+                }
             }
         }
     };
