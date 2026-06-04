@@ -163,9 +163,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let key_v = lower_expr(ctx, key_expr)?;
             if let Some(&class_id) = ctx.class_ids.get(class_name) {
                 if class_id != 0 {
-                    if let Some(llvm_name) =
-                        ctx.methods.get(&(class_name.clone(), method_name.clone()))
-                    {
+                    let registry_name = if *is_static {
+                        crate::codegen::static_method_registry_key(method_name)
+                    } else {
+                        method_name.clone()
+                    };
+                    if let Some(llvm_name) = ctx.methods.get(&(class_name.clone(), registry_name)) {
                         let func_ref = format!("@{}", llvm_name);
                         let func_i64 = ctx.block().ptrtoint(&func_ref, I64);
                         let cid_str = class_id.to_string();
@@ -200,7 +203,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if class_id != 0 {
                     let getter_i64 = getter_name
                         .as_ref()
-                        .and_then(|name| ctx.methods.get(&(class_name.clone(), name.clone())))
+                        .and_then(|name| {
+                            let registry_name = if *is_static {
+                                crate::codegen::static_method_registry_key(name)
+                            } else {
+                                name.clone()
+                            };
+                            ctx.methods.get(&(class_name.clone(), registry_name))
+                        })
                         .map(|llvm_name| {
                             let func_ref = format!("@{}", llvm_name);
                             ctx.block().ptrtoint(&func_ref, I64)
@@ -208,7 +218,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .unwrap_or_else(|| "0".to_string());
                     let setter_i64 = setter_name
                         .as_ref()
-                        .and_then(|name| ctx.methods.get(&(class_name.clone(), name.clone())))
+                        .and_then(|name| {
+                            let registry_name = if *is_static {
+                                crate::codegen::static_method_registry_key(name)
+                            } else {
+                                name.clone()
+                            };
+                            ctx.methods.get(&(class_name.clone(), registry_name))
+                        })
                         .map(|llvm_name| {
                             let func_ref = format!("@{}", llvm_name);
                             ctx.block().ptrtoint(&func_ref, I64)

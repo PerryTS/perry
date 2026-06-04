@@ -398,13 +398,12 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             )
             .with_context(|| format!("lowering constructor for '{}'", class.name))?;
         }
-        // Static methods compile as plain functions named
-        // `perry_static_<modprefix>__<class>__<method>` — no `this`
-        // parameter, no class_stack push.
+        // Static methods compile as ID-qualified plain functions with no
+        // `this` parameter and no class_stack push.
         for sm in &class.static_methods {
             compile_static_method(
                 llmod,
-                &class.name,
+                class,
                 sm,
                 func_names,
                 strings,
@@ -431,7 +430,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         {
             compile_static_method(
                 llmod,
-                &class.name,
+                class,
                 &member.function,
                 func_names,
                 strings,

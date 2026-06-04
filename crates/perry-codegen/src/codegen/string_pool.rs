@@ -6,7 +6,7 @@ use crate::module::LlModule;
 use crate::strings::StringPool;
 use crate::types::{DOUBLE, I32, I64, PTR, VOID};
 
-use super::helpers::sanitize;
+use super::helpers::{sanitize, scoped_static_method_name};
 
 /// Emit the string pool into the module: byte-array constants, handle
 /// globals, and the `__perry_init_strings_<prefix>` function that
@@ -413,12 +413,7 @@ pub(super) fn emit_string_pool(
         // #1788: static methods are emitted as `perry_static_*` (no `this`
         // param). Collect them for the runtime CLASS_STATIC_METHODS table.
         for sm in &class.static_methods {
-            let llvm_name = format!(
-                "perry_static_{}__{}__{}",
-                module_prefix,
-                sanitize(class_name),
-                sanitize(&sm.name),
-            );
+            let llvm_name = scoped_static_method_name(module_prefix, cid, class_name, &sm.name);
             let has_rest = sm.params.last().map(|p| p.is_rest).unwrap_or(false);
             static_method_triples.push((
                 cid,

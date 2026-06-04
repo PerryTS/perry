@@ -1,0 +1,230 @@
+use perry_codegen::{compile_module, AppMetadata, CompileOptions};
+use perry_hir::{Class, Expr, Function, Module, ModuleInitKind, Stmt};
+use perry_types::Type;
+
+fn empty_opts() -> CompileOptions {
+    CompileOptions {
+        target: None,
+        is_entry_module: false,
+        non_entry_module_prefixes: Vec::new(),
+        import_function_prefixes: std::collections::HashMap::new(),
+        import_function_origin_names: std::collections::HashMap::new(),
+        import_function_v8_specifiers: std::collections::HashMap::new(),
+        import_function_node_submodule: std::collections::HashMap::new(),
+        namespace_node_submodules: std::collections::HashMap::new(),
+        namespace_v8_specifiers: std::collections::HashMap::new(),
+        namespace_member_prefixes: std::collections::HashMap::new(),
+        emit_ir_only: true,
+        verify_native_regions: false,
+        disable_buffer_fast_path: false,
+        namespace_imports: Vec::new(),
+        namespace_reexport_named_imports: std::collections::HashSet::new(),
+        imported_classes: Vec::new(),
+        imported_enums: Vec::new(),
+        imported_async_funcs: std::collections::HashSet::new(),
+        type_aliases: std::collections::HashMap::new(),
+        imported_func_param_counts: std::collections::HashMap::new(),
+        imported_func_has_rest: std::collections::HashSet::new(),
+        imported_func_synthetic_arguments: std::collections::HashSet::new(),
+        imported_func_return_types: std::collections::HashMap::new(),
+        imported_vars: std::collections::HashSet::new(),
+        output_type: "executable".to_string(),
+        needs_stdlib: false,
+        needs_ui: false,
+        needs_geisterhand: false,
+        geisterhand_port: 7676,
+        enabled_features: Vec::new(),
+        native_module_init_names: Vec::new(),
+        js_module_specifiers: Vec::new(),
+        bundled_extensions: Vec::new(),
+        native_library_functions: Vec::new(),
+        i18n_table: None,
+        fast_math: false,
+        fp_contract_mode: perry_codegen::FpContractMode::Off,
+        app_metadata: AppMetadata::default(),
+        namespace_entries: Vec::new(),
+        dynamic_import_path_to_prefix: std::collections::HashMap::new(),
+        deferred_module_prefixes: std::collections::HashSet::new(),
+        module_init_deps: Vec::new(),
+        is_dynamic_import_target: false,
+    }
+}
+
+fn static_method(id: u32, value: f64) -> Function {
+    Function {
+        id,
+        name: "lex".to_string(),
+        type_params: Vec::new(),
+        params: Vec::new(),
+        return_type: Type::Number,
+        body: vec![Stmt::Return(Some(Expr::Number(value)))],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        was_plain_async: false,
+        was_unrolled: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+    }
+}
+
+fn instance_method(id: u32, value: f64) -> Function {
+    Function {
+        id,
+        name: "lex".to_string(),
+        type_params: Vec::new(),
+        params: Vec::new(),
+        return_type: Type::Number,
+        body: vec![Stmt::Return(Some(Expr::Number(value)))],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        was_plain_async: false,
+        was_unrolled: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+    }
+}
+
+fn class_with_static(id: u32, value: f64) -> Class {
+    Class {
+        id,
+        name: "x".to_string(),
+        type_params: Vec::new(),
+        extends: None,
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        fields: Vec::new(),
+        constructor: None,
+        methods: Vec::new(),
+        getters: Vec::new(),
+        setters: Vec::new(),
+        computed_members: Vec::new(),
+        static_fields: Vec::new(),
+        static_methods: vec![static_method(id + 100, value)],
+        decorators: Vec::new(),
+        is_exported: false,
+        aliases: Vec::new(),
+    }
+}
+
+fn duplicate_static_module() -> Module {
+    Module {
+        name: "marked_symbol_hygiene.ts".to_string(),
+        imports: Vec::new(),
+        exports: Vec::new(),
+        classes: vec![class_with_static(11, 1.0), class_with_static(12, 2.0)],
+        interfaces: Vec::new(),
+        type_aliases: Vec::new(),
+        enums: Vec::new(),
+        globals: Vec::new(),
+        functions: Vec::new(),
+        init: Vec::new(),
+        exported_native_instances: Vec::new(),
+        exported_func_return_native_instances: Vec::new(),
+        exported_objects: Vec::new(),
+        exported_functions: Vec::new(),
+        widgets: Vec::new(),
+        uses_fetch: false,
+        uses_webassembly: false,
+        extern_funcs: Vec::new(),
+        init_was_unrolled: false,
+        has_top_level_await: false,
+        init_kind: ModuleInitKind::Eager,
+        async_step_closures: std::collections::HashSet::new(),
+        closure_display_names: std::collections::HashMap::new(),
+        closure_source_text: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
+    }
+}
+
+fn class_with_instance_and_static_method() -> Module {
+    let mut class = class_with_static(11, 2.0);
+    class.methods.push(instance_method(301, 1.0));
+
+    Module {
+        name: "static_instance_symbol_hygiene.ts".to_string(),
+        imports: Vec::new(),
+        exports: Vec::new(),
+        classes: vec![class],
+        interfaces: Vec::new(),
+        type_aliases: Vec::new(),
+        enums: Vec::new(),
+        globals: Vec::new(),
+        functions: Vec::new(),
+        init: Vec::new(),
+        exported_native_instances: Vec::new(),
+        exported_func_return_native_instances: Vec::new(),
+        exported_objects: Vec::new(),
+        exported_functions: Vec::new(),
+        widgets: Vec::new(),
+        uses_fetch: false,
+        uses_webassembly: false,
+        extern_funcs: Vec::new(),
+        init_was_unrolled: false,
+        has_top_level_await: false,
+        init_kind: ModuleInitKind::Eager,
+        async_step_closures: std::collections::HashSet::new(),
+        closure_display_names: std::collections::HashMap::new(),
+        closure_source_text: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
+    }
+}
+
+fn count(haystack: &str, needle: &str) -> usize {
+    haystack.match_indices(needle).count()
+}
+
+#[test]
+fn duplicate_class_static_methods_use_class_id_in_symbols() {
+    let ir = String::from_utf8(compile_module(&duplicate_static_module(), empty_opts()).unwrap())
+        .unwrap();
+
+    assert_eq!(
+        count(
+            &ir,
+            "define double @perry_static_marked_symbol_hygiene_ts__x__c11__lex"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &ir,
+            "define double @perry_static_marked_symbol_hygiene_ts__x__c12__lex"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &ir,
+            "define double @perry_static_marked_symbol_hygiene_ts__x__lex"
+        ),
+        0
+    );
+}
+
+#[test]
+fn static_and_instance_methods_with_same_name_keep_distinct_symbols() {
+    let ir = String::from_utf8(
+        compile_module(&class_with_instance_and_static_method(), empty_opts()).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        count(
+            &ir,
+            "define double @perry_method_static_instance_symbol_hygiene_ts__x__lex"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &ir,
+            "define double @perry_static_static_instance_symbol_hygiene_ts__x__c11__lex"
+        ),
+        1
+    );
+}

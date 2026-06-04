@@ -871,8 +871,8 @@ pub fn try_lower_property_get_method_call(
     // Resolution: when the static receiver is `Expr::ClassRef`, walk
     // the class's own static methods plus its `extends_name` chain
     // looking for `property`. If found, emit a direct call to the
-    // `perry_static_<modprefix>__<class>__<method>` symbol with
-    // IMPLICIT_THIS bound to the ClassRef so `pipe`'s body's
+    // ID-qualified static method symbol with IMPLICIT_THIS bound to
+    // the ClassRef so `pipe`'s body's
     // `this` references the class. If nothing matches (Effect's
     // BigIntFromSelf case — its parent is an unnamed CallExpr so
     // perry's `extends_name` chain is empty), fall back to
@@ -987,7 +987,11 @@ pub fn try_lower_property_get_method_call(
                     .iter()
                     .find(|m| m.name == *property);
                 if let Some(sm) = sm {
-                    if let Some(fname) = ctx.methods.get(&(c.clone(), property.clone())).cloned() {
+                    let key = (
+                        c.clone(),
+                        crate::codegen::static_method_registry_key(property),
+                    );
+                    if let Some(fname) = ctx.methods.get(&key).cloned() {
                         let declared = sm.params.len();
                         let has_rest = sm.params.last().map(|p| p.is_rest).unwrap_or(false);
                         let is_synth_args = sm

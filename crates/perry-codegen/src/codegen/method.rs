@@ -12,7 +12,7 @@ use crate::stmt;
 use crate::strings::StringPool;
 use crate::types::{LlvmType, DOUBLE, I64};
 
-use super::helpers::sanitize;
+use super::helpers::scoped_static_method_name;
 use super::opts::CrossModuleCtx;
 
 fn node_stream_parent_kind(
@@ -536,12 +536,12 @@ pub(super) fn compile_method(
 
 /// Compile a static class method as a top-level LLVM function with
 /// no `this` parameter. Mostly identical to `compile_function` but
-/// the LLVM symbol name is `perry_static_<modprefix>__<class>__<method>`
-/// instead of `perry_fn_<modprefix>__<name>`.
+/// the LLVM symbol name is scoped by module, class id, class name, and
+/// method name instead of `perry_fn_<modprefix>__<name>`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn compile_static_method(
     llmod: &mut LlModule,
-    class_name: &str,
+    class: &perry_hir::Class,
     f: &Function,
     func_names: &HashMap<u32, String>,
     strings: &mut StringPool,
@@ -559,12 +559,7 @@ pub(super) fn compile_static_method(
     closure_rest_params: &HashMap<u32, usize>,
     cross_module: &CrossModuleCtx,
 ) -> Result<()> {
-    let llvm_name = format!(
-        "perry_static_{}__{}__{}",
-        module_prefix,
-        sanitize(class_name),
-        sanitize(&f.name),
-    );
+    let llvm_name = scoped_static_method_name(module_prefix, class.id, &class.name, &f.name);
 
     let params: Vec<(LlvmType, String)> = f
         .params
@@ -615,10 +610,10 @@ pub(super) fn compile_static_method(
     let mut ctx = FnCtx {
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
-        source_function: format!("{}.{}", class_name, f.name),
+        source_function: format!("{}.{}", class.name, f.name),
         source_function_slug: crate::expr::native_region_slug(&format!(
             "{}.{}",
-            class_name, f.name
+            class.name, f.name
         )),
         active_region_id: None,
         locals,
@@ -750,11 +745,11 @@ pub(super) fn compile_static_method(
     );
     if f.is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, &f.body).with_context(|| {
-            format!("lowering async body of static '{}::{}'", class_name, f.name)
+            format!("lowering async body of static '{}::{}'", class.name, f.name)
         })?;
     } else {
         stmt::lower_stmts(&mut ctx, &f.body)
-            .with_context(|| format!("lowering body of static '{}::{}'", class_name, f.name))?;
+            .with_context(|| format!("lowering body of static '{}::{}'", class.name, f.name))?;
     }
 
     if !ctx.block().is_terminated() {

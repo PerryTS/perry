@@ -112,6 +112,21 @@ pub(super) fn scoped_fn_name(module_prefix: &str, hir_name: &str) -> String {
     format!("perry_fn_{}__{}", module_prefix, sanitize(hir_name))
 }
 
+pub(super) fn scoped_static_method_name(
+    module_prefix: &str,
+    class_id: u32,
+    class_name: &str,
+    method_name: &str,
+) -> String {
+    format!(
+        "perry_static_{}__{}__c{}__{}",
+        module_prefix,
+        sanitize(class_name),
+        class_id,
+        sanitize(method_name)
+    )
+}
+
 /// Walk a function body looking for `Return(Some(expr))` shapes that
 /// identify the function as a factory returning a class. Sets
 /// `*produced` to the resolved class name when the first qualifying
@@ -617,7 +632,10 @@ pub(super) fn init_static_fields_late(
             if !sm.name.starts_with("__perry_static_init_") {
                 continue;
             }
-            let key = (c.name.clone(), sm.name.clone());
+            let key = (
+                c.name.clone(),
+                crate::codegen::static_method_registry_key(&sm.name),
+            );
             // Skip if the init stream already invokes this block. The
             // typical class-decl path emits a `StaticMethodCall` for
             // each block; if we find one referencing this (class,

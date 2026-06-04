@@ -60,7 +60,7 @@ use artifacts::{emit_module_artifacts, ModuleArtifactsCtx};
 use function::compile_function;
 use helpers::{
     collect_return_class, emit_buffer_alias_metadata, function_body_returns_generator_object,
-    sanitize, scoped_fn_name, scoped_method_name,
+    sanitize, scoped_fn_name, scoped_method_name, scoped_static_method_name,
 };
 
 // Collector and boxing-analysis walkers live in dedicated modules.
@@ -72,6 +72,10 @@ pub(super) fn spec_function_length(params: &[perry_hir::Param]) -> usize {
         .iter()
         .take_while(|p| !p.is_rest && p.default.is_none())
         .count()
+}
+
+pub(crate) fn static_method_registry_key(method_name: &str) -> String {
+    format!("__perry_static__{}", method_name)
 }
 
 /// Compile a Perry HIR module to an object file via LLVM IR.
@@ -944,10 +948,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // with 2 scalar args while the signature expects (rest_array),
         // and `arguments.length` reads garbage / undefined.
         for sm in &cls.static_methods {
-            method_param_counts.insert((cls.name.clone(), sm.name.clone()), sm.params.len());
+            let key = static_method_registry_key(&sm.name);
+            method_param_counts.insert((cls.name.clone(), key.clone()), sm.params.len());
             let has_rest = sm.params.iter().any(|p| p.is_rest);
             if has_rest {
-                method_has_rest.insert((cls.name.clone(), sm.name.clone()), true);
+                method_has_rest.insert((cls.name.clone(), key), true);
             }
         }
     }
@@ -1593,6 +1598,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .get(&c.name)
             .map(|s| s.as_str())
             .unwrap_or(c.name.as_str());
+        let class_symbol_id = class_ids.get(&c.name).copied().unwrap_or(c.id);
         for m in &c.methods {
             let llvm_name = scoped_method_name(class_prefix, mangle_class_name, &m.name);
             method_names.insert((c.name.clone(), m.name.clone()), llvm_name.clone());
@@ -1608,22 +1614,36 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
         for member in &c.computed_members {
             let llvm_name = if member.is_static {
-                format!(
-                    "perry_static_{}__{}__{}",
+                scoped_static_method_name(
                     class_prefix,
-                    sanitize(mangle_class_name),
-                    sanitize(&member.function.name),
+                    class_symbol_id,
+                    mangle_class_name,
+                    &member.function.name,
                 )
             } else {
                 scoped_method_name(class_prefix, mangle_class_name, &member.function.name)
             };
             method_names.insert(
-                (c.name.clone(), member.function.name.clone()),
+                (
+                    c.name.clone(),
+                    if member.is_static {
+                        static_method_registry_key(&member.function.name)
+                    } else {
+                        member.function.name.clone()
+                    },
+                ),
                 llvm_name.clone(),
             );
             for alias in &c.aliases {
                 method_names
-                    .entry((alias.clone(), member.function.name.clone()))
+                    .entry((
+                        alias.clone(),
+                        if member.is_static {
+                            static_method_registry_key(&member.function.name)
+                        } else {
+                            member.function.name.clone()
+                        },
+                    ))
                     .or_insert_with(|| llvm_name.clone());
             }
         }
@@ -1661,20 +1681,17 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 ),
             );
         }
-        // Static methods. Registered under their plain method name
-        // so `Counter.increment()` (StaticMethodCall) can look them
-        // up the same way as instance methods, but emitted as
-        // `perry_static_<modprefix>__<class>__<method>` (no `this`).
-        // The class/method names are sanitized so private methods
-        // (`#helper`) produce a valid LLVM identifier.
+        // Static methods. Registered under a static-only key so they do not
+        // collide with instance methods of the same class and name, and emitted
+        // with the class id so duplicate text class names stay distinct.
         for sm in &c.static_methods {
             method_names.insert(
-                (c.name.clone(), sm.name.clone()),
-                format!(
-                    "perry_static_{}__{}__{}",
+                (c.name.clone(), static_method_registry_key(&sm.name)),
+                scoped_static_method_name(
                     class_prefix,
-                    sanitize(mangle_class_name),
-                    sanitize(&sm.name),
+                    class_symbol_id,
+                    mangle_class_name,
+                    &sm.name,
                 ),
             );
         }
@@ -1777,19 +1794,22 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
         llmod.declare_function(&ctor_fn, VOID, &ctor_params);
 
-        // Cross-module static methods. Source module emits these as
-        // `perry_static_<source_prefix>__<class>__<method>` (no `this`
-        // receiver). Register them in `method_names` under the same
-        // (class, method) key the StaticMethodCall lowering looks up.
+        // Cross-module static methods. Source modules emit these as static
+        // functions with no `this` receiver, normally qualified by the source
+        // class id. Register them under the static-only key the lowering uses.
         for sm in &ic.static_method_names {
-            let llvm_fn = format!(
-                "perry_static_{}__{}__{}",
-                sanitize(src),
-                sanitize(&ic.name),
-                sanitize(sm),
-            );
+            let llvm_fn = if let Some(source_class_id) = ic.source_class_id {
+                scoped_static_method_name(&sanitize(src), source_class_id, &ic.name, sm)
+            } else {
+                format!(
+                    "perry_static_{}__{}__{}",
+                    sanitize(src),
+                    sanitize(&ic.name),
+                    sanitize(sm),
+                )
+            };
             method_names
-                .entry((effective_name.to_string(), sm.clone()))
+                .entry((effective_name.to_string(), static_method_registry_key(sm)))
                 .or_insert_with(|| llvm_fn.clone());
             // Declare conservatively with 6 double params; LLVM's direct-call
             // resolution doesn't require an exact arity match for declarations.

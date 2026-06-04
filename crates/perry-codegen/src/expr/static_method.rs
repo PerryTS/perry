@@ -87,7 +87,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let signal_handle = blk.call(I64, "js_abort_signal_any", &[(I64, &arr_handle)]);
                 return Ok(nanbox_pointer_inline(blk, &signal_handle));
             }
-            let key = (class_name.clone(), method_name.clone());
+            let key = (
+                class_name.clone(),
+                crate::codegen::static_method_registry_key(method_name),
+            );
             if let Some(fn_name) = ctx.methods.get(&key).cloned() {
                 let mut lowered: Vec<String> = Vec::with_capacity(args.len());
                 for a in args {
