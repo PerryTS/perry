@@ -29,6 +29,11 @@
 
 use super::*;
 
+enum TypedArrayProtoReceiver {
+    TypedArray(*mut crate::typedarray::TypedArrayHeader),
+    Uint8Buffer(usize),
+}
+
 /// The TypedArray prototype methods whose receiver must be brand-checked. The
 /// `u32` is the spec `.length` (own-property arity), matching what Node reports
 /// for `Int8Array.prototype.<m>.length`. Iterator/data methods that don't take
@@ -82,6 +87,13 @@ pub(super) fn install_typed_array_proto_methods(proto_obj: *mut ObjectHeader) {
     for &(name, arity) in TYPED_ARRAY_PROTO_METHODS {
         let func_ptr = thunk_for(name);
         ipm(proto_obj, name, func_ptr, arity);
+        // `install_proto_method` uses the visible spec `.length` as the call
+        // arity. These thunks have a wider native signature so optional trailing
+        // arguments can be padded with `undefined` instead of reading an unset
+        // register slot.
+        if matches!(name, "copyWithin" | "fill") {
+            crate::closure::js_register_closure_arity(func_ptr, 3);
+        }
     }
 }
 
@@ -138,9 +150,9 @@ fn throw_not_typed_array(method: &str) -> ! {
 }
 
 /// Read the `IMPLICIT_THIS` receiver and brand-check it as a real TypedArray.
-/// Returns the cleaned `TypedArrayHeader` pointer, or throws a `TypeError`.
+/// Returns the cleaned receiver, or throws a `TypeError`.
 #[inline]
-unsafe fn ta_receiver_or_throw(method: &str) -> *mut crate::typedarray::TypedArrayHeader {
+unsafe fn ta_receiver_or_throw(method: &str) -> TypedArrayProtoReceiver {
     let bits = IMPLICIT_THIS.with(|c| c.get());
     // A TypedArray receiver reaches here in either of two boxings: a NaN-boxed
     // `POINTER_TAG` value (top16 >= 0x7FF8) or a *raw* heap pointer whose top16
@@ -156,9 +168,285 @@ unsafe fn ta_receiver_or_throw(method: &str) -> *mut crate::typedarray::TypedArr
         throw_not_typed_array(method)
     };
     if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-        return addr as *mut crate::typedarray::TypedArrayHeader;
+        return TypedArrayProtoReceiver::TypedArray(
+            addr as *mut crate::typedarray::TypedArrayHeader,
+        );
+    }
+    if is_typed_array_buffer(addr) {
+        return TypedArrayProtoReceiver::Uint8Buffer(addr);
     }
     throw_not_typed_array(method)
+}
+
+fn is_typed_array_buffer(addr: usize) -> bool {
+    crate::buffer::is_registered_buffer(addr)
+        && !crate::buffer::is_any_array_buffer(addr)
+        && !crate::buffer::is_data_view(addr)
+        && !crate::buffer::is_secret_key(addr)
+        && crate::buffer::asymmetric_key_meta(addr).is_none()
+        && crate::buffer::crypto_key_meta(addr).is_none()
+}
+
+#[inline]
+fn undefined() -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[inline]
+fn pointer_value(addr: usize) -> f64 {
+    f64::from_bits(crate::value::JSValue::pointer(addr as *mut u8).bits())
+}
+
+#[inline]
+fn arg_or_undefined(args: &[f64], index: usize) -> f64 {
+    args.get(index).copied().unwrap_or_else(undefined)
+}
+
+#[inline]
+fn is_undefined_arg(value: f64) -> bool {
+    crate::value::JSValue::from_bits(value.to_bits()).is_undefined()
+}
+
+#[inline]
+fn to_integer_or_infinity(value: f64) -> f64 {
+    let number = crate::value::JSValue::from_bits(value.to_bits()).to_number();
+    if number.is_nan() || number == 0.0 {
+        0.0
+    } else if !number.is_finite() {
+        number
+    } else {
+        number.trunc()
+    }
+}
+
+#[inline]
+fn uint8_relative_index_arg(args: &[f64], index: usize, len: usize, default: usize) -> usize {
+    let Some(value) = args.get(index).copied() else {
+        return default;
+    };
+    if is_undefined_arg(value) {
+        return default;
+    }
+    let n = to_integer_or_infinity(value);
+    if n == f64::INFINITY {
+        return len;
+    }
+    if n == f64::NEG_INFINITY {
+        return 0;
+    }
+    let n = n as i64;
+    if n < 0 {
+        (len as i64 + n).max(0) as usize
+    } else {
+        (n as usize).min(len)
+    }
+}
+
+#[inline]
+fn to_uint8(value: f64) -> u8 {
+    let number = crate::value::JSValue::from_bits(value.to_bits()).to_number();
+    if !number.is_finite() || number == 0.0 {
+        0
+    } else {
+        (number.trunc() as i64).rem_euclid(256) as u8
+    }
+}
+
+#[inline]
+unsafe fn uint8_len(addr: usize) -> usize {
+    (*(addr as *const crate::buffer::BufferHeader)).length as usize
+}
+
+#[inline]
+unsafe fn uint8_get(addr: usize, index: usize) -> u8 {
+    crate::buffer::js_buffer_get(addr as *const crate::buffer::BufferHeader, index as i32) as u8
+}
+
+#[inline]
+unsafe fn uint8_set(addr: usize, index: usize, value: u8) {
+    crate::buffer::js_buffer_set(
+        addr as *mut crate::buffer::BufferHeader,
+        index as i32,
+        value as i32,
+    );
+}
+
+unsafe fn uint8_alloc_like(source_addr: usize, len: usize) -> *mut crate::buffer::BufferHeader {
+    let out = crate::buffer::buffer_alloc(len as u32);
+    if !out.is_null() {
+        (*out).length = len as u32;
+        if crate::buffer::is_uint8array_buffer(source_addr) {
+            crate::buffer::mark_as_uint8array(out as usize);
+        }
+    }
+    out
+}
+
+unsafe fn uint8_copy_to_new(source_addr: usize) -> *mut crate::buffer::BufferHeader {
+    let len = uint8_len(source_addr);
+    let out = uint8_alloc_like(source_addr, len);
+    for i in 0..len {
+        uint8_set(out as usize, i, uint8_get(source_addr, i));
+    }
+    out
+}
+
+fn validate_callback(args: &[f64]) -> *const crate::closure::ClosureHeader {
+    crate::array::js_validate_array_callback(arg_or_undefined(args, 0))
+        as *const crate::closure::ClosureHeader
+}
+
+fn validate_comparator(args: &[f64]) -> *const crate::closure::ClosureHeader {
+    if args.is_empty() {
+        std::ptr::null()
+    } else {
+        crate::array::js_validate_array_comparator(args[0]) as *const crate::closure::ClosureHeader
+    }
+}
+
+unsafe fn dispatch_uint8_buffer_method(addr: usize, method: &str, args: &[f64]) -> Option<f64> {
+    let len = uint8_len(addr);
+    let receiver = pointer_value(addr);
+    let mut args_ptr = std::ptr::null();
+    if !args.is_empty() {
+        args_ptr = args.as_ptr();
+    }
+
+    let result = match method {
+        "set" => super::dispatch_buffer_method(addr, method, args_ptr, args.len()),
+        "slice" | "subarray" => {
+            let start = uint8_relative_index_arg(args, 0, len, 0);
+            let end = uint8_relative_index_arg(args, 1, len, len);
+            let result = crate::buffer::js_buffer_slice(
+                addr as *mut crate::buffer::BufferHeader,
+                start as i32,
+                end as i32,
+            );
+            if crate::buffer::is_uint8array_buffer(addr) {
+                crate::buffer::mark_as_uint8array(result as usize);
+            }
+            pointer_value(result as usize)
+        }
+        "copyWithin" => {
+            let to = uint8_relative_index_arg(args, 0, len, 0);
+            let from = uint8_relative_index_arg(args, 1, len, 0);
+            let final_ = uint8_relative_index_arg(args, 2, len, len);
+            let count = final_.saturating_sub(from).min(len.saturating_sub(to));
+            if count > 0 {
+                let block: Vec<u8> = (0..count).map(|i| uint8_get(addr, from + i)).collect();
+                for (i, value) in block.into_iter().enumerate() {
+                    uint8_set(addr, to + i, value);
+                }
+            }
+            receiver
+        }
+        "fill" => {
+            let value = to_uint8(arg_or_undefined(args, 0));
+            let start = uint8_relative_index_arg(args, 1, len, 0);
+            let end = uint8_relative_index_arg(args, 2, len, len);
+            for i in start..end {
+                uint8_set(addr, i, value);
+            }
+            receiver
+        }
+        "map" => {
+            let cb = validate_callback(args);
+            let out = uint8_alloc_like(addr, len);
+            for i in 0..len {
+                let value = uint8_get(addr, i) as f64;
+                let mapped = crate::closure::js_closure_call3(cb, value, i as f64, receiver);
+                uint8_set(out as usize, i, to_uint8(mapped));
+            }
+            pointer_value(out as usize)
+        }
+        "filter" => {
+            let cb = validate_callback(args);
+            let mut kept = Vec::new();
+            for i in 0..len {
+                let value = uint8_get(addr, i) as f64;
+                let keep = crate::closure::js_closure_call3(cb, value, i as f64, receiver);
+                if crate::value::js_is_truthy(keep) != 0 {
+                    kept.push(value as u8);
+                }
+            }
+            let out = uint8_alloc_like(addr, kept.len());
+            for (i, value) in kept.into_iter().enumerate() {
+                uint8_set(out as usize, i, value);
+            }
+            pointer_value(out as usize)
+        }
+        "findIndex" | "findLastIndex" => {
+            let cb = validate_callback(args);
+            let indexes: Box<dyn Iterator<Item = usize>> = if method == "findIndex" {
+                Box::new(0..len)
+            } else {
+                Box::new((0..len).rev())
+            };
+            for i in indexes {
+                let value = uint8_get(addr, i) as f64;
+                let keep = crate::closure::js_closure_call3(cb, value, i as f64, receiver);
+                if crate::value::js_is_truthy(keep) != 0 {
+                    return Some(i as f64);
+                }
+            }
+            -1.0
+        }
+        "reverse" => {
+            if len > 1 {
+                let mut i = 0usize;
+                let mut j = len - 1;
+                while i < j {
+                    let left = uint8_get(addr, i);
+                    let right = uint8_get(addr, j);
+                    uint8_set(addr, i, right);
+                    uint8_set(addr, j, left);
+                    i += 1;
+                    j -= 1;
+                }
+            }
+            receiver
+        }
+        "sort" | "toSorted" => {
+            let cmp = validate_comparator(args);
+            let out_addr = if method == "sort" {
+                addr
+            } else {
+                uint8_copy_to_new(addr) as usize
+            };
+            let mut values: Vec<u8> = (0..len).map(|i| uint8_get(out_addr, i)).collect();
+            if cmp.is_null() {
+                values.sort_unstable();
+            } else {
+                values.sort_by(|a, b| {
+                    let r = crate::closure::js_closure_call2(cmp, *a as f64, *b as f64);
+                    if r < 0.0 {
+                        std::cmp::Ordering::Less
+                    } else if r > 0.0 {
+                        std::cmp::Ordering::Greater
+                    } else {
+                        std::cmp::Ordering::Equal
+                    }
+                });
+            }
+            for (i, value) in values.into_iter().enumerate() {
+                uint8_set(out_addr, i, value);
+            }
+            if method == "sort" {
+                receiver
+            } else {
+                pointer_value(out_addr)
+            }
+        }
+        "toReversed" => {
+            let out = uint8_alloc_like(addr, len);
+            for i in 0..len {
+                uint8_set(out as usize, i, uint8_get(addr, len - 1 - i));
+            }
+            pointer_value(out as usize)
+        }
+        _ => return None,
+    };
+    Some(result)
 }
 
 /// Brand-check, then delegate to the shared dispatch tower with the supplied
@@ -167,21 +455,33 @@ unsafe fn ta_receiver_or_throw(method: &str) -> *mut crate::typedarray::TypedArr
 /// practice (the name set is kept in sync) but avoids a panic on drift.
 #[inline]
 unsafe fn brand_then_dispatch(method: &str, args: &[f64]) -> f64 {
-    let ta = ta_receiver_or_throw(method);
+    let receiver = ta_receiver_or_throw(method);
     let args_ptr = if args.is_empty() {
         std::ptr::null()
     } else {
         args.as_ptr()
     };
-    match super::native_call_method::dispatch_typed_array_method(ta, method, args_ptr, args.len()) {
-        // Brand check passed and the tower handled the method.
-        Some(r) => r,
-        // The only `TYPED_ARRAY_PROTO_METHODS` entry the tower doesn't yet
-        // resolve is `toLocaleString` (a separate formatting gap, out of scope
-        // for this brand-check fix). The brand check already ran, so a
-        // non-TypedArray receiver has thrown; a real receiver simply gets
-        // `undefined` here rather than a wrong value.
-        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+    match receiver {
+        TypedArrayProtoReceiver::TypedArray(ta) => {
+            match super::native_call_method::dispatch_typed_array_method(
+                ta,
+                method,
+                args_ptr,
+                args.len(),
+            ) {
+                // Brand check passed and the tower handled the method.
+                Some(r) => r,
+                // The only `TYPED_ARRAY_PROTO_METHODS` entry the tower doesn't yet
+                // resolve is `toLocaleString` (a separate formatting gap, out of scope
+                // for this brand-check fix). The brand check already ran, so a
+                // non-TypedArray receiver has thrown; a real receiver simply gets
+                // `undefined` here rather than a wrong value.
+                None => undefined(),
+            }
+        }
+        TypedArrayProtoReceiver::Uint8Buffer(addr) => {
+            dispatch_uint8_buffer_method(addr, method, args).unwrap_or_else(undefined)
+        }
     }
 }
 
