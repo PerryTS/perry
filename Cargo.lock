@@ -5188,7 +5188,7 @@ dependencies = [
  "dotenvy",
  "hex",
  "indexmap",
- "md-5 0.10.6",
+ "md-5 0.11.0",
  "once_cell",
  "proptest",
  "rand 0.8.6",
