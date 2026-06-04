@@ -49,7 +49,7 @@ jobs:
           node-version: "26"
 
       - name: Build Perry release binary
-        run: cargo build --release -p perry-runtime -p perry-stdlib -p perry
+        run: cargo build --release -p perry-runtime -p perry
 
       - name: Check feature matrix
         run: |
