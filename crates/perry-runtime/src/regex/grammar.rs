@@ -90,8 +90,12 @@ fn is_regex_identity_escape(ch: char) -> bool {
     )
 }
 
-fn push_escaped_literal(out: &mut String, ch: char) {
+fn push_escaped_literal(out: &mut String, ch: char, in_class: bool) {
     match ch {
+        '-' if in_class => {
+            out.push('\\');
+            out.push(ch);
+        }
         '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$' | '\\' => {
             out.push('\\');
             out.push(ch);
@@ -257,7 +261,7 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
                     }
                 }
                 ch if is_regex_identity_escape(ch) => {
-                    push_escaped_literal(&mut result, ch);
+                    push_escaped_literal(&mut result, ch, in_class);
                     i += 2;
                 }
                 // Pass through all other backslash sequences as-is. (An escaped
