@@ -1,3 +1,72 @@
 {
-  "min_parity_pct": 83.0
+  "_schema": {
+    "description": "Global and per-category thresholds for scripts/parity_threshold_gate.py. The global threshold preserves the historical aggregate gate. The category default keeps currently passing domains pinned at 100%, while configured exceptions document known broad inventory gaps that are tracked elsewhere.",
+    "min_parity_pct": "Minimum aggregate parity percentage from test-parity/reports/latest.json.",
+    "default_category_min_parity_pct": "Minimum percentage for any category not listed in categories.",
+    "categories": "Category-specific minimums keyed by scripts/parity_threshold_gate.py category names."
+  },
+  "min_parity_pct": 83.0,
+  "default_category_min_parity_pct": 100.0,
+  "categories": {
+    "parity/dns": {
+      "min_parity_pct": 0.0,
+      "issue": "793",
+      "reason": "Known node:dns module-inventory gap tracked in known_failures.json."
+    },
+    "parity/dns_promises": {
+      "min_parity_pct": 0.0,
+      "issue": "793",
+      "reason": "Known node:dns/promises module-inventory gap tracked in known_failures.json."
+    },
+    "parity/http": {
+      "min_parity_pct": 0.0,
+      "issue": "793",
+      "reason": "Known node:http module-inventory gap tracked in known_failures.json."
+    },
+    "parity/http2": {
+      "min_parity_pct": 0.0,
+      "issue": "793",
+      "reason": "Known node:http2 module-inventory gap tracked in known_failures.json."
+    },
+    "parity/https": {
+      "min_parity_pct": 0.0,
+      "issue": "793",
+      "reason": "Known node:https module-inventory gap tracked in known_failures.json."
+    },
+    "parity/net": {
+      "min_parity_pct": 0.0,
+      "issue": "793",
+      "reason": "Known node:net module-inventory gap tracked in known_failures.json."
+    },
+    "parity/sqlite": {
+      "min_parity_pct": 0.0,
+      "issue": "793",
+      "reason": "Known node:sqlite module-inventory gap tracked in known_failures.json."
+    },
+    "parity/stream": {
+      "min_parity_pct": 0.0,
+      "issue": "793",
+      "reason": "Known node:stream module-inventory gap tracked in known_failures.json."
+    },
+    "parity/stream_web": {
+      "min_parity_pct": 0.0,
+      "issue": "793",
+      "reason": "Known node:stream/web module-inventory gap tracked in known_failures.json."
+    },
+    "parity/tls": {
+      "min_parity_pct": 0.0,
+      "issue": "793",
+      "reason": "Known node:tls module-inventory gap tracked in known_failures.json."
+    },
+    "parity/zlib": {
+      "min_parity_pct": 0.0,
+      "issue": "793",
+      "reason": "Known node:zlib module-inventory gap tracked in known_failures.json."
+    },
+    "node-suite/stream": {
+      "min_parity_pct": 0.0,
+      "issue": "1545",
+      "reason": "Known node-suite stream/web abort-during-pipeto failure tracked in known_failures.json."
+    }
+  }
 }
