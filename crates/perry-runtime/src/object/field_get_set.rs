@@ -2099,7 +2099,15 @@ pub extern "C" fn js_object_get_field_by_name(
                 }
             }
         }
-        return JSValue::undefined();
+        // #4363 regression fix: a secret-key Uint8Array (KeyObject backing
+        // buffer) exposes `type` / `symmetricKeySize` / `asymmetricKey*`
+        // through the KeyObject metadata block later in this function. The
+        // typed-array own-property fallback must not shadow those with
+        // `undefined` — fall through for a secret-key buffer so the metadata
+        // block resolves them. Plain typed arrays keep the `undefined` result.
+        if !crate::buffer::is_secret_key(addr) {
+            return JSValue::undefined();
+        }
     }
     // #2128: a plain JS number value (a finite double or canonical NaN —
     // anything `JSValue::is_number` returns true for *minus* the raw-I64
