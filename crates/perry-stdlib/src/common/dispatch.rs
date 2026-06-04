@@ -1295,6 +1295,15 @@ unsafe fn dispatch_net_socket(handle: i64, method: &str, args: &[f64]) -> f64 {
             crate::net::js_net_socket_destroy(handle);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
+        "getTypeOfService" => crate::net::js_net_socket_get_type_of_service(handle),
+        "setTypeOfService" => {
+            let value = args
+                .first()
+                .copied()
+                .unwrap_or(f64::from_bits(0x7FFC_0000_0000_0001));
+            crate::net::js_net_socket_set_type_of_service(handle, value);
+            f64::from_bits(0x7FFD_0000_0000_0000u64 | (handle as u64 & 0x0000_FFFF_FFFF_FFFF))
+        }
         "on" if args.len() >= 2 => {
             let event_ptr = unbox_to_i64(args[0]);
             let cb_ptr = unbox_to_i64(args[1]);

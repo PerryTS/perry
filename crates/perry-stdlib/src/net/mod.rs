@@ -150,6 +150,7 @@ struct SocketState {
     /// where the rx flows straight into the task.
     pending_rx: Option<mpsc::UnboundedReceiver<SocketCommand>>,
     is_open: bool,
+    type_of_service: u8,
 }
 
 enum SocketCommand {
@@ -536,6 +537,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             cmd_tx: tx,
             pending_rx: Some(rx),
             is_open: false,
+            type_of_service: 0,
         },
     );
     NET_LISTENERS.lock().unwrap().insert(id, HashMap::new());
@@ -660,6 +662,7 @@ fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>
             cmd_tx: tx,
             pending_rx: None,
             is_open: false,
+            type_of_service: 0,
         },
     );
     NET_LISTENERS.lock().unwrap().insert(id, HashMap::new());
@@ -875,6 +878,24 @@ pub unsafe extern "C" fn js_net_socket_destroy(handle: i64) {
     if let Some(s) = sockets.get(&handle) {
         let _ = s.cmd_tx.send(SocketCommand::Destroy);
     }
+}
+
+#[no_mangle]
+pub extern "C" fn js_net_socket_get_type_of_service(handle: i64) -> f64 {
+    NET_SOCKETS
+        .lock()
+        .ok()
+        .and_then(|sockets| sockets.get(&handle).map(|s| s.type_of_service as f64))
+        .unwrap_or(0.0)
+}
+
+#[no_mangle]
+pub extern "C" fn js_net_socket_set_type_of_service(handle: i64, tos: f64) -> i64 {
+    let tos = perry_runtime::net_validate::js_net_validate_tos(tos) as u8;
+    if let Some(s) = NET_SOCKETS.lock().unwrap().get_mut(&handle) {
+        s.type_of_service = tos;
+    }
+    handle
 }
 
 // ─── FFI: socket.on(event, callback) ─────────────────────────────────────────
