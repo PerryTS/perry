@@ -244,6 +244,7 @@ where
         | Expr::IteratorToArray(v)
         | Expr::GetIterator(v)
         | Expr::ForOfToArray(v)
+        | Expr::ForAwaitToArray(v)
         | Expr::ObjectRest { object: v, .. }
         | Expr::ProxyRevoke(v)
         | Expr::ReflectOwnKeys(v)

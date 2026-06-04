@@ -2108,6 +2108,11 @@ pub enum Expr {
     /// else drives its `[Symbol.iterator]`. Without it the index loop read
     /// `.length` off a raw Map/Set handle (→ 0) and iterated zero times.
     ForOfToArray(Box<Expr>),
+    /// Materialize an untyped `for await...of` receiver into a plain Array.
+    /// This routes through the async-iterator protocol first, then falls back
+    /// to the existing array/array-like behavior used by `Array.fromAsync`.
+    /// The lowering wraps this in `Await` before the index loop reads it.
+    ForAwaitToArray(Box<Expr>),
     /// Array.from(iterable, mapFn, thisArg?) -> Array
     /// Creates a new array by applying mapFn to each element of the iterable.
     /// `this_arg` (#2773) binds `this` inside a non-arrow mapFn.

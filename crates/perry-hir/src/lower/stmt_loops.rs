@@ -982,7 +982,11 @@ pub(crate) fn lower_stmt_for_of(
     } else if is_iterable_typed_array {
         Expr::ArrayFrom(Box::new(arr_expr))
     } else if needs_runtime_iterator {
-        Expr::ForOfToArray(Box::new(arr_expr))
+        if for_of_stmt.is_await {
+            Expr::Await(Box::new(Expr::ForAwaitToArray(Box::new(arr_expr))))
+        } else {
+            Expr::ForOfToArray(Box::new(arr_expr))
+        }
     } else {
         arr_expr
     };

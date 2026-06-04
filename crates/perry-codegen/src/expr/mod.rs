@@ -1581,6 +1581,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::IteratorToArray(..)
         | Expr::GetIterator(..)
         | Expr::ForOfToArray(..)
+        | Expr::ForAwaitToArray(..)
         | Expr::WeakRefDeref(..)
         | Expr::Uint8ArrayNew(..)
         | Expr::Uint8ArrayLength(..)

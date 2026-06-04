@@ -1035,6 +1035,11 @@ impl JsEmitter {
                 self.emit_expr(val);
                 self.output.push(')');
             }
+            Expr::ForAwaitToArray(val) => {
+                self.output.push_str("Array.fromAsync(");
+                self.emit_expr(val);
+                self.output.push(')');
+            }
             Expr::ArrayFromMapped {
                 iterable,
                 map_fn,

@@ -396,6 +396,7 @@ pub fn check_escapes_in_expr(
         | Expr::IteratorToArray(operand)
         | Expr::GetIterator(operand)
         | Expr::ForOfToArray(operand)
+        | Expr::ForAwaitToArray(operand)
         | Expr::WeakRefNew(operand)
         | Expr::WeakRefDeref(operand)
         | Expr::FinalizationRegistryNew(operand)

@@ -1351,6 +1351,8 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 }
             } else if is_iterable_typed_array {
                 Expr::ArrayFrom(Box::new(arr_expr))
+            } else if needs_runtime_iterator && for_of_stmt.is_await {
+                Expr::Await(Box::new(Expr::ForAwaitToArray(Box::new(arr_expr))))
             } else if needs_runtime_iterator {
                 Expr::ForOfToArray(Box::new(arr_expr))
             } else {
