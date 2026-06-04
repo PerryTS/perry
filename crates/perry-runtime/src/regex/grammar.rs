@@ -257,7 +257,18 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
                     }
                 }
                 ch if is_regex_identity_escape(ch) => {
-                    push_escaped_literal(&mut result, ch);
+                    // Inside a character class an escaped hyphen `\-` is always a
+                    // literal hyphen, but the Rust `regex` crate reads a bare `-`
+                    // flanked by members as a range operator (so `[a\- ]` would
+                    // become the invalid range `[a- ]`). Keep the escape so it
+                    // stays a literal regardless of position. `marked`'s GFM
+                    // table-delimiter regex `[:\- ]` relies on this.
+                    if in_class && ch == '-' {
+                        result.push('\\');
+                        result.push('-');
+                    } else {
+                        push_escaped_literal(&mut result, ch);
+                    }
                     i += 2;
                 }
                 // Pass through all other backslash sequences as-is. (An escaped

@@ -1885,4 +1885,24 @@ mod tests {
 
         assert_eq!(string_as_str(result), "hell0 w0rld");
     }
+
+    #[test]
+    fn escaped_hyphen_in_class_stays_literal() {
+        // #4425: `\-` inside a character class is always a literal hyphen. The
+        // Rust `regex` crate reads a bare `-` flanked by members as a range
+        // operator, so the escape must be preserved or `[a\- ]` translates to
+        // the invalid range `[a- ]`.
+        assert_eq!(js_regex_to_rust(r"[a\- ]"), r"[a\- ]");
+        assert_eq!(js_regex_to_rust(r"[:\- ]"), r"[:\- ]");
+        assert_eq!(js_regex_to_rust(r"[\-]"), r"[\-]");
+        // Outside a class a hyphen carries no range meaning, so it stays bare.
+        assert_eq!(js_regex_to_rust(r"a\-b"), "a-b");
+
+        // The patterns that crashed `marked` at module-init must now compile.
+        for pat in [r"[a\- ]", r"[:\- ]", r" {0,3}\|?(?:[:\- ]*\|)+[\:\- ]*\n"] {
+            let flags = make_string("");
+            let re = js_regexp_new(make_string(pat), flags);
+            assert!(!re.is_null(), "pattern failed to construct: {pat}");
+        }
+    }
 }
