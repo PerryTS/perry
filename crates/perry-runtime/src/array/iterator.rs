@@ -58,9 +58,19 @@ pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
 
     // Non-pointer scalars (number/bool/null/undefined) are not iterable;
     // hand back an empty array so the loop runs zero times rather than
-    // dereferencing a non-pointer.
+    // dereferencing a non-pointer. Web Streams are the exception here: their
+    // runtime handles are finite numeric ids, but plain `for...of` must still
+    // reject them because they are async-iterable only.
     let raw_ptr = crate::value::js_nanbox_get_pointer(val_f64);
     if raw_ptr == 0 {
+        if val_f64.is_finite()
+            && val_f64 > 0.0
+            && val_f64.fract() == 0.0
+            && crate::object::stream_handle_kind_probe()
+                .is_some_and(|probe| unsafe { probe(val_f64 as usize) != 0 })
+        {
+            throw_not_iterable(val_f64);
+        }
         return js_nanbox_pointer(js_array_alloc(0) as i64);
     }
 
@@ -87,27 +97,20 @@ pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
             js_nanbox_pointer(arr as i64)
         }
         // Generic objects / generator objects / anything carrying a
-        // custom `[Symbol.iterator]` or a `.next()`: walk the iterator
-        // protocol. `js_get_iterator` returns the operand's
-        // `Symbol.iterator()` result when iterable, or the operand
-        // unchanged when it already is an iterator (perry generators).
-        //
-        // `for await` currently lowers through this same materializer.
-        // Classic Node Readables are async-iterable only, so when no
-        // sync iterator was found, prefer `[Symbol.asyncIterator]()` if
-        // present and synchronously unwrap already-settled `next()`
-        // promises. This keeps Readable iterator helpers like `take(0)`
-        // from being mis-driven as sync iterators.
+        // custom `[Symbol.iterator]` or a `.next()`: walk the synchronous
+        // iterator protocol. `js_get_iterator` returns the operand's
+        // `Symbol.iterator()` result when iterable, or the operand unchanged
+        // when it already is an iterator (perry generators). Plain `for...of`
+        // must not fall back to `Symbol.asyncIterator`; async-only stream
+        // values belong to the dedicated `for await...of` lowering.
         _ => {
             let iter = crate::symbol::js_get_iterator(val_f64);
             let arr = if iter.to_bits() != val_f64.to_bits() {
                 js_iterator_to_array(iter)
-            } else if let Some(async_iter) = call_symbol_async_iterator(val_f64) {
-                js_async_iterator_to_array(async_iter)
             } else if has_named_next(iter) {
                 js_iterator_to_array(iter)
             } else {
-                js_iterator_to_array(iter)
+                throw_not_iterable(val_f64);
             };
             js_nanbox_pointer(arr as i64)
         }
