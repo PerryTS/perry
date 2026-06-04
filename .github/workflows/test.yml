@@ -390,23 +390,15 @@ jobs:
 
       - name: Check parity threshold
         run: |
-          REPORT="test-parity/reports/latest.json"
-          THRESHOLD_FILE="test-parity/threshold.json"
-
-          if [[ ! -f "$REPORT" ]]; then
-            echo "No parity report found"
-            exit 1
-          fi
-
-          ACTUAL=$(jq -r '.summary.parity_percentage' "$REPORT")
-          MIN=$(jq -r '.min_parity_pct' "$THRESHOLD_FILE")
-
-          echo "Parity: ${ACTUAL}% (threshold: ${MIN}%)"
-
-          awk -v a="$ACTUAL" -v m="$MIN" 'BEGIN {
-            if (a+0 < m+0) { print "FAIL: Parity " a "% is below threshold " m "%"; exit 1 }
-            print "OK: Parity " a "% meets threshold " m "%"
-          }'
+          set +e
+          python3 scripts/parity_threshold_gate.py \
+            --check \
+            --output-json test-parity/reports/parity_threshold_latest.json \
+            --output-md test-parity/reports/parity_threshold_latest.md
+          status=$?
+          set -e
+          cat test-parity/reports/parity_threshold_latest.md >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
 
       - name: Check for new failures
         run: |
@@ -463,6 +455,8 @@ jobs:
           name: parity-report
           path: |
             test-parity/reports/latest.json
+            test-parity/reports/parity_threshold_latest.json
+            test-parity/reports/parity_threshold_latest.md
             test-parity/reports/parity_matrix_latest.json
             test-parity/reports/parity_matrix_latest.md
 
