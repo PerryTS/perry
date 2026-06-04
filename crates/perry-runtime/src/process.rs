@@ -394,6 +394,12 @@ struct ProcessFinalizationEntry {
     kind: ProcessFinalizationKind,
 }
 
+#[derive(Clone)]
+struct ProcessPermissionDrop {
+    scope: String,
+    reference: Option<String>,
+}
+
 thread_local! {
     static PROCESS_FINALIZATION_REGISTRY: RefCell<Vec<ProcessFinalizationEntry>> =
         RefCell::new(Vec::new());
@@ -407,6 +413,8 @@ thread_local! {
     static MODULE_LOADER_HOOKS: RefCell<Vec<ModuleLoaderHookEntry>> =
         const { RefCell::new(Vec::new()) };
     static MODULE_LOADER_HOOK_NEXT_ID: Cell<u64> = const { Cell::new(1) };
+    static PROCESS_PERMISSION_DROPS: RefCell<Vec<ProcessPermissionDrop>> =
+        const { RefCell::new(Vec::new()) };
     static MODULE_LOADER_NEXT_RESOLVE: Cell<*const crate::closure::ClosureHeader> =
         const { Cell::new(std::ptr::null()) };
     static MODULE_LOADER_NEXT_LOAD: Cell<*const crate::closure::ClosureHeader> =
@@ -920,7 +928,40 @@ fn permission_path_allowed(reference: &str, allowed: &[String]) -> bool {
     false
 }
 
+fn process_permission_is_dropped(scope: &str, reference: Option<&str>) -> bool {
+    PROCESS_PERMISSION_DROPS.with(|drops| {
+        drops.borrow().iter().any(|drop| {
+            if drop.scope != scope {
+                return false;
+            }
+            match (&drop.reference, reference) {
+                (None, _) => true,
+                (Some(drop_reference), Some(reference)) => {
+                    permission_path_allowed(reference, std::slice::from_ref(drop_reference))
+                }
+                _ => false,
+            }
+        })
+    })
+}
+
+fn process_permission_drop(scope: &str, reference: Option<String>) {
+    PROCESS_PERMISSION_DROPS.with(|drops| {
+        let mut drops = drops.borrow_mut();
+        if reference.is_none() {
+            drops.retain(|drop| drop.scope != scope);
+        }
+        drops.push(ProcessPermissionDrop {
+            scope: scope.to_string(),
+            reference,
+        });
+    });
+}
+
 fn process_permission_scope_allowed(scope: &str, reference: Option<&str>) -> bool {
+    if process_permission_is_dropped(scope, reference) {
+        return false;
+    }
     match scope {
         "fs.read" => {
             let allowed = process_permission_flag_values("--allow-fs-read");
@@ -974,6 +1015,26 @@ extern "C" fn process_permission_has_thunk(
     ))
 }
 
+extern "C" fn process_permission_drop_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    scope_value: f64,
+    reference_value: f64,
+) -> f64 {
+    let Some(scope) = module_value_to_string(scope_value) else {
+        throw_permission_arg_type("scope", scope_value);
+    };
+    let reference_js = JSValue::from_bits(reference_value.to_bits());
+    let reference = if reference_js.is_undefined() || reference_js.is_null() {
+        None
+    } else if let Some(reference) = module_value_to_string_or_buffer(reference_value) {
+        Some(reference)
+    } else {
+        throw_permission_arg_type("reference", reference_value);
+    };
+    process_permission_drop(&scope, reference);
+    undefined_value()
+}
+
 fn process_permission_value() -> Option<f64> {
     if !process_permission_enabled() {
         return None;
@@ -988,11 +1049,16 @@ fn process_permission_value() -> Option<f64> {
         return Some(cached);
     }
 
-    let obj = crate::object::js_object_alloc(0, 1);
+    let obj = crate::object::js_object_alloc(0, 2);
     module_set_field(
         obj,
         "has",
         module_function2("has", process_permission_has_thunk, 2),
+    );
+    module_set_field(
+        obj,
+        "drop",
+        module_function2("drop", process_permission_drop_thunk, 2),
     );
     let value = module_object_value(obj);
     CACHED_PERMISSION.with(|c| c.set(value));
