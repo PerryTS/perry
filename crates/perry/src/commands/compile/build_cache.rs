@@ -204,6 +204,9 @@ impl BuildCacheProbe {
             link_cache_stats: Some(LinkCacheStats {
                 linked: false,
                 skipped: true,
+                object_fingerprints_used: 0,
+                object_files_hashed: 0,
+                external_inputs_hashed: 0,
             }),
             build_cache_stats: Some(BuildCacheStats {
                 hit: true,
@@ -219,7 +222,7 @@ impl BuildCacheProbe {
         output_path: &Path,
         target: Option<&str>,
         compiled_features: &[String],
-        object_fingerprints: &[String],
+        object_fingerprints: &[Option<String>],
         runtime_inputs: &[PathBuf],
     ) {
         if std::env::var("PERRY_DISABLE_BUILD_CACHE").ok().as_deref() == Some("1") {
@@ -242,12 +245,24 @@ impl BuildCacheProbe {
             stats.reason = "js-modules".to_string();
             return;
         }
+        // Objects whose fingerprint isn't a trusted proxy for the linked bytes
+        // (bitcode-merged or freshly compiled `.ll`→`.o`) arrive as `None`. We
+        // can't soundly re-validate those on a later run, so refuse to store the
+        // manifest rather than risk a false cache hit.
+        let Some(object_fingerprints) = object_fingerprints
+            .iter()
+            .cloned()
+            .collect::<Option<Vec<String>>>()
+        else {
+            stats.reason = "object-fingerprint-missing".to_string();
+            return;
+        };
         let manifest = match self.build_manifest(
             ctx,
             output_path,
             target,
             compiled_features,
-            object_fingerprints,
+            &object_fingerprints,
             runtime_inputs,
         ) {
             Ok(manifest) => manifest,
