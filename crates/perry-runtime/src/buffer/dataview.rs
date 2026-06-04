@@ -95,9 +95,15 @@ fn to_byte_offset(value: f64) -> i64 {
     i as i64
 }
 
+/// `ToNumber(value)` for `SetViewValue` on a non-BigInt accessor. Uses the full
+/// ToNumber (`js_number_coerce`): a Symbol throws a TypeError, an object runs its
+/// `valueOf`/`toString`, strings parse. The bare `JSValue::to_number()` silently
+/// produced `NaN` for those, so `setFloat32(0, Symbol())` didn't throw and a
+/// throwing `valueOf` never ran. Runs after `ToIndex(byteOffset)` (SetViewValue
+/// step order). A BigInt accessor takes the `to_bigint_raw_or_throw` path instead.
 #[inline]
 fn to_number(value: f64) -> f64 {
-    crate::value::JSValue::from_bits(value.to_bits()).to_number()
+    crate::builtins::js_number_coerce(value)
 }
 
 /// Read `width` bytes starting at `offset` from a DataView's backing storage.
