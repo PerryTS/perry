@@ -135,6 +135,7 @@ fn primitive_proto_method_closure_value(method_name: &str, func_ptr: *const u8, 
     crate::closure::js_register_closure_arity(func_ptr, arity);
     super::native_module::set_bound_native_closure_name(closure, method_name);
     super::native_module::set_builtin_closure_length(closure as usize, arity);
+    super::native_module::set_builtin_closure_non_constructable(closure as usize);
     super::set_builtin_property_attrs(
         closure as usize,
         "name".to_string(),

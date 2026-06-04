@@ -737,6 +737,8 @@ pub(crate) fn lower_stmt(
                                     // dispatches via the class-filtered entries.
                                     ("net", "Socket") => Some("Socket"),
                                     ("net", "Server") => Some("Server"),
+                                    ("net", "BlockList") => Some("BlockList"),
+                                    ("net", "SocketAddress") => Some("SocketAddress"),
                                     ("vm", "SourceTextModule") => Some("SourceTextModule"),
                                     ("vm", "SyntheticModule") => Some("SyntheticModule"),
                                     _ => None,

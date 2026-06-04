@@ -458,11 +458,9 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         ret: NR_OBJ_FROM_JSON_STR,
     },
     // #2549 — `net.Socket` state / counter / metadata property getters.
-    // A bare member read on a `("net","Socket")` instance lowers to a
-    // zero-arg `NativeMethodCall` with `class_name: None` (see
-    // `perry-hir/.../expr_member.rs`), so these rows use `class_filter:
-    // None`; the `module: "net"` qualifier still disambiguates them from
-    // other modules' getters in the generic dispatch pass.
+    // Socket rows remain generic so they still match in the fallback pass when
+    // the HIR preserves a more specific net class filter for nearby accessors
+    // such as `Server.listening` and `SocketAddress.address`.
     NativeModSig {
         module: "net",
         has_receiver: true,

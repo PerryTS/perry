@@ -265,6 +265,37 @@ pub fn transform_generator_function_with_extra_captures(
     // the next .next(). Only the sync-generator .throw() path uses this.
     let while_body_for_throw = while_body.clone();
 
+    // #4438: for sync generators, wrap the dispatch loop body in a real
+    // try/catch so a `throw` *executing inside a try block during a normal
+    // .next()* is caught and routed to the matching catch's linearized states
+    // (or, when no catch matches, runs any pending `finally` and completes the
+    // generator before propagating). Pre-#4438 the catch handler existed only
+    // in the .throw() closure, so such a throw escaped uncaught.
+    let has_state_based_catch = catches.iter().any(|r| r.catch_entry_state.is_some());
+    let has_inlineable_finally = finallys.iter().any(|r| !r.has_yields);
+    let wrap_dispatch = !is_async_generator && (has_state_based_catch || has_inlineable_finally);
+    let dispatch_body = if wrap_dispatch {
+        let disp_err_id = alloc_local(next_local_id);
+        let handler = build_dispatch_catch_handler(
+            &catches,
+            &finallys,
+            state_id,
+            done_id,
+            disp_err_id,
+            &hoisted_ids,
+        );
+        vec![Stmt::Try {
+            body: while_body,
+            catch: Some(CatchClause {
+                param: Some((disp_err_id, "__gen_disp_err".to_string())),
+                body: handler,
+            }),
+            finally: None,
+        }]
+    } else {
+        while_body
+    };
+
     // Build next() method body
     let mut next_body = vec![
         // __sent = <param from next(val)>
@@ -281,7 +312,7 @@ pub fn transform_generator_function_with_extra_captures(
         // while (true) { if-chain }
         Stmt::While {
             condition: Expr::Bool(true),
-            body: while_body,
+            body: dispatch_body,
         },
     ];
     if is_async_generator {
@@ -823,18 +854,40 @@ fn build_async_throw_body(
     // the first collected route is tested first; nested try/catch routes are
     // collected before their containing route and should win on overlap.
     for route in catches.iter().rev() {
-        let then_branch = build_async_catch_route_body(
-            route,
-            finallys,
-            state_id,
-            done_id,
-            throw_param_id,
-            inner_catch_id,
-            hoisted_ids,
-            fall_through,
-        );
+        // #4438: sync generators route the thrown error into the catch's
+        // linearized states (set the catch param + jump to `catch_entry_state`,
+        // then fall through to the appended continuation loop, which dispatches
+        // the catch body — so a `yield` inside the catch actually suspends).
+        // Async generators (and any route without a linearized catch) keep the
+        // legacy inline-the-catch-body behavior.
+        let state_based = fall_through && route.catch_entry_state.is_some();
+        let then_branch = if state_based {
+            let mut b = Vec::new();
+            if let Some(cp_id) = route.param_id {
+                b.push(Stmt::Expr(Expr::LocalSet(
+                    cp_id,
+                    Box::new(Expr::LocalGet(throw_param_id)),
+                )));
+            }
+            b.push(Stmt::Expr(Expr::LocalSet(
+                state_id,
+                Box::new(Expr::Number(route.catch_entry_state.unwrap() as f64)),
+            )));
+            b
+        } else {
+            build_async_catch_route_body(
+                route,
+                finallys,
+                state_id,
+                done_id,
+                throw_param_id,
+                inner_catch_id,
+                hoisted_ids,
+                fall_through,
+            )
+        };
         fallback = vec![Stmt::If {
-            condition: catch_route_condition(route, state_id),
+            condition: catch_route_condition(route, state_id, state_based, false),
             then_branch,
             else_branch: Some(fallback),
         }];
@@ -854,23 +907,97 @@ fn build_async_throw_body(
     fallback
 }
 
-fn catch_route_condition(route: &CatchRoute, state_id: LocalId) -> Expr {
+fn catch_route_condition(
+    route: &CatchRoute,
+    state_id: LocalId,
+    state_based: bool,
+    inclusive_lower: bool,
+) -> Expr {
     // Awaited rejection re-enters after the yield state has advanced to its
     // resume/post state, so lifted catch ownership is open on the start state
     // and closed on the post-catch state.
+    //
+    // #4438: for sync state-based routing the upper bound is
+    // `protected_end_state` (the post-last-yield-in-try happy landing state),
+    // which EXCLUDES the catch's own states — a throw inside the catch must
+    // escape to an enclosing handler, not re-enter this one. The legacy inline
+    // (async) path keeps `post_catch_state` as before.
+    //
+    // `inclusive_lower` selects `>=` vs `>` on the start state. The runtime
+    // dispatch wrapper (a `throw` *executing* inside a try) uses `>=`: a throw
+    // in the try's first state runs at exactly `protected_start_state`. The
+    // `.throw()`-injection path uses `>`: it only fires while *suspended* at a
+    // yield, whose resume state is already `> protected_start_state`, and a
+    // yield sitting just before the try (state == protected_start) is outside
+    // the try and must not be caught.
+    let upper = if state_based {
+        route.protected_end_state
+    } else {
+        route.post_catch_state
+    };
+    let lower_op = if inclusive_lower {
+        CompareOp::Ge
+    } else {
+        CompareOp::Gt
+    };
     Expr::Logical {
         op: LogicalOp::And,
         left: Box::new(Expr::Compare {
-            op: CompareOp::Gt,
+            op: lower_op,
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(route.protected_start_state as f64)),
         }),
         right: Box::new(Expr::Compare {
             op: CompareOp::Le,
             left: Box::new(Expr::LocalGet(state_id)),
-            right: Box::new(Expr::Number(route.post_catch_state as f64)),
+            right: Box::new(Expr::Number(upper as f64)),
         }),
     }
+}
+
+/// #4438: build the catch handler for the sync-generator dispatch loop. When a
+/// `throw` executes inside a try during a normal `.next()` dispatch, route the
+/// error to the matching catch's linearized states (set the catch param, jump
+/// to `catch_entry_state`, and `continue` the dispatch loop so the catch body
+/// runs — including any `yield` inside it). When no catch owns the current
+/// state, run any pending `finally`, complete the generator, and rethrow.
+fn build_dispatch_catch_handler(
+    catches: &[CatchRoute],
+    finallys: &[FinallyRoute],
+    state_id: LocalId,
+    done_id: LocalId,
+    err_id: LocalId,
+    hoisted_ids: &std::collections::HashSet<LocalId>,
+) -> Vec<Stmt> {
+    let mut fallback = vec![Stmt::Expr(Expr::LocalSet(
+        done_id,
+        Box::new(Expr::Bool(true)),
+    ))];
+    fallback.extend(build_finally_run_stmts(finallys, state_id, hoisted_ids));
+    fallback.push(Stmt::Throw(Expr::LocalGet(err_id)));
+    for route in catches.iter().rev() {
+        let Some(entry) = route.catch_entry_state else {
+            continue;
+        };
+        let mut then_branch = Vec::new();
+        if let Some(cp_id) = route.param_id {
+            then_branch.push(Stmt::Expr(Expr::LocalSet(
+                cp_id,
+                Box::new(Expr::LocalGet(err_id)),
+            )));
+        }
+        then_branch.push(Stmt::Expr(Expr::LocalSet(
+            state_id,
+            Box::new(Expr::Number(entry as f64)),
+        )));
+        then_branch.push(Stmt::Continue);
+        fallback = vec![Stmt::If {
+            condition: catch_route_condition(route, state_id, true, true),
+            then_branch,
+            else_branch: Some(fallback),
+        }];
+    }
+    fallback
 }
 
 fn build_async_catch_route_body(
@@ -1000,7 +1127,7 @@ fn build_async_throw_body_direct(
     let mut fallback = vec![Stmt::Throw(Expr::LocalGet(throw_param_id))];
 
     for route in catches.into_iter().rev() {
-        let condition = catch_route_condition(&route, state_id);
+        let condition = catch_route_condition(&route, state_id, false, false);
         let then_branch = build_async_catch_route_body_direct(
             route,
             state_id,
