@@ -258,6 +258,13 @@ pub fn transform_generator_function_with_extra_captures(
     // The next() closure parameter — receives the value from next(val) calls
     let next_param_id = alloc_local(next_local_id);
 
+    // #4374: clone the state-dispatch loop so the .throw() closure can
+    // *continue* the state machine after running a catch handler — running
+    // the inlined finally and proceeding to the next yield / completion,
+    // instead of returning {value: undefined, done: false} and deferring to
+    // the next .next(). Only the sync-generator .throw() path uses this.
+    let while_body_for_throw = while_body.clone();
+
     // Build next() method body
     let mut next_body = vec![
         // __sent = <param from next(val)>
@@ -553,8 +560,28 @@ pub fn transform_generator_function_with_extra_captures(
             *next_func_id += 1;
             id
         };
-        let mut throw_body =
-            build_async_throw_body(&catches, &finallys, state_id, throw_param_id, &hoisted_ids);
+        // #4374: sync generators continue the state machine after a catch
+        // (running the inlined finally + reaching the next yield/completion);
+        // async generators keep the existing deferred-resume behavior to stay
+        // byte-identical on the async path.
+        let throw_continuation = if is_async_generator {
+            None
+        } else {
+            Some(while_body_for_throw)
+        };
+        // #4374: fresh binding for the inner catch that re-runs a try's finally
+        // when its catch handler itself throws (catch-rethrow-with-finally).
+        let inner_catch_id = alloc_local(next_local_id);
+        let mut throw_body = build_async_throw_body(
+            &catches,
+            &finallys,
+            state_id,
+            done_id,
+            throw_param_id,
+            inner_catch_id,
+            &hoisted_ids,
+            throw_continuation,
+        );
         if is_async_generator {
             wrap_returns_in_promise(&mut throw_body);
         }
@@ -757,9 +784,18 @@ fn build_async_throw_body(
     catches: &[CatchRoute],
     finallys: &[FinallyRoute],
     state_id: LocalId,
+    done_id: LocalId,
     throw_param_id: LocalId,
+    inner_catch_id: LocalId,
     hoisted_ids: &std::collections::HashSet<LocalId>,
+    // #4374: for sync generators, the cloned state-dispatch loop. When present,
+    // a matched catch route sets the resume state and *falls through* to this
+    // loop, so the inlined finally runs and the generator continues to the next
+    // yield / completion within the `.throw()` call. When `None` (async
+    // generators) the catch route returns {undefined, false} as before.
+    continuation: Option<Vec<Stmt>>,
 ) -> Vec<Stmt> {
+    let fall_through = continuation.is_some();
     // #4374: when no catch handles the throw, run any pending `finally`
     // (innermost first) before propagating the error — `try { yield }
     // finally { ... }` must run its finally on `.throw(e)`. A `finally` that
@@ -767,20 +803,46 @@ fn build_async_throw_body(
     // return inside build_finally_run_stmts). For a try WITH a catch, the
     // catch route below returns first, so this only fires for
     // try/finally-without-catch and for truly unhandled throws.
-    let mut fallback = build_finally_run_stmts(finallys, state_id, hoisted_ids);
+    let mut fallback = Vec::new();
+    // An unhandled throw completes the generator (subsequent .next() must
+    // return {done: true}). Sync generators only — async generators keep the
+    // existing deferred behavior to stay byte-identical.
+    if fall_through {
+        fallback.push(Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))));
+    }
+    fallback.extend(build_finally_run_stmts(finallys, state_id, hoisted_ids));
     fallback.push(Stmt::Throw(Expr::LocalGet(throw_param_id)));
 
     // Build nested `if` dispatch in source order. We iterate from the back so
     // the first collected route is tested first; nested try/catch routes are
     // collected before their containing route and should win on overlap.
     for route in catches.iter().rev() {
-        let then_branch =
-            build_async_catch_route_body(route, state_id, throw_param_id, hoisted_ids);
+        let then_branch = build_async_catch_route_body(
+            route,
+            finallys,
+            state_id,
+            done_id,
+            throw_param_id,
+            inner_catch_id,
+            hoisted_ids,
+            fall_through,
+        );
         fallback = vec![Stmt::If {
             condition: catch_route_condition(route, state_id),
             then_branch,
             else_branch: Some(fallback),
         }];
+    }
+
+    // #4374: append the continuation loop. Only a fallen-through catch route
+    // reaches it (the no-catch branch throws and the catch routes either
+    // `return` on a user `return`/finally-return or fall through after setting
+    // the resume state).
+    if let Some(cont) = continuation {
+        fallback.push(Stmt::While {
+            condition: Expr::Bool(true),
+            body: cont,
+        });
     }
 
     fallback
@@ -807,9 +869,17 @@ fn catch_route_condition(route: &CatchRoute, state_id: LocalId) -> Expr {
 
 fn build_async_catch_route_body(
     route: &CatchRoute,
+    finallys: &[FinallyRoute],
     state_id: LocalId,
+    done_id: LocalId,
     throw_param_id: LocalId,
+    inner_catch_id: LocalId,
     hoisted_ids: &std::collections::HashSet<LocalId>,
+    // #4374: when true (sync generators), run the catch body, set the resume
+    // state, and fall through to the caller's continuation loop instead of
+    // returning {undefined, false}. A user `return`/finally-return inside the
+    // catch still exits (it's rewritten to an iter-result return below).
+    fall_through: bool,
 ) -> Vec<Stmt> {
     let mut body = Vec::new();
     if let Some(cp_id) = route.param_id {
@@ -823,13 +893,48 @@ fn build_async_catch_route_body(
     rewrite_hoisted_lets_in_stmts(&mut rewritten, hoisted_ids);
     rewrite_yield_to_await_in_stmts(&mut rewritten);
     rewrite_catch_returns_to_iter_result(&mut rewritten);
-    body.extend(rewritten);
+
+    // #4374: if this try also has a (sync) finally, a `throw` inside the catch
+    // handler must still run that finally before propagating. The normal
+    // (catch completes) path runs the finally via the inlined post-catch state
+    // in the continuation loop, so we only need to cover the throwing path:
+    // wrap the catch body in `try { <catch> } catch (e) { <finally>; throw e }`.
+    // On normal completion the inner catch never fires (no double finally run).
+    let matching_finally = if fall_through {
+        finallys.iter().find(|f| {
+            !f.has_yields
+                && f.protected_start_state == route.protected_start_state
+                && f.post_finally_state == route.post_catch_state
+        })
+    } else {
+        None
+    };
+    if let Some(fin) = matching_finally {
+        let mut fin_body = fin.body.clone();
+        rewrite_hoisted_lets_in_stmts(&mut fin_body, hoisted_ids);
+        rewrite_catch_returns_to_iter_result(&mut fin_body);
+        let mut handler = vec![Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true))))];
+        handler.extend(fin_body);
+        handler.push(Stmt::Throw(Expr::LocalGet(inner_catch_id)));
+        body.push(Stmt::Try {
+            body: rewritten,
+            catch: Some(CatchClause {
+                param: Some((inner_catch_id, "__gen_fin_e".to_string())),
+                body: handler,
+            }),
+            finally: None,
+        });
+    } else {
+        body.extend(rewritten);
+    }
 
     body.push(Stmt::Expr(Expr::LocalSet(
         state_id,
         Box::new(Expr::Number(route.post_catch_state as f64)),
     )));
-    body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, false))));
+    if !fall_through {
+        body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, false))));
+    }
     body
 }
 
