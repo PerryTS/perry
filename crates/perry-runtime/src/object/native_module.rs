@@ -3663,8 +3663,14 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("http", "_connectionListener") => Some(1),
         ("module", "register" | "registerHooks") => Some(1),
         // #3904: modern V8 diagnostics/profiler exports (Node .length values).
-        ("v8", "getCppHeapStatistics" | "startCpuProfile") => Some(0),
-        ("v8", "getHeapSnapshot" | "isStringOneByteRepresentation" | "queryObjects") => Some(1),
+        ("v8", "getCppHeapStatistics") => Some(0),
+        (
+            "v8",
+            "getHeapSnapshot"
+            | "isStringOneByteRepresentation"
+            | "queryObjects"
+            | "startCpuProfile",
+        ) => Some(1),
         ("v8", "writeHeapSnapshot") => Some(2),
         // #3906: implemented top-level v8 helpers reachable as bound callables.
         ("v8", "serialize" | "deserialize") => Some(1),
