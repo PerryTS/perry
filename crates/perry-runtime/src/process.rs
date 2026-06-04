@@ -974,6 +974,24 @@ extern "C" fn process_permission_has_thunk(
     ))
 }
 
+extern "C" fn process_permission_drop_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    scope_value: f64,
+    reference_value: f64,
+) -> f64 {
+    let Some(_scope) = module_value_to_string(scope_value) else {
+        throw_permission_arg_type("scope", scope_value);
+    };
+    let reference_js = JSValue::from_bits(reference_value.to_bits());
+    if !(reference_js.is_undefined()
+        || reference_js.is_null()
+        || module_value_to_string_or_buffer(reference_value).is_some())
+    {
+        throw_permission_arg_type("reference", reference_value);
+    }
+    undefined_value()
+}
+
 fn process_permission_value() -> Option<f64> {
     if !process_permission_enabled() {
         return None;
@@ -988,11 +1006,16 @@ fn process_permission_value() -> Option<f64> {
         return Some(cached);
     }
 
-    let obj = crate::object::js_object_alloc(0, 1);
+    let obj = crate::object::js_object_alloc(0, 2);
     module_set_field(
         obj,
         "has",
         module_function2("has", process_permission_has_thunk, 2),
+    );
+    module_set_field(
+        obj,
+        "drop",
+        module_function2("drop", process_permission_drop_thunk, 2),
     );
     let value = module_object_value(obj);
     CACHED_PERMISSION.with(|c| c.set(value));

@@ -379,6 +379,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             receiver,
             strict,
         } => {
+            if matches!(target.as_ref(), Expr::ProcessEnv) {
+                if let Expr::String(property) = key.as_ref() {
+                    let key_idx = ctx.strings.intern(property);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let v = lower_expr(ctx, value)?;
+                    let blk = ctx.block();
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_handle = unbox_to_i64(blk, &key_box);
+                    blk.call_void("js_setenv", &[(I64, &key_handle), (DOUBLE, &v)]);
+                    return Ok(v);
+                }
+            }
             if let Expr::String(property) = key.as_ref() {
                 if matches!(property.as_str(), "caller" | "arguments")
                     && same_side_effect_free_receiver(target, receiver)
