@@ -257,6 +257,16 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         } if module == "buffer" && method == "copyBytesFrom" => {
             Some(HirType::Named("Uint8Array".into()))
         }
+        Expr::NativeMethodCall {
+            module,
+            method,
+            object: None,
+            ..
+        } if matches!(module.as_str(), "http" | "https")
+            && matches!(method.as_str(), "request" | "get") =>
+        {
+            Some(HirType::Named("ClientRequest".into()))
+        }
         // Compare results are now NaN-boxed booleans (TAG_TRUE/FALSE).
         // Type-refining the local as Boolean lets is_numeric_expr
         // skip the fast path (which would emit fcmp/sitofp on a NaN

@@ -91,7 +91,7 @@ use resolve::{
     is_in_compile_package, is_in_perry_native_package, is_js_file, parse_native_library_manifest,
     parse_package_specifier, resolve_import,
 };
-use strip_dedup::strip_duplicate_objects_from_lib;
+use strip_dedup::{strip_duplicate_objects_from_lib, strip_duplicate_objects_from_well_known_lib};
 use targets::{
     apple_sdk_version, compile_for_android_widget, compile_for_ios_widget, compile_for_wasm,
     compile_for_watchos_widget, compile_for_wearos_tile, find_visionos_swift_runtime,
@@ -4883,6 +4883,7 @@ pub fn run_with_parse_cache(
         &runtime_lib,
         &stdlib_lib,
         &optimized_libs.well_known_libs,
+        optimized_libs.prefer_well_known_before_stdlib,
         &wasm_host_lib,
         &exe_path,
         format,

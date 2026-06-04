@@ -41,6 +41,11 @@ pub struct OptimizedLibs {
     /// is *also* stripped from the rebuild so the link line stays
     /// free of duplicate `_js_*` symbols.
     pub well_known_libs: Vec<PathBuf>,
+    /// True when the stdlib archive is the prebuilt full archive rather
+    /// than an optimized rebuild with well-known features stripped. In that
+    /// fallback shape, wrapper archives must appear before stdlib so their
+    /// duplicate Node binding symbols satisfy the object files first.
+    pub prefer_well_known_before_stdlib: bool,
 }
 
 impl OptimizedLibs {
@@ -52,6 +57,7 @@ impl OptimizedLibs {
             stdlib_bc: None,
             extra_bc: Vec::new(),
             well_known_libs: Vec::new(),
+            prefer_well_known_before_stdlib: false,
         }
     }
 }
@@ -85,6 +91,7 @@ pub(super) fn resolve_no_auto_optimized_libs(
         Vec::new()
     };
     OptimizedLibs {
+        prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
         well_known_libs,
         ..OptimizedLibs::empty()
     }
@@ -519,6 +526,7 @@ pub(super) fn build_optimized_libs(
                 Vec::new()
             };
             return OptimizedLibs {
+                prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
                 well_known_libs,
                 ..OptimizedLibs::empty()
             };
@@ -1010,6 +1018,7 @@ pub(super) fn build_optimized_libs(
         stdlib_bc,
         extra_bc,
         well_known_libs,
+        prefer_well_known_before_stdlib: false,
     }
 }
 
@@ -1020,13 +1029,10 @@ pub(super) fn build_optimized_libs(
 /// The in-tree path strips the matching perry-stdlib feature and rebuilds
 /// stdlib so the ext lib and stdlib don't both define the same `_js_*`
 /// symbols. Out-of-tree we can't rebuild — the link uses the prebuilt full
-/// `libperry_stdlib.a` and the ext lib is appended *after* it. That's safe:
-/// the ext lib's only otherwise-undefined symbols (e.g.
-/// `js_node_http_create_server_with_options`, `js_node_http_server_listen`,
-/// `js_node_http_res_end`) are server-side and absent from stdlib, so the
-/// linker pulls just those archive members; the ext crate's *client*-side
-/// duplicates (`js_http_*`) are never pulled because stdlib already resolves
-/// them.
+/// `libperry_stdlib.a`, so the no-auto/fallback linker path places wrappers
+/// before stdlib. That lets wrapper factories and their duplicate client-side
+/// follow-up symbols come from the same archive while still letting the full
+/// stdlib satisfy unrelated bundled modules.
 ///
 /// Each well-known lib is located through `find_library`, which honours the
 /// `PERRY_LIB_DIR` / `PERRY_RUNTIME_DIR` overrides and the exe-dir /

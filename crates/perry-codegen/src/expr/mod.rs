@@ -54,6 +54,7 @@ mod native_record;
 mod object_literal;
 mod pod_layout_constants;
 mod pod_record;
+mod property_get_names;
 mod range_facts;
 mod strings;
 mod typed_feedback;

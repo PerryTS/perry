@@ -32,6 +32,9 @@ use crate::type_analysis::{
 #[allow(unused_imports)]
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
+use super::property_get_names::{
+    is_headers_method_name, is_http_client_request_method_name, is_url_pattern_data_property,
+};
 #[allow(unused_imports)]
 use super::{
     buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
@@ -49,37 +52,6 @@ use super::{
     variant_name, ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract,
     TypedFeedbackKind,
 };
-
-fn is_headers_method_name(name: &str) -> bool {
-    matches!(
-        name,
-        "append"
-            | "delete"
-            | "entries"
-            | "forEach"
-            | "get"
-            | "getSetCookie"
-            | "has"
-            | "keys"
-            | "set"
-            | "values"
-    )
-}
-
-fn is_url_pattern_data_property(name: &str) -> bool {
-    matches!(
-        name,
-        "protocol"
-            | "username"
-            | "password"
-            | "hostname"
-            | "port"
-            | "pathname"
-            | "search"
-            | "hash"
-            | "hasRegExpGroups"
-    )
-}
 
 fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &str) -> bool {
     ctx.classes
@@ -1293,6 +1265,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(blk.call(
                         DOUBLE,
                         "js_headers_method_value",
+                        &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
+                    ));
+                }
+                if class_name == "ClientRequest" && is_http_client_request_method_name(property) {
+                    let recv_box = lower_expr(ctx, object)?;
+                    let key_idx = ctx.strings.intern(property);
+                    let entry = ctx.strings.entry(key_idx);
+                    let bytes_global = format!("@{}", entry.bytes_global);
+                    let len_str = entry.byte_len.to_string();
+                    let blk = ctx.block();
+                    let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_class_method_bind",
                         &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
                     ));
                 }

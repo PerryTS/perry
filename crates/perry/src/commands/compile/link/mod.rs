@@ -34,7 +34,8 @@ use super::{
     find_geisterhand_stdlib, find_geisterhand_ui, find_lld_link, find_llvm_tool,
     find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk, find_stdlib_library,
     find_ui_library, find_visionos_swift_runtime, find_watchos_swift_runtime, rust_target_triple,
-    strip_duplicate_objects_from_lib, windows_pe_subsystem_flag, CompilationContext,
+    strip_duplicate_objects_from_lib, strip_duplicate_objects_from_well_known_lib,
+    windows_pe_subsystem_flag, CompilationContext,
 };
 
 mod platform_cmd;
@@ -231,6 +232,11 @@ pub(super) fn build_and_run_link(
     // optimize rebuild, so the resulting link contains exactly one
     // copy of each `_js_<package>_*` symbol — no duplicates.
     well_known_libs: &[PathBuf],
+    // No-auto / auto-fallback keeps the full prebuilt stdlib, so the
+    // matching perry-stdlib feature was not stripped. Put wrappers first
+    // in that shape so wrapper-only handles keep using their own surface
+    // symbols instead of the bundled stdlib copies.
+    prefer_well_known_before_stdlib: bool,
     // Issue #76 — `libperry_wasm_host.a` (wasmi-backed WebAssembly host
     // runtime). Only `Some(...)` when the user passed `--enable-wasm-runtime`
     // and the archive was located. Appended to the link command after the
@@ -459,6 +465,16 @@ pub(super) fn build_and_run_link(
     let skip_runtime = (is_android || is_watchos || is_visionos)
         && (ctx.needs_ui || is_watchos)
         && find_ui_library(target).is_some();
+    let well_known_libs: Vec<PathBuf> = if prefer_well_known_before_stdlib {
+        well_known_libs
+            .iter()
+            .map(|wk| {
+                strip_duplicate_objects_from_well_known_lib(wk).unwrap_or_else(|_| wk.clone())
+            })
+            .collect()
+    } else {
+        well_known_libs.to_vec()
+    };
     if !skip_runtime {
         if ctx.needs_stdlib || is_windows {
             // On Windows/MSVC, always try to link stdlib because codegen unconditionally
@@ -483,14 +499,21 @@ pub(super) fn build_and_run_link(
                 if is_windows {
                     cmd.arg(runtime_lib);
                 }
+                if prefer_well_known_before_stdlib {
+                    for wk in &well_known_libs {
+                        cmd.arg(wk);
+                    }
+                }
                 cmd.arg(stdlib);
                 // #466 Phase 4 step 2: well-known bindings join the
                 // link line right after perry-stdlib so they cover
                 // the exact `_js_*` symbol gap that was just opened
                 // by stripping the corresponding feature from the
                 // perry-stdlib rebuild.
-                for wk in well_known_libs {
-                    cmd.arg(wk);
+                if !prefer_well_known_before_stdlib {
+                    for wk in &well_known_libs {
+                        cmd.arg(wk);
+                    }
                 }
                 // Also link runtime to supply symbols that may be DCE'd from stdlib's
                 // bundled perry-runtime (e.g. js_closure_unbind_this, js_string_addref)
@@ -518,11 +541,18 @@ pub(super) fn build_and_run_link(
         // Android + UI: runtime is provided by UI lib, but stdlib must still be linked
         // separately (UI lib does not bundle perry-stdlib).
         if let Some(ref stdlib) = stdlib_lib {
+            if prefer_well_known_before_stdlib {
+                for wk in &well_known_libs {
+                    cmd.arg(wk);
+                }
+            }
             cmd.arg(stdlib);
             // #466 Phase 4 step 2: see the parallel comment in the
             // non-Android branch above.
-            for wk in well_known_libs {
-                cmd.arg(wk);
+            if !prefer_well_known_before_stdlib {
+                for wk in &well_known_libs {
+                    cmd.arg(wk);
+                }
             }
         } else {
             eprintln!("Warning: stdlib required but libperry_stdlib.a not found");

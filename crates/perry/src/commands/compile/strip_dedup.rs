@@ -14,10 +14,18 @@ use std::process::Command;
 
 use super::{find_library, find_llvm_tool, find_stdlib_library};
 
-/// Parse `llvm-nm --defined-only --format=just-symbols` output into a
-/// per-member symbol map.
+const FORCE_EXCLUDE_SYMBOLS: &[&str] = &["js_stdlib_init_dispatch", "js_stdlib_process_pending"];
+
+fn find_path_tool(name: &str) -> Option<PathBuf> {
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths)
+        .map(|dir| dir.join(name))
+        .find(|path| path.is_file())
+}
+
+/// Parse `nm --defined-only` archive output into a per-member symbol map.
 ///
-/// Output shape:
+/// LLVM `--format=just-symbols` output shape:
 /// ```text
 /// member1.o:
 /// SYM_A
@@ -27,9 +35,10 @@ use super::{find_library, find_llvm_tool, find_stdlib_library};
 /// SYM_C
 /// ```
 /// Lines ending in `:` start a member; subsequent non-empty lines are
-/// symbol names. Some llvm-nm versions wrap the header as
-/// `archive.a(member.o):` — we strip the parens so the map is keyed off
-/// the bare member name, matching `ar t` output.
+/// symbol names. GNU `nm --format=bsd` uses the same member headers but
+/// includes address/type fields before each symbol. Some nm versions wrap
+/// the header as `archive.a(member.o):` — we strip the parens so the map is
+/// keyed off the bare member name, matching `ar t` output.
 fn parse_nm_archive_output(
     nm_stdout: &str,
 ) -> std::collections::HashMap<String, std::collections::HashSet<String>> {
@@ -55,20 +64,52 @@ fn parse_nm_archive_output(
         } else if let Some(ref m) = current {
             map.entry(m.clone())
                 .or_default()
-                .insert(trimmed.to_string());
+                .insert(parse_nm_symbol_line(trimmed).to_string());
         }
     }
     map
 }
 
-/// Run `llvm-nm --defined-only --format=just-symbols` on an archive and
-/// parse the output into a per-member symbol map. Returns `None` if the
-/// nm invocation fails so callers can fall back to the legacy
-/// name-pattern path.
+fn parse_nm_symbol_line(line: &str) -> &str {
+    let mut parts = line.split_whitespace();
+    let first = parts.next().unwrap_or(line);
+    let second = parts.next();
+    if let Some(value) = second {
+        if is_nm_symbol_type(value) {
+            return parts.next().unwrap_or(line);
+        }
+    }
+    if is_nm_symbol_type(first) {
+        return second.unwrap_or(line);
+    }
+    line
+}
+
+fn is_nm_symbol_type(value: &str) -> bool {
+    value.len() == 1 && value.as_bytes()[0].is_ascii_alphabetic()
+}
+
+/// Run `nm --defined-only` on an archive and parse the output into a
+/// per-member symbol map. Returns `None` if the nm invocation fails so callers
+/// can fall back to the legacy name-pattern path.
 fn collect_archive_symbols_by_member(
     llvm_nm: &Path,
     archive: &Path,
 ) -> Option<std::collections::HashMap<String, std::collections::HashSet<String>>> {
+    let out = Command::new(llvm_nm)
+        .arg("--defined-only")
+        .arg("--format=bsd")
+        .arg(archive)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let parsed = parse_nm_archive_output(&String::from_utf8_lossy(&out.stdout));
+    if !parsed.is_empty() {
+        return Some(parsed);
+    }
+
     let out = Command::new(llvm_nm)
         .arg("--defined-only")
         .arg("--format=just-symbols")
@@ -118,14 +159,14 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     let lib_name = lib_path.file_name().and_then(|f| f.to_str()).unwrap_or("?");
     eprintln!("[strip-dedup] Processing: {}", lib_path.display());
 
-    let llvm_ar = match find_llvm_tool("llvm-ar") {
+    let llvm_ar = match find_llvm_tool("llvm-ar").or_else(|| find_path_tool("ar")) {
         Some(ar) => {
-            eprintln!("[strip-dedup] llvm-ar found: {}", ar.display());
+            eprintln!("[strip-dedup] ar found: {}", ar.display());
             ar
         }
         None => {
-            eprintln!("[strip-dedup] llvm-ar not found, skipping dedup for {lib_name} (optional — install with: rustup component add llvm-tools)");
-            return Err(anyhow::anyhow!("llvm-ar not found"));
+            eprintln!("[strip-dedup] ar not found, skipping dedup for {lib_name}");
+            return Err(anyhow::anyhow!("ar not found"));
         }
     };
 
@@ -294,7 +335,7 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     //
     // Falls back to the legacy `.dll` / `compiler_builtins` short-circuits
     // plus the rlib name-prefix check when llvm-nm isn't available.
-    let llvm_nm = find_llvm_tool("llvm-nm");
+    let llvm_nm = find_llvm_tool("llvm-nm").or_else(|| find_path_tool("nm"));
     let nm_works = llvm_nm.as_ref().is_some_and(|nm| {
         // Probe with a trivial call; if it can't even run, skip the
         // symbol-set path entirely.
@@ -501,6 +542,108 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     Ok(trimmed_lib)
 }
 
+pub(super) fn strip_duplicate_objects_from_well_known_lib(lib_path: &PathBuf) -> Result<PathBuf> {
+    let lib_name = lib_path.file_name().and_then(|f| f.to_str()).unwrap_or("?");
+    eprintln!(
+        "[strip-dedup] Processing well-known wrapper: {}",
+        lib_path.display()
+    );
+
+    let llvm_ar = find_llvm_tool("llvm-ar")
+        .or_else(|| find_path_tool("ar"))
+        .ok_or_else(|| anyhow::anyhow!("ar not found"))?;
+    let objcopy = find_llvm_tool("llvm-objcopy")
+        .or_else(|| find_path_tool("objcopy"))
+        .ok_or_else(|| anyhow::anyhow!("objcopy not found"))?;
+    let nm = find_llvm_tool("llvm-nm")
+        .or_else(|| find_path_tool("nm"))
+        .ok_or_else(|| anyhow::anyhow!("nm not found"))?;
+
+    let abs_staticlib = std::fs::canonicalize(lib_path)?;
+    let symbols_by_member = collect_archive_symbols_by_member(&nm, &abs_staticlib)
+        .ok_or_else(|| anyhow::anyhow!("failed to inspect archive symbols"))?;
+    let affected: std::collections::HashSet<String> = symbols_by_member
+        .iter()
+        .filter(|(_, symbols)| {
+            symbols.iter().any(|s| {
+                FORCE_EXCLUDE_SYMBOLS
+                    .iter()
+                    .any(|forced| s.as_str() == *forced)
+            })
+        })
+        .map(|(member, _)| member.clone())
+        .collect();
+    if affected.is_empty() {
+        return Ok(lib_path.clone());
+    }
+
+    let members_out = Command::new(&llvm_ar)
+        .arg("t")
+        .arg(&abs_staticlib)
+        .output()?;
+    if !members_out.status.success() {
+        return Err(anyhow::anyhow!("failed to list archive members"));
+    }
+    let members: Vec<String> = String::from_utf8_lossy(&members_out.stdout)
+        .lines()
+        .map(|line| line.to_string())
+        .collect();
+
+    let tmp_base = std::env::temp_dir().join(format!("perry_strip_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_base).ok();
+    let extract_dir = tmp_base.join(format!("_{lib_name}_well_known_extract"));
+    let _ = std::fs::remove_dir_all(&extract_dir);
+    std::fs::create_dir_all(&extract_dir)?;
+    let trimmed_lib = tmp_base.join(format!("_{lib_name}_trimmed.lib"));
+
+    let extract_out = Command::new(&llvm_ar)
+        .arg("x")
+        .arg(&abs_staticlib)
+        .current_dir(&extract_dir)
+        .output()?;
+    if !extract_out.status.success() {
+        let stderr = String::from_utf8_lossy(&extract_out.stderr);
+        return Err(anyhow::anyhow!("failed to extract {lib_name}: {stderr}"));
+    }
+
+    for member in &affected {
+        let member_path = extract_dir.join(member);
+        for symbol in FORCE_EXCLUDE_SYMBOLS {
+            let out = Command::new(&objcopy)
+                .arg("--localize-symbol")
+                .arg(symbol)
+                .arg(&member_path)
+                .output()?;
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                return Err(anyhow::anyhow!(
+                    "failed to localize {symbol} in {member}: {stderr}"
+                ));
+            }
+        }
+    }
+
+    let mut ar_cmd = Command::new(&llvm_ar);
+    ar_cmd.arg("crs").arg(&trimmed_lib);
+    for member in &members {
+        ar_cmd.arg(extract_dir.join(member));
+    }
+    let ar_out = ar_cmd.output()?;
+    if !ar_out.status.success() {
+        let stderr = String::from_utf8_lossy(&ar_out.stderr);
+        return Err(anyhow::anyhow!(
+            "failed to create well-known wrapper archive for {lib_name}: {stderr}"
+        ));
+    }
+
+    eprintln!(
+        "[strip-dedup] {lib_name}: localized stdlib dispatch stubs in {} member(s)",
+        affected.len()
+    );
+    let _ = std::fs::remove_dir_all(&extract_dir);
+    Ok(trimmed_lib)
+}
+
 #[cfg(test)]
 mod strip_dedup_tests {
     use super::parse_nm_archive_output;
@@ -536,6 +679,23 @@ _SYM
         let map = parse_nm_archive_output(nm_out);
         assert_eq!(map.len(), 1);
         assert!(map.contains_key("perry_runtime-abc.cgu.0.rcgu.o"));
+    }
+
+    #[test]
+    fn parser_handles_bsd_symbol_lines() {
+        let nm_out = "\
+member_one.o:
+0000000000000000 T _sym_a
+0000000000000010 r .Lprivate
+
+member_two.o:
+0000000000000000 T js_stdlib_init_dispatch
+";
+        let map = parse_nm_archive_output(nm_out);
+        assert_eq!(map.len(), 2);
+        assert!(map["member_one.o"].contains("_sym_a"));
+        assert!(map["member_one.o"].contains(".Lprivate"));
+        assert!(map["member_two.o"].contains("js_stdlib_init_dispatch"));
     }
 
     #[test]
