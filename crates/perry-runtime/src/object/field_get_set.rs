@@ -92,6 +92,7 @@ fn crypto_key_algorithm_name(algo: u8) -> &'static str {
         24 => "KMAC256",
         25 => "AES-OCB",
         26 => "X448",
+        27 => "Ed448",
         _ => "",
     }
 }

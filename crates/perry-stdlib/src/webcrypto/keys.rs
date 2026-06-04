@@ -158,6 +158,68 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         );
         return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
     }
+    if algo_upper == "ED448" {
+        let (private_usages, public_usages) = match validate_key_pair_usages(
+            KeyAlgo::Ed448,
+            usages_bits.to_bits(),
+            "Usages cannot be empty when creating a key.",
+            "Unsupported key usage for an Ed448 key",
+        ) {
+            Ok(u) => u,
+            Err((name, message)) => return reject_with_dom_exception(name, message),
+        };
+        let mut seed = [0u8; 57];
+        rand::rngs::OsRng.fill_bytes(&mut seed);
+        let signing_key = match ed448_goldilocks::SigningKey::try_from(seed.as_slice()) {
+            Ok(k) => k,
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
+        };
+        let public_bytes = signing_key.verifying_key().to_bytes().to_vec();
+
+        let private_buf = alloc_uint8array_from_slice(&seed);
+        let public_buf = alloc_uint8array_from_slice(&public_bytes);
+        if private_buf.is_null() || public_buf.is_null() {
+            return reject_with_dom_exception("OperationError", "The operation failed");
+        }
+        register_crypto_key(
+            private_buf as usize,
+            CryptoKeyMaterial::new(
+                KeyAlgo::Ed448,
+                HashAlgo::Sha256,
+                KeyKind::Private,
+                extractable,
+                private_usages,
+            ),
+        );
+        register_crypto_key(
+            public_buf as usize,
+            CryptoKeyMaterial::new(
+                KeyAlgo::Ed448,
+                HashAlgo::Sha256,
+                KeyKind::Public,
+                true,
+                public_usages,
+            ),
+        );
+
+        let obj = js_object_alloc(0, 2);
+        if obj.is_null() {
+            return reject_with_dom_exception("OperationError", "The operation failed");
+        }
+        let public_key_name = perry_runtime::js_string_from_bytes(b"publicKey".as_ptr(), 9);
+        let private_key_name = perry_runtime::js_string_from_bytes(b"privateKey".as_ptr(), 10);
+        js_object_set_field_by_name(
+            obj,
+            public_key_name,
+            f64::from_bits(JSValue::pointer(public_buf as *const u8).bits()),
+        );
+        js_object_set_field_by_name(
+            obj,
+            private_key_name,
+            f64::from_bits(JSValue::pointer(private_buf as *const u8).bits()),
+        );
+        return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
+    }
     if algo_upper == "X25519" {
         let (private_usages, public_usages) = match validate_key_pair_usages(
             KeyAlgo::X25519,

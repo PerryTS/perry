@@ -139,14 +139,21 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
                 KeyKind::Public
             };
         (ecdh_key_algo_for_curve(curve), HashAlgo::Sha256, kind)
-    } else if algo_upper == "ED25519" && (format_lower == "raw" || format_lower == "jwk") {
+    } else if (algo_upper == "ED25519" || algo_upper == "ED448")
+        && (format_lower == "raw" || format_lower == "jwk")
+    {
         let kind =
             if format_lower == "jwk" && object_field_string(key_bits.to_bits(), b"d").is_some() {
                 KeyKind::Private
             } else {
                 KeyKind::Public
             };
-        (KeyAlgo::Ed25519, HashAlgo::Sha256, kind)
+        let key_algo = if algo_upper == "ED448" {
+            KeyAlgo::Ed448
+        } else {
+            KeyAlgo::Ed25519
+        };
+        (key_algo, HashAlgo::Sha256, kind)
     } else if (algo_upper == "X25519" || algo_upper == "X448")
         && (format_lower == "raw" || format_lower == "jwk")
     {
@@ -264,10 +271,17 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
             return reject_with_dom_exception("OperationError", "The operation failed");
         }
     }
-    if matches!(key_algo, KeyAlgo::Ed25519 | KeyAlgo::X25519 | KeyAlgo::X448) {
-        let expected_len = if key_algo == KeyAlgo::X448 { 56 } else { 32 };
+    if matches!(
+        key_algo,
+        KeyAlgo::Ed25519 | KeyAlgo::Ed448 | KeyAlgo::X25519 | KeyAlgo::X448
+    ) {
+        let expected_len = match key_algo {
+            KeyAlgo::X448 => 56,
+            KeyAlgo::Ed448 => 57,
+            _ => 32,
+        };
         if key_bytes.len() != expected_len {
-            let name = if key_algo == KeyAlgo::X448 {
+            let name = if key_algo == KeyAlgo::X448 || key_algo == KeyAlgo::Ed448 {
                 "DataError"
             } else {
                 "OperationError"
@@ -284,6 +298,18 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
                 let public: Option<[u8; 32]> = key_bytes.as_slice().try_into().ok();
                 public
                     .and_then(|p| ed25519_dalek::VerifyingKey::from_bytes(&p).ok())
+                    .is_some()
+            };
+            if !ok {
+                return reject_with_dom_exception("OperationError", "The operation failed");
+            }
+        } else if key_algo == KeyAlgo::Ed448 {
+            let ok = if kind == KeyKind::Private {
+                ed448_goldilocks::SigningKey::try_from(key_bytes.as_slice()).is_ok()
+            } else {
+                let public: Option<[u8; 57]> = key_bytes.as_slice().try_into().ok();
+                public
+                    .and_then(|p| ed448_goldilocks::VerifyingKey::from_bytes(&p).ok())
                     .is_some()
             };
             if !ok {
@@ -381,6 +407,7 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
                 | KeyAlgo::EcdsaP521
                 | KeyAlgo::EcdhP521
                 | KeyAlgo::Ed25519
+                | KeyAlgo::Ed448
                 | KeyAlgo::X25519
                 | KeyAlgo::X448
         )
@@ -457,7 +484,10 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
             };
             return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
         }
-        if matches!(mat.algo, KeyAlgo::Ed25519 | KeyAlgo::X25519 | KeyAlgo::X448) {
+        if matches!(
+            mat.algo,
+            KeyAlgo::Ed25519 | KeyAlgo::Ed448 | KeyAlgo::X25519 | KeyAlgo::X448
+        ) {
             let obj = match okp_jwk_export_object(&key_bytes, mat) {
                 Some(o) => o,
                 None => return reject_with_dom_exception("OperationError", "The operation failed"),
@@ -562,6 +592,7 @@ pub(super) unsafe fn jwk_okp_bytes(
     let crv = object_field_string(obj_bits, b"crv")?;
     let expected_crv = match key_algo {
         KeyAlgo::Ed25519 => "Ed25519",
+        KeyAlgo::Ed448 => "Ed448",
         KeyAlgo::X25519 => "X25519",
         KeyAlgo::X448 => "X448",
         _ => return None,
@@ -574,7 +605,11 @@ pub(super) unsafe fn jwk_okp_bytes(
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(value.as_bytes())
         .ok()?;
-    let expected_len = if key_algo == KeyAlgo::X448 { 56 } else { 32 };
+    let expected_len = match key_algo {
+        KeyAlgo::X448 => 56,
+        KeyAlgo::Ed448 => 57,
+        _ => 32,
+    };
     if bytes.len() == expected_len {
         Some(bytes)
     } else {
@@ -591,7 +626,10 @@ pub(super) unsafe fn jwk_import_key_bytes(
     if is_ec_key_algo(key_algo) {
         return jwk_ec_bytes(obj_bits, key_algo, kind);
     }
-    if matches!(key_algo, KeyAlgo::Ed25519 | KeyAlgo::X25519 | KeyAlgo::X448) {
+    if matches!(
+        key_algo,
+        KeyAlgo::Ed25519 | KeyAlgo::Ed448 | KeyAlgo::X25519 | KeyAlgo::X448
+    ) {
         return jwk_okp_bytes(obj_bits, key_algo, kind);
     }
     if matches!(
@@ -714,12 +752,17 @@ pub(super) unsafe fn okp_jwk_export_object(
     key_bytes: &[u8],
     mat: CryptoKeyMaterial,
 ) -> Option<*mut perry_runtime::ObjectHeader> {
-    let expected_len = if mat.algo == KeyAlgo::X448 { 56 } else { 32 };
+    let expected_len = match mat.algo {
+        KeyAlgo::X448 => 56,
+        KeyAlgo::Ed448 => 57,
+        _ => 32,
+    };
     if key_bytes.len() != expected_len {
         return None;
     }
     let crv = match mat.algo {
         KeyAlgo::Ed25519 => "Ed25519",
+        KeyAlgo::Ed448 => "Ed448",
         KeyAlgo::X25519 => "X25519",
         KeyAlgo::X448 => "X448",
         _ => return None,
@@ -732,6 +775,10 @@ pub(super) unsafe fn okp_jwk_export_object(
                     .verifying_key()
                     .to_bytes()
                     .to_vec()
+            }
+            KeyAlgo::Ed448 => {
+                let signing_key = ed448_goldilocks::SigningKey::try_from(key_bytes).ok()?;
+                signing_key.verifying_key().to_bytes().to_vec()
             }
             KeyAlgo::X25519 => {
                 let secret: [u8; 32] = key_bytes.try_into().ok()?;

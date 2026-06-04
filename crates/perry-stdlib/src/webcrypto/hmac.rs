@@ -141,6 +141,23 @@ pub unsafe extern "C" fn js_webcrypto_sign(
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret);
         use ed25519_dalek::Signer as _;
         signing_key.sign(&data_bytes).to_bytes().to_vec()
+    } else if algo_upper == "ED448" {
+        if mat.algo != KeyAlgo::Ed448 || mat.kind != KeyKind::Private {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to sign",
+            );
+        }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_SIGN, "Unable to use this key to sign")
+        {
+            return reject_with_dom_exception(name, message);
+        }
+        let signing_key = match ed448_goldilocks::SigningKey::try_from(key_bytes.as_slice()) {
+            Ok(k) => k,
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
+        };
+        signing_key.sign_raw(&data_bytes).to_bytes().to_vec()
     } else if algo_upper == "RSASSA-PKCS1-V1_5" {
         if mat.algo != KeyAlgo::RsassaPkcs1 || mat.kind != KeyKind::Private {
             return reject_with_dom_exception(
@@ -349,6 +366,31 @@ pub unsafe extern "C" fn js_webcrypto_verify(
         };
         use ed25519_dalek::Verifier as _;
         verifying_key.verify(&data_bytes, &signature).is_ok()
+    } else if algo_upper == "ED448" {
+        if mat.algo != KeyAlgo::Ed448 || mat.kind != KeyKind::Public {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to verify",
+            );
+        }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_VERIFY, "Unable to use this key to verify")
+        {
+            return reject_with_dom_exception(name, message);
+        }
+        let public: [u8; 57] = match key_bytes.as_slice().try_into() {
+            Ok(p) => p,
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
+        };
+        let verifying_key = match ed448_goldilocks::VerifyingKey::from_bytes(&public) {
+            Ok(k) => k,
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
+        };
+        let signature = match ed448_goldilocks::Signature::from_slice(&provided_sig) {
+            Ok(sig) => sig,
+            Err(_) => return resolve_with_bool(false),
+        };
+        verifying_key.verify_raw(&signature, &data_bytes).is_ok()
     } else if algo_upper == "RSASSA-PKCS1-V1_5" {
         if mat.algo != KeyAlgo::RsassaPkcs1 || mat.kind != KeyKind::Public {
             return reject_with_dom_exception(

@@ -120,6 +120,7 @@ pub(super) enum KeyAlgo {
     EcdsaP521,
     EcdhP521,
     Ed25519,
+    Ed448,
     X25519,
     X448,
     RsaOaep,
@@ -307,6 +308,7 @@ fn runtime_algo_id(algo: KeyAlgo) -> u8 {
         KeyAlgo::Kmac256 => 24,
         KeyAlgo::AesOcb => 25,
         KeyAlgo::X448 => 26,
+        KeyAlgo::Ed448 => 27,
     }
 }
 
@@ -363,6 +365,7 @@ pub(super) fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
                 24 => KeyAlgo::Kmac256,
                 25 => KeyAlgo::AesOcb,
                 26 => KeyAlgo::X448,
+                27 => KeyAlgo::Ed448,
                 _ => return None,
             };
             let hash = match hash {
@@ -593,6 +596,7 @@ pub(super) fn supported_usages(algo: KeyAlgo, kind: KeyKind) -> u32 {
             | KeyAlgo::EcdsaP384
             | KeyAlgo::EcdsaP521
             | KeyAlgo::Ed25519
+            | KeyAlgo::Ed448
             | KeyAlgo::RsassaPkcs1
             | KeyAlgo::RsaPss,
             KeyKind::Private,
@@ -602,6 +606,7 @@ pub(super) fn supported_usages(algo: KeyAlgo, kind: KeyKind) -> u32 {
             | KeyAlgo::EcdsaP384
             | KeyAlgo::EcdsaP521
             | KeyAlgo::Ed25519
+            | KeyAlgo::Ed448
             | KeyAlgo::RsassaPkcs1
             | KeyAlgo::RsaPss,
             KeyKind::Public,
