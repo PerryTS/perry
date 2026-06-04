@@ -226,7 +226,7 @@ pub(super) fn build_and_run_link(
     ctx: &CompilationContext,
     target: Option<&str>,
     obj_paths: &[PathBuf],
-    obj_fingerprints: &[String],
+    obj_fingerprints: &[Option<String>],
     compiled_features: &[String],
     runtime_lib: &Path,
     stdlib_lib: &Option<PathBuf>,

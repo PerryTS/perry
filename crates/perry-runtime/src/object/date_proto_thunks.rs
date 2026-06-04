@@ -131,7 +131,15 @@ extern "C" fn date_to_json(_closure: *const crate::closure::ClosureHeader) -> f6
             return f64::from_bits(crate::value::TAG_NULL);
         }
     }
-    // Step 4: Invoke(this, "toISOString").
+    // Step 4: Invoke(this, "toISOString"). For a real Date, dispatch straight
+    // to the runtime helper: `js_native_call_method` does not resolve the
+    // reflective `toISOString` on a `DateCell` receiver and would fall back to
+    // the generic `[object Object]` Object.prototype.toString. Other receivers
+    // (a plain object carrying its own `toISOString`) use the ordinary Invoke.
+    if crate::date::is_date_value(this) {
+        let s = crate::date::js_date_to_iso_string_or_throw(this);
+        return crate::value::js_nanbox_string(s as i64);
+    }
     let name = b"toISOString";
     unsafe {
         crate::object::js_native_call_method(

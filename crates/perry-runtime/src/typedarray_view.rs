@@ -109,6 +109,9 @@ pub extern "C" fn js_typed_array_view(
     // so copy the backing bytes at `offset` directly to preserve element values.
     let count = elem_count.max(0) as u32;
     let ta = typed_array_alloc(kind, count);
+    if crate::buffer::is_shared_array_buffer(addr) {
+        crate::typedarray::mark_typed_array_shared_backing(ta);
+    }
     if count > 0 {
         unsafe {
             let src_data = crate::buffer::buffer_data(src).add(offset as usize);

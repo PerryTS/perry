@@ -5,18 +5,6 @@
     "allowed_statuses": "Statuses accepted for the module. `pass` is always accepted as an improvement."
   },
   "modules": {
-    "dns": {
-      "test_id": "test_parity_dns",
-      "issue": "812",
-      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
-      "max_diff_lines": null
-    },
-    "dns_promises": {
-      "test_id": "test_parity_dns_promises",
-      "issue": "812",
-      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
-      "max_diff_lines": null
-    },
     "http": {
       "test_id": "test_parity_http",
       "issue": "812",

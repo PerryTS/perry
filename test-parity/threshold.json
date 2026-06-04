@@ -8,16 +8,6 @@
   "min_parity_pct": 83.0,
   "default_category_min_parity_pct": 100.0,
   "categories": {
-    "parity/dns": {
-      "min_parity_pct": 0.0,
-      "issue": "793",
-      "reason": "Known node:dns module-inventory gap tracked in known_failures.json."
-    },
-    "parity/dns_promises": {
-      "min_parity_pct": 0.0,
-      "issue": "793",
-      "reason": "Known node:dns/promises module-inventory gap tracked in known_failures.json."
-    },
     "parity/http": {
       "min_parity_pct": 0.0,
       "issue": "793",

@@ -54,9 +54,17 @@ impl LinkCacheStatus {
     }
 
     pub(in crate::commands::compile) fn stats(&self) -> LinkCacheStats {
+        let input_stats = self
+            .state
+            .as_ref()
+            .map(|state| state.stats)
+            .unwrap_or_default();
         LinkCacheStats {
             linked: self.linked,
             skipped: !self.linked,
+            object_fingerprints_used: input_stats.object_fingerprints_used,
+            object_files_hashed: input_stats.object_files_hashed,
+            external_inputs_hashed: input_stats.external_inputs_hashed,
         }
     }
 }
@@ -65,6 +73,14 @@ impl LinkCacheStatus {
 struct LinkCacheState {
     manifest_path: PathBuf,
     link_fingerprint: String,
+    stats: LinkCacheInputStats,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct LinkCacheInputStats {
+    object_fingerprints_used: usize,
+    object_files_hashed: usize,
+    external_inputs_hashed: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -85,6 +101,7 @@ struct LinkFingerprintContext<'a> {
     cwd: PathBuf,
     exe_path: &'a Path,
     obj_paths: &'a [PathBuf],
+    stats: LinkCacheInputStats,
     lib_dirs: Vec<SearchDir>,
     framework_dirs: Vec<SearchDir>,
     msvc_lib_dirs: Vec<SearchDir>,
@@ -126,13 +143,20 @@ pub(super) fn prepare_link_cache_status(
     target: Option<&str>,
     cmd: &Command,
     obj_paths: &[PathBuf],
-    _obj_fingerprints: &[String],
+    obj_fingerprints: &[Option<String>],
     exe_path: &Path,
 ) -> LinkCacheStatus {
     if std::env::var("PERRY_NO_LINK_CACHE").ok().as_deref() == Some("1") {
         return LinkCacheStatus::linked(None);
     }
-    let Some(state) = compute_link_cache_state(cache_root, target, cmd, obj_paths, exe_path) else {
+    let Some(state) = compute_link_cache_state(
+        cache_root,
+        target,
+        cmd,
+        obj_paths,
+        obj_fingerprints,
+        exe_path,
+    ) else {
         return LinkCacheStatus::linked(None);
     };
     let Ok(raw) = fs::read_to_string(&state.manifest_path) else {
@@ -161,6 +185,7 @@ fn compute_link_cache_state(
     target: Option<&str>,
     cmd: &Command,
     obj_paths: &[PathBuf],
+    obj_fingerprints: &[Option<String>],
     exe_path: &Path,
 ) -> Option<LinkCacheState> {
     let cwd = command_cwd(cmd);
@@ -176,20 +201,34 @@ fn compute_link_cache_state(
         feed_file_fingerprint_from(&mut hasher, "perry", &exe, &cwd)?;
     }
 
+    let mut stats = LinkCacheInputStats::default();
     for (idx, obj_path) in obj_paths.iter().enumerate() {
         feed_hash_field(&mut hasher, "object-index", &idx.to_string());
-        feed_file_fingerprint_from(&mut hasher, "object-file", obj_path, &cwd)?;
+        if let Some(fingerprint) = trusted_object_fingerprint(obj_path, obj_fingerprints.get(idx)) {
+            feed_hash_field(
+                &mut hasher,
+                "object-file",
+                &absolute_path_identity_from(obj_path, &cwd),
+            );
+            feed_hash_field(&mut hasher, "object-fingerprint", fingerprint);
+            stats.object_fingerprints_used += 1;
+        } else {
+            feed_file_fingerprint_from(&mut hasher, "object-file", obj_path, &cwd)?;
+            stats.object_files_hashed += 1;
+        }
     }
 
     let mut ctx = LinkFingerprintContext {
         cwd: cwd.clone(),
         exe_path,
         obj_paths,
+        stats,
         lib_dirs: library_path_search_dirs(cmd, &cwd),
         framework_dirs: default_framework_search_dirs(cmd, &cwd),
         msvc_lib_dirs: msvc_lib_search_dirs(cmd, &cwd),
     };
     feed_command_args(&mut hasher, cmd, &mut ctx)?;
+    let stats = ctx.stats;
 
     let link_fingerprint = hex::encode(hasher.finalize());
     let manifest_name = format!(
@@ -204,7 +243,20 @@ fn compute_link_cache_state(
     Some(LinkCacheState {
         manifest_path,
         link_fingerprint,
+        stats,
     })
+}
+
+fn trusted_object_fingerprint<'a>(
+    obj_path: &Path,
+    fingerprint: Option<&'a Option<String>>,
+) -> Option<&'a str> {
+    let fingerprint = fingerprint?.as_deref()?;
+    let metadata = fs::metadata(obj_path).ok()?;
+    if fingerprint.is_empty() || !metadata.is_file() || metadata.len() == 0 {
+        return None;
+    }
+    Some(fingerprint)
 }
 
 fn feed_effective_env(hasher: &mut Sha256, cmd: &Command) {
@@ -367,7 +419,7 @@ fn feed_explicit_file_arg(
     hasher: &mut Sha256,
     role: &str,
     path: &OsStr,
-    ctx: &LinkFingerprintContext<'_>,
+    ctx: &mut LinkFingerprintContext<'_>,
 ) -> Option<()> {
     let candidate = resolve_relative_path(Path::new(path), &ctx.cwd);
     if same_path_from(&candidate, ctx.exe_path, &ctx.cwd) {
@@ -387,7 +439,7 @@ fn feed_explicit_file_arg(
         return Some(());
     }
     if candidate.is_file() {
-        feed_file_fingerprint_from(hasher, role, &candidate, &ctx.cwd)
+        feed_external_file_fingerprint_from(hasher, role, &candidate, ctx)
     } else {
         feed_hash_field(hasher, role, &path.to_string_lossy());
         Some(())
@@ -398,10 +450,11 @@ fn feed_file_content_arg(
     hasher: &mut Sha256,
     role: &str,
     path: &OsStr,
-    ctx: &LinkFingerprintContext<'_>,
+    ctx: &mut LinkFingerprintContext<'_>,
 ) -> Option<()> {
     let candidate = resolve_relative_path(Path::new(path), &ctx.cwd);
     let (hash, size) = hash_file_with_size(&candidate).ok()?;
+    ctx.stats.external_inputs_hashed += 1;
     feed_hash_field(hasher, role, "<content-only>");
     feed_hash_field(hasher, "file-size", &size.to_string());
     feed_hash_field(hasher, "file-sha256", &hash);
@@ -411,11 +464,11 @@ fn feed_file_content_arg(
 fn feed_unix_library(
     hasher: &mut Sha256,
     name: &str,
-    ctx: &LinkFingerprintContext<'_>,
+    ctx: &mut LinkFingerprintContext<'_>,
 ) -> Option<()> {
     feed_hash_field(hasher, "library", name);
     if let Some(path) = resolve_unix_library(name, &ctx.lib_dirs) {
-        return feed_file_fingerprint_from(hasher, "library-file", &path, &ctx.cwd);
+        return feed_external_file_fingerprint_from(hasher, "library-file", &path, ctx);
     }
     if has_non_system_dir(&ctx.lib_dirs) {
         return None;
@@ -427,15 +480,15 @@ fn feed_unix_library(
 fn feed_msvc_library(
     hasher: &mut Sha256,
     name: &str,
-    ctx: &LinkFingerprintContext<'_>,
+    ctx: &mut LinkFingerprintContext<'_>,
 ) -> Option<()> {
     feed_hash_field(hasher, "msvc-library", name);
     let direct = resolve_relative_path(Path::new(name), &ctx.cwd);
     if direct.is_file() {
-        return feed_file_fingerprint_from(hasher, "msvc-library-file", &direct, &ctx.cwd);
+        return feed_external_file_fingerprint_from(hasher, "msvc-library-file", &direct, ctx);
     }
     if let Some(path) = resolve_msvc_library(name, &ctx.msvc_lib_dirs) {
-        return feed_file_fingerprint_from(hasher, "msvc-library-file", &path, &ctx.cwd);
+        return feed_external_file_fingerprint_from(hasher, "msvc-library-file", &path, ctx);
     }
     if has_non_system_dir(&ctx.msvc_lib_dirs) {
         return None;
@@ -444,10 +497,14 @@ fn feed_msvc_library(
     Some(())
 }
 
-fn feed_framework(hasher: &mut Sha256, name: &str, ctx: &LinkFingerprintContext<'_>) -> Option<()> {
+fn feed_framework(
+    hasher: &mut Sha256,
+    name: &str,
+    ctx: &mut LinkFingerprintContext<'_>,
+) -> Option<()> {
     feed_hash_field(hasher, "framework", name);
     if let Some(path) = resolve_framework(name, &ctx.framework_dirs) {
-        return feed_file_fingerprint_from(hasher, "framework-file", &path, &ctx.cwd);
+        return feed_external_file_fingerprint_from(hasher, "framework-file", &path, ctx);
     }
     if has_non_system_dir(&ctx.framework_dirs) {
         return None;
@@ -633,6 +690,17 @@ fn feed_hash_field(hasher: &mut Sha256, name: &str, value: &str) {
     hasher.update([0xff]);
 }
 
+fn feed_external_file_fingerprint_from(
+    hasher: &mut Sha256,
+    role: &str,
+    path: &Path,
+    ctx: &mut LinkFingerprintContext<'_>,
+) -> Option<()> {
+    feed_file_fingerprint_from(hasher, role, path, &ctx.cwd)?;
+    ctx.stats.external_inputs_hashed += 1;
+    Some(())
+}
+
 fn feed_file_fingerprint_from(
     hasher: &mut Sha256,
     role: &str,
@@ -777,21 +845,72 @@ mod tests {
     }
 
     fn write_manifest_for(project: &Path, cmd: &Command, output: &Path, obj_paths: &[PathBuf]) {
-        let first = prepare_link_cache_status(project, None, cmd, obj_paths, &[], output);
+        write_manifest_for_with_fingerprints(project, cmd, output, obj_paths, &[]);
+    }
+
+    fn write_manifest_for_with_fingerprints(
+        project: &Path,
+        cmd: &Command,
+        output: &Path,
+        obj_paths: &[PathBuf],
+        obj_fingerprints: &[Option<String>],
+    ) {
+        let first =
+            prepare_link_cache_status(project, None, cmd, obj_paths, obj_fingerprints, output);
         assert!(first.stats().linked);
         write_link_cache_manifest(&first, output);
     }
 
-    fn assert_skips(project: &Path, cmd: &Command, output: &Path, obj_paths: &[PathBuf]) {
+    fn assert_skips(
+        project: &Path,
+        cmd: &Command,
+        output: &Path,
+        obj_paths: &[PathBuf],
+    ) -> LinkCacheStats {
         let status = prepare_link_cache_status(project, None, cmd, obj_paths, &[], output);
         assert!(status.stats().skipped);
         assert!(!status.stats().linked);
+        status.stats()
     }
 
-    fn assert_links(project: &Path, cmd: &Command, output: &Path, obj_paths: &[PathBuf]) {
+    fn assert_links(
+        project: &Path,
+        cmd: &Command,
+        output: &Path,
+        obj_paths: &[PathBuf],
+    ) -> LinkCacheStats {
         let status = prepare_link_cache_status(project, None, cmd, obj_paths, &[], output);
         assert!(status.stats().linked);
         assert!(!status.stats().skipped);
+        status.stats()
+    }
+
+    fn assert_skips_with_fingerprints(
+        project: &Path,
+        cmd: &Command,
+        output: &Path,
+        obj_paths: &[PathBuf],
+        obj_fingerprints: &[Option<String>],
+    ) -> LinkCacheStats {
+        let status =
+            prepare_link_cache_status(project, None, cmd, obj_paths, obj_fingerprints, output);
+        assert!(status.stats().skipped);
+        assert!(!status.stats().linked);
+        status.stats()
+    }
+
+    fn assert_links_with_fingerprints(
+        project: &Path,
+        cmd: &Command,
+        output: &Path,
+        obj_paths: &[PathBuf],
+        obj_fingerprints: &[Option<String>],
+    ) -> LinkCacheStats {
+        let status =
+            prepare_link_cache_status(project, None, cmd, obj_paths, obj_fingerprints, output);
+        assert!(status.stats().linked);
+        assert!(!status.stats().skipped);
+        status.stats()
     }
 
     #[test]
@@ -822,6 +941,85 @@ mod tests {
 
         fs::write(&input, b"object-v2").unwrap();
         assert_links(project, &cmd, &output, &[input]);
+    }
+
+    #[test]
+    fn link_cache_uses_stable_object_fingerprints_without_hashing_object_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+        let input = project.join("main.o");
+        let output = project.join("app");
+        fs::write(&input, b"object-v1").unwrap();
+        fs::write(&output, b"binary-v1").unwrap();
+        let cmd = fake_link_command(project, &input, &output);
+        let objects = vec![input.clone()];
+        let fingerprints = vec![Some("perry-object-cache:fingerprint-v1".to_string())];
+
+        write_manifest_for_with_fingerprints(project, &cmd, &output, &objects, &fingerprints);
+
+        fs::write(&input, b"object-v2-not-read-by-link-cache").unwrap();
+        let stats = assert_skips_with_fingerprints(project, &cmd, &output, &objects, &fingerprints);
+        assert_eq!(stats.object_fingerprints_used, 1);
+        assert_eq!(stats.object_files_hashed, 0);
+    }
+
+    #[test]
+    fn link_cache_relinks_when_object_fingerprint_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+        let input = project.join("main.o");
+        let output = project.join("app");
+        fs::write(&input, b"object-v1").unwrap();
+        fs::write(&output, b"binary-v1").unwrap();
+        let cmd = fake_link_command(project, &input, &output);
+        let objects = vec![input.clone()];
+        let old_fingerprints = vec![Some("perry-object-cache:fingerprint-v1".to_string())];
+        let new_fingerprints = vec![Some("perry-object-cache:fingerprint-v2".to_string())];
+
+        write_manifest_for_with_fingerprints(project, &cmd, &output, &objects, &old_fingerprints);
+
+        let stats =
+            assert_links_with_fingerprints(project, &cmd, &output, &objects, &new_fingerprints);
+        assert_eq!(stats.object_fingerprints_used, 1);
+        assert_eq!(stats.object_files_hashed, 0);
+    }
+
+    #[test]
+    fn link_cache_relinks_when_fingerprinted_object_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+        let input = project.join("main.o");
+        let output = project.join("app");
+        fs::write(&input, b"object-v1").unwrap();
+        fs::write(&output, b"binary-v1").unwrap();
+        let cmd = fake_link_command(project, &input, &output);
+        let objects = vec![input.clone()];
+        let fingerprints = vec![Some("perry-object-cache:fingerprint-v1".to_string())];
+
+        write_manifest_for_with_fingerprints(project, &cmd, &output, &objects, &fingerprints);
+
+        fs::remove_file(&input).unwrap();
+        assert_links_with_fingerprints(project, &cmd, &output, &objects, &fingerprints);
+    }
+
+    #[test]
+    fn link_cache_hashes_truncated_fingerprinted_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+        let input = project.join("main.o");
+        let output = project.join("app");
+        fs::write(&input, b"object-v1").unwrap();
+        fs::write(&output, b"binary-v1").unwrap();
+        let cmd = fake_link_command(project, &input, &output);
+        let objects = vec![input.clone()];
+        let fingerprints = vec![Some("perry-object-cache:fingerprint-v1".to_string())];
+
+        write_manifest_for_with_fingerprints(project, &cmd, &output, &objects, &fingerprints);
+
+        fs::write(&input, b"").unwrap();
+        let stats = assert_links_with_fingerprints(project, &cmd, &output, &objects, &fingerprints);
+        assert_eq!(stats.object_fingerprints_used, 0);
+        assert_eq!(stats.object_files_hashed, 1);
     }
 
     #[test]
@@ -965,11 +1163,17 @@ mod tests {
         cmd.arg(&extra);
         let objects = vec![input.clone(), extra.clone()];
 
-        write_manifest_for(project, &cmd, &output, &objects);
-        assert_skips(project, &cmd, &output, &objects);
+        let fingerprints = vec![Some("perry-object-cache:main-v1".to_string()), None];
+
+        write_manifest_for_with_fingerprints(project, &cmd, &output, &objects, &fingerprints);
+        let stats = assert_skips_with_fingerprints(project, &cmd, &output, &objects, &fingerprints);
+        assert_eq!(stats.object_fingerprints_used, 1);
+        assert_eq!(stats.object_files_hashed, 1);
 
         fs::write(&extra, b"extra-v2").unwrap();
-        assert_links(project, &cmd, &output, &objects);
+        let stats = assert_links_with_fingerprints(project, &cmd, &output, &objects, &fingerprints);
+        assert_eq!(stats.object_fingerprints_used, 1);
+        assert_eq!(stats.object_files_hashed, 1);
     }
 
     #[test]

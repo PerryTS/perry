@@ -142,6 +142,11 @@ thread_local! {
     /// (~1.0% leaf samples on perf-comprehensive).
     static TYPED_ARRAY_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, u8>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
+    /// Perry currently materializes typed-array views over ArrayBuffer storage
+    /// as owning TypedArrayHeader values. Track which views came from
+    /// SharedArrayBuffer so Atomics.wait can apply Node's shared-buffer guard.
+    static TYPED_ARRAY_SHARED_BACKING: RefCell<crate::fast_hash::PtrHashSet<usize>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_set());
 }
 
 pub fn register_typed_array(ptr: *const TypedArrayHeader, kind: u8) {
@@ -155,6 +160,9 @@ pub fn unregister_typed_array(ptr: *const TypedArrayHeader) {
     TYPED_ARRAY_REGISTRY.with(|r| {
         r.borrow_mut().remove(&owner);
     });
+    TYPED_ARRAY_SHARED_BACKING.with(|r| {
+        r.borrow_mut().remove(&owner);
+    });
     crate::typedarray_props::typed_array_clear_own_props(owner);
 }
 
@@ -162,6 +170,17 @@ pub fn unregister_typed_array(ptr: *const TypedArrayHeader) {
 /// typed array, else None.
 pub fn lookup_typed_array_kind(addr: usize) -> Option<u8> {
     TYPED_ARRAY_REGISTRY.with(|r| r.borrow().get(&addr).copied())
+}
+
+pub(crate) fn mark_typed_array_shared_backing(ptr: *const TypedArrayHeader) {
+    TYPED_ARRAY_SHARED_BACKING.with(|r| {
+        r.borrow_mut().insert(ptr as usize);
+    });
+}
+
+pub(crate) fn typed_array_has_shared_backing(ptr: *const TypedArrayHeader) -> bool {
+    let ptr = clean_ta_ptr(ptr);
+    TYPED_ARRAY_SHARED_BACKING.with(|r| r.borrow().contains(&(ptr as usize)))
 }
 
 #[inline]

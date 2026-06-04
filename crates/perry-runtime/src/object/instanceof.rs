@@ -21,6 +21,9 @@ fn small_native_handle_id(value: f64) -> Option<i64> {
             return Some(raw);
         }
     }
+    if bits > 0 && bits < 0x100000 {
+        return Some(bits as i64);
+    }
     if value.is_finite() && value > 0.0 && value.fract() == 0.0 && value < 0x100000 as f64 {
         return Some(value as i64);
     }
@@ -409,23 +412,17 @@ fn throw_type_error(message: &[u8]) -> ! {
 }
 
 fn is_event_emitter_instance_value(value: f64) -> bool {
+    if let Some(handle) = small_native_handle_id(value) {
+        if let Some(probe) = crate::object::event_emitter_handle_probe() {
+            return unsafe { probe(handle) };
+        }
+        return false;
+    }
+
     if crate::node_stream::is_classic_stream_instance_value(value)
         || is_stream_event_emitter_prototype_value(value)
     {
         return true;
-    }
-
-    let bits = value.to_bits();
-    let jsval = crate::JSValue::from_bits(bits);
-    if !jsval.is_pointer() {
-        return false;
-    }
-    let handle = (bits & crate::value::POINTER_MASK) as i64;
-    if handle <= 0 || handle >= 0x100000 {
-        return false;
-    }
-    if let Some(probe) = crate::object::event_emitter_handle_probe() {
-        return unsafe { probe(handle) };
     }
     false
 }
