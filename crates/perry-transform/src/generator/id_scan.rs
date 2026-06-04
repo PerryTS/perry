@@ -276,6 +276,21 @@ pub fn scan_expr_for_max_local(expr: &Expr, max_id: &mut LocalId) {
             scan_expr_for_max_local(object, max_id);
             scan_expr_for_max_local(value, max_id);
         }
+        // Mirror the func-id scan: `PutValueSet` (strict `obj.f = …`) hides a
+        // Closure in `value` whose locals must bump the max, or the generator
+        // transform's synthesized closures reuse colliding local ids.
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            scan_expr_for_max_local(target, max_id);
+            scan_expr_for_max_local(key, max_id);
+            scan_expr_for_max_local(value, max_id);
+            scan_expr_for_max_local(receiver, max_id);
+        }
         Expr::IndexGet { object, index } => {
             scan_expr_for_max_local(object, max_id);
             scan_expr_for_max_local(index, max_id);
@@ -549,6 +564,24 @@ pub fn scan_expr_for_max_func(expr: &Expr, max_id: &mut FuncId) {
         Expr::PropertySet { object, value, .. } => {
             scan_expr_for_max_func(object, max_id);
             scan_expr_for_max_func(value, max_id);
+        }
+        // Strict `obj.f = function(){...}` lowers to `PutValueSet`, whose
+        // `value` Closure is otherwise invisible to the scan. Without this arm
+        // the generator transform's `next_func_id` starts below that closure's
+        // id, so the synthesized iter `next`/`return`/`throw` closures reuse it —
+        // and at codegen `o.f(...)` dispatches into the generator's `next`,
+        // returning a `{value, done}` iterator result instead of calling `o.f`.
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            scan_expr_for_max_func(target, max_id);
+            scan_expr_for_max_func(key, max_id);
+            scan_expr_for_max_func(value, max_id);
+            scan_expr_for_max_func(receiver, max_id);
         }
         Expr::IndexSet {
             object,
