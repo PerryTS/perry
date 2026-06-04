@@ -1050,7 +1050,17 @@ pub extern "C" fn js_date_apply_setter(
     } else {
         unsafe { std::slice::from_raw_parts(args_ptr, argc) }
     };
-    // setTime: single value, replaces the whole time.
+    // Spec: every `Date.prototype.set*` reads `thisTimeValue` (the receiver's
+    // current `[[DateValue]]`) BEFORE coercing any argument via ToNumber. A
+    // user `valueOf` on an argument can re-enter and mutate this very cell
+    // (test262 `set*/date-value-read-before-tonumber-when-date-is-{valid,
+    // invalid}`); the timestamp captured here is the one the rebuild must use,
+    // not whatever the cell holds after the ToNumber side effects. The brand
+    // check (`this` must be a Date) happens earlier, in the reflective setter
+    // thunks (`object::date_proto_thunks`) and on the codegen instance path.
+    let captured = date_cell_timestamp(date);
+    // setTime: single value, replaces the whole time. The old value is unused
+    // (beyond the brand check above), so no read-before ordering applies.
     if field == 7 {
         let v = if argc == 0 {
             f64::NAN
@@ -1058,6 +1068,36 @@ pub extern "C" fn js_date_apply_setter(
             jsvalue_to_number(args[0])
         };
         return date_cell_store(date, v);
+    }
+    // setYear (annexB): like setFullYear but rebases a truncated year in
+    // `0..=99` to `1900 + y`, operates in local time, and has no UTC variant.
+    if field == 8 {
+        let y_raw = if argc == 0 {
+            f64::NAN
+        } else {
+            jsvalue_to_number(args[0])
+        };
+        let yyyy = if y_raw.is_nan() {
+            f64::NAN
+        } else {
+            let yi = y_raw.trunc();
+            if (0.0..=99.0).contains(&yi) {
+                1900.0 + yi
+            } else {
+                y_raw
+            }
+        };
+        return rebuild_local_with(
+            date,
+            captured,
+            Some(yyyy),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
     }
     // `req(0)` is the *leading*, required component: an omitted leading
     // argument coerces to NaN (e.g. `setHours()` → Invalid Date). Trailing
@@ -1092,9 +1132,9 @@ pub extern "C" fn js_date_apply_setter(
         _ => return date_cell_store(date, f64::NAN),
     };
     if is_utc != 0 {
-        rebuild_with(date, year, month0, day, hour, minute, second, ms)
+        rebuild_with(date, captured, year, month0, day, hour, minute, second, ms)
     } else {
-        rebuild_local_with(date, year, month0, day, hour, minute, second, ms)
+        rebuild_local_with(date, captured, year, month0, day, hour, minute, second, ms)
     }
 }
 
@@ -1291,6 +1331,7 @@ pub extern "C" fn js_date_get_timezone_offset(timestamp: f64) -> f64 {
 #[allow(clippy::too_many_arguments)]
 fn rebuild_with(
     date: f64,
+    timestamp: f64,
     year: Option<f64>,
     month0: Option<f64>,
     day: Option<f64>,
@@ -1299,12 +1340,15 @@ fn rebuild_with(
     second: Option<f64>,
     millisecond: Option<f64>,
 ) -> f64 {
-    let timestamp = date_cell_timestamp(date);
     let (cy, cm0, cd, ch, cmi, cs, cur_ms) = if timestamp.is_nan() {
         // Setting the year revives an Invalid Date (ECMA MakeDate seeds from
-        // year/0/1); any other component setter on an Invalid Date is a no-op.
+        // year/0/1); any other component setter on an Invalid Date returns NaN
+        // WITHOUT writing `[[DateValue]]` (spec step "If t is NaN, return NaN"
+        // precedes SetDateValue), so a `valueOf` that mutated the cell during
+        // argument coercion keeps its effect (test262
+        // `date-value-read-before-tonumber-when-date-is-invalid`).
         if year.is_none() {
-            return date_cell_store(date, timestamp);
+            return f64::NAN;
         }
         (1970i64, 0i64, 1i64, 0i64, 0i64, 0i64, 0i64)
     } else {
@@ -1358,6 +1402,7 @@ fn rebuild_with(
 #[allow(clippy::too_many_arguments)]
 fn rebuild_local_with(
     date: f64,
+    timestamp: f64,
     year: Option<f64>,
     month0: Option<f64>,
     day: Option<f64>,
@@ -1366,10 +1411,11 @@ fn rebuild_local_with(
     second: Option<f64>,
     millisecond: Option<f64>,
 ) -> f64 {
-    let timestamp = date_cell_timestamp(date);
     let (cy, cm0, cd, ch, cmi, cs, cur_ms) = if timestamp.is_nan() {
+        // See `rebuild_with`: a NaN time value with no year override returns NaN
+        // without touching `[[DateValue]]`.
         if year.is_none() {
-            return date_cell_store(date, timestamp);
+            return f64::NAN;
         }
         (1970i64, 0i64, 1i64, 0i64, 0i64, 0i64, 0i64)
     } else {

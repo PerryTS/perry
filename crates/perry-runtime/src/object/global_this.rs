@@ -4073,6 +4073,10 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             // MUST run after the OBJECT_PROTO_METHODS block, which would
             // otherwise re-clobber `valueOf` with the generic Object no-op.
             date_proto_thunks::install_date_proto_getters(proto_obj);
+            // Same treatment for the mutating setters: `Date.prototype.setX`
+            // brand-checks `this`, reads `[[DateValue]]` before coercing args,
+            // then mutates the cell. Also after the OBJECT_PROTO_METHODS block.
+            date_proto_thunks::install_date_proto_setters(proto_obj);
             install_proto_method(
                 proto_obj,
                 "isPrototypeOf",
