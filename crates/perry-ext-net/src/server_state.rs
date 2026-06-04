@@ -100,6 +100,28 @@ pub(crate) fn socket_closed(server_id: i64) {
     }
 }
 
+/// Returns true while queued net events, connecting/open sockets, or listening
+/// servers need the runtime event loop to stay alive. Constructed but
+/// unlistened sockets/servers match Node by not keeping the process alive.
+pub(crate) fn has_active_handles() -> bool {
+    if !statics::pending_events().lock().unwrap().is_empty() {
+        return true;
+    }
+    if statics::sockets()
+        .lock()
+        .unwrap()
+        .values()
+        .any(|socket| !socket.destroyed && (socket.is_open || socket.pending_rx.is_none()))
+    {
+        return true;
+    }
+    statics::servers()
+        .lock()
+        .unwrap()
+        .values()
+        .any(|server| server.listening || server.shutdown_tx.is_some())
+}
+
 #[no_mangle]
 pub extern "C" fn js_net_server_get_listening(handle: i64) -> f64 {
     js_bool(crate::js_net_server_listening(handle) != 0)

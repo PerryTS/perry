@@ -400,6 +400,8 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                             ("tls", "createServer" | "Server") => Some(("tls", "Server")),
                             ("net", "Socket") => Some(("net", "Socket")),
                             ("net", "Server") => Some(("net", "Server")),
+                            ("net", "BlockList") => Some(("net", "BlockList")),
+                            ("net", "SocketAddress") => Some(("net", "SocketAddress")),
                             _ => None,
                         };
                         if let Some((m, c)) = native_class {

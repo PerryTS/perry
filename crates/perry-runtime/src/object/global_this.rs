@@ -3052,6 +3052,71 @@ extern "C" fn bigint_as_uint_n_thunk(
     bigint_as_n_dispatch(bits, value, false)
 }
 
+extern "C" fn json_parse_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    text: f64,
+    reviver: f64,
+) -> f64 {
+    let text_ptr = crate::value::js_get_string_pointer_unified(text) as *const crate::StringHeader;
+    let reviver_value = JSValue::from_bits(reviver.to_bits());
+    let parsed = unsafe {
+        if reviver_value.is_pointer()
+            && crate::closure::is_closure_ptr(reviver_value.as_pointer::<u8>() as usize)
+        {
+            crate::json::js_json_parse_with_reviver(
+                text_ptr,
+                reviver_value.as_pointer::<crate::closure::ClosureHeader>() as i64,
+            )
+        } else {
+            crate::json::js_json_parse(text_ptr)
+        }
+    };
+    f64::from_bits(parsed.bits())
+}
+
+extern "C" fn json_stringify_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+    replacer: f64,
+    space: f64,
+) -> f64 {
+    f64::from_bits(unsafe { crate::json::js_json_stringify_full(value, replacer, space) as u64 })
+}
+
+extern "C" fn json_raw_json_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    text: f64,
+) -> f64 {
+    unsafe { crate::json::js_json_raw_json(text) }
+}
+
+extern "C" fn json_is_raw_json_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    unsafe { crate::json::js_json_is_raw_json(value) }
+}
+
+extern "C" fn reflect_apply_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    target: f64,
+    this_arg: f64,
+    args: f64,
+) -> f64 {
+    crate::proxy::js_reflect_apply(target, this_arg, args)
+}
+
+extern "C" fn symbol_for_thunk(_closure: *const crate::closure::ClosureHeader, key: f64) -> f64 {
+    unsafe { crate::symbol::js_symbol_for(key) }
+}
+
+extern "C" fn symbol_key_for_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    symbol: f64,
+) -> f64 {
+    unsafe { crate::symbol::js_symbol_key_for(symbol) }
+}
+
 extern "C" fn number_is_safe_integer_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
@@ -3282,6 +3347,7 @@ fn install_constructor_static_with_call_arity(
     }
     super::native_module::set_bound_native_closure_name(closure, name);
     super::native_module::set_builtin_closure_length(closure as usize, spec_length);
+    super::native_module::set_builtin_closure_non_constructable(closure as usize);
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
     js_object_set_field_by_name(ctor as *mut ObjectHeader, key, value);
@@ -3457,6 +3523,10 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
                 false,
             );
         }
+        "Symbol" => {
+            install_constructor_static(ctor, "for", symbol_for_thunk as *const u8, 1, false);
+            install_constructor_static(ctor, "keyFor", symbol_key_for_thunk as *const u8, 1, false);
+        }
         "ArrayBuffer" => {
             install_constructor_static(
                 ctor,
@@ -3551,6 +3621,7 @@ pub(super) fn install_proto_method(
     // can't distinguish `map` (1) from `slice` (2). Read back by the `.length`
     // value-accessor and `getOwnPropertyDescriptor`.
     super::native_module::set_builtin_closure_length(closure as usize, arity);
+    super::native_module::set_builtin_closure_non_constructable(closure as usize);
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
     js_object_set_field_by_name(proto_obj, key, value);
@@ -3612,6 +3683,7 @@ pub(super) fn install_proto_method_rest_with_length(
     crate::closure::js_register_closure_rest(func_ptr, call_fixed_arity);
     super::native_module::set_bound_native_closure_name(closure, method_name);
     super::native_module::set_builtin_closure_length(closure as usize, spec_length);
+    super::native_module::set_builtin_closure_non_constructable(closure as usize);
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
     js_object_set_field_by_name(proto_obj, key, value);
@@ -3633,19 +3705,17 @@ pub(super) fn install_proto_method_rest_with_length(
     value
 }
 
-/// #4139: reify the `JSON` namespace's own methods for reflection parity. See
-/// `install_math_namespace` for the rationale (call sites are codegen
-/// intrinsics; these no-op-backed fields exist only for reflection).
+/// #4139/#4437: reify the `JSON` namespace's own methods for reflection parity
+/// and detached value calls. Direct call sites are still codegen intrinsics.
 fn install_json_namespace_members(ns_obj: *mut ObjectHeader) {
-    let noop = global_this_builtin_noop_thunk as *const u8;
-    const METHODS: &[(&str, u32)] = &[
-        ("parse", 2),
-        ("stringify", 3),
-        ("rawJSON", 1),
-        ("isRawJSON", 1),
+    const METHODS: &[(&str, *const u8, u32)] = &[
+        ("parse", json_parse_thunk as *const u8, 2),
+        ("stringify", json_stringify_thunk as *const u8, 3),
+        ("rawJSON", json_raw_json_thunk as *const u8, 1),
+        ("isRawJSON", json_is_raw_json_thunk as *const u8, 1),
     ];
-    for (name, arity) in METHODS.iter().copied() {
-        install_proto_method(ns_obj, name, noop, arity);
+    for (name, func_ptr, arity) in METHODS.iter().copied() {
+        install_proto_method(ns_obj, name, func_ptr, arity);
     }
 }
 
@@ -3653,23 +3723,23 @@ fn install_json_namespace_members(ns_obj: *mut ObjectHeader) {
 /// See `install_math_namespace` for the rationale.
 fn install_reflect_namespace_members(ns_obj: *mut ObjectHeader) {
     let noop = global_this_builtin_noop_thunk as *const u8;
-    const METHODS: &[(&str, u32)] = &[
-        ("defineProperty", 3),
-        ("deleteProperty", 2),
-        ("apply", 3),
-        ("construct", 2),
-        ("get", 2),
-        ("getOwnPropertyDescriptor", 2),
-        ("getPrototypeOf", 1),
-        ("has", 2),
-        ("isExtensible", 1),
-        ("ownKeys", 1),
-        ("preventExtensions", 1),
-        ("set", 3),
-        ("setPrototypeOf", 2),
+    let methods = [
+        ("defineProperty", noop, 3),
+        ("deleteProperty", noop, 2),
+        ("apply", reflect_apply_thunk as *const u8, 3),
+        ("construct", noop, 2),
+        ("get", noop, 2),
+        ("getOwnPropertyDescriptor", noop, 2),
+        ("getPrototypeOf", noop, 1),
+        ("has", noop, 2),
+        ("isExtensible", noop, 1),
+        ("ownKeys", noop, 1),
+        ("preventExtensions", noop, 1),
+        ("set", noop, 3),
+        ("setPrototypeOf", noop, 2),
     ];
-    for (name, arity) in METHODS.iter().copied() {
-        install_proto_method(ns_obj, name, noop, arity);
+    for (name, func_ptr, arity) in methods {
+        install_proto_method(ns_obj, name, func_ptr, arity);
     }
 }
 

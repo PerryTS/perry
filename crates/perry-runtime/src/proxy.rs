@@ -1091,6 +1091,10 @@ fn is_callable_function(value: f64) -> bool {
     false
 }
 
+fn is_constructor_function(value: f64) -> bool {
+    is_callable_function(value) && !crate::object::builtin_closure_is_non_constructable_value(value)
+}
+
 /// Forward a `[[Call]]` to `target` (the default behavior when a proxy has no
 /// `apply` trap). If `target` is itself a proxy, recurse so its own trap chain
 /// runs; otherwise invoke the target through the canonical value-call path with
@@ -1189,7 +1193,7 @@ fn forward_construct(target: f64, args_array: f64, new_target: f64) -> f64 {
     if lookup(target).is_some() {
         return js_proxy_construct(target, args_array, new_target);
     }
-    if !is_callable_function(target) {
+    if !is_constructor_function(target) {
         return throw_type_error("target is not a constructor");
     }
     let buf = create_list_from_array_like(args_array);
@@ -1276,7 +1280,7 @@ fn array_from_args(args: &[f64]) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_reflect_construct(target: f64, args_like: f64, new_target: f64) -> f64 {
-    if !is_callable_function(target) {
+    if !is_constructor_function(target) {
         return throw_type_error("target is not a constructor");
     }
     let nt = if new_target.to_bits() == TAG_UNDEFINED {
@@ -1284,7 +1288,7 @@ pub extern "C" fn js_reflect_construct(target: f64, args_like: f64, new_target: 
     } else {
         new_target
     };
-    if !is_callable_function(nt) {
+    if !is_constructor_function(nt) {
         return throw_type_error("newTarget is not a constructor");
     }
     let args = create_list_from_array_like(args_like);

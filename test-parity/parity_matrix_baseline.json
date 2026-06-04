@@ -23,12 +23,6 @@
       "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
       "max_diff_lines": null
     },
-    "net": {
-      "test_id": "test_parity_net",
-      "issue": "812",
-      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
-      "max_diff_lines": null
-    },
     "sqlite": {
       "test_id": "test_parity_sqlite",
       "issue": "812",

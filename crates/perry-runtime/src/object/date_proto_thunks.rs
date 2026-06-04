@@ -102,7 +102,7 @@ extern "C" fn date_to_json(_closure: *const crate::closure::ClosureHeader) -> f6
     let tv = if crate::date::is_date_value(this) {
         crate::date::date_cell_timestamp(this)
     } else {
-        match unsafe { crate::value::ordinary_to_primitive_number_for_add(this) } {
+        match unsafe { crate::value::to_primitive_number(this) } {
             crate::value::OrdinaryToPrimitiveOutcome::Primitive(p) => p,
             // A plain object's default `"[object Object]"` is a String, never a
             // Number, so step 3 (non-finite Number → null) never fires; fall
@@ -165,6 +165,11 @@ extern "C" fn date_to_json(_closure: *const crate::closure::ClosureHeader) -> f6
         return r;
     }
     super::object_ops::throw_object_type_error(b"toISOString is not a function")
+}
+
+#[cfg(test)]
+pub(crate) fn test_date_to_json_current_this() -> f64 {
+    date_to_json(std::ptr::null())
 }
 
 // --- Date constructor static methods (Date.now / Date.parse / Date.UTC) ---

@@ -144,7 +144,7 @@ pub unsafe extern "C" fn js_native_call_method_value(
                 let class_id = (bits & 0xFFFF_FFFF) as u32;
                 let is_prototype_ref = crate::object::class_prototype_ref_id(object).is_some();
                 if is_prototype_ref {
-                    if let Some((func_ptr, param_count, _has_rest)) =
+                    if let Some((func_ptr, param_count, has_rest)) =
                         lookup_class_symbol_method_in_chain(class_id, sym_key, false)
                     {
                         return call_vtable_method(
@@ -153,10 +153,11 @@ pub unsafe extern "C" fn js_native_call_method_value(
                             args_ptr,
                             args_len,
                             param_count,
-                            // Computed symbol methods track `has_rest`, not a
-                            // synthetic-arguments flag, and never synthesize an
-                            // `arguments` object — so pass `false`.
+                            // Computed symbol methods never synthesize an
+                            // `arguments` object, but DO carry a `has_rest`
+                            // flag for a trailing user rest param.
                             false,
+                            has_rest,
                         );
                     }
                 } else {
@@ -199,7 +200,7 @@ pub unsafe extern "C" fn js_native_call_method_value(
                     if !obj.is_null() && is_valid_obj_ptr(obj as *const u8) {
                         let class_id = js_object_get_class_id(obj);
                         if class_id != 0 {
-                            if let Some((func_ptr, param_count, _has_rest)) =
+                            if let Some((func_ptr, param_count, has_rest)) =
                                 lookup_class_symbol_method_in_chain(class_id, sym_key, false)
                             {
                                 let this_i64 = obj as i64;
@@ -210,8 +211,9 @@ pub unsafe extern "C" fn js_native_call_method_value(
                                     args_len,
                                     param_count,
                                     // Computed symbol methods never synthesize an
-                                    // `arguments` object.
+                                    // `arguments` object, but DO carry `has_rest`.
                                     false,
+                                    has_rest,
                                 );
                             }
                         }
@@ -1055,7 +1057,7 @@ pub unsafe extern "C" fn js_native_call_method(
     if (object.to_bits() >> 48) == 0x7FFE {
         let class_id = (object.to_bits() & 0xFFFF_FFFF) as u32;
         if crate::object::class_prototype_ref_id(object).is_some() {
-            if let Some((func_ptr, param_count, has_synthetic_arguments)) =
+            if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
                 crate::object::class_registry::lookup_class_method_in_chain(class_id, method_name)
             {
                 return crate::object::class_registry::call_vtable_method(
@@ -1065,6 +1067,7 @@ pub unsafe extern "C" fn js_native_call_method(
                     args_len,
                     param_count,
                     has_synthetic_arguments,
+                    has_rest,
                 );
             }
         } else if class_id != 0
@@ -2717,7 +2720,7 @@ pub unsafe extern "C" fn js_native_call_method(
             // Vtable lookup for class instances — fast path via per-callsite IC
             let class_id = (*obj).class_id;
             if class_id != 0 {
-                if let Some((func_ptr, param_count, has_synthetic_arguments)) =
+                if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
                     vtable_ic_lookup(class_id, method_name_ptr as usize)
                 {
                     let this_i64 = jsval.as_pointer::<u8>() as i64;
@@ -2728,6 +2731,7 @@ pub unsafe extern "C" fn js_native_call_method(
                         args_len,
                         param_count,
                         has_synthetic_arguments,
+                        has_rest,
                     );
                 }
                 if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
@@ -2754,6 +2758,7 @@ pub unsafe extern "C" fn js_native_call_method(
                                         entry.func_ptr,
                                         entry.param_count,
                                         entry.has_synthetic_arguments,
+                                        entry.has_rest,
                                     );
                                     let this_i64 = jsval.as_pointer::<u8>() as i64;
                                     return call_vtable_method(
@@ -2763,6 +2768,7 @@ pub unsafe extern "C" fn js_native_call_method(
                                         args_len,
                                         entry.param_count,
                                         entry.has_synthetic_arguments,
+                                        entry.has_rest,
                                     );
                                 }
                             }
@@ -3158,7 +3164,7 @@ pub unsafe extern "C" fn js_native_call_method(
             // Vtable lookup — fast path via per-callsite IC
             let class_id = (*obj).class_id;
             if class_id != 0 {
-                if let Some((func_ptr, param_count, has_synthetic_arguments)) =
+                if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
                     vtable_ic_lookup(class_id, method_name_ptr as usize)
                 {
                     let this_i64 = raw_bits as i64;
@@ -3169,6 +3175,7 @@ pub unsafe extern "C" fn js_native_call_method(
                         args_len,
                         param_count,
                         has_synthetic_arguments,
+                        has_rest,
                     );
                 }
                 if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
@@ -3186,6 +3193,7 @@ pub unsafe extern "C" fn js_native_call_method(
                                         entry.func_ptr,
                                         entry.param_count,
                                         entry.has_synthetic_arguments,
+                                        entry.has_rest,
                                     );
                                     let this_i64 = raw_bits as i64;
                                     return call_vtable_method(
@@ -3195,6 +3203,7 @@ pub unsafe extern "C" fn js_native_call_method(
                                         args_len,
                                         entry.param_count,
                                         entry.has_synthetic_arguments,
+                                        entry.has_rest,
                                     );
                                 }
                             }
@@ -3949,6 +3958,7 @@ pub unsafe extern "C" fn js_native_call_method(
                                 args_len,
                                 entry.param_count,
                                 entry.has_synthetic_arguments,
+                                entry.has_rest,
                             );
                         }
                     }
@@ -4034,6 +4044,7 @@ pub unsafe extern "C" fn js_native_call_method(
                                         args_len,
                                         entry.param_count,
                                         entry.has_synthetic_arguments,
+                                        entry.has_rest,
                                     );
                                 }
                             }
