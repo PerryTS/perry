@@ -1402,6 +1402,48 @@ pub fn run_with_parse_cache(
         }
     }
 
+    // Barrel-forwarded function exports need producer-side callable
+    // symbols on the re-exporting module. Example from OpenCode:
+    //
+    //   domhandler/lib/esm/index.js: export * from "./node.js"
+    //   domutils/lib/esm/index.js: export { hasChildren } from "domhandler"
+    //
+    // The predicate body is emitted under node.js, but downstream modules
+    // legitimately reference `perry_fn_<domhandler-index>__hasChildren`.
+    // Emit that symbol as a thin forwarder to the true origin. This is
+    // populated after function arity propagation so rest/arguments call
+    // metadata has already been stamped onto the barrel path.
+    for (module_path, exports) in &all_module_exports {
+        for (export_name, origin_path) in exports {
+            if origin_path == module_path {
+                continue;
+            }
+            let origin_name = all_module_export_origin_names
+                .get(module_path)
+                .and_then(|m| m.get(export_name))
+                .cloned()
+                .unwrap_or_else(|| export_name.clone());
+            let reexport_key = (module_path.clone(), export_name.clone());
+            let origin_key = (origin_path.clone(), origin_name.clone());
+            let Some(param_count) = exported_func_param_counts
+                .get(&reexport_key)
+                .or_else(|| exported_func_param_counts.get(&origin_key))
+                .copied()
+            else {
+                continue;
+            };
+            namespace_reexport_values_by_module
+                .entry(module_path.clone())
+                .or_default()
+                .entry(export_name.clone())
+                .or_insert_with(|| perry_codegen::NamespaceEntryKind::ForeignFunction {
+                    source_prefix: compute_module_prefix(origin_path, &ctx.project_root),
+                    source_local: origin_name,
+                    param_count,
+                });
+        }
+    }
+
     // Propagate exported_func_return_types through ExportAll/ReExport/Named chains.
     // exported_async_funcs is propagated in the same loop so that re-exported async
     // functions remain marked async at every step in the chain.

@@ -869,12 +869,15 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         }
     }
 
-    // Namespace re-exports are value exports too. A consumer of
-    // `export * as NodeWS from "ws"` imports/reads `NodeWS` through
-    // `perry_fn_<this-module>__NodeWS()`. Dynamic namespace materialization
-    // already knew how to build these values, but the ordinary static export
-    // getter was missing, so final link failed with an undefined
-    // `NodeSocket_ts__NodeWS` symbol.
+    // Namespace re-exports and barrel-forwarded functions are value exports
+    // too. A consumer of `export * as NodeWS from "ws"` imports/reads
+    // `NodeWS` through `perry_fn_<this-module>__NodeWS()`. A consumer of
+    // `export * from "./node.js"` may also call
+    // `perry_fn_<barrel>__hasChildren(arg)`, so function-shaped foreign
+    // entries emit callable forwarders rather than zero-arg value getters.
+    // Dynamic namespace materialization already knew how to build these
+    // values, but the ordinary static export getter/forwarder was missing,
+    // so final link failed with undefined barrel symbols.
     {
         let mut entries: Vec<(&String, &NamespaceEntryKind)> =
             cross_module.namespace_reexport_values.iter().collect();
@@ -884,15 +887,57 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             if llmod.has_function(&getter) {
                 continue;
             }
+            if let NamespaceEntryKind::ForeignFunction {
+                source_prefix,
+                source_local,
+                param_count,
+            } = kind
+            {
+                let target = format!("perry_fn_{}__{}", source_prefix, sanitize(source_local));
+                let param_types: Vec<LlvmType> =
+                    std::iter::repeat_n(DOUBLE, *param_count).collect();
+                llmod.declare_function(&target, DOUBLE, &param_types);
+
+                let params: Vec<(LlvmType, String)> = (0..*param_count)
+                    .map(|i| (DOUBLE, format!("%a{}", i)))
+                    .collect();
+                let wf = llmod.define_function(&getter, DOUBLE, params);
+                let _ = wf.create_block("entry");
+                let blk = wf.block_mut(0).unwrap();
+                let arg_names: Vec<String> =
+                    (0..*param_count).map(|i| format!("%a{}", i)).collect();
+                let call_args: Vec<(LlvmType, &str)> =
+                    arg_names.iter().map(|s| (DOUBLE, s.as_str())).collect();
+                let result = blk.call(DOUBLE, &target, &call_args);
+                blk.ret(DOUBLE, &result);
+
+                let wrap_name = format!(
+                    "__perry_wrap_perry_fn_{}__{}",
+                    module_prefix,
+                    sanitize(exported)
+                );
+                if !llmod.has_function(&wrap_name) {
+                    let mut wrap_params: Vec<(LlvmType, String)> =
+                        vec![(I64, "%this_closure".to_string())];
+                    for i in 0..*param_count {
+                        wrap_params.push((DOUBLE, format!("%a{}", i)));
+                    }
+                    let wrap = llmod.define_function(&wrap_name, DOUBLE, wrap_params);
+                    let _ = wrap.create_block("entry");
+                    let blk = wrap.block_mut(0).unwrap();
+                    let arg_names: Vec<String> =
+                        (0..*param_count).map(|i| format!("%a{}", i)).collect();
+                    let call_args: Vec<(LlvmType, &str)> =
+                        arg_names.iter().map(|s| (DOUBLE, s.as_str())).collect();
+                    let result = blk.call(DOUBLE, &getter, &call_args);
+                    blk.ret(DOUBLE, &result);
+                }
+                continue;
+            }
             let foreign_target = match kind {
                 NamespaceEntryKind::ForeignVar {
                     source_prefix,
                     source_local,
-                }
-                | NamespaceEntryKind::ForeignFunction {
-                    source_prefix,
-                    source_local,
-                    ..
                 } => {
                     let target = format!("perry_fn_{}__{}", source_prefix, sanitize(source_local));
                     llmod.declare_function(&target, DOUBLE, &[]);
@@ -929,10 +974,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     let target = foreign_target.as_ref().expect("foreign target prepared");
                     blk.call(DOUBLE, &target, &[])
                 }
-                NamespaceEntryKind::ForeignFunction { .. } => {
-                    let target = foreign_target.as_ref().expect("foreign target prepared");
-                    blk.call(DOUBLE, &target, &[])
-                }
+                NamespaceEntryKind::ForeignFunction { .. } => unreachable!(),
                 NamespaceEntryKind::NestedNamespace { source_prefix } => {
                     let ns_name = format!("__perry_ns_{}", source_prefix);
                     blk.load(DOUBLE, &format!("@{}", ns_name))

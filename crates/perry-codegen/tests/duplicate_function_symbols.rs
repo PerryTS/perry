@@ -193,6 +193,16 @@ fn module_with_native_namespace_reexport() -> Module {
     module
 }
 
+fn module_with_export_all_function_barrel() -> Module {
+    let mut module = module_with_duplicate_local_function_names();
+    module.name = "barrel.ts".to_string();
+    module.functions = Vec::new();
+    module.exports = vec![Export::ExportAll {
+        source: "./node.js".to_string(),
+    }];
+    module
+}
+
 #[test]
 fn duplicate_local_function_names_get_unique_llvm_symbols() {
     let ir = String::from_utf8(
@@ -398,4 +408,36 @@ fn namespace_materialization_declares_nested_foreign_namespace_global() {
         1
     );
     assert!(ir.contains("load double, ptr @__perry_ns_session_schema_ts"));
+}
+
+#[test]
+fn export_all_barrel_emits_callable_function_forwarder() {
+    let mut opts = empty_opts();
+    opts.namespace_reexport_values.insert(
+        "hasChildren".to_string(),
+        NamespaceEntryKind::ForeignFunction {
+            source_prefix: "node_js".to_string(),
+            source_local: "hasChildren".to_string(),
+            param_count: 1,
+        },
+    );
+
+    let ir =
+        String::from_utf8(compile_module(&module_with_export_all_function_barrel(), opts).unwrap())
+            .unwrap();
+
+    assert_eq!(
+        ir.matches("define double @perry_fn_barrel_ts__hasChildren(double %a0)")
+            .count(),
+        1
+    );
+    assert!(ir.contains("declare double @perry_fn_node_js__hasChildren(double)"));
+    assert!(ir.contains("call double @perry_fn_node_js__hasChildren(double %a0)"));
+    assert_eq!(
+        ir.matches(
+            "define double @__perry_wrap_perry_fn_barrel_ts__hasChildren(i64 %this_closure, double %a0)"
+        )
+        .count(),
+        1
+    );
 }

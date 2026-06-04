@@ -585,6 +585,19 @@ fn compute_object_cache_key_with_env(
         h.field("namespace_entries", &buf);
     }
     {
+        let mut entries: Vec<(&String, &perry_codegen::NamespaceEntryKind)> =
+            opts.namespace_reexport_values.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        let mut buf = String::new();
+        for (name, kind) in entries {
+            buf.push_str(name);
+            buf.push('=');
+            serialize_namespace_entry_kind(kind, &mut buf);
+            buf.push('|');
+        }
+        h.field("namespace_reexport_values", &buf);
+    }
+    {
         let mut v: Vec<(&String, &String)> = opts.dynamic_import_path_to_prefix.iter().collect();
         v.sort_by(|a, b| a.0.cmp(b.0));
         let s: String = v
