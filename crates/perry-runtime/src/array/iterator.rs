@@ -238,6 +238,23 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
             raw_ptr as *const crate::typedarray::TypedArrayHeader,
         );
     }
+    if raw_ptr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        let obj_type = unsafe {
+            let hdr =
+                (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            (*hdr).obj_type
+        };
+        if obj_type == crate::gc::GC_TYPE_OBJECT {
+            let obj = raw_ptr as *mut crate::object::ObjectHeader;
+            if crate::url::try_read_as_search_params(obj).is_some() {
+                let boxed = crate::url::js_url_search_params_entries_arr(obj);
+                let ptr = crate::value::js_nanbox_get_pointer(boxed) as *mut ArrayHeader;
+                if !ptr.is_null() {
+                    return ptr;
+                }
+            }
+        }
+    }
     // A built-in iterator object (`arr.values()`, `map.entries()`, a String
     // iterator, …) IS already an iterator: drive `.next()` via the class-id
     // tower directly. These now inherit `[Symbol.iterator]` from the shared
