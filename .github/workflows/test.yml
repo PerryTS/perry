@@ -335,6 +335,14 @@ jobs:
   # Parity tests (Perry output vs Node.js)
   # ---------------------------------------------------------------------------
   parity:
+    # Release-publish decoupling: aspirational extended suite. Per maintainer
+    # decision it no longer BLOCKS package publishing — release-packages.yml's
+    # await-tests gate keys on this workflow's run conclusion, and job-level
+    # `continue-on-error: true` keeps a red result here from failing that
+    # conclusion. The job still runs on every tag + shows its own pass/fail as
+    # an informational signal (and core jobs — cargo-test/lint/api-docs-drift/
+    # compiler-output-regression — still gate publish).
+    continue-on-error: true
     # Was macos-14 — moved to ubuntu-latest in v0.5.392. Parity tests
     # just compare Perry's stdout against `node --experimental-strip-types`'s
     # stdout per test file; both run cleanly on Linux. `gtimeout` on
@@ -464,6 +472,9 @@ jobs:
   # Compile smoke test (all 130+ test files must compile)
   # ---------------------------------------------------------------------------
   compile-smoke:
+    # Release-publish decoupling (see `parity` above): aspirational extended
+    # suite, informational only — does not block package publishing.
+    continue-on-error: true
     # Was macos-14 — moved to ubuntu-latest in v0.5.392. The smoke
     # compiles every `test-files/*.ts` with the bare `perry foo.ts -o
     # out` path; the auto-optimize cache + clang link steps work
@@ -895,6 +906,9 @@ jobs:
   # default. Opt-in via the `run-extended-tests` label.
   # ---------------------------------------------------------------------------
   drizzle-mysql-smoke:
+    # Release-publish decoupling (see `parity` above): aspirational extended
+    # suite, informational only — does not block package publishing.
+    continue-on-error: true
     if: >-
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
@@ -970,6 +984,9 @@ jobs:
   # demand. PR authors and maintainers can both apply labels.
   # ---------------------------------------------------------------------------
   doc-tests:
+    # Release-publish decoupling (see `parity` above): aspirational extended
+    # suite, informational only — does not block package publishing.
+    continue-on-error: true
     if: >-
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
