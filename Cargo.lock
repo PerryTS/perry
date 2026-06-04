@@ -1547,19 +1547,6 @@ dependencies = [
 
 [[package]]
 name = "dashmap"
-version = "5.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "978747c1d849a7d2ee5e8adc0159961c48fb7e5db2f06af6723b80123bb53856"
-dependencies = [
- "cfg-if",
- "hashbrown 0.14.5",
- "lock_api",
- "once_cell",
- "parking_lot_core",
-]
-
-[[package]]
-name = "dashmap"
 version = "6.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6361d5c062261c78a176addb82d4c821ae42bed6089de0e12603cd25de2059c"
@@ -2634,7 +2621,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9efcab3c1958580ff1f25a2a41be1668f7603d849bb63af523b208a3cc1223b8"
 dependencies = [
  "cfg-if",
- "dashmap 6.2.1",
+ "dashmap",
  "futures-sink",
  "futures-timer",
  "futures-util",
@@ -5171,7 +5158,7 @@ dependencies = [
  "atty",
  "clap",
  "console 0.15.11",
- "dashmap 5.5.3",
+ "dashmap",
  "dialoguer 0.11.0",
  "dotenvy",
  "hex",
@@ -5584,7 +5571,7 @@ dependencies = [
 name = "perry-ffi"
 version = "0.5.1119"
 dependencies = [
- "dashmap 6.2.1",
+ "dashmap",
  "once_cell",
  "perry-runtime",
 ]
@@ -5664,7 +5651,7 @@ dependencies = [
  "clap",
  "cron",
  "ctr",
- "dashmap 6.2.1",
+ "dashmap",
  "ecb",
  "ed25519-dalek",
  "flate2",
