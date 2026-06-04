@@ -117,6 +117,15 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         let byte_val = crate::buffer::js_buffer_get(buf, idx_i32);
         return byte_val as f64;
     }
+    if crate::typedarray::lookup_typed_array_kind(raw_ptr).is_some() {
+        if idx_i32 < 0 {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        return crate::typedarray::js_typed_array_get(
+            raw_ptr as *const crate::typedarray::TypedArrayHeader,
+            idx_i32,
+        );
+    }
     if raw_ptr >= crate::gc::GC_HEADER_SIZE {
         let gc_hdr = unsafe {
             (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader

@@ -1,0 +1,18 @@
+signed direct bigint:5|bigint:-1|bigint:-9223372036854775808
+signed accessors bigint:-1 bigint:-9223372036854775808 bigint:5
+unsigned direct bigint:5|bigint:18446744073709551615|bigint:0
+signed number write TypeError
+unsigned number write TypeError
+after direct rejects bigint:5 bigint:5
+define values bigint:42 bigint:18446744073709551614 bigint:42 true true true
+define number value TypeError
+after define reject bigint:-1
+from array bigint:1|bigint:-2|bigint:3|bigint:1
+from number array TypeError
+set values bigint:3|bigint:-4|bigint:5|bigint:6
+set number source TypeError
+after set reject bigint:3|bigint:-4|bigint:5|bigint:6
+fill bigint bigint:3|bigint:7|bigint:7|bigint:6
+fill number TypeError
+after fill reject bigint:3|bigint:7|bigint:7|bigint:6
+copy unsigned bigint:5|bigint:18446744073709551614|bigint:0

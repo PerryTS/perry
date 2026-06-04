@@ -569,32 +569,35 @@ fn jsvalue_to_f64(v: f64) -> f64 {
     f64::NAN
 }
 
-/// Store a number into the typed array slot, performing the per-kind cast.
+/// Store a JS value into the typed array slot, performing the per-kind cast.
 unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64) {
     let kind = (*ta).kind;
+    let number = if matches!(kind, KIND_BIGINT64 | KIND_BIGUINT64) {
+        value
+    } else {
+        jsvalue_to_f64(value)
+    };
     let elem_size = (*ta).elem_size as usize;
     let base = data_ptr_mut(ta);
     let off = idx * elem_size;
     match kind {
         KIND_INT8 => {
-            let v = value as i32 as i8;
+            let v = number as i32 as i8;
             *(base.add(off) as *mut i8) = v;
         }
         KIND_UINT8 => {
-            let mut v = value as i64;
+            let mut v = number as i64;
             v = v.rem_euclid(256);
             *base.add(off) = v as u8;
         }
         KIND_UINT8_CLAMPED => {
-            // ToUint8Clamp: NaN → 0, v ≤ 0 → 0, v ≥ 255 → 255,
-            // otherwise round-half-to-even then clamp.
-            let byte = if value.is_nan() || value <= 0.0 {
+            let byte = if number.is_nan() || number <= 0.0 {
                 0u8
-            } else if value >= 255.0 {
+            } else if number >= 255.0 {
                 255u8
             } else {
-                let f = value.floor();
-                let frac = value - f;
+                let f = number.floor();
+                let frac = number - f;
                 let rounded = if frac > 0.5 {
                     f + 1.0
                 } else if frac < 0.5 {
@@ -609,42 +612,43 @@ unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64) {
             *base.add(off) = byte;
         }
         KIND_INT16 => {
-            let v = value as i32 as i16;
+            let v = number as i32 as i16;
             *(base.add(off) as *mut i16) = v;
         }
         KIND_UINT16 => {
-            let mut v = value as i64;
+            let mut v = number as i64;
             v = v.rem_euclid(65536);
             *(base.add(off) as *mut u16) = v as u16;
         }
         KIND_INT32 => {
-            let v = value as i32;
+            let v = number as i32;
             *(base.add(off) as *mut i32) = v;
         }
         KIND_UINT32 => {
-            let v = value as i64 as u32;
+            let v = number as i64 as u32;
             *(base.add(off) as *mut u32) = v;
         }
         KIND_FLOAT16 => {
-            *(base.add(off) as *mut u16) = f64_to_f16_bits(value);
+            *(base.add(off) as *mut u16) = f64_to_f16_bits(number);
         }
         KIND_FLOAT32 => {
-            *(base.add(off) as *mut f32) = value as f32;
+            *(base.add(off) as *mut f32) = number as f32;
         }
         KIND_FLOAT64 => {
-            *(base.add(off) as *mut f64) = value;
+            *(base.add(off) as *mut f64) = number;
         }
         KIND_BIGINT64 => {
-            *(base.add(off) as *mut i64) = value as i64;
+            *(base.add(off) as *mut i64) =
+                crate::typedarray_bigint::bigint64_element_bits(value) as i64;
         }
         KIND_BIGUINT64 => {
-            *(base.add(off) as *mut u64) = value as u64;
+            *(base.add(off) as *mut u64) = crate::typedarray_bigint::bigint64_element_bits(value);
         }
         _ => {}
     }
 }
 
-/// Load a slot, returning a plain f64 (numeric, not NaN-boxed).
+/// Load a slot as the JS element value.
 unsafe fn load_at(ta: *const TypedArrayHeader, idx: usize) -> f64 {
     let kind = (*ta).kind;
     let elem_size = (*ta).elem_size as usize;
@@ -660,8 +664,8 @@ unsafe fn load_at(ta: *const TypedArrayHeader, idx: usize) -> f64 {
         KIND_FLOAT16 => f16_bits_to_f64(*(base.add(off) as *const u16)),
         KIND_FLOAT32 => *(base.add(off) as *const f32) as f64,
         KIND_FLOAT64 => *(base.add(off) as *const f64),
-        KIND_BIGINT64 => *(base.add(off) as *const i64) as f64,
-        KIND_BIGUINT64 => *(base.add(off) as *const u64) as f64,
+        KIND_BIGINT64 => crate::typedarray_bigint::box_bigint64(*(base.add(off) as *const i64)),
+        KIND_BIGUINT64 => crate::typedarray_bigint::box_biguint64(*(base.add(off) as *const u64)),
         _ => 0.0,
     }
 }
@@ -817,11 +821,9 @@ pub extern "C" fn js_typed_array_new_from_array(
     }
     unsafe {
         let len = (*arr).length;
-        // Snapshot source values via the canonical accessor BEFORE allocating:
-        // `typed_array_alloc` may GC and free/move an unrooted cloned source
-        // (`.of/.from` path), and the raw inline read mis-read it (#871).
+        // Snapshot before allocating: `typed_array_alloc` may GC (#871).
         let vals: Vec<f64> = (0..len)
-            .map(|i| jsvalue_to_f64(crate::array::js_array_get_f64(arr, i)))
+            .map(|i| crate::array::js_array_get_f64(arr, i))
             .collect();
         let ta = typed_array_alloc(kind, len);
         for (i, v) in vals.iter().enumerate() {
@@ -988,17 +990,11 @@ pub extern "C" fn js_typed_array_set(ta: *mut TypedArrayHeader, index: i32, valu
         if index < 0 || index as u32 >= (*ta).length {
             return;
         }
-        store_at(ta, index as usize, jsvalue_to_f64(value));
+        store_at(ta, index as usize, value);
     }
 }
 
-/// Collect the elements of a `TypedArray.prototype.set` source value into a
-/// `Vec<f64>` (numeric, not NaN-boxed). Handles three source shapes:
-///   - another typed array (read via its per-kind `load_at`),
-///   - a plain `Array` (each element coerced through `jsvalue_to_f64`),
-///   - an array-like object (`{ length, 0, 1, … }`).
-/// Returns `None` for null/undefined (caller throws TypeError) and an empty
-/// vec for unrecognized non-iterable values (Node coerces those to length 0).
+/// Collect `TypedArray.prototype.set` source values before mutating target.
 unsafe fn collect_typed_array_set_source(source_value: f64) -> Option<Vec<f64>> {
     let v = crate::value::JSValue::from_bits(source_value.to_bits());
     if v.is_null() || v.is_undefined() {
@@ -1037,9 +1033,7 @@ unsafe fn collect_typed_array_set_source(source_value: f64) -> Option<Vec<f64>> 
             let len = crate::array::js_array_length(arr) as usize;
             let mut out = Vec::with_capacity(len);
             for i in 0..len {
-                out.push(jsvalue_to_f64(crate::array::js_array_get_f64(
-                    arr, i as u32,
-                )));
+                out.push(crate::array::js_array_get_f64(arr, i as u32));
             }
             return Some(out);
         }
@@ -1058,7 +1052,7 @@ unsafe fn collect_typed_array_set_source(source_value: f64) -> Option<Vec<f64>> 
                 let key = i.to_string();
                 let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
                 let field = crate::object::js_object_get_field_by_name(obj, key_ptr);
-                out.push(jsvalue_to_f64(f64::from_bits(field.bits())));
+                out.push(f64::from_bits(field.bits()));
             }
             return Some(out);
         }
@@ -1395,7 +1389,7 @@ pub extern "C" fn js_typed_array_with(
         let out = typed_array_alloc(kind, len as u32);
         for i in 0..len {
             if i as i64 == idx {
-                store_at(out, i, jsvalue_to_f64(value));
+                store_at(out, i, value);
             } else {
                 store_at(out, i, load_at(ta, i));
             }
@@ -1470,8 +1464,8 @@ pub extern "C" fn js_typed_array_find_last_index(
 // this file and the generic array helpers use.
 
 /// `ta.map(cb)` — returns a NEW TypedArray of the SAME kind (per spec, not a
-/// plain Array). Each result is coerced back to the element type via the same
-/// `jsvalue_to_f64` path `ta[i] = v` uses.
+/// plain Array). Each result is coerced back to the element type through
+/// `store_at`, matching `ta[i] = v`.
 #[no_mangle]
 pub extern "C" fn js_typed_array_map(
     ta: *const TypedArrayHeader,
@@ -1489,7 +1483,7 @@ pub extern "C" fn js_typed_array_map(
         for i in 0..len {
             let v = load_at(ta, i);
             let r = crate::closure::js_closure_call3(callback, v, i as f64, recv);
-            store_at(out, i, jsvalue_to_f64(r));
+            store_at(out, i, r);
         }
         out
     }
@@ -1890,7 +1884,6 @@ pub extern "C" fn js_typed_array_fill(
     }
     unsafe {
         let len = (*ta).length as isize;
-        let v = jsvalue_to_f64(value);
         let norm = |x: f64, default: isize| -> isize {
             let mut n = if x.is_nan() { default } else { x as isize };
             if n < 0 {
@@ -1902,7 +1895,7 @@ pub extern "C" fn js_typed_array_fill(
         let e = if has_end != 0 { norm(end, len) } else { len };
         let mut i = s;
         while i < e {
-            store_at(ta, i as usize, v);
+            store_at(ta, i as usize, value);
             i += 1;
         }
         ta
