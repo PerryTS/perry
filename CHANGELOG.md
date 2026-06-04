@@ -2,6 +2,12 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1121 — fix(release): build Apple cross-libs on the arm64 mac job only (unblocks npm/brew/apt/winget publish)
+
+v0.5.1120 fixed the gtk4 + android build-matrix breakage (both verified green on the real toolchains) and published 34 assets, but `release-packages` still concluded failure and skipped the package-manager publish legs (`npm-publish`/`homebrew`/`apt`/`winget`, which `needs: build` = every primary build). The lone remaining failure was `build (macos-15, x86_64-apple-darwin)`: its "Build iOS cross-compile libraries (macOS)" step panicked in `libsqlite3-sys` build.rs — `could not run bindgen on header sqlite3/sqlite3.h` — a libclang/SDK issue on the macos-15 x86_64 runner. The macos-14 arm64 runner built the identical iOS aarch64 libs fine; the failure was masked in earlier releases by the build matrix's (now-removed) fail-fast.
+
+Fix: gate the "Build iOS cross-compile libraries (macOS)" and "Build tvOS/visionOS/watchOS cross-compile libraries (macOS)" steps to `matrix.target == 'aarch64-apple-darwin'`. These Apple cross-libs are aarch64 and host-independent, so building them on the x86_64 mac job was pure redundancy. The macOS staging step copies them only `if [ -f ]`, so the x86_64 (Intel) bottle degrades gracefully — the arm64 bottle and the standalone `build-cross` `perry-cross-aarch64-apple-*` tarballs still ship every Apple cross-lib.
+
 ## v0.5.1120 — fix(release): unblock the publish build matrix (gtk4 + android cross-host UI crates)
 
 v0.5.1117 fixed the `await-tests` gate (publishing resumed after ~90 dark versions) but `release-packages` still concluded failure and skipped npm/brew/apt/winget — a second, separate breakage in the **cross-host UI crates**, which `cargo-test` excludes (so no PR CI catches them):
