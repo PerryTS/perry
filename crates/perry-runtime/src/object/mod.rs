@@ -58,6 +58,7 @@ mod property_key;
 pub(crate) mod prototype_chain;
 mod prototype_helpers;
 mod reflect_support;
+mod typed_array_define;
 mod typed_array_proto_thunks;
 mod util_types;
 mod websocket_global;
@@ -101,6 +102,7 @@ pub(crate) use primitive_proto_thunks::primitive_proto_method_value;
 pub use property_key::*;
 pub(crate) use prototype_helpers::*;
 pub(crate) use reflect_support::*;
+pub(crate) use typed_array_define::{typed_array_define_own_property, TypedArrayDefineOutcome};
 pub use util_types::*;
 pub use with_env::*;
 

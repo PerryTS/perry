@@ -1524,27 +1524,9 @@ pub extern "C" fn js_reflect_define_property(obj: f64, key: f64, descriptor: f64
             return coerce_trap_bool(trap_result);
         }
         // No trap — define on the underlying target with ordinary semantics.
-        return reflect_ordinary_define(target, key, descriptor);
+        return crate::object::reflect_define_property(target, key, descriptor);
     }
-    reflect_ordinary_define(obj, key, descriptor)
-}
-
-/// Ordinary (non-proxy) `[[DefineOwnProperty]]` reporting success as a boolean.
-fn reflect_ordinary_define(obj: f64, key: f64, descriptor: f64) -> f64 {
-    let has_own = crate::object::obj_value_has_own_key(obj, key);
-    // Redefining a non-configurable existing property fails.
-    if has_own {
-        if let Some((_writable, configurable)) = crate::object::obj_value_attrs(obj, key) {
-            if !configurable {
-                return nanbox_bool(false);
-            }
-        }
-    } else if crate::object::obj_value_no_extend(obj) {
-        // Defining a brand-new property on a non-extensible object fails.
-        return nanbox_bool(false);
-    }
-    crate::object::js_object_define_property(obj, key, descriptor);
-    nanbox_bool(true)
+    crate::object::reflect_define_property(obj, key, descriptor)
 }
 
 /// `Reflect.getPrototypeOf(obj)` — shares the actual prototype lookup with

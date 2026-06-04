@@ -101,6 +101,40 @@ pub(crate) fn obj_value_attrs(value: f64, key: f64) -> Option<(bool, bool)> {
     }
 }
 
+#[inline]
+fn reflect_bool(b: bool) -> f64 {
+    f64::from_bits(crate::value::JSValue::bool(b).bits())
+}
+
+/// Ordinary (non-proxy) `Reflect.defineProperty` `[[DefineOwnProperty]]`,
+/// reporting success as a NaN-boxed boolean. Shared by `crate::proxy`'s
+/// `Reflect.defineProperty` entry point (both the no-trap and direct paths).
+pub(crate) fn reflect_define_property(obj: f64, key: f64, descriptor: f64) -> f64 {
+    // TypedArrays are Integer-Indexed exotic objects: a canonical numeric index
+    // key returns true/false here rather than going through the ordinary object
+    // machinery (which would mishandle in-bounds element writes and treats the
+    // view as non-extensible).
+    match unsafe { super::typed_array_define_own_property(obj, key, descriptor) } {
+        super::TypedArrayDefineOutcome::Defined => return reflect_bool(true),
+        super::TypedArrayDefineOutcome::Rejected => return reflect_bool(false),
+        super::TypedArrayDefineOutcome::NotTypedArray => {}
+    }
+    let has_own = obj_value_has_own_key(obj, key);
+    // Redefining a non-configurable existing property fails.
+    if has_own {
+        if let Some((_writable, configurable)) = obj_value_attrs(obj, key) {
+            if !configurable {
+                return reflect_bool(false);
+            }
+        }
+    } else if obj_value_no_extend(obj) {
+        // Defining a brand-new property on a non-extensible object fails.
+        return reflect_bool(false);
+    }
+    super::js_object_define_property(obj, key, descriptor);
+    reflect_bool(true)
+}
+
 unsafe fn key_to_rust_string(value: f64) -> Option<String> {
     let key_str = crate::builtins::js_string_coerce(value);
     if key_str.is_null() {

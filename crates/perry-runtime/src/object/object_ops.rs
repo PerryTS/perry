@@ -852,6 +852,17 @@ pub extern "C" fn js_object_define_property(
         }
         validate_property_descriptor(descriptor_value);
 
+        // TypedArrays are Integer-Indexed exotic objects: a canonical numeric
+        // index key bypasses ordinary define entirely (validate the index, then
+        // either write the element or reject with a TypeError).
+        match super::typed_array_define_own_property(obj_value, key_value, descriptor_value) {
+            super::TypedArrayDefineOutcome::Defined => return obj_value,
+            super::TypedArrayDefineOutcome::Rejected => {
+                throw_object_type_error(b"Cannot redefine property")
+            }
+            super::TypedArrayDefineOutcome::NotTypedArray => {}
+        }
+
         // #2159: when the receiver is a class-ref (`Class.prototype` evaluates
         // back to the class itself in Perry — see `class_ref_id` /
         // `js_object_get_own_property_descriptor`'s class-ref arm), route the
