@@ -528,6 +528,7 @@ pub extern "C" fn js_node_inspector_open(port: f64, host: f64, _wait: f64) -> f6
     let host = string_to_rust(host).unwrap_or_else(|| "127.0.0.1".to_string());
     let port = allocate_endpoint_port(port);
     let uuid = next_uuid();
+    let url = format!("ws://{host}:{port}/{uuid}");
     if let Ok(mut endpoint) = INSPECTOR_ENDPOINT.lock() {
         if endpoint.active {
             throw_node_error(
@@ -540,6 +541,8 @@ pub extern "C" fn js_node_inspector_open(port: f64, host: f64, _wait: f64) -> f6
         endpoint.port = port;
         endpoint.uuid = uuid;
     }
+    eprintln!("Debugger listening on {url}");
+    eprintln!("For help, see: https://nodejs.org/learn/getting-started/debugging");
     endpoint_handle()
 }
 
