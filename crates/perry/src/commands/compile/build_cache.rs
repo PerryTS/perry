@@ -204,6 +204,11 @@ impl BuildCacheProbe {
             link_cache_stats: Some(LinkCacheStats {
                 linked: false,
                 skipped: true,
+                // A build-cache hit performs no linking, so no object
+                // fingerprints were used or hashed (#4434×#4436 merge fixup).
+                object_fingerprints_used: 0,
+                object_files_hashed: 0,
+                external_inputs_hashed: 0,
             }),
             build_cache_stats: Some(BuildCacheStats {
                 hit: true,

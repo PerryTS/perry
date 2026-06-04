@@ -5387,13 +5387,22 @@ pub fn run_with_parse_cache(
     if let Some(path) = &wasm_host_lib {
         build_cache_runtime_inputs.push(path.clone());
     }
+    // #4434×#4436 merge fixup: `write_manifest_after_success` (added by the
+    // link-cache fingerprint work) takes `&[String]`, but `obj_fingerprints`
+    // carries `Option<String>` (None for objects that can't be fingerprinted,
+    // e.g. well-known archives — those are validated separately through
+    // `build_cache_runtime_inputs`). Flatten None to an empty fingerprint.
+    let obj_fingerprints_for_manifest: Vec<String> = obj_fingerprints
+        .iter()
+        .map(|f| f.clone().unwrap_or_default())
+        .collect();
     build_cache_probe.write_manifest_after_success(
         &mut build_cache_stats,
         &ctx,
         &exe_path,
         target.as_deref(),
         &compiled_features,
-        &obj_fingerprints,
+        &obj_fingerprints_for_manifest,
         &build_cache_runtime_inputs,
     );
 
