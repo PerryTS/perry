@@ -43,6 +43,11 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     if raw < 0x1000 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    if let Some(value) =
+        unsafe { crate::typedarray_props::typed_array_get_numeric_index(raw as usize, idx) }
+    {
+        return value;
+    }
     if crate::buffer::is_registered_buffer(raw as usize) {
         let idx_i32 = idx as i32;
         let byte_val =
@@ -148,6 +153,10 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         return;
     }
     let idx_i32 = idx as i32;
+
+    if unsafe { crate::typedarray_props::typed_array_set_numeric_index(raw as usize, idx, value) } {
+        return;
+    }
 
     if unsafe { arguments_object_set_index(raw as *mut ObjectHeader, idx_i32 as u32, value) } {
         return;

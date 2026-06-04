@@ -38,12 +38,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory \u2014 `node:net` socket-layer surface not implemented (Server/Socket classes, BlockList, SocketAddress). Classification helpers landed via #811. Tracker for surface coverage; flips to PASS as each API lands."
   },
-  "test_parity_sqlite": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:sqlite` (Node 22.5+ built-in) surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
   "test_parity_stream": {
     "issue": "793",
     "added": "2026-05-15",

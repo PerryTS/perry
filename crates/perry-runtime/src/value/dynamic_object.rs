@@ -90,6 +90,11 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
         if handle < heap_min || handle >= 0x8000_0000_0000 {
             return 0.0;
         }
+        if let Some(value) = unsafe {
+            crate::typedarray_props::typed_array_get_property_value_by_name(handle, "length")
+        } {
+            return value;
+        }
         if crate::buffer::is_registered_buffer(handle) {
             let buf = handle as *const crate::buffer::BufferHeader;
             return unsafe { (*buf).length as f64 };
@@ -162,6 +167,11 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
     let raw_heap_min: u64 = 0x200_0000_0000;
     if top16 == 0 && bits >= raw_heap_min && bits < 0x8000_0000_0000 {
         let handle = bits as usize;
+        if let Some(value) = unsafe {
+            crate::typedarray_props::typed_array_get_property_value_by_name(handle, "length")
+        } {
+            return value;
+        }
         if crate::buffer::is_registered_buffer(handle) {
             let buf = handle as *const crate::buffer::BufferHeader;
             return unsafe { (*buf).length as f64 };

@@ -631,7 +631,7 @@ pub(crate) fn is_bigint_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
-fn is_numeric_typed_array_class(name: &str) -> bool {
+pub(crate) fn is_numeric_typed_array_class(name: &str) -> bool {
     matches!(
         name,
         "Int8Array"

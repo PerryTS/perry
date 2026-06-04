@@ -1,0 +1,16 @@
+{
+  "name": "perry-release-fixture-effect-basic",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tier-3 fixture: canonical Effect compile/run smoke for issue #802.",
+  "dependencies": {
+    "effect": "3.21.2"
+  },
+  "perry": {
+    "compilePackages": ["effect"],
+    "allow": {
+      "compilePackages": ["effect"]
+    }
+  }
+}

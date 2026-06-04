@@ -98,6 +98,7 @@ pub mod timer;
 pub mod typed_feedback;
 pub mod typedarray;
 pub mod typedarray_half;
+pub(crate) mod typedarray_props;
 pub mod typedarray_view;
 pub mod url;
 pub mod v8;
