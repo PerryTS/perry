@@ -32,6 +32,7 @@ benchmarks/suite/assets/
 # -march=native, so sharing across machines with different CPUs can produce
 # SIGILL at runtime. Always machine-local, always regenerable.)
 .perry-cache/
+.feature-matrix/
 
 # `perry compile --trace llvm` dumps per-module .ll files here.
 .perry-trace/
@@ -44,6 +45,7 @@ benchmarks/suite/assets/
 # Re-include the test source directories
 !test-files/
 !tests/
+!test-features/
 !test-parity/
 !test-coverage/
 # But ignore compiled test binaries (no extension) inside them
