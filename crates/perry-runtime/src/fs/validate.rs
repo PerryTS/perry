@@ -533,17 +533,26 @@ pub(crate) fn validate_string_or_object_options(arg_name: &str, value: f64) {
 /// Validate fs options parameters that accept only an options object. Node
 /// accepts an omitted value but rejects `null`, arrays, functions, and
 /// primitives with `ERR_INVALID_ARG_TYPE`.
-pub(crate) fn validate_object_options(arg_name: &str, value: f64) {
+pub(crate) fn object_options_type_error_value(arg_name: &str, value: f64) -> Option<f64> {
     let jv = JSValue::from_bits(value.to_bits());
     if jv.is_undefined() || is_plain_options_object(value) {
-        return;
+        return None;
     }
     let message = format!(
         "The \"{}\" argument must be of type object. Received {}",
         arg_name,
         describe_received(value)
     );
-    throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    Some(build_type_error_with_code_value(
+        &message,
+        "ERR_INVALID_ARG_TYPE",
+    ))
+}
+
+pub(crate) fn validate_object_options(arg_name: &str, value: f64) {
+    if let Some(err) = object_options_type_error_value(arg_name, value) {
+        crate::exception::js_throw(err);
+    }
 }
 
 /// Validate the options object passed to `fs.mkdir*` (#3662). Node accepts an

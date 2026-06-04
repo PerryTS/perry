@@ -240,25 +240,25 @@ fn array_ptr_from_value(value: f64) -> Option<*const crate::array::ArrayHeader> 
     }
 }
 
-fn throw_glob_pattern_string(arg_name: &str, value: f64) -> ! {
+fn glob_pattern_string_error(arg_name: &str, value: f64) -> f64 {
     let message = format!(
         "The \"{arg_name}\" argument must be of type string. Received {}",
         validate::describe_received(value)
     );
-    validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+    validate::build_type_error_with_code_value(&message, "ERR_INVALID_ARG_TYPE")
 }
 
-fn throw_glob_patterns_array(value: f64) -> ! {
+fn glob_patterns_array_error(value: f64) -> f64 {
     let message = format!(
         "The \"patterns\" argument must be an instance of Array. Received {}",
         validate::describe_received(value)
     );
-    validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+    validate::build_type_error_with_code_value(&message, "ERR_INVALID_ARG_TYPE")
 }
 
-fn glob_patterns_from_value(pattern_value: f64) -> Vec<String> {
+fn glob_patterns_from_value_result(pattern_value: f64) -> Result<Vec<String>, f64> {
     if let Some(pattern) = decode_string_value(pattern_value) {
-        return vec![normalize_slashes(&pattern)];
+        return Ok(vec![normalize_slashes(&pattern)]);
     }
     if let Some(arr) = array_ptr_from_value(pattern_value) {
         let len = crate::array::js_array_length(arr) as usize;
@@ -266,26 +266,32 @@ fn glob_patterns_from_value(pattern_value: f64) -> Vec<String> {
         for i in 0..len {
             let value = crate::array::js_array_get_f64(arr, i as u32);
             let Some(pattern) = decode_string_value(value) else {
-                throw_glob_pattern_string(&format!("patterns[{i}]"), value);
+                return Err(glob_pattern_string_error(&format!("patterns[{i}]"), value));
             };
             patterns.push(normalize_slashes(&pattern));
         }
-        return patterns;
+        return Ok(patterns);
     }
     let js = crate::value::JSValue::from_bits(pattern_value.to_bits());
     if js.is_null() || js.is_pointer() {
-        throw_glob_patterns_array(pattern_value);
+        return Err(glob_patterns_array_error(pattern_value));
     }
-    throw_glob_pattern_string("patterns", pattern_value);
+    Err(glob_pattern_string_error("patterns", pattern_value))
 }
 
-fn compile_exclude_patterns(exclude_value: f64, cwd_actual: &str) -> Vec<fancy_regex::Regex> {
+fn compile_exclude_patterns_result(
+    exclude_value: f64,
+    cwd_actual: &str,
+) -> Result<Vec<fancy_regex::Regex>, f64> {
     let Some(arr) = array_ptr_from_value(exclude_value) else {
         let message = format!(
             "The \"options.exclude\" property must be of type function or string[]. Received {}",
             validate::describe_received(exclude_value)
         );
-        validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+        return Err(validate::build_type_error_with_code_value(
+            &message,
+            "ERR_INVALID_ARG_TYPE",
+        ));
     };
     let len = crate::array::js_array_length(arr) as usize;
     let mut patterns = Vec::with_capacity(len);
@@ -296,7 +302,10 @@ fn compile_exclude_patterns(exclude_value: f64, cwd_actual: &str) -> Vec<fancy_r
                 "The \"options.exclude[{i}]\" property must be of type string. Received {}",
                 validate::describe_received(value)
             );
-            validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+            return Err(validate::build_type_error_with_code_value(
+                &message,
+                "ERR_INVALID_ARG_TYPE",
+            ));
         };
         let normalized = normalize_slashes(&pattern);
         let absolute = if Path::new(&normalized).is_absolute() {
@@ -308,11 +317,13 @@ fn compile_exclude_patterns(exclude_value: f64, cwd_actual: &str) -> Vec<fancy_r
             patterns.push(re);
         }
     }
-    patterns
+    Ok(patterns)
 }
 
-fn glob_options_from_value(options_value: f64) -> FsGlobOptions {
-    validate::validate_object_options("options", options_value);
+fn glob_options_from_value_result(options_value: f64) -> Result<FsGlobOptions, f64> {
+    if let Some(err) = validate::object_options_type_error_value("options", options_value) {
+        return Err(err);
+    }
     let mut cwd_actual = current_dir_slashes();
     let mut cwd_display = ".".to_string();
     unsafe {
@@ -324,7 +335,10 @@ fn glob_options_from_value(options_value: f64) -> FsGlobOptions {
                         "The \"paths[0]\" argument must be of type string. Received {}",
                         validate::describe_received(cwd_value)
                     );
-                    validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+                    return Err(validate::build_type_error_with_code_value(
+                        &message,
+                        "ERR_INVALID_ARG_TYPE",
+                    ));
                 };
                 let cwd_norm = normalize_slashes(&cwd_raw);
                 cwd_actual = absolutize_slash(&cwd_norm);
@@ -342,21 +356,21 @@ fn glob_options_from_value(options_value: f64) -> FsGlobOptions {
             if !is_nullish(exclude_value) {
                 let callable = extract_closure_ptr(exclude_value);
                 if callable.is_null() {
-                    exclude_patterns = compile_exclude_patterns(exclude_value, &cwd_actual);
+                    exclude_patterns = compile_exclude_patterns_result(exclude_value, &cwd_actual)?;
                 } else {
                     exclude_fn = Some(callable);
                 }
             }
         }
     }
-    FsGlobOptions {
+    Ok(FsGlobOptions {
         cwd_actual,
         cwd_display,
         with_file_types,
         follow_symlinks,
         exclude_patterns,
         exclude_fn,
-    }
+    })
 }
 
 fn regex_escape_char(out: &mut String, ch: char) {
@@ -637,9 +651,9 @@ fn glob_entry_value(entry: &FsGlobMatch, with_file_types: bool) -> f64 {
     }
 }
 
-fn run_fs_glob(pattern_value: f64, options_value: f64) -> FsGlobRun {
-    let patterns = glob_patterns_from_value(pattern_value);
-    let options = glob_options_from_value(options_value);
+fn run_fs_glob_result(pattern_value: f64, options_value: f64) -> Result<FsGlobRun, f64> {
+    let patterns = glob_patterns_from_value_result(pattern_value)?;
+    let options = glob_options_from_value_result(options_value)?;
     let mut matches: BTreeMap<String, FsGlobMatch> = BTreeMap::new();
     for pattern in patterns {
         let pattern_is_absolute = Path::new(&pattern).is_absolute();
@@ -684,9 +698,16 @@ fn run_fs_glob(pattern_value: f64, options_value: f64) -> FsGlobRun {
             matches.entry(entry.output.clone()).or_insert(entry);
         }
     }
-    FsGlobRun {
+    Ok(FsGlobRun {
         matches: matches.into_values().collect(),
         with_file_types: options.with_file_types,
+    })
+}
+
+fn run_fs_glob(pattern_value: f64, options_value: f64) -> FsGlobRun {
+    match run_fs_glob_result(pattern_value, options_value) {
+        Ok(run) => run,
+        Err(err) => crate::exception::js_throw(err),
     }
 }
 
@@ -793,6 +814,7 @@ struct GlobIteratorState {
     index: usize,
     with_file_types: bool,
     closed: bool,
+    validation_error: Option<f64>,
 }
 
 thread_local! {
@@ -1697,6 +1719,7 @@ enum PromiseNextAction {
 
 enum GlobNextAction {
     Done,
+    Reject(f64),
     Entry(FsGlobMatch, bool),
 }
 
@@ -1707,6 +1730,10 @@ extern "C" fn glob_iterator_next_impl(closure: *const ClosureHeader) -> f64 {
         let Some(state) = iterators.get_mut(&id) else {
             return GlobNextAction::Done;
         };
+        if let Some(reason) = state.validation_error.take() {
+            state.closed = true;
+            return GlobNextAction::Reject(reason);
+        }
         if state.closed || state.index >= state.entries.len() {
             state.closed = true;
             return GlobNextAction::Done;
@@ -1717,6 +1744,7 @@ extern "C" fn glob_iterator_next_impl(closure: *const ClosureHeader) -> f64 {
     });
     match action {
         GlobNextAction::Done => resolved_iterator_promise(undefined_value(), true),
+        GlobNextAction::Reject(reason) => rejected_promise_value(reason),
         GlobNextAction::Entry(entry, with_file_types) => {
             resolved_iterator_promise(glob_entry_value(&entry, with_file_types), false)
         }
@@ -1966,16 +1994,21 @@ fn build_glob_iterator_object(id: usize) -> f64 {
 }
 
 pub(crate) fn js_fs_promises_glob_iterator(pattern_value: f64, options_value: f64) -> f64 {
-    let run = run_fs_glob(pattern_value, options_value);
+    let (entries, with_file_types, validation_error) =
+        match run_fs_glob_result(pattern_value, options_value) {
+            Ok(run) => (run.matches, run.with_file_types, None),
+            Err(err) => (Vec::new(), false, Some(err)),
+        };
     let id = next_glob_iterator_id();
     GLOB_ITERATORS.with(|iterators| {
         iterators.borrow_mut().insert(
             id,
             GlobIteratorState {
-                entries: run.matches,
+                entries,
                 index: 0,
-                with_file_types: run.with_file_types,
+                with_file_types,
                 closed: false,
+                validation_error,
             },
         );
     });
