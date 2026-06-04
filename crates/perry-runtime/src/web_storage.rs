@@ -30,12 +30,23 @@ pub extern "C" fn storage_constructor_illegal(_closure: *const ClosureHeader) ->
     throw_error("Illegal constructor")
 }
 
-extern "C" fn storage_global_getter(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn storage_global_setter(_closure: *const ClosureHeader, _value: f64) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn storage_global_setter(_closure: *const ClosureHeader, _value: f64) -> f64 {
-    f64::from_bits(TAG_UNDEFINED)
+extern "C" fn storage_local_global_getter(_closure: *const ClosureHeader) -> f64 {
+    storage_global_value(StorageKind::Local)
+}
+
+extern "C" fn storage_session_global_getter(_closure: *const ClosureHeader) -> f64 {
+    storage_global_value(StorageKind::Session)
+}
+
+extern "C" fn storage_length_getter(_closure: *const ClosureHeader) -> f64 {
+    let Some(kind) = receiver_kind() else {
+        return throw_type_error("Illegal invocation");
+    };
+    with_store(kind, |store| store.len() as f64)
 }
 
 extern "C" fn storage_get_item(_closure: *const ClosureHeader, key: f64) -> f64 {
@@ -151,6 +162,15 @@ fn storage_key_impl(kind: StorageKind, index: f64) -> f64 {
     })
 }
 
+fn storage_global_value(kind: StorageKind) -> f64 {
+    let obj = storage_object(kind);
+    if obj.is_null() {
+        f64::from_bits(TAG_UNDEFINED)
+    } else {
+        crate::value::js_nanbox_pointer(obj as i64)
+    }
+}
+
 fn storage_clear_impl(kind: StorageKind) -> f64 {
     with_store_mut(kind, |store| {
         let keys: Vec<String> = store.keys().cloned().collect();
@@ -245,11 +265,11 @@ fn install_method(proto: *mut ObjectHeader, name: &str, func_ptr: *const u8, ari
 }
 
 fn install_storage_length_accessor(proto: *mut ObjectHeader) {
-    let getter = crate::closure::js_closure_alloc(storage_global_getter as *const u8, 0);
+    let getter = crate::closure::js_closure_alloc(storage_length_getter as *const u8, 0);
     if getter.is_null() {
         return;
     }
-    crate::closure::js_register_closure_arity(storage_global_getter as *const u8, 0);
+    crate::closure::js_register_closure_arity(storage_length_getter as *const u8, 0);
     crate::object::set_bound_native_closure_name(getter, "get length");
     crate::object::js_object_set_field_by_name(
         proto,
@@ -325,9 +345,16 @@ fn set_global_storage_property(global: *mut ObjectHeader, name: &str, value: *mu
         PropertyAttrs::new(true, true, true),
     );
 
-    let getter = crate::closure::js_closure_alloc(storage_global_getter as *const u8, 0);
+    let getter_fn = match name {
+        "localStorage" => storage_local_global_getter as *const u8,
+        _ => storage_session_global_getter as *const u8,
+    };
+    let getter = crate::closure::js_closure_alloc(getter_fn, 0);
     let setter = crate::closure::js_closure_alloc(storage_global_setter as *const u8, 0);
     if !getter.is_null() && !setter.is_null() {
+        crate::closure::js_register_closure_arity(getter_fn, 0);
+        crate::closure::js_register_closure_arity(storage_global_setter as *const u8, 1);
+        crate::object::set_bound_native_closure_name(getter, name);
         crate::object::set_builtin_accessor_descriptor(
             global as usize,
             name.to_string(),
@@ -412,6 +439,7 @@ fn update_length(kind: StorageKind, len: usize) {
 }
 
 fn update_length_on_obj(obj: *mut ObjectHeader, len: usize) {
+    crate::object::clear_property_attrs(obj as usize, "length");
     crate::object::js_object_set_field_by_name(obj, string("length"), len as f64);
     crate::object::set_builtin_property_attrs(
         obj as usize,
