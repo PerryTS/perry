@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "default_limit": 6,
+  "description": "Prioritized npm packages for the compilePackages compatibility sweep. The first tier mirrors the initial ad-hoc #805 baseline; later tiers keep the issue-body package set ready for wider manual/nightly runs.",
+  "packages": [
+    {
+      "name": "nanoid",
+      "version": "latest",
+      "tier": "tier1",
+      "reason": "small ESM utility baseline"
+    },
+    {
+      "name": "ms",
+      "version": "latest",
+      "tier": "tier1",
+      "reason": "small CommonJS utility baseline"
+    },
+    {
+      "name": "zod",
+      "version": "latest",
+      "tier": "tier1",
+      "reason": "popular TypeScript-first library with deep re-export surface"
+    },
+    {
+      "name": "uuid",
+      "version": "latest",
+      "tier": "tier1",
+      "reason": "hybrid export/default-wrapper coverage"
+    },
+    {
+      "name": "dayjs",
+      "version": "latest",
+      "tier": "tier1",
+      "reason": "prototype-heavy date utility coverage"
+    },
+    {
+      "name": "chalk",
+      "version": "latest",
+      "tier": "tier1",
+      "reason": "callable object plus property surface coverage"
+    },
+    {
+      "name": "express",
+      "version": "latest",
+      "tier": "tier2",
+      "reason": "issue-body server framework target"
+    },
+    {
+      "name": "hono",
+      "version": "latest",
+      "tier": "tier2",
+      "reason": "issue-body ESM server framework target"
+    },
+    {
+      "name": "pino",
+      "version": "latest",
+      "tier": "tier2",
+      "reason": "issue-body logger target"
+    },
+    {
+      "name": "vitest",
+      "version": "latest",
+      "tier": "tier3",
+      "reason": "issue-body toolchain target with larger dependency graph"
+    },
+    {
+      "name": "prisma",
+      "version": "latest",
+      "tier": "tier3",
+      "reason": "issue-body generated-client/tooling target"
+    }
+  ]
+}

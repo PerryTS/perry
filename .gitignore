@@ -67,6 +67,7 @@ tests/test-*
 !tests/test_typed_feedback_runtime_evidence.py
 !tests/test_perf_frontier_report.py
 !tests/test_test262_focused_report.py
+!tests/test_npm_sweep.py
 !tests/test_perf_frontier_gate_smoke.sh
 !tests/*/
 bench_*
@@ -193,6 +194,12 @@ test-files/.perry-cache/
 !/test-compat/test262/
 !/test-compat/test262/**
 /test-compat/test262/report.json
+!/test-compat/npm-sweep/
+!/test-compat/npm-sweep/**
+!/test-compat/npm-sweep-history.csv
+/test-compat/npm-sweep/__pycache__/
+/test-compat/npm-sweep/out/
+/test-compat/npm-sweep/.npm-sweep-results/
 /test-compat/test262/reports/
 
 # Vendored upstream corpora for the compat radars (large; never committed).

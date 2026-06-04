@@ -1,0 +1,94 @@
+name: NPM Package Sweep
+
+on:
+  schedule:
+    # Nightly advisory signal for package drift. It does not run on PRs.
+    - cron: '25 5 * * *'
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: 'Optional comma-separated package specs. Empty uses packages.json.'
+        type: string
+        default: ''
+      limit:
+        description: 'Maximum packages to sweep. Use 0 for all selected packages.'
+        type: number
+        default: 6
+      strict:
+        description: 'Fail the workflow if any package fails.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-package-sweep-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+jobs:
+  compile-packages-sweep:
+    name: compilePackages sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry-npm-sweep"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Build Perry release binary
+        run: cargo build --release -p perry-runtime -p perry-stdlib -p perry
+
+      - name: Run npm package sweep
+        env:
+          SWEEP_PACKAGES: ${{ github.event.inputs.packages }}
+          SWEEP_LIMIT: ${{ github.event.inputs.limit }}
+          SWEEP_STRICT: ${{ github.event.inputs.strict }}
+        run: |
+          set -euo pipefail
+          mkdir -p .npm-sweep-results
+          flags=(
+            --perry-bin "$GITHUB_WORKSPACE/target/release/perry"
+            --out-dir .npm-sweep-results
+            --history test-compat/npm-sweep-history.csv
+            --limit "${SWEEP_LIMIT:-6}"
+          )
+          if [[ -n "${SWEEP_PACKAGES:-}" ]]; then
+            flags+=(--packages "$SWEEP_PACKAGES")
+          fi
+          if [[ "${SWEEP_STRICT:-false}" == "true" ]]; then
+            flags+=(--strict)
+          fi
+
+          set +e
+          python3 test-compat/npm-sweep/run.py "${flags[@]}"
+          sweep_rc=$?
+          set -e
+
+          cp test-compat/npm-sweep-history.csv .npm-sweep-results/npm-sweep-history.csv
+          cat .npm-sweep-results/summary.md >> "$GITHUB_STEP_SUMMARY"
+          exit "$sweep_rc"
+
+      - name: Upload sweep artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: npm-package-sweep-${{ github.sha }}
+          path: .npm-sweep-results/
+          if-no-files-found: ignore
+          retention-days: 90
