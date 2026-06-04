@@ -69,18 +69,19 @@ pub(crate) fn try_const_fold_function_construct(
     };
 
     let synth = format!("(function ({params_src}) {{\n{body_src}\n}});\n");
-    let module = perry_parser::parse_typescript(&synth, "<new Function body>").map_err(|e| {
-        anyhow::Error::new(LowerError::new(
-            format!(
-                "`{}` body is not valid JavaScript and cannot be compiled: {} \
+    let module =
+        perry_parser::parse_typescript(&synth, "<new Function body>.cjs").map_err(|e| {
+            anyhow::Error::new(LowerError::new(
+                format!(
+                    "`{}` body is not valid JavaScript and cannot be compiled: {} \
                  (#1679)\n  body: {:?}",
-                surface.label(),
-                e,
-                body_src,
-            ),
-            span,
-        ))
-    })?;
+                    surface.label(),
+                    e,
+                    body_src,
+                ),
+                span,
+            ))
+        })?;
 
     let fn_expr = extract_fn_expr(&module).ok_or_else(|| {
         anyhow::Error::new(LowerError::new(
