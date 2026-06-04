@@ -637,6 +637,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &result))
         }
 
+        // `Iterator.from(x)` (#2874) — wrap any iterable/iterator in a TC39
+        // iterator-helper object so the lazy helper methods (map/filter/take/
+        // drop/flatMap/reduce/toArray/...) dispatch at runtime against
+        // `ITERATOR_HELPER_CLASS_ID`. `js_iterator_from` takes and returns a
+        // NaN-boxed f64, so pass the boxed value straight through and return
+        // the boxed result directly.
+        Expr::IteratorFrom(iter) => {
+            let iter_box = lower_expr(ctx, iter)?;
+            let blk = ctx.block();
+            Ok(blk.call(DOUBLE, "js_iterator_from", &[(DOUBLE, &iter_box)]))
+        }
+
         // Tagged-template strings literal — build cooked array, build raw
         // array, then fetch/init the frozen per-call-site template object.
         // Same emit shape as the generic `Expr::Array` lowering but with

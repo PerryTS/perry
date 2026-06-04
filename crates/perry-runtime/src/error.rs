@@ -630,6 +630,7 @@ pub extern "C" fn js_throw_strict_eval_arguments_syntax_error() -> f64 {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+#[no_mangle]
 pub extern "C" fn js_throw_math_constructor_type_error() -> f64 {
     throw_builtin_not_constructor("Math")
 }
