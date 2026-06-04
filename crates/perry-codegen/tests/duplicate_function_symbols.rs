@@ -1,4 +1,6 @@
-use perry_codegen::{compile_module, AppMetadata, CompileOptions, NamespaceEntryKind};
+use perry_codegen::{
+    compile_module, AppMetadata, CompileOptions, NamespaceEntry, NamespaceEntryKind,
+};
 use perry_hir::{Class, Export, Expr, Function, Module, ModuleInitKind, Stmt};
 use perry_types::Type;
 
@@ -340,4 +342,60 @@ fn export_all_barrel_forwards_namespace_reexport_getter() {
         1
     );
     assert!(ir.contains("call double @perry_fn_platform_node_shared_src_NodeSocket_ts__NodeWS()"));
+}
+
+#[test]
+fn self_namespace_reexport_getter_has_backing_namespace_global() {
+    let mut opts = empty_opts();
+    opts.namespace_reexport_values.insert(
+        "AccountV2".to_string(),
+        NamespaceEntryKind::NestedNamespace {
+            source_prefix: "NodeSocket_ts".to_string(),
+        },
+    );
+    let mut module = module_with_native_namespace_reexport();
+    module.exports = vec![Export::NamespaceReExport {
+        source: "./NodeSocket".to_string(),
+        name: "AccountV2".to_string(),
+    }];
+
+    let ir = String::from_utf8(compile_module(&module, opts).unwrap()).unwrap();
+
+    assert!(ir.contains("@__perry_ns_NodeSocket_ts = global double"));
+    assert!(ir.contains("define double @perry_fn_NodeSocket_ts__AccountV2()"));
+    assert!(ir.contains("load double, ptr @__perry_ns_NodeSocket_ts"));
+    assert!(ir.contains("js_create_namespace"));
+    assert!(!ir.contains("@__perry_ns_NodeSocket_ts = external global"));
+}
+
+#[test]
+fn namespace_materialization_declares_nested_foreign_namespace_global() {
+    let mut opts = empty_opts();
+    opts.namespace_entries.push(NamespaceEntry {
+        name: "SessionSchema".to_string(),
+        kind: NamespaceEntryKind::NestedNamespace {
+            source_prefix: "session_schema_ts".to_string(),
+        },
+    });
+    opts.namespace_reexport_values.insert(
+        "SessionSchema".to_string(),
+        NamespaceEntryKind::NestedNamespace {
+            source_prefix: "session_schema_ts".to_string(),
+        },
+    );
+    let mut module = module_with_native_namespace_reexport();
+    module.exports = vec![Export::NamespaceReExport {
+        source: "./session/schema".to_string(),
+        name: "SessionSchema".to_string(),
+    }];
+
+    let ir = String::from_utf8(compile_module(&module, opts).unwrap()).unwrap();
+
+    assert!(ir.contains("@__perry_ns_session_schema_ts = external global double"));
+    assert_eq!(
+        ir.matches("@__perry_ns_session_schema_ts = external global double")
+            .count(),
+        1
+    );
+    assert!(ir.contains("load double, ptr @__perry_ns_session_schema_ts"));
 }

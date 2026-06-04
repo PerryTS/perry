@@ -218,9 +218,7 @@ pub(crate) fn emit_closure_value_call(
     for (idx, arg) in args.iter().enumerate() {
         let value = lower_expr(ctx, arg)?;
         let idx_s = idx.to_string();
-        let slot = ctx
-            .block()
-            .gep(DOUBLE, &arg_buf, &[(I64, idx_s.as_str())]);
+        let slot = ctx.block().gep(DOUBLE, &arg_buf, &[(I64, idx_s.as_str())]);
         ctx.block().store(DOUBLE, &value, &slot);
     }
 

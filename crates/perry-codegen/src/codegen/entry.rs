@@ -397,9 +397,7 @@ pub(super) fn compile_module_entry(
         // is a target). The populator emits `js_create_namespace(0, ...)`
         // → an empty NaN-boxed object → stored into `@__perry_ns_<prefix>`,
         // satisfying the consumer-side extern reference.
-        if (!cross_module.namespace_entries.is_empty() || cross_module.is_dynamic_import_target)
-            && !ctx.block().is_terminated()
-        {
+        if cross_module.needs_namespace_global(module_prefix) && !ctx.block().is_terminated() {
             emit_namespace_populator(
                 &mut ctx,
                 &cross_module.namespace_entries,
@@ -814,9 +812,7 @@ pub(super) fn compile_module_entry(
         // is a target). The populator emits `js_create_namespace(0, ...)`
         // → an empty NaN-boxed object → stored into `@__perry_ns_<prefix>`,
         // satisfying the consumer-side extern reference.
-        if (!cross_module.namespace_entries.is_empty() || cross_module.is_dynamic_import_target)
-            && !ctx.block().is_terminated()
-        {
+        if cross_module.needs_namespace_global(module_prefix) && !ctx.block().is_terminated() {
             emit_namespace_populator(
                 &mut ctx,
                 &cross_module.namespace_entries,

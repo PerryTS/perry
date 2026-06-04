@@ -906,11 +906,6 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 } else {
                     None
                 };
-            if let NamespaceEntryKind::NestedNamespace { source_prefix } = kind {
-                if source_prefix != module_prefix {
-                    llmod.add_external_global(&format!("__perry_ns_{}", source_prefix), DOUBLE);
-                }
-            }
             let wf = llmod.define_function(&getter, DOUBLE, vec![]);
             let _ = wf.create_block("entry");
             let blk = wf.block_mut(0).unwrap();
@@ -1220,7 +1215,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // declaration links to nothing. The empty-entries case still emits
     // the global; the populator below handles `n == 0` by calling
     // `js_create_namespace(0, ...)` which returns an empty object.
-    if !cross_module.namespace_entries.is_empty() || cross_module.is_dynamic_import_target {
+    if cross_module.needs_namespace_global(module_prefix) {
         let ns_name = format!("__perry_ns_{}", module_prefix);
         // Hex double literal for TAG_UNDEFINED (0x7FFC_0000_0000_0001).
         llmod.add_global(&ns_name, DOUBLE, "0x7FFC000000000001");
@@ -1228,6 +1223,25 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             let (gname, byte_len) = llmod.add_string_constant(&entry.name);
             namespace_key_globals.push((gname, byte_len));
         }
+    }
+    let mut nested_namespace_prefixes: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+    for entry in &cross_module.namespace_entries {
+        if let NamespaceEntryKind::NestedNamespace { source_prefix } = &entry.kind {
+            if source_prefix != module_prefix {
+                nested_namespace_prefixes.insert(source_prefix.clone());
+            }
+        }
+    }
+    for kind in cross_module.namespace_reexport_values.values() {
+        if let NamespaceEntryKind::NestedNamespace { source_prefix } = kind {
+            if source_prefix != module_prefix {
+                nested_namespace_prefixes.insert(source_prefix.clone());
+            }
+        }
+    }
+    for prefix in nested_namespace_prefixes {
+        llmod.add_external_global(&format!("__perry_ns_{}", prefix), DOUBLE);
     }
     // For each `Expr::DynamicImport` target this module dispatches to,
     // declare the foreign module's `@__perry_ns_<target_prefix>` as an

@@ -213,6 +213,28 @@ pub(super) fn find_llvm_tool(tool_name: &str) -> Option<PathBuf> {
         }
     }
 
+    // 4. Common macOS LLVM installs. Homebrew does not put LLVM tools on PATH by
+    // default, and Apple `nm` may not understand newer LLVM object attributes
+    // emitted by Rust.
+    if cfg!(target_os = "macos") {
+        let candidates = [
+            format!("/opt/homebrew/opt/llvm/bin/{tool_name}"),
+            format!("/opt/homebrew/opt/llvm@21/bin/{tool_name}"),
+            format!("/usr/local/opt/llvm/bin/{tool_name}"),
+            format!("/usr/local/opt/llvm@21/bin/{tool_name}"),
+            format!(
+                "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/{tool_name}"
+            ),
+            format!("/Library/Developer/CommandLineTools/usr/bin/{tool_name}"),
+        ];
+        for path in candidates {
+            let p = PathBuf::from(path);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+
     None
 }
 

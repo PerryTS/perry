@@ -719,3 +719,17 @@ pub(crate) struct CrossModuleCtx {
     /// is empty (side-effect-only modules with no `export`s).
     pub is_dynamic_import_target: bool,
 }
+
+impl CrossModuleCtx {
+    pub(crate) fn needs_namespace_global(&self, module_prefix: &str) -> bool {
+        self.is_dynamic_import_target
+            || !self.namespace_entries.is_empty()
+            || self.namespace_reexport_values.values().any(|kind| {
+                matches!(
+                    kind,
+                    NamespaceEntryKind::NestedNamespace { source_prefix }
+                        if source_prefix == module_prefix
+                )
+            })
+    }
+}

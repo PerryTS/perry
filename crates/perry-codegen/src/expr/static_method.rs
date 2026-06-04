@@ -11,9 +11,7 @@ use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
 use perry_types::Type as HirType;
 
 #[allow(unused_imports)]
-use crate::lower_call::{
-    emit_closure_value_call, lower_call, lower_native_method_call, lower_new,
-};
+use crate::lower_call::{emit_closure_value_call, lower_call, lower_native_method_call, lower_new};
 #[allow(unused_imports)]
 use crate::lower_conditional::{lower_conditional, lower_logical, lower_truthy};
 #[allow(unused_imports)]

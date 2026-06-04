@@ -401,7 +401,10 @@ mod js_runtime_gate_tests {
             .expect_err("runtime JS importer must fail the V8-free gate")
             .to_string();
 
-        assert!(message.contains(&format!("imported by {} via `untrusted`", importer.display())));
+        assert!(message.contains(&format!(
+            "imported by {} via `untrusted`",
+            importer.display()
+        )));
     }
 }
 

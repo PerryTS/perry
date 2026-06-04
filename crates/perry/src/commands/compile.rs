@@ -107,6 +107,7 @@ pub use types::*;
 
 const LARGE_CODEGEN_MODULE_COUNT: usize = 1024;
 const LARGE_CODEGEN_THREAD_CAP: usize = 1;
+const LARGE_CODEGEN_STACK_SIZE: usize = 128 * 1024 * 1024;
 const MAX_OBJECT_FILE_STEM_BYTES: usize = 200;
 
 fn codegen_thread_count(total_modules: usize, host_threads: usize) -> usize {
@@ -136,6 +137,117 @@ fn codegen_thread_count_with_override(
     } else {
         host_threads
     }
+}
+
+fn codegen_thread_stack_size(total_modules: usize) -> Option<usize> {
+    codegen_thread_stack_size_with_override(
+        total_modules,
+        std::env::var("PERRY_CODEGEN_STACK_BYTES").ok().as_deref(),
+    )
+}
+
+fn codegen_thread_stack_size_with_override(
+    total_modules: usize,
+    override_value: Option<&str>,
+) -> Option<usize> {
+    if let Some(value) = override_value {
+        if let Ok(parsed) = value.parse::<usize>() {
+            if parsed > 0 {
+                return Some(parsed);
+            }
+        }
+    }
+
+    if total_modules >= LARGE_CODEGEN_MODULE_COUNT {
+        Some(LARGE_CODEGEN_STACK_SIZE)
+    } else {
+        None
+    }
+}
+
+fn target_uses_macho_symbols(target: Option<&str>) -> bool {
+    matches!(
+        target,
+        Some("ios")
+            | Some("ios-simulator")
+            | Some("ios-widget")
+            | Some("ios-widget-simulator")
+            | Some("visionos")
+            | Some("visionos-simulator")
+            | Some("macos")
+            | Some("watchos")
+            | Some("watchos-simulator")
+            | Some("tvos")
+            | Some("tvos-simulator")
+    ) || (!matches!(
+        target,
+        Some("windows")
+            | Some("linux")
+            | Some("android")
+            | Some("harmonyos")
+            | Some("harmonyos-simulator")
+    ) && cfg!(target_os = "macos"))
+}
+
+fn nm_tool_for_target(target: Option<&str>) -> String {
+    if let Some(llvm_nm) = find_llvm_tool("llvm-nm") {
+        return llvm_nm.to_string_lossy().to_string();
+    }
+
+    let is_windows =
+        matches!(target, Some("windows")) || (cfg!(target_os = "windows") && target.is_none());
+    let needs_llvm_nm =
+        is_windows || (target_uses_macho_symbols(target) && !cfg!(target_os = "macos"));
+    if needs_llvm_nm {
+        find_llvm_tool("llvm-nm")
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "nm".to_string())
+    } else {
+        "nm".to_string()
+    }
+}
+
+fn nm_output_defines_symbol(nm_stdout: &str, symbol: &str, is_macho: bool) -> bool {
+    for line in nm_stdout.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let (st, sn) = if parts.len() == 3 {
+            (parts[1], parts[2])
+        } else {
+            (parts[0], parts[1])
+        };
+        let canonical = if is_macho {
+            sn.strip_prefix('_').unwrap_or(sn)
+        } else {
+            sn
+        };
+        if matches!(st, "T" | "t" | "D" | "d" | "S" | "s" | "B" | "b") && canonical == symbol {
+            return true;
+        }
+    }
+    false
+}
+
+fn archive_defines_symbol(archive: &Path, target: Option<&str>, symbol: &str) -> Result<bool> {
+    let nm_cmd = nm_tool_for_target(target);
+    let output = Command::new(&nm_cmd)
+        .arg("-g")
+        .arg(archive)
+        .output()
+        .map_err(|e| anyhow!("failed to run {nm_cmd} on {}: {e}", archive.display()))?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "{nm_cmd} failed while inspecting {} for {symbol}",
+            archive.display()
+        ));
+    }
+    Ok(nm_output_defines_symbol(
+        &String::from_utf8_lossy(&output.stdout),
+        symbol,
+        target_uses_macho_symbols(target),
+    ))
 }
 
 fn object_file_stem_for_module(module_name: &str) -> String {
@@ -1774,6 +1886,28 @@ pub fn run_with_parse_cache(
             }
         }
     }
+    for (path, hir_module) in &ctx.native_modules {
+        for export in &hir_module.exports {
+            let perry_hir::Export::NamespaceReExport { source, .. } = export else {
+                continue;
+            };
+            if let Some((resolved_path, _)) = resolve_import(
+                source,
+                path,
+                &ctx.project_root,
+                &ctx.compile_packages,
+                &ctx.compile_package_dirs,
+            ) {
+                // `export * as Name from "./mod"` exposes the source module's
+                // namespace object as an ordinary value export. That source
+                // therefore needs the same `@__perry_ns_<prefix>` materialized
+                // for static namespace re-exports as it does for `import()`.
+                // This includes intentional self-aliases such as
+                // `export * as AccountV2 from "./account"`.
+                dyn_target_paths.insert(resolved_path);
+            }
+        }
+    }
     // Per-module precomputed namespace_entries (keyed by path).
     let mut per_module_namespace_entries: HashMap<PathBuf, Vec<perry_codegen::NamespaceEntry>> =
         HashMap::new();
@@ -1793,12 +1927,17 @@ pub fn run_with_parse_cache(
                 .map(|m| sanitize_module_name(&m.name))
                 .unwrap_or_else(|| sanitize_module_name(&fe.source_module));
             let kind = if let Some(nested) = &fe.nested_namespace_of {
-                let nested_prefix = module_name_to_module
-                    .get(nested)
-                    .map(|m| sanitize_module_name(&m.name))
-                    .unwrap_or_else(|| sanitize_module_name(nested));
-                perry_codegen::NamespaceEntryKind::NestedNamespace {
-                    source_prefix: nested_prefix,
+                if let Some(nested_mod) = module_name_to_module.get(nested) {
+                    perry_codegen::NamespaceEntryKind::NestedNamespace {
+                        source_prefix: sanitize_module_name(&nested_mod.name),
+                    }
+                } else if let Some(module_name) = native_module_name_for_namespace_reexport(nested)
+                {
+                    perry_codegen::NamespaceEntryKind::NativeModuleNamespace { module_name }
+                } else {
+                    perry_codegen::NamespaceEntryKind::NestedNamespace {
+                        source_prefix: sanitize_module_name(nested),
+                    }
                 }
             } else if fe.source_module == target_name {
                 // Local binding — find what kind it is in target_hir.
@@ -1957,9 +2096,22 @@ pub fn run_with_parse_cache(
             codegen_threads, host_codegen_threads, total_codegen_modules
         );
     }
-    let codegen_pool = ThreadPoolBuilder::new()
+    let codegen_stack_size = codegen_thread_stack_size(total_codegen_modules);
+    if verbose > 0 {
+        if let Some(stack_size) = codegen_stack_size {
+            eprintln!(
+                "  • codegen stack: {} MiB per worker",
+                stack_size / (1024 * 1024)
+            );
+        }
+    }
+    let mut codegen_pool_builder = ThreadPoolBuilder::new()
         .num_threads(codegen_threads)
-        .thread_name(|idx| format!("perry-codegen-{idx}"))
+        .thread_name(|idx| format!("perry-codegen-{idx}"));
+    if let Some(stack_size) = codegen_stack_size {
+        codegen_pool_builder = codegen_pool_builder.stack_size(stack_size);
+    }
+    let codegen_pool = codegen_pool_builder
         .build()
         .map_err(|e| anyhow!("failed to create codegen thread pool: {}", e))?;
     let compile_results: Vec<Result<PathBuf, String>> = codegen_pool.install(|| {
@@ -5028,6 +5180,35 @@ pub fn run_with_parse_cache(
     } else {
         None
     };
+    if ctx.needs_wasm_runtime || args.enable_wasm_runtime {
+        const WASM_RUNTIME_SHIM: &str = "js_webassembly_module_new";
+        match archive_defines_symbol(&runtime_lib, target.as_deref(), WASM_RUNTIME_SHIM) {
+            Ok(true) => {}
+            Ok(false) => {
+                let mut fix = format!(
+                    "WebAssembly.* used but selected runtime archive {} does not export {WASM_RUNTIME_SHIM}. \
+                     libperry_wasm_host.a supplies the wasmi engine ABI, but the JS-facing \
+                     js_webassembly_* shims are compiled into perry-runtime only with the \
+                     wasm-host feature. Build it with: cargo build --release -p perry-runtime \
+                     --features wasm-host",
+                    runtime_lib.display()
+                );
+                if args.no_auto_optimize {
+                    fix.push_str(
+                        "; or omit --no-auto-optimize so Perry rebuilds perry-runtime with perry-runtime/wasm-host",
+                    );
+                }
+                return Err(anyhow!(fix));
+            }
+            Err(e) => {
+                return Err(anyhow!(
+                    "WebAssembly.* used but Perry could not verify that selected runtime archive {} exports {WASM_RUNTIME_SHIM}: {e}. \
+                     Build perry-runtime with wasm host support: cargo build --release -p perry-runtime --features wasm-host",
+                    runtime_lib.display()
+                ));
+            }
+        }
+    }
 
     // Build & run the per-platform link command. Tier 2.1 final extraction
     // (v0.5.342) — see crates/perry/src/commands/compile/link.rs.
@@ -5386,8 +5567,9 @@ pub fn run_with_parse_cache(
 #[cfg(test)]
 mod codegen_thread_tests {
     use super::{
-        codegen_thread_count_with_override, object_file_stem_for_module,
-        LARGE_CODEGEN_MODULE_COUNT, MAX_OBJECT_FILE_STEM_BYTES,
+        codegen_thread_count_with_override, codegen_thread_stack_size_with_override,
+        nm_output_defines_symbol, object_file_stem_for_module, LARGE_CODEGEN_MODULE_COUNT,
+        LARGE_CODEGEN_STACK_SIZE, MAX_OBJECT_FILE_STEM_BYTES,
     };
 
     #[test]
@@ -5409,6 +5591,54 @@ mod codegen_thread_tests {
             codegen_thread_count_with_override(LARGE_CODEGEN_MODULE_COUNT, 12, Some("4")),
             4
         );
+    }
+
+    #[test]
+    fn large_graph_uses_larger_codegen_stack() {
+        assert_eq!(
+            codegen_thread_stack_size_with_override(LARGE_CODEGEN_MODULE_COUNT, None),
+            Some(LARGE_CODEGEN_STACK_SIZE)
+        );
+    }
+
+    #[test]
+    fn small_graph_uses_default_codegen_stack() {
+        assert_eq!(codegen_thread_stack_size_with_override(8, None), None);
+    }
+
+    #[test]
+    fn codegen_stack_env_override_takes_precedence() {
+        assert_eq!(
+            codegen_thread_stack_size_with_override(LARGE_CODEGEN_MODULE_COUNT, Some("67108864")),
+            Some(67_108_864)
+        );
+    }
+
+    #[test]
+    fn nm_parser_detects_macho_wasm_runtime_shim() {
+        let nm = "\
+libperry_runtime.a(webassembly.o):
+0000000000000000 T _js_webassembly_module_new
+                 U _perry_wasm_host_module_compile
+";
+        assert!(nm_output_defines_symbol(
+            nm,
+            "js_webassembly_module_new",
+            true
+        ));
+    }
+
+    #[test]
+    fn nm_parser_rejects_archive_without_wasm_runtime_shim() {
+        let nm = "\
+libperry_runtime.a(global_this_webassembly.o):
+0000000000000000 T _js_global_webassembly_object
+";
+        assert!(!nm_output_defines_symbol(
+            nm,
+            "js_webassembly_module_new",
+            true
+        ));
     }
 
     #[test]
