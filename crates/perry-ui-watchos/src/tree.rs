@@ -93,6 +93,10 @@ pub struct NodeData {
     /// Issue #707 — truncation mode. 0=word-wrap (no truncation), 1=head,
     /// 2=middle, 3=tail. SwiftUI host applies `.truncationMode(.head/.middle/.tail)`.
     pub text_truncation_mode: i64,
+    /// Issue #3621 — horizontal text alignment. 0=left, 1=right, 2=center,
+    /// 3=justified, 4=natural. SwiftUI host applies `.multilineTextAlignment`
+    /// (mapping right/justified/natural to the nearest SwiftUI `TextAlignment`).
+    pub text_alignment: i64,
     /// Issue #710 — AttributedText runs (text + per-run attrs). Empty for
     /// plain Text nodes; populated by `attributedTextAppend`. SwiftUI host
     /// renders by concatenating `Text(run).bold().italic().underline()
@@ -151,6 +155,7 @@ impl NodeData {
             text_decoration: 0,
             text_number_of_lines: 0,
             text_truncation_mode: 0,
+            text_alignment: 0,
             attributed_runs: Vec::new(),
             map_lat: 0.0,
             map_lon: 0.0,
@@ -675,6 +680,13 @@ pub extern "C" fn perry_watchos_node_text_number_of_lines(id: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn perry_watchos_node_text_truncation_mode(id: i64) -> i64 {
     with_node(id, |n| n.text_truncation_mode).unwrap_or(0)
+}
+
+/// Issue #3621 — horizontal text alignment introspection for the SwiftUI
+/// host. 0=left, 1=right, 2=center, 3=justified, 4=natural.
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_text_alignment(id: i64) -> i64 {
+    with_node(id, |n| n.text_alignment).unwrap_or(0)
 }
 
 /// Issue #710 — AttributedText introspection. Each run is read field-by-

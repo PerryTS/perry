@@ -367,6 +367,16 @@ pub extern "C" fn perry_ui_text_set_truncation_mode(handle: i64, mode: i64) {
     });
 }
 
+/// Issue #3621 — watchOS Text horizontal alignment (0=left, 1=right,
+/// 2=center, 3=justified, 4=natural). SwiftUI host reads via
+/// `perry_watchos_node_text_alignment`.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_text_alignment(handle: i64, alignment: i64) {
+    tree::with_node_mut(handle, |node| {
+        node.text_alignment = alignment;
+    });
+}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_text_set_font_family(handle: i64, family_ptr: i64) {
     tree::with_node_mut(handle, |node| {

@@ -199,6 +199,46 @@ pub fn set_truncation_mode(handle: i64, mode: i64) {
     }
 }
 
+/// Set horizontal text alignment on a Text widget (issue #3621).
+/// Public `alignment` follows the canonical Perry/AppKit scheme:
+/// 0=left, 1=right, 2=center, 3=justified, 4=natural. Win32 STATIC
+/// controls express horizontal alignment through the SS_LEFT/SS_CENTER/
+/// SS_RIGHT style bits (the low 2 bits of the style-type field). Justified
+/// and natural have no native STATIC equivalent, so both fall back to left.
+pub fn set_text_alignment(handle: i64, alignment: i64) {
+    #[cfg(target_os = "windows")]
+    {
+        // SS_LEFT=0, SS_CENTER=1, SS_RIGHT=2. Mask the low 2 bits.
+        const SS_ALIGN_MASK: u32 = 0x3;
+        if let Some(hwnd) = super::get_hwnd(handle) {
+            unsafe {
+                let bits: u32 = match alignment {
+                    1 => 2, // right
+                    2 => 1, // center
+                    _ => 0, // left / justified / natural
+                };
+                let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+                let new_style = (style & !SS_ALIGN_MASK) | bits;
+                let _ = SetWindowLongPtrW(hwnd, GWL_STYLE, new_style as isize);
+                // SWP_FRAMECHANGED forces STATIC style changes to take effect.
+                let _ = SetWindowPos(
+                    hwnd,
+                    HWND(std::ptr::null_mut()),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+                );
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (handle, alignment);
+    }
+}
+
 /// Set the text string of a Text widget from a &str (used by state bindings).
 pub fn set_text_str(handle: i64, text: &str) {
     #[cfg(target_os = "windows")]

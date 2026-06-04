@@ -400,6 +400,12 @@ pub const MATRIX: &[MatrixRow] = &[
         ffi: "perry_ui_text_set_wraps",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
+    MatrixRow {
+        widget: "text",
+        prop: "text_alignment",
+        ffi: "perry_ui_text_set_text_alignment",
+        statuses: W_ALL_NATIVE_WEB_TODO,
+    },
     // ---- textfield widget styling -------------------------------------
     MatrixRow {
         widget: "textfield",

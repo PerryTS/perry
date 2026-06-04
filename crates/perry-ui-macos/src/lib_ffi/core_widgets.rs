@@ -443,6 +443,13 @@ pub extern "C" fn perry_ui_text_set_truncation_mode(handle: i64, mode: i64) {
     widgets::text::set_truncation_mode(handle, mode);
 }
 
+/// Issue #3621 — horizontal text alignment. `alignment`: 0=left, 1=right,
+/// 2=center, 3=justified, 4=natural.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_text_alignment(handle: i64, alignment: i64) {
+    widgets::text::set_text_alignment(handle, alignment);
+}
+
 /// Set the text color of a Button.
 #[no_mangle]
 pub extern "C" fn perry_ui_button_set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
