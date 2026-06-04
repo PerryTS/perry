@@ -336,49 +336,49 @@ fn error_constructor_call(kind: u32, message: f64) -> f64 {
     crate::value::js_nanbox_pointer(error as i64)
 }
 
-extern "C" fn error_constructor_call_thunk(
+pub(crate) extern "C" fn error_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
     message: f64,
 ) -> f64 {
     error_constructor_call(crate::error::ERROR_KIND_ERROR, message)
 }
 
-extern "C" fn type_error_constructor_call_thunk(
+pub(crate) extern "C" fn type_error_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
     message: f64,
 ) -> f64 {
     error_constructor_call(crate::error::ERROR_KIND_TYPE_ERROR, message)
 }
 
-extern "C" fn range_error_constructor_call_thunk(
+pub(crate) extern "C" fn range_error_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
     message: f64,
 ) -> f64 {
     error_constructor_call(crate::error::ERROR_KIND_RANGE_ERROR, message)
 }
 
-extern "C" fn reference_error_constructor_call_thunk(
+pub(crate) extern "C" fn reference_error_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
     message: f64,
 ) -> f64 {
     error_constructor_call(crate::error::ERROR_KIND_REFERENCE_ERROR, message)
 }
 
-extern "C" fn syntax_error_constructor_call_thunk(
+pub(crate) extern "C" fn syntax_error_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
     message: f64,
 ) -> f64 {
     error_constructor_call(crate::error::ERROR_KIND_SYNTAX_ERROR, message)
 }
 
-extern "C" fn eval_error_constructor_call_thunk(
+pub(crate) extern "C" fn eval_error_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
     message: f64,
 ) -> f64 {
     error_constructor_call(crate::error::ERROR_KIND_EVAL_ERROR, message)
 }
 
-extern "C" fn uri_error_constructor_call_thunk(
+pub(crate) extern "C" fn uri_error_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
     message: f64,
 ) -> f64 {
