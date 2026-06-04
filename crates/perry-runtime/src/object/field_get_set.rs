@@ -22,6 +22,10 @@ const CRYPTO_USAGE_DERIVE_KEY: u32 = 1 << 4;
 const CRYPTO_USAGE_DERIVE_BITS: u32 = 1 << 5;
 const CRYPTO_USAGE_WRAP_KEY: u32 = 1 << 6;
 const CRYPTO_USAGE_UNWRAP_KEY: u32 = 1 << 7;
+const CRYPTO_USAGE_ENCAPSULATE_BITS: u32 = 1 << 8;
+const CRYPTO_USAGE_DECAPSULATE_BITS: u32 = 1 << 9;
+const CRYPTO_USAGE_ENCAPSULATE_KEY: u32 = 1 << 10;
+const CRYPTO_USAGE_DECAPSULATE_KEY: u32 = 1 << 11;
 
 unsafe fn crypto_key_property_value(addr: usize, key_bytes: &[u8]) -> Option<JSValue> {
     let (algo, hash, kind, extractable, usages) = crate::buffer::crypto_key_meta(addr)?;
@@ -93,6 +97,9 @@ fn crypto_key_algorithm_name(algo: u8) -> &'static str {
         25 => "AES-OCB",
         26 => "X448",
         27 => "Ed448",
+        30 => "ML-KEM-512",
+        31 => "ML-KEM-768",
+        32 => "ML-KEM-1024",
         _ => "",
     }
 }
@@ -133,6 +140,10 @@ unsafe fn crypto_key_usages_value(usages: u32) -> JSValue {
         (CRYPTO_USAGE_DERIVE_BITS, "deriveBits"),
         (CRYPTO_USAGE_WRAP_KEY, "wrapKey"),
         (CRYPTO_USAGE_UNWRAP_KEY, "unwrapKey"),
+        (CRYPTO_USAGE_ENCAPSULATE_BITS, "encapsulateBits"),
+        (CRYPTO_USAGE_DECAPSULATE_BITS, "decapsulateBits"),
+        (CRYPTO_USAGE_ENCAPSULATE_KEY, "encapsulateKey"),
+        (CRYPTO_USAGE_DECAPSULATE_KEY, "decapsulateKey"),
     ];
     let count = entries.iter().filter(|(bit, _)| usages & *bit != 0).count();
     let mut arr = crate::array::js_array_alloc(count as u32);

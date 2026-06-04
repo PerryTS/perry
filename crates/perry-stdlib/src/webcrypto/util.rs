@@ -50,6 +50,12 @@ pub(super) use rsa::{BigUint as RsaBigUint, Oaep, RsaPrivateKey, RsaPublicKey};
 pub(super) use sha1::Sha1;
 pub(super) use sha2::{Digest as Sha2Digest, Sha256, Sha384, Sha512};
 
+pub(super) use ml_kem::kem::KeyExport as MlKemKeyExport;
+pub(super) use ml_kem::pkcs8::{
+    DecodePrivateKey as MlKemDecodePrivateKey, DecodePublicKey as MlKemDecodePublicKey,
+    EncodePrivateKey as MlKemEncodePrivateKey, EncodePublicKey as MlKemEncodePublicKey,
+};
+
 pub(super) use perry_runtime::{
     buffer::{buffer_alloc, buffer_data_mut, is_registered_buffer, BufferHeader},
     js_object_alloc, js_object_set_field_by_name, js_promise_resolved, JSValue, Promise,
@@ -128,6 +134,9 @@ pub(super) enum KeyAlgo {
     RsaPss,
     Kmac128,
     Kmac256,
+    MlKem512,
+    MlKem768,
+    MlKem1024,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -232,6 +241,10 @@ pub(super) const USAGE_DERIVE_KEY: u32 = 1 << 4;
 pub(super) const USAGE_DERIVE_BITS: u32 = 1 << 5;
 pub(super) const USAGE_WRAP_KEY: u32 = 1 << 6;
 pub(super) const USAGE_UNWRAP_KEY: u32 = 1 << 7;
+pub(super) const USAGE_ENCAPSULATE_BITS: u32 = 1 << 8;
+pub(super) const USAGE_DECAPSULATE_BITS: u32 = 1 << 9;
+pub(super) const USAGE_ENCAPSULATE_KEY: u32 = 1 << 10;
+pub(super) const USAGE_DECAPSULATE_KEY: u32 = 1 << 11;
 
 #[derive(Copy, Clone, Debug)]
 pub(super) struct CryptoKeyMaterial {
@@ -309,6 +322,9 @@ fn runtime_algo_id(algo: KeyAlgo) -> u8 {
         KeyAlgo::AesOcb => 25,
         KeyAlgo::X448 => 26,
         KeyAlgo::Ed448 => 27,
+        KeyAlgo::MlKem512 => 30,
+        KeyAlgo::MlKem768 => 31,
+        KeyAlgo::MlKem1024 => 32,
     }
 }
 
@@ -366,6 +382,9 @@ pub(super) fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
                 25 => KeyAlgo::AesOcb,
                 26 => KeyAlgo::X448,
                 27 => KeyAlgo::Ed448,
+                30 => KeyAlgo::MlKem512,
+                31 => KeyAlgo::MlKem768,
+                32 => KeyAlgo::MlKem1024,
                 _ => return None,
             };
             let hash = match hash {
@@ -557,6 +576,10 @@ pub(super) fn usage_bit(name: &str) -> Option<u32> {
         "deriveBits" => Some(USAGE_DERIVE_BITS),
         "wrapKey" => Some(USAGE_WRAP_KEY),
         "unwrapKey" => Some(USAGE_UNWRAP_KEY),
+        "encapsulateBits" => Some(USAGE_ENCAPSULATE_BITS),
+        "decapsulateBits" => Some(USAGE_DECAPSULATE_BITS),
+        "encapsulateKey" => Some(USAGE_ENCAPSULATE_KEY),
+        "decapsulateKey" => Some(USAGE_DECAPSULATE_KEY),
         _ => None,
     }
 }
@@ -629,7 +652,160 @@ pub(super) fn supported_usages(algo: KeyAlgo, kind: KeyKind) -> u32 {
         ) => 0,
         (KeyAlgo::RsaOaep, KeyKind::Public) => USAGE_ENCRYPT | USAGE_WRAP_KEY,
         (KeyAlgo::RsaOaep, KeyKind::Private) => USAGE_DECRYPT | USAGE_UNWRAP_KEY,
+        (KeyAlgo::MlKem512 | KeyAlgo::MlKem768 | KeyAlgo::MlKem1024, KeyKind::Public) => {
+            USAGE_ENCAPSULATE_BITS | USAGE_ENCAPSULATE_KEY
+        }
+        (KeyAlgo::MlKem512 | KeyAlgo::MlKem768 | KeyAlgo::MlKem1024, KeyKind::Private) => {
+            USAGE_DECAPSULATE_BITS | USAGE_DECAPSULATE_KEY
+        }
         _ => 0,
+    }
+}
+
+pub(super) fn ml_kem_key_algo_from_name(name: &str) -> Option<KeyAlgo> {
+    match name {
+        "ML-KEM-512" => Some(KeyAlgo::MlKem512),
+        "ML-KEM-768" => Some(KeyAlgo::MlKem768),
+        "ML-KEM-1024" => Some(KeyAlgo::MlKem1024),
+        _ => None,
+    }
+}
+
+pub(super) fn is_ml_kem_key_algo(algo: KeyAlgo) -> bool {
+    matches!(
+        algo,
+        KeyAlgo::MlKem512 | KeyAlgo::MlKem768 | KeyAlgo::MlKem1024
+    )
+}
+
+pub(super) fn ml_kem_algorithm_name(algo: KeyAlgo) -> Option<&'static str> {
+    match algo {
+        KeyAlgo::MlKem512 => Some("ML-KEM-512"),
+        KeyAlgo::MlKem768 => Some("ML-KEM-768"),
+        KeyAlgo::MlKem1024 => Some("ML-KEM-1024"),
+        _ => None,
+    }
+}
+
+pub(super) fn ml_kem_der_pair_from_seed(
+    algo: KeyAlgo,
+    seed_bytes: &[u8],
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    let seed = ml_kem::Seed::try_from(seed_bytes).ok()?;
+    match algo {
+        KeyAlgo::MlKem512 => {
+            let private = ml_kem::DecapsulationKey512::from_seed(seed);
+            let private_der = private.to_pkcs8_der().ok()?.as_bytes().to_vec();
+            let public_der = private
+                .encapsulation_key()
+                .to_public_key_der()
+                .ok()?
+                .as_bytes()
+                .to_vec();
+            Some((private_der, public_der))
+        }
+        KeyAlgo::MlKem768 => {
+            let private = ml_kem::DecapsulationKey768::from_seed(seed);
+            let private_der = private.to_pkcs8_der().ok()?.as_bytes().to_vec();
+            let public_der = private
+                .encapsulation_key()
+                .to_public_key_der()
+                .ok()?
+                .as_bytes()
+                .to_vec();
+            Some((private_der, public_der))
+        }
+        KeyAlgo::MlKem1024 => {
+            let private = ml_kem::DecapsulationKey1024::from_seed(seed);
+            let private_der = private.to_pkcs8_der().ok()?.as_bytes().to_vec();
+            let public_der = private
+                .encapsulation_key()
+                .to_public_key_der()
+                .ok()?
+                .as_bytes()
+                .to_vec();
+            Some((private_der, public_der))
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn ml_kem_public_bytes_from_der(algo: KeyAlgo, der: &[u8]) -> Option<Vec<u8>> {
+    match algo {
+        KeyAlgo::MlKem512 => Some(
+            ml_kem::EncapsulationKey512::from_public_key_der(der)
+                .ok()?
+                .to_bytes()
+                .as_slice()
+                .to_vec(),
+        ),
+        KeyAlgo::MlKem768 => Some(
+            ml_kem::EncapsulationKey768::from_public_key_der(der)
+                .ok()?
+                .to_bytes()
+                .as_slice()
+                .to_vec(),
+        ),
+        KeyAlgo::MlKem1024 => Some(
+            ml_kem::EncapsulationKey1024::from_public_key_der(der)
+                .ok()?
+                .to_bytes()
+                .as_slice()
+                .to_vec(),
+        ),
+        _ => None,
+    }
+}
+
+pub(super) fn ml_kem_private_seed_and_public_from_der(
+    algo: KeyAlgo,
+    der: &[u8],
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    match algo {
+        KeyAlgo::MlKem512 => {
+            let private = ml_kem::DecapsulationKey512::from_pkcs8_der(der).ok()?;
+            Some((
+                private.to_seed()?.as_slice().to_vec(),
+                private.encapsulation_key().to_bytes().as_slice().to_vec(),
+            ))
+        }
+        KeyAlgo::MlKem768 => {
+            let private = ml_kem::DecapsulationKey768::from_pkcs8_der(der).ok()?;
+            Some((
+                private.to_seed()?.as_slice().to_vec(),
+                private.encapsulation_key().to_bytes().as_slice().to_vec(),
+            ))
+        }
+        KeyAlgo::MlKem1024 => {
+            let private = ml_kem::DecapsulationKey1024::from_pkcs8_der(der).ok()?;
+            Some((
+                private.to_seed()?.as_slice().to_vec(),
+                private.encapsulation_key().to_bytes().as_slice().to_vec(),
+            ))
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn ml_kem_public_der_from_bytes(algo: KeyAlgo, public_bytes: &[u8]) -> Option<Vec<u8>> {
+    match algo {
+        KeyAlgo::MlKem512 => {
+            let public = ml_kem::Key::<ml_kem::EncapsulationKey512>::try_from(public_bytes).ok()?;
+            let key = ml_kem::EncapsulationKey512::new(&public).ok()?;
+            Some(key.to_public_key_der().ok()?.as_bytes().to_vec())
+        }
+        KeyAlgo::MlKem768 => {
+            let public = ml_kem::Key::<ml_kem::EncapsulationKey768>::try_from(public_bytes).ok()?;
+            let key = ml_kem::EncapsulationKey768::new(&public).ok()?;
+            Some(key.to_public_key_der().ok()?.as_bytes().to_vec())
+        }
+        KeyAlgo::MlKem1024 => {
+            let public =
+                ml_kem::Key::<ml_kem::EncapsulationKey1024>::try_from(public_bytes).ok()?;
+            let key = ml_kem::EncapsulationKey1024::new(&public).ok()?;
+            Some(key.to_public_key_der().ok()?.as_bytes().to_vec())
+        }
+        _ => None,
     }
 }
 

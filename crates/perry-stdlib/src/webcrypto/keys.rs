@@ -281,6 +281,80 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         );
         return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
     }
+    if let Some(key_algo) = ml_kem_key_algo_from_name(&algo_upper) {
+        let bad_message = match key_algo {
+            KeyAlgo::MlKem512 => "Unsupported key usage for a ML-KEM-512 key",
+            KeyAlgo::MlKem768 => "Unsupported key usage for a ML-KEM-768 key",
+            KeyAlgo::MlKem1024 => "Unsupported key usage for a ML-KEM-1024 key",
+            _ => unreachable!(),
+        };
+        let (private_usages, public_usages) = match validate_key_pair_usages(
+            key_algo,
+            usages_bits.to_bits(),
+            "Usages cannot be empty when creating a key.",
+            bad_message,
+        ) {
+            Ok(u) => u,
+            Err((name, message)) => return reject_with_dom_exception(name, message),
+        };
+        if private_usages == 0 {
+            return reject_with_dom_exception(
+                "SyntaxError",
+                "Usages cannot be empty when creating a key.",
+            );
+        }
+
+        let mut seed = [0u8; 64];
+        rand::rngs::OsRng.fill_bytes(&mut seed);
+        let (private_der, public_der) = match ml_kem_der_pair_from_seed(key_algo, &seed) {
+            Some(pair) => pair,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        };
+
+        let private_buf = alloc_uint8array_from_slice(&private_der);
+        let public_buf = alloc_uint8array_from_slice(&public_der);
+        if private_buf.is_null() || public_buf.is_null() {
+            return reject_with_dom_exception("OperationError", "The operation failed");
+        }
+        register_crypto_key(
+            private_buf as usize,
+            CryptoKeyMaterial::new(
+                key_algo,
+                HashAlgo::Sha256,
+                KeyKind::Private,
+                extractable,
+                private_usages,
+            ),
+        );
+        register_crypto_key(
+            public_buf as usize,
+            CryptoKeyMaterial::new(
+                key_algo,
+                HashAlgo::Sha256,
+                KeyKind::Public,
+                true,
+                public_usages,
+            ),
+        );
+
+        let obj = js_object_alloc(0, 2);
+        if obj.is_null() {
+            return reject_with_dom_exception("OperationError", "The operation failed");
+        }
+        let public_key_name = perry_runtime::js_string_from_bytes(b"publicKey".as_ptr(), 9);
+        let private_key_name = perry_runtime::js_string_from_bytes(b"privateKey".as_ptr(), 10);
+        js_object_set_field_by_name(
+            obj,
+            public_key_name,
+            f64::from_bits(JSValue::pointer(public_buf as *const u8).bits()),
+        );
+        js_object_set_field_by_name(
+            obj,
+            private_key_name,
+            f64::from_bits(JSValue::pointer(private_buf as *const u8).bits()),
+        );
+        return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
+    }
     if algo_upper == "X448" {
         let (private_usages, public_usages) = match validate_key_pair_usages(
             KeyAlgo::X448,
