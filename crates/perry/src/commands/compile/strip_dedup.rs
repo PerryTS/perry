@@ -9,10 +9,44 @@
 //! decision algorithm and the v0.5.320 over-prune incident.
 
 use anyhow::Result;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::{find_library, find_llvm_tool, find_stdlib_library};
+
+#[derive(Debug, Clone, Copy)]
+struct StripDedupOptions {
+    rewrite_kept_duplicate_symbols: bool,
+    include_runtime_provider: bool,
+    extract_rlib: bool,
+}
+
+impl StripDedupOptions {
+    fn bundled_archive() -> Self {
+        Self {
+            rewrite_kept_duplicate_symbols: false,
+            include_runtime_provider: true,
+            extract_rlib: true,
+        }
+    }
+
+    fn native_archive() -> Self {
+        Self {
+            rewrite_kept_duplicate_symbols: true,
+            include_runtime_provider: true,
+            extract_rlib: true,
+        }
+    }
+
+    fn native_runtime_archive() -> Self {
+        Self {
+            rewrite_kept_duplicate_symbols: true,
+            include_runtime_provider: false,
+            extract_rlib: false,
+        }
+    }
+}
 
 /// Parse `llvm-nm --defined-only --format=just-symbols` output into a
 /// per-member symbol map.
@@ -93,6 +127,203 @@ fn collect_archive_symbols_flat(
         .unwrap_or_default()
 }
 
+fn collect_object_symbols_flat(llvm_nm: &Path, object: &Path) -> std::collections::HashSet<String> {
+    let out = match Command::new(llvm_nm)
+        .arg("--defined-only")
+        .arg("--format=just-symbols")
+        .arg(object)
+        .output()
+    {
+        Ok(out) if out.status.success() => out,
+        _ => return std::collections::HashSet::new(),
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.ends_with(':'))
+        .map(str::to_string)
+        .collect()
+}
+
+fn duplicate_symbols_to_rewrite(
+    member_syms: &std::collections::HashSet<String>,
+    duplicate_provider_symbols: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    let mut symbols: Vec<String> = member_syms
+        .intersection(duplicate_provider_symbols)
+        .cloned()
+        .collect();
+    symbols.sort();
+    symbols
+}
+
+fn find_host_clang() -> Option<PathBuf> {
+    if cfg!(target_os = "macos") {
+        if let Ok(out) = Command::new("xcrun")
+            .args(["--sdk", "macosx", "--find", "clang"])
+            .output()
+        {
+            if out.status.success() {
+                let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !path.is_empty() {
+                    return Some(PathBuf::from(path));
+                }
+            }
+        }
+    }
+
+    Some(PathBuf::from("clang"))
+}
+
+fn find_macosx_sysroot() -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let out = Command::new("xcrun")
+        .args(["--sdk", "macosx", "--show-sdk-path"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!path.is_empty()).then(|| PathBuf::from(path))
+}
+
+fn materialize_lto_object_for_rewrite(object_path: &Path) -> bool {
+    let Some(clang) = find_host_clang() else {
+        return false;
+    };
+    let tmp = object_path.with_extension("materialized.o");
+    let mut cmd = Command::new(clang);
+    cmd.arg("-r");
+    if let Some(sysroot) = find_macosx_sysroot() {
+        cmd.arg("-isysroot").arg(sysroot);
+    }
+    let out = cmd.arg(object_path).arg("-o").arg(&tmp).output();
+    match out {
+        Ok(out) if out.status.success() && tmp.exists() => {
+            if std::fs::rename(&tmp, object_path).is_ok() {
+                true
+            } else {
+                let _ = std::fs::remove_file(&tmp);
+                false
+            }
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            eprintln!(
+                "[strip-dedup] WARNING: clang -r could not materialize {} for symbol rewrite: {}",
+                object_path.display(),
+                stderr.trim()
+            );
+            let _ = std::fs::remove_file(&tmp);
+            false
+        }
+        Err(e) => {
+            eprintln!(
+                "[strip-dedup] WARNING: failed to spawn clang -r for {}: {e}",
+                object_path.display()
+            );
+            false
+        }
+    }
+}
+
+fn rewrite_duplicate_symbols_in_object(
+    llvm_nm: &Path,
+    llvm_objcopy: &Path,
+    object_path: &Path,
+    member_name: &str,
+    member_syms: &std::collections::HashSet<String>,
+    duplicate_provider_symbols: &std::collections::HashSet<String>,
+    rewrite_dir: &Path,
+    rewrite_seq: &mut usize,
+) -> usize {
+    let symbols = duplicate_symbols_to_rewrite(member_syms, duplicate_provider_symbols);
+    if symbols.is_empty() {
+        return 0;
+    }
+
+    let mapping_path = rewrite_dir.join(format!("rewrite_{}.txt", *rewrite_seq));
+    *rewrite_seq += 1;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    object_path.hash(&mut hasher);
+    member_name.hash(&mut hasher);
+    let object_hash = hasher.finish();
+    let mut mapping = String::new();
+    for (idx, old) in symbols.iter().enumerate() {
+        mapping.push_str(old);
+        mapping.push(' ');
+        mapping.push_str(&format!(
+            "__perry_dedup_{}_{}_{:x}_{}",
+            std::process::id(),
+            *rewrite_seq,
+            object_hash,
+            idx
+        ));
+        mapping.push('\n');
+    }
+    if let Err(e) = std::fs::write(&mapping_path, mapping) {
+        eprintln!(
+            "[strip-dedup] WARNING: could not write duplicate-symbol rewrite map for {member_name}: {e}"
+        );
+        return 0;
+    }
+
+    let run_objcopy = |object_path: &Path| -> bool {
+        match Command::new(llvm_objcopy)
+            .arg("--redefine-syms")
+            .arg(&mapping_path)
+            .arg(object_path)
+            .output()
+        {
+            Ok(out) if out.status.success() => true,
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                eprintln!(
+                    "[strip-dedup] WARNING: llvm-objcopy could not rewrite duplicate symbols in {member_name}: {}",
+                    stderr.trim()
+                );
+                false
+            }
+            Err(e) => {
+                eprintln!(
+                    "[strip-dedup] WARNING: failed to spawn llvm-objcopy for {member_name}: {e}"
+                );
+                false
+            }
+        }
+    };
+
+    let mut rewritten = run_objcopy(object_path);
+    let mut remaining = collect_object_symbols_flat(llvm_nm, object_path);
+    if rewritten && symbols.iter().any(|s| remaining.contains(s)) {
+        // Rust release staticlibs may carry ThinLTO-shaped Mach-O objects.
+        // llvm-objcopy accepts --redefine-syms for those but leaves the
+        // LTO symbol table unchanged. A relocatable clang link materializes
+        // the object into normal Mach-O, after which objcopy can rewrite it.
+        if materialize_lto_object_for_rewrite(object_path) {
+            rewritten = run_objcopy(object_path);
+            remaining = collect_object_symbols_flat(llvm_nm, object_path);
+        }
+    }
+
+    if !rewritten {
+        return 0;
+    }
+
+    let still_present = symbols.iter().filter(|s| remaining.contains(*s)).count();
+    if still_present > 0 {
+        eprintln!(
+            "[strip-dedup] WARNING: {member_name}: {still_present} duplicate symbols remained after rewrite"
+        );
+        return symbols.len() - still_present;
+    }
+
+    symbols.len()
+}
+
 /// On Windows, build a trimmed UI lib using the rlib (not staticlib).
 ///
 /// perry-ui-windows builds as both rlib and staticlib. The staticlib bundles
@@ -115,6 +346,26 @@ fn collect_archive_symbols_flat(
 /// bundling staticlib carried unique CGUs (#181 part B). Falls back to the
 /// legacy name-pattern when `llvm-nm` isn't installed.
 pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<PathBuf> {
+    strip_duplicate_objects_from_lib_with_options(lib_path, StripDedupOptions::bundled_archive())
+}
+
+pub(super) fn strip_duplicate_objects_from_native_lib(lib_path: &PathBuf) -> Result<PathBuf> {
+    strip_duplicate_objects_from_lib_with_options(lib_path, StripDedupOptions::native_archive())
+}
+
+pub(super) fn strip_duplicate_objects_from_native_runtime_lib(
+    lib_path: &PathBuf,
+) -> Result<PathBuf> {
+    strip_duplicate_objects_from_lib_with_options(
+        lib_path,
+        StripDedupOptions::native_runtime_archive(),
+    )
+}
+
+fn strip_duplicate_objects_from_lib_with_options(
+    lib_path: &PathBuf,
+    options: StripDedupOptions,
+) -> Result<PathBuf> {
     let lib_name = lib_path.file_name().and_then(|f| f.to_str()).unwrap_or("?");
     eprintln!("[strip-dedup] Processing: {}", lib_path.display());
 
@@ -206,26 +457,28 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
         .filter(|p| p.exists())
         .or_else(|| find_library(runtime_name, search_target));
 
-    if let Some(ref rp) = runtime_path {
-        let abs_rp = std::fs::canonicalize(rp).unwrap_or(rp.clone());
-        if let Ok(out) = Command::new(&llvm_ar).arg("t").arg(&abs_rp).output() {
-            let count_before = exclude_members.len();
-            for line in String::from_utf8_lossy(&out.stdout).lines() {
-                exclude_members.insert(line.to_string());
+    if options.include_runtime_provider {
+        if let Some(ref rp) = runtime_path {
+            let abs_rp = std::fs::canonicalize(rp).unwrap_or(rp.clone());
+            if let Ok(out) = Command::new(&llvm_ar).arg("t").arg(&abs_rp).output() {
+                let count_before = exclude_members.len();
+                for line in String::from_utf8_lossy(&out.stdout).lines() {
+                    exclude_members.insert(line.to_string());
+                }
+                eprintln!(
+                    "[strip-dedup] {runtime_name} found: {} — {} members loaded",
+                    abs_rp.display(),
+                    exclude_members.len() - count_before
+                );
+            } else {
+                eprintln!(
+                    "[strip-dedup] WARNING: failed to list {runtime_name} at {}",
+                    abs_rp.display()
+                );
             }
-            eprintln!(
-                "[strip-dedup] {runtime_name} found: {} — {} members loaded",
-                abs_rp.display(),
-                exclude_members.len() - count_before
-            );
         } else {
-            eprintln!(
-                "[strip-dedup] WARNING: failed to list {runtime_name} at {}",
-                abs_rp.display()
-            );
+            eprintln!("[strip-dedup] WARNING: {runtime_name} not found (searched next to lib and via find_library)");
         }
-    } else {
-        eprintln!("[strip-dedup] WARNING: {runtime_name} not found (searched next to lib and via find_library)");
     }
 
     eprintln!(
@@ -248,12 +501,19 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
         })
         .unwrap_or_default();
     let rlib_path = lib_path.with_file_name(&rlib_name);
-    let has_rlib = rlib_path.exists();
-    eprintln!(
-        "[strip-dedup] rlib {}: {}",
-        if has_rlib { "found" } else { "NOT found" },
-        rlib_path.display()
-    );
+    let has_rlib = options.extract_rlib && rlib_path.exists();
+    if options.extract_rlib {
+        eprintln!(
+            "[strip-dedup] rlib {}: {}",
+            if has_rlib { "found" } else { "NOT found" },
+            rlib_path.display()
+        );
+    } else {
+        eprintln!(
+            "[strip-dedup] rlib extraction disabled for {}",
+            lib_path.display()
+        );
+    }
 
     let rlib_objects: Vec<String> = if has_rlib {
         let abs_rlib = std::fs::canonicalize(&rlib_path)?;
@@ -305,6 +565,8 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     });
 
     // Build provided-symbols union when nm is available.
+    let mut duplicate_provider_symbols: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     let provided_symbols: std::collections::HashSet<String> = if nm_works {
         let nm = llvm_nm.as_ref().expect("nm_works ⇒ Some");
         let mut syms: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -317,20 +579,26 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
         if let Some(ref sp) = stdlib_path {
             let abs = std::fs::canonicalize(sp).unwrap_or_else(|_| sp.clone());
             let n = syms.len();
-            syms.extend(collect_archive_symbols_flat(nm, &abs));
+            let stdlib_syms = collect_archive_symbols_flat(nm, &abs);
+            duplicate_provider_symbols.extend(stdlib_syms.iter().cloned());
+            syms.extend(stdlib_syms);
             eprintln!(
                 "[strip-dedup] {stdlib_name} symbols loaded: {}",
                 syms.len() - n
             );
         }
-        if let Some(ref rp) = runtime_path {
-            let abs = std::fs::canonicalize(rp).unwrap_or_else(|_| rp.clone());
-            let n = syms.len();
-            syms.extend(collect_archive_symbols_flat(nm, &abs));
-            eprintln!(
-                "[strip-dedup] {runtime_name} symbols loaded: {}",
-                syms.len() - n
-            );
+        if options.include_runtime_provider {
+            if let Some(ref rp) = runtime_path {
+                let abs = std::fs::canonicalize(rp).unwrap_or_else(|_| rp.clone());
+                let n = syms.len();
+                let runtime_syms = collect_archive_symbols_flat(nm, &abs);
+                duplicate_provider_symbols.extend(runtime_syms.iter().cloned());
+                syms.extend(runtime_syms);
+                eprintln!(
+                    "[strip-dedup] {runtime_name} symbols loaded: {}",
+                    syms.len() - n
+                );
+            }
         }
         syms
     } else {
@@ -345,6 +613,29 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
         collect_archive_symbols_by_member(nm, &abs_staticlib).unwrap_or_default()
     } else {
         std::collections::HashMap::new()
+    };
+    let rlib_member_symbols = if nm_works && has_rlib {
+        let nm = llvm_nm.as_ref().expect("nm_works ⇒ Some");
+        let abs_rlib = std::fs::canonicalize(&rlib_path).unwrap_or_else(|_| rlib_path.clone());
+        collect_archive_symbols_by_member(nm, &abs_rlib).unwrap_or_default()
+    } else {
+        std::collections::HashMap::new()
+    };
+    let llvm_objcopy = if options.rewrite_kept_duplicate_symbols && nm_works {
+        match find_llvm_tool("llvm-objcopy") {
+            Some(objcopy) => {
+                eprintln!("[strip-dedup] llvm-objcopy found: {}", objcopy.display());
+                Some(objcopy)
+            }
+            None => {
+                eprintln!(
+                    "[strip-dedup] llvm-objcopy unavailable — kept duplicate symbols will not be rewritten"
+                );
+                None
+            }
+        }
+    } else {
+        None
     };
 
     let mut excluded_by_subset = 0usize;
@@ -415,6 +706,8 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     std::fs::create_dir_all(&extract_dir)?;
 
     let mut all_objects: Vec<std::path::PathBuf> = Vec::new();
+    let mut rewritten_duplicate_symbols = 0usize;
+    let mut rewrite_seq = 0usize;
 
     // If we have an rlib, extract UI crate objects from it (skipping alloc shims).
     if has_rlib {
@@ -436,6 +729,22 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
             if out.status.success() {
                 let p = extract_dir.join(member);
                 if p.exists() {
+                    if let (Some(nm), Some(objcopy), Some(member_syms)) = (
+                        llvm_nm.as_deref(),
+                        llvm_objcopy.as_deref(),
+                        rlib_member_symbols.get(member.as_str()),
+                    ) {
+                        rewritten_duplicate_symbols += rewrite_duplicate_symbols_in_object(
+                            nm,
+                            objcopy,
+                            &p,
+                            member,
+                            member_syms,
+                            &duplicate_provider_symbols,
+                            &extract_dir,
+                            &mut rewrite_seq,
+                        );
+                    }
                     all_objects.push(p);
                     rlib_extracted += 1;
                 }
@@ -460,6 +769,22 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
         if out.status.success() {
             let p = extract_dir.join(member.as_str());
             if p.exists() {
+                if let (Some(nm), Some(objcopy), Some(member_syms)) = (
+                    llvm_nm.as_deref(),
+                    llvm_objcopy.as_deref(),
+                    staticlib_member_symbols.get(member.as_str()),
+                ) {
+                    rewritten_duplicate_symbols += rewrite_duplicate_symbols_in_object(
+                        nm,
+                        objcopy,
+                        &p,
+                        member,
+                        member_syms,
+                        &duplicate_provider_symbols,
+                        &extract_dir,
+                        &mut rewrite_seq,
+                    );
+                }
                 all_objects.push(p);
             }
         } else {
@@ -474,6 +799,11 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
         "[strip-dedup] Building trimmed {lib_name}: {} objects total",
         all_objects.len()
     );
+    if options.rewrite_kept_duplicate_symbols {
+        eprintln!(
+            "[strip-dedup] {lib_name}: rewrote {rewritten_duplicate_symbols} duplicate symbols in kept members"
+        );
+    }
 
     // Create new archive from just the UI-specific objects
     let mut ar_cmd = Command::new(&llvm_ar);
@@ -503,7 +833,7 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
 
 #[cfg(test)]
 mod strip_dedup_tests {
-    use super::parse_nm_archive_output;
+    use super::{duplicate_symbols_to_rewrite, parse_nm_archive_output, StripDedupOptions};
 
     #[test]
     fn parser_handles_bare_member_headers() {
@@ -587,5 +917,37 @@ empty_marker.o:
 
         // empty_marker.o → no entry; call site keeps it defensively.
         assert!(!by_member.contains_key("empty_marker.o"));
+    }
+
+    #[test]
+    fn duplicate_rewrite_targets_only_external_providers() {
+        let member: std::collections::HashSet<String> =
+            ["_js_http_request", "_server_only", "_runtime_helper"]
+                .into_iter()
+                .map(str::to_string)
+                .collect();
+        let providers: std::collections::HashSet<String> =
+            ["_js_http_request", "_runtime_helper", "_stdlib_only"]
+                .into_iter()
+                .map(str::to_string)
+                .collect();
+
+        let rewrites = duplicate_symbols_to_rewrite(&member, &providers);
+        assert_eq!(
+            rewrites,
+            vec![
+                "_js_http_request".to_string(),
+                "_runtime_helper".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn native_runtime_dedup_does_not_use_runtime_as_its_own_provider() {
+        let options = StripDedupOptions::native_runtime_archive();
+
+        assert!(options.rewrite_kept_duplicate_symbols);
+        assert!(!options.include_runtime_provider);
+        assert!(!options.extract_rlib);
     }
 }

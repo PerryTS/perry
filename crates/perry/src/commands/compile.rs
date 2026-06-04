@@ -93,7 +93,10 @@ use resolve::{
     is_in_compile_package, is_in_perry_native_package, is_js_file, parse_native_library_manifest,
     parse_package_specifier, resolve_import,
 };
-use strip_dedup::strip_duplicate_objects_from_lib;
+use strip_dedup::{
+    strip_duplicate_objects_from_lib, strip_duplicate_objects_from_native_lib,
+    strip_duplicate_objects_from_native_runtime_lib,
+};
 use targets::{
     apple_sdk_version, compile_for_android_widget, compile_for_ios_widget, compile_for_wasm,
     compile_for_watchos_widget, compile_for_wearos_tile, find_visionos_swift_runtime,
@@ -5148,6 +5151,14 @@ pub fn run_with_parse_cache(
             fs::write(&stub_path, &stub_bytes)?;
             obj_paths.push(stub_path);
         }
+    }
+
+    let obj_path_count_before_dedup = obj_paths.len();
+    let mut seen_obj_paths: HashSet<PathBuf> = HashSet::new();
+    obj_paths.retain(|path| seen_obj_paths.insert(path.clone()));
+    let duplicate_obj_path_count = obj_path_count_before_dedup.saturating_sub(obj_paths.len());
+    if duplicate_obj_path_count > 0 && matches!(format, OutputFormat::Text) {
+        eprintln!("warning: dropped {duplicate_obj_path_count} duplicate object link input(s)");
     }
 
     if args.no_link {

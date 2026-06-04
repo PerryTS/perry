@@ -34,7 +34,8 @@ use super::{
     find_geisterhand_stdlib, find_geisterhand_ui, find_lld_link, find_llvm_tool,
     find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk, find_stdlib_library,
     find_ui_library, find_visionos_swift_runtime, find_watchos_swift_runtime, rust_target_triple,
-    strip_duplicate_objects_from_lib, windows_pe_subsystem_flag, CompilationContext,
+    strip_duplicate_objects_from_lib, strip_duplicate_objects_from_native_lib,
+    strip_duplicate_objects_from_native_runtime_lib, windows_pe_subsystem_flag, CompilationContext,
 };
 
 mod platform_cmd;
@@ -71,6 +72,78 @@ fn select_available_backend_link_metadata(
             pkg_config: backend.pkg_config.clone(),
         })
         .collect()
+}
+
+fn should_strip_duplicate_native_archive(
+    lib_path: &Path,
+    is_windows: bool,
+    is_android: bool,
+    is_linux: bool,
+    is_harmonyos: bool,
+) -> bool {
+    lib_path.extension().is_some_and(|ext| ext == "a")
+        && !is_windows
+        && !is_android
+        && !is_linux
+        && !is_harmonyos
+}
+
+fn strip_duplicate_native_archive_if_needed(
+    lib_path: PathBuf,
+    is_windows: bool,
+    is_android: bool,
+    is_linux: bool,
+    is_harmonyos: bool,
+) -> PathBuf {
+    if !should_strip_duplicate_native_archive(
+        &lib_path,
+        is_windows,
+        is_android,
+        is_linux,
+        is_harmonyos,
+    ) {
+        return lib_path;
+    }
+
+    match strip_duplicate_objects_from_native_lib(&lib_path) {
+        Ok(trimmed) => trimmed,
+        Err(e) => {
+            eprintln!(
+                "[strip-dedup] skipped for native lib {} (non-fatal): {e}",
+                lib_path.display()
+            );
+            lib_path
+        }
+    }
+}
+
+fn strip_duplicate_native_runtime_archive_if_needed(
+    runtime_lib: PathBuf,
+    is_windows: bool,
+    is_android: bool,
+    is_linux: bool,
+    is_harmonyos: bool,
+) -> PathBuf {
+    if !should_strip_duplicate_native_archive(
+        &runtime_lib,
+        is_windows,
+        is_android,
+        is_linux,
+        is_harmonyos,
+    ) {
+        return runtime_lib;
+    }
+
+    match strip_duplicate_objects_from_native_runtime_lib(&runtime_lib) {
+        Ok(trimmed) => trimmed,
+        Err(e) => {
+            eprintln!(
+                "[strip-dedup] skipped for runtime lib {} (non-fatal): {e}",
+                runtime_lib.display()
+            );
+            runtime_lib
+        }
+    }
 }
 
 #[cfg(test)]
@@ -156,6 +229,33 @@ mod native_package_selection_tests {
         let selection = select_available_backend_link_metadata(&tc);
 
         assert!(selection.is_empty());
+    }
+
+    #[test]
+    fn native_static_archives_are_strip_dedup_candidates_on_apple_like_links() {
+        let archive = Path::new("libperry_ext_http.a");
+        assert!(should_strip_duplicate_native_archive(
+            archive, false, false, false, false
+        ));
+        assert!(!should_strip_duplicate_native_archive(
+            archive, true, false, false, false
+        ));
+        assert!(!should_strip_duplicate_native_archive(
+            archive, false, true, false, false
+        ));
+        assert!(!should_strip_duplicate_native_archive(
+            archive, false, false, true, false
+        ));
+        assert!(!should_strip_duplicate_native_archive(
+            archive, false, false, false, true
+        ));
+        assert!(!should_strip_duplicate_native_archive(
+            Path::new("libnative.dylib"),
+            false,
+            false,
+            false,
+            false
+        ));
     }
 }
 
@@ -490,12 +590,26 @@ pub(super) fn build_and_run_link(
                 // by stripping the corresponding feature from the
                 // perry-stdlib rebuild.
                 for wk in well_known_libs {
-                    cmd.arg(wk);
+                    let wk = strip_duplicate_native_archive_if_needed(
+                        wk.clone(),
+                        is_windows,
+                        is_android,
+                        is_linux,
+                        is_harmonyos,
+                    );
+                    cmd.arg(&wk);
                 }
                 // Also link runtime to supply symbols that may be DCE'd from stdlib's
                 // bundled perry-runtime (e.g. js_closure_unbind_this, js_string_addref)
                 if !is_android && !is_windows {
-                    cmd.arg(runtime_lib);
+                    let runtime_lib = strip_duplicate_native_runtime_archive_if_needed(
+                        runtime_lib.to_path_buf(),
+                        is_windows,
+                        is_android,
+                        is_linux,
+                        is_harmonyos,
+                    );
+                    cmd.arg(&runtime_lib);
                 }
             } else {
                 if ctx.needs_stdlib {
@@ -522,7 +636,14 @@ pub(super) fn build_and_run_link(
             // #466 Phase 4 step 2: see the parallel comment in the
             // non-Android branch above.
             for wk in well_known_libs {
-                cmd.arg(wk);
+                let wk = strip_duplicate_native_archive_if_needed(
+                    wk.clone(),
+                    is_windows,
+                    is_android,
+                    is_linux,
+                    is_harmonyos,
+                );
+                cmd.arg(&wk);
             }
         } else {
             eprintln!("Warning: stdlib required but libperry_stdlib.a not found");
@@ -1354,7 +1475,14 @@ pub(super) fn build_and_run_link(
                         prebuilt.display()
                     ));
                 }
-                cmd.arg(prebuilt);
+                let prebuilt = strip_duplicate_native_archive_if_needed(
+                    prebuilt.clone(),
+                    is_windows,
+                    is_android,
+                    is_linux,
+                    is_harmonyos,
+                );
+                cmd.arg(&prebuilt);
                 match format {
                     OutputFormat::Text => {
                         println!("Linking prebuilt native library: {}", prebuilt.display())
@@ -1486,6 +1614,13 @@ pub(super) fn build_and_run_link(
                     );
 
                     if let Some(lib) = lib_path {
+                        let lib = strip_duplicate_native_archive_if_needed(
+                            lib,
+                            is_windows,
+                            is_android,
+                            is_linux,
+                            is_harmonyos,
+                        );
                         // For shared libraries (.so) on Android, use -L/-l so the linker
                         // records just the soname (not the full build path) in DT_NEEDED.
                         if is_android && lib_name.ends_with(".so") {
@@ -1650,7 +1785,14 @@ pub(super) fn build_and_run_link(
                             backend.backend.as_str()
                         ));
                     }
-                    cmd.arg(prebuilt);
+                    let prebuilt = strip_duplicate_native_archive_if_needed(
+                        prebuilt.clone(),
+                        is_windows,
+                        is_android,
+                        is_linux,
+                        is_harmonyos,
+                    );
+                    cmd.arg(&prebuilt);
                     match format {
                         OutputFormat::Text => println!(
                             "Linking prebuilt {} backend library: {}",

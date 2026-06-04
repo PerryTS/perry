@@ -198,7 +198,59 @@ pub(super) fn find_llvm_tool(tool_name: &str) -> Option<PathBuf> {
         }
     }
 
-    // 3. PATH lookup
+    // 3. Rustup-installed LLVM tools. Some setups use Homebrew `rustc`
+    // on PATH while rustup still owns the matching `llvm-tools` component;
+    // prefer those Rust LLVM tools over system/Xcode LLVM when present.
+    if let (Some(home), Some(host)) = (std::env::var_os("HOME"), host_target_triple()) {
+        let toolchains_dir = PathBuf::from(home).join(".rustup/toolchains");
+        let exe_suffix = if cfg!(target_os = "windows") {
+            ".exe"
+        } else {
+            ""
+        };
+        let tool_file = format!("{}{}", tool_name, exe_suffix);
+
+        if let Ok(output) = Command::new("rustup")
+            .arg("show")
+            .arg("active-toolchain")
+            .output()
+        {
+            if output.status.success() {
+                if let Some(active) = String::from_utf8_lossy(&output.stdout)
+                    .split_whitespace()
+                    .next()
+                {
+                    let tool_path = toolchains_dir
+                        .join(active)
+                        .join("lib")
+                        .join("rustlib")
+                        .join(host)
+                        .join("bin")
+                        .join(&tool_file);
+                    if tool_path.exists() {
+                        return Some(tool_path);
+                    }
+                }
+            }
+        }
+
+        if let Ok(entries) = std::fs::read_dir(&toolchains_dir) {
+            for entry in entries.flatten() {
+                let tool_path = entry
+                    .path()
+                    .join("lib")
+                    .join("rustlib")
+                    .join(host)
+                    .join("bin")
+                    .join(&tool_file);
+                if tool_path.exists() {
+                    return Some(tool_path);
+                }
+            }
+        }
+    }
+
+    // 4. PATH lookup
     let which_cmd = if cfg!(target_os = "windows") {
         "where"
     } else {
@@ -213,7 +265,7 @@ pub(super) fn find_llvm_tool(tool_name: &str) -> Option<PathBuf> {
         }
     }
 
-    // 4. Common macOS LLVM installs. Homebrew does not put LLVM tools on PATH by
+    // 5. Common macOS LLVM installs. Homebrew does not put LLVM tools on PATH by
     // default, and Apple `nm` may not understand newer LLVM object attributes
     // emitted by Rust.
     if cfg!(target_os = "macos") {
