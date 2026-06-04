@@ -731,8 +731,11 @@ pub extern "C" fn js_date_to_iso_string(timestamp: f64) -> *mut crate::StringHea
         return invalid_date_string();
     }
     let ts_ms = timestamp as i64;
-    let secs = ts_ms / 1000;
-    let millis = (ts_ms % 1000).unsigned_abs() as u32;
+    // Floor-divide so sub-epoch timestamps round toward -∞: `new Date(-1)` is
+    // `1969-12-31T23:59:59.999Z`, not `1970-01-01T00:00:00.001Z`. Truncating
+    // division (`/`, `%`) gave `secs = 0, millis = 1` for `-1`.
+    let secs = ts_ms.div_euclid(1000);
+    let millis = ts_ms.rem_euclid(1000) as u32;
 
     // Calculate date components from Unix timestamp
     // This is a simplified implementation - proper implementation would use chrono crate
