@@ -68,7 +68,7 @@ struct BuildCacheManifest {
     sources: Vec<FileFingerprint>,
     config_inputs: Vec<FileFingerprint>,
     runtime_inputs: Vec<FileFingerprint>,
-    object_fingerprints: Vec<String>,
+    object_fingerprints: Vec<Option<String>>,
     native_modules: usize,
     js_modules: usize,
     output: FileFingerprint,
@@ -204,6 +204,9 @@ impl BuildCacheProbe {
             link_cache_stats: Some(LinkCacheStats {
                 linked: false,
                 skipped: true,
+                object_fingerprints_used: 0,
+                object_files_hashed: 0,
+                external_inputs_hashed: 0,
             }),
             build_cache_stats: Some(BuildCacheStats {
                 hit: true,
@@ -219,7 +222,7 @@ impl BuildCacheProbe {
         output_path: &Path,
         target: Option<&str>,
         compiled_features: &[String],
-        object_fingerprints: &[String],
+        object_fingerprints: &[Option<String>],
         runtime_inputs: &[PathBuf],
     ) {
         if std::env::var("PERRY_DISABLE_BUILD_CACHE").ok().as_deref() == Some("1") {
@@ -286,7 +289,7 @@ impl BuildCacheProbe {
         output_path: &Path,
         target: Option<&str>,
         compiled_features: &[String],
-        object_fingerprints: &[String],
+        object_fingerprints: &[Option<String>],
         runtime_inputs: &[PathBuf],
     ) -> Result<BuildCacheManifest, String> {
         let sources = ctx
