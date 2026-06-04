@@ -372,14 +372,27 @@ pub(super) fn resolve_with_extensions(base: &Path) -> Option<PathBuf> {
         return Some(base.to_path_buf());
     }
 
-    // Try with extensions in order of preference (TS before JS)
+    // Try with extensions in order of preference (TS before JS). Only replace
+    // the final extension when it is one of the source extensions Perry owns.
+    // For dotted basenames like `./migration.gen`, Path::with_extension("ts")
+    // would produce `migration.ts`; the correct extensionless resolution is
+    // `migration.gen.ts`.
+    let known_source_extension = base
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| matches!(ext, "ts" | "tsx" | "mts" | "js" | "mjs" | "cjs" | "json"));
+    let may_replace_extension = base.extension().is_none() || known_source_extension;
     for ext in all_extensions {
-        let with_ext = base.with_extension(ext.trim_start_matches('.'));
-        if with_ext.exists() && with_ext.is_file() {
-            return Some(with_ext);
+        if may_replace_extension {
+            let with_ext = base.with_extension(ext.trim_start_matches('.'));
+            if with_ext.exists() && with_ext.is_file() {
+                return Some(with_ext);
+            }
         }
 
-        // Also try adding extension to full path (for paths like ./foo.js)
+        // Also try adding extension to full path. This is required for dotted
+        // basenames (`./foo.gen` -> `./foo.gen.ts`) and harmless for ordinary
+        // extensionless imports.
         let path_str = base.to_string_lossy();
         let with_ext = PathBuf::from(format!("{}{}", path_str, ext));
         if with_ext.exists() && with_ext.is_file() {

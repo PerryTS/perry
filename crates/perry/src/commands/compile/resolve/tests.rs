@@ -1474,6 +1474,32 @@ mod declaration_sidecar_tests {
     }
 
     #[test]
+    fn dotted_extensionless_relative_import_appends_extension() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let importer = root.join("migration.ts");
+        let generated = root.join("migration.gen.ts");
+        std::fs::write(&importer, "import { migrations } from './migration.gen';\n")
+            .expect("write importer");
+        std::fs::write(&generated, "export const migrations = [];\n").expect("write generated");
+
+        let resolved = resolve_import(
+            "./migration.gen",
+            &importer,
+            root,
+            &HashSet::new(),
+            &HashMap::new(),
+        )
+        .expect("resolve dotted basename");
+
+        assert_eq!(resolved.1, ModuleKind::NativeCompiled);
+        assert_eq!(
+            resolved.0,
+            generated.canonicalize().expect("canonical generated")
+        );
+    }
+
+    #[test]
     fn declaration_file_detection_includes_mts_and_cts_sidecars() {
         assert!(is_declaration_file(Path::new("index.d.ts")));
         assert!(is_declaration_file(Path::new("index.d.mts")));
